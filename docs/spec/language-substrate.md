@@ -38,9 +38,14 @@ The [§9.1](#91-selection-rule-by-defect-blast-radius) safety bucket is divided 
 > [!WARNING]
 > **The load-bearing bet:** that in-DB projections stay cheap enough on Pi-class hardware to keep
 > chart reads local and fast (the [§1.2](vision.md#12-the-paper-parity-test-normative) paper-parity
-> floor). The first implementation spike is a Pi benchmark that validates or falsifies it. If it
-> fails, the **per-projection Rust escape hatch** is the mitigation: default every projection to
-> in-DB and relocate a *specific* projection to the Rust core only on measured need — the identity
-> connected-component over a large link graph is the likeliest candidate if a recursive CTE proves
-> too slow. The decision is criteria-gated (Pi performance, reviewer-legibility, bypassability),
-> recorded per projection, not an upfront blanket split.
+> floor). A Pi serves only a handful of workstations with little concurrency, so the risk is
+> single-operation latency on a weak CPU + SD/USB storage, not throughput. The first implementation
+> spike is a Pi benchmark that validates or falsifies it.
+
+**Escape hatch — an in-database escalation ladder, never leaving Postgres** (see [ADR-0002](decisions/0002-in-database-rust-pgrx-escape-hatch.md)):
+
+1. **PL/pgSQL** — the default; most legible for set-oriented projection logic; no build step.
+2. **Rust via pgrx (in-database)** — when a function is hot or algorithmically complex (the identity connected-component is the prime candidate). Compiled-Rust speed and type-safety while the function **stays a Postgres function** — next to the data, unbypassable, invoked by the same triggers, inside the [§9.3](#93-integration-boundary) database boundary. So "Rust" and "in-database" are one bucket, not two.
+3. **External Rust** — only if logic genuinely cannot be a database function (not expected for projections).
+
+The decision is per-projection and criteria-gated (Pi single-op latency, reviewer-legibility, bypassability), not an upfront blanket split. The thin sync daemon still carries no merge logic.

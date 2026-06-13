@@ -57,10 +57,14 @@ written into `spec/topology.md` (§2), `spec/data-model.md` (§3.5), `spec/sync.
 
 **The load-bearing bet to validate first when implementation begins:** that trigger-maintained
 in-DB projections + the identity algebra stay cheap enough on **Pi-class hardware** to keep chart
-reads local and fast (the §1.2 paper-parity floor). The designed first spike is a **Raspberry-Pi-5
-benchmark harness** (solo-practice and busy-ED event volumes; measure per-INSERT projection latency
-and chart-read latency; threshold = beat "grab the paper chart"). If it fails, the per-projection
-Rust escape hatch (§9.4) is the mitigation. *This spike is the go/no-go on the whole approach.*
+reads local and fast (the §1.2 paper-parity floor). A Pi serves only a handful of workstations with
+little concurrency, so the risk is **single-operation latency** (weak CPU + SD/USB I/O), not
+throughput. The designed first spike is a **Raspberry-Pi-5 benchmark harness** (rural-clinic
+profile, low concurrency; measure single-op projection-maintenance and chart-read latency;
+threshold = beat "grab the paper chart"). Mitigation ladder if it's slow:
+PL/pgSQL → **pgrx (in-DB Rust)** → external Rust — see
+[ADR-0002](spec/decisions/0002-in-database-rust-pgrx-escape-hatch.md). *This spike is the go/no-go
+on the approach.*
 
 ---
 
