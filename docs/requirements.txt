@@ -6,3 +6,4 @@
 # permissively licensed (MkDocs: BSD, Material: MIT), so no AGPL/mission friction.
 mkdocs-material
 mkdocs-callouts
+mkdocs-redirects

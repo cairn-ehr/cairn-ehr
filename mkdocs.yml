@@ -17,6 +17,7 @@ dev_addr: 127.0.0.1:8765
 exclude_docs: |
   HANDOVER.md
   superpowers/
+  requirements.txt
 
 theme:
   name: material
@@ -58,6 +59,11 @@ plugins:
   # Renders GitHub/Obsidian-style "> [!NOTE]" callouts as Material admonitions,
   # so the same source renders on GitHub *and* in this site.
   - callouts
+  # The canonical home is spec/index.md (served at /spec/). Redirect the bare
+  # site root (/) there so docs.cairn-ehr.org doesn't 404.
+  - redirects:
+      redirect_maps:
+        index.md: spec/index.md
 
 nav:
   - Home: spec/index.md
