@@ -97,18 +97,27 @@ evaluation and makes *repair* a first-class, fast, auditable operation:
 **never merge — always link; never erase — always overlay.** Every identity error, accidental
 or deliberate, is correctable without data loss and with a full audit trail.
 
-### 5. One system, every scale (fractal topology)
+### 5. Acknowledged uncertainty (an imprecise near-truth over a precise untruth)
+Clinicians are routinely forced by software to enter data they cannot be sure of — a guessed date
+of birth, a mandatory field with no honest answer — and the record fills with confident falsehoods
+that are then trusted downstream. Cairn refuses this trade: an imprecise near-truth always beats a
+precise untruth. Uncertainty, imprecision, ranges, and an explicit *unknown* (distinct from
+*not-yet-asked* and from *refused*) are first-class, recordable values; no required field may be
+satisfiable only by fabrication; and certainty is refined over time by overlay, never forced up
+front. This keeps the record honest and never feeds the identity matcher a confident falsehood.
+
+### 6. One system, every scale (fractal topology)
 The same software runs at every tier — workstation, department, facility, region, nation. A
 node's role is configuration, not a different product. This is what lets the architecture
 serve both the rural clinic and the tertiary hospital without forking.
 
-### 6. Vendor independence is non-negotiable
+### 7. Vendor independence is non-negotiable
 AGPL-3.0 throughout. Open standards (e.g. FHIR as the interoperability interface). Commodity
 x86/ARM hardware, standard Linux, PostgreSQL. No proprietary services, no mandatory cloud, no
 license keys. If any part of this system ever requires asking a company's permission, we have
 failed.
 
-### 7. Safety-critical logic is built to be unbreakable and auditable
+### 8. Safety-critical logic is built to be unbreakable and auditable
 Components whose defects could corrupt the record, mis-merge patients, or leak data are
 implemented where whole classes of error become *unrepresentable* — in memory-safe,
 strictly-typed code or enforced directly by the database — and are optimized above all for

@@ -77,5 +77,7 @@ nav:
       - ADR-0000 · Pre-ADR changelog: spec/decisions/0000-pre-adr-changelog-v0.1-v0.6.md
       - ADR-0001 · Fat Postgres, thin daemon: spec/decisions/0001-fat-postgres-thin-daemon.md
       - ADR-0002 · In-database Rust (pgrx) escape hatch: spec/decisions/0002-in-database-rust-pgrx-escape-hatch.md
+      - ADR-0003 · Bitemporal time & acknowledged uncertainty: spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md
+      - ADR-0004 · Dynamic sync scope — prefetch, not authority: spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md
   - Principles:
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md

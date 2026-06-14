@@ -36,9 +36,9 @@ Do not invent build/test/run instructions; they don't exist until implementation
 When starting a session, read HANDOVER.md first for current state (open questions, decisions
 pending write-up, time-sensitive items), then the canonical docs it points to.
 
-## The three governing principles (the lens for every decision)
+## The four governing principles (the lens for every decision)
 
-Check every new design choice against these three before anything else. They are load-bearing;
+Check every new design choice against these four before anything else. They are load-bearing;
 the entire architecture is downstream of them.
 
 1. **Append-only + causal ordering.** All clinical content is immutable, signed events ordered
@@ -55,6 +55,13 @@ the entire architecture is downstream of them.
    their paper counterpart and benchmark in time/steps/cognitive load. **Confirmation dialogs are
    explicitly NOT an acceptable safety mechanism** — they fail paper-parity; restore the physical
    affordance instead (e.g. possession semantics for wrong-chart prevention).
+4. **Acknowledged uncertainty.** An imprecise near-truth always beats a precise untruth. Never force
+   a clinician to commit data they cannot vouch for: uncertainty, imprecision, ranges, and an explicit
+   *unknown* (distinct from *not-yet-asked* and from *refused*) are first-class recordable values; no
+   required field may be satisfiable only by fabrication; certainty is refined later by overlay, never
+   forced up front. Time is the canonical case — objective `t_recorded` (HLC, the ceiling) vs. asserted
+   `t_effective` (the displayed, freely-backdatable claim); clashes are flagged, never auto-resolved
+   ([ADR-0003](docs/spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md), spec §3.6/§3.7).
 
 Two more architectural invariants worth holding: **availability over consistency** (a clinician
 must always be able to read locally-relevant records and write new data during a partition; AP in
@@ -93,4 +100,9 @@ All components must be **AGPL-3.0-compatible**. The whole project is AGPL-3.0 �
 - `docs/spec/open-questions.md` (§11) lists the open architecture questions. The
   "how much intelligence lives inside Postgres" cluster (§11.1/§11.2/§11.11) is **resolved** —
   *fat Postgres, thin Rust daemon* — see [ADR-0001](docs/spec/decisions/0001-fat-postgres-thin-daemon.md).
-  §11.3 (dynamic sync-scope handoff) is the cleanest remaining standalone problem.
+  §11.3 (dynamic sync-scope handoff) is also **resolved** — *scope is a prefetch hint, not an
+  authority* ([ADR-0004](docs/spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md)); it
+  also surfaced the bitemporal time model and the fourth governing principle (acknowledged
+  uncertainty, [ADR-0003](docs/spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md)).
+  Of the remaining open questions, §11.5 (tombstones/GDPR erasure in an append-only system) is now the
+  sharpest standalone problem.

@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-13
+**Session date:** 2026-06-14 (spec bumped to **v0.7**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
@@ -30,7 +30,40 @@ Everything below is the stuff that lives *between* those documents and would oth
 
 ---
 
-## Resolved this session (now written into spec v0.6 — here for the trail)
+## Resolved 2026-06-14 (now written into spec v0.7)
+
+Brainstormed **§11.3 (dynamic sync scopes)** from a real ED→ICU transfer case. It dissolved, and
+spun off a fourth governing principle along the way:
+
+- **§11.3 RESOLVED → [ADR-0004](spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md),
+  [sync §6.4](spec/sync.md).** **Scope is an administrative *prefetch hint*, not an authority.** Nobody
+  owns the record — it's the sum of autonomous signed parts, assembled when it can be. A transfer
+  triggers *acquisition* (sibling-on-LAN / carried-with-patient / from-parent-on-reconnect), not
+  reassignment; the parent ratifies+audits, never gates. Granting scope is urgent & edge-authorized,
+  revoking is lazy & parent-mediated. Surviving requirement: **honest assembly-state disclosure**
+  (surface known-missing parts). Softened [sync §6.1](spec/sync.md) ("evaluated at the parent" is now
+  the online optimization, not the only path).
+- **New 4th governing principle: "Acknowledged uncertainty" — an imprecise near-truth beats a precise
+  untruth.** Written into [index §1](spec/index.md), [vision §1 + §12](spec/vision.md), root
+  `README.md`, and `CLAUDE.md`. The user (GNUmed founder) flags forced-precision as a primary cause of
+  unreliable real-world records.
+- **Bitemporal event time + uncertainty value types →
+  [ADR-0003](spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md),
+  [data-model §3.6/§3.7](spec/data-model.md).** `t_recorded` (HLC, objective, immutable, the **ceiling**
+  — `t_effective ≤ t_recorded` invariant) vs. `t_effective` (author-asserted, freely backdatable, the
+  *displayed* time with `t_recorded` in brackets). Two orderings: integrity/sync by `t_recorded`,
+  clinical narrative by `t_effective`. Clash detection (Tier 1 self-ceiling; Tier 2 a *closed* set of
+  clinical brackets) **flags, never resolves** — humans reconcile via an overlaying event. Value types:
+  precision/interval values; `null ≠ unknown ≠ refused`; no required field satisfiable only by
+  fabrication.
+
+**Open follow-ons explicitly deferred:** surplus-copy garbage collection (touches §11.5);
+legitimate-need acquisition of *sensitive* episodes (touches §11.8); the concrete Tier-2 clinical-bracket
+list; UI rendering of two orderings + clash flags + "unknown" affordances without clutter.
+
+---
+
+## Resolved 2026-06-13 (now written into spec v0.6 — here for the trail)
 
 The **"Postgres-intelligence" cluster** (§11.1 / §11.2 / §11.11) — the one entangled decision
 flagged in prior handovers — is **resolved** as a single architecture: **"Fat Postgres, thin Rust
@@ -105,16 +138,16 @@ STEWARDSHIP-OF-THE-NAME.md.)*
 
 ## Open questions / where we'd pick up
 
-Spec §11 still lists the remaining open questions (1, 2 and 11 are now struck-through/resolved).
+Spec §11 still lists the remaining open questions (1, 2, 3 and 11 are now struck-through/resolved).
 The standing synthesis point not captured in the spec body:
 
-- **Dynamic sync-scope handoff (§11.3)** — the patient transferred ED→ICU mid-partition; who
-  owns scope reassignment during a partition. This is the last genuinely unsolved
-  distributed-systems problem in the design, and it stands largely independent of the now-resolved
-  Postgres-intelligence cluster — so it's a clean standalone session.
+- **Tombstones & retention / GDPR erasure (§11.5)** — legal deletion in an append-only, multi-copy
+  system; now the sharpest remaining standalone problem (it also collects the surplus-copy GC
+  follow-on from [ADR-0004](spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md)).
 
 **The recurring menu** when resuming (pick one):
-- The **dynamic sync-scope handoff (§11.3)** — the cleanest remaining hard problem.
+- **Tombstones / GDPR erasure (§11.5)** — the cleanest remaining hard problem; sits in direct tension
+  with principle 1 (append-only).
 - **Write the GOVERNANCE / CONTRIBUTING document** (folding in STEWARDSHIP-OF-THE-NAME.md).
 - **Define the Pi-benchmark spike** in enough detail to be the first implementation task (it
   validates the [ADR-0001](spec/decisions/0001-fat-postgres-thin-daemon.md) architecture; see
@@ -157,4 +190,6 @@ The standing synthesis point not captured in the spec body:
   clinically-reasoned merge policies; **(b) identity is a claim, never a fact** — never merge,
   always link; never erase, always overlay. A third, added later: **(c) paper-parity** — no
   workflow may be slower / harder / more cognitively demanding than its paper equivalent
-  (malfeasance excepted). When a new design choice arises, check it against these three first.
+  (malfeasance excepted). A fourth, added 2026-06-14: **(d) acknowledged uncertainty** — an imprecise
+  near-truth beats a precise untruth; never force a clinician to commit data they cannot vouch for.
+  When a new design choice arises, check it against these four first.

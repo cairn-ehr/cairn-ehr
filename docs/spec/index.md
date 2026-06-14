@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture / specification phase — no implementation yet.
-**Spec version:** 0.6 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.7 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
@@ -62,7 +62,7 @@ data sovereignty as architectural guarantees rather than marketing claims.
 ## Founding principles (the lens for every decision)
 
 Everything in the architecture is downstream of these. New design choices are checked against the
-first three before anything else.
+first four before anything else.
 
 1. **Append-only + causal ordering** — all clinical content is immutable, signed events ordered by
    Hybrid Logical Clocks; corrections reference originals. Sync becomes safe **set union** plus a
@@ -71,13 +71,18 @@ first three before anything else.
    overlay.** Patient UUIDs are immortal; identity is an append-only event stream; every error is
    repairable by an auditable event with no data loss.
 3. **Paper-parity (governing law)** — see the callout above.
-4. **Availability over consistency** — a clinician must always be able to read locally-relevant
+4. **Acknowledged uncertainty** — an imprecise near-truth always beats a precise untruth. The
+   system never forces a clinician to commit data they cannot vouch for; uncertainty, imprecision,
+   ranges, and an explicit *unknown* (distinct from not-yet-asked and from refused) are first-class
+   recordable values, no required field is satisfiable only by fabrication, and certainty is refined
+   later by overlay ([data-model §3.7](data-model.md#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
+5. **Availability over consistency** — a clinician must always be able to read locally-relevant
    records and write new data during a partition (AP in CAP terms).
-5. **Fractal topology** — one codebase at every tier; a node's role is configuration, not a
+6. **Fractal topology** — one codebase at every tier; a node's role is configuration, not a
    different product.
-6. **Vendor independence** — AGPL-3.0 throughout, open standards, commodity hardware, PostgreSQL;
+7. **Vendor independence** — AGPL-3.0 throughout, open standards, commodity hardware, PostgreSQL;
    no proprietary services, no mandatory cloud, no license keys.
-7. **Safety-critical logic is unbreakable and auditable** — implemented where whole error classes
+8. **Safety-critical logic is unbreakable and auditable** — implemented where whole error classes
    become unrepresentable (Rust or in-database), optimized above all for reviewer-legibility, and
    kept as small as possible.
 
