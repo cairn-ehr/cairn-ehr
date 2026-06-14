@@ -2,7 +2,7 @@ site_name: Cairn
 site_description: >-
   Cairn — an offline-first, vendor-independent electronic health record.
   The grid goes down. The chart stays up.
-site_url: https://cairn-ehr.org
+site_url: https://docs.cairn-ehr.org
 copyright: >-
   Cairn is free software under the AGPL-3.0. The name is stewarded for the mission —
   see Stewardship of the Name.
@@ -16,6 +16,7 @@ dev_addr: 127.0.0.1:8765
 # Disposable working scaffolding and AI tooling are not part of the published site.
 exclude_docs: |
   HANDOVER.md
+  superpowers/
 
 theme:
   name: material
