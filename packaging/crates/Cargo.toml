@@ -1,0 +1,15 @@
+[package]
+name = "cairn-ehr"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Reserved name for Cairn — an offline-first, vendor-independent electronic health record. Not yet released."
+license = "AGPL-3.0-only"
+homepage = "https://cairn-ehr.org"
+repository = "https://github.com/hherb/cairn-ehr"
+readme = "README.md"
+keywords = ["ehr", "healthcare", "offline-first", "postgres"]
+categories = ["database"]
+
+[lib]
+path = "src/lib.rs"

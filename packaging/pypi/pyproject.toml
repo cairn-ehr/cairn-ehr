@@ -1,0 +1,22 @@
+[project]
+name = "cairn-ehr"
+version = "0.0.0"
+description = "Reserved name for Cairn — an offline-first, vendor-independent electronic health record. Not yet released."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+authors = [{ name = "Horst Herb" }]
+keywords = ["ehr", "health-record", "offline-first", "healthcare", "postgresql"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Healthcare Industry",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+[project.urls]
+Homepage = "https://cairn-ehr.org"
+Repository = "https://github.com/hherb/cairn-ehr"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

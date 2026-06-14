@@ -1,0 +1,17 @@
+{
+  "name": "@cairn-ehr/cairn-ehr",
+  "version": "0.0.0",
+  "description": "Reserved name for Cairn — an offline-first, vendor-independent electronic health record. Not yet released.",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://cairn-ehr.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hherb/cairn-ehr.git"
+  },
+  "keywords": ["ehr", "healthcare", "offline-first", "postgres"],
+  "main": "index.js",
+  "files": ["index.js", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

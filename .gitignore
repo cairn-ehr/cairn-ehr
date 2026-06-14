@@ -11,3 +11,9 @@ venv/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Packaging placeholders — build artifacts (never committed)
+packaging/pypi/dist/
+packaging/crates/target/
+packaging/crates/Cargo.lock
+packaging/npm/node_modules/
