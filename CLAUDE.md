@@ -109,5 +109,12 @@ All components must be **AGPL-3.0-compatible**. The whole project is AGPL-3.0 �
   slot, exposed as a policy-neutral severity ladder
   ([ADR-0005](docs/spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md)); it added a ninth
   founding principle (**policy-neutral infrastructure** — mechanism, never policy) and a corollary of the
-  fourth (**deletion is best-effort and declared, never guaranteed**). Of the remaining open questions,
-  §11.8 (visibility-scope ↔ sync-scope) and §11.9 (armed write-context) are the next sharpest.
+  fourth (**deletion is best-effort and declared, never guaranteed**).
+  §11.8 (visibility-scope ↔ sync-scope) is also **resolved** — *replication is never the confidentiality
+  boundary*: a safety-relevant sensitive episode replicates unconditionally, and confidentiality lives in
+  key-custody + visibility + envelope-abstraction; a sealed body emits a de-identified, severity-graded
+  **safety projection** so decision-support warns without disclosing; sensitivity is a graded, append-only
+  blacklist+grading+human-editability stream (Cairn ships the mechanism, policy combines it); break-glass
+  is audited key-*use* ([ADR-0006](docs/spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md),
+  [identity §5.9](docs/spec/identity.md)). It also absorbed the ADR-0005 rung-1 metadata follow-on. Of the
+  remaining open questions, **§11.9 (armed write-context)** is now the sharpest.

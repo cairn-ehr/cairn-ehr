@@ -5,7 +5,8 @@
 - **Offline authentication:** cached short-lived credentials/certificates per device and user; offline access automatically narrows; break-glass with mandatory retrospective audit.
 - **Audit log is an event stream**, syncing upstream at highest priority.
 - mTLS between nodes; enrollment via explicit trust/provisioning ceremony (also regenerates machine identity and PRNG seed — see [data-model §3.2](data-model.md#32-identity-time)).
-- **Visibility scopes on link events** ([§5.6](identity.md#56-pseudonymous-sanctioned-care)): access-control and identity-linkage decisions are coupled by design.
+- **Visibility scopes on link events** ([§5.6](identity.md#56-pseudonymous-sanctioned-care)): access-control and identity-linkage decisions are coupled by design. A sensitive episode replicates unconditionally (replication is never the confidentiality boundary); confidentiality is enforced at key-custody and visibility, and a sealed body still emits a de-identified, severity-graded **safety projection** so decision-support warns without disclosing — see [§5.9](identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope), [ADR-0006](decisions/0006-visibility-scope-replication-and-the-safety-projection.md).
+- **Break-glass is audited key-*use***, distinct from the key-*destruction* of erasure ([§7.1](#71-erasure-the-severity-ladder)): it acquires/uses a DEK to unseal a sequestered body where a key-holder is reachable, and is partition-honest where none is (*"sealed content exists here; the key is not present"*). The architecture always provides it; whether the UI offers it and what authorization it demands is policy.
 - Compliance posture (GDPR/HIPAA/national law) is configuration; core guarantees (encryption, audit, access control) are universal.
 
 ## 7.1 Erasure (the severity ladder)

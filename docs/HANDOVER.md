@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-14 (spec bumped to **v0.8**)
+**Session date:** 2026-06-14 (spec bumped to **v0.9**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
@@ -27,6 +27,49 @@ restate them. Repository layout:
   shopfront; the same mission prose also lives canonically in `docs/spec/index.md`).
 
 Everything below is the stuff that lives *between* those documents and would otherwise be lost.
+
+---
+
+## Resolved 2026-06-14 — §11.8 visibility-scope ↔ sync-scope (now written into spec v0.9)
+
+Case-mined **§11.8** (does a sequestered episode replicate to a node at all?) plus the **rung-1 metadata
+follow-on left open by ADR-0005**. It dissolved into existing primitives + two explicit constructs; no
+new architecture, no new founding principle.
+
+- **§11.8 RESOLVED → [ADR-0006](spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md),
+  [identity §5.9](spec/identity.md) (canonical home), with pointers from [sync §6.4](spec/sync.md),
+  [security §7](spec/security.md), [data-model §3.5](spec/data-model.md), [index principle 9](spec/index.md).**
+- **The core ruling (the user's): replication is *never* the confidentiality boundary.** Because there is
+  almost always a patient's-best-interest case for the treating clinician to break glass with consent
+  (the clincher: a sealed pregnancy termination still implies **Rh-sensitization** a future antenatal
+  clinician must act on), a safety-relevant sensitive episode **replicates unconditionally**.
+  Confidentiality lives entirely in **key-custody + body-visibility + envelope-abstraction**, never in
+  withholding the row. This *confirms* ADR-0004 from the other side (sync scope was never an access control).
+- **The word "scope" was hiding four dials**: replication (always on), decryptability (gated),
+  body-visibility (sealed), and a newly-sharp fourth — **envelope-metadata exposure** (the plaintext
+  envelope's scope key `department = sexual-health` is itself the disclosure; ADR-0005 only seals the body).
+- **Two new explicit constructs:** (1) a **safety projection** — a de-identified, severity-graded signal
+  (*"⚠ Grade X interaction with confidential content — break glass"*) **mechanically projected from the
+  body's coded fields**, replicated in the clear like an allergy, naming nothing; makes the §5.6 promise
+  concrete; partition-safe. (2) **Sensitivity as a graded, multi-source, append-only assertion stream**
+  (effective grade = projection). **Safety-floor invariant:** the grade controls the signal's *coarseness,
+  never its existence* — secrecy blurs the safety signal, never extinguishes it.
+- **Infrastructure, not policy (principle 9):** Cairn ships exactly three pieces — a **category blacklist**
+  (coded-category → default grade; whitelist is impossibly wide), the **confidentiality grading system**,
+  and **human editability** of tag/grade (patient request / clinician judgment). *Whether a blacklist
+  auto-tag applies silently, needs clinician acceptance, or is manual-only is a UI-layer policy decision*
+  Cairn makes expressible but never enforces.
+- **Two findings worth carrying:** the **semantic scope key is abstractable to an opaque "confidential-
+  episode" token** — and doing so *forces* safe behavior (the sync prefetch predicate can no longer
+  select, so it falls back to replicate-everything-for-this-patient). And the **policy-neutral
+  severity-ladder pattern recurs** (erasure ladder → now a disclosure-coarsening ladder) — a structural
+  motif, not yet elevated to anything.
+- **Break-glass** is audited key-*use* (distinct from key-*destruction*/erasure), mirroring the ADR-0004
+  acquisition trichotomy, partition-honest (*"sealed content exists here; the key is not present"*).
+
+**Open follow-on:** the seal-time projection seam (the one code path that reads the coded body en route to
+ciphertext) is safety/confidentiality-critical → a §9 blast-radius concern when implementation begins; and
+projection quality tracks coding quality (uncoded body → weaker class, still better than paper's nothing).
 
 ---
 
@@ -140,16 +183,15 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 
 ## Open questions / where we'd pick up
 
-Spec §11 lists the remaining open questions (1, 2, 3, **5**, and 11 now struck-through/resolved). With
-§11.5 gone, no single problem is obviously "sharpest"; the next-sharpest pair is **§11.8
-(visibility-scope ↔ sync-scope)** and **§11.9 (armed write-context)** — and §11.8 now also owns the
-rung-1 metadata follow-on from ADR-0005.
+Spec §11 lists the remaining open questions (1, 2, 3, **5**, **8**, and 11 now struck-through/resolved).
+With §11.8 gone, **§11.9 (armed write-context)** is now the sharpest single problem — and it pairs
+naturally with §11.12 (authentication vs. paper-parity), both being point-of-care possession/identity
+problems.
 
 **The recurring menu** when resuming (pick one):
-- **§11.8 visibility-scope ↔ sync-scope** — does a sequestered/sensitive episode replicate to a node at
-  all? Now also: what *policy-defined* safety metadata may remain visible while a body is sealed (the
-  rung-1 follow-on from [ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md)).
-- **§11.9 armed write-context** — concrete possession-semantics design passing paper-parity at ED pace.
+- **§11.9 armed write-context** — concrete possession-semantics design ([identity §5.8](spec/identity.md))
+  passing paper-parity at ED pace: "picking up a chart" must cost ≤ its paper equivalent (~seconds, zero
+  cognitive overhead) without degrading into reflexive click-through. The sharpest remaining problem.
 - **Write the GOVERNANCE / CONTRIBUTING document** (folding in STEWARDSHIP-OF-THE-NAME.md).
 - **Define the Pi-benchmark spike** in enough detail to be the first implementation task (now validates
   both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
