@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture / specification phase — no implementation yet.
-**Spec version:** 0.7 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.8 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
@@ -76,6 +76,9 @@ first four before anything else.
    ranges, and an explicit *unknown* (distinct from not-yet-asked and from refused) are first-class
    recordable values, no required field is satisfiable only by fabrication, and certainty is refined
    later by overlay ([data-model §3.7](data-model.md#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
+   *Corollary:* **deletion is best-effort and declared, never guaranteed** — the strongest honest claim
+   is *"to our knowledge, we have erased all copies in our existence"*
+   ([data-model §3.8](data-model.md#38-erasure-and-key-custody), [ADR-0005](decisions/0005-erasure-key-custody-and-crypto-shredding.md)).
 5. **Availability over consistency** — a clinician must always be able to read locally-relevant
    records and write new data during a partition (AP in CAP terms).
 6. **Fractal topology** — one codebase at every tier; a node's role is configuration, not a
@@ -85,6 +88,13 @@ first four before anything else.
 8. **Safety-critical logic is unbreakable and auditable** — implemented where whole error classes
    become unrepresentable (Rust or in-database), optimized above all for reviewer-legibility, and
    kept as small as possible.
+9. **Policy-neutral infrastructure** — Cairn provides *mechanism*, never policy. Conflicting legal and
+   health-system requirements (retention, erasure, disclosure, compliance posture) are *facilitated
+   without taking sides*: the system builds the full range of mechanisms spanning the worst-case
+   extremes and lets configuration/UI select. The clearest instances are erasure as a policy-selected
+   severity ladder ([security §7.1](security.md#71-erasure-the-severity-ladder),
+   [ADR-0005](decisions/0005-erasure-key-custody-and-crypto-shredding.md)) and compliance posture as
+   configuration ([security §7](security.md)).
 
 ---
 

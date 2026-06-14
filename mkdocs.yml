@@ -79,5 +79,6 @@ nav:
       - ADR-0002 · In-database Rust (pgrx) escape hatch: spec/decisions/0002-in-database-rust-pgrx-escape-hatch.md
       - ADR-0003 · Bitemporal time & acknowledged uncertainty: spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md
       - ADR-0004 · Dynamic sync scope — prefetch, not authority: spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md
+      - ADR-0005 · Erasure — key-custody & crypto-shredding: spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md
   - Principles:
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md

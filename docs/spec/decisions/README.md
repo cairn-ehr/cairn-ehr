@@ -25,6 +25,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0002](0002-in-database-rust-pgrx-escape-hatch.md) | In-database Rust (pgrx) as the projection escape hatch | Accepted (refines 0001) | 2026-06-14 |
 | [0003](0003-bitemporal-time-and-acknowledged-uncertainty.md) | Bitemporal event time and acknowledged uncertainty | Accepted | 2026-06-14 |
 | [0004](0004-dynamic-sync-scope-prefetch-not-authority.md) | Dynamic sync scope: a prefetch hint, not an authority | Accepted | 2026-06-14 |
+| [0005](0005-erasure-key-custody-and-crypto-shredding.md) | Erasure as key-custody redistribution: crypto-shredding and a policy-neutral severity ladder | Accepted | 2026-06-14 |
 
 ## Template
 

@@ -104,5 +104,10 @@ All components must be **AGPL-3.0-compatible**. The whole project is AGPL-3.0 �
   authority* ([ADR-0004](docs/spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md)); it
   also surfaced the bitemporal time model and the fourth governing principle (acknowledged
   uncertainty, [ADR-0003](docs/spec/decisions/0003-bitemporal-time-and-acknowledged-uncertainty.md)).
-  Of the remaining open questions, §11.5 (tombstones/GDPR erasure in an append-only system) is now the
-  sharpest standalone problem.
+  §11.5 (tombstones/GDPR erasure in an append-only system) is also **resolved** — *erasure is
+  redistribution of key-custody, not deletion of data*: crypto-shredding on an encryption-capable body
+  slot, exposed as a policy-neutral severity ladder
+  ([ADR-0005](docs/spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md)); it added a ninth
+  founding principle (**policy-neutral infrastructure** — mechanism, never policy) and a corollary of the
+  fourth (**deletion is best-effort and declared, never guaranteed**). Of the remaining open questions,
+  §11.8 (visibility-scope ↔ sync-scope) and §11.9 (armed write-context) are the next sharpest.
