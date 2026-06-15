@@ -28,6 +28,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0005](0005-erasure-key-custody-and-crypto-shredding.md) | Erasure as key-custody redistribution: crypto-shredding and a policy-neutral severity ladder | Accepted | 2026-06-14 |
 | [0006](0006-visibility-scope-replication-and-the-safety-projection.md) | Visibility-scope vs. sync-scope: replication is not the confidentiality boundary; the safety projection and graded sensitivity | Accepted | 2026-06-14 |
 | [0007](0007-authorship-and-accountability.md) | Authorship is compositional; accountability is separable | Accepted | 2026-06-15 |
+| [0008](0008-point-of-care-identity-possession-and-salvage.md) | Point-of-care identity: possession binding, fast authentication, and work-salvage | Accepted | 2026-06-15 |
 
 ## Template
 

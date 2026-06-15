@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-14 (spec bumped to **v0.9**)
+**Session date:** 2026-06-15 (spec bumped to **v0.11**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
@@ -27,6 +27,46 @@ restate them. Repository layout:
   shopfront; the same mission prose also lives canonically in `docs/spec/index.md`).
 
 Everything below is the stuff that lives *between* those documents and would otherwise be lost.
+
+---
+
+## Resolved 2026-06-15 — §11.9 + §11.12 point-of-care identity (now spec v0.11)
+
+Case-mined the two **point-of-care possession/identity** problems — §11.9 (armed write-context) and
+§11.12 (authentication vs. paper-parity) — and found they are **one problem**: the binding of *which
+patient* and *which clinician* to a write. Dissolved into existing primitives + one new data-model
+invariant; **no new founding principle** (the three operational principles below are corollaries of
+existing ones). → [ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md),
+canonical home **[identity §5.11](spec/identity.md)**, with [security §7.3](spec/security.md),
+[data-model §3.10](spec/data-model.md), [vision §1.2](spec/vision.md).
+
+- **The §11.12 "tension" is illusory** (the session's clincher reframe): the deployed-EHR audit-trail
+  collapse is *caused by* the parity violation — expensive per-write auth makes shared logins rational,
+  and sharing is what destroys attribution. So paper-parity and accountability are achieved **together**.
+  Same shape as ADR-0006 ("scope") and ADR-0007 ("signature"): **one word hides separable dials.**
+- **Unbundle `authentication` → gatekeeping (rare, coarse) + attribution (per-write, cheap).**
+  Load-bearing invariant: **`session.user ≠ event.author`, independently bindable** ([data-model §3.10](spec/data-model.md));
+  its absence is exactly why deployed EHRs can't salvage stranded work.
+- **Possession binds `(clinician, patient)` in one ambient gesture** — cheap in time, **high in
+  distinctiveness** (the antidote to confirmation-dialog click-through), **cold = warm** cost.
+- **Three operational principles (corollaries, the user's), not new founding principles:**
+  (1) *never make the user wait if engineering can avoid it* (latency limb of paper-parity; cache-and-hide
+  not clear; instant re-auth is the **precondition** that makes auto-de-arm parity-legal);
+  (2) *always a fallback, no dead-ends, no IT dependency* (badge → password → self-recovery → **audited
+  break-glass**; the severity-ladder motif recurring a 3rd time — recovery is break-glass for the auth layer);
+  (3) *never make the user redo work already done* (the **`sign-as`** salvage).
+- **`sign-as` salvage = identity-repair applied to authorship.** Trichotomy sign-as (default) / switch /
+  stay; rescues *your own* stranded work; replaces the three bad real-world hacks (free-text `[Dr X:]`,
+  wrong-author save, lost work). **Authorship-confidence is a grade (attested/asserted/unattributed),
+  never a gate** — composes into the existing trust projection, no new stream.
+- **Settled forks:** authorship is **note-level** — span-granular-within-a-note **rejected** (user's call:
+  "hideously complicates" for a rare edge; free-text hatch remains). **Make contention cheap** (multi-warm-
+  context shared station) is the software's answer to the 2–5-clinicians-per-workstation reality. Design is
+  **rhythm-agnostic** (live / after-each / batch / AI-scribe / forced-retrospective all first-class via
+  bitemporal time) and **degrades to no special hardware**.
+- **Blast-radius (§9):** the `(clinician, patient)` binding + authorship stamp are safety-critical (trusted
+  Rust/in-DB surface); proximity/UI is fit-for-purpose; the proximity-event → authorship-stamp **seam** is
+  the one safety-critical path (like the §5.9 seal-time seam).
 
 ---
 
@@ -210,15 +250,16 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 
 ## Open questions / where we'd pick up
 
-Spec §11 lists the remaining open questions (1, 2, 3, **5**, **8**, and 11 now struck-through/resolved).
-With §11.8 gone, **§11.9 (armed write-context)** is now the sharpest single problem — and it pairs
-naturally with §11.12 (authentication vs. paper-parity), both being point-of-care possession/identity
-problems.
+Spec §11: items 1, 2, 3, **5**, **8**, **9**, 11, and **12** now struck-through/resolved. Remaining
+architecture open questions are **§11.4** (schema migration across offline nodes), **§11.6** (attachment
+strategy), **§11.7** (locale-pluggable matcher comparators), and **§11.10** (notification economy). No
+single one is as sharp as the possession/identity cluster just closed; the most *generative* threads are
+now the ADR-0007 deferred follow-on (**additive-vs-suppressing classification** — "the sharpest of the
+follow-ons," may warrant its own session) and continued **clinical case-mining**.
 
 **The recurring menu** when resuming (pick one):
-- **§11.9 armed write-context** — concrete possession-semantics design ([identity §5.8](spec/identity.md))
-  passing paper-parity at ED pace: "picking up a chart" must cost ≤ its paper equivalent (~seconds, zero
-  cognitive overhead) without degrading into reflexive click-through. The sharpest remaining problem.
+- **Additive-vs-suppressing classification** (ADR-0007 follow-on) — author-declared vs. output-type-derived,
+  and how it's validated/enforced where policy demands. The sharpest of the AI-authorship follow-ons.
 - **Write the GOVERNANCE / CONTRIBUTING document** (folding in STEWARDSHIP-OF-THE-NAME.md).
 - **Define the Pi-benchmark spike** in enough detail to be the first implementation task (now validates
   both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
@@ -228,8 +269,7 @@ problems.
   primitives have absorbed every case raised without new architecture; continuing to stress-test is
   high-value.
 - Other still-open §11 items: schema migrations across offline nodes (§11.4), attachment strategy
-  (§11.6), locale-pluggable matcher comparators (§11.7), notification economy (§11.10), authentication
-  vs. paper-parity (§11.12).
+  (§11.6), locale-pluggable matcher comparators (§11.7), notification economy (§11.10).
 
 ---
 
@@ -251,9 +291,12 @@ problems.
 - The project's founding motivation is explicitly **anti-capture / anti-vendor-lock-in**, rooted in the
   user's experience of government EHR committees being sabotaged by commercial interests. Decisions
   consistently favour the mission over convenience; treat that as the tie-breaker.
-- **Nine founding principles** now run through everything ([index.md](spec/index.md)); the **first four**
+- **Ten founding principles** now run through everything ([index.md](spec/index.md)); the **first four**
   are the lens checked before any new design choice: **(1)** append-only + causal ordering; **(2)**
   identity is a claim, never a fact (never merge/erase, always link/overlay); **(3)** paper-parity;
-  **(4)** acknowledged uncertainty (incl. the new corollary *deletion is best-effort and declared*). The
+  **(4)** acknowledged uncertainty (incl. the corollary *deletion is best-effort and declared*). The
   rest: availability-over-consistency, fractal topology, vendor independence, safety-critical-logic-in-
-  Rust/DB, and the new **(9) policy-neutral infrastructure** (mechanism, never policy).
+  Rust/DB, **(9) policy-neutral infrastructure** (mechanism, never policy), and **(10) authorship is
+  compositional, accountability is separable**. Note: the §5.11 point-of-care work added **no** new
+  founding principle — its three operational principles (never-wait / always-a-fallback / never-redo-work)
+  are corollaries of paper-parity, availability, append-only, and identity-repair.
