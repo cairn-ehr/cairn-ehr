@@ -21,6 +21,7 @@
 - Eventual consistency with causal ordering (HLC) within a patient record.
 - Every projection displays a **freshness indicator** ("last synced with parent 4 h ago") — a first-class UI requirement.
 - **Honest assembly state.** The chart is always a best-effort assembly of currently-available parts, and must say so as a first-class clinical fact. Beyond freshness it surfaces **known-missing** parts when it can detect them (the parent advertised 5 episodes, only 3 arrived; a sibling is reachable but unsynced) and, when fully partitioned, signals that parts may exist beyond the island. Making absence *visible* is a safety gain with no paper equivalent — on paper the other ward's notes are simply, invisibly absent. See [§6.4](#64-scope-is-a-prefetch-hint-not-an-authority) and [ADR-0004](decisions/0004-dynamic-sync-scope-prefetch-not-authority.md).
+- **The notification inbox is honest-assembly applied to alerts.** A notification is a local projection over locally-available events ([identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor), [data-model §3.11](data-model.md#311-notifications-as-projections-responsibility-routing-and-acknowledgment)); a trigger may still be on another node, so *"all caught up / inbox zero"* is **never** claimed across a partition. The honest ceiling mirrors the erasure ceiling: *"to this node's knowledge, you have seen everything relevant."*
 
 ## 6.3 Failure modes (designed-for)
 | Failure | Behaviour |

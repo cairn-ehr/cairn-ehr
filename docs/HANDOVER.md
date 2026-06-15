@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-15 (spec bumped to **v0.11**)
+**Session date:** 2026-06-15 (spec bumped to **v0.14**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
@@ -27,6 +27,129 @@ restate them. Repository layout:
   shopfront; the same mission prose also lives canonically in `docs/spec/index.md`).
 
 Everything below is the stuff that lives *between* those documents and would otherwise be lost.
+
+---
+
+## Resolved 2026-06-15 — actor registry / AI-agent identity (now spec v0.14)
+
+Closed the next ADR-0007 follow-on: the **AI-agent identity registry** (registration, keying,
+version-pinning, key custody). → [ADR-0011](spec/decisions/0011-actor-registry-version-pinning-and-key-custody.md)
+(refines 0007), canonical home **[security §7.5](spec/security.md)**, invariants [data-model §3.12](spec/data-model.md),
+with a recall-marker note in [identity §5.10](spec/identity.md).
+
+- **General actor registry** (human/device/AI, AI the forcing case) — the user's call, with the foresight
+  that "the boundaries will increasingly blur and the type of actor will matter less," so `kind` is a
+  **de-emphasizable discriminator**, not a separate subsystem.
+- **Immutable, version-pinned identity over a closed actor-event algebra** (`enroll/supersede/revoke/
+  suspend/rotate-key`) — the §5.7 patient-identity-algebra shape applied to actors. A version bump = a new
+  UUID + `supersede` link; compromise = `revoke` overlay (with compromise-time). *Never merge/erase, always
+  link/overlay*, now for non-human actors. Forced by recall-traceability (mutating v2.3→v2.4 in place
+  destroys "which events did the defective v2.3 author?").
+- **The user's sharp refinement — identity granularity tracks objectively-recordable behavioral
+  determinants.** The AI tuple expands beyond model+version+vendor+node to the **declared inference/decoding
+  config** (temperature, top-p/k, sampling, system-prompt/template, tool/RAG config) — because under current
+  tech these *distinguishably* shape output and consistency. The deep principle (the user's): humans vary too
+  (mood, fatigue) but there is **no objective criterion** to split "happy Dr X" from "sleep-deprived Dr X,"
+  so they stay one identity — **granularity is bounded by what's objectively recordable** (the same
+  epistemics as t_recorded vs t_effective; fabricating a split violates principle 4). Identity-explosion
+  avoided by pinning the *standing* config to the identity and stamping *per-invocation* variance on the
+  event (objective-vs-asserted split again); both queryable for recall.
+- **Enrolment: binding mandatory, output-responsibility policy** (the user's call). An audited, signed
+  ceremony (mirrors node provisioning/mTLS) that **must record a named responsible human** — the
+  introduction-accountability backstop that **completes ADR-0010's conservation chain** (even a fully
+  un-owned AI output traces to a human who decided the agent may write here); ongoing per-output
+  responsibility stays separable/policy (ADR-0007).
+- **Key custody un-conflated — opposite lifecycles:** **signing publics are immortal** (verify history
+  forever; `revoke` = distrust-new-after-T, never can't-verify-old), **DEKs are destroyable** (ADR-0005
+  keystore). Private AI signing key node-bound trusted-base; a stolen key forges *origin* not
+  *responsibility* (signature ≠ attestation), bounded by un-vouched-by-default + revocation + recall.
+- **A model recall reuses the contamination-cascade primitive** (§5.5/§5.12): select by agent-UUID (+ the
+  queryable per-event config), re-surface for review, overlay a §5.10 recall trust marker — **never erase.**
+  Structurally identical to a misfiled-note cascade.
+- **Blast-radius (§9):** registry projection + actor-event algebra + signature verification are
+  safety-critical (in-DB, beside the §5.7 identity algebra); the **agent runtime** is fit-for-purpose (output
+  additive/advisory by default, ADR-0010); the runtime→signing/registry **seam** is the one safety-critical
+  path (the recurring seam motif). **No new founding principle.**
+
+---
+
+## Resolved 2026-06-15 — additive-vs-suppressing classification (now spec v0.13)
+
+Closed the **sharpest ADR-0007/0009 deferred follow-on**: *how* an output's additive-vs-suppressing
+nature is classified, validated, and enforced. → [ADR-0010](spec/decisions/0010-additive-vs-suppressing-classification.md)
+(refines 0007), canonical home **[data-model §3.9](spec/data-model.md)**, with [identity §5.10](spec/identity.md)
+(atrophy detection) and [§5.12](spec/identity.md) (the triage seam).
+
+- **Derived, not declared — additive ≡ overlay, suppressing ≡ foreclosure.** The **append-only principle
+  (1) applied to the attention/decision layer.** A self-declared "I'm additive" is the banned flag. Test:
+  *could a human still independently see and act on everything they would have without this output?*
+- **The user's reframe (load-bearing): suppression is often *desirable*** (drowning in thousands of
+  objectively-normal results). Resolved by the §5.12 line: **demotion (priority-lowering) is additive**
+  (still reaches the human) and is the primary, safe, un-owned noise tool; **only hide-to-nothing /
+  auto-decide is suppressing.** The dangerous tail is a **closed enumerated set** (merge-policy discipline)
+  behind a **structural in-DB owner-gate**; additive is the default, curated suppressing-until-proven-additive.
+- **Conservation of responsibility:** un-owned suppression is a contradiction — accountability sits at the
+  event, or (policy-permitted class) at the explicit audited config act that permitted it. Policy relocates
+  the owner, never abolishes it (same shape as ADR-0005 deniable-rung, ADR-0008 sign-as).
+- **Declaration is a one-way caution ratchet** (answer to "declared vs derived vs both"): derived sets the
+  floor; a responsible human may declare a formally-additive output *more* suppressing, never less — the
+  handle for **de-facto suppression** (automation complacency).
+- **Triage = a salience-scoring extension point (mechanism, not policy — the user's recurring insistence):**
+  trend-aware rule classifier (eGFR 90→70→30 = ALERT; 30→35→38 = TREND IMPROVING — trend beats instantaneous
+  value) + optional AI oversight (meds/history/consults for context), wired to the §5.12 salience dial. Its
+  output is an additive `{rule-classifier | AI, graded | triaged}` event — the §3.9 contributory roles built
+  for exactly this; safe un-owned because additive.
+- **Automation-complacency atrophy detection — BUILT NOW (user's call):** an **additive governance meta-signal**
+  computed from the audit/ack streams when independent human review of a class collapses to ~0 (humans only
+  ack the AI, never assess first) → *"the automated layer for X is now a single point of failure."* Additive
+  (safe un-owned, self-consistent), population/governance-facing (mostly-pull), honest only at volume.
+- **Blast-radius (§9):** the closed suppressing set + owner-gate + demotion-can't-silently-become-hide floor
+  are safety-critical (in-DB/Rust); the salience classifier and atrophy detector are fit-for-purpose; the
+  classifier→floor **seam** is the one safety-critical path (the recurring seam motif).
+
+---
+
+## Resolved 2026-06-15 — §11.10 notification economy (now spec v0.12)
+
+Case-mined **§11.10** (notification priority taxonomy). It dissolved into existing primitives with
+**no new founding principle and no new event stream** — same trajectory as §5.11. → [ADR-0009](spec/decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md),
+canonical home **[identity §5.12](spec/identity.md)**, invariants [data-model §3.11](spec/data-model.md),
+with [security §7.4](spec/security.md), [sync §6.2](spec/sync.md), [vision §1.2](spec/vision.md).
+
+- **"Priority" is one word hiding orthogonal dials** (the recurring *scope/signature/authentication*
+  motif a 4th time). Dials: **salience × ack-requirement × addressing × modality × escalation.** The
+  load-bearing split is **salience ≠ interruptiveness** — a standing fact (allergy) is *ambient*, only an
+  urgent *transition* is interruptive (once). Alert fatigue **is** confirmation-dialog click-through
+  (§5.11) generalised; the mechanism of fatigue is collapsing the dials into one popup-defaulted scale.
+- **A notification is a projection, not a mailbox** — a *delta* over the log against the clinician's own
+  audit history (view/act, already recorded). The inbox is a query; **acknowledgment is an append-only
+  audit event** (single explicit human confirm; the user's call), **never auto-satisfied** for the
+  hard-ack class (auto-ack = silent falsification). No new stream.
+- **Noise reduction IS suppression IS accountable** (ties §11.10 straight into ADR-0007 — the bridge to
+  the still-open *additive-vs-suppressing* follow-on). **Demotion/coalescing/digest = additive** (free);
+  **filtering-out / auto-ack / below-threshold-hiding = suppressing** (owned, audited, policy-gated).
+- **The user's routing ruling (load-bearing):** the locum reality is that the orderer has usually *left*
+  before the result lands; many sites have no follow-up policy, remote sites run informally. So the
+  **co-equal inbox is infrastructure; policy does prioritisation.** Responsibility-to-follow-up is a
+  **graded, multi-source, append-only tag overlay** (orderer intrinsic + always telephone-prioritised;
+  policy adds fallbacks; **timeout-reassignment** when the present responsible doctor is busy; *multiple*
+  holders at once) → effective responsible set is a projection (same shape as §5.9 sensitivity / §5.1
+  link graph). **Single co-equal inbox, not a single exclusive owner.**
+- **Safety floor — routing is NEVER a visibility gate (the user's clincher case):** the *"orderer must
+  release before anyone sees it"* policy has caused missed critical results. It is expressible as **ambient
+  state only**; the architecture **refuses to enforce withholding** from a present clinician. Consumer-side
+  mirror of ADR-0006's *"replication is never the confidentiality boundary"*: routing decides who *owns
+  acting/acknowledging*, never who may *see*. New incoming results are **always** visible to whoever opened
+  the patient.
+- **Other floors:** escalation ladder never dead-ends (severity-ladder motif a 4th time → bottoms in the
+  §5.11 current care-context holder); filtering changes modality, **never extinguishes** a hard-ack class
+  (mirror of §5.9 *"blurs, never extinguishes"*); partition-honest inbox (no false *"all caught up"* —
+  §6.2 honest-assembly for alerts); **mostly-pull, selectively-push** is the paper-parity default (paper
+  = pull + critical-value callback + allergy sticker; everything-push is a parity *regression*).
+- **Blast-radius (§9):** floor enforcement (hard-ack un-filterable; present-clinician never blind;
+  escalation fires) is safety-critical (in-DB/Rust); advisory salience-ranking + digest UI are
+  fit-for-purpose; the filter→floor **seam** is the one safety-critical path (like the §5.9 seal-time and
+  §5.11 proximity→stamp seams).
 
 ---
 
@@ -250,26 +373,26 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 
 ## Open questions / where we'd pick up
 
-Spec §11: items 1, 2, 3, **5**, **8**, **9**, 11, and **12** now struck-through/resolved. Remaining
-architecture open questions are **§11.4** (schema migration across offline nodes), **§11.6** (attachment
-strategy), **§11.7** (locale-pluggable matcher comparators), and **§11.10** (notification economy). No
-single one is as sharp as the possession/identity cluster just closed; the most *generative* threads are
-now the ADR-0007 deferred follow-on (**additive-vs-suppressing classification** — "the sharpest of the
-follow-ons," may warrant its own session) and continued **clinical case-mining**.
+Spec §11: items 1, 2, 3, **5**, **8**, **9**, **10**, 11, and **12** now struck-through/resolved, and the
+ADR-0007 deferred **additive-vs-suppressing** ([ADR-0010](spec/decisions/0010-additive-vs-suppressing-classification.md))
+and **AI-agent identity registry** ([ADR-0011](spec/decisions/0011-actor-registry-version-pinning-and-key-custody.md))
+follow-ons are closed too. Remaining architecture open questions are **§11.4** (schema migration across
+offline nodes), **§11.6** (attachment strategy), and **§11.7** (locale-pluggable matcher comparators) —
+none as sharp as the clusters already closed. The only ADR-0007 follow-ons still open are small (closed
+role-enum membership finalisation; proxy/liability semantics, out of scope — Cairn records the chain). The
+most *generative* mode is now continued **clinical case-mining**, or one of the build-prep threads below.
 
 **The recurring menu** when resuming (pick one):
-- **Additive-vs-suppressing classification** (ADR-0007 follow-on) — author-declared vs. output-type-derived,
-  and how it's validated/enforced where policy demands. The sharpest of the AI-authorship follow-ons.
+- More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
+  primitives have absorbed every case raised without new architecture). The AI-authorship arc (ADR-0007 →
+  0009 → 0010 → 0011) is now complete, so fresh clinical cases are the highest-signal next input.
 - **Write the GOVERNANCE / CONTRIBUTING document** (folding in STEWARDSHIP-OF-THE-NAME.md).
 - **Define the Pi-benchmark spike** in enough detail to be the first implementation task (now validates
   both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
 - **Polish a non-developer landing page** for the generated site (frontend-design work; draft plans
   already exist under `docs/superpowers/`).
-- More clinical **case-mining** — the most productive mode so far: the event-overlay + key-custody
-  primitives have absorbed every case raised without new architecture; continuing to stress-test is
-  high-value.
 - Other still-open §11 items: schema migrations across offline nodes (§11.4), attachment strategy
-  (§11.6), locale-pluggable matcher comparators (§11.7), notification economy (§11.10).
+  (§11.6), locale-pluggable matcher comparators (§11.7).
 
 ---
 
@@ -299,4 +422,12 @@ follow-ons," may warrant its own session) and continued **clinical case-mining**
   Rust/DB, **(9) policy-neutral infrastructure** (mechanism, never policy), and **(10) authorship is
   compositional, accountability is separable**. Note: the §5.11 point-of-care work added **no** new
   founding principle — its three operational principles (never-wait / always-a-fallback / never-redo-work)
-  are corollaries of paper-parity, availability, append-only, and identity-repair.
+  are corollaries of paper-parity, availability, append-only, and identity-repair. The §5.12 notification
+  economy likewise added none — its rulings (salience ≠ interruptiveness; notification-as-projection;
+  noise-reduction-is-accountable-suppression; routing-is-never-a-visibility-gate) are corollaries of
+  paper-parity, acknowledged uncertainty, append-only, accountability, and policy-neutral infrastructure.
+  ADR-0010 (additive-vs-suppressing) is a *refinement* of principle 10, not a new principle — its core
+  identity (additive ≡ overlay, suppressing ≡ foreclosure) is principle 1 applied to the attention layer.
+  ADR-0011 (actor registry) likewise adds none — version-pinned immutable actor identity is principle 2
+  (never merge/erase, always link/overlay) applied to non-human actors, and identity-granularity-tracks-
+  what's-objectively-recordable is principle 4 applied to the actor model.
