@@ -78,7 +78,7 @@ The **reattribution event** — "event set E belongs to UUID-B, not UUID-A" — 
 | `reattribute` | Misfiled documentation; wrong-chart contamination; identity theft | Tiered: self-service (author, windowed) / one sign-off / two-person rule ([§5.5](#55-reattribution-one-primitive-tiered-workflows)) |
 | `dispute` | Patient-initiated review | Triage to queue |
 
-**Chart trust states (projection-side contract):** *confirmed* / *unconfirmed* (identity-pending) / *under-review* (coherence failure, open dispute, pending reattribution). The chart always tells the clinician how much to trust the identity behind it.
+**Chart trust states (projection-side contract):** *confirmed* / *unconfirmed* (identity-pending) / *under-review* (coherence failure, open dispute, pending reattribution). The chart always tells the clinician how much to trust the identity behind it. Responsibility-state composes into this contract: an event whose authorship is un-vouched (a non-human author with no responsibility-bearing human) renders with an explicit *unattested* marker — a form of acknowledged uncertainty (principle 4), distinct from *wrong* ([§5.10](#510-authorship-and-responsibility-state-the-consumer-side)).
 
 **Biometrics:** excluded from core (vendor/AGPL minefield; poor offline performance on constrained hardware). Accommodated as one more identifier system in the multi-valued set via a pluggable module. The core must work with names, dates, photos, and human judgment alone.
 
@@ -110,3 +110,26 @@ The **reattribution event** — "event set E belongs to UUID-B, not UUID-A" — 
 - **Sensitivity is a graded, multi-source, append-only assertion stream**; the **effective grade is a projection** (*never merge, always overlay*, the same shape as the link graph [§5.1](#51-linkage-layer-never-merge-always-link) and the per-field demographic projection [§4.2](demographics.md#42-per-field-projection-policy)). Because what is confidential is cultural/regional/personal, Cairn ships **only three infrastructure pieces** — a deployment-populated **category blacklist** (coded-category → default grade; whitelisting is impossibly wide), the **confidentiality grading system** itself, and **human editability** of tag/grade (patient request: divorce, family dispute; clinician judgment: domestic violence, mental health). *How they combine is policy* ([principle 9](index.md#founding-principles-the-lens-for-every-decision)): whether a blacklist auto-tag applies silently, requires clinician acceptance, or whether a deployment is manual-only, is a UI-layer policy decision Cairn makes expressible but never enforces. The grade drives the seal rung (dial 2) and the projection coarseness (dial 4). Effective grade is the **highest standing assertion**; **declassification is an authorized overlay, never an erasure** (mirroring the [§5.5](#55-reattribution-one-primitive-tiered-workflows) tiers).
 - **The envelope is not automatically safe.** Plaintext scope keys (`department = sexual-health`) can be the whole disclosure, so the *semantic* scope key is **abstractable to an opaque "confidential-episode" routing token** ([§3.5](data-model.md#35-event-storage-model-hybrid-envelope)). This is self-reinforcing: opacifying the key means the sync prefetch predicate can no longer *select* on it, so replication degrades to "everything for this patient" — exactly the mandatory replication above. Identity/sync still bind on `patient_uuid` and HLC; only the human-meaningful label is generalized.
 - **Break-glass is audited key-*use*** (distinct from key-*destruction*/erasure), the mirror of the [ADR-0004](decisions/0004-dynamic-sync-scope-prefetch-not-authority.md) acquisition trichotomy: key-holder present → local unseal; carried-with-patient (the patient is a key-holder, paper-parity-exact); from sibling/parent on reconnect; or, **none reachable → honest disclosure** *"sealed content exists here; the key is not present on this node"* (the warning already fired; only the specifics are unavailable — honest-assembly-state, [§6.2](sync.md#62-consistency-model)). It is an append-only audited access event ([§7](security.md)). **The architecture always provides break-glass; whether the UI offers it and what authorization it demands is policy.**
+
+## 5.10 Authorship and responsibility-state (the consumer side)
+
+> [!NOTE]
+> Authorship the clinician cannot see is useless. Responsibility-state is surfaced in **three layers**,
+> the same shape as the sensitivity / safety-projection design ([§5.9](#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)).
+> The model itself is [data-model §3.9](data-model.md#39-authorship-and-accountability) /
+> [ADR-0007](decisions/0007-authorship-and-accountability.md).
+
+1. **Informational floor (always).** The record honestly shows provenance and responsibility-state —
+   *"AI-drafted, unattested"* vs *"attested by Dr X"*. It **never gates, blocks, or forces** anything;
+   surfacing it *is* the job (principle 3 — confirmation dialogs are explicitly not a safety mechanism).
+
+2. **Projected trust signal.** Responsibility-state feeds the existing **chart/event trust projection**
+   (*confirmed / unconfirmed / under-review*, the projection-side contract above). Un-vouched AI content
+   can render visually distinct, or be held out of certain auto-derived projections until vouched — still
+   never a hard block. *"No human vouches for this yet"* is **acknowledged uncertainty** (principle 4):
+   distinct from *wrong*, from *not-yet-reviewed*, and from *refused*.
+
+3. **Expressible policy rung.** *"Un-vouched suppressing AI output must be attested before it takes
+   effect"* is an *available* policy, never mandatory — tied to the additive-vs-suppressing distinction
+   ([data-model §3.9](data-model.md#39-authorship-and-accountability)). Cairn ships the rung; the
+   deployment decides (principle 9).

@@ -15,3 +15,23 @@ struck-through; their resolution lives in the cited document and the linked ADR.
 10. **Notification economy:** contamination-cascade and history-arrival alerts ([§5.4](identity.md#54-unidentified-registration-john-doe-baked-into-the-root), [§5.5](identity.md#55-reattribution-one-primitive-tiered-workflows)) are safety-critical but additive; define a priority taxonomy so they don't drown in routine noise.
 11. ~~**In-database vs. application-layer merge boundary.**~~ **RESOLVED** ([ADR-0001](decisions/0001-fat-postgres-thin-daemon.md), [language-substrate §9.4](language-substrate.md#94-merge-projection-boundary-fat-postgres-thin-rust-daemon)): structural invariants + identity event algebra + all projections in Postgres (trigger-maintained incremental tables); thin Rust daemon ships/applies but carries no merge logic; matcher stays Python-advisory; per-projection Rust escape hatch on measured Pi-performance need.
 12. **Authentication vs. paper-parity tension:** shared-workstation login is the largest parity violation in deployed EHRs ([§1.2](vision.md#12-the-paper-parity-test-normative) vs. [§7](security.md)); adjudicate explicitly — fast/proximity sessions enabled by local-first state vs. security posture.
+
+## Resolved — authorship & accountability (AI-authored clinical information)
+
+The general problem behind "tagging AI-generated content" (AI scribe, transcription, result-grading,
+triage, notifications) is **resolved** by founding principle 10 and
+[ADR-0007](decisions/0007-authorship-and-accountability.md): authorship is a contributor set and legal
+responsibility is a separable, possibly-absent, possibly-proxied attribute
+([data-model §3.9](data-model.md#39-authorship-and-accountability)). The notification-economy item (10)
+is unaffected — it concerns priority/noise, not authorship.
+
+**Deferred follow-ons (not blocking):**
+- **Closed role-enum membership** — the bearing/non-bearing *partition* is settled; the exact member list
+  is to be finalised in `data-model.md` (`dictated`, `reviewed`, `co-signed` are candidates).
+- **AI-agent identity registry** — registration, keying, version-pinning, and key custody for non-human
+  actors; relation to the §9 trusted base and the keystore (a safety-critical / blast-radius concern).
+- **Additive-vs-suppressing classification** — author-declared, output-type-derived, or both; and how it
+  is validated/enforced where policy demands. The sharpest of the follow-ons; may warrant its own
+  case-mining session.
+- **Proxy/liability semantics** — what `on_behalf_of` legally binds is out of scope; Cairn records the
+  chain, jurisdictions interpret it.

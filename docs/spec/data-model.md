@@ -36,7 +36,7 @@
 
 The clinical event log ([§3.1](#31-append-only-clinical-event-log-source-of-truth)) is stored as **append-only event tables with a hybrid shape**, splitting columns by *what must be machine-enforced or matched* vs. *what is opaque clinical content*:
 
-- **Typed/normalized envelope columns** — everything the safety machinery, identity subsystem, sync layer, and matcher must read or constrain: `uuidv7` primary key ([§3.2](#32-identity-time)), `patient_uuid` (FK), the **HLC** as typed fields (physical timestamp, logical counter, node id; [§3.2](#32-identity-time)) — this *is* the recording time `t_recorded`, author / device, signature, `event_type` (a **closed enum**), scope keys (facility / department / encounter), `created_at`, and **`t_effective` with its precision/interval qualifier** ([§3.6](#36-bitemporal-event-time-recording-time-vs-effective-time), [§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)). Invariants live here because constraints can reach these columns (e.g. the `t_effective ≤ t_recorded` ceiling); JSONB they cannot reach unbypassably.
+- **Typed/normalized envelope columns** — everything the safety machinery, identity subsystem, sync layer, and matcher must read or constrain: `uuidv7` primary key ([§3.2](#32-identity-time)), `patient_uuid` (FK), the **HLC** as typed fields (physical timestamp, logical counter, node id; [§3.2](#32-identity-time)) — this *is* the recording time `t_recorded`, the **contributor set** ([§3.9](#39-authorship-and-accountability)) replacing the single author/device field, the **signature** (origin + integrity only — *not* attestation, [§3.9](#39-authorship-and-accountability)), `event_type` (a **closed enum**), scope keys (facility / department / encounter), `created_at`, and **`t_effective` with its precision/interval qualifier** ([§3.6](#36-bitemporal-event-time-recording-time-vs-effective-time), [§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)). Invariants live here because constraints can reach these columns (e.g. the `t_effective ≤ t_recorded` ceiling); JSONB they cannot reach unbypassably.
 - **Cairn-native JSONB clinical body** — the actual clinical payload (note/observation/order/result/etc.). JSONB avoids re-modeling the sprawling clinical content as relational tables and keeps the FHIR façade cheap, **without** adopting FHIR's resource graph as the schema. The body's integrity is its **signature**, not a SQL constraint — appropriate, since clinical content is immutable and signed.
   - **The body slot is encryption-capable by construction — reserved from day one** ([§3.8](#38-erasure-and-key-custody), [ADR-0005](decisions/0005-erasure-key-custody-and-crypto-shredding.md)). A body is *either* plaintext JSONB *or* **ciphertext under a per-unit data-encryption key (DEK)** wrapped for a set of key-holders (`{node}` by default; optionally `{patient}` and/or named `{clinicians}`). This shape cannot be retrofitted onto an append-only log without re-encrypting history, so it is fixed now even though per-record encryption is **off by default** (default deployments use whole-storage encryption, [§7](security.md)). The envelope columns are never encrypted — identity, sync, and matching bind on them.
   - **A sealed body emits a plaintext *safety projection* sibling** ([identity §5.9](identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope), [ADR-0006](decisions/0006-visibility-scope-replication-and-the-safety-projection.md)): de-identified safety **classes** (interaction/allergy class, Rh-sensitizing event) + a **severity grade**, mechanically projected from the body's coded fields and replicated in the clear like an allergy, so decision-support fires on a sealed episode without disclosing it. Its coarseness is set by a graded, append-only **sensitivity** stream (effective grade = projection). Relatedly, the **semantic scope key may be abstracted to an opaque "confidential-episode" routing token** — the only envelope generalization permitted; `patient_uuid` and the HLC stay plaintext so identity/sync/matching still bind.
@@ -101,3 +101,54 @@ The append-only log ([§3.1](#31-append-only-clinical-event-log-source-of-truth)
 - **Deletion is best-effort and *declared*, never guaranteed** (a corollary of acknowledged uncertainty, [§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)): offline nodes, old backups, and WORM cannot be confirmed. The strongest honest claim is *"to our knowledge, we have erased all copies in our existence."*
 
 The full ladder, the deniable-deletion design (the institution holds nothing; the clinician's cover migrates to a self-held sealed copy), and the keystore's safety-critical status are in [ADR-0005](decisions/0005-erasure-key-custody-and-crypto-shredding.md) and [§7](security.md).
+
+## 3.9 Authorship and accountability
+
+> [!IMPORTANT]
+> **Authorship is compositional; accountability is separable** (founding principle 10,
+> [ADR-0007](decisions/0007-authorship-and-accountability.md)). "AI-generated" is not a flag — it is the
+> emergent reading of a richer model.
+
+- **Contributor set** (replaces the single `author`/device envelope field). Each event's authorship is
+  a *set* of contributors; each entry is `{ identity, role, descriptor?, responsibility? }`. `identity`
+  is a registered actor — **human**, **AI agent** (model + version + vendor + deploying node), or
+  **device**. The ordinary human note is a one-element set, so the common case gets no heavier; an
+  AI-scribed note the clinician edited and signed is `{AI, drafted}` + `{clinician, attested, …}` — mixed
+  authorship and mixed responsibility inside one immutable row. **An event is "AI-generated" iff its set
+  contains a non-human author and no human in a responsibility-bearing role** — true by construction, never
+  tagged.
+
+- **Role — a closed core enum + free descriptor.** Roles are a **closed enum** (like `event_type`), kept
+  small so the safety/DB layer reasons about them unambiguously and the taxonomy cannot sprawl into an
+  unbounded folksonomy. It is partitioned by whether a role *bears or transfers responsibility*:
+  **responsibility-bearing** (`authored`, `ordered`, `attested`) vs **contributory** (`drafted`,
+  `transcribed`, `graded`, `triaged`, `suggested`). An optional **free-text descriptor** carries nuance
+  the machinery never branches on.
+
+- **Responsibility — `{ held_by, on_behalf_of }`, not a boolean.** *Absent* = un-vouched (a legitimate
+  state, below). `held_by` a human, no `on_behalf_of` = ordinary self-attestation. `held_by` an AI agent
+  with `on_behalf_of` a legal entity = the **proxy** case — the output is accountable, accountability
+  routing to its owner/deployer. The attribute is **orthogonal to human/machine**: *"AI is never
+  responsible" is a policy default mapping, not a schema law.* The column exists from day one, so the
+  transition from "software needs a human to take responsibility" toward "the AI colleague is accountable
+  (initially as proxy for its owner)" is a **policy change with no schema migration**.
+
+- **Signature ≠ attestation.** The **signature** proves *origin + integrity* only; **attestation** (a
+  responsibility-bearing role) confers *responsibility*. Every event is signed, including AI output —
+  *signed ≠ vouched-for* ([security §7.2](security.md#72-signing-attestation-and-ai-agent-identity)).
+
+- **No responsible party is legitimate, and structurally characterised.** An event may carry **zero**
+  responsibility-bearing contributors. The safe-by-construction case is a **strictly additive** output —
+  one that can only *raise* signal (priority, a warning) and can never reduce, defer, de-prioritise,
+  auto-file, or auto-resolve something a human would otherwise act on. Its worst case is exactly the paper
+  baseline (principle 3 — a safety net laid *under* the floor, never a hole cut *in* it), so nothing new is
+  created to answer for. The **additive-vs-suppressing nature of an output is a recordable, projectable
+  property**; whether an *un-owned suppressing* output is permitted is **policy** (principle 9), and an
+  override toward permitting it is itself an explicit, audited, owned configuration act.
+
+- **Lifecycle rides existing lineage.** Responsibility that attaches *over time* — an AI fires a draft
+  now (`{AI, drafted}`, un-vouched); a human vouches later — is a **new event referencing the draft**
+  (`{human, attested, responsibility: human}`), exactly how signatures, addenda, and corrections already
+  work ([§3.1](#31-append-only-clinical-event-log-source-of-truth)). No new overlay stream; principle 1 is
+  satisfied (the draft is never mutated). How the clinician *sees* authorship and responsibility-state is
+  [identity §5.10](identity.md#510-authorship-and-responsibility-state-the-consumer-side).

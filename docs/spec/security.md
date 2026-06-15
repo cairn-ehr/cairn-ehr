@@ -25,3 +25,27 @@
 - **Rung 2 (deniable) vs. rung 3 (audited) pull opposite ways and that is deliberate.** Rung 3's tombstone *proves* existence + lawful destruction (clinician medico-legal cover); rung 2 must leave **no trace** — a tombstone would prove the record existed, which is exactly what the patient needs gone. In rung 2 the clinician's cover **migrates** to their own retained sealed copy, producible later by the patient's consent; the institution can honestly answer a subpoena "no record". Policy selects the rung; the system takes no side.
 - **The honest-erasure ceiling (normative).** The strongest claim Cairn ever makes is **"to our knowledge, we have erased all copies in our existence"** — both hedges load-bearing, both corollaries of acknowledged uncertainty ([§3.7](data-model.md#37-acknowledged-uncertainty-uncertainty-capable-value-types)): offline nodes/backups/WORM cannot be confirmed (*"to our knowledge"*), and sealed copies a patient or trusted clinician holds are outside the institution's boundary (*"in our existence"*).
 - **The keystore is safety-critical.** Key destruction is irreversible; an *accidental* shred is catastrophic data loss (founding principle 1). It carries the same gravity/authorization/audit as the erasure it effects, and keys must not be silently reconstructable from ordinary DB backups after destruction.
+
+## 7.2 Signing, attestation, and AI-agent identity
+
+> [!IMPORTANT]
+> **A signature proves origin and integrity; attestation confers responsibility. They are separable
+> acts** (founding principle 10, [ADR-0007](decisions/0007-authorship-and-accountability.md)).
+
+- **Two jobs, unfused.** For a human author the cryptographic signature and the act of vouching collapse
+  into one, which is why the envelope historically carried a single `author` + `signature`. AI authorship
+  forces them apart: every event is **signed** (origin + integrity, by whatever authored it — including an
+  AI agent), but a signature confers **no legal attestation**. *Signed ≠ vouched-for.* Responsibility is a
+  separate per-contributor attribute carried by a responsibility-bearing role
+  ([data-model §3.9](data-model.md#39-authorship-and-accountability)).
+
+- **AI agents are registered cryptographic identities.** An AI author signs with its own key, bound to
+  `model + version + vendor + deploying node`. This makes AI authorship as auditable and **recall-traceable**
+  as a human's even though it is (by current policy) never accountable: when a model version is later found
+  defective, *"which events did agent X v2.3 author?"* is a first-class query. The AI-agent identity
+  **registry and its key custody are part of the trusted base** — a non-human actor inside the
+  safety-critical surface ([§9 blast-radius rule](language-substrate.md)); keep it small and reviewer-legible.
+
+- **Policy-neutral (principle 9).** Whether a deployment ever lets responsibility be *held_by* an AI agent
+  (as proxy for its owner, or eventually in its own right) is configuration, not a stance Cairn takes. The
+  signing/attestation mechanism is indifferent to that choice.

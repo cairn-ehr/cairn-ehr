@@ -25,7 +25,7 @@ Do not invent build/test/run instructions; they don't exist until implementation
      history and the spec version is stated in `index.md`. Pre-ADR history (v0.1→v0.6 changelogs) is
      preserved in `docs/spec/decisions/0000-pre-adr-changelog-v0.1-v0.6.md`.
    - **HTML is generated, not hand-edited.** Source is Markdown; the site builds with
-     `uv run --with mkdocs-material --with mkdocs-callouts -- mkdocs build` (config: `mkdocs.yml`).
+     `uv run --with mkdocs-material --with mkdocs-callouts --with mkdocs-redirects -- mkdocs build` (config: `mkdocs.yml`).
      Author callouts in GitHub/Obsidian syntax (`> [!NOTE]`) so they render on GitHub *and* as
      Material admonitions. Never commit the generated `site/` (gitignored).
 3. **`docs/HANDOVER.md`** — disposable working scaffolding, NOT a source of truth. It points at
@@ -67,6 +67,11 @@ Two more architectural invariants worth holding: **availability over consistency
 must always be able to read locally-relevant records and write new data during a partition; AP in
 CAP terms) and **fractal topology** (one codebase at every tier — workstation→department→facility→
 region→nation; a node's role is configuration, not a different product).
+
+A **tenth founding principle** — *authorship is compositional; accountability is separable* — generalizes
+"AI-generated content" into a contributor set plus a separable, possibly-absent, possibly-proxied
+responsibility attribute (signature proves origin/integrity; attestation confers responsibility)
+([ADR-0007](docs/spec/decisions/0007-authorship-and-accountability.md), spec §3.9 / §5.10 / §7.2).
 
 ## When implementation begins: language/substrate selection rule
 

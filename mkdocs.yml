@@ -97,5 +97,6 @@ nav:
       - ADR-0004 · Dynamic sync scope — prefetch, not authority: spec/decisions/0004-dynamic-sync-scope-prefetch-not-authority.md
       - ADR-0005 · Erasure — key-custody & crypto-shredding: spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md
       - ADR-0006 · Visibility-scope — replication & the safety projection: spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md
+      - ADR-0007 · Authorship is compositional, accountability separable: spec/decisions/0007-authorship-and-accountability.md
   - Principles:
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md

@@ -30,6 +30,33 @@ Everything below is the stuff that lives *between* those documents and would oth
 
 ---
 
+## Resolved 2026-06-15 — authorship & accountability (now spec v0.10)
+
+Reframed "tag AI-generated content" (raised the prior session) into a general model and a **tenth
+founding principle**: **authorship is compositional; accountability is separable**
+([ADR-0007](spec/decisions/0007-authorship-and-accountability.md)). No new overlay stream — it reuses the
+envelope and existing lineage.
+
+- **Contributor set** replaces the single `author` field: `{identity, role, descriptor?, responsibility?}`,
+  identity = human / AI agent (model+version+vendor+node) / device. "AI-generated" is the emergent reading
+  "non-human author + no responsible human," never a flag. ([data-model §3.9](spec/data-model.md))
+- **Responsibility = `{held_by, on_behalf_of}`** — absent / held / proxied; orthogonal to human-vs-machine.
+  *"AI is never responsible" is a policy default, not a schema law* → the transition toward AI accountability
+  needs no migration.
+- **Signature decoupled from attestation** — signed proves origin+integrity, attestation confers
+  responsibility; *signed ≠ vouched-for*; AI agents get a registered crypto identity for recall-traceability.
+  ([security §7.2](spec/security.md))
+- **No responsible party is legitimate** for a *strictly additive* (win-or-no-change) output — the
+  pathology-triage case. Additive-vs-suppressing is a recordable property; un-owned *suppressing* output is
+  policy-gated (principle 9). Consumer side = three layers on the existing trust projection
+  ([identity §5.10](spec/identity.md)).
+
+**Open follow-ons:** exact role-enum membership; AI-agent identity registry + key custody (trusted-base /
+blast-radius); additive-vs-suppressing classification (sharpest — author-declared vs derived); proxy/liability
+semantics (out of scope — Cairn records the chain). See [open-questions.md](spec/open-questions.md).
+
+---
+
 ## Resolved 2026-06-14 — §11.8 visibility-scope ↔ sync-scope (now written into spec v0.9)
 
 Case-mined **§11.8** (does a sequestered episode replicate to a node at all?) plus the **rung-1 metadata

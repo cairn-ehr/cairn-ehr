@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture / specification phase — no implementation yet.
-**Spec version:** 0.9 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.10 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
@@ -97,6 +97,16 @@ first four before anything else.
    blacklist + grading-system + human-editability the policy/UI combines ([identity §5.9](identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope),
    [ADR-0006](decisions/0006-visibility-scope-replication-and-the-safety-projection.md)), and compliance
    posture as configuration ([security §7](security.md)).
+10. **Authorship is compositional; accountability is separable** — the author of a clinical event is a
+    *set* of contributors (human, AI agent, or device), each in a declared role. **Legal responsibility
+    is a distinct attribute, orthogonal to authorship and to whether a contributor is human or machine**:
+    it may be absent (no one vouches), held, or proxied (held on another's behalf). A signature proves
+    *origin and integrity*; *attestation* confers *responsibility*; the two are separable. Cairn records
+    who authored, in what role, and who answers for it — and is indifferent to whether, over time,
+    machines come to hold responsibility in their own right. "AI-generated" is therefore an emergent
+    reading, never a flag ([data-model §3.9](data-model.md#39-authorship-and-accountability),
+    [security §7.2](security.md#72-signing-attestation-and-ai-agent-identity),
+    [ADR-0007](decisions/0007-authorship-and-accountability.md)).
 
 ---
 
