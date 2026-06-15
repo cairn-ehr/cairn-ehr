@@ -73,6 +73,18 @@ A **tenth founding principle** — *authorship is compositional; accountability 
 responsibility attribute (signature proves origin/integrity; attestation confers responsibility)
 ([ADR-0007](docs/spec/decisions/0007-authorship-and-accountability.md), spec §3.9 / §5.10 / §7.2).
 
+An **eleventh founding principle** — *legibility across time* — extends paper-parity along the
+time/version axis: a clinical event stays human-readable for as long as it exists, no matter how far the
+schema has moved (*schema is versioned data, not privileged structure*). Mechanism: a mandatory, signed,
+mechanically-derived **plaintext legibility twin** on every event (also the full-text/RAG substrate) plus
+**additive-only** schema evolution. This came out of resolving §11.4 (schema migration across the offline
+fleet): evolution is routed through **two planes** — clinical events sync forward-compatibly (never
+executable code), while code/DDL/pgrx extensions travel a **separate signed, per-architecture,
+sneakernet-capable distribution plane**; the schema/extension version is a *local node property*, so there
+is no lockstep fleet upgrade ([ADR-0012](docs/spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md),
+spec §3.13 / §6.5 / §7.6). Remaining open §11 items: **§11.6** (attachment strategy) and **§11.7**
+(locale-pluggable matcher comparators).
+
 ## When implementation begins: language/substrate selection rule
 
 The spec deliberately does **not** fix languages per component (spec §9). It fixes the *rule*:

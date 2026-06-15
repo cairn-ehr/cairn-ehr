@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-15 (spec bumped to **v0.14**)
+**Session date:** 2026-06-15 (spec bumped to **v0.15**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
@@ -27,6 +27,59 @@ restate them. Repository layout:
   shopfront; the same mission prose also lives canonically in `docs/spec/index.md`).
 
 Everything below is the stuff that lives *between* those documents and would otherwise be lost.
+
+---
+
+## Resolved 2026-06-15 — §11.4 schema migration + founding principle 11 (now spec v0.15)
+
+Closed **§11.4** (schema migrations across a fleet of offline nodes) and, along the way, added an
+**eleventh founding principle: legibility across time.** → [ADR-0012](spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md),
+canonical homes **[data-model §3.13](spec/data-model.md)** (event-format invariants),
+**[sync §6.5](spec/sync.md)** (two planes + lossless forwarding), **[security §7.6](spec/security.md)**
+(distribution plane), with the safety-projection unification in **[identity §5.9](spec/identity.md)** and the
+new principle in **[index.md](spec/index.md)** / **[vision §1.9](spec/vision.md)**.
+
+- **Schema evolution = the append-only/overlay + acknowledged-uncertainty principles applied to the schema
+  itself.** The user's framing held: this is the *highest-leverage* remaining §11 item because — unlike
+  attachments/comparators — it **constrains the event envelope**, which can't be retrofitted onto an
+  append-only log (same logic as `t_effective` and the encryption-capable body slot being reserved day one).
+- **Two planes that run at different speeds (the central ruling).** **Sync plane:** clinical events, set-union,
+  AP, skew-tolerant, **never executable code**; the event *format* evolves forward-compatibly. **Distribution
+  plane:** code/DDL/pgrx extensions, per-node, **per-architecture**, signed against a steward key, verified
+  before load, **sneakernet-capable**. The decoupling that dissolves "lockstep fleet upgrade": **the
+  schema/extension version is a *local node property* — node X's extension only has to match node X's own
+  schema, never the version of events arriving from elsewhere.** Syncing a native `.so` over the clinical mesh
+  is a hard no (RCE channel; violates principle 8).
+- **The user's two sharp inputs, both absorbed:** (1) *pgrx extensions must travel with migrations* → the
+  migration unit is one signed atomic bundle `{DDL + per-arch extension binary + projection-rebuild recipe}`;
+  difficulty tracks native-code surface, so ADR-0001/0002's "small native surface" earns a *second* payoff
+  (minimized migration blast radius). (2) *the stuck-at-V1-forever node that downloads a V9 record* → must not
+  just display but **forward and safeguard** it: **lossless passthrough** (store/sync/export the original
+  signed bytes untouched; signature covers a canonical byte form, never re-serialized JSONB), local annotations
+  are **additive overlays**, and a node renders down a **legibility ladder**.
+- **The user's proposal, refined and then elevated.** Their "any post-V1 format ships a to-plaintext function,
+  retaining the original" was right; refined to **a mandatory, signed, mechanically-derived plaintext twin on
+  *every* event** (the user's call, motivated by full-text indexability + compact RAG context + human audit —
+  storage is cheap and compresses). The twin is a *local projection*, never the synced/exported record; carries
+  a `rendered-by` stamp; an upgraded node regenerates a richer one.
+- **The elegant unification (worth carrying):** the legibility ladder and the §5.9 confidentiality ladder are
+  the **same mechanism** — effective rendering = `min(what this node can parse, what it is cleared to see)`. A
+  can't-parse-the-format node is in the same position as a can't-decrypt-the-body node; both degrade down one
+  ladder (rich → generic-descriptor → plaintext twin → §5.9 safety projection → partition-honest floor).
+  *Coarseness varies; existence never disappears.* **Tolerance window = infinite for custody, best-effort for
+  understanding.**
+- **Four day-one event-format essentials** (can't-retrofit): `schema_version` (also the future schema-descriptor
+  registry join key), the mandatory plaintext twin, lossless passthrough, additive-only evolution.
+- **Scope call (the user's): design A, let B inform it.** Committed the four day-one essentials + the carried
+  twin (Rung 0) now; the **generic descriptor-driven renderer (Rung 1)** is explicitly deferred and asserted to
+  need **no envelope change / no migration** to add later (because `schema_version` is forward-designed as its
+  join key). No new event stream.
+- **Blast-radius (§9):** serialization/signature-canonicalization, lossless passthrough, additive-only
+  enforcement, and distribution-plane signature-verification + extension load are safety-critical; all renderers
+  + search/RAG are fit-for-purpose; the write-time body→twin seam *is* the §5.9 seal-time seam (one seam now).
+- **New founding principle 11 — legibility across time** (the user's call to elevate it from a footnote): an
+  event stays human-readable for as long as it exists regardless of schema drift — paper's note-from-decades-ago
+  property; *schema is versioned data, not privileged structure*.
 
 ---
 
@@ -373,14 +426,14 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 
 ## Open questions / where we'd pick up
 
-Spec §11: items 1, 2, 3, **5**, **8**, **9**, **10**, 11, and **12** now struck-through/resolved, and the
+Spec §11: items 1, 2, 3, **4**, **5**, **8**, **9**, **10**, 11, and **12** now struck-through/resolved, and the
 ADR-0007 deferred **additive-vs-suppressing** ([ADR-0010](spec/decisions/0010-additive-vs-suppressing-classification.md))
 and **AI-agent identity registry** ([ADR-0011](spec/decisions/0011-actor-registry-version-pinning-and-key-custody.md))
-follow-ons are closed too. Remaining architecture open questions are **§11.4** (schema migration across
-offline nodes), **§11.6** (attachment strategy), and **§11.7** (locale-pluggable matcher comparators) —
-none as sharp as the clusters already closed. The only ADR-0007 follow-ons still open are small (closed
-role-enum membership finalisation; proxy/liability semantics, out of scope — Cairn records the chain). The
-most *generative* mode is now continued **clinical case-mining**, or one of the build-prep threads below.
+follow-ons are closed too. Remaining architecture open questions are just **§11.6** (attachment strategy) and
+**§11.7** (locale-pluggable matcher comparators) — neither as sharp as the clusters already closed. The only
+ADR-0007 follow-ons still open are small (closed role-enum membership finalisation; proxy/liability semantics,
+out of scope — Cairn records the chain). The most *generative* mode is now continued **clinical case-mining**,
+or one of the build-prep threads below.
 
 **The recurring menu** when resuming (pick one):
 - More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
@@ -391,8 +444,7 @@ most *generative* mode is now continued **clinical case-mining**, or one of the 
   both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
 - **Polish a non-developer landing page** for the generated site (frontend-design work; draft plans
   already exist under `docs/superpowers/`).
-- Other still-open §11 items: schema migrations across offline nodes (§11.4), attachment strategy
-  (§11.6), locale-pluggable matcher comparators (§11.7).
+- Other still-open §11 items: attachment strategy (§11.6), locale-pluggable matcher comparators (§11.7).
 
 ---
 
@@ -414,13 +466,15 @@ most *generative* mode is now continued **clinical case-mining**, or one of the 
 - The project's founding motivation is explicitly **anti-capture / anti-vendor-lock-in**, rooted in the
   user's experience of government EHR committees being sabotaged by commercial interests. Decisions
   consistently favour the mission over convenience; treat that as the tie-breaker.
-- **Ten founding principles** now run through everything ([index.md](spec/index.md)); the **first four**
+- **Eleven founding principles** now run through everything ([index.md](spec/index.md)); the **first four**
   are the lens checked before any new design choice: **(1)** append-only + causal ordering; **(2)**
   identity is a claim, never a fact (never merge/erase, always link/overlay); **(3)** paper-parity;
   **(4)** acknowledged uncertainty (incl. the corollary *deletion is best-effort and declared*). The
   rest: availability-over-consistency, fractal topology, vendor independence, safety-critical-logic-in-
-  Rust/DB, **(9) policy-neutral infrastructure** (mechanism, never policy), and **(10) authorship is
-  compositional, accountability is separable**. Note: the §5.11 point-of-care work added **no** new
+  Rust/DB, **(9) policy-neutral infrastructure** (mechanism, never policy), **(10) authorship is
+  compositional, accountability is separable**, and **(11) legibility across time** (paper-parity along the
+  time/version axis; the mandatory plaintext twin + additive-only schema evolution; *schema is versioned data,
+  not privileged structure* — ADR-0012). Note: the §5.11 point-of-care work added **no** new
   founding principle — its three operational principles (never-wait / always-a-fallback / never-redo-work)
   are corollaries of paper-parity, availability, append-only, and identity-repair. The §5.12 notification
   economy likewise added none — its rulings (salience ≠ interruptiveness; notification-as-projection;

@@ -102,5 +102,6 @@ nav:
       - ADR-0009 · Notification economy — salience, routing & the ack floor: spec/decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md
       - ADR-0010 · Additive-vs-suppressing classification: spec/decisions/0010-additive-vs-suppressing-classification.md
       - ADR-0011 · Actor registry — version-pinning & key custody: spec/decisions/0011-actor-registry-version-pinning-and-key-custody.md
+      - ADR-0012 · Schema evolution, migration & legibility across time: spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md
   - Principles:
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md

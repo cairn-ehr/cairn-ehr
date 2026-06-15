@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture / specification phase — no implementation yet.
-**Spec version:** 0.14 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.15 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
@@ -107,6 +107,17 @@ first four before anything else.
     reading, never a flag ([data-model §3.9](data-model.md#39-authorship-and-accountability),
     [security §7.2](security.md#72-signing-attestation-and-ai-agent-identity),
     [ADR-0007](decisions/0007-authorship-and-accountability.md)).
+11. **Legibility across time** — every clinical event must remain human-readable for as long as it
+    exists, independent of how far the schema or software has since moved. This is paper-parity
+    (principle 3) extended along the *time/version* axis: ink on paper from decades past needs no
+    "version" to be read, and a Cairn event must match that — a node generations behind (or ahead)
+    can always read an event as a clinician reads a progress note. *Schema is versioned data, not
+    privileged structure.* The mechanism is a mandatory, signed, mechanically-derived **plaintext
+    legibility twin** on every event (also the substrate for full-text search and RAG context) plus
+    **additive-only** schema evolution, so the original is never lost and the rendering is always
+    regenerable ([data-model §3.13](data-model.md#313-schema-evolution-event-format-and-the-legibility-twin),
+    [sync §6.5](sync.md#65-schema-evolution-two-planes-and-lossless-forwarding),
+    [ADR-0012](decisions/0012-schema-evolution-event-format-and-legibility-across-time.md)).
 
 ---
 
