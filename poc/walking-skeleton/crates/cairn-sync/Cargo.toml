@@ -1,0 +1,16 @@
+[package]
+name = "cairn-sync"
+version = "0.0.0"
+description = "Cairn walking skeleton — thin set-union ship/apply daemon and the preemptible lazy blob tier (Spike 0001 §3, §5)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cairn-event = { path = "../cairn-event" }
+postgres = "0.19"          # sync client; NoTls — WireGuard is the transport (spike assumption)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v7"] }
+hex = "0.4"

@@ -1,0 +1,21 @@
+[package]
+name = "cairn-event"
+version = "0.0.0"
+description = "Cairn walking skeleton — the signed event envelope: canonical bytes, content-addressing, COSE_Sign1/Ed25519 signing and verification, BLAKE3 blob addressing."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ciborium = "0.2"           # CBOR encode/decode of the canonical body
+coset = "0.3"              # COSE_Sign1 (RFC 9052) signature envelope
+ed25519-dalek = "2"        # Ed25519 (RFC 8032)
+sha2 = "0.10"              # event content address (sha2-256, multihash 0x12)
+blake3 = "1"               # blob content address (multihash 0x1e)
+uuid = { version = "1", features = ["v7"] }
+getrandom = "0.2"          # key generation entropy
+hex = "0.4"
+thiserror = "1"

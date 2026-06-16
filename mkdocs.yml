@@ -105,6 +105,9 @@ nav:
       - ADR-0012 · Schema evolution, migration & legibility across time: spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md
       - ADR-0013 · Attachments — content-addressed blobs & the lazy byte tier: spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md
       - ADR-0014 · Locale-pluggable matcher comparators: spec/decisions/0014-locale-pluggable-matcher-comparators.md
+  - Spikes (build-prep):
+      - spikes/README.md
+      - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
   - Principles:
       - Governance & contributing: principles/GOVERNANCE.md
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md

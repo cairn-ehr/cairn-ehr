@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/cairn-event", "crates/cairn-sync"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.74"
+license = "AGPL-3.0-only"
+repository = "https://github.com/cairn-ehr/cairn-ehr"
+
+# The walking skeleton's safety-critical surface (signing, verification, canonical
+# bytes, content-addressing, set-union apply) lives in Rust per the §9 blast-radius
+# rule; the verify path is the seam that moves in-DB via pgrx (ADR-0002) in production.
+[profile.release]
+opt-level = 3
