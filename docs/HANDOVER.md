@@ -30,6 +30,35 @@ Everything below is the stuff that lives *between* those documents and would oth
 
 ---
 
+## Drafted 2026-06-16 — first implementation spike (build-prep; spec version unchanged at v0.17)
+
+The architecture backlog being empty, started the **build-prep** thread. New area **`docs/spikes/`**
+(build-prep is neither architecture nor an ADR — kept separate so the spec stays a clean *what* and the
+ADR log a clean *why*), with the first task **[Spike 0001](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)**
+and a [spikes/README.md](spikes/README.md) index. Added to `mkdocs.yml` nav; builds `--strict` clean.
+
+- **Reframed "the Pi-benchmark spike" into two separate bets.** The user's available test rig (MacBook in
+  Cape York/Bamaga on Starlink-mini ↔ DGX Spark in Dorrigo NSW on Starlink, over WireGuard) does **not**
+  stress the ADR-0001 compute bet — both machines are fast. It stresses a *different, more fundamental*
+  bet: **sync convergence + partition behaviour + bandwidth economy over a real adverse WAN** (design-
+  validity, hard to retrofit). The Pi compute-cost bet (the documented go/no-go) waits for next week's
+  real Pi-class node. Both ride **one shared walking skeleton**, built once.
+- **The serialization/signature question the user asked me to weigh.** The load-bearing answer is **three
+  structural moves**, not a cleverer primitive: (1) **sign the stored bytes, parse a view, never
+  re-serialize** (shrinks the determinism/safety surface — already implied by §3.13/§3.14); (2)
+  **algorithm-tagged, self-describing digests + signatures** (the day-one choice is reversible by policy);
+  (3) **re-attestation is an overlay** (the append-only model migrates its own crypto — defers PQC safely).
+  With those, the **tagged, migratable defaults**: deterministic-CBOR **COSE_Sign1** + **Ed25519**
+  (aligns with the WireGuard transport; freed from JSON because principle 11's plaintext twin owns human-
+  legibility) + **SHA-256** event digest. **BLAKE3 for blobs** (the user's explicit call) — its Merkle-tree
+  structure fits the ADR-0013 chunked/preemptible/resumable/swarm byte tier (independent chunk verification,
+  fast on ARM). Honest dismissals recorded (BLS, ML-DSA/SLH-DSA-now, RSA/P-256, Protobuf/Avro-for-signed-form).
+- **Not yet ratified.** These are *validate-then-ratify* defaults — the spike is how we learn if they hold.
+  The serialization/signature **ADR is written after the spike**, citing its results (Spike 0001 §7 exit
+  criteria). Spec version intentionally **not** bumped: no §1–11 aspect or ADR changed yet.
+
+---
+
 ## Resolved 2026-06-16 — §11.7 locale-pluggable comparators (now spec v0.17) — **§11 is now fully closed**
 
 Case-mined **§11.7** (the matcher comparator extension point). It dissolved — **no new founding principle, no
@@ -549,8 +578,10 @@ empty, the highest-signal modes are now **fresh clinical case-mining** and the *
   primitives have absorbed every case raised without new architecture). The AI-authorship arc (ADR-0007 →
   0009 → 0010 → 0011) is now complete, so fresh clinical cases are the highest-signal next input.
 - ~~Write the GOVERNANCE / CONTRIBUTING document~~ **DONE 2026-06-16** ([GOVERNANCE.md](principles/GOVERNANCE.md) + root `CONTRIBUTING.md`).
-- **Define the Pi-benchmark spike** in enough detail to be the first implementation task (now validates
-  both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
+- ~~**Define the Pi-benchmark spike**~~ **DRAFTED 2026-06-16** as **[Spike 0001](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)**,
+  reframed into two bets (WAN-sync now / Pi-cost next week) on one shared walking skeleton, with the
+  day-one serialization/signature/digest defaults. **Next:** build the skeleton, then run Bet A on the
+  Cape York ↔ Dorrigo link; ratify the crypto primitives into an ADR per the §7 exit criteria.
 - **Polish a non-developer landing page** for the generated site (frontend-design work; draft plans
   already exist under `docs/superpowers/`).
 
