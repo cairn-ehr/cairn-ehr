@@ -505,8 +505,14 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 
 ## Decided in conversation, NOT yet written into the documents
 
-1. **Governance / CONTRIBUTING document** is identified as the next principles document to write, but
-   does not exist yet. STEWARDSHIP-OF-THE-NAME.md is intended for inclusion in it.
+1. **Governance / CONTRIBUTING document — DONE (2026-06-16).** Written as
+   **[docs/principles/GOVERNANCE.md](principles/GOVERNANCE.md)** (a principles-level doc) folding in
+   Stewardship of the Name by reference, plus a thin root **`CONTRIBUTING.md`** pointer (GitHub
+   convention). README Contributing stub and mkdocs nav updated. Notable governance commitments recorded:
+   **mission as tie-breaker; AGPL-3.0 inbound=outbound with DCO and *no CLA*** (a CLA would be the capture
+   surface the project guards against); name-stewardship binds the steward too; case-mining is a
+   first-class contribution. Entity/jurisdiction and formal trademark remain **parked** (carried into the
+   doc, not re-litigated).
 2. **Status line:** README and spec both say "specification / architecture phase." Still accurate today
    — flip when implementation begins.
 
@@ -542,7 +548,7 @@ empty, the highest-signal modes are now **fresh clinical case-mining** and the *
 - More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
   primitives have absorbed every case raised without new architecture). The AI-authorship arc (ADR-0007 →
   0009 → 0010 → 0011) is now complete, so fresh clinical cases are the highest-signal next input.
-- **Write the GOVERNANCE / CONTRIBUTING document** (folding in STEWARDSHIP-OF-THE-NAME.md).
+- ~~Write the GOVERNANCE / CONTRIBUTING document~~ **DONE 2026-06-16** ([GOVERNANCE.md](principles/GOVERNANCE.md) + root `CONTRIBUTING.md`).
 - **Define the Pi-benchmark spike** in enough detail to be the first implementation task (now validates
   both the ADR-0001 projection cost *and* the ADR-0005 keystore/crypto-shred cost).
 - **Polish a non-developer landing page** for the generated site (frontend-design work; draft plans

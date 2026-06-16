@@ -161,8 +161,12 @@ them running — clinicians, health-IT engineers, and anyone who has been failed
 believes it could be otherwise. Clinical realism is as valued here as code: a well-described
 failure mode from the front line is a genuine contribution.
 
-*(Contribution guidelines, governance, and code of conduct to follow as the project moves from
-specification into implementation.)*
+**How to contribute, and how the project is governed:** see
+**[CONTRIBUTING.md](CONTRIBUTING.md)** and the full
+**[Governance & Contributing](docs/principles/GOVERNANCE.md)** document. In short: the project is in
+its specification phase (most contribution today is design work on the spec); contributions are
+AGPL-3.0, inbound = outbound, under the [DCO](https://developercertificate.org/) (`git commit -s`)
+with **no CLA**; and the mission is the tie-breaker.
 
 ---
 

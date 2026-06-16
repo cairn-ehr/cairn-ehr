@@ -73,7 +73,7 @@ the consumer-side atrophy signal is [identity §5.10](../identity.md#510-authors
    **Additive is the open complement and the runtime default.** The set is curated at the trusted surface
    ([§9](../language-substrate.md)) with a **suppressing-until-proven-additive review discipline**: a new
    operation must affirmatively demonstrate information-preservation to earn the additive (un-owned-eligible)
-   class — the safety-asymmetric stance (false-merge ≫ false-split, [identity §5.2](../identity.md#52-matching-pipeline-safety-asymmetric-false-merge--worse-than-false-split)) applied to the development process, so
+   class — the safety-asymmetric stance (false-merge ≫ false-split, [identity §5.2](../identity.md#52-matching-pipeline-safety-asymmetric-false-merge-worse-than-false-split)) applied to the development process, so
    there is never an unclassified operation at runtime.
 
 4. **Enforcement is structural and in-database.** The trusted apply/projection layer **refuses to apply a
