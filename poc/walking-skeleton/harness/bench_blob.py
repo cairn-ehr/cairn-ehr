@@ -21,6 +21,7 @@ Checks:
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -164,8 +165,16 @@ def cmd_selftest(args):
         elapsed = time.time() - t0
         present, length = dst.present(addr)
         mbps = (nbytes / (1 << 20)) / elapsed if elapsed > 0 else 0.0
+        # Round-trip reduction metric (§4.6): compare old sequential stub vs windowed §8.2.
+        OLD_CHUNK = 65536   # pre-§8.2 stub: one synchronous RTT per 64 KiB chunk
+        SLICE = 262144      # MUST match SLICE_BYTES in cairn-sync (same constant as T2)
+        seq_rtts = math.ceil(nbytes / OLD_CHUNK)
+        n_slices = math.ceil(nbytes / SLICE)
+        waves = math.ceil(n_slices / args.window)
         rows.append(("T1", "windowed fetch", present and length == nbytes,
-                     f"{size_mb} MB in {elapsed:.1f}s ({mbps:.1f} MB/s), window {args.window}, {passes} pass(es)"))
+                     f"{size_mb} MB in {elapsed:.1f}s ({mbps:.1f} MB/s), window {args.window}, {passes} pass(es)"
+                     f"; ~{seq_rtts} seq RTTs (64KiB stub) -> ~{waves} windowed waves"
+                     f" ({n_slices} slices/window {args.window})"))
 
         # T2 resume: INTERRUPT a fetch mid-transfer (a single blobd call drains the
         # whole queue, so resume only manifests on interruption), confirm a partial
