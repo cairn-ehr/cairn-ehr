@@ -77,7 +77,15 @@ multihash/BLAKE3 + the thin set-union ship-apply daemon in Rust (no merge logic)
 - **Stubs are documented** (README "what it proves / deliberately stubs"): key trust = embedded key (not yet
   the ADR-0011 registry); change-capture = watermark-pull (not yet logical decoding); verify-in-applier (not
   yet the in-DB pgrx gate); inline BYTEA blobs. None change either bet.
-- **Next:** Bet A on the Cape York ↔ Dorrigo WireGuard link (Spike 0001 §5); Bet B on a Pi next week (§6).
+- **Bet A measurement harness — built + green** (`poc/walking-skeleton/harness/bet_a.py`, stdlib-only).
+  Added `gen` / `fingerprint` / `pull --metrics` to the daemon; the harness emits the §5 PASS/FAIL table
+  directly. `selftest` passes all six rows on real PG; A4 reads **563ms base → 551ms during** (fixed-batch
+  per-sample work so it's a like-for-like comparison — single-box validates mechanics; the real A4 contention
+  is on the link). One subtlety found + fixed: a free-running generator made the A4 baseline a misleading
+  backlog drain (23s); switched to drain-then-fixed-batch sampling.
+- **Next:** run **Bet A on the Cape York ↔ Dorrigo WireGuard link** (start `serve`+`gen` on each node,
+  drive partition via the injector hooks, compare `fingerprint`s with `bet_a.py report`); **Bet B on a Pi
+  next week** (§6). Then ratify the §4 primitives into an ADR per Spike 0001 §7.
 
 ---
 
