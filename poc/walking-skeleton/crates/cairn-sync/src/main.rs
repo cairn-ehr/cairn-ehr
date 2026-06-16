@@ -7,8 +7,8 @@
 //!   * **clinical plane** (`serve` events / `pull`): eager, small, high priority —
 //!     ships signed event bytes; the receiver *verifies on apply* (Bet A2) and
 //!     inserts idempotently (`ON CONFLICT DO NOTHING` — set-union, Bet A1).
-//!   * **byte tier** (`serve` blob chunks / `blobd`): lazy, chunked, preemptible,
-//!     separately budgeted — must never starve the clinical plane (Bet A4).
+//!   * **byte tier** (`serve` blob slices / `blobd`): lazy, windowed, resumable,
+//!     preemptible, separately budgeted — must never starve the clinical plane (Bet A4).
 //!
 //! This daemon carries NO merge logic (ADR-0001/§9.4): convergence is set-union +
 //! the in-DB projection trigger. It only ships bytes, verifies, and applies.
@@ -726,6 +726,11 @@ fn do_blobd(
     window: usize,
     budget_ms: u64,
 ) -> R<serde_json::Value> {
+    // Bound the worker pool: each worker opens a PG connection and adds parallel
+    // link load, so the effective byte-tier budget is budget_ms * window. Clamp so a
+    // large --window can never exhaust connections or breach the availability floor.
+    let window = window.clamp(1, 16);
+
     let missing = client.query(
         "SELECT encode(blob_address,'hex'), byte_len FROM blob_store WHERE NOT present",
         &[],
@@ -740,7 +745,13 @@ fn do_blobd(
         let byte_len: Option<i64> = row.get(1);
         let total = match byte_len {
             Some(n) if n > 0 => n as u64,
-            _ => continue, // length unknown -> can't chunk yet; a later reference fills it
+            _ => {
+                eprintln!(
+                    "blob {} referenced but byte_len unknown — skipping until a reference supplies it",
+                    &addr_hex[..16]
+                );
+                continue;
+            }
         };
         let addr = hex::decode(&addr_hex)?;
         let n_chunks = total.div_ceil(SLICE_BYTES as u64) as usize;
@@ -756,7 +767,7 @@ fn do_blobd(
         if !todo.is_empty() {
             let queue = Arc::new(Mutex::new(todo));
             let mut handles = Vec::new();
-            for w in 0..window.max(1) {
+            for w in 0..window {
                 let queue = Arc::clone(&queue);
                 let rejected = Arc::clone(&rejected);
                 let fetched = Arc::clone(&fetched);
