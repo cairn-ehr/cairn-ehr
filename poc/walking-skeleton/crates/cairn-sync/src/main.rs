@@ -58,12 +58,28 @@ struct EventsResponse {
     events: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct BlobSliceResponse {
-    found: bool,
-    total_len: u64,
-    /// hex-encoded bao slice (skeleton ships hex; the real tier ships raw bytes).
-    slice_hex: String,
+/// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
+/// tier is throughput-bound on the WAN, so it ships the bao slice as raw bytes
+/// rather than hex (hex doubled every transferred byte, halving measured throughput
+/// and skewing the §8.2 numbers). Layout: `[found:u8][total_len:u64 BE][slice…]`.
+/// The clinical plane stays JSON — it is small and latency-bound, not throughput-bound.
+fn encode_blob_slice(found: bool, total_len: u64, slice: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9 + slice.len());
+    out.push(found as u8);
+    out.extend_from_slice(&total_len.to_be_bytes());
+    out.extend_from_slice(slice);
+    out
+}
+
+/// Decode a [`encode_blob_slice`] frame into `(found, total_len, slice_bytes)`.
+/// A frame shorter than the 9-byte header is malformed and decodes as not-found.
+fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
+    if raw.len() < 9 {
+        return (false, 0, &[]);
+    }
+    let found = raw[0] != 0;
+    let total_len = u64::from_be_bytes(raw[1..9].try_into().unwrap());
+    (found, total_len, &raw[9..])
 }
 
 fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
@@ -812,18 +828,11 @@ fn do_blobd(
                                 Ok(r) => r,
                                 Err(_) => continue, // link drop / dead peer -> next source
                             };
-                            let resp: BlobSliceResponse = match serde_json::from_slice(&raw) {
-                                Ok(r) => r,
-                                Err(_) => continue,
-                            };
-                            if !resp.found {
+                            let (found, _total, slice) = decode_blob_slice(&raw);
+                            if !found {
                                 continue;
                             }
-                            let slice = match hex::decode(&resp.slice_hex) {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
-                            match cairn_event::verify_slice(&slice, &root, offset, len) {
+                            match cairn_event::verify_slice(slice, &root, offset, len) {
                                 Ok(bytes) => {
                                     got = Some(bytes);
                                     break;
@@ -834,6 +843,10 @@ fn do_blobd(
                             }
                         }
                         if let Some(bytes) = got {
+                            // chunk_index is i32 (SQL INT): a blob exceeding ~549 GB at
+                            // 256 KiB slices would overflow it. Far beyond any DICOM study,
+                            // but the dedicated object-store tier (not BYTEA) is where a
+                            // wider index would live if that ceiling ever mattered.
                             if let Err(e) = wc.execute(
                                 "INSERT INTO blob_chunk (blob_address, chunk_index, content)
                                  VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
@@ -1058,7 +1071,7 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
                  FROM blob_store WHERE blob_address=$1 AND present AND outboard IS NOT NULL",
                 &[&addr],
             )?;
-            let resp = match row {
+            match row {
                 Some(r) => {
                     let content: Vec<u8> = r.get(0);
                     let outboard: Vec<u8> = r.get(1);
@@ -1074,19 +1087,10 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
                         let m = slice.len() / 2;
                         slice[m] ^= 0x01;
                     }
-                    BlobSliceResponse {
-                        found: true,
-                        total_len: total,
-                        slice_hex: hex::encode(&slice),
-                    }
+                    encode_blob_slice(true, total, &slice)
                 }
-                None => BlobSliceResponse {
-                    found: false,
-                    total_len: 0,
-                    slice_hex: String::new(),
-                },
-            };
-            serde_json::to_vec(&resp)?
+                None => encode_blob_slice(false, 0, &[]),
+            }
         }
     };
     write_frame(&mut stream, &resp)?;

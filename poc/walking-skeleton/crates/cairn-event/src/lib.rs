@@ -45,6 +45,8 @@ pub enum EventError {
     BadAddress,
     #[error("blob slice extraction: {0}")]
     BlobSlice(String),
+    #[error("blob slice failed verification against the content address")]
+    BlobVerify,
 }
 
 /// Hybrid Logical Clock stamp — the objective `t_recorded` ceiling (§3.6).
@@ -181,7 +183,7 @@ pub fn verify_slice(
 ) -> Result<Vec<u8>, EventError> {
     let mut dec = bao::decode::SliceDecoder::new(Cursor::new(slice), root, start, len);
     let mut out = Vec::new();
-    dec.read_to_end(&mut out).map_err(|_| EventError::BadSignature)?;
+    dec.read_to_end(&mut out).map_err(|_| EventError::BlobVerify)?;
     Ok(out)
 }
 
@@ -419,6 +421,10 @@ mod tests {
 
         // Right slice, wrong claimed offset -> reject.
         assert!(verify_slice(&slice, &root, 0, len).is_err());
+
+        // Right slice, wrong claimed length -> reject (a source can't relabel a
+        // slice's span any more than it can its offset or bytes).
+        assert!(verify_slice(&slice, &root, start, len * 2).is_err());
 
         // Right slice, wrong root -> reject.
         let other = blake3_root_from_address(&blob_address(b"different")).unwrap();
