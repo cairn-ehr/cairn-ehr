@@ -87,6 +87,25 @@ multihash/BLAKE3 + the thin set-union ship-apply daemon in Rust (no merge logic)
   drive partition via the injector hooks, compare `fingerprint`s with `bet_a.py report`); **Bet B on a Pi
   next week** (§6). Then ratify the §4 primitives into an ADR per Spike 0001 §7.
 
+### Field-readiness 2026-06-16 (PR #7 merged to main; this work is post-merge on the branch)
+
+User merged PR #7, then **started the real Cape York ↔ Dorrigo run over Starlink/WireGuard at lunch** —
+hit a minor issue (fixed locally, **likely the `--listen 127.0.0.1` vs WireGuard-address bind**; that local
+fix may be uncommitted on their MacBook — confirm/commit when they're back), but the run didn't conclude
+before they had to return to work. So this interim session made the skeleton **runnable unattended**:
+
+- **`cairn-sync run`** — serves + pulls + lazy-fetches blobs on a timer, appends one JSON line/cycle to a
+  log, and **survives link drops** (bounded `connect_timeout` + retry/backoff; a sustained outage logs a
+  `partition`, never fatal). Start it, walk away, analyse later. Default runs until killed (`--duration-s 0`).
+- **`bet_a.py analyze --log run.jsonl`** — turns an unattended run log into the §5 numbers (duration,
+  partition cycles, pull p50/p95/max, A2 verify-fails, A5 bytes/event, A3 merge+gap, A6 blob state) and
+  writes a `.fingerprint.json` so two nodes' logs compare for A1 via `report`.
+- Refactored `pull`/`blobd`/`fingerprint` into reusable cores (`do_*`) the run loop drives. Build/clippy/
+  tests green; validated end-to-end on the container PG (two nodes converged to identical 106-event hashes
+  under mid-run load; lazy blob fetched; transient + dead-peer partitions logged honestly).
+- **Skeleton README** gained an "Unattended field run" section (the exact two-node commands, with the
+  bind-to-WireGuard-address warning called out).
+
 ---
 
 ## Resolved 2026-06-16 — §11.7 locale-pluggable comparators (now spec v0.17) — **§11 is now fully closed**

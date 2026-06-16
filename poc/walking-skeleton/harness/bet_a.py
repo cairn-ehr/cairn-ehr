@@ -266,6 +266,52 @@ def cmd_report(args):
     sys.exit(0 if render_table(rows) else 1)
 
 
+def cmd_analyze(args):
+    """Summarise a `cairn-sync run` JSONL log into the §5 numbers for one node.
+
+    A1 (convergence) needs both nodes — this prints the final fingerprint so you can
+    save each node's and compare with `report`. A2/A4(latency)/A5/A6 + partition
+    behaviour come from this single node's run.
+    """
+    rows = [json.loads(l) for l in open(args.log) if l.strip()]
+    if not rows:
+        print("empty log")
+        sys.exit(1)
+
+    cycles = len(rows)
+    partitions = sum(1 for r in rows if r.get("partition"))
+    dur_s = (rows[-1]["ts"] - rows[0]["ts"]) / 1000.0
+    lat = [r["pull"]["elapsed_ms"] for r in rows if "pull" in r]
+    vf = sum(r["pull"]["verify_failures"] for r in rows if "pull" in r)
+    applied = sum(r["pull"]["applied_new"] for r in rows if "pull" in r)
+    bpe = [r["pull"]["bytes_per_event"] for r in rows if r.get("pull", {}).get("shipped")]
+    fps = [r["fingerprint"] for r in rows if "fingerprint" in r]
+    final = fps[-1] if fps else {}
+
+    print(f"\nrun log: {args.log}")
+    print(f"  duration        {dur_s:.0f}s over {cycles} cycles")
+    print(f"  partitions      {partitions} cycle(s) the peer was unreachable "
+          f"({100*partitions/cycles:.0f}% of cycles)")
+    print(f"  pull latency    p50 {median(lat):.0f}ms  p95 {p95(lat):.0f}ms  "
+          f"max {max(lat):.0f}ms" if lat else "  pull latency    (no successful pulls)")
+    print(f"  A2 verify-fails {vf}  ({'PASS' if vf == 0 else 'FAIL'})")
+    print(f"  A5 bytes/event  {round(sum(bpe)/len(bpe)) if bpe else 0} "
+          f"(over {len(bpe)} non-empty pulls)")
+    print(f"  events applied  {applied}")
+    if final:
+        print(f"  A3 hlc merged   {final.get('hlc_merged_past_max_event')}  "
+              f"(max HLC-record gap {final.get('max_hlc_record_gap_ms')}ms — flagged, not resolved)")
+        print(f"  A6 blobs        {final.get('blobs_present')} present / "
+              f"{final.get('blobs_referenced_only')} referenced-only")
+        print(f"  final events    {final.get('events')}")
+        # Save the final fingerprint for a two-node A1 comparison via `report`.
+        out = args.log + ".fingerprint.json"
+        json.dump(final, open(out, "w"))
+        print(f"\n  -> final fingerprint written to {out}")
+        print(f"     for A1, run: bet_a.py report --local {out} --peer <other-node>.fingerprint.json")
+    print()
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     default_bin = os.path.join(here, "..", "target", "debug", "cairn-sync")
@@ -297,6 +343,10 @@ def main():
     rp.add_argument("--local", required=True)
     rp.add_argument("--peer", required=True)
     rp.set_defaults(func=cmd_report)
+
+    an = sub.add_parser("analyze", help="summarise a `cairn-sync run` JSONL log into §5 numbers")
+    an.add_argument("--log", required=True)
+    an.set_defaults(func=cmd_analyze)
 
     args = ap.parse_args()
     args.func(args)

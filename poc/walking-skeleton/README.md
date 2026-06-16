@@ -127,11 +127,41 @@ on the clinical plane, **A6** honest assembly-state. Exit code 0 = all PASS.
 
 > [!NOTE]
 > Single-box `selftest` validates the **mechanics**; **A4 is only meaningful on a
-> real shared link** (there is no bandwidth to contend for on one box). On the
-> Cape York ↔ Dorrigo run, start a generator and `serve` on each node, drive the
-> link partition with the injector hooks (`--partition-cmd`/`--heal-cmd`, e.g.
-> `wg-quick down/up`), then capture a `fingerprint` on each side and compare with
-> `bet_a.py report --local a.json --peer b.json` for A1/A3.
+> real shared link** (there is no bandwidth to contend for on one box).
+
+### Unattended field run (the real Cape York ↔ Dorrigo test)
+
+`cairn-sync run` serves, pulls, and fetches blobs on a timer, **survives link drops**
+(bounded connect + retry/backoff; a sustained outage is logged as a partition, never
+fatal), and appends **one JSON line per cycle** to a log — so you start it and walk
+away for hours of real Starlink variability, then analyse the log later.
+
+On each node (point `--peer` at the *peer's* WireGuard address):
+
+```sh
+# IMPORTANT: --listen on the WireGuard address (or 0.0.0.0), NOT 127.0.0.1,
+# or the peer can't reach you.
+cairn-sync run --conn "$CONN" \
+    --listen 10.0.0.1:7710 --peer 10.0.0.2:7710 --peer-name dorrigo \
+    --interval-ms 2000 --log capeyork.jsonl        # runs until killed (--duration-s 0)
+
+# meanwhile, generate clinical load on each node (a separate terminal):
+cairn-sync gen --conn "$CONN" --node capeyork --key node.key --count 100000 --rate 2
+```
+
+When you're back, turn each node's log into the §5 numbers, then compare the two
+final fingerprints for convergence (A1):
+
+```sh
+python3 harness/bet_a.py analyze --log capeyork.jsonl     # A2/A4-latency/A5/A6 + partition behaviour
+python3 harness/bet_a.py analyze --log dorrigo.jsonl
+python3 harness/bet_a.py report  --local capeyork.jsonl.fingerprint.json \
+                                 --peer  dorrigo.jsonl.fingerprint.json   # A1 + A3
+```
+
+`analyze` reports duration, **partition cycles** (how often the link was down), pull
+latency p50/p95/max, A2 verify-failures, A5 bytes/event, A3 HLC merge + gap, and A6
+blob present/referenced-only — and writes a `.fingerprint.json` for the A1 compare.
 
 ## Next (the spike's bets)
 

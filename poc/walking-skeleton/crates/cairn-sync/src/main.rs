@@ -14,8 +14,9 @@
 //! the in-DB projection trigger. It only ships bytes, verifies, and applies.
 
 use std::error::Error;
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
@@ -76,11 +77,38 @@ fn read_frame(s: &mut impl Read) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn request(peer: &str, req: &Request) -> R<Vec<u8>> {
-    let mut stream = TcpStream::connect(peer)?;
+fn try_request(peer: &str, req: &Request) -> R<Vec<u8>> {
+    // Bounded connect so a dead link fails fast instead of hanging for minutes.
+    let addr = peer
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve peer address")?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     write_frame(&mut stream, &serde_json::to_vec(req)?)?;
     Ok(read_frame(&mut stream)?)
+}
+
+/// Retry with exponential backoff. A Starlink link drops constantly; a transient
+/// failure must not fail the whole pull/fetch — it retries, and only a sustained
+/// outage surfaces as an error (which the `run` loop logs as a partition).
+fn request(peer: &str, req: &Request) -> R<Vec<u8>> {
+    let mut delay = Duration::from_millis(250);
+    let mut last: Option<Box<dyn Error>> = None;
+    for attempt in 0..4 {
+        match try_request(peer, req) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last = Some(e);
+                if attempt < 3 {
+                    std::thread::sleep(delay);
+                    delay *= 2;
+                }
+            }
+        }
+    }
+    Err(last.unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -369,8 +397,7 @@ fn cmd_gen(
 
 /// Emit a convergence/honest-state fingerprint (A1, A3, A6) as JSON. Two nodes
 /// have converged iff their `event_hash` and `projection_hash` match.
-fn cmd_fingerprint(conn: &str) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+fn do_fingerprint(client: &mut postgres::Client) -> R<serde_json::Value> {
     let events: i64 = client
         .query_one("SELECT count(*) FROM event_log", &[])?
         .get(0);
@@ -408,26 +435,28 @@ fn cmd_fingerprint(conn: &str) -> R<()> {
     )?;
     let (blobs_present, blobs_referenced_only): (i64, i64) = (blobs.get(0), blobs.get(1));
 
-    println!(
-        "{}",
-        serde_json::json!({
-            "events": events,
-            "event_hash": event_hash,
-            "projection_hash": projection_hash,
-            "hlc_wall": hlc_wall,
-            "hlc_counter": hlc_counter,
-            // A3: the local clock must have merged forward past every applied event.
-            "hlc_merged_past_max_event": hlc_wall >= max_event_hlc,
-            // Max gap between an event's asserted HLC and this node's local recording
-            // time — propagation/partition lag plus any true clock skew. Reported and
-            // flagged, never auto-resolved (§3.6); the structural invariant is the
-            // merge above, not a bound on this gap.
-            "max_hlc_record_gap_ms": max_skew_ms,
-            // A6: references whose bytes have not (yet) been retrieved.
-            "blobs_present": blobs_present,
-            "blobs_referenced_only": blobs_referenced_only
-        })
-    );
+    Ok(serde_json::json!({
+        "events": events,
+        "event_hash": event_hash,
+        "projection_hash": projection_hash,
+        "hlc_wall": hlc_wall,
+        "hlc_counter": hlc_counter,
+        // A3: the local clock must have merged forward past every applied event.
+        "hlc_merged_past_max_event": hlc_wall >= max_event_hlc,
+        // Max gap between an event's asserted HLC and this node's local recording
+        // time — propagation/partition lag plus any true clock skew. Reported and
+        // flagged, never auto-resolved (§3.6); the structural invariant is the
+        // merge above, not a bound on this gap.
+        "max_hlc_record_gap_ms": max_skew_ms,
+        // A6: references whose bytes have not (yet) been retrieved.
+        "blobs_present": blobs_present,
+        "blobs_referenced_only": blobs_referenced_only
+    }))
+}
+
+fn cmd_fingerprint(conn: &str) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    println!("{}", do_fingerprint(&mut client)?);
     Ok(())
 }
 
@@ -448,8 +477,7 @@ fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     Ok(())
 }
 
-fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serde_json::Value> {
     client.execute(
         "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
         &[&peer_name],
@@ -470,7 +498,7 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
     for hexed in &resp.events {
         let signed_bytes = hex::decode(hexed)?;
         event_bytes += signed_bytes.len(); // A5: real clinical-plane payload (the COSE blob)
-        match apply_signed(&mut client, &signed_bytes) {
+        match apply_signed(client, &signed_bytes) {
             Ok(new) => {
                 if new {
                     applied += 1;
@@ -492,26 +520,27 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
     )?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+    Ok(serde_json::json!({
+        "op": "pull", "peer": peer_name,
+        "shipped": resp.events.len(), "applied_new": applied,
+        "verify_failures": verify_failures,
+        "event_bytes": event_bytes, "wire_bytes": wire_bytes,
+        "bytes_per_event": if resp.events.is_empty() { 0.0 }
+                           else { event_bytes as f64 / resp.events.len() as f64 },
+        "elapsed_ms": elapsed_ms,
+        "watermark_wall": max_w, "watermark_counter": max_c
+    }))
+}
+
+fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let m = do_pull(&mut client, peer, peer_name)?;
     if metrics {
-        println!(
-            "{}",
-            serde_json::json!({
-                "op": "pull", "peer": peer_name,
-                "shipped": resp.events.len(), "applied_new": applied,
-                "verify_failures": verify_failures,
-                "event_bytes": event_bytes, "wire_bytes": wire_bytes,
-                "bytes_per_event": if resp.events.is_empty() { 0.0 }
-                                   else { event_bytes as f64 / resp.events.len() as f64 },
-                "elapsed_ms": elapsed_ms,
-                "watermark_wall": max_w, "watermark_counter": max_c
-            })
-        );
+        println!("{m}");
     } else {
         println!(
-            "pulled from {peer_name}: {} shipped, {} new, {} verify-failures, watermark -> ({max_w},{max_c})",
-            resp.events.len(),
-            applied,
-            verify_failures
+            "pulled from {peer_name}: {} shipped, {} new, {} verify-failures",
+            m["shipped"], m["applied_new"], m["verify_failures"]
         );
     }
     Ok(())
@@ -521,12 +550,12 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
 /// between chunks so it is preemptible and cannot saturate the link the clinical
 /// plane shares. Crude on purpose — the real tier rate-budgets, this just shows
 /// the discipline: byte transfer NEVER blocks clinical sync.
-fn cmd_blobd(conn: &str, peer: &str, budget_ms: u64) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+fn do_blobd(client: &mut postgres::Client, peer: &str, budget_ms: u64) -> R<usize> {
     let missing = client.query(
         "SELECT encode(blob_address,'hex'), byte_len FROM blob_store WHERE NOT present",
         &[],
     )?;
+    let mut fetched = 0usize;
     for row in missing {
         let addr_hex: String = row.get(0);
         let mut buf: Vec<u8> = Vec::new();
@@ -570,8 +599,16 @@ fn cmd_blobd(conn: &str, peer: &str, budget_ms: u64) -> R<()> {
              WHERE blob_address=$3",
             &[&buf, &(buf.len() as i64), &got],
         )?;
-        println!("fetched blob {} ({} bytes, verified)", &addr_hex[..16], buf.len());
+        fetched += 1;
+        eprintln!("fetched blob {} ({} bytes, verified)", &addr_hex[..16], buf.len());
     }
+    Ok(fetched)
+}
+
+fn cmd_blobd(conn: &str, peer: &str, budget_ms: u64) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let n = do_blobd(&mut client, peer, budget_ms)?;
+    println!("fetched {n} blob(s)");
     Ok(())
 }
 
@@ -586,6 +623,78 @@ fn cmd_serve(conn: String, listen: &str) -> R<()> {
                 eprintln!("connection error: {e}");
             }
         });
+    }
+    Ok(())
+}
+
+/// Unattended field runner: serve in the background, then every `interval_ms`
+/// pull clinical events, take a blob step, and snapshot a fingerprint — appending
+/// one JSON line per cycle to `log_path`. Survives link drops (each pull/blob
+/// failure is logged as a partition and the loop continues), so an operator can
+/// start it and walk away for hours of real Starlink variability, then analyse the
+/// log with `harness/bet_a.py analyze`. Runs until `duration_s` (0 = until killed).
+#[allow(clippy::too_many_arguments)]
+fn cmd_run(
+    conn: &str,
+    listen: &str,
+    peer: &str,
+    peer_name: &str,
+    interval_ms: u64,
+    budget_ms: u64,
+    log_path: &str,
+    duration_s: u64,
+) -> R<()> {
+    {
+        let (c, l) = (conn.to_string(), listen.to_string());
+        std::thread::spawn(move || {
+            if let Err(e) = cmd_serve(c, &l) {
+                eprintln!("serve thread exited: {e}");
+            }
+        });
+    }
+    let mut log = OpenOptions::new().create(true).append(true).open(log_path)?;
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    eprintln!("run: serving on {listen}, pulling {peer_name} ({peer}) every {interval_ms}ms -> {log_path}");
+
+    let start = Instant::now();
+    let mut cycle: u64 = 0;
+    loop {
+        cycle += 1;
+        let mut line = serde_json::json!({ "ts": now_ms(), "cycle": cycle });
+        let mut status = format!("cycle {cycle}");
+
+        match do_pull(&mut client, peer, peer_name) {
+            Ok(m) => {
+                status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
+                line["pull"] = m;
+            }
+            Err(e) => {
+                // A sustained outage (retries exhausted) = a partition. Logged, not fatal.
+                status += ": PARTITION (pull unreachable)";
+                line["partition"] = serde_json::json!(true);
+                line["pull_error"] = serde_json::json!(e.to_string());
+            }
+        }
+        match do_blobd(&mut client, peer, budget_ms) {
+            Ok(n) => line["blobs_fetched"] = serde_json::json!(n),
+            Err(e) => line["blob_error"] = serde_json::json!(e.to_string()),
+        }
+        if let Ok(fp) = do_fingerprint(&mut client) {
+            status += &format!(
+                ", {} events, blobs {}+{}",
+                fp["events"], fp["blobs_present"], fp["blobs_referenced_only"]
+            );
+            line["fingerprint"] = fp;
+        }
+
+        writeln!(log, "{line}")?;
+        log.flush()?;
+        eprintln!("{status}");
+
+        if duration_s > 0 && start.elapsed().as_secs() >= duration_s {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(interval_ms));
     }
     Ok(())
 }
@@ -659,6 +768,9 @@ USAGE (all take --conn <postgres-uri>):
   blobd       --conn URI --peer HOST:PORT [--budget-ms N]
   serve       --conn URI --listen HOST:PORT
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
+  run         --conn URI --listen HOST:PORT --peer HOST:PORT --peer-name NAME
+              [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N]
+              (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops)
 
 Run over WireGuard; NoTls is intentional (the link is the transport)."
     );
@@ -711,6 +823,16 @@ fn main() -> R<()> {
                 .unwrap_or(50),
         )?,
         "serve" => cmd_serve(need(conn), &need(flag(&args, "--listen")))?,
+        "run" => cmd_run(
+            &need(conn),
+            &need(flag(&args, "--listen")),
+            &need(flag(&args, "--peer")),
+            &need(flag(&args, "--peer-name")),
+            flag(&args, "--interval-ms").and_then(|s| s.parse().ok()).unwrap_or(2000),
+            flag(&args, "--budget-ms").and_then(|s| s.parse().ok()).unwrap_or(20),
+            &flag(&args, "--log").unwrap_or_else(|| "cairn-run.jsonl".into()),
+            flag(&args, "--duration-s").and_then(|s| s.parse().ok()).unwrap_or(0),
+        )?,
         _ => usage(),
     }
     Ok(())
