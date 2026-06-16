@@ -16,7 +16,7 @@
 use std::error::Error;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
@@ -184,29 +184,22 @@ fn cmd_init(conn: &str) -> R<()> {
     Ok(())
 }
 
+/// Sign and append one local clinical event, advancing this node's HLC under a
+/// row lock (the t_recorded ceiling). Returns the clinical-plane byte size of the
+/// signed event. Shared by `write` and the `gen` load generator.
 #[allow(clippy::too_many_arguments)]
-fn cmd_write(
-    conn: &str,
+fn emit_event(
+    client: &mut postgres::Client,
     node: &str,
-    key_path: &str,
+    sk: &SigningKey,
+    kid: &str,
     event_type: &str,
-    patient: &str,
+    patient_id: &str,
     schema_version: &str,
-    json_body: &str,
+    payload: serde_json::Value,
     t_effective: Option<String>,
-) -> R<()> {
-    let (sk, kid) = load_or_create_key(key_path)?;
-    let payload: serde_json::Value = serde_json::from_str(json_body)?;
-    let patient_id = if patient == "new" {
-        uuid::Uuid::now_v7().to_string()
-    } else {
-        patient.to_string()
-    };
-
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+) -> R<EventBody> {
     let mut tx = client.transaction()?;
-
-    // Advance this node's HLC under a row lock (t_recorded ceiling).
     let row = tx.query_one(
         "SELECT hlc_wall, hlc_counter FROM hlc_state WHERE id FOR UPDATE",
         &[],
@@ -226,7 +219,7 @@ fn cmd_write(
 
     let body = EventBody {
         event_id: uuid::Uuid::now_v7().to_string(),
-        patient_id: patient_id.clone(),
+        patient_id: patient_id.to_string(),
         event_type: event_type.to_string(),
         schema_version: schema_version.to_string(),
         hlc: Hlc {
@@ -235,13 +228,13 @@ fn cmd_write(
             node_origin: node.to_string(),
         },
         t_effective,
-        signer_key_id: kid,
+        signer_key_id: kid.to_string(),
         contributors: serde_json::json!([{ "role": "author", "kind": "human", "node": node }]),
         payload,
         attachments: vec![],
     };
 
-    let signed = sign(&body, &sk)?;
+    let signed = sign(&body, sk)?;
     let body_json = serde_json::to_string(&body.payload)?;
     let contributors_json = serde_json::to_string(&body.contributors)?;
     let twin = plaintext_twin(&body);
@@ -271,13 +264,169 @@ fn cmd_write(
         ],
     )?;
     tx.commit()?;
-    println!(
-        "wrote {} {} for patient {} ({} bytes on the clinical plane, addr {})",
+    Ok(body)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_write(
+    conn: &str,
+    node: &str,
+    key_path: &str,
+    event_type: &str,
+    patient: &str,
+    schema_version: &str,
+    json_body: &str,
+    t_effective: Option<String>,
+) -> R<()> {
+    let (sk, kid) = load_or_create_key(key_path)?;
+    let payload: serde_json::Value = serde_json::from_str(json_body)?;
+    let patient_id = if patient == "new" {
+        uuid::Uuid::now_v7().to_string()
+    } else {
+        patient.to_string()
+    };
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let body = emit_event(
+        &mut client,
+        node,
+        &sk,
+        &kid,
         event_type,
-        body.event_id,
-        patient_id,
-        signed.signed_bytes.len(),
-        &hex::encode(&signed.content_address)[..16],
+        &patient_id,
+        schema_version,
+        payload,
+        t_effective,
+    )?;
+    println!("wrote {} {} for patient {}", event_type, body.event_id, patient_id);
+    Ok(())
+}
+
+/// Load generator: create `patients` new patients, then append `count` notes
+/// spread across them at an optional target `rate` (events/sec). Emits one JSON
+/// metrics line so the harness can record throughput.
+fn cmd_gen(
+    conn: &str,
+    node: &str,
+    key_path: &str,
+    patients: usize,
+    count: usize,
+    rate: f64,
+) -> R<()> {
+    let (sk, kid) = load_or_create_key(key_path)?;
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+
+    let mut pids = Vec::new();
+    for i in 0..patients.max(1) {
+        let pid = uuid::Uuid::now_v7().to_string();
+        emit_event(
+            &mut client,
+            node,
+            &sk,
+            &kid,
+            "patient.created",
+            &pid,
+            "patient/1",
+            serde_json::json!({"name": format!("Patient {i:04}"), "dob": "1980-01-01", "sex": "U"}),
+            None,
+        )?;
+        pids.push(pid);
+    }
+
+    let interval = if rate > 0.0 {
+        Some(Duration::from_secs_f64(1.0 / rate))
+    } else {
+        None
+    };
+    let start = Instant::now();
+    for n in 0..count {
+        let pid = &pids[n % pids.len()];
+        emit_event(
+            &mut client,
+            node,
+            &sk,
+            &kid,
+            "note.added",
+            pid,
+            "note/1",
+            serde_json::json!({"text": format!("note {n} from {node}")}),
+            None,
+        )?;
+        if let Some(iv) = interval {
+            std::thread::sleep(iv);
+        }
+    }
+    let secs = start.elapsed().as_secs_f64().max(1e-9);
+    println!(
+        "{}",
+        serde_json::json!({
+            "op": "gen", "node": node, "patients": patients, "notes": count,
+            "elapsed_ms": (secs * 1000.0) as i64,
+            "events_per_sec": (count as f64 / secs)
+        })
+    );
+    Ok(())
+}
+
+/// Emit a convergence/honest-state fingerprint (A1, A3, A6) as JSON. Two nodes
+/// have converged iff their `event_hash` and `projection_hash` match.
+fn cmd_fingerprint(conn: &str) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let events: i64 = client
+        .query_one("SELECT count(*) FROM event_log", &[])?
+        .get(0);
+    let event_hash: Option<String> = client
+        .query_one(
+            "SELECT md5(string_agg(encode(content_address,'hex'), ','
+                 ORDER BY hlc_wall, hlc_counter, node_origin)) FROM event_log",
+            &[],
+        )?
+        .get(0);
+    let projection_hash: Option<String> = client
+        .query_one(
+            "SELECT md5(string_agg(
+                 patient_id::text || coalesce(name,'') || coalesce(dob,'') ||
+                 coalesce(sex,'') || note_count::text, ',' ORDER BY patient_id::text))
+             FROM patient_chart",
+            &[],
+        )?
+        .get(0);
+    let hlc = client.query_one("SELECT hlc_wall, hlc_counter FROM hlc_state", &[])?;
+    let (hlc_wall, hlc_counter): (i64, i32) = (hlc.get(0), hlc.get(1));
+    let max_event_hlc: i64 = client
+        .query_one("SELECT coalesce(max(hlc_wall),0) FROM event_log", &[])?
+        .get(0);
+    let max_skew_ms: i64 = client
+        .query_one(
+            "SELECT coalesce(max(abs(hlc_wall - (extract(epoch FROM recorded_at)*1000)::bigint)),0)
+             FROM event_log",
+            &[],
+        )?
+        .get(0);
+    let blobs = client.query_one(
+        "SELECT count(*) FILTER (WHERE present), count(*) FILTER (WHERE NOT present) FROM blob_store",
+        &[],
+    )?;
+    let (blobs_present, blobs_referenced_only): (i64, i64) = (blobs.get(0), blobs.get(1));
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "events": events,
+            "event_hash": event_hash,
+            "projection_hash": projection_hash,
+            "hlc_wall": hlc_wall,
+            "hlc_counter": hlc_counter,
+            // A3: the local clock must have merged forward past every applied event.
+            "hlc_merged_past_max_event": hlc_wall >= max_event_hlc,
+            // Max gap between an event's asserted HLC and this node's local recording
+            // time — propagation/partition lag plus any true clock skew. Reported and
+            // flagged, never auto-resolved (§3.6); the structural invariant is the
+            // merge above, not a bound on this gap.
+            "max_hlc_record_gap_ms": max_skew_ms,
+            // A6: references whose bytes have not (yet) been retrieved.
+            "blobs_present": blobs_present,
+            "blobs_referenced_only": blobs_referenced_only
+        })
     );
     Ok(())
 }
@@ -299,7 +448,7 @@ fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     Ok(())
 }
 
-fn cmd_pull(conn: &str, peer: &str, peer_name: &str) -> R<()> {
+fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
     client.execute(
         "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
@@ -311,21 +460,21 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str) -> R<()> {
     )?;
     let (wall, counter): (i64, i32) = (wm.get(0), wm.get(1));
 
-    let raw = request(
-        peer,
-        &Request::EventsAfter { wall, counter },
-    )?;
+    let started = Instant::now();
+    let raw = request(peer, &Request::EventsAfter { wall, counter })?;
+    let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
-    let (mut applied, mut max_w, mut max_c) = (0usize, wall, counter);
+    let (mut applied, mut verify_failures, mut event_bytes) = (0usize, 0usize, 0usize);
+    let (mut max_w, mut max_c) = (wall, counter);
     for hexed in &resp.events {
         let signed_bytes = hex::decode(hexed)?;
+        event_bytes += signed_bytes.len(); // A5: real clinical-plane payload (the COSE blob)
         match apply_signed(&mut client, &signed_bytes) {
             Ok(new) => {
                 if new {
                     applied += 1;
                 }
-                // Track the watermark from whatever verified, new or not.
                 if let Ok(b) = verify_self_described(&signed_bytes) {
                     if (b.hlc.wall, b.hlc.counter) > (max_w, max_c) {
                         max_w = b.hlc.wall;
@@ -333,18 +482,38 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str) -> R<()> {
                     }
                 }
             }
-            Err(e) => eprintln!("rejected an event from {peer_name}: {e}"), // never poisons the pull
+            // A2: a verification failure is recorded, never applied, never poisons the pull.
+            Err(_) => verify_failures += 1,
         }
     }
     client.execute(
         "UPDATE sync_state SET hlc_wall=$1, hlc_counter=$2, last_pull_at=clock_timestamp() WHERE peer=$3",
         &[&max_w, &max_c, &peer_name],
     )?;
-    println!(
-        "pulled from {peer_name}: {} shipped, {} new, watermark -> ({max_w},{max_c})",
-        resp.events.len(),
-        applied
-    );
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    if metrics {
+        println!(
+            "{}",
+            serde_json::json!({
+                "op": "pull", "peer": peer_name,
+                "shipped": resp.events.len(), "applied_new": applied,
+                "verify_failures": verify_failures,
+                "event_bytes": event_bytes, "wire_bytes": wire_bytes,
+                "bytes_per_event": if resp.events.is_empty() { 0.0 }
+                                   else { event_bytes as f64 / resp.events.len() as f64 },
+                "elapsed_ms": elapsed_ms,
+                "watermark_wall": max_w, "watermark_counter": max_c
+            })
+        );
+    } else {
+        println!(
+            "pulled from {peer_name}: {} shipped, {} new, {} verify-failures, watermark -> ({max_w},{max_c})",
+            resp.events.len(),
+            applied,
+            verify_failures
+        );
+    }
     Ok(())
 }
 
@@ -481,13 +650,15 @@ fn usage() -> ! {
         "cairn-sync — Cairn walking skeleton (Spike 0001)
 
 USAGE (all take --conn <postgres-uri>):
-  init     --conn URI
-  write    --conn URI --node NAME --key PATH --type T --patient (UUID|new)
-           --schema SV --json '<body>' [--effective ISO8601]
-  put-blob --conn URI --file PATH --media MEDIA_TYPE
-  pull     --conn URI --peer HOST:PORT --peer-name NAME
-  blobd    --conn URI --peer HOST:PORT [--budget-ms N]
-  serve    --conn URI --listen HOST:PORT
+  init        --conn URI
+  write       --conn URI --node NAME --key PATH --type T --patient (UUID|new)
+              --schema SV --json '<body>' [--effective ISO8601]
+  gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
+  put-blob    --conn URI --file PATH --media MEDIA_TYPE
+  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics]
+  blobd       --conn URI --peer HOST:PORT [--budget-ms N]
+  serve       --conn URI --listen HOST:PORT
+  fingerprint --conn URI    (convergence/honest-state JSON for the harness)
 
 Run over WireGuard; NoTls is intentional (the link is the transport)."
     );
@@ -512,15 +683,25 @@ fn main() -> R<()> {
             &need(flag(&args, "--json")),
             flag(&args, "--effective"),
         )?,
+        "gen" => cmd_gen(
+            &need(conn),
+            &need(flag(&args, "--node")),
+            &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
+            flag(&args, "--patients").and_then(|s| s.parse().ok()).unwrap_or(10),
+            flag(&args, "--count").and_then(|s| s.parse().ok()).unwrap_or(100),
+            flag(&args, "--rate").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        )?,
         "put-blob" => cmd_put_blob(
             &need(conn),
             &need(flag(&args, "--file")),
             &need(flag(&args, "--media")),
         )?,
+        "fingerprint" => cmd_fingerprint(&need(conn))?,
         "pull" => cmd_pull(
             &need(conn),
             &need(flag(&args, "--peer")),
             &need(flag(&args, "--peer-name")),
+            args.iter().any(|a| a == "--metrics"),
         )?,
         "blobd" => cmd_blobd(
             &need(conn),

@@ -105,12 +105,40 @@ verification · a self-verifying `blob_store` CHECK on both ends.
 - **Sealing/crypto-shred** (`sealed`/`dek_wrapped`) and rich **contributor sets**
   are reserved in the envelope but not exercised.
 
+## Bet A measurement harness
+
+`harness/bet_a.py` (stdlib only — no pip) drives the binary to emit the Spike 0001
+§5 pass/fail table directly against thresholds. The daemon grew three commands for
+it: `gen` (bulk load generator), `fingerprint` (convergence/honest-state JSON), and
+`pull --metrics` (per-pull JSON: verify-failures, bytes/event, latency).
+
+```sh
+# Self-contained: the whole §5 table on two local databases.
+python3 harness/bet_a.py selftest \
+    --conn-a "host=127.0.0.1 user=postgres dbname=skeleton_a" \
+    --conn-b "host=127.0.0.1 user=postgres dbname=skeleton_b"
+```
+
+It measures: **A1** convergence (event + projection hash identical across nodes),
+**A2** zero verify-failures on apply, **A3** the HLC merge invariant (with the
+HLC↔record gap reported, never auto-resolved), **A4** the availability floor
+(clinical pull p95 during a concurrent blob fetch vs. baseline), **A5** bytes/event
+on the clinical plane, **A6** honest assembly-state. Exit code 0 = all PASS.
+
+> [!NOTE]
+> Single-box `selftest` validates the **mechanics**; **A4 is only meaningful on a
+> real shared link** (there is no bandwidth to contend for on one box). On the
+> Cape York ↔ Dorrigo run, start a generator and `serve` on each node, drive the
+> link partition with the injector hooks (`--partition-cmd`/`--heal-cmd`, e.g.
+> `wg-quick down/up`), then capture a `fingerprint` on each side and compare with
+> `bet_a.py report --local a.json --peer b.json` for A1/A3.
+
 ## Next (the spike's bets)
 
 - **Bet A (now):** run two real nodes over WireGuard on the Cape York ↔ Dorrigo
-  link and exercise Spike 0001 §5 — partition/convergence, signatures-on-wire,
-  the availability floor (blob fetch must not stall clinical pull), eager-plane
-  bytes/event, honest assembly-state.
+  link and exercise §5 with the harness above — partition/convergence,
+  signatures-on-wire, the availability floor, eager-plane bytes/event, honest
+  assembly-state.
 - **Bet B (next week):** run the same skeleton on a Pi-5-class node and time the
   `patient_chart` trigger path and a chart read (§6), plus Ed25519/BLAKE3
   throughput on ARM and the keystore cost.
