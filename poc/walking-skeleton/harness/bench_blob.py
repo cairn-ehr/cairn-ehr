@@ -25,9 +25,6 @@ import os
 import subprocess
 import sys
 import time
-from statistics import median
-
-
 def p95(xs):
     if not xs:
         return 0.0
@@ -141,6 +138,7 @@ def cmd_selftest(args):
     # Materialize identical bytes on src2 so it is a genuine second source: export
     # src's content as hex, write a file, put-blob it on src2 (same bytes -> same addr).
     tmp = f"/tmp/cairn_blob_{os.getpid()}.bin"
+    keyfile = f"/tmp/cairn_floor_{os.getpid()}.key"
     hexout = subprocess.run(
         ["psql", src.conn, "-tAc",
          f"select encode(content,'hex') from blob_store where blob_address=decode('{addr}','hex')"],
@@ -224,7 +222,7 @@ def cmd_selftest(args):
 
         # T5 availability floor: clinical pull p95 unaffected during a windowed fetch.
         dst.reset(); dst.init()
-        key = f"/tmp/cairn_floor_{os.getpid()}.key"
+        key = keyfile
         dst.reference_blob(addr, media, nbytes)
 
         def drain():
@@ -253,10 +251,11 @@ def cmd_selftest(args):
             s.terminate()
         if src2_corrupt:
             src2_corrupt.terminate()
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        for f in (tmp, keyfile):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
     # Render.
     w = max(len(r[1]) for r in rows)
