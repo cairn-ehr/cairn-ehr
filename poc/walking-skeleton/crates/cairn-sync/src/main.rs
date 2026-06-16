@@ -17,8 +17,9 @@ use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
@@ -30,7 +31,7 @@ const SCHEMA: [(&str, &str); 3] = [
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
 ];
 
-const BLOB_CHUNK: usize = 64 * 1024;
+const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
 
 type R<T> = Result<T, Box<dyn Error>>;
 
@@ -42,8 +43,8 @@ type R<T> = Result<T, Box<dyn Error>>;
 enum Request {
     /// Clinical plane: every event at or after this HLC watermark.
     EventsAfter { wall: i64, counter: i32 },
-    /// Byte tier: a chunk of a blob's bytes.
-    BlobChunk {
+    /// Byte tier: a BLAKE3 verified-streaming slice of a blob.
+    BlobSlice {
         addr_hex: String,
         offset: u64,
         len: u64,
@@ -58,10 +59,11 @@ struct EventsResponse {
 }
 
 #[derive(Serialize, Deserialize)]
-struct BlobResponse {
+struct BlobSliceResponse {
     found: bool,
     total_len: u64,
-    bytes_hex: String,
+    /// hex-encoded bao slice (skeleton ships hex; the real tier ships raw bytes).
+    slice_hex: String,
 }
 
 fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
@@ -592,17 +594,51 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
 fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     let bytes = std::fs::read(file)?;
     let addr = blob_address(&bytes);
+    let outboard = cairn_event::blob_outboard(&bytes);
     let len = bytes.len() as i64;
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
     client.execute(
-        "INSERT INTO blob_store (blob_address, media_type, byte_len, content, present, fetched_at)
-         VALUES ($1,$2,$3,$4,TRUE,clock_timestamp())
+        "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
+         VALUES ($1,$2,$3,$4,$5,TRUE,clock_timestamp())
          ON CONFLICT (blob_address) DO UPDATE
-            SET content=EXCLUDED.content, present=TRUE, byte_len=EXCLUDED.byte_len,
-                fetched_at=clock_timestamp()",
-        &[&addr, &media, &len, &bytes],
+            SET content=EXCLUDED.content, outboard=EXCLUDED.outboard, present=TRUE,
+                byte_len=EXCLUDED.byte_len, fetched_at=clock_timestamp()",
+        &[&addr, &media, &len, &bytes, &outboard],
     )?;
     println!("stored blob {} ({} bytes, {})", hex::encode(&addr), len, media);
+    Ok(())
+}
+
+/// Mint a large local blob (random-ish bytes) and store it present, so a real
+/// multi-MB windowed fetch can be driven on the link without shipping a file. The
+/// bytes come from a tiny xorshift PRNG (content just needs to be addressable and
+/// distinct, not cryptographically random).
+fn cmd_gen_blob(conn: &str, size_mb: usize, media: &str) -> R<()> {
+    let n = size_mb.max(1) * 1024 * 1024;
+    let mut buf = vec![0u8; n];
+    let mut x = (now_ms() as u64) | 1;
+    for b in buf.iter_mut() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *b = (x & 0xff) as u8;
+    }
+    let addr = blob_address(&buf);
+    let outboard = cairn_event::blob_outboard(&buf);
+    let len = buf.len() as i64;
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    client.execute(
+        "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
+         VALUES ($1,$2,$3,$4,$5,TRUE,clock_timestamp())
+         ON CONFLICT (blob_address) DO UPDATE
+            SET content=EXCLUDED.content, outboard=EXCLUDED.outboard, present=TRUE,
+                byte_len=EXCLUDED.byte_len, fetched_at=clock_timestamp()",
+        &[&addr, &media, &len, &buf, &outboard],
+    )?;
+    println!(
+        "{}",
+        serde_json::json!({"op":"gen_blob","addr": hex::encode(&addr),"bytes": len,"media": media})
+    );
     Ok(())
 }
 
@@ -675,80 +711,211 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
     Ok(())
 }
 
-/// The lazy byte tier (Bet A4): fetch missing blobs in chunks, sleeping a budget
-/// between chunks so it is preemptible and cannot saturate the link the clinical
-/// plane shares. Crude on purpose — the real tier rate-budgets, this just shows
-/// the discipline: byte transfer NEVER blocks clinical sync.
-fn do_blobd(client: &mut postgres::Client, peer: &str, budget_ms: u64) -> R<usize> {
+/// The lazy byte tier (§6.6 / §8.2): for each blob whose bytes are missing, fetch
+/// its slices with `window` worker threads, each round-robining across the swarm
+/// `peers`, each verifying every slice against the content address (§4.4) before
+/// persisting it to `blob_chunk`. Verified slices accumulate across passes/drops
+/// (resumable); when every index is present the blob is assembled, whole-blob
+/// re-verified, and flipped to present. Every worker sleeps `budget_ms` between
+/// requests so windowing stays preemptible and never starves clinical sync
+/// (ADR-0013 availability floor). Returns metrics for the harness.
+fn do_blobd(
+    client: &mut postgres::Client,
+    conn: &str,
+    peers: &[String],
+    window: usize,
+    budget_ms: u64,
+) -> R<serde_json::Value> {
     let missing = client.query(
         "SELECT encode(blob_address,'hex'), byte_len FROM blob_store WHERE NOT present",
         &[],
     )?;
-    let mut fetched = 0usize;
+
+    let mut completed = 0usize;
+    let rejected = Arc::new(AtomicU64::new(0));
+    let fetched = Arc::new(AtomicU64::new(0));
+
     for row in missing {
         let addr_hex: String = row.get(0);
-        let mut buf: Vec<u8> = Vec::new();
-        let mut total: u64 = 0;
-        loop {
-            let raw = request(
-                peer,
-                &Request::BlobChunk {
-                    addr_hex: addr_hex.clone(),
-                    offset: buf.len() as u64,
-                    len: BLOB_CHUNK as u64,
-                },
+        let byte_len: Option<i64> = row.get(1);
+        let total = match byte_len {
+            Some(n) if n > 0 => n as u64,
+            _ => continue, // length unknown -> can't chunk yet; a later reference fills it
+        };
+        let addr = hex::decode(&addr_hex)?;
+        let n_chunks = total.div_ceil(SLICE_BYTES as u64) as usize;
+
+        // Resume: which indexes are already persisted?
+        let have: HashSet<i32> = client
+            .query("SELECT chunk_index FROM blob_chunk WHERE blob_address=$1", &[&addr])?
+            .iter()
+            .map(|r| r.get::<_, i32>(0))
+            .collect();
+        let todo: VecDeque<usize> = (0..n_chunks).filter(|i| !have.contains(&(*i as i32))).collect();
+
+        if !todo.is_empty() {
+            let queue = Arc::new(Mutex::new(todo));
+            let mut handles = Vec::new();
+            for w in 0..window.max(1) {
+                let queue = Arc::clone(&queue);
+                let rejected = Arc::clone(&rejected);
+                let fetched = Arc::clone(&fetched);
+                let peers = peers.to_vec();
+                let addr_hex = addr_hex.clone();
+                let addr = addr.clone();
+                let conn = conn.to_string();
+                handles.push(std::thread::spawn(move || {
+                    // Worker returns (); DB/link errors are logged and the worker moves on
+                    // (the index stays missing and is retried next pass). A Box<dyn Error>
+                    // return would not be Send across the thread boundary.
+                    let mut wc = match postgres::Client::connect(&conn, postgres::NoTls) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("blob worker connect failed: {e}");
+                            return;
+                        }
+                    };
+                    let root = match cairn_event::blake3_root_from_address(&addr) {
+                        Ok(r) => r,
+                        Err(_) => return,
+                    };
+                    loop {
+                        let idx = match queue.lock().unwrap().pop_front() {
+                            Some(i) => i,
+                            None => break,
+                        };
+                        let offset = idx as u64 * SLICE_BYTES as u64;
+                        let len = (SLICE_BYTES as u64).min(total - offset);
+                        // Try peers (offset by worker+index for swarm spread) until one
+                        // returns a slice that VERIFIES. A lying/faulty source is rejected
+                        // here and the next source is tried — the per-slice-verify payoff.
+                        // try_request (single attempt) fails over fast, unlike request's backoff.
+                        let mut got: Option<Vec<u8>> = None;
+                        for k in 0..peers.len() {
+                            let peer = &peers[(w + idx + k) % peers.len()];
+                            std::thread::sleep(Duration::from_millis(budget_ms)); // preemptible budget
+                            let raw = match try_request(
+                                peer,
+                                &Request::BlobSlice { addr_hex: addr_hex.clone(), offset, len },
+                            ) {
+                                Ok(r) => r,
+                                Err(_) => continue, // link drop / dead peer -> next source
+                            };
+                            let resp: BlobSliceResponse = match serde_json::from_slice(&raw) {
+                                Ok(r) => r,
+                                Err(_) => continue,
+                            };
+                            if !resp.found {
+                                continue;
+                            }
+                            let slice = match hex::decode(&resp.slice_hex) {
+                                Ok(s) => s,
+                                Err(_) => continue,
+                            };
+                            match cairn_event::verify_slice(&slice, &root, offset, len) {
+                                Ok(bytes) => {
+                                    got = Some(bytes);
+                                    break;
+                                }
+                                Err(_) => {
+                                    rejected.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        if let Some(bytes) = got {
+                            if let Err(e) = wc.execute(
+                                "INSERT INTO blob_chunk (blob_address, chunk_index, content)
+                                 VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+                                &[&addr, &(idx as i32), &bytes],
+                            ) {
+                                eprintln!("blob_chunk insert failed: {e}");
+                            } else {
+                                fetched.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        // If no source verified this index, leave it missing; the next
+                        // do_blobd pass retries it from persisted state (resumable).
+                    }
+                }));
+            }
+            for h in handles {
+                let _ = h.join();
+            }
+        }
+
+        // Assemble if every index is now present.
+        let have_now: i64 = client
+            .query_one("SELECT count(*) FROM blob_chunk WHERE blob_address=$1", &[&addr])?
+            .get(0);
+        if have_now as usize == n_chunks && n_chunks > 0 {
+            let rows = client.query(
+                "SELECT content FROM blob_chunk WHERE blob_address=$1 ORDER BY chunk_index",
+                &[&addr],
             )?;
-            let resp: BlobResponse = serde_json::from_slice(&raw)?;
-            if !resp.found {
-                eprintln!("peer does not have blob {}", &addr_hex[..16]);
-                break;
+            let mut buf = Vec::with_capacity(total as usize);
+            for r in rows {
+                let c: Vec<u8> = r.get(0);
+                buf.extend_from_slice(&c);
             }
-            total = resp.total_len;
-            let chunk = hex::decode(&resp.bytes_hex)?;
-            if chunk.is_empty() {
-                break;
-            }
-            buf.extend_from_slice(&chunk);
-            std::thread::sleep(Duration::from_millis(budget_ms)); // preemptible budget
-            if buf.len() as u64 >= total {
-                break;
+            // Belt-and-suspenders whole-blob verify before serving as present (§4.4).
+            if blob_address(&buf) == addr {
+                let outboard = cairn_event::blob_outboard(&buf);
+                let mut tx = client.transaction()?;
+                tx.execute(
+                    "UPDATE blob_store SET content=$1, outboard=$2, present=TRUE, byte_len=$3,
+                         fetched_at=clock_timestamp() WHERE blob_address=$4",
+                    &[&buf, &outboard, &(buf.len() as i64), &addr],
+                )?;
+                tx.execute("DELETE FROM blob_chunk WHERE blob_address=$1", &[&addr])?;
+                tx.commit()?;
+                completed += 1;
+                eprintln!("fetched blob {} ({} bytes, verified)", &addr_hex[..16], buf.len());
+            } else {
+                // Per-slice verify should make this unreachable; purge and retry if not.
+                client.execute("DELETE FROM blob_chunk WHERE blob_address=$1", &[&addr])?;
+                eprintln!("blob {} failed whole-blob verify — purged", &addr_hex[..16]);
             }
         }
-        if buf.len() as u64 != total {
-            continue; // resumable: try again next pass, verifying what arrived
-        }
-        // Content-verify before storing (§4.4 — a wrong-hash blob is never served).
-        let got = blob_address(&buf);
-        if hex::encode(&got) != addr_hex {
-            eprintln!("blob {} failed BLAKE3 verification — discarded", &addr_hex[..16]);
-            continue;
-        }
-        client.execute(
-            "UPDATE blob_store SET content=$1, present=TRUE, byte_len=$2, fetched_at=clock_timestamp()
-             WHERE blob_address=$3",
-            &[&buf, &(buf.len() as i64), &got],
-        )?;
-        fetched += 1;
-        eprintln!("fetched blob {} ({} bytes, verified)", &addr_hex[..16], buf.len());
     }
-    Ok(fetched)
+
+    Ok(serde_json::json!({
+        "op": "blobd",
+        "blobs_completed": completed,
+        "slices_fetched": fetched.load(Ordering::Relaxed),
+        "slices_rejected": rejected.load(Ordering::Relaxed),
+        "window": window,
+        "peers": peers.len()
+    }))
 }
 
-fn cmd_blobd(conn: &str, peer: &str, budget_ms: u64) -> R<()> {
+fn cmd_blobd(
+    conn: &str,
+    peers: &[String],
+    window: usize,
+    budget_ms: u64,
+    metrics: bool,
+) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
-    let n = do_blobd(&mut client, peer, budget_ms)?;
-    println!("fetched {n} blob(s)");
+    let m = do_blobd(&mut client, conn, peers, window, budget_ms)?;
+    if metrics {
+        println!("{m}");
+    } else {
+        println!(
+            "byte tier: {} blob(s) completed, {} slices fetched, {} rejected",
+            m["blobs_completed"], m["slices_fetched"], m["slices_rejected"]
+        );
+    }
     Ok(())
 }
 
-fn cmd_serve(conn: String, listen: &str) -> R<()> {
+fn cmd_serve(conn: String, listen: &str, corrupt: bool) -> R<()> {
     let listener = TcpListener::bind(listen)?;
-    eprintln!("serving on {listen}");
+    eprintln!("serving on {listen}{}", if corrupt { " (CORRUPT: test fault injection)" } else { "" });
     for stream in listener.incoming() {
         let stream = stream?;
         let conn = conn.clone();
         std::thread::spawn(move || {
-            if let Err(e) = serve_conn(&conn, stream) {
+            if let Err(e) = serve_conn(&conn, stream, corrupt) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -768,6 +935,8 @@ fn cmd_run(
     listen: &str,
     peer: &str,
     peer_name: &str,
+    blob_peers: Vec<String>,
+    window: usize,
     interval_ms: u64,
     budget_ms: u64,
     log_path: &str,
@@ -776,7 +945,7 @@ fn cmd_run(
     {
         let (c, l) = (conn.to_string(), listen.to_string());
         std::thread::spawn(move || {
-            if let Err(e) = cmd_serve(c, &l) {
+            if let Err(e) = cmd_serve(c, &l, false) {
                 eprintln!("serve thread exited: {e}");
             }
         });
@@ -793,12 +962,15 @@ fn cmd_run(
     // Spawned like the serve thread; the main loop below does clinical work only.
     let blobs_fetched = Arc::new(AtomicU64::new(0));
     {
-        let (c, p) = (conn.to_string(), peer.to_string());
+        let conn = conn.to_string();
+        let peers = if blob_peers.is_empty() { vec![peer.to_string()] } else { blob_peers.clone() };
         let counter = Arc::clone(&blobs_fetched);
-        std::thread::spawn(move || match postgres::Client::connect(&c, postgres::NoTls) {
+        std::thread::spawn(move || match postgres::Client::connect(&conn, postgres::NoTls) {
             Ok(mut bclient) => loop {
-                match do_blobd(&mut bclient, &p, budget_ms) {
-                    Ok(n) => counter.fetch_add(n as u64, Ordering::Relaxed),
+                match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
+                    Ok(m) => {
+                        counter.fetch_add(m["blobs_completed"].as_u64().unwrap_or(0), Ordering::Relaxed)
+                    }
                     Err(_) => 0, // peer unreachable: the next pass retries, never fatal
                 };
                 std::thread::sleep(Duration::from_millis(interval_ms));
@@ -849,7 +1021,7 @@ fn cmd_run(
     Ok(())
 }
 
-fn serve_conn(conn: &str, mut stream: TcpStream) -> R<()> {
+fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
     let raw = read_frame(&mut stream)?;
     let req: Request = serde_json::from_slice(&raw)?;
@@ -864,29 +1036,43 @@ fn serve_conn(conn: &str, mut stream: TcpStream) -> R<()> {
             let events = rows.iter().map(|r| r.get::<_, String>(0)).collect();
             serde_json::to_vec(&EventsResponse { events })?
         }
-        Request::BlobChunk {
+        Request::BlobSlice {
             addr_hex,
             offset,
             len,
         } => {
             let addr = hex::decode(&addr_hex)?;
-            // substring/octet_length take int4; bind the chunk window as i32.
-            // (Skeleton limit: blobs > 2 GiB need bigint offsets — noted in the README.)
             let row = client.query_opt(
-                "SELECT encode(substring(content from $2 for $3),'hex'), octet_length(content)
-                 FROM blob_store WHERE blob_address=$1 AND present",
-                &[&addr, &(offset as i32 + 1), &(len as i32)],
+                "SELECT content, outboard, octet_length(content)
+                 FROM blob_store WHERE blob_address=$1 AND present AND outboard IS NOT NULL",
+                &[&addr],
             )?;
             let resp = match row {
-                Some(r) => BlobResponse {
-                    found: true,
-                    total_len: r.get::<_, i32>(1) as u64,
-                    bytes_hex: r.get(0),
-                },
-                None => BlobResponse {
+                Some(r) => {
+                    let content: Vec<u8> = r.get(0);
+                    let outboard: Vec<u8> = r.get(1);
+                    let total = r.get::<_, i32>(2) as u64;
+                    // Clamp the final slice to the blob's end.
+                    let len = len.min(total.saturating_sub(offset));
+                    let mut slice = cairn_event::extract_slice(&content, &outboard, offset, len)?;
+                    // TEST-ONLY fault injection: if started with --corrupt, flip a byte of
+                    // every outgoing slice so the receiver's per-slice verify (§4.4) rejects
+                    // it. This proves the swarm heals around a lying/faulty source; it is
+                    // never enabled in a real node.
+                    if corrupt && !slice.is_empty() {
+                        let m = slice.len() / 2;
+                        slice[m] ^= 0x01;
+                    }
+                    BlobSliceResponse {
+                        found: true,
+                        total_len: total,
+                        slice_hex: hex::encode(&slice),
+                    }
+                }
+                None => BlobSliceResponse {
                     found: false,
                     total_len: 0,
-                    bytes_hex: String::new(),
+                    slice_hex: String::new(),
                 },
             };
             serde_json::to_vec(&resp)?
@@ -904,6 +1090,15 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+/// All values for a repeatable flag, e.g. `--blob-peer A --blob-peer B`.
+fn flags(args: &[String], name: &str) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, a)| a.as_str() == name)
+        .filter_map(|(i, _)| args.get(i + 1).cloned())
+        .collect()
+}
+
 fn usage() -> ! {
     eprintln!(
         "cairn-sync — Cairn walking skeleton (Spike 0001)
@@ -914,12 +1109,13 @@ USAGE (all take --conn <postgres-uri>):
               --schema SV --json '<body>' [--effective ISO8601]
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
+  gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
   pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics]
-  blobd       --conn URI --peer HOST:PORT [--budget-ms N]
-  serve       --conn URI --listen HOST:PORT
+  blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
+  serve       --conn URI --listen HOST:PORT [--corrupt]
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
   run         --conn URI --listen HOST:PORT --peer HOST:PORT --peer-name NAME
-              [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N]
+              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N]
               (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops)
   bench-insert --conn URI --node NAME --key PATH [--count N]   (Bet B B1: maintained-write latency)
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
@@ -980,19 +1176,37 @@ fn main() -> R<()> {
             &need(flag(&args, "--peer-name")),
             args.iter().any(|a| a == "--metrics"),
         )?,
-        "blobd" => cmd_blobd(
+        "gen-blob" => cmd_gen_blob(
             &need(conn),
-            &need(flag(&args, "--peer")),
-            flag(&args, "--budget-ms")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(50),
+            flag(&args, "--size-mb").and_then(|s| s.parse().ok()).unwrap_or(8),
+            &flag(&args, "--media").unwrap_or_else(|| "application/dicom".into()),
         )?,
-        "serve" => cmd_serve(need(conn), &need(flag(&args, "--listen")))?,
+        "blobd" => {
+            let single = flag(&args, "--peer");
+            let mut peers = flags(&args, "--blob-peer");
+            if peers.is_empty() {
+                peers.push(need(single));
+            }
+            cmd_blobd(
+                &need(conn),
+                &peers,
+                flag(&args, "--window").and_then(|s| s.parse().ok()).unwrap_or(4),
+                flag(&args, "--budget-ms").and_then(|s| s.parse().ok()).unwrap_or(20),
+                args.iter().any(|a| a == "--metrics"),
+            )?
+        }
+        "serve" => cmd_serve(
+            need(conn),
+            &need(flag(&args, "--listen")),
+            args.iter().any(|a| a == "--corrupt"),
+        )?,
         "run" => cmd_run(
             &need(conn),
             &need(flag(&args, "--listen")),
             &need(flag(&args, "--peer")),
             &need(flag(&args, "--peer-name")),
+            flags(&args, "--blob-peer"),
+            flag(&args, "--window").and_then(|s| s.parse().ok()).unwrap_or(4),
             flag(&args, "--interval-ms").and_then(|s| s.parse().ok()).unwrap_or(2000),
             flag(&args, "--budget-ms").and_then(|s| s.parse().ok()).unwrap_or(20),
             &flag(&args, "--log").unwrap_or_else(|| "cairn-run.jsonl".into()),
