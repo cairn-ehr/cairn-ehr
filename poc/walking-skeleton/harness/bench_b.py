@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Bet B benchmark harness — Spike 0001 §6 (the Pi compute-cost bet).
 
-Drives the `cairn-sync` binary to produce the §6 pass/fail table. Stdlib only, so
-it runs on a Pi with no pip install.
+Drives the `cairn-sync` binary to produce the §6 pass/fail table. No Python
+dependencies (stdlib only, no pip install); the DB-backed `selftest` does shell out
+to the `psql` client, which is present on any node running PostgreSQL.
 
 IMPORTANT: use a **release** binary — `cargo build --release` — or the crypto and
 projection numbers are meaningless (debug Ed25519/BLAKE3 are an order of magnitude
 slow). The DB-backed rows (B1/B2) must run **on the Pi itself** against its local
 PostgreSQL; the crypto rows (B3/B4) are pure CPU.
+
+WARNING: `selftest` **drops and recreates** the Cairn tables on the target DB before
+it runs. It is destructive by design (a benchmark needs a known-empty log). It refuses
+to run without `--force` so a mistyped `--conn` cannot silently wipe a real database.
 
 §6 rows:
   B1 projection maintenance : single-op maintained-write latency, and that it does
@@ -50,13 +55,19 @@ def psql(conn, sql):
 
 
 def render_table(rows):
+    # `passed` is True/False for a real gate, or None for an informational row that
+    # is measured-and-reported but never fails the run (e.g. B3 keystore cost).
     w = max(len(r[1]) for r in rows)
     print(f"\n{'':4}{'check':<{w}}  {'result':<6}  detail")
     print("-" * (12 + w + 48))
     ok = True
     for code, name, passed, detail in rows:
-        ok = ok and passed
-        print(f"{code:<4}{name:<{w}}  {'PASS' if passed else 'FAIL':<6}  {detail}")
+        if passed is None:
+            result = "INFO"
+        else:
+            ok = ok and passed
+            result = "PASS" if passed else "FAIL"
+        print(f"{code:<4}{name:<{w}}  {result:<6}  {detail}")
     print("-" * (12 + w + 48))
     print(f"\nBet B: {'PASS — go on this hardware' if ok else 'FAIL — see the mitigation ladder below'}\n")
     return ok
@@ -71,12 +82,17 @@ def cmd_bench(args):
 
 def cmd_selftest(args):
     conn = args.conn
+    if not args.force:
+        sys.exit(
+            f"refusing to run: selftest DROPs and recreates the Cairn tables on:\n  {conn}\n"
+            "This is destructive. Re-run with --force once you have confirmed the target DB."
+        )
     # Fresh DB.
     psql(conn, "drop table if exists event_log,hlc_state,sync_state,patient_chart,blob_store cascade;")
     init_db(args.bin, conn)
 
     sizes = sorted(args.sizes)
-    b1 = {}  # log_size -> p95 maintained-write latency
+    b1 = []  # (log_size, p95 maintained-write latency), in sample order
     for target in sizes:
         have = int(psql(conn, "select count(*) from event_log") or 0)
         if target > have:
@@ -87,35 +103,39 @@ def cmd_selftest(args):
                            capture_output=True, text=True, check=True)
         m = run_json(args.bin, "bench-insert", "--conn", conn, "--node", "pi",
                      "--key", "/tmp/cairn_bench.key", "--count", str(args.insert_count))
-        b1[m["log_size"]] = m["p95_ms"]
+        b1.append((m["log_size"], m["p95_ms"]))
         print(f"  B1 @ {m['log_size']:>8} events: p50 {m['p50_ms']:.2f}ms  p95 {m['p95_ms']:.2f}ms")
 
-    # B2: time the fattest patient's full chart, a few times.
+    # B2: time the fattest patient's full chart, a few times. The chart op also
+    # reports the note count, so capture it from the reads rather than re-querying.
     fattest = psql(conn, "select patient_id from patient_chart order by note_count desc limit 1")
-    chart = [run_json(args.bin, "chart", "--conn", conn, "--patient", fattest)["elapsed_ms"]
+    reads = [run_json(args.bin, "chart", "--conn", conn, "--patient", fattest)
              for _ in range(args.chart_reads)]
-    notes = run_json(args.bin, "chart", "--conn", conn, "--patient", fattest)["notes"]
+    chart = [r["elapsed_ms"] for r in reads]
+    notes = reads[-1]["notes"]
 
     # B3/B4: pure-CPU crypto.
     c = run_json(args.bin, "bench", "--hash-mb", str(args.hash_mb),
                  "--sig-iters", str(args.sig_iters), "--dek-iters", str(args.dek_iters))
 
-    small, large = min(b1), max(b1)
-    growth = b1[large] / b1[small] if b1[small] > 0 else float("inf")
+    (small, small_p95), (large, large_p95) = b1[0], b1[-1]
+    growth = large_p95 / small_p95 if small_p95 > 0 else float("inf")
     b1_flat = growth <= args.growth_factor
-    b1_fast = b1[large] <= args.insert_budget_ms
+    b1_fast = large_p95 <= args.insert_budget_ms
     b2_p95 = p95(chart)
 
     rows = [
         ("B1", "projection maintenance (single-op)",
          b1_fast and b1_flat,
-         f"p95 {b1[large]:.2f}ms @ {large} events; growth x{growth:.2f} vs {small} events "
+         f"p95 {large_p95:.2f}ms @ {large} events; growth x{growth:.2f} vs {small} events "
          f"(budget {args.insert_budget_ms}ms, flat<=x{args.growth_factor})"),
         ("B2", "chart read beats paper",
          b2_p95 <= args.chart_budget_ms,
          f"p50 {median(chart):.1f}ms  p95 {b2_p95:.1f}ms over {notes} notes (budget {args.chart_budget_ms}ms)"),
+        # B3 is informational (INFO, never FAIL): the keystore cost is reported to
+        # inform per-event vs per-episode DEK granularity, not gated against a budget.
         ("B3", "keystore cost (crypto-shred)",
-         c["body_seal_mbps"] > 0,
+         None,
          f"DEK-wrap {c['dek_wrap_per_s']:,.0f}/s, body-seal {c['body_seal_mbps']:.0f} MB/s "
          f"(per-episode unwrap is 1 op; per-event is N)"),
         ("B4", "crypto on ARM (verify + hash)",
@@ -128,9 +148,12 @@ def cmd_selftest(args):
     print(f"\nNOTE: run this ON THE TARGET (a Pi) for real numbers — these reflect whatever ran it.")
     ok = render_table(rows)
     if not ok:
-        print("Mitigation ladder (ADR-0002) if B1/B2 miss: PL/pgSQL -> pgrx (in-DB Rust)\n"
-              "for the hot projection -> external Rust. A miss tells you WHICH rung, not\n"
-              "whether the design works.\n")
+        print("On a miss, the remedy depends on WHICH gate failed:\n"
+              "  B1/B2 (projection/chart cost) -> mitigation ladder (ADR-0002): PL/pgSQL\n"
+              "         -> pgrx (in-DB Rust) for the hot projection -> external Rust. A miss\n"
+              "         tells you which rung, not whether the design works.\n"
+              "  B4 (crypto throughput) -> a hardware-class signal: faster node, or accept\n"
+              "         SHA-256 for blobs (ADR-0015's provisional line) — not a projection fix.\n")
     sys.exit(0 if ok else 1)
 
 
@@ -148,6 +171,8 @@ def main():
 
     st = sub.add_parser("selftest", help="run the whole §6 table against one local DB")
     st.add_argument("--conn", required=True)
+    st.add_argument("--force", action="store_true",
+                    help="confirm the target DB may be DROPped and recreated (required)")
     st.add_argument("--sizes", type=int, nargs="+", default=[2000, 20000],
                     help="log sizes (events) to sample B1 at — use big ones on the Pi")
     st.add_argument("--insert-count", type=int, default=200, help="B1 maintained-writes per sample")

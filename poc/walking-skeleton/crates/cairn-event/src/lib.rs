@@ -303,4 +303,21 @@ mod tests {
         assert_eq!(a.len(), 34);
         assert_eq!(&a[2..], blake3::hash(b"DICOM bytes here").as_bytes());
     }
+
+    // Smoke tests for the Bet B microbenchmarks: a tiny iteration count proves the
+    // crypto path runs end-to-end (sign/verify succeeds, both hashes produce a rate),
+    // independent of the production numbers a release build on a Pi would yield.
+    #[test]
+    fn bench_sign_verify_runs() {
+        let (sign_per_s, verify_per_s) = bench_sign_verify(4);
+        assert!(sign_per_s > 0.0, "sign throughput should be positive");
+        assert!(verify_per_s > 0.0, "verify throughput should be positive");
+    }
+
+    #[test]
+    fn bench_hash_mbps_runs() {
+        let (sha, blake) = bench_hash_mbps(2);
+        assert!(sha > 0.0, "SHA-256 throughput should be positive");
+        assert!(blake > 0.0, "BLAKE3 throughput should be positive");
+    }
 }

@@ -165,28 +165,29 @@ blob present/referenced-only — and writes a `.fingerprint.json` for the A1 com
 
 ## Bet B benchmark harness (the Pi compute-cost bet)
 
-`harness/bench_b.py` (stdlib only) drives the binary to emit the §6 table. The
-daemon grew three commands for it: `bench-insert` (B1 — maintained-write latency at
-the current log size), `chart` (B2 — full chart assembly from the projection + the
-plaintext legibility twins), and `bench` (B3/B4 — pure-CPU crypto: Ed25519 sign/verify,
-SHA-256 vs BLAKE3, DEK-wrap/body-seal).
+`harness/bench_b.py` (no Python deps; shells out to `psql`, present on any PG node)
+drives the binary to emit the §6 table. The daemon grew three commands for it:
+`bench-insert` (B1 — maintained-write latency at the current log size), `chart`
+(B2 — full chart assembly from the projection + the plaintext legibility twins), and
+`bench` (B3/B4 — pure-CPU crypto: Ed25519 sign/verify, SHA-256 vs BLAKE3, DEK-wrap/body-seal).
 
 ```sh
 cargo build --release          # REQUIRED — debug crypto/projection numbers are meaningless
-# Run ON THE PI, against its local PostgreSQL:
-python3 harness/bench_b.py --bin target/release/cairn-sync selftest \
+# Run ON THE PI, against its local PostgreSQL.
+# selftest DROPs+recreates the Cairn tables, so it requires --force (guards a mistyped --conn):
+python3 harness/bench_b.py --bin target/release/cairn-sync selftest --force \
     --conn "host=127.0.0.1 user=cairn dbname=pi" --sizes 5000 50000 200000
-# just the pure-CPU crypto numbers (B3/B4), no DB:
+# just the pure-CPU crypto numbers (B3/B4), no DB, non-destructive:
 python3 harness/bench_b.py --bin target/release/cairn-sync bench
 ```
 
 It measures: **B1** single-op projection maintenance and *that it stays flat as the
-log grows* (the ADR-0001 load-bearing bet), **B2** chart read beats "grab the paper
-chart" (sub-second), **B3** keystore cost (DEK-wrap/body-seal → per-event vs
-per-episode crypto-shred granularity), **B4** Ed25519 verify/s + SHA-256-vs-BLAKE3
-(the ARM input to ADR-0015's *provisional* blob-digest default). On a miss it prints
-the ADR-0002 mitigation ladder (PL/pgSQL → pgrx → external Rust). Run it **on the Pi**;
-single-machine numbers reflect whatever ran them.
+log grows* (the ADR-0001 load-bearing bet, gated), **B2** chart read beats "grab the
+paper chart" (sub-second, gated), **B3** keystore cost (DEK-wrap/body-seal → per-event
+vs per-episode crypto-shred granularity — reported as INFO, not gated), **B4** Ed25519
+verify/s + SHA-256-vs-BLAKE3 (the ARM input to ADR-0015's *provisional* blob-digest
+default, gated). On a miss it prints the ADR-0002 mitigation ladder (PL/pgSQL → pgrx →
+external Rust). Run it **on the Pi**; single-machine numbers reflect whatever ran them.
 
 ## Next (the spike's bets)
 

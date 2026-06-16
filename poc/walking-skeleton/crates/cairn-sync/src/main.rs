@@ -547,6 +547,12 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     // B3: a KEK wraps a fresh per-body DEK; the DEK seals the body. Crypto-shred =
     // destroy the DEK, so opening a sealed episode is one unwrap per DEK — hence the
     // per-event vs per-episode granularity question this cost feeds.
+    //
+    // BENCHMARK ONLY: the fixed all-zero nonce reused across every encrypt below is a
+    // throughput microbench, not a keystore. NEVER copy this into real DEK-wrap /
+    // body-seal code — nonce reuse under XChaCha20Poly1305 (same key + same nonce)
+    // is catastrophic for confidentiality. Real sealing draws a fresh random nonce
+    // per encryption.
     let kek = XChaCha20Poly1305::new(Key::from_slice(&[9u8; 32]));
     let nonce = XNonce::from_slice(&[0u8; 24]);
     let dek = [3u8; 32];
