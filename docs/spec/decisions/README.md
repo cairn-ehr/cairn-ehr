@@ -36,6 +36,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0013](0013-attachments-content-addressed-lazy-blob-tier.md) | Attachments: content-addressed blobs, the lazy byte tier, and reference-eager replication | Accepted | 2026-06-15 |
 | [0014](0014-locale-pluggable-matcher-comparators.md) | Locale-pluggable matcher comparators: content-addressed profiles that travel with the data | Accepted | 2026-06-16 |
 | [0015](0015-event-serialization-signatures-and-content-addressing.md) | Event serialization, signatures, and content addressing: tagged, migratable primitives over three structural moves | Accepted | 2026-06-16 |
+| [0016](0016-record-discovery-and-the-replicated-essential-tier.md) | National-scale record discovery: the replicated essential-state tier and federation admission | Accepted | 2026-06-16 |
 
 ## Template
 

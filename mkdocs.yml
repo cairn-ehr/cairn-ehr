@@ -106,6 +106,7 @@ nav:
       - ADR-0013 · Attachments — content-addressed blobs & the lazy byte tier: spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md
       - ADR-0014 · Locale-pluggable matcher comparators: spec/decisions/0014-locale-pluggable-matcher-comparators.md
       - ADR-0015 · Event serialization, signatures & content addressing: spec/decisions/0015-event-serialization-signatures-and-content-addressing.md
+      - ADR-0016 · Record discovery & the replicated essential tier: spec/decisions/0016-record-discovery-and-the-replicated-essential-tier.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

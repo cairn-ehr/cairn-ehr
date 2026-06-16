@@ -32,3 +32,31 @@ is unaffected — it concerns priority/noise, not authorship.
 - ~~**Additive-vs-suppressing classification**~~ — **RESOLVED** ([ADR-0010](decisions/0010-additive-vs-suppressing-classification.md), [data-model §3.9](data-model.md#39-authorship-and-accountability), [identity §5.10](identity.md#510-authorship-and-responsibility-state-the-consumer-side)/[§5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor)): **structurally derived, not declared** — additive ≡ overlay, suppressing ≡ foreclosure (the append-only principle applied to the attention layer); the test is *"could a human still independently see and act on everything?"*. **Demotion is additive, only hiding/auto-deciding is suppressing** (a closed enumerated set); enforcement is a structural in-DB owner-gate; **responsibility is conserved** (relocated to the audited config act, never abolished); **declaration is a one-way caution ratchet** (the de-facto-suppression handle). Triage is a salience-scoring extension point (trend rules + AI oversight; mechanism, not policy), and **automation-complacency atrophy is detected** as an additive governance signal.
 - **Proxy/liability semantics** — what `on_behalf_of` legally binds is out of scope; Cairn records the
   chain, jurisdictions interpret it.
+
+## Resolved — national-scale record discovery (first contact, no central index)
+
+How a node that does **not** hold the whole population's records discovers that a record exists for a
+first-contact patient (new to the region) and requests it is **RESOLVED**
+([ADR-0016](decisions/0016-record-discovery-and-the-replicated-essential-tier.md),
+[sync §6.7](sync.md#67-record-discovery-and-the-replicated-essential-state-tier),
+[identity §5.2](identity.md#52-matching-pipeline-safety-asymmetric-false-merge-worse-than-false-split)):
+discovery is a **local matcher query** against a **replicated essential-state tier** (each person's
+essential safety snapshot + a blocking-key summary on every federated node) — **no national Master
+Patient Index** (the capture surface), no real-time dependency, no dependence on a patient-carried token.
+The tier carries **current state, not transaction history** (the affordability boundary); the full record
+follows lazily via [§6.4](sync.md#64-scope-is-a-prefetch-hint-not-an-authority) acquisition once a match is
+confirmed. "Essential" is a graded, multi-source, append-only flag, and the confidential-essential case
+composes with the [§5.9](identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)
+safety projection. Sizing validated against real-system data: ~2.5 TB and ~75–150 kbit/s for 100 M people.
+
+## Open — Custodian & Federation Admission (new spec)
+
+Surfaced as a hard dependency of [ADR-0016](decisions/0016-record-discovery-and-the-replicated-essential-tier.md):
+the existence-disclosure surface of record discovery (and the lawfulness of replicating a nation's essential
+set) is bounded by requiring every node that **joins the sync mesh** to present **proof of health-system
+participation + an enforceable privacy contract**; a node lacking these may run fully but isolated. This is
+**admission control for federation** — a governance/security spec, sibling to
+[GOVERNANCE](../principles/GOVERNANCE.md) and [Stewardship of the Name](../principles/STEWARDSHIP-OF-THE-NAME.md).
+To define: the credential/attestation a node presents, who issues and verifies it, how it is revoked
+(contamination-cascade reuse?), the contract's minimum terms, and the disclosure granularity it permits
+(region, never named clinic). Out of scope for the spec, into jurisdiction: the contract's legal force.

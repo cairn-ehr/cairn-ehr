@@ -1,9 +1,61 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-16 (spec bumped to **v0.17**)
+**Session date:** 2026-06-16 (spec bumped to **v0.19**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
+
+---
+
+## Resolved 2026-06-16 — national-scale record discovery (now spec v0.19) → ADR-0016
+
+Case-mined a **new** problem (not in the original §11 set): at national scale **no node holds the whole
+population's records**; a patient new to a region presents at a small under-resourced clinic — how does it
+discover a record exists elsewhere, and request it? It dissolved into existing primitives + **one new
+replication tier**, **no new founding principle**. → [ADR-0016](spec/decisions/0016-record-discovery-and-the-replicated-essential-tier.md),
+canonical homes **[sync §6.7](spec/sync.md)** (the tier + discovery mechanism) and
+**[identity §5.2](spec/identity.md)** (discovery feeds the matcher; national ID as accelerator), with the
+confidential-essential composition in **[identity §5.9](spec/identity.md)**.
+
+- **The gap:** §5.2's *"match at the lowest tier that sees both registrations"* breaks when the lowest
+  common ancestor is *the nation* — which can be neither a fat index the clinic queries nor one it can hold.
+  The conventional fix (a national **Master Patient Index**) is the surveillance/lock-in capture surface
+  principle 7 forbids.
+- **Two phases of opposite character:** *identity* discovery is irreducibly the matcher's fuzzy problem
+  (**you cannot content-address a human** — why ADR-0013's content-addressing doesn't solve it); *part/locator*
+  discovery (UUID → which nodes hold its events) **is** content-addressable, the §6.6 swarm-fetch shape.
+- **The resolution (the user's keystone intuition, validated by the math):** a **replicated essential-state
+  tier** — a tiny, replicate-to-all-*federated* projection of each person's essential safety set (demographics,
+  active allergies, active meds, problem list, code-status, care pointer) + a blocking-key summary on every
+  node. Discovery becomes a **local matcher query** — offline, partition-proof, *no broadcast of who is being
+  sought*. Hit → middle band → human → `link` → §6.4 lazy acquisition of the full record. ADR-0013's
+  **reference-eager/byte-lazy** generalized from attachments to **patient existence**.
+- **The footgun the research caught + nailed in the spec:** the essential tier carries **current state, not
+  transaction history** (~77 % of dispensed items are repeats that don't change the list). Dispensing history,
+  observations, labs, notes stay in the scoped/lazy full record. This is the line that keeps it affordable.
+- **"Essential" is a graded, multi-source, append-only flag, not a fixed list** (the user's *Sildenafil* case:
+  privacy-sensitive, sporadic, undisclosed, but lethal-with-nitrates). Policy default pre-label pack + any
+  accountable contributor may tag; *when unsure, err toward essential* (principle 4). **Confidential ∧ essential
+  composes with the §5.9 safety projection:** the **de-identified projection** (interaction class + severity,
+  naming nothing) replicates broadly and is itself the actionable fact; the **identified body stays sealed**
+  behind break-glass — patient kept safe without being outed and without point-of-care disclosure.
+- **National/memorable ID (Norway *personnummer*) = deterministic accelerator, never a dependency** (the user:
+  patient-carried tokens fail in practice — forgotten cards, failed logins). Patient-carried token optional.
+- **Sizing validated by a 5-angle deep-research pass** (PubMed + national stats; full numbers in
+  [ADR-0016 §8](spec/decisions/0016-record-discovery-and-the-replicated-essential-tier.md)): essential set
+  **~25 KB/person → ~2.5 TB for 100 M** (range 1.2–5 TB; a commodity 4 TB SSD), discovery summary ~0.4–1.6 GB;
+  churn **~5–10 essential events/person/yr → ~75–150 kbit/s per full-mirror node ≈ ~1 % of a mediocre
+  Starlink** (1–2 orders of headroom even at a sicker ~25/yr). Anchored on the spike's measured ~494 B/event,
+  England NHSBSA (~21 items/yr, ~77 % repeats), Scottish/Swedish polypharmacy registries (~40 % on zero meds),
+  Barnett 2012 multimorbidity, Zhou 2016 allergies (n≈1.77M), US MEPS utilisation skew.
+- **New open item surfaced (a hard dependency):** **Custodian & Federation Admission** — a separate
+  governance/security spec. Replicating a nation's essential set is lawful only because every holding node is a
+  **contracted, accountable custodian** (proof of health-system participation + enforceable privacy contract to
+  join the mesh; else isolated). This bounds the unavoidable existence-disclosure to vetted custodians at
+  **region** granularity. Logged in [open-questions.md](spec/open-questions.md).
+- **Blast-radius (§9):** the summary build + local matcher query + ranking are fit-for-purpose (advisory); the
+  essential-tier replication predicate + **current-state projection seam** + the essential-flag→safety-projection
+  seam + federation-admission credential verification are safety-critical (the recurring seam motif).
 
 ---
 
@@ -730,9 +782,12 @@ keystore cost / key granularity for crypto-shredding — see ADR-0005.)**
 follow-ons are closed too. The last two — **§11.6** (attachments, [ADR-0013](spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md))
 and **§11.7** (locale-pluggable comparators, [ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md))
 — closed this session. The only ADR-0007 follow-ons still open are small (closed role-enum membership
-finalisation; proxy/liability semantics, out of scope — Cairn records the chain). With the open-question backlog
-empty, the highest-signal modes are now **fresh clinical case-mining** and the **build-prep threads** below
-(the architecture spec is feature-complete enough to start specifying the first implementation spike).
+finalisation; proxy/liability semantics, out of scope — Cairn records the chain). This session's record-discovery
+case-mining (→ [ADR-0016](spec/decisions/0016-record-discovery-and-the-replicated-essential-tier.md)) added
+**one new open item**: the **Custodian & Federation Admission** spec (see the top section + [open-questions.md](spec/open-questions.md)).
+With the original §11 backlog otherwise empty, the highest-signal modes are now **the Custodian & Federation
+Admission spec**, **fresh clinical case-mining**, and the **build-prep threads** below (the architecture spec is
+feature-complete enough to start specifying the first implementation spike).
 
 **The recurring menu** when resuming (pick one):
 - More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
