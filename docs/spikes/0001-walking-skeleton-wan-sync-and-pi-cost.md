@@ -302,3 +302,15 @@ ADR-0013 and left for the production byte tier:
    2 MB blob was still `referenced-only` at cutoff). The real tier must **persist partial bytes and resume**
    (ADR-0013 *chunked/resumable*). Moving the fetch off the clinical loop (8.1) is the **availability** fix;
    pipelining + resumability is the **throughput** fix.
+
+**STATUS — implemented (PR #12), pending real-link confirmation.** Both deferred items above are now built:
+`do_blobd` is **windowed** (worker pool, `--window N` ≤16), **resumable** (verified slices persist in a
+`blob_chunk` set-union table; a restart fetches only the missing indexes), **multi-source swarm**
+(`--blob-peer` repeatable, per-slice failover), and **per-slice BLAKE3 verified** via `bao`
+(`cairn-event::verify_slice` — a lying/faulty source is rejected per-slice and healed by another). Slices
+travel as **raw binary frames** (not hex, which would halve measured throughput). Validated locally by
+`harness/bench_blob.py selftest` (T1 windowed throughput · T2 resume-across-interrupt · T3 swarm · T4
+lying-peer heal · T5 availability floor — all PASS). **What the real Cape York ↔ Dorrigo run must still
+confirm** before §8.2 is marked *delivered*: throughput + round-trip reduction vs the old stub on the actual
+~710 ms link, **resume across a real Starlink drop**, and **clinical p95 unaffected** during the windowed
+fetch at the *production* `--budget-ms`. Record the chosen `SLICE_BYTES` / `--window` from that run.

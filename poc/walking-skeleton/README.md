@@ -75,8 +75,16 @@ persist in `blob_chunk`; a restart fetches only missing indexes), **windowed**
 **swarm-capable** (repeat `--blob-peer HOST:PORT` for multiple sources), and
 **per-slice verified** (every slice is checked against the BLAKE3 `blob_address`
 via bao verified streaming; a lying or faulty source is rejected per-slice and
-healed by another source). The `--budget-ms` sleep between requests is preserved
-to keep byte transfer from starving clinical sync.
+healed by another source). Slices travel as **raw binary frames**
+(`[found:u8][total_len:u64 BE][slice…]`), not hex — the byte tier is
+throughput-bound, and hex would double every transferred byte; the clinical plane
+stays JSON because it is small and latency-bound. The `--budget-ms` sleep between
+requests is preserved to keep byte transfer from starving clinical sync.
+
+A single `blobd` call makes **one pass** over the missing slices and returns; a
+transient link drop simply leaves an index missing for the next pass (resumable).
+Re-run `blobd` until `blobs_completed` covers your references, or use `run`, whose
+byte-tier thread loops automatically.
 
 ```sh
 $BIN gen-blob --conn "$A" [--size-mb N] [--media MEDIA_TYPE]          # mint a large local blob to fetch
@@ -119,7 +127,16 @@ fault injection via `serve --corrupt` → per-slice rejection → heal from good
 - **Blob bytes are inline BYTEA** (not a dedicated object store). The fetch protocol
   is now windowed, resumable, swarm-capable, and per-slice verified (Spike 0001 §8.2
   resolved), but the storage substrate remains BYTEA; true N-way swarm is only
-  locally exercisable on the two-node rig.
+  locally exercisable on the two-node rig. A consequence of BYTEA storage: the
+  **server reads the whole blob from Postgres for every slice request** (bao seeks
+  within an in-memory cursor), so serving an N-slice blob does N full-blob DB reads.
+  This is **local** I/O on the serving node (not over the WAN link being measured),
+  but the production object-store tier replaces it with a ranged read.
+- **The byte tier has no per-blob authorization.** `serve` ships any slice of any
+  present blob to any peer that can reach the port, exactly as the clinical plane
+  ships every event — the WireGuard link is the trust boundary here. Visibility
+  scope, the safety projection, and break-glass ([ADR-0006](../../docs/spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md))
+  are **not** exercised by this skeleton.
 - **Sealing/crypto-shred** (`sealed`/`dek_wrapped`) and rich **contributor sets**
   are reserved in the envelope but not exercised.
 

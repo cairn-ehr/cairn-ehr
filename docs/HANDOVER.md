@@ -135,6 +135,49 @@ field-readiness session's predicted fix was right: **bind `--listen` to the Wire
   Then the byte-tier **throughput** work (§8.2: pipelined/windowed + resumable/swarm fetch — the availability
   fix shipped in #9; this is the throughput fix).
 
+### Byte-tier throughput (§8.2) — SHIPPED in PR #12 + post-merge review hardening 2026-06-16
+
+**PR #12 closed §8.2** (the throughput half; the availability half was #9): `do_blobd` went from a
+synchronous one-RTT-per-64 KiB stub to **windowed** (worker pool, `--window N` ≤16) + **resumable**
+(verified slices persist in a new `blob_chunk` set-union table; a restart fetches only the missing indexes)
++ **multi-source swarm** (`--blob-peer` repeatable, per-slice failover) + **per-slice BLAKE3 verified** via
+the `bao` crate (`cairn-event::verify_slice` — the single trust seam; a lying source is rejected per-slice
+and healed by another). Own thread + clamped window + preemptible budget preserve the #9 availability floor.
+
+**A retrospective review of #12 found no correctness blockers** (re-ran `cargo test` 6/6 incl. the 3
+adversarial verify-slice cases, `clippy -D warnings` clean). The actionable findings were addressed
+**post-merge on the branch** (this session), all validated end-to-end with `bench_blob.py selftest` on the
+local 3-DB rig (T1–T5 PASS over the new protocol):
+
+- **Byte tier now ships raw binary slice frames** (`[found:u8][total_len:u64 BE][slice…]`), not hex. Hex
+  doubled every transferred byte — a real artifact for a *throughput* measurement; removing it before the
+  WAN run means the recorded MB/s and chosen `SLICE_BYTES`/`--window` are tuned against the real wire, not
+  an encoding we'd delete. The clinical plane stays JSON (small, latency-bound).
+- **`verify_slice` failures now return a dedicated `EventError::BlobVerify`** instead of reusing
+  `BadSignature` (a slice integrity failure isn't a signature failure — clearer logs/metrics).
+- **Added a wrong-claimed-length adversarial test** (offset and bytes were already covered; length wasn't).
+- **Documented the skeleton artifacts** in the README "deliberately stubs" section: (a) BYTEA storage means
+  the **server re-reads the whole blob from PG per slice** — but this is *local* I/O on the serving node,
+  **not** over the WAN link being measured (the production object-store tier replaces it with a ranged read);
+  (b) the byte tier has **no per-blob authorization** — visibility scope / safety projection / break-glass
+  (ADR-0006) are not exercised here, the WireGuard link is the trust boundary; (c) `chunk_index` is i32, so a
+  >~549 GB blob would overflow it (far beyond any DICOM study); (d) a single `blobd` call is one pass —
+  re-run until `blobs_completed` covers your references, or use `run` (its byte-tier thread loops).
+
+**READY FOR THE SPIKE — the real Cape York ↔ Dorrigo §8.2 throughput run** (user-driven, immediately after
+merge). The PR's unchecked box. Field path is the same canonical `cairn-sync run` per node as Bet A
+(bind `--listen` to the **WireGuard** address, not `127.0.0.1` — the recurring gotcha). Checklist:
+  1. `cargo build --release` on **both** nodes (MacBook Cape York `10.0.0.2`; DGX Spark Dorrigo `10.0.0.3`,
+     user PG18 on :5444 — both already provisioned, see the Bet A note).
+  2. On a source: `gen-blob --size-mb N` (or `put-blob` a real DICOM); note the printed address + length.
+  3. On the fetcher: `blob_note_reference(...)` the address, then `run … --blob-peer <wg-addr> [--window N]
+     [--budget-ms 20]` so the byte-tier thread fetches lazily while clinical sync continues.
+  4. **Confirm the three §8.2 claims on the real link:** throughput + round-trip reduction vs the old stub
+     (T1 reports `~seq RTTs → ~windowed waves`); **resume across a real Starlink drop** (kill mid-fetch,
+     restart, only missing indexes refetch); **clinical p95 unaffected** during the windowed fetch (the
+     ADR-0013 floor — re-confirm at the *production* `--budget-ms`, not just the selftest's aggressive 2 ms).
+  5. **Record the chosen `SLICE_BYTES` / `--window`** from the run and mark §8.2 *delivered* in the spike doc.
+
 ### Field-readiness 2026-06-16 (PR #7 merged to main; this work is post-merge on the branch)
 
 User merged PR #7, then **started the real Cape York ↔ Dorrigo run over Starlink/WireGuard at lunch** —
