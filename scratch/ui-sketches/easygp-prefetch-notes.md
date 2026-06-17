@@ -100,6 +100,30 @@ Cairn principle alignment:
 - Smart defaults / forced-manual = principle-4 + paper-parity: strip keystrokes where safe, force
   attention where a default could harm.
 
+### Further refinements (HH)
+
+**1a. The thin context id is a small first-class entity: `{time, place, author, ≥1 linked events}`.**
+- Same shape as the event envelope (HLC time, scope/place keys, contributor set) → it's a lightweight
+  *header* that events point at via the `encounter` key.
+- **Author can be non-human** (e.g. an automatic recall system spawns the context; generated
+  orders/letters hang off it). Lands on [ADR-0007](../../docs/spec/decisions/0007-authorship-and-accountability.md):
+  authorship is compositional, a machine is a legitimate contributor; signature = origin (the algorithm),
+  attestation absent or proxied to the recall-policy owner. Contexts are not always human-initiated.
+
+**3a. The narrow modal exception is a RECONCILIATION, not a breach of principle 3.**
+- Banned (CLAUDE.md principle 3): *confirmation dialogs* ("are you sure? OK/Cancel") as a safety
+  mechanism — click-through fatigue, fails paper-parity.
+- Allowed (HH, ~1–2×/year): a **forced-rationale gate on irreversible harm**. Distinct mechanism:
+  - demands a *rationale* (substantive, recorded) — cannot be click-throughed;
+  - reserved for the genuinely *irreversible*. Append-only + overlay make almost everything reversible,
+    so the modal-worthy set collapses to the irreducible core (crypto-shred/erasure
+    [ADR-0005](../../docs/spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), repudiation, a
+    tiny handful). That collapse is *why* it's a once-or-twice-a-year event; rarity preserves its signal.
+  - the captured rationale is just an accountability event (same pattern as break-glass key-use).
+- Rule of thumb: **never block the reversible (overlay handles it); for the irreversible few, don't
+  confirm — demand a reason and record it.** Candidate phrasing for spec/ADR; distinguish
+  "confirmation dialog (banned)" from "forced-rationale gate (rare, allowed)".
+
 ### Still to verify / pull next week against easyGP
 - [ ] The `rx!`/`tx!`+tab parser & the type-through state machine (port faithfully — battle-tested).
 - [ ] How the progress-note item (context id) was spawned — cost, lifecycle, when a new one starts.
