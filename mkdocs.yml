@@ -110,6 +110,7 @@ nav:
       - ADR-0017 · Federation admission — sovereignty, peering & trust anchors: spec/decisions/0017-federation-admission-sovereignty-peering-and-trust-anchors.md
       - ADR-0018 · Federation revocation — cascade & the anchor as power: spec/decisions/0018-federation-revocation-cascade-and-the-anchor-as-power.md
       - ADR-0019 · Author-scoped record export — the medico-legal copy: spec/decisions/0019-author-scoped-record-export-the-medico-legal-copy.md
+      - ADR-0020 · Active-write model — thin encounters, type-through & delete-vs-erase: spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

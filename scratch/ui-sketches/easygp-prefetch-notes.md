@@ -3,6 +3,17 @@
 > Scratch / conversation aid — NOT canonical. Pre-read for the next-week session
 > when HH has access to the full easyGP Postgres schema + PL/pgSQL + PL/Python.
 
+> [!NOTE]
+> **PROMOTED TO CANON 2026-06-17.** The *write-model* cluster from this note — thin encounter /
+> context-entity, order-provenance-via-the-encounter-key, the `rx!`/`tx!` type-through model, the
+> note-line-as-derived-legibility-twin, the delete-vs-erase taxonomy, and the forced-rationale gate —
+> is now **[ADR-0020](../../docs/spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)**
+> + **[data-model §3.15](../../docs/spec/data-model.md)** + **[vision §1.2](../../docs/spec/vision.md)** (spec v0.22).
+> **Still pending next week (build-prep, intentionally NOT promoted):** the `rx!`/`tx!` parser +
+> type-through state machine port, the formulation/drug data source + forced-manual rule table, and the
+> **prefetch/materialization warming daemon** internals (the "To look at next week" + "Still to verify"
+> checklists below). Those are why this note stays live.
+
 ## Context
 UI requirements discussion (clinical dashboard + results/reports inbox) surfaced
 the performance machinery easyGP used. Goal: scavenge what scales to Cairn's

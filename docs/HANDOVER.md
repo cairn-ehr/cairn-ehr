@@ -1,9 +1,59 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-16 (spec bumped to **v0.21**)
+**Session date:** 2026-06-17 (spec bumped to **v0.22**)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
+
+---
+
+## Resolved 2026-06-17 — the active-write model promoted to canon (now spec v0.22) → ADR-0020
+
+Promoted the **write-model / UI design cluster** — resolved in conversation across PRs #15–#17, captured in
+`scratch/ui-sketches/`, but never in canon — into the spec + ADR log. It dissolved into existing primitives
++ one principle-3 reconciliation: **no new envelope field, no new event stream, no new founding principle.**
+→ [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md),
+canonical home **[data-model §3.15](spec/data-model.md)**, with the forced-rationale gate in
+**[vision §1.2](spec/vision.md)** and back-pointers from data-model §3.5/§3.10/§3.13 and identity §5.11.
+
+- **Same one-word-hides-many-dials motif** that resolved "scope"/"signature"/"authentication"/"priority",
+  now applied to the write surface — "encounter", "the order's consult", "the note line", "delete".
+- **Thin encounter / context-entity.** `encounter` is an opaque grouping id that asserts **nothing** about
+  formality (a 5-second results-review with one annotated order is a first-class "virtual encounter"); a small
+  first-class header `{HLC time, place, contributor set, ≥1 events}`; author **may be non-human** (a recall
+  system spawns it). **Guard the prose against importing FHIR-`Encounter`/billing semantics — grouping id,
+  full stop.** It rides on the ADR-0008 armed write-context; events inherit it ambiently like
+  facility/department — no new field.
+- **Order provenance falls out of the encounter key** — `result → order → order.encounter → fold`; the
+  external-results gap is structurally explained + **honestly degraded** (labelled most-recent fallback,
+  never silently "the ordering consult"). AI cross-ref only *proposes* a link (overlay discipline).
+- **Type-through write model** (`rx!`/`tx!`+tab, non-modal side panel; smart-default-vs-**forced-manual**
+  dosing for paediatric/pregnant/breastfeeding/renal/hepatic). The readable note line is a **derived
+  projection of the one structured event = the §3.13 legibility twin rendered inline, born at authoring
+  time** — so the "two artifacts diverge" worry dissolves at the root (principle 11 at the point of authoring).
+- **Delete-vs-erase taxonomy** (conventional EHRs conflate them): **delete** = suppress a *rendering*
+  (visibility overlay, reversible, **zero friction**, routine) vs **erase** = crypto-shred the *data*
+  (ADR-0005, irreversible, ≈never). *"Delete only ever removes one UI aspect, never the original data"* =
+  never-erase-always-overlay (principle 2) applied to the **display layer**. Suppression is itself a recorded
+  visibility-overlay event (the *that*; the *why* may stay unstated). Slots under ADR-0006 (confidentiality in
+  presentation, never existence — the STI-screen case).
+- **Forced-rationale gate ≠ banned confirmation dialog** — a reconciliation of principle 3. Confirmation
+  dialogs stay banned (click-through fatigue); but the genuinely irreversible few (erase, repudiation) earn a
+  **forced-rationale** gate that demands a substantive recorded reason (can't be click-throughed). Because
+  overlay makes almost everything reversible, the modal-worthy set collapses to ~1–2×/yr — rarity preserves
+  the signal. Rule: **never block the reversible; for the irreversible few, don't confirm — demand a reason
+  and record it.** Canonical home vision §1.2.
+- **Blast-radius (§9):** the thin-encounter grouping + type-through state machine + forced-manual rule table
+  are fit-for-purpose; the **delete-is-never-erase** boundary and the **suppression-is-always-a-recorded-
+  overlay-event** invariant are safety/privacy-critical (trusted apply surface — the recurring seam motif).
+- **Still in `scratch/`, gated on next-week easyGP schema access (build-prep, intentionally NOT promoted):**
+  the `rx!`/`tx!` parser + type-through state machine port, the formulation/drug data source + forced-manual
+  rule table, and the **prefetch/materialization warming daemon** internals (validates ADR-0001 from
+  production; splits into *scavengeable mechanism* vs *swappable prediction policy*). See
+  `scratch/ui-sketches/easygp-prefetch-notes.md` (banner added pointing at the promoted canon).
+- **Why the previous handover missed this:** the whole UI/write-model thread — wireframes under
+  `scratch/ui-sketches/`, the `web/` landing-page + chart examples — ran across **PRs #15–#17 *after* the
+  2026-06-16 handover was last regenerated**, so it was unreflected until now. Build verified `--strict` clean.
 
 ---
 
@@ -861,10 +911,13 @@ and **§11.7** (locale-pluggable comparators, [ADR-0014](spec/decisions/0014-loc
 finalisation; proxy/liability semantics, out of scope — Cairn records the chain). This session's record-discovery
 case-mining (→ [ADR-0016](spec/decisions/0016-record-discovery-and-the-replicated-essential-tier.md)) surfaced the
 **Custodian & Federation Admission** dependency, which was then **drafted the same session** (→ [ADR-0017](spec/decisions/0017-federation-admission-sovereignty-peering-and-trust-anchors.md),
-[security §7.7](spec/security.md)). With the backlog empty again, the highest-signal modes are now **fresh
-clinical case-mining** and the **build-prep threads** below (the architecture spec is feature-complete enough to
-start specifying the first implementation spike). Build-prep next steps unchanged: **Bet B on a Pi**, then the
-byte-tier connection-reuse throughput lever.
+[security §7.7](spec/security.md)). This session (2026-06-17) promoted the **active-write model** cluster to
+canon (→ [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md),
+spec v0.22; top entry). With the architecture backlog empty again, the highest-signal modes are now **fresh
+clinical case-mining** and the **build-prep threads** below (the spec is feature-complete enough to keep
+driving the first implementation spike). Build-prep next steps: the **easyGP next-week session** (port the
+`rx!`/`tx!` type-through + the prefetch/materialization warming daemon — the ADR-0020 deferred items), **Bet B
+on a Pi**, then the byte-tier connection-reuse throughput lever.
 
 **The recurring menu** when resuming (pick one):
 - More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
@@ -876,8 +929,14 @@ byte-tier connection-reuse throughput lever.
   day-one serialization/signature/digest defaults. ~~build the skeleton~~ **DONE**; ~~run Bet A on the
   Cape York ↔ Dorrigo link~~ **DONE 2026-06-16 — all six §5 rows PASS** (see the run note above).
   **Now:** ratify the §4 crypto primitives into an ADR per the §7 exit criteria; **Bet B on a Pi next week**.
+- **easyGP next-week session** (the live build-prep thread) — with full easyGP Postgres schema + PL/pgSQL +
+  PL/Python access, port the ADR-0020 deferred items: the `rx!`/`tx!` parser + type-through state machine, the
+  formulation/drug data source + renal/hepatic/pregnancy forced-manual rule table, and the prefetch/
+  materialization warming daemon (mechanism scavenge, validates ADR-0001). Pre-read:
+  `scratch/ui-sketches/easygp-prefetch-notes.md`.
 - **Polish a non-developer landing page** for the generated site (frontend-design work; draft plans
-  already exist under `docs/superpowers/`).
+  already exist under `docs/superpowers/`). Note: the `web/` landing page + chart examples already advanced
+  across PRs #15–#17 (founding-principles cards, two-zone chart UI example).
 
 *(All §11 open architecture questions are now resolved — no remaining items in that backlog.)*
 

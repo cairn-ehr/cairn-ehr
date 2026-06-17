@@ -40,6 +40,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0017](0017-federation-admission-sovereignty-peering-and-trust-anchors.md) | Federation admission: the sovereignty floor, mutual peering, pluggable trust anchors, and the custodian contract | Accepted | 2026-06-16 |
 | [0018](0018-federation-revocation-cascade-and-the-anchor-as-power.md) | Federation revocation: counterparty enforcement, cascade, and the anchor as a position of power | Accepted (refines 0017) | 2026-06-16 |
 | [0019](0019-author-scoped-record-export-the-medico-legal-copy.md) | Author-scoped record export: the clinician's medico-legal copy | Accepted (refines 0007) | 2026-06-16 |
+| [0020](0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md) | The active-write model: thin encounters, type-through authoring, and the delete-vs-erase distinction | Accepted | 2026-06-17 |
 
 ## Template
 
