@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cairn — chart (full screen example)</title>
+  <meta name="description" content="The Cairn chart, full screen: a persistent safety zone, a splittable work zone, an endless past-visits timeline, and a durable scratchpad that commits on your terms.">
+  <meta name="theme-color" content="#1E3A52">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* ============================================================
+       Full-screen chart — fluid, no horizontal scroll, fills the
+       whole viewport. Reuses site tokens from /styles.css.
+       ============================================================ */
+    :root {
+      --clinical:       #FBFCFD;
+      --clinical-alt:   #F3F6F8;
+      --chart-line:     rgba(30, 58, 82, 0.14);
+      --chart-line-soft:rgba(30, 58, 82, 0.08);
+      --captured:       #2F6E62;  --captured-bg: #E2F0EB;  --captured-line: rgba(47,110,98,0.34);
+      --clay:           #A8432F;  --clay-bg: #F4E3DC;       --clay-line: rgba(168,67,47,0.30);
+      --amber:          #9A6A21;  --amber-bg: #F2E6CF;      --amber-line: rgba(154,106,33,0.32);
+      --uncertain:      #6E6256;
+    }
+    html, body { height: 100%; }
+    body.chart-app {
+      margin: 0; background: var(--clinical); color: var(--ink);
+      font-family: var(--font-sans); font-size: 15px; line-height: 1.5;
+      display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+
+    /* ---- titlebar ---- */
+    .app-titlebar {
+      flex: none; display: flex; align-items: center; gap: 14px;
+      padding: 9px 16px; background: linear-gradient(180deg, #1E3A52, #1A3147);
+      color: #D7E2EA; font-size: 12.5px; letter-spacing: 0.2px;
+    }
+    .app-titlebar .back { color: #BFE0D5; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+    .app-titlebar .back:hover { color: #fff; text-decoration: none; }
+    .app-titlebar .node { display: inline-flex; align-items: center; gap: 8px; color: #EAF1F6; font-weight: 500; }
+    .app-titlebar .dot { width: 8px; height: 8px; border-radius: 50%; background: #57C99A; box-shadow: 0 0 0 3px rgba(87,201,154,0.18); }
+    .app-titlebar .sep { color: rgba(215,226,234,0.35); }
+    .app-titlebar .offline { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; color: #BFE0D5; }
+    @media (max-width: 640px) { .app-titlebar .offline span { display: none; } }
+
+    /* ============================================================ PERSISTENT ============================================================ */
+    .persistent {
+      flex: none; position: relative;
+      background: linear-gradient(180deg, #F3F6F9, #EEF2F6);
+      border-bottom: 2px solid var(--chart-line);
+      padding: 14px 18px 16px;
+    }
+    .zone-tag { position: absolute; top: 9px; right: 16px; font-size: 9.5px; letter-spacing: 1.3px; text-transform: uppercase; color: var(--stone); font-weight: 600; }
+    .persistent-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+    .persistent-top > :nth-child(2) { flex-grow: 1.4; }
+    @media (max-width: 1080px) { .persistent-top { grid-template-columns: 1fr 1fr; } .persistent-top > :nth-child(3) { grid-column: 1 / -1; } }
+    @media (max-width: 720px)  { .persistent-top { grid-template-columns: 1fr; } .persistent-top > * { grid-column: auto !important; } }
+
+    .pcard { background: #fff; border: 1px solid var(--chart-line); border-radius: 10px; padding: 12px 15px 13px; }
+    .pcard h2 { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; margin: 0 0 9px; display: flex; align-items: center; gap: 7px; }
+    .pcard h2 .num { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--navy-soft); color: var(--navy); font-size: 9.5px; font-weight: 700; }
+
+    .identity { display: grid; grid-template-columns: 58px 1fr; gap: 12px; }
+    .portrait { width: 58px; height: 70px; border-radius: 7px; background: linear-gradient(160deg, #DCE4EA, #C7D3DC); display: grid; place-items: center; color: var(--stone); border: 1px solid var(--chart-line); }
+    .id-name { font-family: var(--font-serif); font-size: 20px; font-weight: 600; color: var(--ink); line-height: 1.1; margin: 0 0 5px; }
+    .id-line { font-size: 13px; color: var(--ink-soft); margin: 0 0 3px; }
+    .id-line .sex { color: var(--ink-faint); }
+    .id-meta { font-size: 11px; color: var(--ink-faint); margin-top: 5px; }
+    .id-meta .link-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--clinical-alt); border: 1px solid var(--chart-line-soft); border-radius: 20px; padding: 1px 8px; color: var(--ink-soft); }
+
+    .pcard.mnm { background: linear-gradient(180deg, #fff, #FDF8F6); border-color: var(--clay-line); }
+    .allergy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+    .allergy .badge { display: inline-flex; align-items: center; gap: 6px; color: var(--clay); font-weight: 700; font-size: 14.5px; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 9px; border-radius: 20px; background: var(--clay-bg); color: var(--clay); border: 1px solid var(--clay-line); }
+    .mnm-row { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 4px; }
+    .mnm-row b { color: var(--ink); font-weight: 600; }
+    .mnm-row .uncertain { color: var(--uncertain); font-style: italic; }
+    .allergy-detail { margin-top: 9px; background: var(--clay-bg); border: 1px solid var(--clay-line); border-radius: 8px; padding: 8px 11px; }
+    .allergy-detail p { margin: 0; font-size: 12px; color: #6E3326; line-height: 1.45; }
+    .allergy-detail .tolerated { color: var(--captured); font-weight: 600; }
+    .allergy-detail .inline-note { display: block; margin-top: 3px; font-size: 10.5px; color: var(--ink-faint); font-style: italic; }
+
+    .hn-present { font-size: 13.5px; color: var(--ink); font-weight: 600; margin: 0 0 7px; line-height: 1.3; }
+    .hn-dx { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 7px; }
+    .hn-dx .tag { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 5px; background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-line); margin-left: 4px; }
+    .hn-loc { font-size: 11.5px; color: var(--ink-faint); margin: 0 0 10px; }
+    .ghost-btn { font-size: 12px; cursor: pointer; background: var(--clinical-alt); color: var(--ink-soft); border: 1px solid var(--chart-line); border-radius: 6px; padding: 6px 11px; display: inline-flex; align-items: center; gap: 6px; }
+    .ghost-btn:hover { background: #fff; border-color: var(--navy-soft); color: var(--navy); }
+
+    .urgent-banner { margin-top: 12px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; background: linear-gradient(180deg, #F6EDD8, #F1E5CC); border: 1px solid var(--amber-line); border-radius: 10px; padding: 9px 13px; }
+    .urgent-banner .label { font-size: 10px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--amber); font-weight: 700; margin-right: 3px; display: inline-flex; align-items: center; gap: 7px; }
+    .urgent-banner .num { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--amber); color: #F6EDD8; font-size: 9px; }
+    .chip { font-size: 12px; cursor: pointer; background: #fff; color: var(--ink-soft); border: 1px solid var(--amber-line); border-radius: 20px; padding: 5px 12px; display: inline-flex; align-items: center; gap: 7px; transition: transform .12s ease, box-shadow .12s ease, border-color .12s; }
+    .chip:hover { transform: translateY(-1px); box-shadow: 0 3px 10px -4px rgba(154,106,33,0.5); border-color: var(--amber); }
+    .chip .badge-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .chip.hot { background: var(--captured-bg); border-color: var(--captured-line); color: var(--captured); font-weight: 600; }
+    .chip .new { font-size: 8.5px; letter-spacing: 0.5px; background: var(--captured); color: #fff; border-radius: 4px; padding: 1px 5px; font-weight: 700; }
+    .urgent-hint { margin-left: auto; font-size: 10.5px; color: var(--ink-faint); font-style: italic; }
+    @media (max-width: 880px) { .urgent-hint { display: none; } }
+
+    /* ============================================================ WORK ZONE ============================================================ */
+    .work { flex: 1; min-height: 0; display: grid; grid-template-columns: 188px 1fr; }
+
+    .rail { border-right: 1px solid var(--chart-line); background: var(--clinical-alt); padding: 14px 11px; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
+    .rail h2 { font-size: 9.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--stone); font-weight: 700; margin: 0 4px 7px; }
+    .rail button { font-size: 13px; text-align: left; cursor: pointer; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px 11px; color: var(--ink-soft); display: flex; align-items: center; gap: 9px; transition: background .12s, color .12s, border-color .12s; }
+    .rail button svg { color: var(--stone); flex: none; }
+    .rail button:hover { background: #fff; color: var(--ink); }
+    .rail button[aria-pressed="true"] { background: #fff; color: var(--navy); border-color: var(--navy-soft); box-shadow: inset 3px 0 0 var(--teal); }
+    .rail button[aria-pressed="true"] svg { color: var(--teal); }
+    .rail button .count { margin-left: auto; font-size: 11px; color: var(--amber); font-weight: 600; }
+    .rail-foot { margin-top: auto; padding: 9px 6px 0; font-size: 10.5px; color: var(--ink-faint); line-height: 1.45; border-top: 1px solid var(--chart-line-soft); }
+    @media (max-width: 720px) { .work { grid-template-columns: 1fr; } .rail { display: none; } }
+
+    .workspace { min-width: 0; display: flex; flex-direction: column; }
+    .ws-tabs { flex: none; display: flex; align-items: stretch; gap: 4px; padding: 9px 14px 0; border-bottom: 1px solid var(--chart-line); background: var(--clinical-alt); }
+    .ws-tab { font-size: 12.5px; cursor: pointer; background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; padding: 8px 14px; color: var(--ink-faint); display: inline-flex; align-items: center; gap: 8px; position: relative; top: 1px; white-space: nowrap; }
+    .ws-tab[aria-selected="true"] { background: var(--clinical); border-color: var(--chart-line); color: var(--ink); font-weight: 600; }
+    .ws-tab .close { color: var(--stone); font-size: 14px; }
+    .ws-tab.add { color: var(--stone); font-size: 16px; padding: 8px 12px; }
+    .ws-split-hint { margin-left: auto; align-self: center; font-size: 11px; color: var(--ink-faint); display: inline-flex; gap: 12px; }
+    .ws-split-hint span { display: inline-flex; align-items: center; gap: 5px; }
+    @media (max-width: 900px) { .ws-split-hint { display: none; } }
+
+    .ws-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; position: relative; }
+    .ws-split .divider { position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px dashed var(--chart-line); transform: translateX(-0.5px); pointer-events: none; }
+    @media (max-width: 900px) { .ws-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } .ws-split .divider { display: none; } }
+
+    .pane { min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; display: flex; flex-direction: column; }
+    .pane.right { background: var(--clinical-alt); border-left: 1px solid var(--chart-line-soft); }
+    @media (max-width: 900px) { .pane.right { border-left: none; border-top: 1px solid var(--chart-line); } }
+    .pane-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 3px; }
+    .pane-head h3 { font-size: 10.5px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; margin: 0; }
+    .pane-sub { font-size: 11.5px; color: var(--ink-faint); margin: 0 0 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pane-sub .ctx { color: var(--clay); }
+
+    /* live note — serif body + scratchpad status */
+    .note-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 20px; padding: 2px 10px; }
+    .note-status .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .note-sheet { flex: 1; background: #fff; border: 1px solid var(--chart-line); border-radius: 10px; padding: 17px 19px; font-family: var(--font-serif); font-size: 15px; line-height: 1.62; color: var(--ink); }
+    .note-sheet p { margin: 0 0 11px; }
+    .note-sheet .blank { color: var(--stone); }
+    .note-sheet .caret { display: inline-block; width: 2px; height: 1.05em; background: var(--navy); vertical-align: -2px; margin-left: 1px; animation: blink 1.1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .captured-line { font-family: var(--font-sans); font-size: 13px; background: var(--captured-bg); border: 1px solid var(--captured-line); border-radius: 7px; padding: 7px 11px; margin: 0 0 11px; color: #1F4F46; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .captured-line .tick { color: var(--captured); font-weight: 700; }
+    .captured-line .what { font-weight: 600; }
+    .captured-line .src { margin-left: auto; font-size: 10px; color: var(--captured); opacity: 0.8; font-style: italic; }
+    .note-foot { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .btn-attest { font-family: var(--font-sans); font-size: 13.5px; font-weight: 600; cursor: pointer; background: var(--navy); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; display: inline-flex; align-items: center; gap: 8px; }
+    .btn-attest:hover { background: #16314a; }
+    .teff { font-family: var(--font-sans); font-size: 12.5px; cursor: pointer; background: var(--clinical-alt); border: 1px solid var(--chart-line); border-radius: 8px; padding: 9px 13px; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 7px; }
+    .save-state { margin-left: auto; font-family: var(--font-sans); font-size: 11px; color: var(--ink-faint); display: inline-flex; align-items: center; gap: 6px; max-width: 280px; line-height: 1.35; }
+    .save-state .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--captured); flex: none; }
+    .save-state b { color: var(--captured); font-weight: 600; }
+
+    /* ---- past-visits timeline (the cherished endless scroll) ---- */
+    .visits-head { position: sticky; top: -16px; z-index: 2; margin: -16px -20px 0; padding: 14px 20px 11px; background: linear-gradient(180deg, var(--clinical-alt) 78%, rgba(243,246,248,0)); }
+    .visits-head .pane-head { margin-bottom: 3px; }
+    .visits { display: flex; flex-direction: column; }
+    .visit { display: grid; grid-template-columns: 86px 1fr; gap: 13px; padding: 13px 2px; border-top: 1px solid var(--chart-line-soft); }
+    .visit:first-child { border-top: none; }
+    .visit .when { text-align: right; padding-top: 1px; }
+    .visit .when .d { font-size: 12px; color: var(--ink); font-weight: 600; display: block; }
+    .visit .when .y { font-size: 11px; color: var(--ink-faint); }
+    .visit .what h5 { font-family: var(--font-serif); font-size: 15px; font-weight: 600; margin: 0 0 3px; color: var(--ink); }
+    .visit .what .meta { font-size: 11.5px; color: var(--ink-faint); margin: 0 0 5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .visit .what p { font-size: 13px; color: var(--ink-soft); margin: 0; line-height: 1.5; }
+    .setting { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 5px; text-transform: uppercase; }
+    .setting.ed   { background: var(--clay-bg);  color: var(--clay); }
+    .setting.gp   { background: var(--captured-bg); color: var(--captured); }
+    .setting.path { background: var(--navy-soft); color: var(--navy); }
+    .setting.imag { background: var(--amber-bg); color: var(--amber); }
+    .visit.recent { background: #fff; border: 1px solid var(--chart-line); border-radius: 10px; padding: 13px 14px; margin: 2px 0; }
+    .visit.recent .attested { color: var(--captured); display: inline-flex; align-items: center; gap: 4px; }
+    .visit-sentinel { padding: 16px 0; text-align: center; font-size: 11.5px; color: var(--ink-faint); }
+    .visit-sentinel .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--chart-line); border-top-color: var(--teal); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 7px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .visit-start { padding: 18px 0 8px; text-align: center; font-size: 11px; color: var(--stone); letter-spacing: 0.4px; }
+    .visit-start::before, .visit-start::after { content: "·····"; color: var(--chart-line); margin: 0 8px; letter-spacing: 2px; }
+
+    /* results table */
+    .results-sheet { flex: 1; background: #fff; border: 1px solid var(--chart-line); border-radius: 10px; padding: 16px 18px; }
+    .res-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .res-table th { text-align: left; font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; padding: 6px 8px; border-bottom: 1px solid var(--chart-line); }
+    .res-table td { padding: 7px 8px; border-bottom: 1px solid var(--chart-line-soft); color: var(--ink-soft); }
+    .res-table tr.flag td { color: var(--clay); font-weight: 600; }
+    .res-table tr.flag .up::after { content: " ▲"; font-size: 10px; }
+    .res-table .t { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+    [hidden] { display: none !important; }
+
+    /* Narrow screens: a wide clinical app can't honour the desktop app-shell
+       (fixed-height, nested scroll panes). Rather than trap or clip content,
+       unwrap it and let the page scroll as one document. */
+    @media (max-width: 900px) {
+      html, body.chart-app { height: auto; }
+      body.chart-app { overflow: visible; min-height: 100vh; }
+      .work { min-height: 0; }
+      .pane { overflow: visible; }
+      .ws-split { grid-template-rows: auto auto; }
+      .visits-head { position: static; margin: 0 0 6px; padding: 0; background: none; }
+    }
+  </style>
+</head>
+<body class="chart-app">
+
+  <!-- titlebar -->
+  <div class="app-titlebar">
+    <a class="back" href="/chart-example.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Cairn</a>
+    <span class="sep">·</span>
+    <span class="node"><span class="dot" aria-hidden="true"></span> Bendigo-ED-7</span>
+    <span class="sep">·</span>
+    <span>last sync 09:33</span>
+    <span class="offline">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+      <span>works offline — the grid can go down</span>
+    </span>
+  </div>
+
+  <!-- ===================== PERSISTENT ZONE ===================== -->
+  <div class="persistent">
+    <span class="zone-tag">Persistent — never covered, never scrolls</span>
+    <div class="persistent-top">
+
+      <section class="pcard" aria-label="Patient identity">
+        <h2><span class="num">1</span> Right chart?</h2>
+        <div class="identity">
+          <div class="portrait" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg></div>
+          <div>
+            <p class="id-name">Park, Min-jun</p>
+            <p class="id-line">02 Apr 1971 · 55 yr · <span class="sex">male</span></p>
+            <p class="id-line">14 Marsh Rd, Bendigo VIC</p>
+            <p class="id-meta">UUID a3f1… &nbsp;·&nbsp; <span class="link-badge"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 12h6M10 8H7a4 4 0 0 0 0 8h3m4-8h3a4 4 0 0 1 0 8h-3"/></svg> 2 linked</span></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="pcard mnm" aria-label="Must not miss">
+        <h2><span class="num">2</span> Must not miss</h2>
+        <div class="allergy">
+          <span class="badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Penicillin</span>
+          <span class="pill">rash, not anaphylaxis</span>
+        </div>
+        <p class="mnm-row"><b>Meds:</b> Metformin 1 g BD · Ramipril 5 mg OD</p>
+        <p class="mnm-row"><b>Hx:</b> T2DM · HTN · CKD-3 <span class="uncertain">(stage uncertain)</span></p>
+        <div class="allergy-detail">
+          <p>“Rash, 1974.” Unconfirmed; never anaphylaxis.
+            <span class="inline-note"><span class="tolerated">Cephalexin &amp; amoxicillin tolerated since</span> (2019, 2021) — shown inline, nothing blocked.</span>
+          </p>
+        </div>
+      </section>
+
+      <section class="pcard" aria-label="Here and now">
+        <h2><span class="num">3</span> Here &amp; now</h2>
+        <p class="hn-present">Central chest pain, 40 min — radiating to left arm.</p>
+        <p class="hn-dx">Working dx: <span class="tag">?ACS — rule out</span></p>
+        <p class="hn-loc">ED · bed 7 · arrived 09:02 · under Dr Okafor</p>
+        <button class="ghost-btn" type="button"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg> edit context</button>
+      </section>
+    </div>
+
+    <div class="urgent-banner" role="group" aria-label="Pending and urgent">
+      <span class="label"><span class="num">4</span> Pending &amp; urgent</span>
+      <button class="chip" type="button"><span class="badge-dot"></span> 3 results unreviewed</button>
+      <button class="chip" type="button"><span class="badge-dot"></span> 1 report to sign</button>
+      <button class="chip" type="button"><span class="badge-dot"></span> 2 messages</button>
+      <button class="chip hot" type="button" data-opens="results"><span aria-hidden="true">↑</span> Troponin 0.09 (09:31) <span class="new">NEW</span></button>
+      <span class="urgent-hint">chips open in the work zone below — never in a pop-up</span>
+    </div>
+  </div>
+
+  <!-- ===================== WORK ZONE ===================== -->
+  <div class="work">
+
+    <nav class="rail" aria-label="Drill in">
+      <h2>Drill in</h2>
+      <button type="button" aria-pressed="true" data-pane="past">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3 3"/></svg>
+        Past visits
+      </button>
+      <button type="button" aria-pressed="false" data-pane="results">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg>
+        Results <span class="count">3</span>
+      </button>
+      <button type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>
+        Reports / letters <span class="count">1</span>
+      </button>
+      <button type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        Imaging
+      </button>
+      <button type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7z"/><path d="m8.5 8.5 7 7"/></svg>
+        Medications
+      </button>
+      <button type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Messages <span class="count">2</span>
+      </button>
+      <p class="rail-foot">Zones 1–4 stay visible the whole time you browse here.</p>
+    </nav>
+
+    <div class="workspace">
+      <div class="ws-tabs" role="tablist" aria-label="Open views">
+        <button class="ws-tab" role="tab" aria-selected="true">Current note <span class="close" aria-hidden="true">×</span></button>
+        <button class="ws-tab" role="tab" aria-selected="false">Visit history</button>
+        <button class="ws-tab add" aria-label="New view">+</button>
+        <span class="ws-split-hint">
+          <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/></svg> split ↕</span>
+          <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg> split ↔</span>
+        </span>
+      </div>
+
+      <div class="ws-split">
+        <span class="divider" aria-hidden="true"></span>
+
+        <!-- LEFT: the live note, held in a durable scratchpad -->
+        <div class="pane left">
+          <div class="pane-head"><h3>Current note — chest pain</h3></div>
+          <p class="pane-sub"><span class="ctx">virtual context: ED encounter · bed 7</span> · <span class="note-status"><span class="pulse"></span> Draft — scratchpad</span></p>
+          <div class="note-sheet">
+            <p>55 M, central chest pain 40 min, radiates to L arm. No prior cardiac history. Diaphoretic on arrival.</p>
+            <div class="captured-line"><span class="tick">✓</span><span class="what">ECG ordered</span> — 12-lead, urgent <span class="src">order fired → committed event</span></div>
+            <p>Aspirin 300 mg given 09:18. Awaiting first troponin — <span class="blank">now back: ↑0.09 at 09:31.</span></p>
+            <p>DDx: ACS vs. musculoskeletal vs. PE. Favour ACS given radiation + diaphoresis<span class="caret" aria-hidden="true"></span></p>
+            <div class="note-foot">
+              <button class="btn-attest" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Sign &amp; commit</button>
+              <button class="teff" type="button"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> t_effective: now ▾</button>
+              <span class="save-state"><span class="dot"></span> <span><b>Held in durable scratchpad</b> — safe through power loss. Commits to the record when you sign, or auto after quarantine when you leave the chart.</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: past-visits endless timeline (default) -->
+        <div class="pane right" id="pane-past">
+          <div class="visits-head">
+            <div class="pane-head"><h3>Past visits</h3></div>
+            <p class="pane-sub">most recent first · scroll back through the entire recorded history</p>
+          </div>
+          <div class="visits" id="visits"></div>
+          <div class="visit-sentinel" id="visit-sentinel"><span class="spin" aria-hidden="true"></span> loading earlier history…</div>
+        </div>
+
+        <!-- RIGHT alt: results -->
+        <div class="pane right" id="pane-results" hidden>
+          <div class="pane-head"><h3>Results — cardiac</h3></div>
+          <p class="pane-sub">opened beside the note · the note never moved</p>
+          <div class="results-sheet">
+            <table class="res-table">
+              <thead><tr><th>Analyte</th><th>Value</th><th>Ref</th><th>Time</th></tr></thead>
+              <tbody>
+                <tr class="flag"><td>Troponin I</td><td class="up">0.09 µg/L</td><td>&lt;0.04</td><td class="t">09:31</td></tr>
+                <tr><td>Troponin I</td><td>0.02 µg/L</td><td>&lt;0.04</td><td class="t">06:55</td></tr>
+                <tr><td>Creatinine</td><td>148 µmol/L</td><td>60–110</td><td class="t">06:55</td></tr>
+                <tr><td>eGFR</td><td>46 mL/min</td><td>&gt;60</td><td class="t">06:55</td></tr>
+                <tr><td>Potassium</td><td>4.6 mmol/L</td><td>3.5–5.2</td><td class="t">06:55</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ---- non-modal right-pane switch (opens beside, never over) ---- */
+    const panePast = document.getElementById('pane-past');
+    const paneResults = document.getElementById('pane-results');
+    const railBtns = document.querySelectorAll('.rail button[data-pane]');
+    function showPane(which) {
+      const wantResults = which === 'results';
+      paneResults.hidden = !wantResults;
+      panePast.hidden = wantResults;
+      railBtns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.pane === which)));
+    }
+    railBtns.forEach(b => b.addEventListener('click', () => showPane(b.dataset.pane)));
+    document.querySelectorAll('[data-opens]').forEach(el => el.addEventListener('click', () => showPane(el.dataset.opens)));
+
+    /* ---- endless lazy past-visits timeline ---- */
+    const visitsEl = document.getElementById('visits');
+    const sentinel = document.getElementById('visit-sentinel');
+
+    // the recent, clinically meaningful visits (hand-written)
+    const seed = [
+      { d:'03 Nov', y:'2025', set:'ed',   setLabel:'ED',   recent:true,
+        title:'Palpitations', who:'Dr S. Lee',
+        body:'ECG sinus tachycardia 110. Troponin negative ×2 (06:40, 12:10). No ischaemic changes. Settled with rest. Discharged with Holter referral and GP follow-up.' },
+      { d:'12 Aug', y:'2025', set:'gp',   setLabel:'GP',   title:'Hypertension review', who:'Dr Okafor',
+        body:'BP 148/92 in clinic, home avg 138/86. Ramipril continued 5 mg. Counselled on salt; review 3/12.' },
+      { d:'19 May', y:'2025', set:'path', setLabel:'Path', title:'Renal panel', who:'Bendigo Pathology',
+        body:'Creatinine 144, eGFR 47. Stable vs. prior. Potassium 4.5. ACR mildly raised.' },
+      { d:'02 May', y:'2025', set:'gp',   setLabel:'GP',   title:'Diabetes review', who:'Dr Okafor',
+        body:'HbA1c 7.8%. Metformin continued 1 g BD. Feet checked — monofilament intact. Retinal screen booked.' },
+      { d:'09 Jun', y:'2024', set:'ed',   setLabel:'ED',   title:'Renal colic', who:'Dr A. Mbeki',
+        body:'Left loin pain, CT-KUB 4 mm distal stone. Analgesia, passed spontaneously. Discharged with strain advice.' },
+      { d:'20 Nov', y:'2023', set:'gp',   setLabel:'GP',   title:'Annual health check', who:'Dr Okafor',
+        body:'Asymptomatic. Lipids mildly elevated, lifestyle advice. CV risk discussed. Vaccinations up to date.' },
+      { d:'14 Mar', y:'2022', set:'imag', setLabel:'Imaging', title:'CXR — cough', who:'Bendigo Radiology',
+        body:'Clear lung fields. No focal consolidation. Heart size normal.' },
+      { d:'07 Sep', y:'2019', set:'gp',   setLabel:'GP',   title:'Cephalexin course', who:'Dr Okafor',
+        body:'Cellulitis L shin. Cephalexin 500 mg QID 7/7 — tolerated, no reaction despite recorded penicillin label.' },
+    ];
+
+    // deterministic filler so the history feels endless when scrolled
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const fillerTemplates = [
+      { set:'gp',   setLabel:'GP',   title:'Repeat prescription', who:'Dr Okafor',  body:'Metformin and ramipril renewed. No new concerns raised.' },
+      { set:'gp',   setLabel:'GP',   title:'Diabetes review',     who:'Dr Okafor',  body:'HbA1c stable. Continue current regimen. Foot and eye checks current.' },
+      { set:'path', setLabel:'Path', title:'Routine bloods',      who:'Bendigo Pathology', body:'FBE, U&E, LFTs within expected range for stage-3 CKD.' },
+      { set:'gp',   setLabel:'GP',   title:'Influenza vaccination', who:'Practice nurse', body:'Seasonal influenza vaccine administered. No immediate reaction.' },
+      { set:'gp',   setLabel:'GP',   title:'Blood pressure check', who:'Practice nurse', body:'BP 134/84. Within target. No medication change.' },
+    ];
+    let cursorYear = 2018, cursorMonthIdx = 6, fi = 0;
+    function makeFiller(n) {
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        cursorMonthIdx -= 4 + (fi % 2);          // step back ~4–5 months, deterministic
+        if (cursorMonthIdx < 0) { cursorMonthIdx += 12; cursorYear -= 1; }
+        if (cursorYear < 2009) break;            // 2009 is the start of the record
+        const t = fillerTemplates[fi % fillerTemplates.length];
+        const day = String(3 + (fi * 7) % 25).padStart(2, '0');
+        out.push({ ...t, d: `${day} ${months[cursorMonthIdx]}`, y: String(cursorYear) });
+        fi++;
+      }
+      return out;
+    }
+
+    function render(list) {
+      const frag = document.createDocumentFragment();
+      for (const v of list) {
+        const el = document.createElement('div');
+        el.className = 'visit' + (v.recent ? ' recent' : '');
+        el.innerHTML =
+          `<div class="when"><span class="d">${v.d}</span><span class="y">${v.y}</span></div>` +
+          `<div class="what">` +
+            `<h5>${v.title}</h5>` +
+            `<p class="meta"><span class="setting ${v.set}">${v.setLabel}</span> ${v.who}` +
+              (v.recent ? ` · <span class="attested"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg>attested</span>` : '') +
+            `</p>` +
+            `<p>${v.body}</p>` +
+          `</div>`;
+        frag.appendChild(el);
+      }
+      visitsEl.appendChild(frag);
+    }
+
+    render(seed);
+
+    // lazy-load earlier history as the sentinel scrolls into view.
+    // IntersectionObserver only fires on transitions, so after each batch we
+    // re-observe — if the sentinel is still in view (fast scroll), it fires again.
+    let loading = false;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries[0].isIntersecting || loading) return;
+      loading = true;
+      const batch = makeFiller(6);
+      if (batch.length) {
+        render(batch);
+        io.unobserve(sentinel);
+        requestAnimationFrame(() => { loading = false; io.observe(sentinel); });
+      } else {
+        io.disconnect();
+        sentinel.outerHTML = '<div class="visit-start">start of recorded history · 2009</div>';
+      }
+    }, { root: panePast, rootMargin: '140px' });
+    io.observe(sentinel);
+  </script>
+</body>
+</html>

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cairn — the chart, streamlined · UI example</title>
+  <meta name="description" content="A worked example of the Cairn chart: a persistent zone that never scrolls away, a work zone that splits side by side, an endless past-visits history, and a durable scratchpad that commits on the clinician's terms.">
+  <meta name="theme-color" content="#F4F1E9">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Cairn — the chart, streamlined">
+  <meta property="og:description" content="One screen, two zones, no blocking pop-ups. A worked example of the Cairn chart.">
+  <meta property="og:image" content="https://cairn-ehr.org/assets/chart-preview.png">
+  <link rel="stylesheet" href="/styles.css">
+  <noscript><style>@media (max-width: 720px) { .site-nav { display: flex !important; position: static; flex-direction: row; flex-wrap: wrap; gap: 16px; padding: 0 0 12px; border: 0; } .nav-toggle { display: none; } }</style></noscript>
+  <style>
+    :root { --teal: #2F6E62; }
+
+    .page-hero { padding: clamp(40px, 7vw, 72px) 0 clamp(20px, 3vw, 30px); }
+    .page-hero h1 { font-size: clamp(30px, 5vw, 50px); line-height: 1.08; letter-spacing: -0.5px; font-weight: 700; margin: 14px 0 18px; max-width: 17ch; }
+    .page-hero .lede { max-width: 620px; margin-left: 0; }
+    .breadcrumb { font-size: 14px; color: var(--ink-faint); letter-spacing: 0.2px; }
+    .breadcrumb a { color: var(--ink-faint); }
+
+    /* ---- the preview image as a link into the full-screen chart ---- */
+    .chart-stage {
+      background: radial-gradient(120% 80% at 50% -10%, rgba(30,58,82,0.06), transparent 60%), var(--paper-alt);
+      border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline);
+      padding: clamp(26px, 4vw, 52px) 0 clamp(30px, 4vw, 50px);
+    }
+    .chart-figure {
+      display: block; position: relative; max-width: 1040px; margin: 0 auto;
+      border-radius: 14px; overflow: hidden; cursor: pointer;
+      border: 1px solid rgba(30,58,82,0.16);
+      box-shadow: 0 18px 50px -22px rgba(30,58,82,0.45), 0 2px 8px -2px rgba(30,58,82,0.18);
+      transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s;
+    }
+    .chart-figure:hover, .chart-figure:focus-visible {
+      text-decoration: none; transform: translateY(-3px);
+      box-shadow: 0 28px 64px -24px rgba(30,58,82,0.5), 0 4px 12px -2px rgba(30,58,82,0.22);
+    }
+    .chart-figure img { width: 100%; height: auto; display: block; }
+    .chart-figure .overlay {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(180deg, rgba(30,58,82,0) 55%, rgba(30,58,82,0.45));
+      opacity: 0; transition: opacity .25s;
+    }
+    .chart-figure:hover .overlay, .chart-figure:focus-visible .overlay { opacity: 1; }
+    .chart-figure .open-cta {
+      display: inline-flex; align-items: center; gap: 9px;
+      background: rgba(255,255,255,0.96); color: var(--navy);
+      font-size: 15px; font-weight: 600; padding: 11px 20px; border-radius: 999px;
+      box-shadow: 0 6px 20px -6px rgba(0,0,0,0.4);
+    }
+    /* persistent corner badge so the affordance reads even without hover */
+    .chart-figure .badge {
+      position: absolute; top: 14px; right: 14px;
+      display: inline-flex; align-items: center; gap: 7px;
+      background: rgba(30,58,82,0.86); color: #EAF1F6; backdrop-filter: blur(3px);
+      font-size: 12.5px; font-weight: 500; padding: 6px 13px; border-radius: 999px;
+    }
+    .figure-caption { text-align: center; font-size: 14px; color: var(--ink-faint); margin: 20px auto 0; max-width: 640px; }
+    .figure-caption strong { color: var(--ink-soft); font-weight: 600; }
+    .figure-actions { text-align: center; margin-top: 18px; }
+
+    /* ---- annotated design notes ---- */
+    .design-notes h2 { font-size: clamp(22px, 3.4vw, 30px); font-weight: 500; margin: 0 0 8px; }
+    .design-notes .sub { color: var(--ink-soft); max-width: 660px; margin: 0 0 32px; font-size: 17px; }
+    .notes-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+    .dnote { background: #fff; border: 1px solid var(--hairline); border-radius: 12px; padding: 22px 24px; }
+    .dnote .kicker { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--teal); font-weight: 700; margin: 0 0 9px; }
+    .dnote h3 { font-size: 18px; font-weight: 500; margin: 0 0 8px; color: var(--ink); }
+    .dnote p { font-size: 15px; color: var(--ink-soft); margin: 0; line-height: 1.55; }
+    .dnote .tie { display: block; margin-top: 10px; font-size: 13px; color: var(--ink-faint); }
+    @media (max-width: 700px) { .notes-grid { grid-template-columns: 1fr; } }
+
+    .wireframe-note { font-size: 13px; color: var(--ink-faint); text-align: center; margin-top: 26px; }
+    .wireframe-note code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--paper-alt); padding: 1px 6px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/" aria-label="Cairn home">
+        <img class="brand-mark" src="/assets/logo.svg" alt="" width="28" height="33">
+        <span class="brand-word">CAIRN</span>
+      </a>
+      <button class="nav-toggle" aria-expanded="false" aria-controls="nav" aria-label="Menu">&#9776;</button>
+      <nav id="nav" class="site-nav" aria-label="Primary">
+        <a href="/#mission">Mission</a>
+        <a href="/#architecture">Architecture</a>
+        <a href="/#principles">Principles</a>
+        <a href="https://docs.cairn-ehr.org">Docs</a>
+        <a class="nav-cta" href="https://github.com/cairn-ehr/cairn-ehr">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <section class="page-hero">
+      <div class="wrap">
+        <p class="breadcrumb"><a href="/">Cairn</a> &nbsp;/&nbsp; UI example</p>
+        <p class="eyebrow">The chart, streamlined</p>
+        <h1>Everything that keeps a patient safe, never more than a glance away.</h1>
+        <p class="lede">One screen, two zones. A <strong>persistent zone</strong> that can never be scrolled away or covered, and a <strong>work zone</strong> that splits side&nbsp;by&nbsp;side. No blocking pop-ups — because a dialog you have to dismiss is something paper never made you do.</p>
+      </div>
+    </section>
+
+    <section class="chart-stage" aria-label="Cairn chart — worked example">
+      <div class="wrap">
+        <a class="chart-figure" href="/chart.html" aria-label="Open the full-screen chart example">
+          <img src="/assets/chart-preview.png" width="1440" height="900"
+               alt="The Cairn chart for Min-jun Park: a persistent identity and safety zone across the top, and below it a split work zone with a live progress note beside an endlessly scrollable past-visits history.">
+          <span class="badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg> Full screen</span>
+          <span class="overlay"><span class="open-cta">Open the interactive chart <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span></span>
+        </a>
+        <p class="figure-caption"><strong>Click to open it full screen.</strong> Clinical content is illustrative. Inside: try the rail and the troponin chip, and scroll the past-visits history right back to the start of the record.</p>
+        <p class="figure-actions"><a class="btn btn-primary" href="/chart.html">Open the full-screen chart →</a></p>
+      </div>
+    </section>
+
+    <section class="design-notes section">
+      <div class="wrap">
+        <p class="eyebrow">Why it is shaped this way</p>
+        <h2>Four decisions doing the heavy lifting</h2>
+        <p class="sub">None of this is decoration. Each choice traces back to a founding principle — most of all, that no clinical workflow may lose to its paper equivalent.</p>
+        <div class="notes-grid">
+
+          <article class="dnote">
+            <p class="kicker">The split</p>
+            <h3>A zone that never goes away</h3>
+            <p>Identity, allergies, current meds, the reason they’re in front of you, and what’s still outstanding stay pinned at the top — they can’t be scrolled past or buried under a window. The paper chart’s front sheet was always face-up; so is this.</p>
+            <span class="tie">Paper-parity · acknowledged uncertainty</span>
+          </article>
+
+          <article class="dnote">
+            <p class="kicker">No blocking modals</p>
+            <h3>Detail opens beside, not over</h3>
+            <p>Expanding the penicillin note, reviewing the new troponin, opening a past visit — all of it lands <em>next to</em> what you’re doing, never on top of it, each pane scrolling on its own so any two views sit side by side. A dialog you must dismiss is not a safety mechanism; it’s an interruption paper never imposed.</p>
+            <span class="tie">Paper-parity · confirmation dialogs are explicitly rejected</span>
+          </article>
+
+          <article class="dnote">
+            <p class="kicker">The whole story</p>
+            <h3>An endless history, one scroll away</h3>
+            <p>Past visits open on the most recent and keep going — scroll back through years of the record without paging, dialogs, or date-pickers, the way you’d thumb back through a paper folder. The relevant visit is usually the recent one; everything before it is still right there when it isn’t.</p>
+            <span class="tie">Paper-parity · respects the clinician’s time</span>
+          </article>
+
+          <article class="dnote">
+            <p class="kicker">Committed on your terms</p>
+            <h3>A durable scratchpad, not an instant commit</h3>
+            <p>Working notes are written to a non-volatile scratchpad — safe through a power cut the instant they’re typed — but nothing enters the permanent record until you sign off, or, if you move to other patients or log out, it auto-commits after a configurable quarantine. A differential is revised constantly; the clinician owns the moment it becomes part of the record.</p>
+            <span class="tie">Append-only · availability over consistency · acknowledged uncertainty</span>
+          </article>
+
+        </div>
+        <p class="wireframe-note">Built from the <code>chart-two-zone</code> and <code>active-write</code> sketches. The persistent / work split, the no-modal rule, and the scratchpad-then-commit model are the load-bearing decisions.</p>
+      </div>
+    </section>
+
+    <section class="band-contribute" aria-labelledby="contribute-h">
+      <div class="wrap">
+        <h2 id="contribute-h">This is design work, in the open.</h2>
+        <p>The interface is reasoned the same way as the architecture — against real failure modes from the front line. A well-described clinical workflow is as valuable a contribution as code.</p>
+        <a class="btn btn-teal" href="https://github.com/cairn-ehr/cairn-ehr">Get involved</a>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>© Cairn · AGPL-3.0</span>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://docs.cairn-ehr.org">Specification</a>
+        <a href="https://github.com/cairn-ehr/cairn-ehr">GitHub</a>
+        <a href="https://docs.cairn-ehr.org/principles/STEWARDSHIP-OF-THE-NAME/">The name is stewarded for the mission</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    const t = document.querySelector('.nav-toggle');
+    const n = document.getElementById('nav');
+    t.addEventListener('click', () => {
+      const open = n.classList.toggle('open');
+      t.setAttribute('aria-expanded', String(open));
+    });
+  </script>
+</body>
+</html>
