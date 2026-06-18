@@ -118,6 +118,7 @@ nav:
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
+      - Spike 0002 · Advisory-actor write contract — kastellan ↔ Cairn: spikes/0002-advisory-actor-write-contract.md
   - Ecosystem (plugin evaluations):
       - ecosystem/README.md
       - Eval 0001 · Agent & messaging plugins — kastellan & localmail: ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md

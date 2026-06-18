@@ -326,9 +326,10 @@ disclosed to triage it. Every step is auditable and recallable.
 
 ## 7. Open items / candidate next steps
 
-- **Integration spike (could become Spike 0002):** kastellan registers as a Cairn actor and drops one synthetic
-  triage advisory through `submit_event` as an additive, un-attested event — pass/fail: it touches no safety-floor
-  invariant and is fully recallable by actor-UUID. The single most informative artifact.
+- **Integration spike — drafted as [Spike 0002](../spikes/0002-advisory-actor-write-contract.md):** kastellan
+  registers as a Cairn actor and drops one synthetic triage advisory through `submit_event` as an additive,
+  un-attested event, and a hostile/buggy agent fails to breach the in-DB floor — pass/fail: it touches no
+  safety-floor invariant and is fully recallable by actor-UUID. The single most informative artifact.
 - **Skill-epoch refinement to [ADR-0011](../spec/decisions/0011-actor-registry-version-pinning-and-key-custody.md)**
   — ratify when the integration above is committed (cheap to get right day-one, expensive to retrofit).
 - **Clinical embedding re-test** (low priority; plug-and-play) — re-run the Gemma-vs-Arctic comparison on clinical

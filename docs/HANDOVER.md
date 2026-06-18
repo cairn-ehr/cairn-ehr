@@ -52,9 +52,13 @@ spec nor ADR; wired into `mkdocs.yml` nav after Spikes). Main artifact:
   the production base Apache/MIT (Arctic 2.0 / Nomic), fine-tune with an MRL-256 objective (Postgres index-load win by
   construction). Gemma beat Arctic on the user's *tax* corpus at matched 256-dim — out-of-domain, so low-signal for
   clinical; plug-and-play, low priority.
-- **Candidate next step (not done):** a **Spike 0002** — kastellan registers as a Cairn actor and drops one synthetic
-  triage advisory through `submit_event` (pass/fail: touches no safety-floor invariant, fully recallable by
-  actor-UUID). The single most informative artifact, and the trigger to ratify the parked ADR-0011 refinement.
+- **Next step — DRAFTED as [Spike 0002](spikes/0002-advisory-actor-write-contract.md) (Proposed, not yet run):**
+  kastellan registers as a Cairn actor and drops one synthetic triage advisory through `submit_event` as an additive,
+  un-attested event, **and a hostile/buggy agent fails to breach the in-DB floor** (the sharpest half — ADR-0021's
+  "direct DB access safe by construction" made checkable). Extends the Spike 0001 walking skeleton (adds a real actor
+  registry + contributor-set/responsibility + a minimal `submit_event` + a Python agent stand-in). Pass/fail in §5;
+  C1–C5 PASS is the trigger to ratify *two* ADRs — the parked ADR-0011 skill-epoch refinement and an advisory-actor
+  integration-contract ADR (promotes ecosystem/0001 from evaluation to decision). Still build-prep; spec unchanged.
 
 ---
 
