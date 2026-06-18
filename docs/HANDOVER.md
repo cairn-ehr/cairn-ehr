@@ -7,6 +7,51 @@ the canonical documents win.
 
 ---
 
+## Drafted 2026-06-18 — Spike 0002: the prescribing vertical slice (design meets implementation reality)
+
+Build-prep, **not** architecture — spec/ADR log unchanged (**v0.26**). New
+[Spike 0002](spikes/0002-prescribing-vertical-slice.md) (`docs/spikes/0002-prescribing-vertical-slice.md`),
+added to the spikes index + mkdocs nav; builds `--strict` clean. This is the **highest-signal next move after a
+viability discussion** with the user: the design has been pressure-tested against clinical *case-mining* but
+never against *implementation*, and the user's own caution — "an unpressured team that loves an elegant spec
+keeps polishing the spec instead of letting implementation break it" — pointed straight here. The slice takes
+**one real workflow (writing a prescription) end to end** and benchmarks it against the **paper script**.
+
+- **What it exercises (the layers the walking skeleton stubbed):** the active-write **type-through** (`rx!`,
+  [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)), the
+  **validated `submit_event` floor** ([ADR-0022](spec/decisions/0022-validated-submit-surface-the-write-path.md)),
+  the **armed write-context** `(clinician, patient)` + thin encounter
+  ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)), the **legibility twin born
+  at authoring** (principle 11 — the script line *is* the twin, one artifact), and **forced-manual dosing** for
+  special populations (principle 4). It re-confirms ADR-0001's projection→chart cost from *inside a real
+  workflow*, on the **same Pi as Bet B**.
+- **Five bets, C1 governing:** **C1 paper-parity** (type-through ≤ paper on time/steps/cognitive-load — a fail
+  here fails the active-write thesis, not a tuning task); **C2** the displayed line == the stored twin, one
+  artifact; **C3** a prescription enters the log *only* via `submit_event`→validator→signed append (raw INSERT
+  rejected by the in-DB floor); **C4** special-population auto-dose withheld + forced-manual, with honest
+  `unknown` never a fabricated number; **C5** projection maintained + chart read sub-second on the Pi.
+- **The principle-3/4 reconciliation made measurable (§5):** forced-manual on a renal/paediatric dose is **not**
+  a parity regression — the *paper* script needs the identical computation; the architecture only refuses to
+  *fabricate* it. So the hard-case bar is "parity with the thinking paper also demands." The measurement protocol
+  (a ~10-script basket spanning the difficulty tail, timed paper-vs-type-through by the EM-physician user, report
+  the *distribution*) is concrete in the doc.
+- **Scope discipline (the recurring "reserve the shape, stub the depth"):** one event type
+  (`medication.prescribed`) through the ADR-0022 door; a hand-seeded ~10-drug mini-formulary + a few forced-manual
+  rules so the slice is **not blocked on easyGP schema access** (the real drug source stays the deferred build-prep
+  item). No matcher/FHIR/federation/keystore. The prefetch warming daemon is explicitly out of scope (this measures
+  the *cold* write→read path).
+- **Blast-radius (§9):** `submit_event` + the `medication.prescribed` validator (incl. the forced-manual gate) +
+  twin-at-authoring + sign + the projection trigger are safety-critical (Rust/in-DB); the `rx!` parser +
+  mini-formulary + chart-read presentation + paper-parity harness are fit-for-purpose (Python). The one
+  safety-critical seam is **parsed-draft → `submit_event`** (ADR-0021's "UIs call submit-functions, never raw
+  INSERT," made concrete).
+- **Status: spec'd, not built.** This is the **user's solo workstream** (clinical + Pi — their turf), and the
+  concrete artifact the distributed-systems reviewer (son-in-law) can red-team and the workflow/UI designer
+  (retired physician) can shape. The scale-simulation experiment (for the two sons) is the *other* deferred
+  hand-off artifact, not yet drafted.
+
+---
+
 ## Prepared 2026-06-18 — Bet B (the Pi compute-cost spike): field runbook + self-describing, floor-finding harness
 
 Build-prep, **not** architecture — spec/ADR log unchanged (**v0.26**). The user has a **Pi 5 / 16 GB + 1 TB
@@ -1107,10 +1152,14 @@ founding principle 12) and **closed its entire follow-on arc** in one session: t
 expression** (→ [ADR-0024](spec/decisions/0024-hard-policy-expression-the-policy-assertion-stream.md)); spec
 **v0.26**. **The layering/API arc (0021 → 0022 → 0023 → 0024) is now complete** — no open architecture
 follow-ons from it. The highest-signal modes are now **fresh clinical case-mining** and the **build-prep
-threads** below. Build-prep next steps: the **easyGP next-week session** (port the `rx!`/`tx!` type-through +
-the prefetch/materialization warming daemon — the ADR-0020 deferred items), **Bet B on a Pi** (now
-**prepared** — runbook + self-describing harness ready, awaiting the board; see the top entry), then the
-byte-tier connection-reuse throughput lever.
+threads** below. Build-prep next steps: **[Spike 0002](spikes/0002-prescribing-vertical-slice.md) — the
+prescribing vertical slice** (spec'd 2026-06-18, the user's solo workstream: build it and run the paper-parity
+basket on the Pi — the highest-information test of whether the active-write design survives implementation);
+**Bet B on a Pi** (now **prepared** — runbook + self-describing harness ready, awaiting the board; see the top
+entries); the **easyGP session** (the real drug source + the `rx!`/`tx!` type-through + the
+prefetch/materialization warming daemon — ADR-0020 deferred items); then the byte-tier connection-reuse
+throughput lever. **Not yet drafted:** the scale-simulation experiment spec (the hand-off artifact for the two
+academic contributors — workload model + what to measure + which ADRs it validates).
 
 **The recurring menu** when resuming (pick one):
 - More clinical **case-mining** — the most productive mode so far (the event-overlay + key-custody + actor
