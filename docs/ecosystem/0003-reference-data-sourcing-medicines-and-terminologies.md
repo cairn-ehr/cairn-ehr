@@ -248,9 +248,16 @@ encumbered ones — and unlike ICD/ICPC they are fully modifiable, so Cairn *can
 
 ### 8.4 Recommendation and open verifies
 
+> [!NOTE]
+> **Ratified.** The ICD-11 decision below graduated from this evaluation to
+> [ADR-0025](../spec/decisions/0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md) (canonical home
+> [data-model §3.16](../spec/data-model.md#316-clinical-concept-coding-the-icd-11-interlingua-and-the-local-terminology-overlay)),
+> which fixes ICD-11 as the canonical classification interlingua with a local-terminology overlay (map-once,
+> offered-not-forced, open mappings deferrable to a professional coder). Spec → v0.27.
+
 **Recommended disease/injury identifier stack:**
 - **Primary concept anchor: ICD-11** (CC BY-ND 3.0 IGO) — verbatim entity-URI/stem-code identifiers, free offline
-  Docker container, commercial OK with attribution. The ND boundary documented in §8.2.
+  Docker container, commercial OK with attribution. The ND boundary documented in §8.2. **(Ratified — ADR-0025.)**
 - **Bridging: ICD-10** (CC BY-ND) where ICD-11 isn't yet the local standard — same verbatim posture.
 - **Primary-care layer: ICPC-3 — *conditionally*.** If its open licence confirms as **CC BY** (not NC/ND), it
   becomes the natural GP-aligned coder and should be adopted for the primary-care reason-for-encounter axis.
