@@ -271,9 +271,58 @@ encumbered ones — and unlike ICD/ICPC they are fully modifiable, so Cairn *can
 **Open verifies (all sites 403'd automated fetch — need a human browser read):**
 1. **ICPC-3 exact CC variant** (CC BY vs CC BY-NC vs CC BY-ND) — `icpc-3.info` licence page + the WONCA
    "ICPC-3 to Become Openly Licensed" announcement. **Highest priority — it decides whether the GP coder is in.**
+   See §8.5 for a full verification-attempt log and a manual recipe.
 2. **SNOMED GPS current licence** — CC BY 4.0 vs CC BY-ND 4.0.
 3. **HPO custom licence** full text (`hpo.jax.org/app/license`).
 4. **WHO crosswalk/translation separate-agreement terms** — needed before Cairn ships *any* ICD-derived map.
+
+### 8.5 ICPC-3 licence variant — verification attempt (2026-06-19): UNRESOLVED
+
+A second, focused attempt to pin the exact ICPC-3 Creative Commons variant **did not succeed**. Recorded here so
+it can be finished manually.
+
+**What is firmly established:**
+- WONCA (via the WICC) announced ICPC-3 would be **"made openly available under a Creative Commons licence,"**
+  framed as a historic policy change *"to remove barriers to adoption, implementation, and innovation
+  worldwide."* ICPC-3 was adopted Dec 2020 and endorsed 16 Apr 2021.
+- **The exact CC variant is not stated in any publicly machine-accessible source.**
+
+**What was tried, and why it failed:**
+- **WebSearch** (many phrasings): consistently returns *"a Creative Commons licence,"* never the variant.
+- **Authoritative pages all return HTTP 403 to automated fetch:** the WONCA announcement
+  (`globalfamilydoctor.com/News/ICPC-3OpenLicense.aspx`), `icpc-3.info` and its sub-tools
+  (`book.`/`browser.`/`claw.icpc-3.info`), `wicc.one`, and the Wikipedia ICPC page.
+- **Wayback Machine** (`web.archive.org`) is blocked from this tool.
+- **The ICPC-3 User Manual PDF was retrieved and text-extracted** (the encrypted, "not-for-extraction" Routledge
+  file — decrypted and parsed). It carries only the **book's** notice — *"Copyright Material – Provided by Taylor
+  & Francis – Not for Redistribution"* — i.e. the **commercial book's copyright, not the classification's
+  open-data licence.** (Note the split, and the irony: the *manual* is a paywalled T&F book even though the
+  *classification* is openly licensed — exactly the trap to avoid conflating.)
+- **A third-party GitHub `LICENSE`** (`Karim-53/Docs-for-ICPC`) is GPLv3 for that repo's own docs — not
+  authoritative for ICPC-3.
+
+**Best current inference (LOW confidence — do not rely):** WICC's stated aim of removing barriers to
+*"implementation and innovation"* leans toward a permissive **CC BY** (commercial + derivatives allowed) rather
+than an NC/ND variant, which would contradict that aim. But one earlier search summary inferred **CC BY-NC**, and
+nothing confirms either. **Treat as unknown until read directly.**
+
+**Why it's decisive:** **CC BY / CC0 / CC BY-SA → AGPL-compatible**, and ICPC-3 becomes the natural pluggable
+primary-care layer producing ICD-11 ([ADR-0025](../spec/decisions/0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md)).
+**CC BY-NC or CC BY-ND → not freely bundleable**, usable only as a node-local plug-in the deployment licenses —
+the same posture as SNOMED/AMT.
+
+**Manual verification recipe (for HH):**
+1. Open `https://www.icpc-3.info/` in a browser → look for a **Licence / Terms / Copyright** footer; the
+   classification download and the API doc (`icpc-3.info/documents/extra/API-Calls.pdf`) usually state the data
+   licence.
+2. Read the WONCA announcement directly: `https://www.globalfamilydoctor.com/News/ICPC-3OpenLicense.aspx` — it
+   should name the variant.
+3. Check the Classification Workbench (`https://claw.icpc-3.info/`) and browser (`https://browser.icpc-3.info/`)
+   footers.
+4. If still unclear, email the WICC / ICPC-3 consortium (contact on `icpc-3.info`) and ask for the **SPDX
+   identifier** of the data licence.
+5. **The decisive question:** *"May we redistribute the ICPC-3 classification verbatim, commercially, inside an
+   AGPL-3.0 product?"* — CC BY / CC0 / CC BY-SA = yes; CC BY-NC / any-ND = no.
 
 ---
 
