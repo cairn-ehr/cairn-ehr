@@ -45,6 +45,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0022](0022-validated-submit-surface-the-write-path.md) | The validated submit surface: the node's write path | Accepted (refines 0021) | 2026-06-17 |
 | [0023](0023-native-api-contract-capability-and-conformance.md) | The native API contract: capability description and executable conformance | Accepted (refines 0021) | 2026-06-17 |
 | [0024](0024-hard-policy-expression-the-policy-assertion-stream.md) | Hard policy expression: the policy-assertion stream and the effective-policy projection | Accepted (refines 0021) | 2026-06-17 |
+| [0025](0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md) | ICD-11 as the canonical classification interlingua and the local-terminology overlay | Accepted | 2026-06-19 |
 
 ## Template
 
