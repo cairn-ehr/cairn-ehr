@@ -115,13 +115,20 @@ nav:
       - ADR-0022 · The validated submit surface — the node's write path: spec/decisions/0022-validated-submit-surface-the-write-path.md
       - ADR-0023 · The native API contract — capability description & conformance: spec/decisions/0023-native-api-contract-capability-and-conformance.md
       - ADR-0024 · Hard policy expression — the policy-assertion stream & effective-policy projection: spec/decisions/0024-hard-policy-expression-the-policy-assertion-stream.md
+      - ADR-0025 · ICD-11 canonical interlingua & local-terminology overlay: spec/decisions/0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md
+      - ADR-0026 · Node durability & disaster recovery — backup-as-cold-peer & shred-aware backups: spec/decisions/0026-node-durability-and-disaster-recovery.md
+      - ADR-0027 · Trusted-time anchoring — clock-confidence grade, bracketed t_recorded & multi-anchor: spec/decisions/0027-trusted-time-anchoring.md
+      - ADR-0028 · The finalized closed contributor-role enum: spec/decisions/0028-finalized-closed-contributor-role-enum.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
       - Spike 0002 · Advisory-actor write contract — kastellan ↔ Cairn: spikes/0002-advisory-actor-write-contract.md
+      - Spike 0003 · A Cairn node on an Android phone — native bionic PostgreSQL 18 + pgrx: spikes/0003-postgres-on-android-bionic-node.md
   - Ecosystem (plugin evaluations):
       - ecosystem/README.md
       - Eval 0001 · Agent & messaging plugins — kastellan & localmail: ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md
+      - Eval 0002 · Reasoning-primitive catalog — clinical evidence advisory service: ecosystem/0002-cairn-advisor-reasoning-primitives.md
+      - Eval 0003 · External reference-data sourcing — medicines & terminologies: ecosystem/0003-reference-data-sourcing-medicines-and-terminologies.md
   - Principles:
       - Governance & contributing: principles/GOVERNANCE.md
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md
