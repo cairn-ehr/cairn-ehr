@@ -183,5 +183,11 @@ All components must be **AGPL-3.0-compatible**. The whole project is AGPL-3.0 �
   **safety projection** so decision-support warns without disclosing; sensitivity is a graded, append-only
   blacklist+grading+human-editability stream (Cairn ships the mechanism, policy combines it); break-glass
   is audited key-*use* ([ADR-0006](docs/spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md),
-  [identity §5.9](docs/spec/identity.md)). It also absorbed the ADR-0005 rung-1 metadata follow-on. Of the
-  remaining open questions, **§11.9 (armed write-context)** is now the sharpest.
+  [identity §5.9](docs/spec/identity.md)). It also absorbed the ADR-0005 rung-1 metadata follow-on.
+  §11.14 (trusted-time anchoring) is also **resolved** — *principle 4 applied to wall-clock truth*: `t_recorded`
+  becomes a graded interval carrying a day-one **clock-confidence grade**; the 2001-era notary is reframed as two
+  pluggable planes (clock-setting + a transparency-log-shaped multi-anchor existence-proof) on the ADR-0017
+  anchor spectrum, with offline as an honest bracket riding the gossip plane
+  ([ADR-0027](docs/spec/decisions/0027-trusted-time-anchoring.md)). **With ADR-0027 every original §11 open
+  architecture question is closed** — the remaining generative threads are build-prep (the Bet B Pi compute-cost
+  run, [Spike 0002](docs/spikes/0002-advisory-actor-write-contract.md)) and continued clinical case-mining.

@@ -47,6 +47,8 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0024](0024-hard-policy-expression-the-policy-assertion-stream.md) | Hard policy expression: the policy-assertion stream and the effective-policy projection | Accepted (refines 0021) | 2026-06-17 |
 | [0025](0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md) | ICD-11 as the canonical classification interlingua and the local-terminology overlay | Accepted | 2026-06-19 |
 | [0026](0026-node-durability-and-disaster-recovery.md) | Node durability and disaster recovery: backup-as-cold-peer, new-identity restore, and shred-aware backups | Accepted (refines 0005) | 2026-06-20 |
+| [0027](0027-trusted-time-anchoring.md) | Trusted-time anchoring: the clock-confidence grade, the bracketed `t_recorded`, and the pluggable multi-anchor | Accepted (refines 0003) | 2026-06-20 |
+| [0028](0028-finalized-closed-contributor-role-enum.md) | The finalized closed contributor-role enum | Accepted (refines 0007) | 2026-06-20 |
 
 ## Template
 

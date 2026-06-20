@@ -54,6 +54,9 @@ Every event carries **two times**, because the time a thing is *done* is almost 
 - **`t_recorded`** — the objective time the event entered the log, carried by the **HLC** ([§3.2](#32-identity-time)). Machine-assigned, immutable, the basis for causal ordering and sync. It is the **hard ceiling** on effective time: an event cannot have been performed *after* it was recorded, so **`t_effective ≤ t_recorded` is an envelope invariant**. A violation is *prima facie* falsification, rejected/flagged at write.
 - **`t_effective`** — the author's assertion of when the event actually happened. It defaults to `t_recorded`, may be freely **backdated** by the author (a routine, legitimate act — *not* falsification), and is the time **displayed** to clinicians, with `t_recorded` shown in brackets.
 
+> [!NOTE]
+> The HLC gives causal *ordering* tolerant of skewed clocks — **not wall-clock truth.** A node with a drifting RTC and no time sync can place `t_recorded` arbitrarily. So `t_recorded` is not a bare point: it carries a **clock-confidence grade** and a bracketing **interval** ([§3.17](#317-trusted-time-anchoring-the-clock-confidence-grade-and-the-bracketed-t_recorded), [ADR-0027](decisions/0027-trusted-time-anchoring.md)) — [principle 4](index.md#founding-principles-the-lens-for-every-decision) applied to time. The ceiling invariant `t_effective ≤ t_recorded` reads against that bound; the grade tells a reader how much to trust the ceiling.
+
 **Two orderings, on purpose:**
 
 - **Integrity / sync** order by `t_recorded` (the HLC) — the objective causal order.
@@ -123,12 +126,25 @@ The full ladder, the deniable-deletion design (the institution holds nothing; th
   tagged. The contributor set is also the selection key for a clinician's **author-scoped record export**
   ([security §7.8](security.md#78-author-scoped-record-export-the-medico-legal-copy)).
 
-- **Role — a closed core enum + free descriptor.** Roles are a **closed enum** (like `event_type`), kept
-  small so the safety/DB layer reasons about them unambiguously and the taxonomy cannot sprawl into an
-  unbounded folksonomy. It is partitioned by whether a role *bears or transfers responsibility*:
-  **responsibility-bearing** (`authored`, `ordered`, `attested`) vs **contributory** (`drafted`,
-  `transcribed`, `graded`, `triaged`, `suggested`). An optional **free-text descriptor** carries nuance
-  the machinery never branches on.
+- **Role — a closed core enum + free descriptor** ([ADR-0028](decisions/0028-finalized-closed-contributor-role-enum.md)
+  finalises the membership). Roles are a **closed enum** (like `event_type`), kept small so the safety/DB layer
+  reasons about them unambiguously and the taxonomy cannot sprawl into an unbounded folksonomy. It is partitioned
+  by whether a role *bears or transfers responsibility*: **responsibility-bearing** (`authored`, `ordered`,
+  `attested`, `co-signed`, `witnessed`, `dictated`) vs **contributory** (`drafted`, `transcribed`, `graded`,
+  `triaged`, `suggested`). An optional **free-text descriptor** carries nuance the machinery never branches on.
+  Three of the bearing roles are responsibility-distinct in ways hard policy and the [identity §5.10](identity.md#510-authorship-and-responsibility-state-the-consumer-side)
+  projection branch on: **`co-signed`** (supervisory countersignature — the registrar→consultant / NP→supervisor
+  sign-off a deployment may gate on, *"pending until co-signed"*); **`witnessed`** (attests an event *occurred or
+  was observed* — controlled-drug waste, consent, restraint, verbal-order read-back, death verification — not that
+  content is vouched-for); **`dictated`** (the voice source of clinical content: bears the clinical *intent* while
+  the *verbatim text* rides a `transcribed` contributor and carries an ASR/transcription-accuracy gap until
+  separately attested, distinct from `authored` owning the exact words). The bar for any future member is that the
+  **safety/policy layer must branch on it** — otherwise the distinction is a descriptor (flavor), a policy gate, or
+  an acknowledgment ([identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor)),
+  which is why **`reviewed` is deliberately *not* a role** (it is either `attested` or an acknowledgment). These
+  roles describe **contribution to the record, not performance of the clinical act** (so `performed` is body
+  content, not a role; `ordered` sits on the line by design). The set is **closed and additive-only** — a new
+  member is an ADR-recorded act, never ad-hoc.
 
 - **Responsibility — `{ held_by, on_behalf_of }`, not a boolean.** *Absent* = un-vouched (a legitimate
   state, below). `held_by` a human, no `on_behalf_of` = ordinary self-attestation. `held_by` an AI agent
@@ -261,3 +277,16 @@ The decision pathway keys on **stable concept identifiers, never free-text names
 
 > [!NOTE]
 > Mostly fit-for-purpose: a mis-mapping is visible (source term and label still show) and overlay-repairable, so the auto-translate and the external plug-ins optimise for iteration ([§9](language-substrate.md)). The one safety-relevant floor is that **coding can never block or silently alter the clinical write** — an unmapped diagnosis must always be recordable, and the as-asserted code must never be mutated in place (corrections are overlays). The open-mapping worklist is an additive signal ([ADR-0010](decisions/0010-additive-vs-suppressing-classification.md)): it only raises *"these await coding,"* never hides or auto-decides.
+
+## 3.17 Trusted-time anchoring: the clock-confidence grade and the bracketed `t_recorded`
+> Resolves former open question §11.14 — see [ADR-0027](decisions/0027-trusted-time-anchoring.md). [Principle 4](index.md#founding-principles-the-lens-for-every-decision) ([§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)) applied to wall-clock truth. One day-one envelope field; no new founding principle.
+
+The HLC ([§3.2](#32-identity-time)) orders events robustly under skew but does not establish wall-clock *truth*; a drifting RTC with no time sync can place `t_recorded` ([§3.6](#36-bitemporal-event-time-recording-time-vs-effective-time)) arbitrarily, with medico-legal consequences (was a record created when it claims, or backdated to cover a mistake?). The honest treatment is **not** a single authoritative timestamp but the **§3.7 uncertainty-capable time type**: `t_recorded` is a **graded interval**, where trusted-time anchoring is simply what populates the bounds and the grade. Two sub-problems are kept distinct: **clock-setting** (trustable *current* time — bounds `t_recorded` from **below**) and **existence-proof** (proving an event existed by a time — bounds it from **above**); together they **bracket** `t_recorded`.
+
+- **The clock-confidence grade — one ordered ladder, best-corroboration-wins** (the [§7.1](security.md#71-erasure-the-severity-ladder) severity / [§3.13](#313-schema-evolution-event-format-and-the-legibility-twin) legibility / [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) retrievability shape): `unknown < self-asserted (RTC) < network-synced (NTS/Roughtime) < hardware-sourced (GNSS/TPM) < externally-anchored (notary/transparency-log token) < multi-anchor-corroborated`. A reader decades on sees whether a `t_recorded` was independently anchored or merely self-asserted.
+- **`self-asserted` is the honest default.** With no anchor configured a node still signs a timestamp, but that proves **integrity, not external time** — it is graded *self-asserted* and **never displayed as a trusted timestamp** (distinct from *unknown*, [§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
+- **Envelope floor + overlay refine** (the day-one, can't-retrofit piece). The **initial grade + interval are a mandatory envelope field**, born at mint (the best clock provenance the node had); **later anchor tokens are overlays** that upgrade the grade and tighten the interval — token renewal before algorithm obsolescence is [ADR-0015](decisions/0015-event-serialization-signatures-and-content-addressing.md) re-attestation-as-overlay. Envelope for the floor, overlay for refinement — exactly how `t_recorded` is the immutable ceiling while certainty refines upward ([§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
+- **Confidence is graded, never required.** A solo offline node gets an honest bracket (a TPM monotonic floor + RTC, with the HLC for ordering), not a blocked write — the [ADR-0001](decisions/0001-fat-postgres-thin-daemon.md) availability floor and [principle 4](index.md#founding-principles-the-lens-for-every-decision) (an imprecise near-truth beats a precise untruth). The pluggable anchors, the offline bracket, and the notary node role live in [security §7.11](security.md#711-trusted-time-anchoring-the-notary-anchor-node-role) and [sync §6.8](sync.md#68-time-attestation-rides-the-gossip-plane); clock-confidence is itself a first-class honest-assembly fact, shown like sync freshness ([sync §6.2](sync.md#62-consistency-model)).
+
+> [!IMPORTANT]
+> Safety-critical ([§9.1](language-substrate.md#91-selection-rule-by-defect-blast-radius)): the grade+interval envelope field, the best-corroboration composition, and anchor-token verification (a forged/mis-verified anchor corrupts the medico-legal record). The clock-setting clients and the notary/log *server* are fit-for-purpose. HLC ordering and wall-clock truth are orthogonal and compose — this never changes causal ordering.

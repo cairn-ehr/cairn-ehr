@@ -1,9 +1,99 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-20 (node durability & disaster recovery → ADR-0026; units ruling; spec **v0.28**)
+**Session date:** 2026-06-20 (trusted-time anchoring → ADR-0027 *closes the last open §11 architecture question*; then closed-role-enum finalization → ADR-0028; spec **v0.30**. Earlier same day: node durability → ADR-0026, units ruling, spec v0.28)
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
+
+---
+
+## Resolved 2026-06-20 — finalized the closed contributor-role enum (spec v0.30) → ADR-0028
+
+Closed the **ADR-0007 deferred follow-on** ("closed role-enum membership"). The enum was already populated +
+identical in ADR-0007 and [data-model §3.9](spec/data-model.md); the real task was to **ratify it as closed** and
+rule on the three parked candidates (`dictated`/`reviewed`/`co-signed`). → **[ADR-0028](spec/decisions/0028-finalized-closed-contributor-role-enum.md)**
+(refines 0007), canonical home [data-model §3.9](spec/data-model.md). **No new founding principle** (mechanism of
+principle 10); **no schema migration** (the `role` field + descriptor existed day one — this fixes the closed
+value set). Build `--strict` clean.
+
+- **The bar I applied (and the user agreed to):** a role earns a closed-enum slot **only if the safety/DB layer or
+  hard policy must branch on its responsibility semantics**; otherwise the distinction is a **descriptor** (flavor),
+  a **policy gate** (workflow), or an **acknowledgment** ([ADR-0009](spec/decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md)).
+  The enum is a safety primitive (the ADR-0010 suppressing-op owner-gate + the "AI-generated" structural reading
+  both branch on bears-vs-not), so it stays small + closed + additive-only.
+- **Final membership — 6 bearing + 5 contributory:** bearing = `authored`, `ordered`, `attested`, **`co-signed`**,
+  **`witnessed`**, **`dictated`**; contributory = `drafted`, `transcribed`, `graded`, `triaged`, `suggested`.
+- **The user (EM physician) ruled to add all three flagged-as-bearing candidates**, including the two I leaned
+  against keeping (co-signed/dictated) — their clinical-workflow judgment: **`co-signed`** (supervisory sign-off,
+  gateable "pending until co-signed" — pervasive in EM with registrars/residents/NP/PA); **`witnessed`** (attests
+  an event *occurred/was observed* — controlled-drug waste, consent, restraint, verbal-order read-back, death
+  verification; *I raised this one* as a stronger claim than two of the flagged three); **`dictated`** (voice
+  source of content — bears intent while verbatim text rides a `transcribed` contributor with an ASR-accuracy gap
+  until separately attested).
+- **`reviewed` rejected** (the user agreed): it collapses to either `attested` (if it confers responsibility) or an
+  acknowledgment event (if not) — admitting it would re-fuse the signature≠attestation split ADR-0007 separated.
+- **Boundary recorded to forestall the next candidate round:** these roles describe **contribution to the record,
+  not performance of the clinical act** → `performed` is out of scope (body content); `ordered` sits on the line by
+  design. Remaining ADR-0007 follow-on (`on_behalf_of` proxy/liability) stays out of scope (jurisdictions interpret
+  the recorded chain).
+
+---
+
+## Resolved 2026-06-20 — trusted-time anchoring (spec v0.29) → ADR-0027 — **closes the last original §11 open architecture question**
+
+Resolved the final genuinely-open §11 item (**§11.14 trusted-time anchoring**), which the prior session had
+logged with a direction + four recorded critique caveats. The user explicitly asked me to **surface modern
+solutions beyond their 2001-era `gnotary` (RFC-3161) design** before committing — their knowledge predated 25
+years of progress. It **dissolved into existing primitives — no new founding principle** (principle 4 applied to
+wall-clock truth). → **[ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)**, canonical home
+**[data-model §3.17](spec/data-model.md)** (the grade + interval + envelope field), with the notary/anchor node
+role in **[security §7.11](spec/security.md)** and the gossip/offline mechanism in **[sync §6.8](spec/sync.md)**.
+One **day-one can't-retrofit** field (the clock-confidence grade + `t_recorded` interval, born on every event).
+Build `--strict` clean.
+
+- **The reframe that did the work (offered + accepted):** "trusted time" hides **two distinct problems** the
+  RFC-3161 notary conflates — **(A) clock-setting** (trustable *current* time, bounds `t_recorded` from **below**,
+  fights the drifting RTC) and **(B) existence-proof** (prove an event existed by T, bounds from **above**, fights
+  backdating). gnotary is a (B)-only mechanism. Together they **bracket** `t_recorded` into an interval — and the
+  bracket *is* principle 4 (the §3.7 uncertainty-capable time type), not a weaker fallback.
+- **`t_recorded` becomes a graded interval, not a point.** Carries a single ordered **clock-confidence grade**
+  (`unknown < self-asserted < network-synced < hardware-sourced < externally-anchored < multi-anchor-corroborated`,
+  best-corroboration-wins — the severity/legibility/retrievability ladder shape). **Envelope floor + overlay
+  refine** (the user agreed with my recommendation): initial grade+interval is a **day-one envelope field**; later
+  anchor tokens are **overlays** that upgrade it ([ADR-0015](spec/decisions/0015-event-serialization-signatures-and-content-addressing.md)
+  re-attestation-as-overlay). `self-asserted` is the honest default — proves integrity, **not** external time;
+  never displayed as trusted.
+- **The modern-landscape survey I brought forward** (the heart of the user's ask): the existence-proof world moved
+  from "trust the TSA" to **transparency logs** (Certificate Transparency RFC 6962 → Trillian → Sigstore Rekor:
+  append-only Merkle log, signed tree-heads, inclusion/consistency proofs, gossip to catch a lying log),
+  **blockchain anchoring** (OpenTimestamps — Merkle root → Bitcoin, no trusted party), and **threshold notaries**
+  (FROST). Clock-setting moved to **NTS** (authenticated NTP RFC 8915), **Roughtime** (multi-server with
+  lying-server proofs), **GNSS/GPS**, **TPM/Secure-Enclave** secure clocks. VDFs noted-and-dismissed as overkill.
+  **The convergence I didn't expect until I worked it through:** Cairn's event log is *already* an append-only,
+  signed, Merkle-izable, gossip-synced log — so the transparency-log approach is **the same machinery pointed at
+  time**, more Cairn-native than the centralized TSA. The user agreed it's "truer to the Cairn principles."
+- **Two pluggable planes on the [ADR-0017](spec/decisions/0017-federation-admission-sovereignty-peering-and-trust-anchors.md)
+  anchor spectrum — no Cairn-owned root, multi-anchor default.** Self-signed → practice transparency log →
+  national notary; RFC-3161 TSA kept as **one supported anchor type** (interop); **threshold via the FROST already
+  earmarked in ADR-0015** kills the single-notary trust/availability/capture point.
+- **Offline = bracket, not degradation, via the existing gossip plane:** peer cross-attestation gives the **lower**
+  bound (a received anchor at T → any later-authored event has `t_recorded.lower ≥ T`, no write-time round-trip);
+  deferred **Merkle-root batch** notarization on reconnect gives the **upper** bound *and is the privacy fix* (the
+  anchor learns "a batch existed," not per-event clinic-activity metadata). Solo node still gets an honest interval
+  (TPM monotonic + RTC, HLC for ordering). Confidence is **graded, never required** — availability floor preserved.
+- **Decisions the user ruled on this session:** (1) grade representation = **envelope floor + overlay refine**
+  (agreed my rec); (2) primary canonical home = **data-model §3.17** (the load-bearing piece travels in the
+  envelope), security/sync as mechanism homes (agreed my rec); (3) **public-chain anchoring = named-but-unshipped**
+  (pluggable future, never default/dependency — governance + longevity optics; the user's call).
+- **Honest ceilings recorded:** the real hardening is the **anchor's own time provenance + signing-key protection +
+  long-term token renewal** (the protocol is the easy part); self-signed proves integrity not time; single anchor =
+  capture/privacy point → multi + self-hostable + Merkle-root.
+- **Also fixed:** the stale CLAUDE.md pointer ("§11.9 is now the sharpest" — §11.9 was long resolved by ADR-0008).
+  **With ADR-0027 every original §11 open architecture question is closed.** Remaining generative threads are
+  build-prep (Bet B Pi compute-cost run; [Spike 0002](spikes/0002-advisory-actor-write-contract.md)) and continued
+  clinical case-mining.
+- *(Private memory note, per product-neutrality: the user's own `gnotary` — submitted to gnu.org CVS in 2001 — is a
+  ready candidate implementation of the notary role and may be revived; **never named in public docs.**)*
 
 ---
 
