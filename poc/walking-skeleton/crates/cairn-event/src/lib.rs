@@ -365,6 +365,7 @@ pub fn verify_attestation(token: &[u8], content_address: &[u8], vk: &VerifyingKe
     if !verified {
         return false;
     }
+    // COSE_Sign1 signs over the payload in its TBS structure, so the payload read below is exactly the bytes that were verified above.
     let payload = match sign1.payload {
         Some(p) => p,
         None => return false,
@@ -574,7 +575,6 @@ mod tests {
         assert!(!verify_attestation(&token, &other, &vk));
 
         // Wrong key -> reject (a forged attester does not verify).
-        let (_sk2, _kid2) = generate_key().unwrap();
         let other_vk = SigningKey::from_bytes(&[5u8; 32]).verifying_key();
         assert!(!verify_attestation(&token, &ca, &other_vk));
 
