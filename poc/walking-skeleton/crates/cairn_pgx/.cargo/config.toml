@@ -1,0 +1,9 @@
+# macOS linker flag so pgrx test binaries can defer postgres symbol resolution
+# until the extension is loaded into the postgres process at runtime.
+# Without this, ld64 errors with "symbol not found" for internal PG symbols
+# when Postgres.app is the PG installation (it doesn't ship a linkable postgres lib).
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

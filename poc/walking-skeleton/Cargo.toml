@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/cairn-event", "crates/cairn-sync"]
+exclude = ["crates/cairn_pgx"]
 
 [workspace.package]
 edition = "2021"

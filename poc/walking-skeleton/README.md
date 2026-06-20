@@ -38,6 +38,34 @@ cargo test --workspace      # unit tests incl. sign→wire→verify round-trip +
 cargo build --workspace     # produces target/debug/cairn-sync
 ```
 
+### pgrx extension (`crates/cairn_pgx`)
+
+`cairn_pgx` is the in-database verify gate (ADR-0002 / Spike 0002 §4.3). It is
+**excluded from the workspace** so `cargo test --workspace` stays green without
+the pgrx toolchain. Build it separately:
+
+```sh
+# One-time toolchain setup (installs cargo-pgrx and initialises a test data dir):
+cargo install --locked cargo-pgrx --version 0.12.9
+cargo pgrx init --pg16 "$(which pg_config)"
+
+# On macOS, bindgen needs the SDK sysroot; pass it via the environment:
+export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --show-sdk-path)"
+
+# Run the pg_test (spawns a throw-away Postgres instance):
+# Note: --pgdata /tmp/... is required on macOS worktrees whose path exceeds
+# the 103-byte Unix socket limit.
+cd crates/cairn_pgx
+cargo pgrx test pg16 --pgdata /tmp/cairn_pgx_test_pg
+
+# Install into your local Postgres.app and smoke-test:
+cargo pgrx install --pg-config "$(which pg_config)"
+psql "host=127.0.0.1 user=postgres dbname=postgres" \
+  -c "CREATE EXTENSION IF NOT EXISTS cairn_pgx;" \
+  -c "SELECT cairn_verify('\x00'::bytea) AS should_be_false;"
+# Expected: should_be_false = f
+```
+
 Requirements: a recent Rust toolchain and PostgreSQL (the project floor is **≥ 18**;
 the skeleton's SQL also runs on 16 for local testing — it uses no 18-only syntax,
 since UUIDv7s are minted in Rust, not via `uuidv7()`). `pgcrypto` is created by
