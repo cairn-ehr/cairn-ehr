@@ -309,6 +309,73 @@ pub fn bench_hash_mbps(total_mb: usize) -> (f64, f64) {
     (sha, blake)
 }
 
+/// The payload of an attestation token: a human (or attesting actor) binds their
+/// key and a responsibility-bearing role to a specific event's content-address.
+/// Signed as a COSE_Sign1, verified in-DB by cairn_pgx (ADR-0008: the token, never
+/// the DB session, is what confers responsibility / stops a forged human author).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttestationBody {
+    pub content_address_hex: String,
+    pub attester_key_id: String,
+    pub role: String,
+}
+
+/// Sign an attestation token over `content_address` (a COSE_Sign1, Ed25519).
+pub fn sign_attestation(
+    content_address: &[u8],
+    attester_key_id: &str,
+    role: &str,
+    sk: &SigningKey,
+) -> Result<Vec<u8>, EventError> {
+    use coset::{iana, CborSerializable, CoseSign1Builder, HeaderBuilder};
+    let body = AttestationBody {
+        content_address_hex: hex::encode(content_address),
+        attester_key_id: attester_key_id.to_string(),
+        role: role.to_string(),
+    };
+    let mut payload = Vec::new();
+    ciborium::into_writer(&body, &mut payload).map_err(|e| EventError::Cbor(e.to_string()))?;
+    let kid = sk.verifying_key().to_bytes().to_vec();
+    let protected = HeaderBuilder::new()
+        .algorithm(iana::Algorithm::EdDSA)
+        .key_id(kid)
+        .build();
+    let sign1 = CoseSign1Builder::new()
+        .protected(protected)
+        .payload(payload)
+        .create_signature(b"", |tbs| sk.sign(tbs).to_bytes().to_vec())
+        .build();
+    sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
+}
+
+/// Verify an attestation token against `vk` and confirm it binds `content_address`.
+pub fn verify_attestation(token: &[u8], content_address: &[u8], vk: &VerifyingKey) -> bool {
+    use coset::{CborSerializable, CoseSign1};
+    let sign1 = match CoseSign1::from_slice(token) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let verified = sign1
+        .verify_signature(b"", |sig, tbs| {
+            let signature =
+                ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
+            vk.verify(tbs, &signature).map_err(|_| EventError::BadSignature)
+        })
+        .is_ok();
+    if !verified {
+        return false;
+    }
+    let payload = match sign1.payload {
+        Some(p) => p,
+        None => return false,
+    };
+    let body: AttestationBody = match ciborium::from_reader(&payload[..]) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    body.content_address_hex == hex::encode(content_address)
+}
+
 /// Recursively sort object keys so the encoding is canonical regardless of input
 /// key order, then return the value re-built with BTreeMap-ordered objects.
 fn canonicalize(v: &serde_json::Value) -> serde_json::Value {
@@ -491,5 +558,30 @@ mod tests {
         // A different pinned value yields a different actor identity (the C4 supersede trigger).
         let c = canonical_json_address(&json!({"model": "m", "version": "1", "skill_epoch": "e2"}));
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn attestation_binds_key_and_content_address() {
+        let (sk, kid) = generate_key().unwrap();
+        let vk = sk.verifying_key();
+        let ca = event_address(b"some signed event bytes");
+
+        let token = sign_attestation(&ca, &kid, "attested", &sk).unwrap();
+        assert!(verify_attestation(&token, &ca, &vk), "valid token for right key + address");
+
+        // Wrong content-address -> reject (a token cannot be replayed onto another event).
+        let other = event_address(b"a different event");
+        assert!(!verify_attestation(&token, &other, &vk));
+
+        // Wrong key -> reject (a forged attester does not verify).
+        let (_sk2, _kid2) = generate_key().unwrap();
+        let other_vk = SigningKey::from_bytes(&[5u8; 32]).verifying_key();
+        assert!(!verify_attestation(&token, &ca, &other_vk));
+
+        // Tampered token bytes -> reject.
+        let mut bad = token.clone();
+        let m = bad.len() / 2;
+        bad[m] ^= 0x01;
+        assert!(!verify_attestation(&bad, &ca, &vk));
     }
 }
