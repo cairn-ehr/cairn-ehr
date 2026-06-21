@@ -25,12 +25,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA: [(&str, &str); 5] = [
+const SCHEMA: [(&str, &str); 6] = [
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
     ("002_projection", include_str!("../../../db/002_projection.sql")),
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
     ("004_actors", include_str!("../../../db/004_actors.sql")),
     ("005_submit", include_str!("../../../db/005_submit.sql")),
+    ("006_recall", include_str!("../../../db/006_recall.sql")),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
