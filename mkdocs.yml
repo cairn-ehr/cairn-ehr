@@ -76,6 +76,10 @@ extra_css:
 nav:
   - "↤ cairn-ehr.org": https://cairn-ehr.org
   - Home: spec/index.md
+  - Essays:
+      - essays/index.md
+      - The chart that stays up — designing a fractal EHR: essays/designing-a-fractal-ehr.md
+      - A health record that assumes the network will fail: essays/a-health-record-that-assumes-the-network-will-fail.md
   - Architecture:
       - Vision & goals: spec/vision.md
       - Topology: spec/topology.md

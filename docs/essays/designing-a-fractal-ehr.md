@@ -3,6 +3,7 @@
 *An essay on what it takes to build an electronic health record like Cairn — the architecture,
 the reasoning behind it, and why the people who have been failed by these systems are the right
 people to design the next one.*
+{: .essay-lead }
 
 ---
 
@@ -375,3 +376,11 @@ go down and the chart stays up. Build it so the record would rather admit it doe
 a confident lie. Build it so it never wastes the one resource the clinician cannot get back, which is
 time and attention at the point of care. Do those three things honestly, at every scale, in one
 codebase, and you have a stone worth adding to the stack.
+
+---
+
+> [!NOTE] Related reading
+> - The full [architecture specification](../spec/index.md) and the [decision log (ADRs)](../spec/decisions/README.md) — where the *why* behind every choice lives.
+> - The mechanisms named above, in detail: [Synchronisation](../spec/sync.md) · [Identity subsystem](../spec/identity.md) · [Data model](../spec/data-model.md) · [Topology](../spec/topology.md) · [Language & substrate](../spec/language-substrate.md).
+> - A companion essay for engineers: [A health record that assumes the network will fail](a-health-record-that-assumes-the-network-will-fail.md).
+> - The project on [GitHub](https://github.com/cairn-ehr/cairn-ehr) — AGPL-3.0, contributions and clinical failure modes welcome.

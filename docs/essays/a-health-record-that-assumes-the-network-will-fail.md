@@ -1,6 +1,7 @@
 # A Health Record That Assumes the Network Will Fail
 
 *Designing an offline-first, append-only, fractal EHR — and what it took to make blob sync survive a real satellite link.*
+{: .essay-lead }
 
 ---
 
@@ -207,4 +208,13 @@ So we assumed it wouldn't be. Everything else followed from that.
 
 ---
 
-*The architecture spec, ADR log, and the walking-skeleton code are open source under AGPL-3.0. Code examples above are drawn directly from the implementation. Comments and pull requests welcome.*
+*The [architecture spec](../spec/index.md), [ADR log](../spec/decisions/README.md), and the walking-skeleton code are open source under AGPL-3.0. Code examples above are drawn directly from the implementation. Comments and pull requests welcome.*
+
+---
+
+> [!NOTE] Related reading
+> - The full [architecture specification](../spec/index.md) and the [decision log (ADRs)](../spec/decisions/README.md).
+> - The subsystems behind this writeup: [Synchronisation](../spec/sync.md) · [Identity subsystem](../spec/identity.md) · [Data model](../spec/data-model.md) · [Security & compliance](../spec/security.md).
+> - The satellite-link validation in detail: [Spike 0001 · Walking skeleton, WAN-sync & Pi cost](../spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md).
+> - A companion essay on the design philosophy: [The chart that stays up — designing a fractal EHR](designing-a-fractal-ehr.md).
+> - The project on [GitHub](https://github.com/cairn-ehr/cairn-ehr) — AGPL-3.0.

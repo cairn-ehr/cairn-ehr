@@ -54,6 +54,18 @@
 /* Blockquotes / admonition prose read nicely in the serif accent */
 .md-typeset blockquote { font-family: "Source Serif 4", Georgia, serif; }
 
+/* Essay standfirst — the italic lead under an essay title. Larger, serif,
+   softened ink, with a little air before the first rule. */
+.md-typeset .essay-lead {
+  font-family: "Source Serif 4", Georgia, serif;
+  font-size: 1.2rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0.4rem;
+  margin-bottom: 1.2rem;
+}
+.md-typeset .essay-lead em { font-style: normal; }
+
 /* Keep the stone mark crisp and a sensible size in the header */
 .md-header__button.md-logo img { height: 1.7rem; width: auto; }
 
