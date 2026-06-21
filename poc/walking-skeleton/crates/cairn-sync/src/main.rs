@@ -25,10 +25,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA: [(&str, &str); 3] = [
+const SCHEMA: [(&str, &str); 5] = [
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
     ("002_projection", include_str!("../../../db/002_projection.sql")),
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
+    ("004_actors", include_str!("../../../db/004_actors.sql")),
+    ("005_submit", include_str!("../../../db/005_submit.sql")),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -225,6 +227,8 @@ fn apply_signed(client: &mut postgres::Client, signed_bytes: &[u8]) -> R<bool> {
 // ---------------------------------------------------------------------------
 fn cmd_init(conn: &str) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    // 004/005 call cairn_pgx functions; the extension must exist first.
+    client.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")?;
     for (name, sql) in SCHEMA {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
