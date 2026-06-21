@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -30,6 +31,21 @@ enum Cmd {
     Peers,
     /// Revoke trust for a peer node.
     Unpeer { node_id: String },
+    /// Serve this node's `node_event` log to pinned-mTLS peers (federation sync).
+    Serve {
+        #[arg(long, default_value = "0.0.0.0:7843")]
+        listen: SocketAddr,
+    },
+    /// Unattended: serve in the background and pull from `peer` on an interval,
+    /// surviving link drops (availability over consistency).
+    Run {
+        #[arg(long, default_value = "0.0.0.0:7843")]
+        listen: SocketAddr,
+        #[arg(long)]
+        peer: SocketAddr,
+        #[arg(long, default_value_t = 5)]
+        interval_secs: u64,
+    },
 }
 
 #[tokio::main]
@@ -103,6 +119,20 @@ async fn main() -> anyhow::Result<()> {
                 &db, &sk, &kid, &id.node_id_hex, &node_id,
             ).await?;
             println!("unpeered {node_id}");
+        }
+        Cmd::Serve { listen } => {
+            use cairn_node::sync;
+            let sk = cairn_node::keystore::load(&cli.key, None)?;
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let trust = sync::trust_store_from_db(&db).await?;
+            let (addr, serve_cfg) = sync::bind_serve(listen, &cli.conn, &sk, trust).await?;
+            eprintln!("serving node_event sync on {addr}");
+            sync::serve(serve_cfg).await?;
+        }
+        Cmd::Run { listen, peer, interval_secs } => {
+            use cairn_node::sync;
+            let sk = cairn_node::keystore::load(&cli.key, None)?;
+            sync::run(listen, peer, &cli.conn, &sk, interval_secs).await?;
         }
     }
     Ok(())
