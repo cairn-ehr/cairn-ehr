@@ -151,4 +151,20 @@ REVOKE EXECUTE ON FUNCTION submit_node_event(bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION submit_node_event(bytea) TO cairn_node;
 GRANT SELECT ON node_event, node_current, local_node TO cairn_node;
 
+-- The local node's trust set: peer assertions IT authored, graded active/revoked by
+-- the latest op per subject. Read by the admission gate (Task 8) and the mTLS
+-- cert-pin verifier (Task 9). A revoked peer is retained, never deleted (principle 2).
+CREATE OR REPLACE VIEW trust_peer AS
+SELECT DISTINCT ON (ne.subject_node_id)
+       ne.subject_node_id AS peer_node_id,
+       ne.peer_pubkey, ne.fingerprint, ne.role, ne.scope_hint,
+       CASE ne.op WHEN 'revoke' THEN 'revoked' ELSE 'active' END AS status,
+       ne.hlc_wall, ne.hlc_counter
+FROM node_event ne
+WHERE ne.op IN ('peer','revoke')
+  AND ne.author_node_id = (SELECT node_id FROM local_node WHERE id)
+ORDER BY ne.subject_node_id, ne.hlc_wall DESC, ne.hlc_counter DESC, ne.recorded_at DESC;
+
+GRANT SELECT ON trust_peer TO cairn_node;
+
 COMMIT;

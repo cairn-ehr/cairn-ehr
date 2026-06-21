@@ -53,4 +53,19 @@ DO $$ BEGIN
     END;
 END $$;
 
+-- Seed a local node + a peer + then revoke it; trust_peer reflects active->revoked.
+INSERT INTO local_node (id, node_id, signer_key_id) VALUES (TRUE, '\x1220'||digest('SELF','sha256'), 'selfkey')
+    ON CONFLICT (id) DO NOTHING;
+INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id, signer_key_id,
+    peer_pubkey, fingerprint, role, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+VALUES (gen_random_uuid(),'peer', '\x1220'||digest('SELF','sha256'), '\x1220'||digest('P','sha256'),
+    'selfkey','pkey','AAAA-BBBB-CCCC-DDDD-EEEE','peer',1,0,'SELF','p1','\x1220'||digest('p1','sha256'));
+SELECT (status = 'active') AS peer_is_active FROM trust_peer WHERE peer_node_id = '\x1220'||digest('P','sha256');
+
+INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id, signer_key_id,
+    hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+VALUES (gen_random_uuid(),'revoke', '\x1220'||digest('SELF','sha256'), '\x1220'||digest('P','sha256'),
+    'selfkey',2,0,'SELF','p2','\x1220'||digest('p2','sha256'));
+SELECT (status = 'revoked') AS peer_is_revoked FROM trust_peer WHERE peer_node_id = '\x1220'||digest('P','sha256');
+
 ROLLBACK;
