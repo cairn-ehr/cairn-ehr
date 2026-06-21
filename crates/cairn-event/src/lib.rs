@@ -105,7 +105,7 @@ pub struct SignedEvent {
 /// registry decision, not a property of the event asserting its own key.
 pub fn generate_key() -> Result<(SigningKey, String), EventError> {
     let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).map_err(|e| EventError::Entropy(e.to_string()))?;
+    getrandom::fill(&mut seed).map_err(|e| EventError::Entropy(e.to_string()))?;
     let sk = SigningKey::from_bytes(&seed);
     let kid = hex::encode(sk.verifying_key().to_bytes());
     Ok((sk, kid))

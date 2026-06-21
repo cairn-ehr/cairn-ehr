@@ -17,6 +17,6 @@ sha2 = "0.10"              # event content address (sha2-256, multihash 0x12)
 blake3 = "1"               # blob content address (multihash 0x1e)
 bao = "0.13"               # BLAKE3 verified streaming: per-slice content verification (§4.4)
 uuid = { version = "1", features = ["v7"] }
-getrandom = "0.2"          # key generation entropy
+getrandom = "0.4"          # key generation entropy (0.4 matches uuid/rand; dedupes once #11's RustCrypto stack lands)
 hex = "0.4"
 thiserror = "1"
