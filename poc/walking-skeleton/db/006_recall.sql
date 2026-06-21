@@ -22,6 +22,7 @@ CREATE TRIGGER recall_overlay_no_update BEFORE UPDATE OR DELETE ON recall_overla
     FOR EACH ROW EXECUTE FUNCTION recall_overlay_is_append_only();
 
 -- Events authored by the actor(s) whose pinned skill_epoch matches (C4 recall query).
+-- NOTE: joins actor_current (current state). Valid for recall at the actor's current epoch. After a supersede bumps skill_epoch, a query for the OLD epoch will miss its events — production recall must resolve against historical actor_event rows, not actor_current.
 CREATE OR REPLACE FUNCTION events_by_actor_epoch(p_key TEXT, p_epoch TEXT)
 RETURNS TABLE(event_id UUID, event_type TEXT) LANGUAGE sql STABLE AS $$
     SELECT el.event_id, el.event_type

@@ -138,6 +138,7 @@ def main():
 def _enroll(db, bin_path, kind, key_path, pinned):
     """Create the key (sign a throwaway body), learn its kid, enroll it, return the kid."""
     body = _agent_body("probe.added", str(uuid.uuid4()), {}, [], "")
+    # probe.added is signed only to read back signer_key_id via cairn_body; it is NEVER submitted (so its absence from event_type_class is intentional).
     signed = agent._sign(bin_path, key_path, body)
     kid = db.execute("SELECT cairn_body(decode(%s,'hex')) ->> 'signer_key_id'", (signed,)).fetchone()[0]
     db.execute("SELECT enroll_actor(%s,%s,%s)", (kind, json.dumps(pinned), kid))

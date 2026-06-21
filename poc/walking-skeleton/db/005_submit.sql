@@ -56,6 +56,7 @@ BEGIN
 
     v_event_id := (b ->> 'event_id')::uuid;
     v_type     := b ->> 'event_type';
+    -- content_address = sha256 of the signed wire bytes (the COSE envelope), identical to event_address() in cairn-event and the db/001 CHECK. (Distinct from canonical_json_address, which hashes the actor pinned-set body for actor_id.) Attestation tokens bind to THIS value.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
 
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked).
