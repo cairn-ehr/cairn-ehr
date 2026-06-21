@@ -1,6 +1,7 @@
 # Spike 0002 — Advisory-Actor Write Contract (kastellan ↔ Cairn)
 
-- **Status:** **Proposed** (drafted 2026-06-18; not yet run). Extends the
+- **Status:** **Run 2026-06-21 — C1–C5 all PASS (exit 0).** The two follow-on ADRs (skill-epoch
+  refinement to ADR-0011, advisory-actor integration contract) are now unblocked. Extends the
   [Spike 0001](0001-walking-skeleton-wan-sync-and-pi-cost.md) walking skeleton.
 - **Date:** 2026-06-18
 - **Motivation:** [Ecosystem eval 0001](../ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md)
