@@ -1,9 +1,72 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-21 (built + ran **Spike 0002 — advisory-actor write contract**; C1–C5 PASS; [PR #27](https://github.com/cairn-ehr/cairn-ehr/pull/27); build-prep, spec unchanged at **v0.30**). Prior session 2026-06-20: trusted-time anchoring → ADR-0027 *closes the last open §11 architecture question*; closed-role-enum finalization → ADR-0028; node durability → ADR-0026; units ruling.
+**Session date:** 2026-06-21 (**built the first federating node** — the project graduates from
+spec/spikes into a top-level **implementation workspace**; [PR #28](https://github.com/cairn-ehr/cairn-ehr/pull/28);
+**spec/ADRs unchanged at v0.30** — this is the first *implementation* of
+[ADR-0017](spec/decisions/0017-federation-admission-sovereignty-peering-and-trust-anchors.md),
+not new architecture). Prior same-day: built + ran **Spike 0002 — advisory-actor write contract**;
+C1–C5 PASS; [PR #27](https://github.com/cairn-ehr/cairn-ehr/pull/27). Prior 2026-06-20: trusted-time
+anchoring → ADR-0027 *closes the last open §11 architecture question*; closed-role-enum finalization
+→ ADR-0028; node durability → ADR-0026; units ruling.
 **Status of this file:** Working scaffolding, not a source of truth. Disposable — regenerate
 at the end of each working session. If this file ever disagrees with the canonical documents,
 the canonical documents win.
+
+---
+
+## Built 2026-06-21 — the first federating node: implementation begins → [PR #28](https://github.com/cairn-ehr/cairn-ehr/pull/28)
+
+The project **crosses from spec/spikes into the production implementation tree.** This is the first
+*implementation* of [ADR-0017](spec/decisions/0017-federation-admission-sovereignty-peering-and-trust-anchors.md)
+(federation admission), scoped to the **direct-pairwise** trust anchor with **no EHR/clinical
+surface** — the only payload that flows is the federation machinery itself, which exercises
+ADR-0017's one safety-critical seam (*verified credential → admitted peer*) end-to-end. **No spec
+or ADR change (v0.30 holds).** Design + plan:
+[`docs/superpowers/specs/2026-06-21-first-federating-node-design.md`](superpowers/specs/2026-06-21-first-federating-node-design.md),
+[`docs/superpowers/plans/2026-06-21-first-federating-node.md`](superpowers/plans/2026-06-21-first-federating-node.md).
+Executed subagent-driven (12 TDD tasks, spec+quality review gate per task; admission gate + mTLS
+verifiers got adversarial opus reviews; final whole-branch review = *ready to merge, no Critical/Important*).
+
+- **Workspace graduation (the structural move):** `cairn-event` / `cairn-sync` / `cairn_pgx` / `db/`
+  promoted **out of `poc/walking-skeleton`** into a root Cargo workspace (`/crates`, `/extensions`,
+  `/db`); `poc/` frozen as historical spikes (their recorded results stand); new **`cairn-node`**
+  crate is the first product binary.
+- **What was built** (faithful to the §9 blast-radius rule): **`cairn-event`** node short-fingerprint
+  + signed pairing bundle (verifies signature *and* self-consistent fingerprint — the MITM antidote);
+  **`db/007`** append-only `node_event` table + `node_current` view + the `submit_node_event` authoring
+  door + grant floor + `trust_peer` projection + the **`apply_remote_node_event` admission gate**
+  (deny-all, genesis pinned on *both* content-address and pubkey; reuses the existing `cairn_verify`
+  pgrx — **no new crypto, no new pgrx functions**); **`cairn-node`** keystore (off-log Ed25519 key),
+  `init`/`identity`, out-of-band pairing + `peers`/`unpeer`, **built-in mTLS pinned to the trust set**,
+  `node_event` set-union sync, honest-assembly `status`.
+- **Load-bearing decisions (all canon-faithful):** (1) **genesis-stable `node_id`** = content-address
+  of the genesis enrollment event (NOT the pinned-key hash `db/004` uses for agents) → survives future
+  key rotation, consistent with the §7.5 `rotate-key` vs `supersede` split + principle 2; (2) **in-DB
+  floor day one** — both write paths verify in-DB + gate on the trust set, raw DML revoked, append-only
+  trigger-enforced; (3) **symmetric direct-pairwise only** — trust roots in the out-of-band fingerprint
+  ("upstream/downstream" is a label + sync-scope hint, not an asymmetric primitive); (4) **`cairn-node`
+  owns its transport** — the Ed25519 signing key *is* the TLS identity (self-signed, no CA), peers
+  accepted only if their cert key is `active` in `trust_peer`, so the trust set is *both* admission and
+  transport-auth gate; **WireGuard is optional belt-and-braces, never a dependency** (so a single clinic's
+  workstations pair with zero infra); (5) **`trust_peer` is author-scoped to the local node** → a synced
+  peer's own peer/revoke events can't mutate the local trust set (**transitive-trust bypass closed**,
+  opus-confirmed across 7 vectors).
+- **Tested on local Postgres 16 + `cairn_pgx`:** `cairn-event` 14 units; cairn-node integration —
+  provision, pairing, **admission** (deny-all genesis · revoked-peer · unknown-signer · pinned-key-mismatch),
+  **mTLS** pin accept/reject + cert-binds-key, **federation** single-direction + full **two-node E2E**
+  (converge → unpeer-reject → stranger-reject, asserted on the *receiving* DB after TRUNCATE so admitted
+  rows can only have crossed the wire). All green.
+- **Declared honest gaps / follow-ons (surfaced, not silent):** DR/recovery escrow is a named stub
+  ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)) shown in `status`
+  (`dr_escrow: STUBBED`); **`status` crashes if run before `init`** (should degrade — CLI-surface fix);
+  genesis HLC 0/0 placeholder; full-pull (no incremental watermark yet); trust-snapshot refreshes per
+  `run` cycle; **key rotation / `supersede` reserved, not built**; the `peer_pubkey`-mismatch and
+  unknown-signer reject branches are now directly tested. Build-prep tooling note: the DB-gated tests
+  need a local PG with `cairn_pgx` installed (`cargo pgrx install` against PG16) and run serialized
+  (several integration files share databases).
+- **Still build-prep beyond this slice:** the **Bet B Pi compute-cost run** (awaiting the board) and
+  continued **clinical case-mining**. Two ADRs remain unblocked from Spike 0002 (skill-epoch refinement
+  to ADR-0011; advisory-actor integration contract) — natural next generative steps.
 
 ---
 
