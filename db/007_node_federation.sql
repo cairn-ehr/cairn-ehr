@@ -149,6 +149,13 @@ BEGIN
 END;
 $$;
 
+-- The grant floor. This binds ONLY a connection that is NOT a superuser/table
+-- owner: a superuser bypasses GRANT/REVOKE entirely and can raw-INSERT around the
+-- submit/admission gate. So the "enforced in Postgres" guarantee holds iff the
+-- RUNTIME connects as an unprivileged role — `cairn_node` is NOLOGIN, so deploy a
+-- login role granted `cairn_node` and point the daemon at it. `init` (DDL) is the
+-- only step that needs ownership. `status` reports whether the connected role can
+-- still raw-INSERT (db_floor ENFORCED vs BYPASSABLE). (PR #28 review, finding 2.)
 REVOKE INSERT, UPDATE, DELETE ON node_event FROM PUBLIC;
 REVOKE INSERT, UPDATE, DELETE ON node_event FROM cairn_node;
 REVOKE INSERT, UPDATE, DELETE ON local_node FROM PUBLIC, cairn_node;

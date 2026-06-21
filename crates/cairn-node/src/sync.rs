@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -102,26 +102,47 @@ async fn read_frame<S: AsyncReadExt + Unpin>(s: &mut S) -> std::io::Result<Optio
 // TrustStore from the DB (snapshot of the active peer pubkeys).
 // ---------------------------------------------------------------------------
 
-/// Snapshot this node's currently-active peer pubkeys into a [`TrustStore`].
-///
-/// The rustls verifier closures are `Fn(&str)->bool + Send + Sync` and cannot be
-/// async, so we materialize the answer to
-/// `SELECT 1 FROM trust_peer WHERE peer_pubkey=$1 AND status='active'` once, at
-/// config-build time, into a `HashSet`. That is correct for the lifetime of one
-/// serve/pull session; a revocation takes effect on the next config build (the
-/// next `run` cycle), which matches the deny-all-by-default posture — a snapshot
-/// can only be *more* restrictive than the live set within a single short session,
-/// never less, because a newly-added peer simply isn't admitted until the rebuild.
-pub async fn trust_store_from_db(db: &Client) -> anyhow::Result<TrustStore> {
+/// A LIVE set of this node's currently-active peer pubkeys. The rustls verifier
+/// closures hold a clone and read it on every handshake, so mutating it (via
+/// [`refresh_trust_set`]) updates an *already-built* `ServerConfig`/`ClientConfig`
+/// in place — no rebind, no restart. This is what lets `run` apply
+/// `peer.added`/`peer.revoked` to BOTH the inbound serve path and the outbound
+/// pull on the next cycle (PR #28 review, finding 1).
+pub type TrustSet = Arc<RwLock<HashSet<String>>>;
+
+/// Build a [`TrustStore`] backed by a live [`TrustSet`]. The verifier consults the
+/// set on every handshake. A poisoned lock fails CLOSED (peer treated as untrusted)
+/// — a panic mid-write can only ever *withhold* trust, never grant it.
+pub fn trust_store_from_set(set: TrustSet) -> TrustStore {
+    Arc::new(move |pk: &str| set.read().map(|s| s.contains(pk)).unwrap_or(false))
+}
+
+/// Replace `set`'s contents with this node's currently-active peer pubkeys
+/// (`SELECT peer_pubkey FROM trust_peer WHERE status='active'`). Called once at
+/// `run` start and again each cycle so revocations/additions take effect live.
+pub async fn refresh_trust_set(db: &Client, set: &TrustSet) -> anyhow::Result<()> {
     let rows = db
         .query(
             "SELECT peer_pubkey FROM trust_peer WHERE status='active' AND peer_pubkey IS NOT NULL",
             &[],
         )
         .await
-        .context("snapshotting active peer pubkeys for the trust store")?;
-    let set: HashSet<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
-    Ok(Arc::new(move |pk: &str| set.contains(pk)))
+        .context("snapshotting active peer pubkeys for the trust set")?;
+    let fresh: HashSet<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
+    *set.write().map_err(|_| anyhow::anyhow!("trust set lock poisoned"))? = fresh;
+    Ok(())
+}
+
+/// One-shot snapshot into a [`TrustStore`], for callers that do not refresh (the
+/// `serve` CLI command and tests). The returned store is frozen for its lifetime —
+/// correct for a single short session; the refreshing path is `run`, which builds
+/// the store from a [`TrustSet`] it re-snapshots each cycle. (It reuses the
+/// [`TrustSet`] plumbing for DRY; the internal `RwLock` is just never written
+/// again — no caller holds the set — so the snapshot is effectively immutable.)
+pub async fn trust_store_from_db(db: &Client) -> anyhow::Result<TrustStore> {
+    let set: TrustSet = Arc::new(RwLock::new(HashSet::new()));
+    refresh_trust_set(db, &set).await?;
+    Ok(trust_store_from_set(set))
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +178,11 @@ pub async fn bind_serve(
 /// client is rejected by the Task 9 `ClientCertVerifier` during the handshake; a
 /// per-connection handler error (a dropped link, a malformed request) is logged and
 /// never takes the loop down.
+///
+/// Whether a revocation takes effect mid-serve depends on how the trust was built:
+/// a config from [`trust_store_from_set`] (the `run` path) honours live updates on
+/// the next handshake; a frozen [`trust_store_from_db`] snapshot (the one-shot
+/// `serve` CLI command) is restart-scoped.
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     let acceptor = TlsAcceptor::from(cfg.tls);
     loop {
@@ -209,6 +235,9 @@ async fn stream_node_events<S: AsyncWriteExt + Unpin>(
 ) -> anyhow::Result<()> {
     // `after_id` is the day-one watermark shape; Task 10 pulls the full set
     // (after_id = NULL), and a later incremental pull will key off recorded_at.
+    // NOTE: the `<> $1` below is an exclude-ONE placeholder, not a true "after"
+    // predicate — it must be REPLACED (not extended) by a `(recorded_at, id) >`
+    // watermark when incremental pull lands; it is NOT working incremental logic.
     // We keep the SQL uniform: NULL after_id selects everything. The id is bound as
     // text and cast in SQL (matching the codebase's $1::text::uuid convention),
     // avoiding the tokio-postgres `with-uuid-1` feature dependency.
@@ -299,32 +328,48 @@ pub async fn run(
     sk: &SigningKey,
     interval_secs: u64,
 ) -> anyhow::Result<()> {
-    // The trust set is snapshotted per config build; rebuilding both per cycle picks
-    // up peer.added/peer.revoked authored since the last cycle.
-    let serve_db = db::connect(db_conn).await.context("run: connecting serve DB")?;
-    let trust_serve = trust_store_from_db(&serve_db).await?;
-    let (addr, serve_cfg) = bind_serve(listen, db_conn, sk, trust_serve).await?;
+    // ONE live trust set, shared by the inbound serve verifier AND every outbound
+    // pull. Re-snapshotting it each cycle (below) makes peer.added / peer.revoked
+    // take effect on BOTH paths with no process restart: the rustls verifier
+    // closures read this set live, so the already-built serve `ServerConfig` and
+    // pull `ClientConfig` honour a revocation on the very next handshake. (Earlier
+    // this froze the serve-side set for the process lifetime — PR #28 review,
+    // finding 1.)
+    let trust_set: TrustSet = Arc::new(RwLock::new(HashSet::new()));
+    let boot_db = db::connect(db_conn).await.context("run: connecting boot DB")?;
+    refresh_trust_set(&boot_db, &trust_set)
+        .await
+        .context("run: initial trust snapshot")?;
+
+    let (addr, serve_cfg) =
+        bind_serve(listen, db_conn, sk, trust_store_from_set(trust_set.clone())).await?;
     eprintln!("run: serving on {addr}, pulling {peer} every {interval_secs}s");
     let serve_handle = tokio::spawn(serve(serve_cfg));
 
-    let sk = sk.clone();
+    // The pull side reads the SAME live set, so its TLS config is also built once.
+    let client_tls = transport::client_config(sk, trust_store_from_set(trust_set.clone()))?;
     let db_conn = db_conn.to_string();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
     loop {
         ticker.tick().await;
-        // Re-snapshot trust each cycle so revocations/additions take effect.
-        let pull_db = match db::connect(&db_conn).await {
-            Ok(c) => c,
-            Err(e) => { eprintln!("run: DB unreachable, skipping cycle: {e}"); continue; }
-        };
-        let trust = match trust_store_from_db(&pull_db).await {
-            Ok(t) => t,
-            Err(e) => { eprintln!("run: trust snapshot failed, skipping cycle: {e}"); continue; }
-        };
-        let cfg = match client_config(&db_conn, &sk, trust).await {
-            Ok(c) => c,
-            Err(e) => { eprintln!("run: client config failed, skipping cycle: {e}"); continue; }
-        };
+        // Re-snapshot the live set so peering changes since the last cycle apply to
+        // serve AND pull. A failed refresh is non-fatal: the last-known set stays in
+        // force and we still attempt the pull. During a DB outage a pending
+        // revocation therefore lands only once the DB is reachable again — the
+        // deliberate availability-over-consistency trade (we never halt federation
+        // on a transient DB blip), and the still-pinned mTLS + in-DB admission gate
+        // remain the hard floor regardless.
+        match db::connect(&db_conn).await {
+            Ok(c) => {
+                if let Err(e) = refresh_trust_set(&c, &trust_set).await {
+                    eprintln!("run: trust refresh failed, serving last-known set: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("run: DB unreachable for trust refresh, serving last-known set: {e}")
+            }
+        }
+        let cfg = PullConfig { tls: client_tls.clone(), db_conn: db_conn.clone() };
         match pull_once(peer, cfg).await {
             Ok(s) => eprintln!(
                 "run: pull {peer}: received={} admitted={} rejected={}",

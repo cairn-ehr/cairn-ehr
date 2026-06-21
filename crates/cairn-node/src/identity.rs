@@ -119,6 +119,18 @@ pub struct Status {
     /// `true` iff the key file exists and loads as a valid 32-byte Ed25519 seed.
     /// Missing or unreadable key: `false` — honest degradation, not an error.
     pub keystore_ok: bool,
+    /// Key-at-rest posture (ADR-0026): v1 is plaintext-0600 — the passphrase the
+    /// keystore API accepts is NOT yet honoured (no KDF/seal). Surfaced so an
+    /// operator never assumes the seed is encrypted (PR #28 review, finding 3).
+    pub key_at_rest: String,
+    /// The DB role this status was queried over (`current_user`).
+    pub runtime_role: String,
+    /// `true` iff the connected role CANNOT raw-INSERT into `node_event` — i.e. the
+    /// in-DB submit/admission floor actually binds THIS connection. A superuser or
+    /// the table owner yields `false`: the floor exists but is BYPASSABLE by this
+    /// connection (run the runtime as the unprivileged `cairn_node` role — e.g. a
+    /// login role granted `cairn_node` — to enforce it). PR #28 review, finding 2.
+    pub db_floor_enforced: bool,
     /// Hard-coded stub (ADR-0026): no recovery escrow in v1.
     pub dr_escrow: String,
 }
@@ -152,11 +164,28 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     // Keystore health: try to load the key; a missing/invalid file is not an error.
     let keystore_ok = crate::keystore::load(key_path, None).is_ok();
 
+    // In-DB floor self-check: is the submit/admission gate actually unbypassable for
+    // THIS connection? `has_table_privilege` returns true for a superuser/owner (who
+    // can raw-INSERT around the gate) and false for the `cairn_node` role (INSERT
+    // revoked). Surfaced so the "enforced in Postgres" claim is honest at runtime.
+    let floor = db
+        .query_one(
+            "SELECT current_user::text AS role,
+                    has_table_privilege(current_user, 'node_event', 'INSERT') AS can_insert",
+            &[],
+        )
+        .await?;
+    let runtime_role: String = floor.get("role");
+    let can_insert: bool = floor.get("can_insert");
+
     Ok(Status {
         node_id_hex: id.node_id_hex,
         peers_active,
         peers_revoked,
         keystore_ok,
+        key_at_rest: "PLAINTEXT (0600; ADR-0026 KDF/seal + escrow pending)".into(),
+        runtime_role,
+        db_floor_enforced: !can_insert,
         dr_escrow: "STUBBED (ADR-0026): no recovery escrow; key loss = node loss".into(),
     })
 }

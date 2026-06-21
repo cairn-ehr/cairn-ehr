@@ -42,6 +42,16 @@ DO $$ BEGIN
     EXCEPTION WHEN insufficient_privilege THEN RESET ROLE; RAISE NOTICE 'grant-floor OK'; END;
 END $$;
 
+-- C7.1b: the floor-detection predicate status() reports on is honest — the
+-- unprivileged runtime role cannot raw-INSERT (floor binds), so a node connected as
+-- cairn_node would show db_floor=ENFORCED. (PR #28 review, finding 2.)
+DO $$ BEGIN
+    IF has_table_privilege('cairn_node','node_event','INSERT') THEN
+        RAISE EXCEPTION 'floor-detect FAILED: cairn_node can raw-INSERT node_event';
+    END IF;
+    RAISE NOTICE 'floor-detect OK: cairn_node cannot raw-INSERT (db_floor would be ENFORCED)';
+END $$;
+
 -- C7.2: submit_node_event rejects unsigned/malformed bytes with a legible reason (fail closed).
 DO $$ BEGIN
     BEGIN

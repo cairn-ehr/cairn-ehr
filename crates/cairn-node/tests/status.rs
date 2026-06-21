@@ -62,6 +62,22 @@ async fn status_reports_peers_and_keystore_health() {
         st.dr_escrow
     );
 
+    // Finding 3 (review): key-at-rest posture is surfaced and honest about v1 plaintext.
+    assert!(
+        st.key_at_rest.contains("PLAINTEXT"),
+        "key_at_rest must surface v1 plaintext, got: {:?}",
+        st.key_at_rest
+    );
+    // Finding 2 (review): the in-DB floor self-check is populated. Tests connect as a
+    // superuser, so the floor is present-but-bypassable here (can raw-INSERT) — assert
+    // that exact honest reading rather than pretending the gate binds this connection.
+    assert!(!st.runtime_role.is_empty(), "runtime_role must be populated");
+    assert!(
+        !st.db_floor_enforced,
+        "a superuser test connection must report the floor BYPASSABLE (role {:?})",
+        st.runtime_role
+    );
+
     // --- Degraded path: missing key file must NOT error; just flags keystore_ok=false.
     let missing = tmp.path().join("does_not_exist.key");
     let st2 = identity::status(&db, &missing).await.unwrap();

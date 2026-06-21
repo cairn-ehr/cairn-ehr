@@ -59,9 +59,15 @@ verifiers got adversarial opus reviews; final whole-branch review = *ready to me
 - **Declared honest gaps / follow-ons (surfaced, not silent):** DR/recovery escrow is a named stub
   ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)) shown in `status`
   (`dr_escrow: STUBBED`); **`status` crashes if run before `init`** (should degrade — CLI-surface fix);
-  genesis HLC 0/0 placeholder; full-pull (no incremental watermark yet); trust-snapshot refreshes per
-  `run` cycle; **key rotation / `supersede` reserved, not built**; the `peer_pubkey`-mismatch and
-  unknown-signer reject branches are now directly tested. Build-prep tooling note: the DB-gated tests
+  genesis HLC 0/0 placeholder; full-pull (no incremental watermark yet); **`run` shares ONE live trust
+  set across serve + pull, re-snapshotted each cycle** so `peer.added`/`peer.revoked` apply to both paths
+  with no restart (a transient DB outage holds the last-known set — availability over consistency); the
+  one-shot `serve` CLI command stays restart-scoped; **key rotation / `supersede` reserved, not built**;
+  the `peer_pubkey`-mismatch and unknown-signer reject branches are directly tested. **In-DB floor caveat:**
+  the submit/admission gate is unbypassable only for an unprivileged DB connection — `init` needs DDL, but
+  the runtime should connect as a login role granted `cairn_node` (NOLOGIN); `status` now reports
+  `db_floor ENFORCED`/`BYPASSABLE` for the connected role, and key-at-rest as plaintext-0600 (ADR-0026 seal
+  pending). Build-prep tooling note: the DB-gated tests
   need a local PG with `cairn_pgx` installed (`cargo pgrx install` against PG16) and run serialized
   (several integration files share databases).
 - **Still build-prep beyond this slice:** the **Bet B Pi compute-cost run** (awaiting the board) and

@@ -196,10 +196,18 @@ pub fn server_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<S
         trust,
         provider: provider.clone(),
     });
-    let cfg = ServerConfig::builder_with_provider(provider)
+    let mut cfg = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .with_client_cert_verifier(verifier)
         .with_single_cert(vec![cert], key)?;
+    // Pinning is a per-handshake decision against the LIVE trust set. A *resumed*
+    // TLS session skips client-cert re-verification and reuses the original
+    // session's identity — so a peer revoked between sessions could keep a foothold
+    // by resuming an old ticket. Disable resumption: every handshake re-pins against
+    // the current trust set, which is what makes `run`'s live revocation real
+    // (PR #28 review, finding 1).
+    cfg.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    cfg.send_tls13_tickets = 0;
     Ok(Arc::new(cfg))
 }
 
@@ -211,11 +219,15 @@ pub fn client_config(sk: &SigningKey, trust: TrustStore) -> anyhow::Result<Arc<C
         trust,
         provider: provider.clone(),
     });
-    let cfg = ClientConfig::builder_with_provider(provider)
+    let mut cfg = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_client_auth_cert(vec![cert], key)?;
+    // Symmetric to the server: don't resume sessions, so the client re-pins the
+    // server's key against the live trust set on every connection (a peer we
+    // revoked is re-checked, never silently resumed). (PR #28 review, finding 1.)
+    cfg.resumption = rustls::client::Resumption::disabled();
     Ok(Arc::new(cfg))
 }
 

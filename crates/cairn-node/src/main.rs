@@ -5,6 +5,13 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "cairn-node", about = "A Cairn federation node")]
 struct Cli {
+    /// PostgreSQL connection string. `init` needs DDL privileges (it loads the
+    /// schema and creates the `cairn_node` role); the RUNTIME commands
+    /// (`serve`/`run`/`peers`/…) should connect as an UNPRIVILEGED role so the
+    /// in-DB submit/admission gate is unbypassable — create a login role and
+    /// `GRANT cairn_node TO <that role>`, then point `--conn`/`CAIRN_CONN` at it.
+    /// `status` reports whether the gate actually binds the connected role
+    /// (`db_floor ENFORCED` vs `BYPASSABLE`). See `db/007_node_federation.sql`.
     #[arg(long, env = "CAIRN_CONN")] conn: String,
     #[arg(long, default_value = "node.key")] key: PathBuf,
     #[command(subcommand)] cmd: Cmd,
@@ -131,6 +138,17 @@ async fn main() -> anyhow::Result<()> {
             println!("keystore_ok   {}", st.keystore_ok);
             if !st.keystore_ok {
                 println!("              (cannot author: keystore unreadable)");
+            }
+            println!("key_at_rest   {}", st.key_at_rest);
+            println!("runtime_role  {}", st.runtime_role);
+            if st.db_floor_enforced {
+                println!("db_floor      ENFORCED (connected role cannot raw-INSERT node_event)");
+            } else {
+                println!(
+                    "db_floor      BYPASSABLE — '{}' can raw-INSERT node_event; \
+                     run runtime as the cairn_node role to enforce the gate",
+                    st.runtime_role
+                );
             }
             println!("dr_escrow     {}", st.dr_escrow);
         }
