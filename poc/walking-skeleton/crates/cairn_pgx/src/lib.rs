@@ -24,7 +24,7 @@ fn cairn_verify(signed: &[u8]) -> bool {
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_body(signed: &[u8]) -> Option<JsonB> {
     let body = cairn_event::verify_self_described(signed).ok()?;
-    let value = serde_json::to_value(&body).ok()?;
+    let value = serde_json::to_value(&body).ok()?; // fail closed: a non-serializable body returns SQL NULL, which submit_event rejects
     Some(JsonB(value))
 }
 
@@ -91,6 +91,10 @@ mod tests {
         assert!(crate::cairn_attestation_ok(&token, &ca, &pubkey));
         let other = cairn_event::event_address(b"other");
         assert!(!crate::cairn_attestation_ok(&token, &other, &pubkey));
+
+        // Fail closed on a malformed (wrong-length) key — never panic.
+        assert!(!crate::cairn_attestation_ok(&token, &ca, &[]));
+        assert!(!crate::cairn_attestation_ok(&token, &ca, &[0u8; 33]));
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,
