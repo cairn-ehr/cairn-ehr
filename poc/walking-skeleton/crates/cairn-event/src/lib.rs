@@ -316,6 +316,7 @@ pub fn bench_hash_mbps(total_mb: usize) -> (f64, f64) {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Contributor {
     pub actor_id: String,
+    // TODO: a closed ContributorRole enum (ADR-0028) — String for the spike
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub responsibility: Option<String>,
@@ -615,5 +616,17 @@ mod tests {
         assert_eq!(v[0]["role"], json!("triaged"));
         assert!(v[0].get("responsibility").is_none());
         assert!(v[0].get("is_ai").is_none());
+    }
+
+    #[test]
+    fn attested_contributor_serializes_responsibility_key() {
+        let set = vec![Contributor {
+            actor_id: "clinician-aid".into(),
+            role: "attested".into(),
+            responsibility: Some("authored".into()),
+        }];
+        let v = contributors_json(&set);
+        assert_eq!(v[0]["role"], json!("attested"));
+        assert_eq!(v[0]["responsibility"], json!("authored"));
     }
 }
