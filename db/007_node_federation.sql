@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS local_node (
     signer_key_id TEXT NOT NULL,
     address  TEXT
 );
+-- Additive-only evolution (ADR-0012): CREATE TABLE IF NOT EXISTS does not add a
+-- column to an already-existing local_node, so patch it forward for nodes
+-- provisioned before `address` existed.
+ALTER TABLE local_node ADD COLUMN IF NOT EXISTS address TEXT;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_node') THEN
