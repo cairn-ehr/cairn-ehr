@@ -290,6 +290,37 @@ python3 harness/bench_blob.py selftest \
     --force
 ```
 
+## Spike 0002 harness — advisory-actor write-contract (C1–C5)
+
+`harness/spike_0002.py` drives the end-to-end **C1–C5 advisory-actor write-contract table**
+([Spike 0002](../../docs/spikes/0002-advisory-actor-write-contract.md)).
+It enrolls a human and an agent actor, authors an additive provenance-anchored advisory
+through `submit_event`, then exercises five hostile-agent attacks that the in-DB floor must
+reject. Requires `cairn_pgx` installed (see pgrx section above) — `submit_event` calls
+`cairn_verify`/`cairn_body`/`cairn_actor_id`/`cairn_attestation_ok` in-DB.
+
+| Row | What it checks |
+|-----|---------------|
+| C1  | Additive advisory accepted un-attested; no `is_ai` field, no `responsibility` |
+| C2  | Suppressing event without attestation token is rejected |
+| C3  | Advisory cites its source blob reference (provenance-anchored) |
+| C4  | `events_by_actor_epoch` finds the advisory; `recall_event` overlays, never erases; bumping `skill_epoch` mints a distinct actor_id |
+| C5  | Five hostile attacks fail closed: unsigned/malformed (C5.1), forged human author (C5.2), suppress-un-attested (C5.3), raw INSERT as `cairn_agent` role (C5.4), cross-author salience downgrade un-attested (C5.5) |
+
+```sh
+# selftest DROPs+recreates the Cairn tables — requires --force (guards a mistyped --conn).
+# Build the daemon first if needed: cargo build -p cairn-sync
+cd poc/walking-skeleton/harness
+uv run python spike_0002.py selftest \
+    --conn "host=127.0.0.1 user=postgres dbname=skeleton_c" \
+    --bin ../target/debug/cairn-sync --force
+# Expected: all five rows print [PASS]; exit code 0.
+```
+
+**Run 2026-06-21:** C1–C5 all PASS on macOS (Postgres.app, cairn_pgx installed). The two
+follow-on ADRs (skill-epoch refinement to ADR-0011, advisory-actor integration contract)
+are now unblocked.
+
 ## Next (the spike's bets)
 
 - **Bet A — DONE** (#9): all six §5 rows PASS over the real Cape York ↔ Dorrigo
