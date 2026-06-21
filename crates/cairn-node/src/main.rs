@@ -69,7 +69,9 @@ async fn main() -> anyhow::Result<()> {
             let sk = cairn_node::keystore::load(&cli.key, None)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            let kid = id.pubkey_hex.clone();
+            // Stamp signer_key_id with the key we actually sign with (the keystore),
+            // not the DB row; on key/DB drift the door then gives a legible rejection.
+            let kid = hex::encode(sk.verifying_key().to_bytes());
             cairn_node::identity::author_peer(
                 &db, &sk, &kid, &id.node_id_hex, &bundle, role.as_deref(),
             ).await?;
@@ -96,8 +98,9 @@ async fn main() -> anyhow::Result<()> {
             let sk = cairn_node::keystore::load(&cli.key, None)?;
             let db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
             cairn_node::identity::author_unpeer(
-                &db, &sk, &id.pubkey_hex, &id.node_id_hex, &node_id,
+                &db, &sk, &kid, &id.node_id_hex, &node_id,
             ).await?;
             println!("unpeered {node_id}");
         }
