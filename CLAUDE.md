@@ -189,5 +189,11 @@ All components must be **AGPL-3.0-compatible**. The whole project is AGPL-3.0 �
   pluggable planes (clock-setting + a transparency-log-shaped multi-anchor existence-proof) on the ADR-0017
   anchor spectrum, with offline as an honest bracket riding the gossip plane
   ([ADR-0027](docs/spec/decisions/0027-trusted-time-anchoring.md)). **With ADR-0027 every original §11 open
-  architecture question is closed** — the remaining generative threads are build-prep (the Bet B Pi compute-cost
-  run, [Spike 0002](docs/spikes/0002-advisory-actor-write-contract.md)) and continued clinical case-mining.
+  architecture question is closed.** **[Spike 0002](docs/spikes/0002-advisory-actor-write-contract.md)** (advisory-actor
+  write contract) then passed C1–C5 (the in-DB floor holds against a hostile agent even with direct DB access),
+  triggering **two ADRs** (spec **v0.31**): **[ADR-0029](docs/spec/decisions/0029-skill-epoch-as-pinned-actor-determinant.md)**
+  (skill-epoch + served-model digest as pinned determinants of an agent actor's identity, refining ADR-0011 — canonical
+  home spec §7.5) and **[ADR-0030](docs/spec/decisions/0030-advisory-actor-integration-contract.md)** (the advisory-actor
+  integration contract — L2/L3 attachment + authorship through the validated in-DB floor; promotes the ecosystem/0001
+  evaluation to a decision — canonical home spec §9.8). The remaining generative threads are build-prep (the Bet B Pi
+  compute-cost run) and continued clinical case-mining.

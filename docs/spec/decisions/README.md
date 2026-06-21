@@ -49,6 +49,8 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0026](0026-node-durability-and-disaster-recovery.md) | Node durability and disaster recovery: backup-as-cold-peer, new-identity restore, and shred-aware backups | Accepted (refines 0005) | 2026-06-20 |
 | [0027](0027-trusted-time-anchoring.md) | Trusted-time anchoring: the clock-confidence grade, the bracketed `t_recorded`, and the pluggable multi-anchor | Accepted (refines 0003) | 2026-06-20 |
 | [0028](0028-finalized-closed-contributor-role-enum.md) | The finalized closed contributor-role enum | Accepted (refines 0007) | 2026-06-20 |
+| [0029](0029-skill-epoch-as-pinned-actor-determinant.md) | Skill-epoch (and served-model digest) as a pinned determinant of an agent actor's identity | Accepted (refines 0011) | 2026-06-21 |
+| [0030](0030-advisory-actor-integration-contract.md) | The advisory-actor integration contract: L2/L3 attachment and authorship through the in-DB floor | Accepted (refines 0021) | 2026-06-21 |
 
 ## Template
 

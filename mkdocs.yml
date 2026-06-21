@@ -119,6 +119,8 @@ nav:
       - ADR-0026 · Node durability & disaster recovery — backup-as-cold-peer & shred-aware backups: spec/decisions/0026-node-durability-and-disaster-recovery.md
       - ADR-0027 · Trusted-time anchoring — clock-confidence grade, bracketed t_recorded & multi-anchor: spec/decisions/0027-trusted-time-anchoring.md
       - ADR-0028 · The finalized closed contributor-role enum: spec/decisions/0028-finalized-closed-contributor-role-enum.md
+      - ADR-0029 · Skill-epoch as a pinned determinant of an agent actor's identity: spec/decisions/0029-skill-epoch-as-pinned-actor-determinant.md
+      - ADR-0030 · The advisory-actor integration contract: spec/decisions/0030-advisory-actor-integration-contract.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

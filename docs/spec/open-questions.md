@@ -208,6 +208,30 @@ cross-attestation (lower bound) and deferred **Merkle-root batch** notarization 
 existing gossip plane — *the same append-only/signed/Merkle machinery pointed at time.* Public-chain anchoring is
 named-but-unshipped. **No new founding principle**; one day-one can't-retrofit field (the grade + interval).
 
-**With this, every original §11 open architecture question is closed.** The remaining generative threads are
-build-prep (the Bet B Pi compute-cost run, [Spike 0002](../spikes/0002-advisory-actor-write-contract.md)) and
-continued clinical case-mining.
+**With this, every original §11 open architecture question is closed.**
+
+## Resolved — advisory-actor integration contract and skill-epoch refinement
+
+[Spike 0002](../spikes/0002-advisory-actor-write-contract.md) (advisory-actor write contract) passed C1–C5 on
+2026-06-21 — an external advisory agent authors an additive, un-attested, provenance-anchored, recallable advisory
+through the validated in-DB floor, and the floor rejects every hostile-agent attempt even with direct DB access
+([ADR-0021](decisions/0021-layering-the-node-api-and-ui-pluralism.md)'s *"direct DB access safe by construction"*
+made checkable and confirmed). Per its §6 exit criteria, that triggered **two ADRs**.
+**[ADR-0029](decisions/0029-skill-epoch-as-pinned-actor-determinant.md)** (refines
+[ADR-0011](decisions/0011-actor-registry-version-pinning-and-key-custody.md); canonical home
+[security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody)) names the
+**crystallised-skill digest (skill epoch)** and the **served-model digest** as pinned determinants of an agent
+actor's identity: a skill bump is an audited supersession, recall bounds to a skill epoch via the contamination
+cascade, and a shared serving fabric cannot silently mutate a pinned identity.
+**[ADR-0030](decisions/0030-advisory-actor-integration-contract.md)** (refines
+[ADR-0021](decisions/0021-layering-the-node-api-and-ui-pluralism.md)/[ADR-0022](decisions/0022-validated-submit-surface-the-write-path.md);
+canonical home [language-substrate §9.8](language-substrate.md#98-the-advisory-actor-integration-contract)) fixes
+the **advisory-actor integration contract** — an L2/L3 actor authors only through `submit_event`, un-vouched by
+construction, additive-never-suppressing (suppression needs human attestation), provenance-anchored, recallable,
+enforced unbypassably at the L1 floor — promoting
+[ecosystem/0001](../ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md) from evaluation to decision.
+**No new founding principle** (both apply the existing principles 2/8/10/12). Honest ceiling (ADR-0030): the
+attestation *success* path is not yet exercised (only the rejection half), and is the first thing to build atop the
+contract.
+
+The remaining generative threads are build-prep (the Bet B Pi compute-cost run) and continued clinical case-mining.
