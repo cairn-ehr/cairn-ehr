@@ -220,11 +220,16 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM trust_peer WHERE peer_node_id = v_author_node AND status = 'active') THEN
         RAISE EXCEPTION 'apply_remote_node_event: author % is not an active peer (deny-all)', encode(v_author_node,'hex');
     END IF;
+    -- Mirror the local door's legible guard: a trusted-but-malformed peer event
+    -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject.
+    IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
+        RAISE EXCEPTION 'apply_remote_node_event: % from % missing peer_node_id_hex in payload', v_type, encode(v_author_node,'hex');
+    END IF;
     INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
         signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
         hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
     VALUES (v_eid, v_op, v_author_node,
-        decode(COALESCE(v_payload ->> 'peer_node_id_hex','00'),'hex'),
+        decode(v_payload ->> 'peer_node_id_hex','hex'),
         v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
         v_payload ->> 'role', v_payload ->> 'scope_hint',
         NULLIF(v_payload ->> 'target_event_id','')::uuid,
