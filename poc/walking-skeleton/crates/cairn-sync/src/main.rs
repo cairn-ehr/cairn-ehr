@@ -235,8 +235,21 @@ fn cmd_sign_stdin(key_path: &str) -> R<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
     let body: EventBody = serde_json::from_str(&input)?;
+    // Sign exactly what we were given — including a body.signer_key_id that may NOT
+    // match this key. That is deliberate: the helper is a dumb signer so the hostile
+    // C5.6 (impersonation) case can produce a mismatched event; the in-DB binding
+    // gate (verify_self_described) is the floor that rejects it.
     let signed = sign(&body, &sk)?;
     println!("{}", hex::encode(&signed.signed_bytes));
+    Ok(())
+}
+
+/// Print the hex Ed25519 public key (the kid) for `key_path`, creating the key if
+/// it does not yet exist. Lets a non-Rust client set body.signer_key_id correctly
+/// (it must match the signing key — see the binding gate in verify_self_described).
+fn cmd_key_id(key_path: &str) -> R<()> {
+    let (_sk, kid) = load_or_create_key(key_path)?;
+    println!("{kid}");
     Ok(())
 }
 
@@ -1155,6 +1168,7 @@ USAGE (all take --conn <postgres-uri>):
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
   sign-stdin  --key PATH    (read JSON EventBody on stdin, write hex COSE_Sign1 on stdout)
+  key-id      --key PATH    (print the hex Ed25519 public key / kid for the key file)
 
 Run over WireGuard; NoTls is intentional (the link is the transport)."
     );
@@ -1248,6 +1262,9 @@ fn main() -> R<()> {
             flag(&args, "--duration-s").and_then(|s| s.parse().ok()).unwrap_or(0),
         )?,
         "sign-stdin" => cmd_sign_stdin(
+            &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
+        )?,
+        "key-id" => cmd_key_id(
             &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
         )?,
         _ => usage(),

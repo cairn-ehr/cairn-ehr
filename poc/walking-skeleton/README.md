@@ -305,7 +305,7 @@ reject. Requires `cairn_pgx` installed (see pgrx section above) — `submit_even
 | C2  | Suppressing event without attestation token is rejected |
 | C3  | Advisory cites its source blob reference (provenance-anchored) |
 | C4  | `events_by_actor_epoch` finds the advisory; `recall_event` overlays, never erases; bumping `skill_epoch` mints a distinct actor_id |
-| C5  | Five hostile attacks fail closed: unsigned/malformed (C5.1), forged human author (C5.2), suppress-un-attested (C5.3), raw INSERT as `cairn_agent` role (C5.4), cross-author salience downgrade un-attested (C5.5) |
+| C5  | Hostile attacks fail closed: unsigned/malformed (C5.1), forged human author (C5.2), suppress-un-attested (C5.3), raw INSERT as `cairn_agent` role (C5.4), cross-author salience downgrade un-attested (C5.5), impersonation — claimed `signer_key_id` ≠ verifying key (C5.6). These exercise three distinct floors: signature (C5.1/C5.6), the grant model (C5.4), and the attestation gate (C5.2/C5.3/C5.5). |
 
 ```sh
 # selftest DROPs+recreates the Cairn tables — requires --force (guards a mistyped --conn).

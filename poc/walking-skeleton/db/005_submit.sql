@@ -91,14 +91,19 @@ BEGIN
         END IF;
     END IF;
 
-    -- 5. Owner-gate: a suppressing overlay that targets another author's event must
-    --    be attested by a human (already enforced in step 4); record the linkage.
+    -- 5. Target-existence gate for an overlay on another author's event.
     --    (The skeleton stores the target in the body as `target_event_id`.)
+    --
+    --    DEFERRED (known limitation, not a fix): this does NOT verify that the
+    --    attester is *entitled* to suppress THIS target. Step 4 only requires
+    --    *some* enrolled human attester, so any human could downgrade any author's
+    --    event. Real owner/authority semantics (target-author vs attester, role
+    --    authority, delegation) are an ADR-level design question, not a spike hack;
+    --    it is therefore left explicit here. C5.5 only demonstrates the *un-attested*
+    --    cross-author downgrade is refused, which is the attestation gate, not an
+    --    ownership check.
     IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
         v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
-        -- The target must exist; cross-author ownership is enforced by the
-        -- step-4 human-attestation requirement (a suppressing overlay always
-        -- needs a human attester), not by a signer comparison in this spike.
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'submit_event: overlay targets unknown event %', v_target_id;
         END IF;
@@ -154,6 +159,10 @@ REVOKE INSERT, UPDATE, DELETE ON event_log FROM cairn_agent;
 -- suppressing op as additive would dodge the attestation gate. Lock it down;
 -- submit_event reads it as its SECURITY DEFINER owner, so cairn_agent needs nothing.
 REVOKE INSERT, UPDATE, DELETE ON event_type_class FROM PUBLIC;
+-- submit_event is SECURITY DEFINER, so PUBLIC's default EXECUTE on a new function
+-- would let *any* connected role drive the privileged write door (bypassing the
+-- table REVOKEs above). Close that: only cairn_agent may knock.
+REVOKE EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea) TO cairn_agent;
 GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
 

@@ -37,6 +37,8 @@ pub enum EventError {
     BadSignature,
     #[error("malformed key id (expected 32-byte Ed25519 public key)")]
     BadKeyId,
+    #[error("body signer_key_id does not match the key the signature verified against")]
+    SignerKeyMismatch,
     #[error("missing COSE payload")]
     NoPayload,
     #[error("entropy: {0}")]
@@ -242,7 +244,18 @@ pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventErro
     let kid = key_id(signed_bytes)?;
     let bytes: [u8; 32] = kid.try_into().map_err(|_| EventError::BadKeyId)?;
     let vk = VerifyingKey::from_bytes(&bytes).map_err(|_| EventError::BadKeyId)?;
-    verify_with(signed_bytes, &vk)
+    let body = verify_with(signed_bytes, &vk)?;
+    // Bind the body's claimed signer to the key the signature actually verified
+    // against. The COSE header key is what the signature *proves*; body.signer_key_id
+    // is what the registry resolves and what the projection records as the author.
+    // If they may disagree, a holder of ANY (even unenrolled) key can author events
+    // that verify yet are ATTRIBUTED to an enrolled victim — forged authorship that
+    // also leaves signed_bytes (header key) inconsistent with the signer_key_id
+    // column. The signature must prove the claimed origin (founding principle 2).
+    if body.signer_key_id != hex::encode(bytes) {
+        return Err(EventError::SignerKeyMismatch);
+    }
+    Ok(body)
 }
 
 /// Mechanically derive the §3.13 plaintext legibility twin from a body. Crude on
@@ -480,6 +493,23 @@ mod tests {
         let mid = tampered.len() / 2;
         tampered[mid] ^= 0x01;
         assert!(verify_self_described(&tampered).is_err());
+    }
+
+    // Spike 0002 review (attribution forgery): signing with one key while claiming
+    // another's signer_key_id must be rejected. The registry resolves the actor and
+    // the projection records the author from signer_key_id, so it has to be bound to
+    // the key the signature actually verified against.
+    #[test]
+    fn verify_rejects_body_claiming_a_different_signer_key() {
+        let (sk, _kid) = generate_key().unwrap();
+        let (_victim_sk, victim_kid) = generate_key().unwrap();
+        let mut body = sample();
+        body.signer_key_id = victim_kid; // claim the victim's key id...
+        let signed = sign(&body, &sk).unwrap(); // ...but sign with our own key
+        match verify_self_described(&signed.signed_bytes) {
+            Err(EventError::SignerKeyMismatch) => {}
+            other => panic!("expected SignerKeyMismatch, got {other:?}"),
+        }
     }
 
     #[test]

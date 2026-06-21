@@ -37,18 +37,23 @@ def _sign(bin_path, key_path, body):
     return p.stdout.decode().strip()
 
 
+def key_id(bin_path, key_path):
+    """Return the hex Ed25519 public key (kid) for key_path (creating it if absent).
+
+    The body's signer_key_id must equal the signing key (the in-DB binding gate),
+    so the agent learns its real kid up front rather than guessing.
+    """
+    p = subprocess.run([bin_path, "key-id", "--key", key_path], capture_output=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"key-id failed: {p.stderr.decode()}")
+    return p.stdout.decode().strip()
+
+
 def author(conn_str, bin_path, key_path, blob_addr_hex, patient_id):
     """Author one advisory through submit_event. Returns the new event_id."""
-    # The agent must sign with the kid it is enrolled under; read it from the key
-    # by signing a probe and extracting the COSE key_id via the DB's cairn_body.
+    # Sign with — and declare — the kid this key actually owns (binding gate).
+    kid = key_id(bin_path, key_path)
     with psycopg.connect(conn_str, autocommit=True) as db:
-        probe = _body("advisory.added", patient_id, "advisory/1", {}, [], kid="")
-        # First pass: sign to learn our kid (cairn_body exposes signer_key_id).
-        signed_hex = _sign(bin_path, key_path, probe)
-        row = db.execute("SELECT cairn_body(decode(%s,'hex')) ->> 'signer_key_id'",
-                         (signed_hex,)).fetchone()
-        kid = row[0]
-
         # urgency score = a trivial deterministic function of the blob address.
         urgency = (int(blob_addr_hex[:2], 16) % 5) + 1
         body = _body(

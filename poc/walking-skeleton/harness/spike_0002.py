@@ -99,7 +99,7 @@ def main():
             len(found) == 1 and str(found[0][0]) == str(eid)
             and n_after == n_before and aid_a != aid_b)
 
-        # ---- C5: the five hostile attacks all fail closed with legible reasons.
+        # ---- C5: the hostile attacks all fail closed with legible reasons.
         c5_checks = []
         # C5.1 unsigned/malformed
         c5_checks.append(expect_raises(db, "SELECT submit_event(%s)", (b"\xde\xad",),
@@ -121,6 +121,16 @@ def main():
         signed = agent._sign(args.bin, "/tmp/agent.key", downgrade)
         c5_checks.append(expect_raises(db, "SELECT submit_event(decode(%s,'hex'))", (signed,),
                                        "attestation", "C5.5 cross-author salience downgrade"))
+        # C5.6 impersonation: sign with the agent key but claim the human's
+        # signer_key_id. signer_key_id is bound to the verifying key in-DB, so the
+        # event fails the signature floor — an actor cannot author events attributed
+        # to another (un-)enrolled actor. (Closes the Spike 0002 attribution-forgery gap.)
+        impersonate = _agent_body("advisory.added", pid, {"x": 1},
+                                  [{"alg":"blake3","digest_hex":blob_addr,"media_type":"m","descriptor":"d","byte_len":1}],
+                                  human_key)  # claim the human's key id...
+        signed = agent._sign(args.bin, "/tmp/agent.key", impersonate)  # ...sign with the agent key
+        c5_checks.append(expect_raises(db, "SELECT submit_event(decode(%s,'hex'))", (signed,),
+                                       "signature", "C5.6 impersonation (claimed signer_key_id)"))
         for ok, detail in c5_checks:
             print("   ", detail)
         # Committed-event set unchanged by the attacks (only the C1 advisory + patient exist).
@@ -136,11 +146,8 @@ def main():
 
 
 def _enroll(db, bin_path, kind, key_path, pinned):
-    """Create the key (sign a throwaway body), learn its kid, enroll it, return the kid."""
-    body = _agent_body("probe.added", str(uuid.uuid4()), {}, [], "")
-    # probe.added is signed only to read back signer_key_id via cairn_body; it is NEVER submitted (so its absence from event_type_class is intentional).
-    signed = agent._sign(bin_path, key_path, body)
-    kid = db.execute("SELECT cairn_body(decode(%s,'hex')) ->> 'signer_key_id'", (signed,)).fetchone()[0]
+    """Create the key (if absent), learn its real kid, enroll it, return the kid."""
+    kid = agent.key_id(bin_path, key_path)
     db.execute("SELECT enroll_actor(%s,%s,%s)", (kind, json.dumps(pinned), kid))
     return kid
 
