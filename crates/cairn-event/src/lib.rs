@@ -445,6 +445,80 @@ pub fn canonical_json_address(v: &serde_json::Value) -> Vec<u8> {
     out
 }
 
+/// A human-verifiable short fingerprint of an Ed25519 public key (hex): the
+/// sha2-256 of the 32 key bytes, rendered as five 4-hex-digit groups. This is the
+/// out-of-band code an operator reads aloud / scans to confirm a peer's identity
+/// at pairing (the MITM antidote — ADR-0017 §7). Display-only; the DB pins the key.
+pub fn short_fingerprint(pubkey_hex: &str) -> Result<String, EventError> {
+    use sha2::{Digest, Sha256};
+    let raw = hex::decode(pubkey_hex).map_err(|_| EventError::BadKeyId)?;
+    if raw.len() != 32 {
+        return Err(EventError::BadKeyId);
+    }
+    let digest = Sha256::digest(&raw);
+    let groups: Vec<String> = digest[..10]
+        .chunks(2)
+        .map(|c| format!("{:02X}{:02X}", c[0], c[1]))
+        .collect();
+    Ok(groups.join("-"))
+}
+
+/// The out-of-band pairing offer (ADR-0017 §7): a signed, operator-carried bundle
+/// that introduces one node to another. The fingerprint is the human check; the
+/// pubkey is what the trust set pins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PairingBundle {
+    pub node_id_hex: String,
+    pub pubkey_hex: String,
+    pub address: String,
+    pub fingerprint: String,
+    pub nonce: String,
+    pub hlc: Hlc,
+}
+
+/// Sign a pairing bundle as a COSE_Sign1 (Ed25519), reusing the event signing path.
+pub fn sign_pairing_bundle(b: &PairingBundle, sk: &SigningKey) -> Result<Vec<u8>, EventError> {
+    use coset::{iana, CborSerializable, CoseSign1Builder, HeaderBuilder};
+    let mut payload = Vec::new();
+    ciborium::into_writer(b, &mut payload).map_err(|e| EventError::Cbor(e.to_string()))?;
+    let kid = sk.verifying_key().to_bytes().to_vec();
+    let protected = HeaderBuilder::new()
+        .algorithm(iana::Algorithm::EdDSA)
+        .key_id(kid)
+        .build();
+    let sign1 = CoseSign1Builder::new()
+        .protected(protected)
+        .payload(payload)
+        .create_signature(b"", |tbs| sk.sign(tbs).to_bytes().to_vec())
+        .build();
+    sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
+}
+
+/// Verify a pairing bundle against the key it embeds, and confirm it does not lie
+/// about its own fingerprint (the fingerprint must derive from the embedded key).
+pub fn verify_pairing_bundle(token: &[u8]) -> Result<PairingBundle, EventError> {
+    use coset::{CborSerializable, CoseSign1};
+    let sign1 = CoseSign1::from_slice(token).map_err(|e| EventError::Cose(e.to_string()))?;
+    let kid = sign1.protected.header.key_id.clone();
+    let bytes: [u8; 32] = kid.as_slice().try_into().map_err(|_| EventError::BadKeyId)?;
+    let vk = VerifyingKey::from_bytes(&bytes).map_err(|_| EventError::BadKeyId)?;
+    sign1
+        .verify_signature(b"", |sig, tbs| {
+            let signature =
+                ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
+            vk.verify(tbs, &signature).map_err(|_| EventError::BadSignature)
+        })
+        .map_err(|_| EventError::BadSignature)?;
+    let payload = sign1.payload.ok_or(EventError::NoPayload)?;
+    let b: PairingBundle =
+        ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
+    // The bundle must be honest about the key it carries and that key's fingerprint.
+    if b.pubkey_hex != hex::encode(bytes) || b.fingerprint != short_fingerprint(&b.pubkey_hex)? {
+        return Err(EventError::SignerKeyMismatch);
+    }
+    Ok(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,5 +732,42 @@ mod tests {
         let v = contributors_json(&set);
         assert_eq!(v[0]["role"], json!("attested"));
         assert_eq!(v[0]["responsibility"], json!("authored"));
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic_and_keyed() {
+        let (_sk, kid) = generate_key().unwrap();
+        let fp1 = short_fingerprint(&kid).unwrap();
+        let fp2 = short_fingerprint(&kid).unwrap();
+        assert_eq!(fp1, fp2, "same key -> same fingerprint");
+        let (_sk2, kid2) = generate_key().unwrap();
+        assert_ne!(fp1, short_fingerprint(&kid2).unwrap(), "different key -> different fingerprint");
+        assert!(short_fingerprint("not-hex").is_err());
+    }
+
+    #[test]
+    fn pairing_bundle_roundtrips_and_rejects_tampering() {
+        let (sk, kid) = generate_key().unwrap();
+        let b = PairingBundle {
+            node_id_hex: hex::encode(event_address(b"genesis-bytes")),
+            pubkey_hex: kid.clone(),
+            address: "10.0.0.2:7800".into(),
+            fingerprint: short_fingerprint(&kid).unwrap(),
+            nonce: "abcd1234".into(),
+            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+        };
+        let token = sign_pairing_bundle(&b, &sk).unwrap();
+        assert_eq!(verify_pairing_bundle(&token).unwrap(), b);
+
+        // A bundle that lies about its own fingerprint is rejected.
+        let mut liar = b.clone();
+        liar.fingerprint = "DEAD-BEEF".into();
+        let bad = sign_pairing_bundle(&liar, &sk).unwrap();
+        assert!(verify_pairing_bundle(&bad).is_err());
+
+        // Tampered bytes -> reject.
+        let mut t = token.clone();
+        let m = t.len() / 2; t[m] ^= 0x01;
+        assert!(verify_pairing_bundle(&t).is_err());
     }
 }
