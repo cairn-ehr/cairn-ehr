@@ -42,7 +42,6 @@ DECLARE
     v_targets_other BOOLEAN;
     v_bears        BOOLEAN;
     v_target_id    UUID;
-    v_target_origin TEXT;
     v_twin         TEXT;
     c              JSONB;
 BEGIN
@@ -96,8 +95,10 @@ BEGIN
     --    (The skeleton stores the target in the body as `target_event_id`.)
     IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
         v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
-        SELECT node_origin INTO v_target_origin FROM event_log WHERE event_id = v_target_id;
-        IF v_target_origin IS NULL THEN
+        -- The target must exist; cross-author ownership is enforced by the
+        -- step-4 human-attestation requirement (a suppressing overlay always
+        -- needs a human attester), not by a signer comparison in this spike.
+        IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'submit_event: overlay targets unknown event %', v_target_id;
         END IF;
     END IF;
@@ -110,7 +111,7 @@ BEGIN
     END IF;
 
     -- 7. Derive the plaintext twin (mechanical; the §3.13 substrate) and append.
-    v_twin := format('[%s] %s for patient %s', v_type, b ->> 'schema_version', b ->> 'patient_id');
+    v_twin := format('[%s] %s for patient %s', v_type, b ->> 'schema_version', b ->> 'patient_id'); -- TODO: skeleton twin — spec §3.13/ADR-0012 want the clinical payload rendered too
 
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
@@ -123,7 +124,16 @@ BEGIN
         NULLIF(b ->> 't_effective','null')::timestamptz,
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
         b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb))
-    ON CONFLICT DO NOTHING;
+    ON CONFLICT (event_id) DO NOTHING;
+
+    -- Idempotent re-submit of the SAME event is a silent no-op (set-union).
+    -- But a DIFFERENT event reusing this event_id (substitution) must not pass
+    -- silently: compare the stored content-address to what we just verified.
+    IF NOT FOUND THEN
+        IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
+            RAISE EXCEPTION 'submit_event: event_id % already exists with different content (substitution refused)', v_event_id;
+        END IF;
+    END IF;
 
     -- Learn any attachment references (reference-eager, byte-lazy).
     FOR c IN SELECT * FROM jsonb_array_elements(COALESCE(b -> 'attachments','[]'::jsonb)) LOOP
@@ -139,6 +149,10 @@ $$;
 -- submit_event. The agent reads projections + the log, executes the door, nothing else.
 REVOKE INSERT, UPDATE, DELETE ON event_log FROM PUBLIC;
 REVOKE INSERT, UPDATE, DELETE ON event_log FROM cairn_agent;
+-- The classification table is itself a safety surface: reclassifying a
+-- suppressing op as additive would dodge the attestation gate. Lock it down;
+-- submit_event reads it as its SECURITY DEFINER owner, so cairn_agent needs nothing.
+REVOKE INSERT, UPDATE, DELETE ON event_type_class FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea) TO cairn_agent;
 GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
 
