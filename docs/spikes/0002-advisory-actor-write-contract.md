@@ -3,6 +3,13 @@
 - **Status:** **Run 2026-06-21 — C1–C5 all PASS (exit 0).** The two follow-on ADRs (skill-epoch
   refinement to ADR-0011, advisory-actor integration contract) are now unblocked. Extends the
   [Spike 0001](0001-walking-skeleton-wan-sync-and-pi-cost.md) walking skeleton.
+
+  **Update 2026-06-22:** the attestation success path is now exercised end-to-end —
+  `cairn-sync attest-stdin` (the token minter), a durable `cairn-node` integration test
+  (`tests/attestation.rs`: accept for responsibility-bearing and suppressing events; reject for
+  wrong-address, tampered, and non-human-attester), and the `spike_0002.py` selftest external-actor
+  accept and wrong-address/tamper cases. No `submit_event` logic changed — the accept branch
+  already existed; this is the coverage that was missing.
 - **Date:** 2026-06-18
 - **Motivation:** [Ecosystem eval 0001](../ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md)
   concluded that kastellan and localmail fit as a three-membrane, nested-chokepoint stack. That conclusion is

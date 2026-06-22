@@ -69,12 +69,15 @@ door, **and the floor rejected all five hostile-agent attacks** with legible rea
 caught two real floor holes the spike's own review missed — forged authorship (unbound `signer_key_id`) and a
 `PUBLIC`-executable `SECURITY DEFINER` door — both fixed before merge (recorded in ADR-0030).
 
-**Honest gap carried forward (candidate follow-on work):** the attestation **success** path (a *valid*, correctly-bound
-token accepted) is **never exercised E2E** — every test hits the "no token presented" gate. Needs an `attest-stdin`
-CLI + positive/wrong-address token tests; in scope for the [ADR-0030](spec/decisions/0030-advisory-actor-integration-contract.md)
-integration contract. Smaller deferred items (commented in code): `events_by_actor_epoch` resolves against
-`actor_current` not historical `actor_event` rows; `actor_current` wall-clock ordering needs a monotonic tiebreaker
-before production; no FK on `recall_overlay.target_event_id`; plaintext twin is skeletal.
+**Honest gap — **(closed 2026-06-22)**:** the attestation **success** path (a *valid*, correctly-bound
+token accepted) was never exercised E2E — now closed by `cairn-sync attest-stdin` (the token minter),
+`crates/cairn-node/tests/attestation.rs` (accept for responsibility-bearing + suppressing events; reject for
+wrong-address, tampered, and non-human-attester), and `spike_0002.py` selftest (external-actor accept +
+wrong-address/tamper). No `submit_event` logic changed — the accept branch already existed; this is the
+coverage that was missing. **Smaller deferred items remain open** (commented in code):
+`events_by_actor_epoch` resolves against `actor_current` not historical `actor_event` rows;
+`actor_current` wall-clock ordering needs a monotonic tiebreaker before production; no FK on
+`recall_overlay.target_event_id`; plaintext twin is skeletal.
 
 ---
 
@@ -85,8 +88,8 @@ before production; no FK on `recall_overlay.target_event_id`; plaintext twin is 
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
 - **Harden the first federating node** — close the declared gaps above (status-before-init crash; runtime login
   role for the in-DB floor; incremental sync watermark; genesis HLC).
-- **Spike 0002 attestation success-path** — the one un-exercised half of the ADR-0030 contract (`attest-stdin`
-  CLI + positive token tests).
+- **Spike 0002 attestation success-path** — ~~the one un-exercised half of the ADR-0030 contract (`attest-stdin`
+  CLI + positive token tests)~~ **closed 2026-06-22** (see Spike 0002 honest-gap note above).
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 
