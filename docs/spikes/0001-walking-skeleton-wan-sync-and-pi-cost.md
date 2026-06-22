@@ -242,6 +242,36 @@ PL/pgSQL → **pgrx (in-DB Rust)** for the hot projection → external Rust as t
 > doesn't earn its indirection) rather than overturning the discipline. This row touches **only** the
 > fit-for-purpose projection schema + harness; the §9 Rust safety surface is untouched.
 
+#### 6.2 B5 — prepared (2026-06-22): the guard + bench artifacts
+
+B5 is **built and runnable**; only the ARM numbers await the board. The artifacts are pure SQL
+(no pgrx, no Rust rebuild — the discipline lives wholly in the projection plane), driven by one runner:
+
+- **`db/008_surrogate_projection.sql`** — the dual-identifier projection: the `local_ref` domain (the
+  type-system leakage guard), the `patient_ref` interning dictionary (the anchor row carrying *both*
+  fields), the `intern_patient`/`patient_uuid` ingress/egress chokepoints, and two child projections of
+  note events — `chart_note_u` (16-byte canonical-UUID FK) vs `chart_note_s` (8-byte surrogate FK) —
+  maintained from the *same* event stream so the A/B is honest.
+- **`db/tests/008_surrogate_test.sql`** — the **leakage guard** (G1–G6), the load-bearing half: it
+  mechanically asserts the surrogate never reaches the signed plane (`event_log` is surrogate-free),
+  `local_ref` is a real two-way type barrier, interning is idempotent/dense, the anchor carries both while
+  referencing rows carry only the surrogate, and egress rehydrates the canonical UUID. Runs in review, off-Pi.
+- **`db/bench/b5_surrogate.sql`** + **`db/bench/run_b5.sh`** — seeds N patients × M notes and reports the
+  FK-index size ratio (B5.1), heap sizes (B5.2), and `EXPLAIN (ANALYZE, BUFFERS)` of the UUID-keyed vs
+  surrogate-keyed "all notes for one patient" read (B5.3/B5.4). On-Pi invocation: PI-RUNBOOK §6.1.
+
+**x86 sanity run** (dev box, PG 16, 2 000 patients × 50 notes = 100 000 child rows): guard **ALL PASS**;
+FK-index `shrink_factor` **≈1.3×** with random-UUID keys, surrogate read one extra single-row anchor hit.
+The ~1.3× is a *floor* on the win — the real ARM target uses larger fan-out, and UUIDv7's k-sortable index
+on the dev box already removes the random-insertion penalty that a national `content_address` (random
+multihash) FK would still pay; the Pi run is where the verdict lands.
+
+**Deliberate scope choice:** B5 is **not** wired into the default `init` schema (`crates/cairn-sync` /
+`crates/cairn-node`). A second always-on projection trigger would fold surrogate-maintenance cost into the
+**B1** measurement and conflate the ADR-0001 question. So B5 is an opt-in bench loaded by its own runner;
+folding interning into the *real* projection is a product-build step, not a shadow projection bolted onto
+the skeleton. The §9 Rust safety surface is untouched; `cargo test --workspace` is unaffected.
+
 ### 6.1 Preparation status — runbook + a self-describing, floor-finding harness (2026-06-18)
 
 Bet B is **prepared and waiting only on the physical board.** The harness

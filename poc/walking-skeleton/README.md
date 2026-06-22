@@ -43,6 +43,22 @@ cargo test --workspace      # unit tests incl. sign→wire→verify round-trip +
 cargo build --workspace     # produces target/debug/cairn-sync
 ```
 
+### Surrogate-key leakage guard + Bet B5 (pure SQL, no pgrx)
+
+The dual-identifier discipline ([ADR-0031](../../docs/spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md):
+canonical UUID on the wire, node-local `bigint` surrogate as the physical join key)
+lives wholly in the projection plane, so its guard runs against plain PostgreSQL:
+
+```sh
+# loads 001+002+008, runs the leakage/interning guard, then the size/read benchmark
+db/bench/run_b5.sh "host=/var/run/postgresql dbname=cairn_b5 user=postgres" 2000 50
+```
+
+`db/tests/008_surrogate_test.sql` mechanically asserts the surrogate never escapes the
+projection (the `event_log` signed plane stays surrogate-free, the `local_ref` domain is
+a real type barrier, egress rehydrates the canonical UUID). On the Pi, see
+[`PI-RUNBOOK.md`](PI-RUNBOOK.md) §6.1.
+
 ### pgrx extension (`crates/cairn_pgx`)
 
 `cairn_pgx` is the in-database verify gate (ADR-0002 / Spike 0002 §4.3). It is

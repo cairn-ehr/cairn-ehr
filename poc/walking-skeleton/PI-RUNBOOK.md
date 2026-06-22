@@ -236,6 +236,40 @@ python3 harness/bench_b.py --bin target/release/cairn-sync selftest --force \
 `--force` is required because `selftest` drops and recreates the Cairn tables (a
 benchmark needs a known-empty log); it guards against a mistyped `--conn`.
 
+### 6.1 B5 — does surrogate-key interning pay on ARM? (ADR-0031)
+
+[ADR-0031](../../docs/spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)
+keeps the canonical UUID on the wire but interns it to a node-local `bigint`
+surrogate as the physical join key. B5 measures whether the smaller foreign-key
+index actually pays on the Pi. It is a **pure-SQL** run (no Rust rebuild, no pgrx) —
+the discipline lives entirely in the projection plane — so it is separate from the
+B1/B2 daemon run above and does not perturb their numbers.
+
+Run it against a **throwaway** bench database (it `TRUNCATE`s the projections):
+
+```bash
+# A fresh bench DB on the SSD cluster from §3:
+psql "$CONN" -c "CREATE DATABASE cairn_b5" 2>/dev/null || true
+B5="host=127.0.0.1 port=5444 user=cairn dbname=cairn_b5"
+
+# Loads 001+002+008, runs the leakage/interning guard, then the size/read bench.
+# Scale the second/third args up on the Pi to a realistic fleet (patients, notes each):
+db/bench/run_b5.sh "$B5" 20000 100
+```
+
+Read **B5.1**'s `shrink_factor` (the foreign-key index size ratio — the cost ADR-0031
+targets) and confirm **B5.4**'s surrogate read stays competitive with **B5.3**'s direct
+UUID read once the one-row anchor rehydrate is counted. A "no material shrink / slower
+read" result on ARM **narrows** the interning scope (keep UUIDv7-only where it doesn't
+earn its indirection); it does not overturn the discipline. Record the numbers in §9
+alongside the B1–B4 table.
+
+> [!NOTE]
+> The guard (`db/tests/008_surrogate_test.sql`) is the load-bearing half: it mechanically
+> asserts the surrogate never reaches the canonical/signed plane (`event_log` stays
+> surrogate-free), that the `local_ref` domain is a real type barrier, and that egress
+> rehydrates the canonical UUID. It runs anywhere `psql` does — including in review, off-Pi.
+
 ---
 
 ## 7. Read the result, and the floor
