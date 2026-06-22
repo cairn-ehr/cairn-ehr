@@ -7,6 +7,7 @@
 //! mTLS is mutual, so BOTH nodes must peer with each other before B can pull:
 //!   * A's server pins connecting clients to A's `trust_peer` → A must hold peer(B).
 //!   * B's client pins A's server cert                       → B must hold peer(A).
+//!
 //! The test therefore establishes mutual peering (each node authors `peer.added`
 //! for the other, using the other's real node_id + pubkey + fingerprint) BEFORE
 //! the pull.

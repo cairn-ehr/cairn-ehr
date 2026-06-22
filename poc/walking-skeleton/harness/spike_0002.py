@@ -6,6 +6,7 @@ exits 0 iff all PASS. selftest DROPs+recreates the Cairn tables, so it requires
 --force (guards a mistyped --conn), exactly like bet_a.py.
 """
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -24,6 +25,9 @@ def sh(bin_path, *a, stdin=None):
 
 def expect_raises(db, sql, params, needle, label):
     """Return True iff `sql` raises an error whose message contains `needle`."""
+    # Relies on the caller's connection being autocommit=True (it is, in main): a
+    # submit_event RAISE aborts the tx, so without autocommit the next statement
+    # would fail with InFailedSqlTransaction rather than the needle we check for.
     try:
         db.execute(sql, params)
         return False, f"{label}: NO error raised (floor breached)"
@@ -31,6 +35,19 @@ def expect_raises(db, sql, params, needle, label):
         msg = str(e)
         ok = needle.lower() in msg.lower()
         return ok, f"{label}: {'OK' if ok else 'WRONG ERROR'} — {msg.splitlines()[0]}"
+
+
+def _content_address_hex(signed_hex):
+    """The event's content address = 0x1220 (sha2-256 multihash prefix) + sha256 of
+    the signed wire bytes — identical to event_address() in cairn-event and v_ca in
+    db/005. Attestation tokens bind to THIS value.
+
+    NOTE: this is the THIRD home of that encoding (Rust event_address, SQL v_ca, here).
+    The three must move together — if the multihash prefix ever changes, update all
+    three or this harness will silently mint wrong-address tokens. This copy exists
+    only so the Python stand-in stays zero-dependency (no Rust call to derive the CA).
+    """
+    return "1220" + hashlib.sha256(bytes.fromhex(signed_hex)).hexdigest()
 
 
 def main():
@@ -136,6 +153,42 @@ def main():
         # Committed-event set unchanged by the attacks (only the C1 advisory + patient exist).
         committed = db.execute("SELECT count(*) FROM event_log WHERE event_type='advisory.added'").fetchone()[0]
         results["C5 floor holds against hostile agent"] = all(ok for ok, _ in c5_checks) and committed == 1
+
+        # ---- Attestation SUCCESS path (the C2 complement; closes the ADR-0030 gap).
+        # A human attests the agent's suppressing event end-to-end -> accepted.
+        supp2 = _agent_body("salience.downgrade", pid, {"target_event_id": str(eid)}, [], agent_key)
+        supp2_signed = agent._sign(args.bin, "/tmp/agent.key", supp2)
+        ca2 = _content_address_hex(supp2_signed)
+        token2 = agent.attest(args.bin, "/tmp/human.key", ca2)
+        row = db.execute(
+            "SELECT submit_event(decode(%s,'hex'),decode(%s,'hex'),decode(%s,'hex'))",
+            (supp2_signed, token2, human_key)).fetchone()
+        accept_ok = row is not None and row[0] is not None
+        print("   ", f"P  suppress + valid human token accepted: {accept_ok}")
+
+        # A fresh suppress event with a WRONG-address token -> rejected.
+        supp3 = _agent_body("salience.downgrade", pid, {"target_event_id": str(eid)}, [], agent_key)
+        supp3_signed = agent._sign(args.bin, "/tmp/agent.key", supp3)
+        wrong_token = agent.attest(args.bin, "/tmp/human.key", "1220" + "22" * 32)
+        n1, d1 = expect_raises(
+            db, "SELECT submit_event(decode(%s,'hex'),decode(%s,'hex'),decode(%s,'hex'))",
+            (supp3_signed, wrong_token, human_key),
+            "not bound to this event", "N1 wrong-address token rejected")
+        print("   ", d1)
+
+        # A correctly-bound token with one nibble flipped -> rejected.
+        ca3 = _content_address_hex(supp3_signed)
+        good3 = agent.attest(args.bin, "/tmp/human.key", ca3)
+        flip = "0" if good3[len(good3) // 2] != "0" else "1"
+        tampered = good3[:len(good3) // 2] + flip + good3[len(good3) // 2 + 1:]
+        n2, d2 = expect_raises(
+            db, "SELECT submit_event(decode(%s,'hex'),decode(%s,'hex'),decode(%s,'hex'))",
+            (supp3_signed, tampered, human_key),
+            "not bound to this event", "N2 tampered token rejected")
+        print("   ", d2)
+
+        results["Attestation success-path: accept + wrong-address/tamper rejected"] = (
+            accept_ok and n1 and n2)
 
     print("\n  Spike 0002 — C1-C5")
     all_pass = True

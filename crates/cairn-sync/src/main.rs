@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cairn_event::{blob_address, plaintext_twin, sign, verify_self_described, EventBody, Hlc, SigningKey};
+use cairn_event::{blob_address, plaintext_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA: [(&str, &str); 6] = [
@@ -241,6 +241,33 @@ fn cmd_sign_stdin(key_path: &str) -> R<()> {
     // gate (verify_self_described) is the floor that rejects it.
     let signed = sign(&body, &sk)?;
     println!("{}", hex::encode(&signed.signed_bytes));
+    Ok(())
+}
+
+/// Build a hex COSE_Sign1 attestation token from a JSON `AttestationBody` string,
+/// signed by `sk`. Pure (no I/O) so it is unit-testable; `cmd_attest_stdin` wraps it
+/// with key-load + stdin-read + stdout-print. Mirrors the sign-stdin split so Rust
+/// owns the one canonical attestation encoding (no second crypto impl in Python).
+fn attestation_token_hex(input: &str, sk: &SigningKey) -> R<String> {
+    let body: AttestationBody = serde_json::from_str(input)?;
+    let content_address = hex::decode(&body.content_address_hex)?;
+    let token = sign_attestation(&content_address, &body.attester_key_id, &body.role, sk)?;
+    Ok(hex::encode(&token))
+}
+
+/// Sign an `AttestationBody` supplied as JSON on stdin and emit a hex COSE_Sign1
+/// attestation token on stdout. Like `sign-stdin`, this is a DUMB signer: it attests
+/// whatever `content_address_hex` it is handed, including one bound to no real event.
+/// That is deliberate — it is how the wrong-address adversarial test is constructed —
+/// and the in-DB floor (`cairn_attestation_ok`) is what rejects a mis-bound token,
+/// never this CLI. Do NOT "harden" it to validate the address: that would break the
+/// adversarial tests and move a floor check out of the database (ADR-0021/0030).
+fn cmd_attest_stdin(key_path: &str) -> R<()> {
+    let (sk, _kid) = load_or_create_key(key_path)?;
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input)?;
+    let token_hex = attestation_token_hex(&input, &sk)?;
+    println!("{token_hex}");
     Ok(())
 }
 
@@ -1168,6 +1195,7 @@ USAGE (all take --conn <postgres-uri>):
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
   sign-stdin  --key PATH    (read JSON EventBody on stdin, write hex COSE_Sign1 on stdout)
+  attest-stdin --key PATH    (read JSON AttestationBody on stdin, write hex COSE_Sign1 token on stdout)
   key-id      --key PATH    (print the hex Ed25519 public key / kid for the key file)
 
 Run over WireGuard; NoTls is intentional (the link is the transport)."
@@ -1264,10 +1292,39 @@ fn main() -> R<()> {
         "sign-stdin" => cmd_sign_stdin(
             &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
         )?,
+        "attest-stdin" => cmd_attest_stdin(
+            &flag(&args, "--key").unwrap_or_else(|| "human.key".into()),
+        )?,
         "key-id" => cmd_key_id(
             &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
         )?,
         _ => usage(),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cairn_event::{event_address, generate_key, verify_attestation};
+
+    #[test]
+    fn attest_token_hex_is_verifiable_and_address_bound() {
+        // The CLI core must produce a token the verifier accepts for the right
+        // key+address and rejects for a different address (the binding guarantee).
+        let (sk, kid) = generate_key().unwrap();
+        let vk = sk.verifying_key();
+        let ca = event_address(b"some signed event bytes");
+        let input = format!(
+            r#"{{"content_address_hex":"{}","attester_key_id":"{}","role":"attested"}}"#,
+            hex::encode(&ca), kid
+        );
+
+        let token_hex = attestation_token_hex(&input, &sk).unwrap();
+        let token = hex::decode(&token_hex).unwrap();
+
+        assert!(verify_attestation(&token, &ca, &vk), "token verifies for right key + address");
+        let other = event_address(b"a different event");
+        assert!(!verify_attestation(&token, &other, &vk), "token is bound to its content-address");
+    }
 }

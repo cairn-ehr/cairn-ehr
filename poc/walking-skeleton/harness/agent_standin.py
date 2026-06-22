@@ -37,6 +37,24 @@ def _sign(bin_path, key_path, body):
     return p.stdout.decode().strip()
 
 
+def attest(bin_path, key_path, content_address_hex, role="attested"):
+    """Mint a hex COSE_Sign1 attestation token bound to content_address_hex, signed
+    by key_path's key, via `cairn-sync attest-stdin` (Rust owns the canonical encoding).
+
+    Like _sign, this is a dumb signer: it attests whatever address it is handed, so a
+    test can build a wrong-address token. The in-DB floor is what rejects a mis-binding.
+    """
+    # attest-stdin needs the attester's kid for the AttestationBody (unlike sign-stdin,
+    # which derives the signer kid from the key itself).
+    kid = key_id(bin_path, key_path)
+    body = {"content_address_hex": content_address_hex, "attester_key_id": kid, "role": role}
+    p = subprocess.run([bin_path, "attest-stdin", "--key", key_path],
+                       input=json.dumps(body).encode(), capture_output=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"attest-stdin failed: {p.stderr.decode()}")
+    return p.stdout.decode().strip()
+
+
 def key_id(bin_path, key_path):
     """Return the hex Ed25519 public key (kid) for key_path (creating it if absent).
 
