@@ -224,10 +224,23 @@ with a 1 TB SSD (the suspected realistic floor); a **Pi 4 / 8 GB** is the follow
 | B2 | Does a **chart read** beat paper? | Time a realistic multi-event chart assembly from projections | Faster than "grab the paper chart" — the [§1.2](../spec/vision.md) paper-parity floor (record the distribution; target sub-second) |
 | B3 | What does the **keystore** cost? | Crypto-shred ([ADR-0005](../spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md)) at per-event vs per-episode DEK granularity | A granularity whose key-management cost is acceptable on the Pi; informs the §3.8 key hierarchy |
 | B4 | Crypto throughput on ARM? | Ed25519 verify/s; BLAKE3 vs SHA-256 hashing throughput | Verify + hash keep up with sync + chart-read load; confirms or revises the §4 blob-digest default on real ARM |
+| B5 | Does **surrogate-key interning** actually pay on ARM? ([ADR-0031](../spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)) | Build the projection two ways — canonical `uuid`/`bytea` FKs vs `bigint` `local_ref` FKs interned via a dictionary — and compare: FK index size, chart-read join time, buffer-cache residency, and the `submit_event` interning-upsert cost on ingress | `bigint`-surrogate FK indexes materially smaller and chart-read joins **no slower** (ideally faster); ingress interning-upsert cost within the B1 maintenance budget — confirms or **narrows** the ADR-0031 interning scope |
 
 **Mitigation ladder if a threshold misses** (per [ADR-0002](../spec/decisions/0002-in-database-rust-pgrx-escape-hatch.md)):
 PL/pgSQL → **pgrx (in-DB Rust)** for the hot projection → external Rust as the last resort. A miss tells us
 *which rung*, not *whether the design works*.
+
+> [!NOTE]
+> **B5 — surrogate-key interning is a *scope*-finding measurement, not a go/no-go.**
+> [ADR-0031](../spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md) fixes the
+> *discipline* (canonical UUID/multihash identity on the wire; node-local `bigint` surrogates as the
+> physical join key, never escaping the projection) as a design decision; B5 measures only *how much* the
+> interning pays on real ARM and *which* references are worth interning. The candidates, in cost order, are
+> the wide random `BYTEA` references (`content_address`/`actor_id`/`blob_address`) and the high-fan-out
+> `patient_id` — `event_id` PKs stay UUIDv7. Like [ADR-0001](../spec/decisions/0001-fat-postgres-thin-daemon.md)'s
+> compute bet, a "no measurable win" result on the Pi **narrows** the scope (keep UUIDv7-only where interning
+> doesn't earn its indirection) rather than overturning the discipline. This row touches **only** the
+> fit-for-purpose projection schema + harness; the §9 Rust safety surface is untouched.
 
 ### 6.1 Preparation status — runbook + a self-describing, floor-finding harness (2026-06-18)
 

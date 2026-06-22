@@ -51,6 +51,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0028](0028-finalized-closed-contributor-role-enum.md) | The finalized closed contributor-role enum | Accepted (refines 0007) | 2026-06-20 |
 | [0029](0029-skill-epoch-as-pinned-actor-determinant.md) | Skill-epoch (and served-model digest) as a pinned determinant of an agent actor's identity | Accepted (refines 0011) | 2026-06-21 |
 | [0030](0030-advisory-actor-integration-contract.md) | The advisory-actor integration contract: L2/L3 attachment and authorship through the in-DB floor | Accepted (refines 0021) | 2026-06-21 |
+| [0031](0031-canonical-identifiers-and-node-local-surrogate-keys.md) | Canonical identifiers and node-local surrogate keys: the dual-identifier discipline | Accepted (refines 0021) | 2026-06-22 |
 
 ## Template
 
