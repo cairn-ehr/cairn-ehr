@@ -38,17 +38,30 @@ pub async fn provision(db: &Client, sk: &SigningKey, key_id: &str, display_name:
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
-pub async fn load_local(db: &Client) -> anyhow::Result<Identity> {
-    let row = db.query_one(
+/// Load the local node identity, or `None` if this node has not been provisioned
+/// yet (no `local_node` row). Use this where a missing node is a *normal* state to
+/// report (e.g. `status` before `init`); use [`load_local`] where it is an error.
+pub async fn load_local_opt(db: &Client) -> anyhow::Result<Option<Identity>> {
+    let row = db.query_opt(
         "SELECT encode(node_id,'hex') AS node_id_hex, signer_key_id, COALESCE(address,'') AS address
          FROM local_node WHERE id", &[]).await?;
+    let Some(row) = row else { return Ok(None) };
     let pubkey_hex: String = row.get("signer_key_id");
-    Ok(Identity {
+    Ok(Some(Identity {
         node_id_hex: row.get("node_id_hex"),
         fingerprint: short_fingerprint(&pubkey_hex)?,
         pubkey_hex,
         address: row.get("address"),
-    })
+    }))
+}
+
+/// Load the local node identity; errors if the node has not been provisioned.
+/// The pairing/identity/unpeer commands all require an existing node, so a missing
+/// `local_node` row is a genuine error there (run `init` first).
+pub async fn load_local(db: &Client) -> anyhow::Result<Identity> {
+    load_local_opt(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("node not provisioned: run `cairn-node init` first"))
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +127,11 @@ pub async fn author_unpeer(
 #[derive(Debug)]
 pub struct Status {
     pub node_id_hex: String,
+    /// `false` iff the node has no genesis enrollment yet (no `local_node` row) —
+    /// i.e. `status` was run before `init`. The rest of the struct still populates
+    /// (peers are 0, the floor self-check is independent of provisioning), so an
+    /// operator gets an honest "uninitialized" reading instead of a crash.
+    pub initialized: bool,
     pub peers_active: i64,
     pub peers_revoked: i64,
     /// `true` iff the key file exists and loads as a valid 32-byte Ed25519 seed.
@@ -141,8 +159,10 @@ pub struct Status {
 /// absent or corrupt, `keystore_ok` is set to `false` and the rest of the
 /// struct is still populated (honest degradation).
 pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
-    // Load the local node identity for the node_id.
-    let id = load_local(db).await?;
+    // Load the local node identity for the node_id. A missing row means the node
+    // has not been provisioned yet (`status` run before `init`) — report that
+    // honestly rather than erroring (HANDOVER: "status crashes if run before init").
+    let id = load_local_opt(db).await?;
 
     // Count peers by status from trust_peer.
     let rows = db.query(
@@ -179,7 +199,11 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     let can_insert: bool = floor.get("can_insert");
 
     Ok(Status {
-        node_id_hex: id.node_id_hex,
+        // When un-provisioned, surface a legible sentinel rather than a blank
+        // node_id, and flag `initialized=false` so callers can prompt for `init`.
+        node_id_hex: id.as_ref().map(|i| i.node_id_hex.clone())
+            .unwrap_or_else(|| "(uninitialized — run `cairn-node init`)".into()),
+        initialized: id.is_some(),
         peers_active,
         peers_revoked,
         keystore_ok,

@@ -38,6 +38,13 @@ enum Cmd {
     Peers,
     /// Revoke trust for a peer node.
     Unpeer { node_id: String },
+    /// Provision the unprivileged runtime login role and grant it `cairn_node`, so
+    /// the daemon can connect as a role the in-DB floor actually binds (run this once
+    /// with DDL privileges, then point `--conn`/`CAIRN_CONN` at `user=<role>`).
+    ProvisionRuntimeRole {
+        #[arg(long, default_value = "cairn_runtime")]
+        role: String,
+    },
     /// Print this node's honest assembly state (peers, keystore health, DR escrow stub).
     Status,
     /// Serve this node's `node_event` log to pinned-mTLS peers (federation sync).
@@ -129,10 +136,24 @@ async fn main() -> anyhow::Result<()> {
             ).await?;
             println!("unpeered {node_id}");
         }
+        Cmd::ProvisionRuntimeRole { role } => {
+            // DDL: connect with the privileges that loaded the schema (owner/superuser),
+            // not the unprivileged runtime role we are about to create.
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            cairn_node::db::provision_runtime_role(&db, &role).await?;
+            println!(
+                "runtime role '{role}' provisioned and granted cairn_node\n\
+                 point the daemon at it, e.g. CAIRN_CONN=\"… user={role}\" cairn-node … run …\n\
+                 (set a password with `ALTER ROLE {role} PASSWORD …` for a networked deployment)"
+            );
+        }
         Cmd::Status => {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let st = cairn_node::identity::status(&db, &cli.key).await?;
             println!("node_id       {}", st.node_id_hex);
+            if !st.initialized {
+                println!("              (not provisioned — run `cairn-node init` to enroll this node)");
+            }
             println!("peers_active  {}", st.peers_active);
             println!("peers_revoked {}", st.peers_revoked);
             println!("keystore_ok   {}", st.keystore_ok);

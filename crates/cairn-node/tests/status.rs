@@ -92,3 +92,32 @@ async fn status_reports_peers_and_keystore_health() {
     let _ = sk_b;
     let _ = sk_c;
 }
+
+/// `status` must NOT crash when run before `init` (no `local_node` row yet).
+/// An operator inspecting a freshly-created-but-unprovisioned node should get an
+/// honest "uninitialized" reading, not a `query_one` "expected one row" error —
+/// the same honest-degradation contract `keystore_ok` already follows. (HANDOVER:
+/// "status crashes if run before init".)
+#[tokio::test]
+async fn status_before_init_degrades_gracefully() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let db = db::connect_and_load_schema(&base).await.unwrap();
+    // Un-provisioned node: schema loaded, but no genesis enrollment.
+    db.batch_execute("TRUNCATE node_event, local_node").await.ok();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let key_path = tmp.path().join("node.key");
+
+    // Must return Ok, not error.
+    let st = identity::status(&db, &key_path)
+        .await
+        .expect("status before init must not error");
+    eprintln!("status (uninitialized): {:?}", st);
+
+    assert!(!st.initialized, "an un-provisioned node must report initialized=false");
+    assert_eq!(st.peers_active, 0, "no peers before init");
+    assert_eq!(st.peers_revoked, 0, "no peers before init");
+    // The floor self-check does not depend on local_node, so it must still populate.
+    assert!(!st.runtime_role.is_empty(), "runtime_role must populate even uninitialized");
+}
