@@ -63,10 +63,19 @@ local PG16 + `cairn_pgx`.
   is still plaintext-0600 (ADR-0026 seal pending).
 - **DR/recovery escrow** is a named stub ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)),
   shown as `dr_escrow: STUBBED`.
-- Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark** yet (incremental watermark has a
-  convergence-safety subtlety — node-local `recorded_at` + non-monotonic `clock_timestamp` → silent skip;
-  design captured in [issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), coupled with the HLC);
-  **key rotation / `supersede` reserved, not built**.
+- ~~Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark**~~ **closed 2026-06-23**
+  ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), branch `harden-node-incremental-sync`):
+  incremental pull keyed on a monotonic local-insertion `node_event.seq` (a node always inserts newly-learned
+  events with a fresh high `seq`, so the watermark is **structurally** skip-proof — decoupling it from the HLC,
+  which dissolved the stated coupling), per-peer `sync_cursor` written only through an advance-only
+  `checkpoint_sync_cursor` `SECURITY DEFINER` door (the runtime role keeps **zero raw DML**), with an explicit
+  periodic + trust-change-triggered **full-sweep** as the correctness floor for the residual commit-order /
+  rejected-then-trusted / address-remap hazards. The `0/0` HLC is now a real local clock (`hlc_state` +
+  `node_hlc_tick()` + merge-forward on apply, mirroring `cairn-sync`). Acceptance test
+  `sync_watermark::out_of_order_skip_is_reconciled_by_full_sweep` proves a jammed-cursor skip is reconciled by
+  the sweep; the seq prefix is transport-only (signed core byte-identical, principle 12). Full node suite green
+  on PG16 + `cairn_pgx`, clippy clean.
+- Still open: **key rotation / `supersede` reserved, not built**; DR/recovery escrow stub (ADR-0026, above).
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
