@@ -52,14 +52,21 @@ new crypto). Genesis-stable `node_id` = content-address of the genesis enrollmen
 local PG16 + `cairn_pgx`.
 
 **Honest gaps / follow-ons declared in the node (candidate "harden the node" work):**
-- `status` **crashes if run before `init`** — should degrade gracefully (CLI-surface fix).
-- **In-DB floor caveat:** the submit/admission gate is unbypassable only for an *unprivileged* connection;
-  runtime should connect as a login role granted `cairn_node` (NOLOGIN). `status` already reports
-  `db_floor ENFORCED/BYPASSABLE` and key-at-rest as plaintext-0600 (ADR-0026 seal pending).
+- ~~`status` **crashes if run before `init`**~~ **closed 2026-06-23** — `load_local_opt` (`query_opt`) +
+  an `initialized` flag; `status` degrades honestly with a "run `cairn-node init`" hint
+  (`tests/status.rs::status_before_init_degrades_gracefully`).
+- **In-DB floor caveat** — ~~runtime should connect as a login role granted `cairn_node` (NOLOGIN)~~
+  **closed 2026-06-23**: `db::provision_runtime_role` (charset-guarded against DDL injection) + a
+  `provision-runtime-role` CLI subcommand create that role, and `tests/floor_enforced.rs` now **proves the
+  ENFORCED path** — over a `cairn_node`-granted login role a raw `INSERT` into `node_event` is denied
+  (SQLSTATE 42501), `status` reports `db_floor ENFORCED`, yet `submit_node_event` still works. Key-at-rest
+  is still plaintext-0600 (ADR-0026 seal pending).
 - **DR/recovery escrow** is a named stub ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)),
   shown as `dr_escrow: STUBBED`.
-- Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark** yet; **key rotation / `supersede`
-  reserved, not built**.
+- Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark** yet (incremental watermark has a
+  convergence-safety subtlety — node-local `recorded_at` + non-monotonic `clock_timestamp` → silent skip;
+  design captured in [issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), coupled with the HLC);
+  **key rotation / `supersede` reserved, not built**.
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
@@ -86,8 +93,10 @@ coverage that was missing. **Smaller deferred items remain open** (commented in 
 **Desk-doable now (no external dependency):**
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
-- **Harden the first federating node** — close the declared gaps above (status-before-init crash; runtime login
-  role for the in-DB floor; incremental sync watermark; genesis HLC).
+- **Harden the first federating node** — status-before-init crash and the runtime-login-role/floor-ENFORCED
+  proof are **closed 2026-06-23** (see node gaps above). Remaining: **incremental sync watermark + genesis HLC**
+  ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38) — a coupled design with a real convergence-safety
+  subtlety, not a placeholder swap); DR/recovery escrow stub (ADR-0026); key rotation / `supersede`.
 - **Spike 0002 attestation success-path** — ~~the one un-exercised half of the ADR-0030 contract (`attest-stdin`
   CLI + positive token tests)~~ **closed 2026-06-22** (see Spike 0002 honest-gap note above).
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced

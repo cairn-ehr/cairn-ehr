@@ -16,6 +16,52 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     Ok(client)
 }
 
+/// Provision the unprivileged runtime login role and grant it `cairn_node`.
+///
+/// The in-DB submit/admission floor (`db/007`) only *binds* a connection that is
+/// neither superuser nor table owner — a superuser raw-INSERTs around the gate. So
+/// the "enforced in Postgres" guarantee holds iff the daemon connects as a login
+/// role that merely *inherits* `cairn_node` (which is NOLOGIN). This is the one DDL
+/// step that creates that role; run it once, with owner privileges, then point the
+/// runtime `--conn`/`CAIRN_CONN` at `user=<role>`. `status` then reports
+/// `db_floor ENFORCED`.
+///
+/// Idempotent: re-running is a no-op (the role is created only if absent, and the
+/// GRANT is harmless to repeat). The role is created with LOGIN and NO password —
+/// fine for a local-socket/trust deployment; a networked deployment should `ALTER
+/// ROLE … PASSWORD` afterwards (we never embed a secret here).
+pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Result<()> {
+    // Identifiers cannot be passed as bind parameters, so this name is interpolated
+    // into DDL. Reject anything but a conservative identifier charset to close the
+    // SQL-injection door rather than trusting the caller (defence in depth — the
+    // CLI also constrains it). PostgreSQL identifiers are <= 63 bytes.
+    if role.is_empty()
+        || role.len() > 63
+        || !role.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        || !role.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+    {
+        anyhow::bail!(
+            "invalid runtime role name {role:?}: use lowercase letters, digits, and underscores \
+             (starting with a letter or underscore), max 63 chars"
+        );
+    }
+    // CREATE ROLE has no IF NOT EXISTS, so guard with a catalog check; the name is
+    // safe to interpolate after the charset gate above.
+    let ddl = format!(
+        "DO $$ BEGIN \
+           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN \
+             CREATE ROLE {role} LOGIN; \
+           END IF; \
+         END $$; \
+         GRANT cairn_node TO {role};"
+    );
+    client
+        .batch_execute(&ddl)
+        .await
+        .map_err(|e| anyhow::anyhow!("provisioning runtime role {role}: {e}"))?;
+    Ok(())
+}
+
 pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
     for (name, sql) in SCHEMA.iter() {
