@@ -52,7 +52,7 @@
           <a class="btn btn-primary" href="https://docs.cairn-ehr.org">Read the specification</a>
           <a class="btn btn-secondary" href="https://github.com/cairn-ehr/cairn-ehr">View on GitHub</a>
         </div>
-        <p class="status-line">Architecture &amp; specification phase &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; PostgreSQL&nbsp;≥&nbsp;18</p>
+        <p class="status-line">Specification complete &nbsp;·&nbsp; prototypes proving it works &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; PostgreSQL&nbsp;≥&nbsp;18</p>
       </div>
     </section>
 
@@ -91,6 +91,61 @@
       </div>
     </section>
 
+    <section class="section section-tint" id="frontline" aria-labelledby="frontline-h">
+      <div class="wrap">
+        <h2 class="eyebrow center" id="frontline-h">From the front line</h2>
+        <p class="section-lede">Cairn is designed against real failure modes, not abstractions. Three that anyone who has worked a ward or a clinic will recognise.</p>
+        <ol class="vignettes">
+          <li class="vignette">
+            <p class="scene">“Allergy: penicillin — <em>rash, 1974</em>.” Nobody can confirm it, so everyone prescribes around it for fifty years.</p>
+            <p class="answer"><span class="arrow" aria-hidden="true">→</span> Cairn carries the label <em>and</em> the cephalexin and amoxicillin this same patient has tolerated since — side by side, nothing hidden, nothing silently blocked. The clinician sees the whole picture and makes the call, exactly as they would with the paper notes open in front of them.</p>
+            <span class="tie">Acknowledged uncertainty · paper-parity</span>
+          </li>
+          <li class="vignette">
+            <p class="scene">Same patient, two records — one the ED opened at 3&nbsp;a.m., one the clinic made last year under a slightly different spelling of the name.</p>
+            <p class="answer"><span class="arrow" aria-hidden="true">→</span> Cairn never silently merges them and never quietly deletes one. It <em>links</em> them as a claim that can be reviewed — and unlinked just as easily if it’s wrong — every step on an audit trail, with no data lost either way.</p>
+            <span class="tie">Identity is a claim, never a fact</span>
+          </li>
+          <li class="vignette">
+            <p class="scene">Mid-progress-note, the connection drops — or the whole hospital system goes down for the afternoon.</p>
+            <p class="answer"><span class="arrow" aria-hidden="true">→</span> The note was saved to durable local storage the instant it was typed, and reading and writing carry on through the outage. When the link returns, everything syncs back on its own. Nothing waits on a server that isn’t there.</p>
+            <span class="tie">Availability over consistency</span>
+          </li>
+        </ol>
+        <p class="center vignette-more"><a href="/chart-example.html">See it in a worked example of the chart →</a></p>
+      </div>
+    </section>
+
+    <section class="section" id="operations" aria-labelledby="ops-h">
+      <div class="wrap">
+        <h2 class="eyebrow center" id="ops-h">For the people who run the service</h2>
+        <p class="section-lede">The same decisions that protect the clinician also protect the budget, the data, and the duty to keep the service running.</p>
+        <div class="card-grid">
+          <article class="card">
+            <svg class="card-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></svg>
+            <h3>Runs on hardware you already own</h3>
+            <p>No licence fees, no per-seat pricing, no mandatory cloud. The same software runs from a Raspberry&nbsp;Pi in a rural clinic to a hospital cluster — on commodity hardware you control.</p>
+          </article>
+          <article class="card">
+            <svg class="card-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <h3>Your data is yours — and stays portable</h3>
+            <p>Built on open standards, with no proprietary layer to license and no vendor to ask permission. The full record exports in an open format; changing your mind never means losing it or paying to leave.</p>
+          </article>
+          <article class="card">
+            <svg class="card-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+            <h3>Care continues through any outage</h3>
+            <p>A failed internet link, a downed intranet, or a single isolated machine doesn’t stop care. Business continuity isn’t a bolt-on here — it’s the first thing the architecture was built to guarantee.</p>
+          </article>
+          <article class="card">
+            <svg class="card-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg>
+            <h3>A complete, permanent audit trail</h3>
+            <p>Nothing is ever silently overwritten or erased. Every entry is signed, and corrections are layered over the original — so the full medico-legal history of who recorded what, and when, stays intact.</p>
+          </article>
+        </div>
+        <p class="status-note"><b>Where it is today:</b> the architecture is complete, and the hardest parts are already working in prototype — synchronisation proven over a real satellite link, a first node federating with its neighbours, and the safety layer tested against a deliberately hostile AI agent. It is not a product you can install yet, and this page won’t pretend otherwise. <a href="https://docs.cairn-ehr.org">Read the specification →</a></p>
+      </div>
+    </section>
+
     <section class="section section-tint" id="principles" aria-labelledby="principles-h">
       <div class="wrap">
         <h2 class="eyebrow center" id="principles-h">Founding principles</h2>
@@ -99,7 +154,7 @@
             <span class="principle-num" aria-hidden="true">1</span>
             <div class="principle-body">
               <h3>Availability over consistency</h3>
-              <p>A clinician can always read locally-relevant records and write new data during a partition.</p>
+              <p>A clinician can always read the records that matter and write new data — even with the network down.</p>
             </div>
           </li>
           <li>
@@ -113,7 +168,7 @@
             <span class="principle-num" aria-hidden="true">3</span>
             <div class="principle-body">
               <h3>The clinical record is append-only</h3>
-              <p>Immutable signed events; corrections reference originals; sync becomes a safe set-union.</p>
+              <p>Every entry is permanent and signed; corrections are layered over the original, never written in its place — just as medico-legal notes already work on paper.</p>
             </div>
           </li>
           <li>
@@ -141,7 +196,7 @@
             <span class="principle-num" aria-hidden="true">7</span>
             <div class="principle-body">
               <h3>Safety-critical logic is unbreakable and auditable</h3>
-              <p>Built where whole classes of error are unrepresentable, optimised for reviewer-legibility.</p>
+              <p>The few components that could corrupt a record or mix up patients are built so those mistakes can’t happen — and kept small enough to audit line by line.</p>
             </div>
           </li>
         </ol>

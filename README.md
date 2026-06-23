@@ -128,13 +128,19 @@ smallest.
 
 ## What this is (and isn't), right now
 
-**This is** an architecture and specification effort. The design is being worked out
-deliberately and from clinical first principles before implementation, because the decisions
-that matter most — the data model, the identity system, the synchronization semantics — are
-the ones that are ruinously expensive to get wrong later.
+**This is** a completed architecture specification, now being proven viable through
+proof-of-concept code. The design was worked out deliberately and from clinical first
+principles, because the decisions that matter most — the data model, the identity system, the
+synchronization semantics — are the ones that are ruinously expensive to get wrong later. With
+that spec settled, the hardest mechanisms are being validated in working spikes: a walking
+skeleton whose append-only sync was proven over a real intermittent satellite link, a first
+node that federates with its neighbours, and the safety layer tested against a deliberately
+hostile AI agent.
 
-**This is not yet** running software. There is no product to install today. The current
-artifacts are the architecture specification and the reasoning behind it.
+**This is not yet** a product you can install. There is no clinical application today — the
+spikes prove the architecture holds; they are not the EHR. Most contribution right now is still
+design work: clinical case-mining, stress-testing the data model, and refining the spec, plus
+the build-prep spikes.
 
 ---
 
