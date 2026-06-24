@@ -1,20 +1,28 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 /// The single prompt string + no-echo behaviour for the operational passphrase,
 /// shared by every command that reads the secret interactively. One copy so the
 /// wording and echo policy can never drift between `init`/`seal-key` and the runtime.
-fn prompt_passphrase() -> anyhow::Result<String> {
-    Ok(rpassword::prompt_password("operational passphrase: ")?)
+///
+/// Returns a `Zeroizing<String>` so the secret is wiped from heap memory on drop
+/// (issue #46): `rpassword` flushes its own internal buffer, but the copy we hold and
+/// pass on to the KDF would otherwise linger in freed memory.
+fn prompt_passphrase() -> anyhow::Result<Zeroizing<String>> {
+    Ok(Zeroizing::new(rpassword::prompt_password("operational passphrase: ")?))
 }
 
 /// Resolve the operational passphrase: from `--passphrase` (which clap also fills from
 /// the CAIRN_KEY_PASSPHRASE env var), else an interactive no-echo prompt. Errors if none
 /// is available — we never write an unsealed key implicitly (use --insecure-plaintext).
-fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<String> {
+///
+/// The result is `Zeroizing<String>` and stays wrapped all the way to the Argon2 call,
+/// so the passphrase is zeroed on drop wherever the short-lived CLI arm ends (issue #46).
+fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>> {
     if let Some(p) = flag.filter(|s| !s.is_empty()) {
-        return Ok(p);
+        return Ok(Zeroizing::new(p));
     }
     let p = prompt_passphrase()?;
     if p.is_empty() {
@@ -36,8 +44,12 @@ fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<String> {
 fn load_signing_key(path: &std::path::Path, allow_prompt: bool)
     -> anyhow::Result<cairn_event::SigningKey> {
     use cairn_node::keystore::{load, KeystoreError};
-    let env_secret = std::env::var("CAIRN_KEY_PASSPHRASE").ok().filter(|s| !s.is_empty());
-    match load(path, env_secret.as_deref()) {
+    // Hold the env-provided secret as Zeroizing too, so the copy we lifted out of the
+    // environment is wiped on drop (issue #46). We can't scrub the OS env store itself.
+    let env_secret = std::env::var("CAIRN_KEY_PASSPHRASE").ok()
+        .filter(|s| !s.is_empty())
+        .map(Zeroizing::new);
+    match load(path, env_secret.as_ref().map(|s| s.as_str())) {
         Ok(sk) => Ok(sk),
         Err(KeystoreError::Sealed) => {
             if !allow_prompt {
@@ -48,7 +60,7 @@ fn load_signing_key(path: &std::path::Path, allow_prompt: bool)
                 );
             }
             let p = prompt_passphrase()?;
-            Ok(load(path, Some(&p))?)
+            Ok(load(path, Some(p.as_str()))?)
         }
         Err(e) => Err(e.into()),
     }
@@ -149,7 +161,9 @@ async fn main() -> anyhow::Result<()> {
                 cairn_node::keystore::generate_plaintext(&cli.key)?
             } else {
                 let op = resolve_passphrase(passphrase)?;
-                let code = cairn_node::seal::generate_recovery_code();
+                // The recovery code is a key-recovering secret too — hold it Zeroizing so
+                // it is wiped on drop once sealed/printed (issue #46).
+                let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
                 // Show the recovery code BEFORE the key is persisted. If a crash struck
                 // between persist and print, the key would be sealed under a code no
                 // human ever saw — silently destroying the off-node escrow. Printing
@@ -177,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
                                    refusing to seal", cli.key.display()),
             }
             let op = resolve_passphrase(passphrase)?;
-            let code = cairn_node::seal::generate_recovery_code();
+            let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
             // Show the code BEFORE the in-place overwrite: a crash mid-write must not be
             // able to leave the sole key sealed under a code that was never displayed
             // (silent escrow loss). The shown-once code is the critical output.
@@ -301,4 +315,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_passphrase_from_flag_is_zeroizing() {
+        // The flag (also clap-filled from CAIRN_KEY_PASSPHRASE) must come back wrapped in
+        // `Zeroizing` so the secret is wiped from heap memory on drop (issue #46). The type
+        // annotation IS the assertion: this fails to compile if the secret is a bare String.
+        let secret: zeroize::Zeroizing<String> =
+            resolve_passphrase(Some("op-pass".to_string())).unwrap();
+        assert_eq!(secret.as_str(), "op-pass", "a non-empty flag is returned verbatim");
+    }
 }

@@ -22,6 +22,7 @@ chacha20poly1305 = "0.10"  # XChaCha20-Poly1305 AEAD (192-bit nonce: random nonc
 ciborium = "0.2"           # CBOR (de)serialization of the sealed-key bundle (same as cairn-event)
 getrandom = "0.4"          # salts/nonces/DEK entropy (matches cairn-event; no OsRng, issue #11)
 rpassword = "7"            # no-echo operational-passphrase prompt
+zeroize = "1"              # wipe passphrase/recovery-code from heap on drop (issue #46); MIT/Apache-2.0
 uuid = { version = "1", features = ["v7", "serde"] }
 thiserror = "1"
 anyhow = "1"

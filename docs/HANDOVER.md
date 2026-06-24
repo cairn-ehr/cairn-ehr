@@ -1,8 +1,12 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-24 · **Spec/ADRs:** v0.31 (+ADR-0031) · **Phase:** architecture complete; proving viability
-through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node) — no
-clinical implementation yet. (Status lines across spec/README/GOVERNANCE were realigned to this framing this session.)
+**Session date:** 2026-06-25 · **Spec/ADRs:** v0.31 (+ADR-0031) · **Phase:** architecture complete; proving viability
+through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
+no clinical implementation yet.
+
+**Last session (2026-06-25):** Spike 0003 (Postgres on Android) **ran to G0–G3 PASS** and merged — native PG 18.2 +
+a cross-built pgrx extension on a stock Android 16 phone, plus a Medium-style write-up ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47),
+[PR #48](https://github.com/cairn-ehr/cairn-ehr/pull/48)). See the "done" note below; ROADMAP + spikes/README already reflect it.
 
 **Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
 of each session. If it ever disagrees with the canonical docs, **the canonical docs win.** The *why* lives
@@ -86,9 +90,14 @@ local PG16 + `cairn_pgx`.
   on PG16 + `cairn_pgx`, clippy clean.
 - Still open (remaining ADR-0026 slices): the sealed **local-state export** (config + drafts, not just the
   key); **backup-as-cold-peer** + backup-health (slice B); **key rotation / `supersede`** + new-identity
-  restore (slice C); Shamir M-of-N, QR, TPM/keyring. Also deferred (filed): atomic key-file write
-  ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)), passphrase `zeroize`-on-drop
-  ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46)).
+  restore (slice C); Shamir M-of-N, QR, TPM/keyring.
+- ~~atomic key-file write ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)); passphrase
+  `zeroize`-on-drop ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46))~~ **closed 2026-06-25**:
+  `write_key_file` is now atomic (temp sibling → fsync → `rename`, 0600 preserved), so an interrupted
+  `init`/`seal-key` can never leave a half-written key that boots `Corrupt`; the operational passphrase and
+  recovery code are held as `Zeroizing<String>` from `resolve_passphrase`/prompt through to the Argon2 call,
+  wiped on drop (`zeroize` was already a transitive dep — no new crate). TDD: red-first tests for the new
+  `tmp_sibling` helper, no-temp-litter, stale-temp clobber, 0600 perms, and the `Zeroizing` return type.
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
@@ -131,12 +140,24 @@ accurate (one-directional framing), so neither was touched. All G1–G6 green on
 
 ---
 
+### Spike 0003 (Postgres on Android) — ran 2026-06-25, G0–G3 PASS, merged ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47) + [PR #48](https://github.com/cairn-ehr/cairn-ehr/pull/48))
+Validated the **fractal-topology** invariant at the phone tier (RedMagic 11 Pro). Native PG 18.2 execs, `initdb`s,
+serves SQL over TCP, and a cross-built pgrx extension loads + runs (incl. SPI) — no Termux userland, no root, no VM.
+The one real blocker was `libandroid-shmem` (compile-baked Termux prefix + dead `/dev/ashmem`), fixed by a
+self-contained, pinned-upstream patch. Runnable kit at [`poc/pg-android-kit/`](../poc/pg-android-kit/) + a
+Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build and APK/`jniLibs` packaging
+(not blocking — the bet is proven). No spec/ADR change.
+
+---
+
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
-- **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain hygiene cleanup.
+- **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
+  hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
+  while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
 - **Harden the first federating node** — status-before-init crash, runtime-login-role/floor-ENFORCED proof,
   incremental sync watermark + genesis HLC ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42),
   **and at-rest keystore seal + recovery escrow** (ADR-0026 slice A, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)) are all **closed** (see node gaps
@@ -151,12 +172,6 @@ accurate (one-directional framing), so neither was touched. All G1–G6 green on
   harness ready ([`PI-RUNBOOK.md`](../poc/walking-skeleton/PI-RUNBOOK.md)); **awaiting the Pi 5 / 16 GB / 1 TB SSD.**
   The one number that could revisit ADR-0015's *provisional* BLAKE3 blob-digest default is the ARM SHA-256-vs-BLAKE3
   result. Floor experiment = a Pi 4 / 8 GB (changes only `--label`).
-- **Spike 0003 — Postgres on Android** ([0003](spikes/0003-postgres-on-android-bionic-node.md), **Ran 2026-06-25 —
-  G0–G3 PASS**): validated the fractal-topology invariant at the phone tier (RedMagic 11 Pro). Native PG 18.2 execs,
-  `initdb`s, serves SQL over TCP, and a cross-built pgrx extension loads + runs (incl. SPI) — no Termux userland, no
-  root, no VM. Runnable kit at [`poc/pg-android-kit/`](../poc/pg-android-kit/) (PR #47). The one real blocker was
-  `libandroid-shmem` (compile-baked Termux prefix + dead `/dev/ashmem`), fixed by a self-contained, pinned-upstream
-  patch. Remaining non-load-bearing gaps: from-source PG build and APK/`jniLibs` packaging.
 - **easyGP session** — port the [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
   deferred items with live easyGP schema access: the `rx!`/`tx!` type-through parser + state machine; the
   formulation/drug data source + renal/hepatic/pregnancy/paediatric **forced-manual** rule table; the
@@ -234,4 +249,4 @@ ADR before reopening any of these.
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
 
 **Spikes:** 0001 (walking skeleton — Bet A ✓ → ADR-0015; Bet B prepared); 0002 (advisory-actor — ran, C1–C5 ✓
-→ ADR-0029/0030); 0003 (Postgres on Android — Proposed).
+→ ADR-0029/0030); 0003 (Postgres on Android — **ran 2026-06-25, G0–G3 ✓**; PR #47/#48).
