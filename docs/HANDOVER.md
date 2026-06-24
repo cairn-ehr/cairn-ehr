@@ -64,7 +64,7 @@ local PG16 + `cairn_pgx`.
   ENFORCED path** — over a `cairn_node`-granted login role a raw `INSERT` into `node_event` is denied
   (SQLSTATE 42501), `status` reports `db_floor ENFORCED`, yet `submit_node_event` still works.
 - ~~**Key-at-rest plaintext-0600**; **DR/recovery escrow a named stub** (`dr_escrow: STUBBED`)~~ **closed
-  2026-06-24** (ADR-0026 **slice A**): the signing key is now **sealed at rest** — a random DEK seals the
+  2026-06-24** (ADR-0026 **slice A**, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)): the signing key is now **sealed at rest** — a random DEK seals the
   seed (XChaCha20-Poly1305), DEK **dual-wrapped** under Argon2id KEKs from an operational passphrase
   **and** a one-time **recovery code** (paper escrow, shown once at `init`). New pure `seal.rs`
   (seal/unseal/CBOR + base32 recovery code); `keystore` gained `generate_sealed`/`generate_plaintext`/
@@ -138,7 +138,7 @@ accurate (one-directional framing), so neither was touched. All G1–G6 green on
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain hygiene cleanup.
 - **Harden the first federating node** — status-before-init crash, runtime-login-role/floor-ENFORCED proof,
   incremental sync watermark + genesis HLC ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42),
-  **and at-rest keystore seal + recovery escrow** (ADR-0026 slice A) are all **closed** (see node gaps
+  **and at-rest keystore seal + recovery escrow** (ADR-0026 slice A, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)) are all **closed** (see node gaps
   above). Remaining ADR-0026 slices: sealed local-state export; backup-as-cold-peer (B); key rotation /
   `supersede` + new-identity restore (C).
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
