@@ -58,7 +58,10 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
 - **Visibility-scope ≠ replication; the safety projection** — sealed bodies emit de-identified, severity-graded safety projection; sensitivity is a graded append-only stream ([ADR-0006](spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md)).
-- **At-rest seal** — replace plaintext-0600 keystore ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
+- **At-rest seal** — ✓ done at node level (ADR-0026 **slice A**): signing key sealed with a dual-recipient
+  envelope (Argon2id KEKs from an operational passphrase + a one-time off-node recovery code; XChaCha20-Poly1305),
+  recovery escrow minted at `init`, `seal-key` migration. Remaining ADR-0026 slices: sealed local-state export,
+  backup-as-cold-peer, `supersede`/new-identity restore ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).
 

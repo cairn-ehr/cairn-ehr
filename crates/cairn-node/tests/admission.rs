@@ -12,7 +12,7 @@ async fn admission_admits_trusted_peer_genesis_and_rejects_strangers() {
     a.batch_execute("TRUNCATE node_event, local_node").await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7800").await.unwrap();
 
     // B's genesis (authored against B's own key), captured as signed bytes.
@@ -72,7 +72,7 @@ async fn admission_rejects_peer_event_from_an_unknown_signer() {
 
     // Provision node A so the DB is in a valid enrolled state.
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7810").await.unwrap();
 
     // Generate a key Z that is NEVER enrolled as a node.
@@ -122,7 +122,7 @@ async fn admission_rejects_genesis_when_pinned_pubkey_mismatches_signer() {
 
     // Provision node A.
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7820").await.unwrap();
 
     // Build B's REAL genesis signed by sk_b.

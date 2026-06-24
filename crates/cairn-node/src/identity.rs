@@ -171,8 +171,12 @@ pub struct Status {
     /// connection (run the runtime as the unprivileged `cairn_node` role — e.g. a
     /// login role granted `cairn_node` — to enforce it). PR #28 review, finding 2.
     pub db_floor_enforced: bool,
-    /// Hard-coded stub (ADR-0026): no recovery escrow in v1.
+    /// At-rest key escrow status (ADR-0026). "recovery code set …" when a sealed
+    /// dual-recipient key is present; "STUBBED …" otherwise.
     pub dr_escrow: String,
+    /// `true` iff the at-rest key carries an off-node recovery wrap (ADR-0026 escrow).
+    /// `false` for plaintext keys and any key sealed without a dual-recipient wrap.
+    pub recovery_escrow: bool,
 }
 
 /// Assemble the node's current status without erroring on a missing keystore.
@@ -203,8 +207,32 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
         }
     }
 
-    // Keystore health: try to load the key; a missing/invalid file is not an error.
-    let keystore_ok = crate::keystore::load(key_path, None).is_ok();
+    // At-rest posture, inspected WITHOUT the secret (a sealed key cannot be loaded
+    // here — we have no passphrase in `status` — so we classify the file instead).
+    let kstate = crate::keystore::key_at_rest_state(key_path);
+    use crate::keystore::KeyAtRest;
+    let keystore_ok = matches!(kstate, KeyAtRest::Sealed { .. } | KeyAtRest::Plaintext);
+    // One classification site derives ALL THREE escrow-related fields together, so the
+    // human strings and the `recovery_escrow` bool can never drift out of agreement
+    // (the redundancy a split if/else would invite). `recovery_escrow` is true ONLY for
+    // a sealed bundle with a structurally-intact recovery wrap.
+    const STUB: &str = "STUBBED (ADR-0026): no recovery escrow; key loss = node loss";
+    let (key_at_rest, dr_escrow, recovery_escrow) = match kstate {
+        KeyAtRest::Sealed { dual_recipient } => (
+            format!("SEALED (argon2id + xchacha20poly1305{})",
+                    if dual_recipient { "; dual-recipient" } else { "" }),
+            if dual_recipient {
+                "recovery code set (off-node escrow; ADR-0026 slice A)".to_string()
+            } else {
+                STUB.to_string()
+            },
+            dual_recipient,
+        ),
+        KeyAtRest::Plaintext =>
+            ("PLAINTEXT (0600; run `cairn-node seal-key`)".to_string(), STUB.to_string(), false),
+        KeyAtRest::Missing => ("MISSING".to_string(), STUB.to_string(), false),
+        KeyAtRest::Corrupt => ("CORRUPT (unparseable key file)".to_string(), STUB.to_string(), false),
+    };
 
     // In-DB floor self-check: is the submit/admission gate actually unbypassable for
     // THIS connection? `has_table_privilege` returns true for a superuser/owner (who
@@ -229,10 +257,11 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
         peers_active,
         peers_revoked,
         keystore_ok,
-        key_at_rest: "PLAINTEXT (0600; ADR-0026 KDF/seal + escrow pending)".into(),
+        key_at_rest,
         runtime_role,
         db_floor_enforced: !can_insert,
-        dr_escrow: "STUBBED (ADR-0026): no recovery escrow; key loss = node loss".into(),
+        dr_escrow,
+        recovery_escrow,
     })
 }
 

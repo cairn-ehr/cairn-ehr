@@ -39,7 +39,7 @@ async fn floor_binds_the_unprivileged_runtime_role() {
 
     let tmp = tempfile::tempdir().unwrap();
     let key_path = tmp.path().join("node.key");
-    let (sk, kid) = keystore::generate_and_seal(&key_path, None).unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&key_path).unwrap();
     identity::provision(&owner, &sk, &kid, "A", "127.0.0.1:7950").await.unwrap();
     let id = identity::load_local(&owner).await.unwrap();
 

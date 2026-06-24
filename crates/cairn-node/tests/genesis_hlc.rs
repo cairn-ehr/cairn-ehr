@@ -16,7 +16,7 @@ async fn genesis_hlc_is_nonzero_and_advances() {
     db::reset_node_federation_tables(&a).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk, kid) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7902").await.unwrap();
 
     // Genesis HLC stored in node_event must be non-zero.

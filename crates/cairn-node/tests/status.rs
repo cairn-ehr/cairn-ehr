@@ -15,7 +15,7 @@ async fn status_reports_peers_and_keystore_health() {
     let key_path = tmp.path().join("node.key");
 
     // Provision node A with a real keystore file.
-    let (sk_a, kid_a) = keystore::generate_and_seal(&key_path, None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&key_path).unwrap();
     identity::provision(&db, &sk_a, &kid_a, "A", "127.0.0.1:7900").await.unwrap();
     let id_a = identity::load_local(&db).await.unwrap();
 
@@ -69,6 +69,7 @@ async fn status_reports_peers_and_keystore_health() {
         "key_at_rest must surface v1 plaintext, got: {:?}",
         st.key_at_rest
     );
+    assert!(!st.recovery_escrow, "plaintext key has no recovery escrow");
     // Finding 2 (review): the in-DB floor self-check is populated. Tests connect as a
     // superuser, so the floor is present-but-bypassable here (can raw-INSERT) — assert
     // that exact honest reading rather than pretending the gate binds this connection.

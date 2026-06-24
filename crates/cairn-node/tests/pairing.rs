@@ -12,7 +12,7 @@ async fn pairing_records_an_active_peer_and_unpeer_revokes_it() {
     a.batch_execute("TRUNCATE node_event, local_node").await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7800").await.unwrap();
     let id_a = identity::load_local(&a).await.unwrap();
 

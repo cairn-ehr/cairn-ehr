@@ -55,8 +55,8 @@ async fn b_pulls_and_admits_a_genesis_over_mtls() {
     db::reset_node_federation_tables(&b).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
-    let (sk_b, kid_b) = keystore::generate_and_seal(&tmp.path().join("b.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7800").await.unwrap();
     identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7801").await.unwrap();
 
@@ -138,9 +138,9 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     db::reset_node_federation_tables(&c).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
-    let (sk_b, kid_b) = keystore::generate_and_seal(&tmp.path().join("b.key"), None).unwrap();
-    let (sk_c, kid_c) = keystore::generate_and_seal(&tmp.path().join("c.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
+    let (sk_c, kid_c) = keystore::generate_plaintext(&tmp.path().join("c.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7810").await.unwrap();
     identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7811").await.unwrap();
     identity::provision(&c, &sk_c, &kid_c, "C", "127.0.0.1:7812").await.unwrap();

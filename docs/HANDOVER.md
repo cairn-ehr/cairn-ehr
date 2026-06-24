@@ -62,10 +62,16 @@ local PG16 + `cairn_pgx`.
   **closed 2026-06-23**: `db::provision_runtime_role` (charset-guarded against DDL injection) + a
   `provision-runtime-role` CLI subcommand create that role, and `tests/floor_enforced.rs` now **proves the
   ENFORCED path** — over a `cairn_node`-granted login role a raw `INSERT` into `node_event` is denied
-  (SQLSTATE 42501), `status` reports `db_floor ENFORCED`, yet `submit_node_event` still works. Key-at-rest
-  is still plaintext-0600 (ADR-0026 seal pending).
-- **DR/recovery escrow** is a named stub ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)),
-  shown as `dr_escrow: STUBBED`.
+  (SQLSTATE 42501), `status` reports `db_floor ENFORCED`, yet `submit_node_event` still works.
+- ~~**Key-at-rest plaintext-0600**; **DR/recovery escrow a named stub** (`dr_escrow: STUBBED`)~~ **closed
+  2026-06-24** (ADR-0026 **slice A**, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)): the signing key is now **sealed at rest** — a random DEK seals the
+  seed (XChaCha20-Poly1305), DEK **dual-wrapped** under Argon2id KEKs from an operational passphrase
+  **and** a one-time **recovery code** (paper escrow, shown once at `init`). New pure `seal.rs`
+  (seal/unseal/CBOR + base32 recovery code); `keystore` gained `generate_sealed`/`generate_plaintext`/
+  `seal_existing` + auto-detect `load` + `key_at_rest_state`; CLI seals by default (`--insecure-plaintext`
+  escape hatch) and added `seal-key` migration; daemon unseals via `CAIRN_KEY_PASSPHRASE`. `status` now
+  reports `key_at_rest SEALED` + `dr_escrow recovery code set` + `recovery_escrow`. **Honest ceiling
+  (documented, not engineered away): lose both the passphrase AND the recovery code → node loss.**
 - ~~Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark**~~ **closed 2026-06-23**
   ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), **merged [PR #42](https://github.com/cairn-ehr/cairn-ehr/pull/42)**):
   incremental pull keyed on a monotonic local-insertion `node_event.seq` (a node always inserts newly-learned
@@ -78,7 +84,11 @@ local PG16 + `cairn_pgx`.
   `sync_watermark::out_of_order_skip_is_reconciled_by_full_sweep` proves a jammed-cursor skip is reconciled by
   the sweep; the seq prefix is transport-only (signed core byte-identical, principle 12). Full node suite green
   on PG16 + `cairn_pgx`, clippy clean.
-- Still open: **key rotation / `supersede` reserved, not built**; DR/recovery escrow stub (ADR-0026, above).
+- Still open (remaining ADR-0026 slices): the sealed **local-state export** (config + drafts, not just the
+  key); **backup-as-cold-peer** + backup-health (slice B); **key rotation / `supersede`** + new-identity
+  restore (slice C); Shamir M-of-N, QR, TPM/keyring. Also deferred (filed): atomic key-file write
+  ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)), passphrase `zeroize`-on-drop
+  ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46)).
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
@@ -98,7 +108,7 @@ coverage that was missing. **Smaller deferred items remain open** (commented in 
 `actor_current` wall-clock ordering needs a monotonic tiebreaker before production; no FK on
 `recall_overlay.target_event_id`; plaintext twin is skeletal.
 
-### Dual-identifier discipline — ADR-0031, merged 2026-06-22 ([PR #34](https://github.com/cairn-ehr/cairn-ehr/pull/34))
+### Dual-identifier discipline — ADR-0031, merged 2026-06-22 ([PR #34](https://github.com/cairn-ehr/cairn-ehr/pull/34); `local_ref` honesty fix merged 2026-06-24 [PR #43](https://github.com/cairn-ehr/cairn-ehr/pull/43))
 New **[ADR-0031](spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)** (canonical
 identifiers + node-local surrogate keys): canonical plane (UUIDv7 + multihash) is unchanged and is the *only*
 identifier on the wire/in signed bodies; the **projection plane** may intern canonical IDs to dense node-local
@@ -117,7 +127,7 @@ an intent-signal + one-directional guard. Rewrote **G4** in `db/tests/008_surrog
 the functions exist first (no more vacuous pass via `undefined_function`, now dropped), proves the genuine
 guard (G4a `uuid`↛`local_ref`; G4b `bigint`↛`uuid` signed plane), and **characterizes the honest limit**
 (G4c: `bigint` flows into `local_ref` silently). The spec body (§3.18) and immutable ADR-0031 were already
-accurate (one-directional framing), so neither was touched. All G1–G6 green on PG16. *(PR pending.)*
+accurate (one-directional framing), so neither was touched. All G1–G6 green on PG16. **Merged 2026-06-24 ([PR #43](https://github.com/cairn-ehr/cairn-ehr/pull/43)).**
 
 ---
 
@@ -127,10 +137,11 @@ accurate (one-directional framing), so neither was touched. All G1–G6 green on
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain hygiene cleanup.
-- **Harden the first federating node** — status-before-init crash, runtime-login-role/floor-ENFORCED proof, **and
-  incremental sync watermark + genesis HLC** ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38),
-  PR #42) are all **closed** (see node gaps above). Remaining: DR/recovery escrow stub (ADR-0026); key rotation /
-  `supersede`.
+- **Harden the first federating node** — status-before-init crash, runtime-login-role/floor-ENFORCED proof,
+  incremental sync watermark + genesis HLC ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42),
+  **and at-rest keystore seal + recovery escrow** (ADR-0026 slice A, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)) are all **closed** (see node gaps
+  above). Remaining ADR-0026 slices: sealed local-state export; backup-as-cold-peer (B); key rotation /
+  `supersede` + new-identity restore (C).
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 

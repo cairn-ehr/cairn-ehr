@@ -14,6 +14,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 base64 = "0.22"
+# At-rest key sealing (ADR-0026 slice A). Licenses: argon2, chacha20poly1305 and
+# getrandom are dual MIT/Apache-2.0; ciborium and rpassword are Apache-2.0-only.
+# All AGPL-3.0-compatible. Pure-Rust, reviewer-legible (§9).
+argon2 = "0.5"             # Argon2id KDF: passphrase/recovery-code -> key-encryption-key
+chacha20poly1305 = "0.10"  # XChaCha20-Poly1305 AEAD (192-bit nonce: random nonce, no reuse worry)
+ciborium = "0.2"           # CBOR (de)serialization of the sealed-key bundle (same as cairn-event)
+getrandom = "0.4"          # salts/nonces/DEK entropy (matches cairn-event; no OsRng, issue #11)
+rpassword = "7"            # no-echo operational-passphrase prompt
 uuid = { version = "1", features = ["v7", "serde"] }
 thiserror = "1"
 anyhow = "1"

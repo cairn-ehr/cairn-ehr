@@ -16,7 +16,7 @@ async fn provision_writes_genesis_identity() {
 
     let tmp = tempfile::tempdir().unwrap();
     let keypath = tmp.path().join("node.key");
-    let (sk, kid) = keystore::generate_and_seal(&keypath, None).unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&keypath).unwrap();
 
     let node_id = identity::provision(&client, &sk, &kid, "Clinic-A", "127.0.0.1:7800").await.unwrap();
     let loaded = identity::load_local(&client).await.unwrap();

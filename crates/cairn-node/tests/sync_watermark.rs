@@ -15,7 +15,7 @@ async fn node_event_seq_is_monotonic_on_insert() {
     db::reset_node_federation_tables(&a).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk, kid) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7900").await.unwrap();
 
     // After genesis there is exactly one row, and its seq is NOT NULL and >= 1.
@@ -105,7 +105,7 @@ async fn wire_seq_prefix_does_not_touch_signed_core() {
     db::reset_node_federation_tables(&a).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk, kid) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7904").await.unwrap();
 
     // The bytes stored for the genesis enroll.
@@ -159,8 +159,8 @@ async fn out_of_order_skip_is_reconciled_by_full_sweep() {
     db::reset_node_federation_tables(&b).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
-    let (sk_b, kid_b) = keystore::generate_and_seal(&tmp.path().join("b.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7906").await.unwrap();
     identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7907").await.unwrap();
     let id_a = identity::load_local(&a).await.unwrap();
@@ -219,8 +219,8 @@ async fn incremental_pull_ships_only_new_events() {
     db::reset_node_federation_tables(&b).await.ok();
 
     let tmp = tempfile::tempdir().unwrap();
-    let (sk_a, kid_a) = keystore::generate_and_seal(&tmp.path().join("a.key"), None).unwrap();
-    let (sk_b, kid_b) = keystore::generate_and_seal(&tmp.path().join("b.key"), None).unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
     identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7908").await.unwrap();
     identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7909").await.unwrap();
     let id_a = identity::load_local(&a).await.unwrap();
