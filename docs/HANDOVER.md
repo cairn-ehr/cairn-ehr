@@ -93,11 +93,14 @@ local PG16 + `cairn_pgx`.
   restore (slice C); Shamir M-of-N, QR, TPM/keyring.
 - ~~atomic key-file write ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)); passphrase
   `zeroize`-on-drop ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46))~~ **closed 2026-06-25**:
-  `write_key_file` is now atomic (temp sibling → fsync → `rename`, 0600 preserved), so an interrupted
-  `init`/`seal-key` can never leave a half-written key that boots `Corrupt`; the operational passphrase and
-  recovery code are held as `Zeroizing<String>` from `resolve_passphrase`/prompt through to the Argon2 call,
-  wiped on drop (`zeroize` was already a transitive dep — no new crate). TDD: red-first tests for the new
-  `tmp_sibling` helper, no-temp-litter, stale-temp clobber, 0600 perms, and the `Zeroizing` return type.
+  `write_key_file` is now atomic (temp sibling → fsync → `rename` → **parent-dir fsync**, 0600 forced
+  explicitly), so an interrupted `init`/`seal-key` can never leave a half-written key that boots `Corrupt`,
+  the rename itself survives a power loss (not just the bytes), and a stale wide-perm `<key>.tmp` can no longer
+  leak its mode onto the key; the operational passphrase and recovery code are held as `Zeroizing<String>`
+  from `resolve_passphrase`/prompt through to the Argon2 call, wiped on drop (`zeroize` was already a transitive
+  dep — no new crate). TDD: red-first tests for the new `tmp_sibling` helper, no-temp-litter, stale-temp clobber,
+  0600 perms, stale-wide-perm-temp non-leak, and the `Zeroizing` return type. (PR #49 review: + dir fsync,
+  explicit 0600, non-unix fsync.)
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
