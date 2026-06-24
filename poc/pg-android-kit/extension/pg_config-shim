@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Host-side pg_config SHIM for the bionic PostgreSQL 18.2 prefix.
+#
+# WHY: pgrx's build script runs `pg_config --…` to locate server headers and
+# learn the version. The real pg_config in our prefix is an aarch64 Android ELF
+# and cannot execute on the macOS host. This shim returns the same answers, but
+# with include/lib paths pointing at the HOST copy of the staged prefix so that
+# bindgen (running on the host) can read the server headers.
+#
+# $PGPREFIX must point at the host staged prefix (…/prefix).
+set -euo pipefail
+P="${PGPREFIX:?set PGPREFIX to the host staged prefix dir}"
+case "${1:-}" in
+  --version)            echo "PostgreSQL 18.2" ;;
+  --includedir)         echo "$P/include" ;;
+  --includedir-server)  echo "$P/include/postgresql/server" ;;
+  --pkgincludedir)      echo "$P/include/postgresql" ;;
+  --libdir)             echo "$P/lib" ;;
+  --pkglibdir)          echo "$P/lib/postgresql" ;;
+  --sharedir)           echo "$P/share/postgresql" ;;
+  --bindir)             echo "$P/bin" ;;
+  --sysconfdir)         echo "$P/etc/postgresql" ;;
+  --pgxs)               echo "$P/lib/postgresql/pgxs/src/makefiles/pgxs.mk" ;;
+  # Flags below are reported as the on-device pg_config does, minus host-unusable bits.
+  --cppflags)           echo "-D_GNU_SOURCE" ;;
+  --cflags)             echo "-fno-strict-aliasing -fwrapv" ;;
+  --cflags_sl)          echo "" ;;
+  --ldflags)            echo "" ;;
+  --ldflags_ex)         echo "" ;;
+  --ldflags_sl)         echo "" ;;
+  --libs)               echo "" ;;
+  --configure)          echo "'--host=aarch64-linux-android' '--with-icu' '--with-openssl'" ;;
+  --cc)                 echo "aarch64-linux-android28-clang" ;;
+  *)                    echo "" ;;
+esac

@@ -1,0 +1,23 @@
+# Standalone (own [workspace] so it is not absorbed by any parent cargo workspace).
+[workspace]
+
+[package]
+name = "cairn_smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["pg18"]
+pg18 = ["pgrx/pg18"]
+
+[dependencies]
+pgrx = "=0.18.1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+panic = "unwind"

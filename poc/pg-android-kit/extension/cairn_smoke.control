@@ -1,0 +1,4 @@
+comment = 'Cairn spike 0003 G3 — pgrx smoke extension (cross-built for aarch64-linux-android)'
+default_version = '0.0.0'
+module_pathname = '$libdir/cairn_smoke'
+relocatable = true
