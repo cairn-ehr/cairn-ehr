@@ -171,7 +171,8 @@ pub struct Status {
     /// connection (run the runtime as the unprivileged `cairn_node` role — e.g. a
     /// login role granted `cairn_node` — to enforce it). PR #28 review, finding 2.
     pub db_floor_enforced: bool,
-    /// Hard-coded stub (ADR-0026): no recovery escrow in v1.
+    /// At-rest key escrow status (ADR-0026). "recovery code set …" when a sealed
+    /// dual-recipient key is present; "STUBBED …" otherwise.
     pub dr_escrow: String,
     /// `true` iff the at-rest key carries an off-node recovery wrap (ADR-0026 escrow).
     /// `false` for plaintext keys and any key sealed without a dual-recipient wrap.
