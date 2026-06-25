@@ -63,9 +63,13 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
   recovery escrow minted at `init`, `seal-key` migration.
 - **Backup-as-cold-peer (export + health)** — ✓ done at node level (ADR-0026 **slice B**): `backup`/`verify-backup`
   CLI + `last_backup` status; signed-event medium, self-verifying via the existing signature invariant; fail-safe
-  node-local health sidecar; shared `fsio` atomic-write. **Restore-apply** half = slice C ([issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
-  self-trusting restore door + new-identity `supersede` (the live admission gate is the *peer* path). Remaining
-  ADR-0026 slices: sealed local-state export (point 3), slice C ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
+  node-local health sidecar; shared `fsio` atomic-write.
+- **Restore-apply + new-identity `supersede`** — ✓ done at node level (ADR-0026 **slice C**, [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
+  `cairn-node restore` rehydrates the `node_event` log into a fresh DB via a self-trusting `restore_node_event` door
+  (empty-genesis fenced — a no-op on a live node), mints a fresh key (signing key never backed up), and records a
+  node-level `supersede`(dead→new); `db/009` op `supersede` + `node_lineage` view; `status` `supersedes` line.
+  **Remaining ADR-0026 slice:** the sealed local-state export (point 3 — config/drafts/sealed-episode DEKs)
+  ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).
 

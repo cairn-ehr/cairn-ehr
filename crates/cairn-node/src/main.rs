@@ -151,6 +151,27 @@ enum Cmd {
         #[arg(long)]
         from: PathBuf,
     },
+    /// Restore a node from a cold-peer backup medium into a FRESH, un-enrolled database
+    /// (ADR-0026 slice C). Verifies the medium, mints a NEW sealed keypair (the old
+    /// signing key is never backed up), rehydrates the old event history through the
+    /// self-trusting restore door, authors a new genesis, and records a supersede linking
+    /// the dead node to the new one. The node then re-peers from empty.
+    Restore {
+        /// Path of the backup medium to restore (as written by `backup`).
+        #[arg(long)]
+        from: PathBuf,
+        /// For a federated medium with multiple enrolls: the dead node-id (hex) to
+        /// supersede — must name an enroll present on the medium. Optional for a solo
+        /// node (auto-detected from the sole enroll).
+        #[arg(long)]
+        superseded_node: Option<String>,
+        /// Operational passphrase for the NEW sealed key (else CAIRN_KEY_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
+        /// Write the new key UNSEALED (test nodes only — no recovery escrow).
+        #[arg(long)]
+        insecure_plaintext: bool,
+    },
     /// Serve this node's `node_event` log to pinned-mTLS peers (federation sync).
     Serve {
         #[arg(long, default_value = "0.0.0.0:7843")]
@@ -317,6 +338,9 @@ async fn main() -> anyhow::Result<()> {
             println!("dr_escrow     {}", st.dr_escrow);
             println!("recovery_esc  {}", st.recovery_escrow);
             println!("last_backup   {}", st.last_backup);
+            if let Some(old) = &st.supersedes {
+                println!("supersedes    {old}");
+            }
         }
         Cmd::Backup { to } => {
             // Reads node_event (any role with SELECT works) and writes a self-verifying
@@ -354,6 +378,65 @@ async fn main() -> anyhow::Result<()> {
                     report.first_bad
                 );
             }
+        }
+        Cmd::Restore { from, superseded_node, passphrase, insecure_plaintext } => {
+            // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
+            let bytes = std::fs::read(&from)
+                .with_context(|| format!("reading backup medium {}", from.display()))?;
+            let events = cairn_node::backup::parse_medium(&bytes)?;
+            let report = cairn_node::backup::verify_events(&events);
+            if !report.all_intact() {
+                anyhow::bail!(
+                    "refusing to restore a medium that fails self-verification: {}/{} intact, \
+                     first bad at index {:?}",
+                    report.intact, report.total, report.first_bad
+                );
+            }
+            // 2. Resolve the dead node-id (solo auto-detect, else --superseded-node).
+            //    resolve_dead_node_id guarantees the id names an enroll on the medium, so
+            //    old_genesis_meta always resolves; the bail is a defensive invariant, never a
+            //    silent synthetic identity (paper-parity: a restored node keeps its name/address).
+            let dead = cairn_node::restore::resolve_dead_node_id(&events, superseded_node.as_deref())?;
+            let (name, address) = cairn_node::restore::old_genesis_meta(&events, &dead)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "internal: resolved dead node {dead} has no enroll on the medium (unreachable)"
+                ))?;
+
+            // 3. Connect to the FRESH db and load the schema (DDL: owner privileges, like init).
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            if cairn_node::identity::load_local_opt(&db).await?.is_some() {
+                anyhow::bail!(
+                    "target database already has an enrolled node; restore is only into a \
+                     fresh, un-enrolled database (the restore door is fenced closed otherwise)"
+                );
+            }
+
+            // 4. Mint the NEW key (the old signing key was never backed up).
+            let (sk, kid) = if insecure_plaintext {
+                eprintln!("WARNING: --insecure-plaintext: new key written UNSEALED (test use only)");
+                cairn_node::keystore::generate_plaintext(&cli.key)?
+            } else {
+                let op = resolve_passphrase(passphrase)?;
+                let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
+                // Show the recovery code BEFORE the key is persisted — same rationale as
+                // `init`: a crash between persist and print would seal the disaster-recovery
+                // node under a code no human ever saw, silently destroying the new escrow.
+                // Printing first means the worst case is a shown code for an unwritten key
+                // (restore simply re-runs), never a permanently sealed, unrecoverable node.
+                print_recovery_code(&code);
+                cairn_node::keystore::generate_sealed(&cli.key, &op, &code)?
+            };
+
+            // 5. Apply old events through the self-trusting door (db still un-enrolled),
+            //    then author the new genesis + supersede.
+            let applied = cairn_node::restore::apply_medium(&db, &events).await?;
+            let outcome = cairn_node::restore::finalize_identity(
+                &db, &sk, &kid, &name, &address, &dead).await?;
+
+            println!("restored {applied} event(s) from {}", from.display());
+            println!("new node {}", outcome.new_node_id_hex);
+            println!("supersedes {}", outcome.superseded_node_id_hex);
+            println!("re-peer with `cairn-node pair-offer` / `pair-accept` (trust resets on restore)");
         }
         Cmd::Serve { listen } => {
             use cairn_node::sync;

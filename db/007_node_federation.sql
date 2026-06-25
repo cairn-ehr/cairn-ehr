@@ -181,6 +181,7 @@ BEGIN
         WHEN 'node.enrolled' THEN 'enroll'
         WHEN 'peer.added'    THEN 'peer'
         WHEN 'peer.revoked'  THEN 'revoke'
+        WHEN 'node.superseded' THEN 'supersede'   -- ADR-0026 slice C
         ELSE NULL END;
     IF v_op IS NULL THEN
         RAISE EXCEPTION 'submit_node_event: unknown node event_type % (fail closed)', v_type;
@@ -201,13 +202,31 @@ BEGIN
         RETURN v_eid;
     END IF;
 
-    -- peer / revoke: authored only by this node's own current key.
+    -- peer / revoke / supersede: authored only by this node's own current key.
     IF v_local_node IS NULL THEN
         RAISE EXCEPTION 'submit_node_event: node not yet enrolled; cannot author peering';
     END IF;
     IF v_signer <> v_local_key THEN
         RAISE EXCEPTION 'submit_node_event: peering may be authored only by this node (signer % != local %)', v_signer, v_local_key;
     END IF;
+    -- supersede (ADR-0026 slice C): a restored node records that it succeeds a dead node.
+    -- Authored by THIS node's current (new) key; subject = the superseded (dead) node-id.
+    -- A distinct payload field (superseded_node_id_hex, not peer_node_id_hex) keeps the
+    -- intent legible — the superseded node is NOT a peer.
+    IF v_op = 'supersede' THEN
+        IF v_payload ->> 'superseded_node_id_hex' IS NULL THEN
+            RAISE EXCEPTION 'submit_node_event: node.superseded missing superseded_node_id_hex in payload';
+        END IF;
+        INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+            signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+        VALUES (v_eid, 'supersede', v_local_node,
+            decode(v_payload ->> 'superseded_node_id_hex','hex'),
+            v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+            b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+        ON CONFLICT (node_event_id) DO NOTHING;
+        RETURN v_eid;
+    END IF;
+
     -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
     -- as an opaque constraint error rather than a legible rejection.
     IF v_payload ->> 'peer_node_id_hex' IS NULL THEN

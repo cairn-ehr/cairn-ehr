@@ -4,6 +4,7 @@ pub mod fsio;
 pub mod identity;
 pub mod keystore;
 pub mod pairing;
+pub mod restore;
 pub mod seal;
 pub mod sync;
 pub mod transport;
