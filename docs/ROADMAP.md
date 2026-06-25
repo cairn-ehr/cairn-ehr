@@ -66,18 +66,24 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
   node-local health sidecar; shared `fsio` atomic-write.
 - **Restore-apply + new-identity `supersede`** — ✓ done at node level (ADR-0026 **slice C**, [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
   `cairn-node restore` rehydrates the `node_event` log into a fresh DB via a self-trusting `restore_node_event` door
-  (empty-genesis fenced — a no-op on a live node), mints a fresh key (signing key never backed up), and records a
-  node-level `supersede`(dead→new); `db/009` op `supersede` + `node_lineage` view; `status` `supersedes` line.
-  **Remaining ADR-0026 slice:** the sealed local-state export (point 3 — config/drafts/sealed-episode DEKs)
-  ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
+  (empty-genesis fenced — a no-op on a live node), mints a fresh key, records a `supersede`(dead→new); `db/009` op
+  `supersede` + `node_lineage`; `status` `supersedes` line.
+- **Sealed local-state export** — ✓ done at node level (ADR-0026 **slice D**): a long-lived local-state DEK dual-wrapped
+  once at provisioning (op-pass + recovery code, point-5 compliant); `CAIRNL1` export co-located with the backup medium +
+  `CAIRNX1` `.lsk` sidecar; additive-CBOR `LocalState` with typed-empty slots + DB read/apply **seams** the clinical tier
+  extends; signing key never in the bundle (point 4); `establish-local-state-key` + `status` line; honest-degrades on
+  absent/corrupt export. `localstate.rs` (no schema change). **All ADR-0026 slices (A–D) complete.** Optional follow-ons:
+  uniform key zeroization ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)) + escrow rungs (Shamir M-of-N, QR,
+  TPM/keyring) ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).
 
 ## Phase 6 — Federation hardening
 
 - **Revocation cascade; anchor-as-power** ([ADR-0018](spec/decisions/0018-federation-revocation-cascade-and-the-anchor-as-power.md)).
-- **DR / recovery escrow** — promote the `dr_escrow: STUBBED` cold-peer backup ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
-- **Key rotation / `supersede`** — currently reserved, not built.
+- **DR / recovery escrow** — ✓ done at node level (ADR-0026 slices A–D, see Phase 5). Federation-tier follow-ons:
+  peer-quorum (social) recovery + escrow rungs (Shamir M-of-N, QR, TPM/keyring); uniform key zeroization ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)).
+- **Node-identity `supersede`** — ✓ done (ADR-0026 slice C). **Signing-key rotation** (`rotate-key` actor event) — still reserved, not built.
 
 ## Phase 7 — Attachments / byte tier
 

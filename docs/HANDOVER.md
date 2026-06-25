@@ -4,23 +4,27 @@
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-25):** ADR-0026 **slice C** — node **backup restore (apply) + new-identity supersede**
-([issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)). New `cairn-node restore` rehydrates a node's signed
-`node_event` history into a fresh DB under a **freshly-minted** key (the signing key is never backed up), then records
-a node-level `supersede`(dead→new). The self-trusting `restore_node_event` door is **fenced empty-genesis** —
-fail-closed on any already-enrolled node, so it can never bypass peer-admission on a live node — yet still enforces
-signature + content-address (a tampered medium is rejected exactly as a hostile peer would be) and **never writes
-`local_node`**. Schema: `db/009` (widened `op` CHECK +`supersede`, the door, `node_lineage` view) + a `supersede`
-branch in `submit_node_event` (db/007); `status` now shows a `supersedes` line. Full round-trip + non-enroll-branch
-tests green (8 DB-gated + pure unit). Built via the brainstorm→plan→subagent-SDD workflow (spec + plan under
-`docs/superpowers/`). **Deferred** (issue #50 / ADR-0026 point 3): the sealed **local-state export** (config + drafts
-+ sealed-episode DEKs); shred-replay is N/A at the node tier (no clinical bodies in `node_event` yet).
+**This session (2026-06-25):** ADR-0026 **slice D** — the sealed **local-state export** (point 3), which **closes the
+last open ADR-0026 slice (A–D all done)**. No spec/ADR change (implementation of point 3). The federation-node tier has
+**no clinical surface yet**, so the export's *content* is intentionally **empty today**; the deliverable is the
+can't-retrofit **shape**: a long-lived **local-state DEK (LSK)** dual-wrapped **once at provisioning** (op-passphrase +
+recovery code) so `backup` re-encrypts under it with the op-pass alone (ADR-0026 point-5 compliant — no recovery code at
+backup time) and `restore` decrypts via the old recovery code. The **signing key is never in the bundle** (point 4). New
+`crates/cairn-node/src/localstate.rs` (versioned `LocalState` with typed-empty slots + additive CBOR; reuses `seal.rs`
+primitives — no duplicated crypto; `CAIRNL1` export container co-located with the backup medium + `CAIRNX1` `.lsk`
+sidecar; DB read/apply **seams** the clinical tier extends, empty/noop today). CLI: `.lsk` established at
+`init`/`seal-key`, new `establish-local-state-key` verb, `backup` writes the export sibling, `restore` consumes it
+(**honest-degrades** — warn+skip — on absent/corrupt/unsealable export), `status` `local_state` line. **No DB schema
+change.** Built via brainstorm→plan→subagent-SDD (6 TDD tasks, per-task + opus whole-branch review; spec+plan under
+`docs/superpowers/`). Full `cairn-node` suite green (19/19 binaries). Follow-up: [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54)
+(uniform LSK/DEK zeroization across `seal.rs`+`localstate.rs` — deferred, consistent with existing convention).
 
-**Prior sessions (2026-06-25):** ADR-0026 **slice B** — backup-as-cold-peer **export + self-verify + health**
-([PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51)): `backup`/`verify-backup` + `last_backup`; signed-event
-medium, self-verifying via the signature invariant; shared `fsio` atomic-write. And Spike 0003 (Postgres on Android)
-**G0–G3 PASS** + Medium write-up ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47),
-[PR #48](https://github.com/cairn-ehr/cairn-ehr/pull/48)).
+**Prior sessions (2026-06-25):** ADR-0026 **slice C** — restore (apply) + new-identity `supersede`
+([PR #52](https://github.com/cairn-ehr/cairn-ehr/pull/52), [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
+`cairn-node restore` rehydrates `node_event` into a fresh DB under a freshly-minted key, records `supersede`(dead→new);
+self-trusting `restore_node_event` door (empty-genesis fenced); `db/009` + `node_lineage`. **Slice B** — backup-as-cold-peer
+export+verify+health ([PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51)). And Spike 0003 (Postgres on Android)
+**G0–G3 PASS** ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47), [PR #48](https://github.com/cairn-ehr/cairn-ehr/pull/48)).
 
 **Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
 of each session. If it ever disagrees with the canonical docs, **the canonical docs win.** The *why* lives
@@ -108,13 +112,13 @@ local PG16 + `cairn_pgx`.
   atomic rename, so a bad set never overwrites the previous good medium) plus a read-after-write tripwire gate the
   health update so it never over-claims. New `backup.rs` (pure medium format + verify + health) + shared `fsio`
   atomic-write.
-- ~~**Restore (apply) + new-identity `supersede`** (slice C, [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50))~~
-  **closed this session**: `cairn-node restore` + the self-trusting `restore_node_event` door (empty-genesis fenced,
-  fail-closed on a live node), node-level `supersede`(dead→new), fresh-key mint (signing key never backed up), and a
-  `status` `supersedes` line. `db/009` (op-CHECK widen, the door, `node_lineage`) + a `supersede` branch in
-  `submit_node_event` (db/007). Round-trip + non-enroll-branch tests green.
-- Still open (remaining ADR-0026 slice): the sealed **local-state export** (config + drafts + sealed-episode DEKs,
-  ADR-0026 point 3); plus Shamir M-of-N, QR, TPM/keyring escrow rungs.
+- ~~**Restore (apply) + new-identity `supersede`** (slice C, [#50](https://github.com/cairn-ehr/cairn-ehr/issues/50))~~
+  **closed**: `cairn-node restore` + self-trusting `restore_node_event` door (empty-genesis fenced), `supersede`(dead→new),
+  fresh-key mint, `status` `supersedes` line. `db/009` + a `supersede` branch in `submit_node_event` (db/007).
+- ~~**Sealed local-state export** (slice D, ADR-0026 point 3)~~ **closed this session**: `localstate.rs` (LSK dual-wrap,
+  `CAIRNL1`/`CAIRNX1` containers, additive `LocalState` with empty slots, DB seams); `.lsk` at provisioning;
+  `establish-local-state-key`; `backup` writes / `restore` consumes the export; `status` `local_state` line. **All ADR-0026
+  slices (A–D) now done.** Remaining escrow *rungs* (Shamir M-of-N, QR, TPM/keyring) are optional upward options, not blockers.
 - ~~atomic key-file write ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)); passphrase
   `zeroize`-on-drop ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46))~~ **closed 2026-06-25**:
   `write_key_file` is now atomic (temp sibling → fsync → `rename` → **parent-dir fsync**, 0600 forced
@@ -186,12 +190,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
 - **Harden the first federating node** — status-before-init crash, runtime-login-role/floor-ENFORCED proof,
-  incremental sync watermark + genesis HLC ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42),
-  at-rest keystore seal + recovery escrow (ADR-0026 slice A, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)),
-  backup-as-cold-peer export + verify + health (ADR-0026 slice B, [PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51)),
-  **and restore-apply + new-identity `supersede`** (ADR-0026 slice C, this session, [#50](https://github.com/cairn-ehr/cairn-ehr/issues/50))
-  are all **closed** (see node gaps above). Next up: the sealed **local-state export** (ADR-0026 point 3) — the only
-  remaining ADR-0026 slice.
+  incremental sync watermark + genesis HLC ([#38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42),
+  and **all four ADR-0026 durability slices** — A (at-rest seal + recovery escrow, PR #44), B (cold-peer export+health,
+  PR #51), C (restore + `supersede`, PR #52), **D (sealed local-state export, this session)** — are all **closed**
+  (see node gaps above). **ADR-0026 is fully implemented at the node tier.** No remaining required node-hardening thread;
+  optional follow-ons: [#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) (uniform key zeroization) + escrow rungs
+  (Shamir/QR/TPM). The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 
