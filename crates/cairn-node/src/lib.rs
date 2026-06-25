@@ -3,6 +3,7 @@ pub mod db;
 pub mod fsio;
 pub mod identity;
 pub mod keystore;
+pub mod localstate;
 pub mod pairing;
 pub mod restore;
 pub mod seal;
