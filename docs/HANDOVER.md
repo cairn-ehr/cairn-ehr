@@ -207,7 +207,7 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 **Blocked on hardware / external access:**
 - **Bet B — Pi compute-cost run** ([Spike 0001 §6](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)): the
   [ADR-0001](spec/decisions/0001-fat-postgres-thin-daemon.md) projection/keystore go/no-go. Runbook + self-describing
-  harness ready ([`PI-RUNBOOK.md`](../poc/walking-skeleton/PI-RUNBOOK.md)); **awaiting the Pi 5 / 16 GB / 1 TB SSD.**
+  harness ready (`poc/walking-skeleton/PI-RUNBOOK.md`); **awaiting the Pi 5 / 16 GB / 1 TB SSD.**
   The one number that could revisit ADR-0015's *provisional* BLAKE3 blob-digest default is the ARM SHA-256-vs-BLAKE3
   result. Floor experiment = a Pi 4 / 8 GB (changes only `--label`).
 - **easyGP session** — port the [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
