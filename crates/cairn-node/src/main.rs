@@ -272,7 +272,12 @@ async fn main() -> anyhow::Result<()> {
             // operator must type the one shown at `init`/`seal-key`.
             let code = Zeroizing::new(
                 rpassword::prompt_password("recovery code (from init/seal-key): ")?);
-            if code.is_empty() {
+            // Reject whitespace-only input, not just empty: `normalize_recovery_code`
+            // (inside `establish_lsk`) strips ALL spacing, so a code of "   " would
+            // normalize to empty and wrap the LSK under an effectively-empty recovery
+            // secret. Trim only for the guard — pass the ORIGINAL `code` on, since
+            // normalization already handles spacing/case during the wrap.
+            if code.trim().is_empty() {
                 anyhow::bail!("no recovery code provided");
             }
             establish_local_state_escrow(&cli.key, &op, &code)?;
