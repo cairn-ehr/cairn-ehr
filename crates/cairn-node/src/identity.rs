@@ -141,6 +141,29 @@ pub async fn author_unpeer(
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
+/// Author a `node.superseded` event and submit it (ADR-0026 slice C).
+///
+/// A restored node mints a fresh keypair (the old signing key is never backed up) and
+/// records that its new identity SUCCEEDS the dead node. This is the actor-algebra
+/// `supersede` applied to nodes: the dead node's past events stay signature-verifiable
+/// forever, but the new node cannot sign as the old one — a destroyed node is a new
+/// physical trust boundary. Authored by THIS (new) node's key, like peer/revoke.
+pub async fn author_supersede(
+    db: &Client,
+    sk: &SigningKey,
+    key_id: &str,
+    node_origin: &str,
+    old_node_id_hex: &str,
+) -> anyhow::Result<String> {
+    let (wall, counter) = next_hlc(db).await?;
+    let body = node_event_body("node.superseded", key_id, node_origin, wall, counter,
+        serde_json::json!({ "superseded_node_id_hex": old_node_id_hex }));
+    let signed = sign(&body, sk)?;
+    let bytes = signed.signed_bytes.clone();
+    db.execute("SELECT submit_node_event($1)", &[&bytes]).await?;
+    Ok(hex::encode(event_address(&signed.signed_bytes)))
+}
+
 // ---------------------------------------------------------------------------
 // Node status
 // ---------------------------------------------------------------------------
