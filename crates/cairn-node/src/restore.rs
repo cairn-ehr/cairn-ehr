@@ -15,6 +15,11 @@ pub enum RestoreError {
     NoGenesis,
     #[error("medium carries {0} enrolls; pass --superseded-node <hex> to pick the dead node")]
     Ambiguous(usize),
+    #[error("--superseded-node {wanted} names no enroll on this medium (available: {available:?})")]
+    UnknownNodeId {
+        wanted: String,
+        available: Vec<String>,
+    },
 }
 
 /// Every enroll (node.enrolled) on the medium, as (node_id_hex, body) pairs. A node-id
@@ -36,8 +41,14 @@ fn enrolls(events: &[Vec<u8>]) -> Vec<(String, cairn_event::EventBody)> {
 
 /// Resolve the dead node's id (hex) to supersede on restore.
 ///
-/// - `explicit` (operator's --superseded-node) always wins — it is normalized to lower
-///   hex but otherwise trusted (the operator knows which node they are restoring).
+/// - `explicit` (operator's --superseded-node) is normalized to lower hex and then
+///   REQUIRED to name an enroll actually present on the medium. The medium IS the dead
+///   node's own history, so its genesis enroll is always there; an explicit id that
+///   matches nothing is a typo (or the wrong node) and we fail closed HERE, before any
+///   key-minting or DB write. This is load-bearing: an unchecked id would otherwise
+///   (a) abort deep in submit_node_event's `decode(...,'hex')` AFTER the new genesis was
+///   already committed — a half-finalized, un-retryable-in-place node — when malformed,
+///   or (b) silently supersede a node that was never restored when well-formed-but-wrong.
 /// - else, if the medium has exactly ONE enroll, that is the dead node (the solo-clinic
 ///   case — ADR-0026's primary deployment).
 /// - else it is ambiguous (a federated node whose log holds peers' genesis too) and we
@@ -46,10 +57,17 @@ pub fn resolve_dead_node_id(
     events: &[Vec<u8>],
     explicit: Option<&str>,
 ) -> Result<String, RestoreError> {
-    if let Some(e) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
-        return Ok(e.to_ascii_lowercase());
-    }
     let found = enrolls(events);
+    if let Some(e) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        let want = e.to_ascii_lowercase();
+        if found.iter().any(|(id, _)| *id == want) {
+            return Ok(want);
+        }
+        return Err(RestoreError::UnknownNodeId {
+            wanted: want,
+            available: found.into_iter().map(|(id, _)| id).collect(),
+        });
+    }
     match found.len() {
         0 => Err(RestoreError::NoGenesis),
         1 => Ok(found.into_iter().next().unwrap().0),
@@ -181,6 +199,35 @@ mod tests {
         let want = node_id(&b);
         let got = resolve_dead_node_id(&[a, b], Some(&want)).unwrap();
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn explicit_arg_not_on_medium_is_rejected() {
+        // A well-formed hex node-id that is NOT any enroll on the medium. Must fail
+        // CLOSED here, before any DB write — otherwise it would silently supersede a
+        // node that was never restored (and name the new node "restored-node").
+        let a = enroll(&sk(), "A");
+        let b = enroll(&sk(), "B");
+        let bogus = "1220".to_string() + &"99".repeat(32);
+        let err = resolve_dead_node_id(&[a, b], Some(&bogus)).unwrap_err();
+        assert!(
+            matches!(err, RestoreError::UnknownNodeId { .. }),
+            "an off-medium dead node-id must fail closed, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_malformed_hex_is_rejected_before_any_db_write() {
+        // A non-hex value can never match an enroll's content-address, so it is
+        // rejected here rather than aborting deep in submit_node_event's
+        // decode(...,'hex') AFTER the new genesis was already committed.
+        let a = enroll(&sk(), "A");
+        let err =
+            resolve_dead_node_id(std::slice::from_ref(&a), Some("not-a-node-id")).unwrap_err();
+        assert!(
+            matches!(err, RestoreError::UnknownNodeId { .. }),
+            "a malformed dead node-id must fail closed, got: {err:?}"
+        );
     }
 
     #[test]

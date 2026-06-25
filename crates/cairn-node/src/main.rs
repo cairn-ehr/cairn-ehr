@@ -161,7 +161,8 @@ enum Cmd {
         #[arg(long)]
         from: PathBuf,
         /// For a federated medium with multiple enrolls: the dead node-id (hex) to
-        /// supersede. Optional for a solo node (auto-detected from the sole enroll).
+        /// supersede — must name an enroll present on the medium. Optional for a solo
+        /// node (auto-detected from the sole enroll).
         #[arg(long)]
         superseded_node: Option<String>,
         /// Operational passphrase for the NEW sealed key (else CAIRN_KEY_PASSPHRASE, else prompt).
@@ -392,17 +393,14 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             // 2. Resolve the dead node-id (solo auto-detect, else --superseded-node).
+            //    resolve_dead_node_id guarantees the id names an enroll on the medium, so
+            //    old_genesis_meta always resolves; the bail is a defensive invariant, never a
+            //    silent synthetic identity (paper-parity: a restored node keeps its name/address).
             let dead = cairn_node::restore::resolve_dead_node_id(&events, superseded_node.as_deref())?;
-            let (name, address) = if let Some(meta) = cairn_node::restore::old_genesis_meta(&events, &dead) {
-                meta
-            } else {
-                eprintln!(
-                    "WARNING: no genesis metadata found for dead node {dead} on the medium; \
-                     the new node will use a synthetic display-name ('restored-node') and \
-                     empty address. Pass --superseded-node to select a different dead node-id."
-                );
-                ("restored-node".to_string(), String::new())
-            };
+            let (name, address) = cairn_node::restore::old_genesis_meta(&events, &dead)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "internal: resolved dead node {dead} has no enroll on the medium (unreachable)"
+                ))?;
 
             // 3. Connect to the FRESH db and load the schema (DDL: owner privileges, like init).
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
