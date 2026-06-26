@@ -12,13 +12,14 @@ crate-type = ["cdylib", "lib"]
 # `::pgrx::pgrx_embed!()` macro, removed in 0.18) is no longer needed and was deleted.
 
 [features]
-default = ["pg16"]
-pg16 = ["pgrx/pg16"]
-# PG18 support: the federation node / clinical substrate targets PostgreSQL >= 18
-# (spec §9). pgrx 0.12.x predates PG18, so reaching it required moving to a
-# pg18-capable pgrx (matched to the installed cargo-pgrx). Build/install for PG18 with
-# `--no-default-features --features pg18` (pgrx permits exactly one `pgNN` feature).
+# Default to pg18: the federation node / clinical substrate targets PostgreSQL >= 18
+# (spec §9), so the no-flag build should match the deployment target. pgrx 0.12.x
+# predated PG18, which is why this crate moved to a pg18-capable pgrx.
+default = ["pg18"]
 pg18 = ["pgrx/pg18"]
+# pg16 retained for the legacy local instance; build/install it with
+# `--no-default-features --features pg16` (pgrx permits exactly one `pgNN` feature).
+pg16 = ["pgrx/pg16"]
 pg_test = []
 
 [dependencies]
