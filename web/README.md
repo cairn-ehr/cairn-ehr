@@ -29,7 +29,8 @@ The MkDocs specification site is deployed separately at `docs.cairn-ehr.org`.
 |---|---|
 | `index.html` | The whole page |
 | `styles.css` | All styling (palette, type scale, layout, responsive, a11y) |
-| `assets/logo.svg`, `assets/favicon.svg` | Stone mark + favicon |
+| `assets/cairn-mark.webp` / `.png` | The Cairn stone-stack logo (header + hero); WebP primary, PNG fallback. Background is flood-filled transparent; regenerate from `../../assets/cairn_logo_only_320px.png` if the source art changes |
+| `assets/favicon.svg` | Favicon (simple stone glyph, legible at 16px) |
 | `assets/og-card.svg` / `.png` | Social-share card (1200×630); regenerate the PNG from the SVG if the card text changes |
 | `assets/fonts/*.woff2` | Self-hosted Inter + Source Serif 4 (SIL OFL) |
 | `robots.txt`, `sitemap.xml` | Indexing |

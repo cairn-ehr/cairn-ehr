@@ -26,7 +26,10 @@
   <header class="site-header">
     <div class="wrap header-inner">
       <a class="brand" href="/" aria-label="Cairn home">
-        <img class="brand-mark" src="/assets/logo.svg" alt="" width="28" height="33">
+        <picture>
+          <source srcset="/assets/cairn-mark.webp" type="image/webp">
+          <img class="brand-mark" src="/assets/cairn-mark.png" alt="" width="46" height="42">
+        </picture>
         <span class="brand-word">CAIRN</span>
       </a>
       <button class="nav-toggle" aria-expanded="false" aria-controls="nav" aria-label="Menu">&#9776;</button>
@@ -45,14 +48,36 @@
 
     <section class="hero">
       <div class="wrap hero-inner">
-        <img class="hero-mark" src="/assets/logo.svg" alt="" width="96" height="112">
-        <h1>The grid goes down.<br>The chart stays up.</h1>
-        <p class="lede">An offline-first, vendor-independent electronic health record. It keeps working through any outage, runs anywhere from a Raspberry&nbsp;Pi to a hospital cluster, and belongs to no vendor.</p>
-        <div class="cta-row">
-          <a class="btn btn-primary" href="https://docs.cairn-ehr.org">Read the specification</a>
-          <a class="btn btn-secondary" href="https://github.com/cairn-ehr/cairn-ehr">View on GitHub</a>
+        <div class="hero-copy">
+          <h1 class="hero-headline">
+            <span class="beat beat-down">The grid<br>goes down.</span>
+            <span class="beat beat-up">The chart<br>stays up.</span>
+          </h1>
+          <p class="lede">An offline-first, vendor-independent electronic health record. It keeps working through any outage, runs anywhere from a Raspberry&nbsp;Pi to a hospital cluster, and belongs to no vendor.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="https://docs.cairn-ehr.org">Read the specification</a>
+            <a class="btn btn-secondary" href="https://github.com/cairn-ehr/cairn-ehr">View on GitHub</a>
+          </div>
+          <p class="status-line">Specification complete &nbsp;·&nbsp; prototypes proving it works &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; PostgreSQL&nbsp;≥&nbsp;18</p>
         </div>
-        <p class="status-line">Specification complete &nbsp;·&nbsp; prototypes proving it works &nbsp;·&nbsp; AGPL-3.0 &nbsp;·&nbsp; PostgreSQL&nbsp;≥&nbsp;18</p>
+        <div class="hero-mark-col" aria-hidden="true">
+          <picture>
+            <source srcset="/assets/cairn-mark.webp" type="image/webp">
+            <img class="hero-mark" src="/assets/cairn-mark.png" alt="" width="320" height="290">
+          </picture>
+        </div>
+      </div>
+      <!--
+        Proof strip: three real, verifiable prototype milestones, surfaced above the fold so a
+        cold visitor (clinician, funder, official) sees evidence next to the claims. The fuller
+        "where it is today" note still appears later in the operations section.
+      -->
+      <div class="wrap">
+        <ul class="proof-strip" aria-label="What is already working in prototype">
+          <li><span class="proof-dot" aria-hidden="true"></span>Sync proven over a real satellite link</li>
+          <li><span class="proof-dot" aria-hidden="true"></span>A first node federating with its neighbours</li>
+          <li><span class="proof-dot" aria-hidden="true"></span>Safety layer tested against a hostile AI agent</li>
+        </ul>
       </div>
     </section>
 

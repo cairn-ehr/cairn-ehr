@@ -1,8 +1,0 @@
-<svg viewBox="0 0 120 140" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cairn logo">
-  <ellipse cx="60" cy="116" rx="52" ry="20" fill="#1E3A52"/>
-  <path d="M22 116 H98 M34 110 l8 -7 6 5 9 -10 8 7 7 -5" stroke="#5C7186" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
-  <ellipse cx="60" cy="80" rx="42" ry="17" fill="#8B9398"/>
-  <path d="M28 80 H92 M40 75 l7 4 6 -7 7 5 6 -4" stroke="#F0EDE4" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
-  <path d="M20 52 C20 24 100 24 100 52 C100 70 80 78 60 78 C40 78 20 70 20 52 Z" fill="#2F6E62"/>
-  <path d="M34 48 l9 -9 6 6 8 -11 7 9 7 -6" stroke="#BFE0D5" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
-</svg>

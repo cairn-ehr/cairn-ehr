@@ -53,6 +53,7 @@ a:hover { text-decoration: underline; }
 .header-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
 .brand:hover { text-decoration: none; }
+.brand-mark { width: 46px; height: auto; }
 .brand-word { font-weight: 700; letter-spacing: 2px; font-size: 18px; }
 .site-nav { display: flex; align-items: center; gap: 24px; }
 .site-nav a { color: var(--ink-soft); font-size: 15px; }
@@ -76,14 +77,73 @@ a:hover { text-decoration: underline; }
 .btn-teal { background: var(--teal); color: #fff; }
 .btn-teal:hover { background: #25564d; }
 
-/* Hero */
-.hero { padding: clamp(48px, 9vw, 104px) 0; }
-.hero-inner { text-align: center; }
-.hero-mark { margin: 0 auto clamp(20px, 3vw, 32px); }
-.hero h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.1; font-weight: 700; margin: 0 0 20px; letter-spacing: -0.5px; }
-.lede { font-size: clamp(17px, 2.2vw, 21px); color: var(--ink-soft); max-width: 620px; margin: 0 auto 28px; }
-.cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
-.status-line { font-size: 14px; color: var(--ink-faint); letter-spacing: 0.3px; }
+/* Hero — bold typographic, left-aligned, the stone mark offset as a quiet anchor */
+.hero { padding: clamp(44px, 8vw, 96px) 0; }
+.hero-inner {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: clamp(24px, 5vw, 64px);
+}
+.hero-copy { min-width: 0; }
+.hero-mark-col { display: flex; justify-content: center; }
+.hero-mark { width: clamp(150px, 18vw, 210px); height: auto; }
+
+.hero-headline {
+  font-size: clamp(40px, 7.5vw, 76px);
+  line-height: 1.02;
+  font-weight: 700;
+  letter-spacing: -1.2px;
+  margin: 0 0 24px;
+}
+.beat { display: block; }
+.beat-up { color: var(--teal); margin-top: 0.28em; }
+
+.lede { font-size: clamp(17px, 2.2vw, 21px); color: var(--ink-soft); max-width: 540px; margin: 0 0 28px; }
+.cta-row { display: flex; gap: 14px; justify-content: flex-start; flex-wrap: wrap; margin-bottom: 22px; }
+.status-line { font-size: 14px; color: var(--ink-faint); letter-spacing: 0.3px; margin: 0; }
+
+/* Proof strip — real prototype milestones, surfaced above the fold */
+.proof-strip {
+  list-style: none;
+  margin: clamp(30px, 5vw, 46px) 0 0;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 30px;
+  font-size: 14px;
+  color: var(--ink-faint);
+  letter-spacing: 0.2px;
+}
+.proof-strip li { display: flex; align-items: center; gap: 9px; }
+.proof-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); flex: none; }
+
+@media (max-width: 760px) {
+  .hero-inner { grid-template-columns: 1fr; gap: clamp(16px, 5vw, 28px); }
+  .hero-mark-col { order: -1; justify-content: flex-start; }
+  .hero-mark { width: 108px; }
+}
+
+/* Restrained entrance: fade-rise, staggered. Only when motion is welcome —
+   the opacity:0 start state lives entirely inside no-preference, so reduced-motion
+   and animation-less renders always show the content. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero-headline, .hero .lede, .hero .cta-row, .hero .status-line, .proof-strip, .hero-mark-col {
+    opacity: 0;
+    animation: heroRise 0.6s cubic-bezier(0.2, 0.6, 0.2, 1) forwards;
+  }
+  .hero-mark-col { animation-delay: 0.08s; }
+  .hero-headline { animation-delay: 0.04s; }
+  .hero .lede { animation-delay: 0.14s; }
+  .hero .cta-row { animation-delay: 0.22s; }
+  .hero .status-line { animation-delay: 0.30s; }
+  .proof-strip { animation-delay: 0.38s; }
+}
+@keyframes heroRise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* Eyebrow labels */
 .eyebrow { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--teal); margin: 0 0 14px; }
