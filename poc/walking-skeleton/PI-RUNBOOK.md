@@ -190,10 +190,18 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # if Rust isn't
 source "$HOME/.cargo/env"
 sudo apt-get install -y build-essential pkg-config libssl-dev postgresql-client
 
-cd poc/walking-skeleton
-cargo build --release            # produces target/release/cairn-sync (arm64)
+cd <repo-root>                   # the cargo workspace lives at the repo root, NOT poc/walking-skeleton
+cargo build --release -p cairn-sync   # produces target/release/cairn-sync (arm64)
 cargo test --release             # sanity: the 6 crypto/round-trip tests should pass
 ```
+
+> [!WARNING]
+> **DB-backed gates (B1/B2/B5) currently require PostgreSQL 16, not 18.** `cairn-sync init` does
+> `CREATE EXTENSION cairn_pgx`, and `extensions/cairn_pgx` is pinned to **`pgrx =0.12.9` with only a `pg16`
+> feature** — it does not build against PG 18. Until the extension is ported to a PG-18-capable pgrx, install
+> **PG 16** for the DB run (build the extension on the board with `cargo pgrx install --release --sudo
+> --pg-config /usr/lib/postgresql/16/bin/pg_config`). The **crypto-only B3/B4 `bench`** needs no DB and runs
+> fine regardless. See the 2026-06-25 Bet B run, [Spike 0001 §9.3](../../docs/spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#93-caveat-2--ran-on-pg-16-because-cairn_pgx-cant-build-on-pg-18-a-build-prep-finding).
 
 ---
 

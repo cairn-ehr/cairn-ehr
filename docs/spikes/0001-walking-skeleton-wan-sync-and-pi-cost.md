@@ -3,9 +3,14 @@
 - **Status:** Bet A **PASS** (run 2026-06-16 over the Cape York ↔ Dorrigo WireGuard link — see §8; the run also
   surfaced and fixed a real availability-floor bug in the field `run` loop, §8.1) → **§4 primitives ratified as
   [ADR-0015](../spec/decisions/0015-event-serialization-signatures-and-content-addressing.md)** (blob-digest
-  line provisional pending Bet B); Bet B (Pi) **prepared** — field runbook + self-describing, floor-finding
-  harness ready (§6.1), awaiting the board (Pi 5 / 16 GB + 1 TB SSD)
-- **Date:** 2026-06-16
+  line provisional pending Bet B). **Bet B (Pi) PASS** (run 2026-06-25 on a Raspberry Pi 5 / **8 GB** — see
+  §9): all §6 gates green with large headroom; the **B4 ARM crypto number confirms ADR-0015's BLAKE3
+  blob-digest default** (BLAKE3 ~4× SHA-256 on Cortex-A76). Two honest caveats on this run — storage was on a
+  **USB-2-limited dock** (35 MB/s, power-offload workaround, §9.2) and it ran on **PG 16** (the `cairn_pgx`
+  pgrx extension is pinned to pgrx 0.12.9 / `pg16` and won't build on PG 18, §9.3) — but both *cost precision,
+  not the verdict* (gates clear by 11×/394×). A clean **PG 18 + USB-3 + official-PSU** re-run is the remaining
+  follow-up (§9.4).
+- **Date:** 2026-06-16 (Bet A); 2026-06-25 (Bet B)
 - **Validates:** [ADR-0001](../spec/decisions/0001-fat-postgres-thin-daemon.md) (projection cost on weak
   hardware), the [§6.2](../spec/sync.md#62-consistency-model) set-union convergence claim under a *real*
   partition, the [ADR-0013](../spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)
@@ -408,3 +413,90 @@ fetcher ↔ DGX Spark 10.0.0.3 source, PG18 :5444; driver `harness/wan_spike.py`
 - **Next throughput lever (beyond this spike):** connection reuse / persistent streaming instead of one TCP
   connection per slice — the production object-store tier already noted in the skeleton README. Windowing
   delivers the §8.2 requirement (parallel, resumable, verified); the per-connection cost is the next ceiling.
+
+---
+
+## 9. Bet B — results (Raspberry Pi 5 / 8 GB, 2026-06-25) — **PASS** (with two honest caveats)
+
+Ran the §6 table on a **Raspberry Pi 5 Model B / 8 GB** (4× Cortex-A76 @ 2.4 GHz, Debian 13 / kernel 6.18,
+active cooling, `performance` governor, `throttle=0x0` throughout), against a release arm64 `cairn-sync`
+built natively on the board (~75 s). This is a *more constrained* board than the runbook's Pi 5 / 16 GB
+target — between the spec's "Pi 5 class" floor and the Pi 4 / 8 GB follow-on candidate — so the headroom it
+shows is a stronger floor signal than the 16 GB board would give.
+
+The artifacts are committed next to this spike at
+[`poc/walking-skeleton/results/`](../../poc/walking-skeleton/results/) (`betb-pi5-full.json`,
+`betb-pi5-crypto.json`, `betb-pi5-b5.log`) — each self-describing per §6.1.
+
+| # | Question | Result | Detail |
+|---|---|---|---|
+| **B1** | projection maintenance cheap + flat as the log grows? | **PASS** | p95 **4.38 ms** @ 202,000 events — **11× under** the 50 ms budget; growth **×2.15** vs 22,000 events (flat ≤ ×3.0) |
+| **B2** | chart read beats paper? | **PASS** | p50 2.4 ms / p95 **2.5 ms** over a 200-note chart — **394× under** the 1 s paper-parity floor |
+| **B3** | keystore (crypto-shred) cost? | **INFO** | DEK-wrap **1,581,249/s**, body-seal **242 MB/s** (per-episode unwrap = 1 op; per-event = N) |
+| **B4** | crypto keeps up on ARM? | **PASS** | Ed25519 **5,490 verify/s** (2.7× over the 2,000 floor); **BLAKE3 915 vs SHA-256 230 MB/s** — BLAKE3 ~4× faster ⇒ **ADR-0015's blob-digest default holds on ARM** |
+| **B5** | does surrogate-key interning pay on ARM? ([ADR-0031](../spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)) | **CONFIRMS (narrows nothing)** | FK-index **shrink ×1.39** (4880→3512 kB / 500k rows); heap 37→33 MB; surrogate read **8 vs 5 buffer hits** (one extra single-row anchor lookup, both sub-ms all-cache) ⇒ interning pays *and* the read stays competitive. Leakage guard **G1–G6 ALL PASS** |
+
+**Verdict: Bet B PASS — go on Pi-5-class hardware at the lowest (PL/pgSQL + pgrx) rung.** ADR-0001's compute
+bet holds; no mitigation-ladder escalation was needed.
+
+### 9.1 The floor read (headroom)
+
+The smallest-headroom gate is **B4 raw crypto (2.7× over floor)** — exactly as §6.1 predicted, since crypto
+tracks clock/cores, not tuning or storage. B1 (11×) and B2 (394×) sit far from their budgets. Because even
+the *constrained* 8 GB board with *crippled USB-2 storage* (below) clears B1/B2 by 11×/394×, a Pi-5-class
+node is comfortably inside the envelope, and the B4 margin says a somewhat weaker core still has room. The
+go/no-go verdict is therefore **robust to both caveats below — they cost precision, not the conclusion.**
+
+### 9.2 Caveat 1 — storage ran on a USB-2-limited dock (and the power saga that forced it)
+
+The board on hand was the **worst-case rig** the spike anticipated: 8 GB RAM and the SSD attached **over USB,
+not NVMe**. The run surfaced a real, **deployment-relevant power finding** worth recording for
+[§8 deployment](../spec/deployment.md):
+
+- **A Pi 5 browns out under combined CPU + bus-powered-SSD load on a generic 5 V/3 A supply — even at only
+  ~9–13 W average draw.** The cause is *transient* current spikes (the A76 cores ramp current sub-millisecond)
+  sagging the rail past the under-voltage trip, compounded by the firmware capping the USB port budget to
+  600 mA on a non-PD supply (which a bus-powered SSD then competes for). Average watts is the wrong metric;
+  instantaneous rail sag is the right one. *Two brownouts corrupted the boot SD card mid-write* before the
+  cause was nailed down. CPU-only load was always stable; only **CPU + direct-USB-SSD** crashed it.
+- **The fix that unblocked the run:** move the SSD onto a **powered hub/dock** so its draw comes off the hub,
+  not the Pi. With the SSD offloaded, combined full-load held `throttle=0x0` and the rail stayed ~4.93 V.
+- **The cost of that workaround:** the only powered hub available was a multifunction dock whose downstream
+  data ports negotiate **USB 2.0** for this drive — so PGDATA storage ran at **~35 MB/s** (vs ~306 MB/s for
+  the same SSD direct on USB-3). B1/B2/B5 are therefore **storage-bound and pessimistic**; B3/B4 are
+  disk-independent and unaffected. That B1/B2 still pass by 11×/394× *on USB-2* is what makes the verdict
+  caveat-robust — real USB-3 only widens the margin.
+- A flaky **Samsung T1** bridge also dropped under load through the hub until a **`usb-storage.quirks=
+  04e8:8001:u`** kernel param (disable UAS → BOT) stabilised it — a concrete clinic-BOM note for older USB-SATA
+  bridges.
+
+> **Deployment-BOM finding (for §8):** a rural-clinic Pi node's **power supply and storage-attachment path are
+> part of the validated bill of materials**, not an afterthought. Recipe: an **official 27 W / 5 V·5 A PD
+> supply**, a **short 5 A-rated cable**, active cooling, and either a **directly-attached USB-3 SSD** or a
+> **true USB-3 powered hub** (verify the SSD enumerates at 5000 Mbps, not 480). Generic phone chargers and
+> long/thin cables brown out a Pi 5 under clinical load and can corrupt the boot medium.
+
+### 9.3 Caveat 2 — ran on PG 16, because `cairn_pgx` can't build on PG 18 (a build-prep finding)
+
+`cairn-sync init` requires the in-DB Rust extension **`cairn_pgx`**, which is pinned to **`pgrx =0.12.9`
+with only a `pg16` feature** — it **does not build against PostgreSQL 18**, the deployment floor the runbook
+tells you to install. So the DB-backed gates (B1/B2/B5) were run on **PG 16.14** (PG 18.4 was also installed,
+but only the crypto-only B3/B4 path, which needs no DB, can use it). This is a genuine inconsistency between
+`poc/walking-skeleton/PI-RUNBOOK.md` ("record on PG 18") and the code, and a **build-prep
+to-do: port `cairn_pgx` to a pgrx release with PG 18 support** before the clean re-run.
+
+**Bonus validation:** `cairn_pgx` *built, linked, installed, and loaded cleanly on Pi 5 arm64* (1.08 MB `.so`,
+via `cargo-pgrx` on the board) — so the **§9 in-DB Rust safety surface is confirmed to compile and run on
+real ARM**, complementing the Android pgrx result in [Spike 0003](0003-postgres-on-android-bionic-node.md).
+
+### 9.4 Follow-ups
+
+1. **Clean re-run on PG 18 + USB-3 + official PSU.** Resolves both caveats and yields the authoritative,
+   precision floor numbers (expected to widen B1/B2 headroom further). Blocked on: porting `cairn_pgx` to a
+   PG-18-capable pgrx (§9.3), and the power/storage BOM (§9.2).
+2. **ADR-0015 follow-up:** the B4 ARM number (**BLAKE3 915 vs SHA-256 230 MB/s**) **confirms** the provisional
+   blob-digest default — fold into the ADR-0015 follow-up to drop the "provisional" caveat on the blob-digest
+   line.
+3. **ADR-0031:** the ×1.39 FK-index shrink with a competitive surrogate read **confirms** the interning
+   discipline pays on ARM and **narrows nothing** — interning earns its indirection for the wide/high-fan-out
+   references, as designed.

@@ -1,0 +1,107 @@
+START 22:30:46
+== loading projection-plane schema (001 + 002 + 008) ==
+psql:/home/hherb/cairn/db/001_envelope.sql:21: NOTICE:  extension "pgcrypto" already exists, skipping
+psql:/home/hherb/cairn/db/001_envelope.sql:82: NOTICE:  relation "event_log" already exists, skipping
+psql:/home/hherb/cairn/db/001_envelope.sql:85: NOTICE:  relation "event_log_order_idx" already exists, skipping
+psql:/home/hherb/cairn/db/001_envelope.sql:87: NOTICE:  relation "event_log_patient_idx" already exists, skipping
+psql:/home/hherb/cairn/db/001_envelope.sql:116: NOTICE:  relation "hlc_state" already exists, skipping
+psql:/home/hherb/cairn/db/001_envelope.sql:130: NOTICE:  relation "sync_state" already exists, skipping
+psql:/home/hherb/cairn/db/002_projection.sql:28: NOTICE:  relation "patient_chart" already exists, skipping
+psql:/home/hherb/cairn/db/008_surrogate_projection.sql:70: NOTICE:  relation "patient_ref" already exists, skipping
+psql:/home/hherb/cairn/db/008_surrogate_projection.sql:114: NOTICE:  relation "chart_note_u" already exists, skipping
+psql:/home/hherb/cairn/db/008_surrogate_projection.sql:115: NOTICE:  relation "chart_note_u_patient_idx" already exists, skipping
+psql:/home/hherb/cairn/db/008_surrogate_projection.sql:122: NOTICE:  relation "chart_note_s" already exists, skipping
+psql:/home/hherb/cairn/db/008_surrogate_projection.sql:123: NOTICE:  relation "chart_note_s_patient_idx" already exists, skipping
+== leakage / interning guard (db/tests/008_surrogate_test.sql) ==
+CREATE FUNCTION
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:59: NOTICE:  G1 OK: local_ref is a domain over bigint
+DO
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:82: NOTICE:  G2 OK: event_log is surrogate-free; patient_id stays canonical uuid
+DO
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:108: NOTICE:  G3 OK: interning idempotent (10001), distinct, anchor binds both
+DO
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:173: NOTICE:  G4a OK: uuid cannot be coerced to local_ref (one-directional guard)
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:173: NOTICE:  G4b OK: a bigint surrogate cannot be cast to uuid (signed plane is protected by bigint<>uuid + G2)
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:173: NOTICE:  G4c OK: bigint flows into local_ref with no type error — domain is a one-directional hint, not a two-way barrier
+DO
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:205: NOTICE:  G5 OK: anchor carries both, child carries only the surrogate
+DO
+psql:/home/hherb/cairn/db/tests/008_surrogate_test.sql:239: NOTICE:  G6 OK: surrogate child round-trips to the canonical uuid at egress
+DO
+DROP FUNCTION
+B5 surrogate/leakage guard: ALL PASS
+== B5 size/read benchmark (db/bench/b5_surrogate.sql) ==
+Timing is off.
+TRUNCATE TABLE
+--- B5: seeding 10000 patients x 50 notes each ---
+CREATE FUNCTION
+ set_config 
+------------
+ 10000
+(1 row)
+
+ set_config 
+------------
+ 50
+(1 row)
+
+DO
+DROP FUNCTION
+ANALYZE
+ANALYZE
+ANALYZE
+
+=== B5.1  foreign-key INDEX size — the cost ADR-0031 targets ===
+ uuid_fk_index | surrogate_fk_index | shrink_factor | rows_indexed 
+---------------+--------------------+---------------+--------------
+ 4880 kB       | 3512 kB            |          1.39 |       500000
+(1 row)
+
+
+=== B5.2  table HEAP size (the per-row key width also lands here) ===
+ uuid_heap | surrogate_heap | anchor_dictionary 
+-----------+----------------+-------------------
+ 37 MB     | 33 MB          | 512 kB
+(1 row)
+
+
+=== B5.3  read: all notes for one patient — UUID-keyed (direct lookup) ===
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Bitmap Heap Scan on chart_note_u u (actual rows=50 loops=1)
+   Recheck Cond: (patient_id = $0)
+   Heap Blocks: exact=2
+   Buffers: shared hit=5, local hit=1
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on _b5_target (actual rows=1 loops=1)
+           Buffers: local hit=1
+   ->  Bitmap Index Scan on chart_note_u_patient_idx (actual rows=50 loops=1)
+         Index Cond: (patient_id = $0)
+         Buffers: shared hit=3, local hit=1
+ Planning:
+   Buffers: shared hit=31
+(12 rows)
+
+
+=== B5.4  read: all notes for one patient — surrogate-keyed (+anchor rehydrate) ===
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
+ Nested Loop (actual rows=50 loops=1)
+   Buffers: shared hit=8, local hit=1
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on _b5_target (actual rows=1 loops=1)
+           Buffers: local hit=1
+   ->  Index Scan using patient_ref_pkey on patient_ref r (actual rows=1 loops=1)
+         Index Cond: (local_ref = $0)
+         Buffers: shared hit=3, local hit=1
+   ->  Index Scan using chart_note_s_patient_idx on chart_note_s s (actual rows=50 loops=1)
+         Index Cond: ((patient_lref)::bigint = $0)
+         Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=38
+(13 rows)
+
+
+B5 done. Headline: shrink_factor in B5.1 is the FK-index win; B5.3/B5.4
+show the surrogate read stays competitive once the anchor join is counted.
+DONE 22:32:18

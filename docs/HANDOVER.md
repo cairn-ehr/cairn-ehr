@@ -205,11 +205,16 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 
 **Blocked on hardware / external access:**
-- **Bet B — Pi compute-cost run** ([Spike 0001 §6](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)): the
-  [ADR-0001](spec/decisions/0001-fat-postgres-thin-daemon.md) projection/keystore go/no-go. Runbook + self-describing
-  harness ready ([`PI-RUNBOOK.md`](../poc/walking-skeleton/PI-RUNBOOK.md)); **awaiting the Pi 5 / 16 GB / 1 TB SSD.**
-  The one number that could revisit ADR-0015's *provisional* BLAKE3 blob-digest default is the ARM SHA-256-vs-BLAKE3
-  result. Floor experiment = a Pi 4 / 8 GB (changes only `--label`).
+- **Bet B — Pi compute-cost run** ([Spike 0001 §9](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#9-bet-b--results-raspberry-pi-5--8-gb-2026-06-25--pass-with-two-honest-caveats)):
+  **RAN 2026-06-25 on a Pi 5 / 8 GB → PASS** (all §6 gates green, large headroom; B4 **confirms** ADR-0015's
+  BLAKE3 blob-digest default — BLAKE3 ~4× SHA-256 on Cortex-A76). Artifacts in
+  [`poc/walking-skeleton/results/`](../poc/walking-skeleton/results/). **Two caveats** (precision, not verdict):
+  storage ran on a **USB-2-limited dock** (power-offload workaround after a Pi 5 brown-out saga — see the §9.2
+  *deployment-BOM finding*: PSU + storage-attachment path are part of the validated BOM), and on **PG 16**
+  because **`cairn_pgx` is pgrx-0.12.9 / `pg16`-pinned and won't build on PG 18** (§9.3). Bonus: `cairn_pgx`
+  builds+loads on Pi arm64 (in-DB Rust surface confirmed on ARM). **Open follow-ups:** (a) port `cairn_pgx` to a
+  PG-18-capable pgrx; (b) clean re-run on **PG 18 + USB-3 SSD + official 27 W PSU** for authoritative precision
+  numbers; (c) fold the B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
 - **easyGP session** — port the [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
   deferred items with live easyGP schema access: the `rx!`/`tx!` type-through parser + state machine; the
   formulation/drug data source + renal/hepatic/pregnancy/paediatric **forced-manual** rule table; the

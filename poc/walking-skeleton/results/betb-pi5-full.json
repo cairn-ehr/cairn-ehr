@@ -1,0 +1,79 @@
+{
+  "spike": "0001",
+  "bet": "B",
+  "harness_version": "0001-betB/2",
+  "verdict": "PASS",
+  "environment": {
+    "harness_version": "0001-betB/2",
+    "label": "pi5-8gb-usb2dock-pg16",
+    "captured_at_utc": "2026-06-25T12:20:45+00:00",
+    "host": "Raspie58",
+    "arch": "aarch64",
+    "kernel": "Linux 6.18.34+rpt-rpi-2712",
+    "board": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu": null,
+    "cores": 4,
+    "mem_total_gb": 7.9,
+    "cpu_governor": "performance",
+    "throttle": {
+      "raw": "0x0",
+      "clean": true,
+      "throttled_now": false,
+      "throttled_this_boot": false
+    },
+    "bin": "/home/hherb/cairn/target/release/cairn-sync",
+    "bin_profile": "release",
+    "pg_version": "PostgreSQL 16.14 (Debian 16.14-1.pgdg13+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "pg_server_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+    "pg_data_directory": "/mnt/ssd/pg16data",
+    "pg_storage_device": "/dev/sdb",
+    "pg_on_sd_card": false,
+    "pg_settings": {
+      "shared_buffers": "2GB",
+      "effective_cache_size": "6GB",
+      "max_wal_size": "4GB",
+      "work_mem": "64MB",
+      "fsync": "on",
+      "synchronous_commit": "on",
+      "wal_compression": "pglz",
+      "max_worker_processes": "8"
+    }
+  },
+  "thresholds": {
+    "insert_budget_ms": 50.0,
+    "growth_factor": 3.0,
+    "chart_budget_ms": 1000.0,
+    "verify_floor_per_s": 2000.0,
+    "sizes": [
+      20000,
+      200000
+    ],
+    "patients": 2000
+  },
+  "rows": [
+    {
+      "code": "B1",
+      "check": "projection maintenance (single-op)",
+      "result": "PASS",
+      "detail": "p95 4.38ms @ 202,000 events (11x under budget 50.0ms); growth x2.15 vs 22,000 events (flat<=x3.0)"
+    },
+    {
+      "code": "B2",
+      "check": "chart read beats paper",
+      "result": "PASS",
+      "detail": "p50 2.4ms  p95 2.5ms over 200 notes (394x under budget 1000.0ms)"
+    },
+    {
+      "code": "B3",
+      "check": "keystore cost (crypto-shred)",
+      "result": "INFO",
+      "detail": "DEK-wrap 1,581,249/s, body-seal 242 MB/s (per-episode unwrap is 1 op; per-event is N)"
+    },
+    {
+      "code": "B4",
+      "check": "crypto on ARM (verify + hash)",
+      "result": "PASS",
+      "detail": "Ed25519 5,490 verify/s (2.7x over floor 2,000); BLAKE3 915 vs SHA-256 230 MB/s (BLAKE3 faster \u2014 ADR-0015 blob default holds)"
+    }
+  ]
+}

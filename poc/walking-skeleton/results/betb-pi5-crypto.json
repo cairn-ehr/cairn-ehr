@@ -1,0 +1,59 @@
+{
+  "spike": "0001",
+  "bet": "B",
+  "harness_version": "0001-betB/2",
+  "verdict": "PASS",
+  "environment": {
+    "harness_version": "0001-betB/2",
+    "label": "pi5-8gb-usb2dock",
+    "captured_at_utc": "2026-06-25T11:55:15+00:00",
+    "host": "Raspie58",
+    "arch": "aarch64",
+    "kernel": "Linux 6.18.34+rpt-rpi-2712",
+    "board": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu": null,
+    "cores": 4,
+    "mem_total_gb": 7.9,
+    "cpu_governor": "performance",
+    "throttle": {
+      "raw": "0x0",
+      "clean": true,
+      "throttled_now": false,
+      "throttled_this_boot": false
+    },
+    "bin": "/home/hherb/cairn/target/release/cairn-sync",
+    "bin_profile": "release",
+    "pg_version": null,
+    "pg_server_version": null,
+    "pg_data_directory": null,
+    "pg_storage_device": null,
+    "pg_on_sd_card": null,
+    "pg_settings": {
+      "shared_buffers": null,
+      "effective_cache_size": null,
+      "max_wal_size": null,
+      "work_mem": null,
+      "fsync": null,
+      "synchronous_commit": null,
+      "wal_compression": null,
+      "max_worker_processes": null
+    }
+  },
+  "thresholds": {
+    "verify_floor_per_s": 2000.0
+  },
+  "rows": [
+    {
+      "code": "B3",
+      "check": "keystore cost (crypto-shred)",
+      "result": "INFO",
+      "detail": "DEK-wrap 1,591,574/s, body-seal 243 MB/s (per-episode unwrap is 1 op; per-event is N)"
+    },
+    {
+      "code": "B4",
+      "check": "crypto on ARM (verify + hash)",
+      "result": "PASS",
+      "detail": "Ed25519 5,498 verify/s (2.7x over floor 2,000); BLAKE3 914 vs SHA-256 230 MB/s (BLAKE3 faster \u2014 ADR-0015 blob default holds)"
+    }
+  ]
+}

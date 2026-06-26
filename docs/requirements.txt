@@ -4,6 +4,16 @@
 #
 # These are build tooling only — not runtime dependencies of Cairn — and are
 # permissively licensed (MkDocs: BSD, Material: MIT), so no AGPL/mission friction.
-mkdocs-material
-mkdocs-callouts
-mkdocs-redirects
+#
+# Versions are PINNED deliberately. The MkDocs project is mid-fracture: the
+# abandoned upstream is pushing a breaking, currently-unlicensed "MkDocs 2.0"
+# (no plugin system, TOML config, rewritten theming — it would break this site
+# outright and is not even legally redistributable). An unpinned `mkdocs` can be
+# silently upgraded into that. Pinning freezes the toolchain to a known-good,
+# reproducible, AGPL-compatible set until we deliberately choose a successor
+# (ProperDocs — BSD, drop-in 1.x fork — or Zensical — the Material team's
+# rewrite). Bump these only as an intentional, tested change.
+mkdocs==1.6.1
+mkdocs-material==9.7.6
+mkdocs-callouts==1.16.1
+mkdocs-redirects==1.2.3
