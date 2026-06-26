@@ -440,21 +440,51 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Backup { to, passphrase } => {
             // Reads node_event (any role with SELECT works) and writes a self-verifying
-            // medium; no signing key is loaded. Health is recorded only after the medium
-            // re-reads and verifies (see backup_to), so it never over-claims.
+            // medium. Health is recorded only after the medium re-reads and verifies (see
+            // backup_to), so it never over-claims.
             let db = cairn_node::db::connect(&cli.conn).await?;
             let now_unix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let health_path = cairn_node::backup::health_path_for(&cli.key);
-            let report = cairn_node::backup::backup_to(&db, &to, &health_path, now_unix).await?;
+
+            // Load the signing key NON-INTERACTIVELY (flag/env passphrase, or a plaintext key)
+            // so the medium's self-marker can be SIGNED (tamper-evident on restore). We never
+            // PROMPT here: an unattended/cron backup must not block on a tty, and an unsigned
+            // marker is a safe degradation (operator-error-safe, just not tamper-evident) —
+            // never a reason to fail the backup. A wrong/absent secret simply yields no key.
+            let key_secret: Option<Zeroizing<String>> = passphrase.clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| std::env::var("CAIRN_KEY_PASSPHRASE").ok().filter(|s| !s.is_empty()))
+                .map(Zeroizing::new);
+            let signing = cairn_node::keystore::load(&cli.key, key_secret.as_deref().map(|s| s.as_str()))
+                .ok()
+                .map(|sk| (hex::encode(sk.verifying_key().to_bytes()), sk));
+            let marker_key = signing.as_ref().map(|(kid, sk)| (sk, kid.as_str()));
+
+            let report = cairn_node::backup::backup_to(&db, &to, &health_path, now_unix, marker_key).await?;
             println!(
                 "backed up {} event(s) ({} bytes) to {}",
                 report.event_count,
                 report.medium_bytes,
                 to.display()
             );
+            // How trustworthy is this medium's identity marker? An unsigned medium travels
+            // flagged for extra care. A signed marker is UNFORGEABLE (no off-medium private key)
+            // and bound to its event set; on a sole-enroll medium it is fully tamper-evident, on a
+            // federated medium restore will ask for confirmation (a converged peer's medium could
+            // be spliced — see crate::medium / restore::Provenance). Store any medium with care.
+            match report.marker {
+                cairn_node::backup::WrittenMarker::Signed =>
+                    println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)"),
+                cairn_node::backup::WrittenMarker::Unsigned => eprintln!(
+                    "WARNING: self-marker UNSIGNED — this medium is operator-error-safe but NOT \
+                     tamper-evident; set CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext \
+                     key) to sign it. Store and handle this medium with extra care."),
+                cairn_node::backup::WrittenMarker::None =>
+                    println!("self-marker  none (node not yet enrolled — nothing to attest)"),
+            }
             println!("backup health recorded at {}", health_path.display());
             // ADR-0026 slice D: co-locate the sealed local-state export beside the medium,
             // IF the local-state escrow exists. Degrades honestly (warn, never fail the
@@ -506,8 +536,8 @@ async fn main() -> anyhow::Result<()> {
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
-            let events = cairn_node::backup::parse_medium(&bytes)?;
-            let report = cairn_node::backup::verify_events(&events);
+            let container = cairn_node::medium::parse_container(&bytes)?;
+            let report = cairn_node::backup::verify_events(&container.events);
             if !report.all_intact() {
                 anyhow::bail!(
                     "refusing to restore a medium that fails self-verification: {}/{} intact, \
@@ -515,15 +545,39 @@ async fn main() -> anyhow::Result<()> {
                     report.intact, report.total, report.first_bad
                 );
             }
-            // 2. Resolve the dead node-id (solo auto-detect, else --superseded-node).
-            //    resolve_dead_node_id guarantees the id names an enroll on the medium, so
-            //    old_genesis_meta always resolves; the bail is a defensive invariant, never a
-            //    silent synthetic identity (paper-parity: a restored node keeps its name/address).
-            let dead = cairn_node::restore::resolve_dead_node_id(&events, superseded_node.as_deref())?;
-            let (name, address) = cairn_node::restore::old_genesis_meta(&events, &dead)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "internal: resolved dead node {dead} has no enroll on the medium (unreachable)"
-                ))?;
+            // 2. Resolve this node's OWN genesis on the medium (the dead node to supersede),
+            //    from the medium's container-level self-marker — the events alone cannot say
+            //    which enroll is self (set-union convergence; issue #53). A SIGNED marker on a
+            //    sole-enroll medium is authoritative + tamper-evident; on a federated/converged
+            //    (multi-enroll) medium it resolves self but carries a residual peer-medium splice
+            //    risk (confirm below); UNSIGNED / no marker is flagged for confirmation too. An
+            //    explicit --superseded-node is validated against the marker and rejected
+            //    fail-closed if it names a peer or an off-medium id.
+            let dead = cairn_node::restore::resolve_dead_node(&container, superseded_node.as_deref())?;
+            use cairn_node::restore::Provenance;
+            match dead.provenance {
+                Provenance::Signed =>
+                    println!("self-identity confirmed by a signed self-marker (tamper-evident)"),
+                Provenance::SignedFederated => eprintln!(
+                    "WARNING: this is a FEDERATED medium (carries peers' genesis too). The signed \
+                     self-marker resolves self, but a converged peer's medium holds a byte-identical \
+                     event set, so a peer's genuine marker could be spliced here — the signature \
+                     alone cannot rule that out. Confirm the restored node's name/address printed \
+                     below match THIS node before relying on it."),
+                Provenance::Unsigned => eprintln!(
+                    "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident). Confirm \
+                     the restored node's name/address printed below match THIS node before relying on it."),
+                Provenance::NoMarker => eprintln!(
+                    "WARNING: this medium carries NO self-marker (legacy/pre-enrollment backup). \
+                     Self identity was taken from --superseded-node / a sole enroll; confirm the \
+                     name/address below match THIS node."),
+            }
+            let (name, address) =
+                cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex)
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "internal: resolved dead node {} has no enroll on the medium (unreachable)",
+                        dead.node_id_hex
+                    ))?;
 
             // 3. Connect to the FRESH db and load the schema (DDL: owner privileges, like init).
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
@@ -557,9 +611,9 @@ async fn main() -> anyhow::Result<()> {
 
             // 5. Apply old events through the self-trusting door (db still un-enrolled),
             //    then author the new genesis + supersede.
-            let applied = cairn_node::restore::apply_medium(&db, &events).await?;
+            let applied = cairn_node::restore::apply_medium(&db, &container.events).await?;
             let outcome = cairn_node::restore::finalize_identity(
-                &db, &sk, &kid, &name, &address, &dead).await?;
+                &db, &sk, &kid, &name, &address, &dead.node_id_hex).await?;
 
             // ADR-0026 slice D: if a sealed local-state export sits beside the medium,
             // unseal it with the OLD recovery code and apply it (empty/noop today), then
@@ -598,6 +652,9 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("restored {applied} event(s) from {}", from.display());
+            // Always echo the adopted identity (name/address) so any self-mis-identification is
+            // visible to the operator, whatever the marker provenance — paper-parity.
+            println!("restored identity '{name}' ({address})");
             println!("new node {}", outcome.new_node_id_hex);
             println!("supersedes {}", outcome.superseded_node_id_hex);
             println!("re-peer with `cairn-node pair-offer` / `pair-accept` (trust resets on restore)");

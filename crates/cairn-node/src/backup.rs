@@ -1,193 +1,27 @@
-//! ADR-0026 slice B — backup-as-cold-peer (the export + self-verify half) and backup
-//! health.
+//! ADR-0026 slice B — backup-as-cold-peer: the DB/IO orchestration of an export plus
+//! backup-health surfacing. The PURE medium container format (framing, the CAIRNB2
+//! self-marker, signature verification) lives in [`crate::medium`]; this module is the thin
+//! DB-touching layer on top.
 //!
-//! WHY THIS EXISTS: the spec designed *intentional* key-death in great detail
-//! (crypto-shred) but left *accidental* data-death — a node's disk simply dying —
-//! undesigned. For the genuinely-solo clinic (no parent to re-provision from) replication
-//! provides zero durability, so a backup is the only safety net. ADR-0026's insight is
-//! that a backup is just another replication peer: the medium holds a NORMAL Cairn event
-//! set (nothing backup-specific about it), and restore is set-union apply through the
-//! existing verify-on-apply path. This module is the EXPORT side of that — it reads the
-//! signed `node_event` set and writes it to a local medium — plus the medium's
-//! **self-verification** and the **backup-health** surfacing (point 7: a node running
-//! without a net must say so).
-//!
-//! SCOPE (slice B): export + self-verify + health. The medium's events are already
-//! signed, so confidentiality at rest is the operator's encrypted-volume choice (we add
-//! nothing backup-specific). The APPLY/restore-into-a-DB half is slice C: it is coupled
-//! with the new-identity `supersede` ceremony (a restored node mints a fresh key — the
-//! signing key is deliberately never backed up) and needs its own self-trusting restore
-//! door, because the live `apply_remote_node_event` gate is the PEER-admission path and
-//! would deny a node rehydrating its OWN history. Keeping that out of this slice keeps
-//! the safety-critical surface here tiny: pure serialization + the existing signature
-//! invariant, no new in-DB door.
-//!
-//! The self-verification reuses `cairn_event::verify_self_described`: a tampered or
-//! bit-rotted medium event fails the SAME Ed25519/COSE signature check that catches a
-//! malicious peer, so the backup is "self-verifying and tamper-evident by construction"
-//! (ADR-0026 point 2) with no separate "is the backup intact?" mechanism.
+//! WHY THIS EXISTS: the spec designed *intentional* key-death in detail (crypto-shred) but
+//! left *accidental* data-death — a node's disk simply dying — undesigned. For a genuinely-solo
+//! clinic (no parent to re-provision from) replication provides zero durability, so a backup is
+//! the only safety net. ADR-0026's insight: a backup is just another replication peer — the
+//! medium holds a NORMAL Cairn event set and restore is set-union apply through the existing
+//! verify-on-apply path. This module reads the signed `node_event` set, writes it to a local
+//! medium (with a self-marker so restore can tell which node it belongs to — see `medium`),
+//! and surfaces backup health (point 7: a node running without a net must say so).
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Magic header identifying a Cairn backup medium (versioned; bump on a format change).
-/// Distinct from the keystore's `CAIRNK1` so the two artifacts can never be confused.
-const MEDIUM_MAGIC: &[u8] = b"CAIRNB1\n";
-
-/// Upper bound on a single framed event on the medium. A signed node-event envelope is
-/// a few hundred bytes; 8 MiB is generous headroom while capping a corrupt length prefix
-/// so a bit-flip can never force a multi-GiB allocation during parse. Mirrors the wire
-/// frame cap in `sync.rs`.
-const MAX_EVENT_BYTES: usize = 8 * 1024 * 1024;
-
-#[derive(thiserror::Error, Debug)]
-pub enum BackupError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    /// The medium bytes are not a valid backup container (bad magic / truncated frame).
-    #[error("decode: {0}")]
-    Decode(String),
-}
-
-// ---------------------------------------------------------------------------
-// Medium container format (pure — no I/O, trivially unit-testable).
-//
-// Layout: MAGIC ++ repeated [u32 big-endian length][signed_bytes]. No event count is
-// stored: frames are read until a clean end-of-buffer, exactly like a peer stream's EOF.
-// ---------------------------------------------------------------------------
-
-/// Serialize a set of signed events into a backup-medium byte image. Pure.
-/// The order is the caller's (we preserve insertion/`seq` order for legibility, but the
-/// set is order-independent on restore — convergence is set-union by content-address).
-pub fn serialize_medium(events: &[Vec<u8>]) -> Vec<u8> {
-    let total: usize = events.iter().map(|e| 4 + e.len()).sum();
-    let mut out = Vec::with_capacity(MEDIUM_MAGIC.len() + total);
-    out.extend_from_slice(MEDIUM_MAGIC);
-    for e in events {
-        // The `as u32` length prefix mirrors `MAX_EVENT_BYTES`/`parse_medium`. Real signed
-        // node-events are a few hundred bytes and the wire layer caps them well under 4 GiB,
-        // so this is unreachable today — but assert the invariant so a future change that
-        // lifts the upstream cap can never silently truncate a length prefix here.
-        debug_assert!(
-            e.len() <= MAX_EVENT_BYTES,
-            "event of {} bytes exceeds the {MAX_EVENT_BYTES}-byte medium frame cap",
-            e.len()
-        );
-        out.extend_from_slice(&(e.len() as u32).to_be_bytes());
-        out.extend_from_slice(e);
-    }
-    out
-}
-
-/// Serialize an event set into a medium image and self-verify it in one step, returning the
-/// verified bytes — or an error if the set fails its own signature check.
-///
-/// This runs BEFORE the image is written over the live medium (see [`backup_to`]). That
-/// ordering is the load-bearing half of the "never over-claim" guarantee: a re-backup
-/// commonly targets a fixed path, so if a serialization/signing regression produced a set
-/// that fails verification we must reject it here — *before* the atomic rename — rather than
-/// overwrite the previous good medium with an unrestorable one and only then notice.
-pub fn serialize_and_verify(events: &[Vec<u8>]) -> Result<Vec<u8>, BackupError> {
-    let image = serialize_medium(events);
-    let report = verify_medium_bytes(&image)?;
-    if !report.all_intact() {
-        return Err(BackupError::Decode(format!(
-            "refusing to write a medium that fails its own self-verification \
-             ({} of {} events intact, first bad at index {:?})",
-            report.intact, report.total, report.first_bad
-        )));
-    }
-    Ok(image)
-}
-
-/// Parse a backup-medium byte image back into its signed events. Pure.
-///
-/// Errors (never panics) on a missing magic header or a truncated frame — a partially
-/// written or bit-rotted medium is reported, not silently accepted. This is the
-/// structural integrity check; the cryptographic one is [`verify_events`].
-pub fn parse_medium(bytes: &[u8]) -> Result<Vec<Vec<u8>>, BackupError> {
-    let mut rest = bytes
-        .strip_prefix(MEDIUM_MAGIC)
-        .ok_or_else(|| BackupError::Decode("missing CAIRNB1 magic header".into()))?;
-    let mut events = Vec::new();
-    while !rest.is_empty() {
-        if rest.len() < 4 {
-            return Err(BackupError::Decode(format!(
-                "truncated medium: {} trailing byte(s) without a complete length prefix",
-                rest.len()
-            )));
-        }
-        let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
-        if len > MAX_EVENT_BYTES {
-            return Err(BackupError::Decode(format!(
-                "medium frame length {len} exceeds {MAX_EVENT_BYTES}-byte cap (corrupt)"
-            )));
-        }
-        let body_start = 4;
-        let body_end = body_start + len;
-        if rest.len() < body_end {
-            return Err(BackupError::Decode(format!(
-                "truncated medium: frame claims {len} bytes, only {} remain",
-                rest.len() - body_start
-            )));
-        }
-        events.push(rest[body_start..body_end].to_vec());
-        rest = &rest[body_end..];
-    }
-    Ok(events)
-}
-
-// ---------------------------------------------------------------------------
-// Self-verification (reuses the existing signature invariant — no DB, no new gate).
-// ---------------------------------------------------------------------------
-
-/// What a verification pass found. `intact` events verified their signature; `first_bad`
-/// is the index of the first event that did NOT (so a caller can point at it). A medium
-/// is sound iff every event is intact.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyReport {
-    pub total: usize,
-    pub intact: usize,
-    pub first_bad: Option<usize>,
-}
-
-impl VerifyReport {
-    /// Every event verified — the backup is restorable as-is.
-    pub fn all_intact(&self) -> bool {
-        self.first_bad.is_none() && self.intact == self.total
-    }
-}
-
-/// Verify ONE signed event the way restore will: its self-described Ed25519 key must sign
-/// the COSE body, and the body's claimed signer must match that key (forged-authorship
-/// guard). A single flipped byte breaks the signature → `false`. Deterministic, no I/O.
-pub fn verify_event(signed: &[u8]) -> bool {
-    cairn_event::verify_self_described(signed).is_ok()
-}
-
-/// Verify every event in a parsed set. Deterministic; no DB and no external key needed —
-/// a node can verify a backup medium with just the `cairn-node` binary.
-pub fn verify_events(events: &[Vec<u8>]) -> VerifyReport {
-    let mut intact = 0;
-    let mut first_bad = None;
-    for (i, e) in events.iter().enumerate() {
-        if verify_event(e) {
-            intact += 1;
-        } else if first_bad.is_none() {
-            first_bad = Some(i);
-        }
-    }
-    VerifyReport { total: events.len(), intact, first_bad }
-}
-
-/// Parse a medium image and verify every event in one step. The two failure modes are
-/// distinct: a `Decode` error means the container is structurally broken (can't even be
-/// read as a Cairn event set); an `Ok(report)` with `!all_intact()` means it parsed but
-/// carries a tampered/corrupt event.
-pub fn verify_medium_bytes(bytes: &[u8]) -> Result<VerifyReport, BackupError> {
-    Ok(verify_events(&parse_medium(bytes)?))
-}
+// The medium format is defined once in `crate::medium`. Re-export the surface other modules
+// and tests already reach for via `backup::…`, so the format move stays source-compatible.
+pub use crate::medium::{
+    parse_medium, verify_event, verify_events, verify_medium_bytes, BackupError, SelfMarker,
+    VerifyReport,
+};
 
 // ---------------------------------------------------------------------------
 // Backup health (node-local operational state — NOT a clinical event, never signed,
@@ -275,11 +109,24 @@ pub fn write_health(path: &Path, health: &BackupHealth) -> Result<(), BackupErro
 // DB / IO glue (thin — the only DB-touching part of this module).
 // ---------------------------------------------------------------------------
 
+/// Which self-marker `backup_to` actually wrote into the medium, so the caller can warn an
+/// operator when a medium is only operator-error-safe (unsigned) rather than tamper-evident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrittenMarker {
+    /// No marker — the node is not yet enrolled, so there is no identity to attest.
+    None,
+    /// The self node-id without a signature (the signing key was not available at backup).
+    Unsigned,
+    /// A signed self-attestation — tampering can only withhold it, never misdirect (medium docs).
+    Signed,
+}
+
 /// What one backup did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupReport {
     pub event_count: usize,
     pub medium_bytes: usize,
+    pub marker: WrittenMarker,
 }
 
 /// Read this node's signed `node_event` set, in local `seq` order. A plain `SELECT` —
@@ -294,36 +141,82 @@ pub async fn read_event_set(db: &tokio_postgres::Client) -> anyhow::Result<Vec<V
     Ok(rows.iter().map(|r| r.get::<_, Vec<u8>>(0)).collect())
 }
 
+/// This node's own genesis node-id (hex), from `local_node`, or `None` if not yet enrolled.
+/// The authoritative answer to "whose backup is this?" — recorded into the medium's marker
+/// while we are still live (set-union sync cannot erase what we write into the container).
+async fn read_self_node_id(db: &tokio_postgres::Client) -> anyhow::Result<Option<String>> {
+    use anyhow::Context;
+    let row = db
+        .query_opt(
+            "SELECT encode(node_id,'hex') AS id FROM local_node WHERE id",
+            &[],
+        )
+        .await
+        .context("reading local_node id for the backup self-marker")?;
+    Ok(row.map(|r| r.get::<_, String>("id")))
+}
+
+/// Choose the self-marker to embed: signed when the node's key is supplied AND the node is
+/// enrolled; unsigned when enrolled but no key was available; none when not yet enrolled. The
+/// signed attestation is bound to `events` (the exact set being backed up) so it cannot be
+/// replayed onto another medium.
+fn choose_marker(
+    self_id: Option<String>,
+    marker_key: Option<(&cairn_event::SigningKey, &str)>,
+    events: &[Vec<u8>],
+) -> Option<SelfMarker> {
+    let id = self_id?;
+    match marker_key {
+        Some((sk, key_id)) => Some(SelfMarker::Signed(crate::medium::build_self_attestation(
+            sk, key_id, &id, events,
+        ))),
+        None => Some(SelfMarker::Unsigned(id)),
+    }
+}
+
 /// Back up the node's event set to `medium_path`, then record health at `health_path`.
 ///
+/// `marker_key` is the node's signing key (+ key-id): when present, the medium carries a
+/// SIGNED self-attestation (tamper can only withhold it on restore, never misdirect — see
+/// [`crate::medium`]); when `None`, an UNSIGNED self-marker is written instead (still closes
+/// the operator-typo footgun, just not tamper-evident). An unsigned marker NEVER blocks a
+/// backup — the caller decides whether the key is available and warns accordingly.
+///
 /// Ordering is deliberately fail-safe and verify-BEFORE-write:
-///   1. serialize the medium and self-verify the image IN MEMORY — if the set fails its
+///   1. serialize the medium and self-verify the image IN MEMORY — if the event set fails its
 ///      own signature check we BAIL before touching disk, so the previous good medium at
-///      `medium_path` is left completely untouched (a re-backup over a fixed path can
-///      never destroy a restorable medium with an unrestorable one);
+///      `medium_path` is left completely untouched;
 ///   2. write the verified image atomically (a crash here never destroys the previous good
 ///      medium either — the rename either lands whole or not at all);
-///   3. re-read and self-verify the on-disk bytes — a defence-in-depth tripwire for an fs
-///      bug between write and rename; still BAIL WITHOUT touching health if it fails;
+///   3. re-read and self-verify the on-disk bytes — a defence-in-depth tripwire for an fs bug
+///      between write and rename; still BAIL WITHOUT touching health if it fails;
 ///   4. only then update the health sidecar.
 ///
-/// A crash between (3) and (4) leaves health UNDER-reporting (older / "never"), which is
-/// the correct direction for a safety-net indicator — it must never over-claim.
+/// A crash between (3) and (4) leaves health UNDER-reporting (older / "never"), which is the
+/// correct direction for a safety-net indicator — it must never over-claim.
 ///
-/// `now_unix` is injected (operational wall-clock) so the function stays deterministic
-/// and testable; the CLI passes `SystemTime::now()`.
+/// `now_unix` is injected (operational wall-clock) so the function stays deterministic and
+/// testable; the CLI passes `SystemTime::now()`.
 pub async fn backup_to(
     db: &tokio_postgres::Client,
     medium_path: &Path,
     health_path: &Path,
     now_unix: i64,
+    marker_key: Option<(&cairn_event::SigningKey, &str)>,
 ) -> anyhow::Result<BackupReport> {
     use anyhow::Context;
     let events = read_event_set(db).await?;
+    let self_id = read_self_node_id(db).await?;
+    let marker = choose_marker(self_id, marker_key, &events);
+    let written = match &marker {
+        None => WrittenMarker::None,
+        Some(SelfMarker::Unsigned(_)) => WrittenMarker::Unsigned,
+        Some(SelfMarker::Signed(_)) => WrittenMarker::Signed,
+    };
 
-    // Verify the image BEFORE it can overwrite the live medium: a set that fails its own
+    // Verify the event set BEFORE it can overwrite the live medium: a set that fails its own
     // signature check is rejected here, with the previous good medium still intact on disk.
-    let medium = serialize_and_verify(&events)
+    let medium = crate::medium::serialize_and_verify_container(marker.as_ref(), &events)
         .context("self-verifying the backup image before writing (previous medium untouched)")?;
 
     crate::fsio::atomic_write(medium_path, &medium, Some(0o600))
@@ -354,137 +247,25 @@ pub async fn backup_to(
     };
     write_health(health_path, &health).context("writing backup-health sidecar")?;
 
-    Ok(BackupReport { event_count: events.len(), medium_bytes: medium.len() })
+    Ok(BackupReport {
+        event_count: events.len(),
+        medium_bytes: medium.len(),
+        marker: written,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_event::{sign, EventBody, Hlc, SigningKey};
     use tempfile::tempdir;
-
-    /// Mint a real, validly-signed event — no DB needed. This is the same signed-envelope
-    /// shape `cairn_event` produces everywhere, so `verify_self_described` exercises the
-    /// genuine signature path a tampered medium would fail.
-    fn synth_event(sk: &SigningKey, n: u64) -> Vec<u8> {
-        let kid = hex::encode(sk.verifying_key().to_bytes());
-        let body = EventBody {
-            event_id: format!("event-{n}"),
-            patient_id: "00000000-0000-0000-0000-000000000000".into(),
-            event_type: "note.added".into(),
-            schema_version: "0".into(),
-            hlc: Hlc { wall: n as i64, counter: 0, node_origin: "test".into() },
-            t_effective: None,
-            signer_key_id: kid,
-            contributors: serde_json::json!([]),
-            payload: serde_json::json!({ "n": n }),
-            attachments: vec![],
-        };
-        sign(&body, sk).unwrap().signed_bytes
-    }
-
-    fn sk() -> SigningKey {
-        cairn_event::generate_key().unwrap().0
-    }
-
-    #[test]
-    fn medium_roundtrips_an_event_set() {
-        let k = sk();
-        let events: Vec<Vec<u8>> = (0..5).map(|n| synth_event(&k, n)).collect();
-        let image = serialize_medium(&events);
-        assert!(image.starts_with(MEDIUM_MAGIC), "medium must carry the CAIRNB1 magic");
-        assert_eq!(parse_medium(&image).unwrap(), events, "parse must recover the exact set");
-    }
-
-    #[test]
-    fn empty_medium_roundtrips() {
-        // A node backing up before genesis (no events) is unusual but valid; it must not
-        // error — an empty set serializes to just the magic and parses back to empty.
-        let image = serialize_medium(&[]);
-        assert_eq!(image, MEDIUM_MAGIC);
-        assert!(parse_medium(&image).unwrap().is_empty());
-    }
-
-    #[test]
-    fn parse_rejects_missing_magic() {
-        assert!(matches!(parse_medium(b"not a medium"), Err(BackupError::Decode(_))));
-        assert!(parse_medium(&[]).is_err(), "an empty file has no magic and is not a medium");
-    }
-
-    #[test]
-    fn parse_rejects_a_truncated_frame() {
-        let k = sk();
-        let mut image = serialize_medium(&[synth_event(&k, 1)]);
-        // Lop off the last byte: the final frame now claims more bytes than remain.
-        image.pop();
-        assert!(matches!(parse_medium(&image), Err(BackupError::Decode(_))));
-    }
-
-    #[test]
-    fn parse_rejects_a_dangling_length_prefix() {
-        // Magic followed by 2 stray bytes — not enough for even a 4-byte length prefix.
-        let mut image = MEDIUM_MAGIC.to_vec();
-        image.extend_from_slice(&[0u8, 0u8]);
-        assert!(matches!(parse_medium(&image), Err(BackupError::Decode(_))));
-    }
-
-    #[test]
-    fn verify_passes_for_an_intact_set_and_pinpoints_a_tampered_event() {
-        let k = sk();
-        let mut events: Vec<Vec<u8>> = (0..4).map(|n| synth_event(&k, n)).collect();
-        assert!(verify_events(&events).all_intact(), "an untouched set must fully verify");
-
-        // Flip a byte in the body of event index 2: its Ed25519 signature must now fail.
-        let mid = events[2].len() / 2;
-        events[2][mid] ^= 0x01;
-        let report = verify_events(&events);
-        assert!(!report.all_intact(), "a tampered event must break verification");
-        assert_eq!(report.first_bad, Some(2), "the report must point at the tampered event");
-        assert_eq!(report.intact, 3, "the other three events still verify");
-    }
-
-    #[test]
-    fn verify_medium_bytes_catches_tamper_through_the_container() {
-        let k = sk();
-        let events: Vec<Vec<u8>> = (0..3).map(|n| synth_event(&k, n)).collect();
-        let mut image = serialize_medium(&events);
-        assert!(verify_medium_bytes(&image).unwrap().all_intact());
-        // Corrupt a byte somewhere inside the framed body region (after the magic).
-        let idx = MEDIUM_MAGIC.len() + 12;
-        image[idx] ^= 0xff;
-        // It still parses structurally (length prefixes intact) but fails verification.
-        let report = verify_medium_bytes(&image).unwrap();
-        assert!(!report.all_intact(), "a content bit-flip must fail the signature check");
-    }
-
-    #[test]
-    fn serialize_and_verify_returns_a_verified_image_for_an_intact_set() {
-        let k = sk();
-        let events: Vec<Vec<u8>> = (0..3).map(|n| synth_event(&k, n)).collect();
-        let image = serialize_and_verify(&events).expect("an intact set must serialize + verify");
-        assert!(image.starts_with(MEDIUM_MAGIC));
-        assert_eq!(parse_medium(&image).unwrap(), events, "the returned bytes are the medium image");
-    }
-
-    #[test]
-    fn serialize_and_verify_refuses_a_set_with_a_tampered_event() {
-        // The load-bearing guarantee behind verify-BEFORE-write: a set that fails its OWN
-        // signature check is rejected before any bytes reach disk, so a re-backup over a
-        // fixed medium path can never overwrite the previous good medium with an
-        // unrestorable one.
-        let k = sk();
-        let mut events: Vec<Vec<u8>> = (0..3).map(|n| synth_event(&k, n)).collect();
-        let mid = events[1].len() / 2;
-        events[1][mid] ^= 0xff;
-        assert!(
-            matches!(serialize_and_verify(&events), Err(BackupError::Decode(_))),
-            "a set that fails self-verification must be refused, not serialized to a medium"
-        );
-    }
 
     #[test]
     fn humanize_ago_buckets_are_coarse_and_safe() {
-        assert_eq!(humanize_ago(-5), "just now", "a backwards clock must not show a negative age");
+        assert_eq!(
+            humanize_ago(-5),
+            "just now",
+            "a backwards clock must not show a negative age"
+        );
         assert_eq!(humanize_ago(0), "just now");
         assert_eq!(humanize_ago(42), "42s");
         assert_eq!(humanize_ago(120), "2m");
@@ -494,7 +275,10 @@ mod tests {
 
     #[test]
     fn describe_health_warns_when_absent_and_summarizes_when_present() {
-        assert_eq!(describe_health(1000, &None), "never — running without a net");
+        assert_eq!(
+            describe_health(1000, &None),
+            "never — running without a net"
+        );
         let h = BackupHealth {
             version: 1,
             last_backup_unix: 1000,
@@ -512,7 +296,11 @@ mod tests {
     fn health_sidecar_roundtrips_and_absent_reads_as_none() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("backup-status.json");
-        assert_eq!(read_health(&p), None, "a missing sidecar reads as None (fail-safe)");
+        assert_eq!(
+            read_health(&p),
+            None,
+            "a missing sidecar reads as None (fail-safe)"
+        );
         let h = BackupHealth {
             version: 1,
             last_backup_unix: 12_345,
@@ -521,7 +309,11 @@ mod tests {
             medium_bytes: 999,
         };
         write_health(&p, &h).unwrap();
-        assert_eq!(read_health(&p), Some(h), "a written sidecar reads back exactly");
+        assert_eq!(
+            read_health(&p),
+            Some(h),
+            "a written sidecar reads back exactly"
+        );
     }
 
     #[test]
@@ -529,12 +321,36 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("backup-status.json");
         std::fs::write(&p, b"{ this is not valid json").unwrap();
-        assert_eq!(read_health(&p), None, "a corrupt sidecar must fail safe to None");
+        assert_eq!(
+            read_health(&p),
+            None,
+            "a corrupt sidecar must fail safe to None"
+        );
     }
 
     #[test]
     fn health_path_is_a_sibling_of_the_key() {
         let p = health_path_for(Path::new("/var/lib/cairn/node.key"));
         assert_eq!(p, Path::new("/var/lib/cairn/backup-status.json"));
+    }
+
+    #[test]
+    fn choose_marker_picks_signed_unsigned_or_none() {
+        let events: Vec<Vec<u8>> = vec![];
+        // No identity yet → no marker (nothing to attest).
+        assert_eq!(choose_marker(None, None, &events), None);
+        // Enrolled but no key available → unsigned marker carrying the self id.
+        assert_eq!(
+            choose_marker(Some("abcd".into()), None, &events),
+            Some(SelfMarker::Unsigned("abcd".into()))
+        );
+        // Enrolled + key → a signed attestation (a Signed variant; its bytes are exercised in
+        // the medium module's verification tests).
+        let (sk, _) = cairn_event::generate_key().unwrap();
+        let kid = hex::encode(sk.verifying_key().to_bytes());
+        assert!(matches!(
+            choose_marker(Some("abcd".into()), Some((&sk, &kid)), &events),
+            Some(SelfMarker::Signed(_))
+        ));
     }
 }

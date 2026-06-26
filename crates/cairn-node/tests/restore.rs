@@ -159,16 +159,25 @@ async fn restore_round_trip_rehydrates_under_a_new_identity() {
     // --- simulate disk death: a fresh, un-enrolled DB ---
     db::reset_node_federation_tables(&a).await.ok();
 
+    // Wrap the medium in a SIGNED-self-marker container, as `backup` does on a live node.
+    let att = cairn_node::medium::build_self_attestation(&sk_a, &kid_a, &old.node_id_hex, &medium);
+    let container = cairn_node::medium::Container {
+        self_marker: Some(cairn_node::medium::SelfMarker::Signed(att)),
+        events: medium,
+    };
+
     // --- restore under a NEW key ---
     let (sk_new, kid_new) = keystore::generate_plaintext(&tmp.path().join("new.key")).unwrap();
-    let dead = cairn_node::restore::resolve_dead_node_id(&medium, None).unwrap();
-    assert_eq!(dead, old.node_id_hex, "auto-detected dead node == A");
-    let (name, addr) = cairn_node::restore::old_genesis_meta(&medium, &dead).unwrap();
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
+    assert_eq!(dead.node_id_hex, old.node_id_hex, "signed marker resolves dead node == A");
+    assert_eq!(dead.provenance, cairn_node::restore::Provenance::Signed);
+    let (name, addr) =
+        cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex).unwrap();
 
-    let applied = cairn_node::restore::apply_medium(&a, &medium).await.unwrap();
+    let applied = cairn_node::restore::apply_medium(&a, &container.events).await.unwrap();
     assert_eq!(applied, 1);
     let outcome = cairn_node::restore::finalize_identity(
-        &a, &sk_new, &kid_new, &name, &addr, &dead).await.unwrap();
+        &a, &sk_new, &kid_new, &name, &addr, &dead.node_id_hex).await.unwrap();
 
     // (a) old events present:
     let n_enroll: i64 = a.query_one(
@@ -235,6 +244,78 @@ async fn restore_door_applies_a_non_enroll_event_after_genesis() {
         .unwrap();
     let author: String = row.get("author");
     assert_eq!(author, a_id, "peer event's author resolved to node A's genesis content-address");
+}
+
+/// Issue #53: a REAL federated medium (built through the live doors) carries the node's own
+/// genesis AND a peer's, indistinguishable from the events alone (set-union convergence). The
+/// medium's SIGNED self-marker resolves self unambiguously, and naming the peer's node-id is
+/// rejected fail-closed before any DB write.
+#[tokio::test]
+async fn federated_medium_resolves_self_and_rejects_a_peer() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let a = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&a).await.ok();
+
+    // Node A is "self".
+    let tmp = tempfile::tempdir().unwrap();
+    let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    identity::provision(&a, &sk_a, &kid_a, "Self-A", "127.0.0.1:7950").await.unwrap();
+    let self_id = identity::load_local(&a).await.unwrap().node_id_hex;
+
+    // Peer B: author B's real genesis, pair A->B (records the peer.added), then admit B's
+    // genesis into A's log through the real admission gate.
+    let (sk_b, kid_b) = cairn_event::generate_key().unwrap();
+    let body_b = EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.enrolled".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc { wall: 1, counter: 0, node_origin: "Peer-B".into() },
+        t_effective: None,
+        signer_key_id: kid_b.clone(),
+        contributors: serde_json::json!([{"actor_id": kid_b, "role": "device"}]),
+        payload: serde_json::json!({"display_name": "Peer-B", "address": "127.0.0.1:7951"}),
+        attachments: vec![],
+    };
+    let signed_b = sign(&body_b, &sk_b).unwrap();
+    let peer_id = hex::encode(cairn_event::event_address(&signed_b.signed_bytes));
+    let bundle = cairn_event::PairingBundle {
+        node_id_hex: peer_id.clone(),
+        pubkey_hex: kid_b.clone(),
+        address: "127.0.0.1:7951".into(),
+        fingerprint: cairn_event::short_fingerprint(&kid_b).unwrap(),
+        nonce: "n".into(),
+        hlc: Hlc { wall: 1, counter: 0, node_origin: peer_id.clone() },
+    };
+    identity::author_peer(&a, &sk_a, &kid_a, "Self-A", &bundle, Some("peer")).await.unwrap();
+    let bytes_b = signed_b.signed_bytes.clone();
+    a.execute("SELECT apply_remote_node_event($1)", &[&bytes_b]).await.unwrap();
+
+    // The medium as `backup` reads it: A.genesis + peer.added(B) + B.genesis (seq order),
+    // i.e. a genuine federated medium carrying TWO enrolls. Wrapped with the SIGNED self-marker
+    // `backup` writes on a live node (self = A, signed by A's key).
+    let events = cairn_node::backup::read_event_set(&a).await.unwrap();
+    assert_eq!(events.len(), 3, "federated medium: A genesis + peer.added(B) + B genesis");
+    let att = cairn_node::medium::build_self_attestation(&sk_a, &kid_a, &self_id, &events);
+    let container = cairn_node::medium::Container {
+        self_marker: Some(cairn_node::medium::SelfMarker::Signed(att)),
+        events,
+    };
+
+    // Omitting --superseded-node resolves to SELF via the signed marker (the events alone
+    // cannot — A and B are symmetric on the medium). A multi-enroll/federated medium is reported
+    // as SignedFederated (resolves self, but confirm-on-restore for the residual splice risk).
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
+    assert_eq!(dead.node_id_hex, self_id, "signed marker resolves this node's own genesis");
+    assert_eq!(dead.provenance, cairn_node::restore::Provenance::SignedFederated);
+
+    // Naming the PEER's real node-id is rejected fail-closed (the issue #53 footgun).
+    let err = cairn_node::restore::resolve_dead_node(&container, Some(&peer_id)).unwrap_err();
+    assert!(
+        matches!(err, cairn_node::restore::RestoreError::NotSelf { .. }),
+        "naming a peer's node-id must fail closed as NotSelf, got: {err:?}"
+    );
 }
 
 /// After a restore, `status` reports the supersede lineage (this node supersedes the dead one).

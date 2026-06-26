@@ -4,17 +4,35 @@
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-26):** closed [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54) — **uniform
-key-material zeroization** across `seal.rs` + `localstate.rs`. Every transient secret (the Argon2id KEKs, the DEK,
-the recovered signing seed, the local-state LSK) is now held in `zeroize::Zeroizing`, wiped from stack/heap on drop;
-the functions that *yield* key material (`derive_kek`, `try_unwrap`, `unseal`/`unseal_op`/`unseal_rec`) now return
-`Zeroizing<[u8;32]>`, so the seed is never bare in a caller's frame (`keystore::load` gains wipe-on-drop for free).
-The type now also *signals* "this is a secret" to a reviewer. Defence-in-depth only — no secret leaks to disk/logs
-today, round-trip behaviour unchanged (existing tests green). TDD via type-asserting tests (red = type mismatch →
-green). The `unseal_local_state_*` **bundle** `Vec` is intentionally left un-wrapped (it's payload, not key material,
-and empty at this tier; revisit when the clinical tier puts DEKs in it). Full `cairn-node` suite green (63 lib +
-all integration binaries), clippy clean. **All ADR-0026 node-durability follow-ons are now closed; only the optional
-escrow rungs (Shamir/QR/TPM) remain as upward options.**
+**This session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
+self-identification on restore**. A federated backup medium holds the node's OWN genesis *and* every peer's; by
+set-union convergence a node's `node_event` set is byte-identical to its peers', so the events alone cannot say which
+enroll is "self" — `restore --superseded-node` could name a *peer* and write a wrong, immutable `supersede` edge + adopt
+the peer's name. Fix: a **container-level self-marker** written at backup time (when `local_node` is authoritative), NOT
+derivable from events. New **`crates/cairn-node/src/medium.rs`** (the medium container format, extracted out of
+`backup.rs`): `CAIRNB2` carries a `SelfMarker` — **Signed** (a `node.self_attested` event held only in the container,
+never inserted/synced) or **Unsigned** (self node-id, operator-error-safe). `restore::resolve_dead_node` reads the
+marker (Signed → authoritative; explicit `--superseded-node` validated against it, a peer/off-medium id rejected
+fail-closed `NotSelf`; Unsigned/legacy flagged for confirmation). The signed attestation is **unforgeable** (no private
+key on the medium) AND **event-set-bound** — a sorted `event_set_commitment` ties it to this exact set, rejecting a
+marker spliced from a backup with a *different* set. **Known residual (caught in code review of this PR):** the
+commitment binds to set *content*, and two fully-converged peers hold *byte-identical* sets, so it **cannot** reject a
+peer's genuine marker spliced between converged media. That splice is impossible on a **sole-enroll** medium (foreign id
+absent → fail closed), so the risk is exactly the **multi-enroll/federated** case → restore reports
+`Provenance::SignedFederated` and asks the operator to confirm the echoed name/address (defence: confirm-on-restore +
+physical custody, not the commitment). So: **forgery-proof always; misdirect-proof for sole-enroll media and
+different-set splices; a converged-peer splice is a confirm-on-restore residual, never a silent misdirect.** Unsigned
+never blocks a backup (just flagged); legacy `CAIRNB1` media degrade honestly. `backup` signs when the key is
+non-interactively available else unsigned+warning; `restore` warns per provenance + echoes the adopted identity
+(paper-parity). Brainstorm→TDD, `medium.rs` no-DB; full `cairn-node` suite green (76 lib + all integration), clippy
+clean. An adversarial subagent review caught the different-set splice (→ commitment bind); the PR code review then caught
+the converged-identical-set residual (→ honest `SignedFederated` provenance + tests pinning the limitation).
+
+**Prior session (2026-06-26):** closed [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54) — **uniform
+key-material zeroization** across `seal.rs` + `localstate.rs`: every transient secret (Argon2id KEKs, DEK, recovered
+signing seed, local-state LSK) held in `zeroize::Zeroizing`; key-yielding fns return `Zeroizing<[u8;32]>`. Defence-in-depth
+(no secret leaked to disk/logs today). **All ADR-0026 node-durability follow-ons now closed; only optional escrow rungs
+(Shamir/QR/TPM) remain.**
 
 **Prior session (2026-06-25):** ADR-0026 **slice D** — the sealed **local-state export** (point 3), which **closes the
 last open ADR-0026 slice (A–D all done)**. No spec/ADR change (implementation of point 3). The federation-node tier has
@@ -131,7 +149,10 @@ local PG16 + `cairn_pgx`.
   atomic-write.
 - ~~**Restore (apply) + new-identity `supersede`** (slice C, [#50](https://github.com/cairn-ehr/cairn-ehr/issues/50))~~
   **closed**: `cairn-node restore` + self-trusting `restore_node_event` door (empty-genesis fenced), `supersede`(dead→new),
-  fresh-key mint, `status` `supersedes` line. `db/009` + a `supersede` branch in `submit_node_event` (db/007).
+  fresh-key mint, `status` `supersedes` line. `db/009` + a `supersede` branch in `submit_node_event` (db/007). Residual
+  footgun ~~[#53](https://github.com/cairn-ehr/cairn-ehr/issues/53) (a federated medium's `--superseded-node` could name a
+  peer)~~ **closed this session** via the container-level self-marker (`medium.rs`, `CAIRNB2`; signed+medium-bound or
+  unsigned) — see top.
 - ~~**Sealed local-state export** (slice D, ADR-0026 point 3)~~ **closed this session**: `localstate.rs` (LSK dual-wrap,
   `CAIRNL1`/`CAIRNX1` containers, additive `LocalState` with empty slots, DB seams); `.lsk` at provisioning;
   `establish-local-state-key`; `backup` writes / `restore` consumes the export; `status` `local_state` line. **All ADR-0026
@@ -211,8 +232,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   and **all four ADR-0026 durability slices** — A (at-rest seal + recovery escrow, PR #44), B (cold-peer export+health,
   PR #51), C (restore + `supersede`, PR #52), **D (sealed local-state export, this session)** — are all **closed**
   (see node gaps above). **ADR-0026 is fully implemented at the node tier.** No remaining required node-hardening thread;
-  ~~[#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) (uniform key zeroization)~~ **closed 2026-06-26**; only optional
-  escrow rungs (Shamir/QR/TPM) remain. The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
+  ~~[#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) (uniform key zeroization)~~ and ~~[#53](https://github.com/cairn-ehr/cairn-ehr/issues/53)
+  (federated-restore self-identification)~~ both **closed 2026-06-26**; only optional escrow rungs (Shamir/QR/TPM) remain.
+  The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 

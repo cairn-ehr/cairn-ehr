@@ -58,11 +58,13 @@ async fn backup_exports_a_self_verifying_medium_and_records_health() {
         "every real node_event must verify"
     );
 
-    // Back up to a medium beside a health sidecar.
+    // Back up to a medium beside a health sidecar. No marker_key → an UNSIGNED self-marker
+    // (still parses to the exact event set; the signed path is exercised below + in restore).
     let medium = dir.path().join("cairn.medium");
     let health_path = backup::health_path_for(&dir.path().join("node.key"));
-    let report = backup::backup_to(&a, &medium, &health_path, 1_000).await.unwrap();
+    let report = backup::backup_to(&a, &medium, &health_path, 1_000, None).await.unwrap();
     assert_eq!(report.event_count, 2);
+    assert_eq!(report.marker, backup::WrittenMarker::Unsigned, "no key → unsigned marker");
 
     // The medium on disk parses and every event verifies (self-verifying by construction).
     let bytes = std::fs::read(&medium).unwrap();
@@ -83,6 +85,40 @@ async fn backup_exports_a_self_verifying_medium_and_records_health() {
     );
 }
 
+/// A backup taken WITH the node's key writes a SIGNED self-marker that round-trips through
+/// disk and resolves to THIS node on restore — the tamper-evident path (issue #53). Exercises
+/// the full wire: build the attestation from the live `local_node` + key, frame it into the
+/// CAIRNB2 container, re-read from disk, and resolve self through the signature/bind check.
+#[tokio::test]
+async fn backup_with_key_writes_a_signed_marker_that_resolves_self() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let a = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&a).await.ok();
+    let (sk, kid) = keystore::generate_plaintext(&dir.path().join("node.key")).unwrap();
+    identity::provision(&a, &sk, &kid, "Clinic-A", "127.0.0.1:7960").await.unwrap();
+    let self_id = identity::load_local(&a).await.unwrap().node_id_hex;
+
+    let medium = dir.path().join("cairn.medium");
+    let health_path = backup::health_path_for(&dir.path().join("node.key"));
+    let report = backup::backup_to(&a, &medium, &health_path, 1_000, Some((&sk, &kid)))
+        .await
+        .unwrap();
+    assert_eq!(report.marker, backup::WrittenMarker::Signed, "key present → signed marker");
+
+    // Re-read the on-disk medium and resolve self through the signed marker.
+    let bytes = std::fs::read(&medium).unwrap();
+    let container = cairn_node::medium::parse_container(&bytes).unwrap();
+    assert!(matches!(container.self_marker, Some(cairn_node::medium::SelfMarker::Signed(_))));
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
+    assert_eq!(dead.node_id_hex, self_id, "signed marker resolves to this node");
+    assert_eq!(dead.provenance, cairn_node::restore::Provenance::Signed);
+}
+
 /// A bit-rotted / tampered medium is caught by the SAME signature invariant that catches
 /// a hostile peer — no separate "is the backup intact?" mechanism (ADR-0026 point 2).
 #[tokio::test]
@@ -97,7 +133,7 @@ async fn a_bitrotted_medium_fails_self_verification() {
 
     let medium = dir.path().join("cairn.medium");
     let health_path = backup::health_path_for(&dir.path().join("node.key"));
-    backup::backup_to(&a, &medium, &health_path, 1_000).await.unwrap();
+    backup::backup_to(&a, &medium, &health_path, 1_000, None).await.unwrap();
 
     // Corrupt a byte inside the FIRST event's body (parse -> flip -> re-serialize), so the
     // container still parses structurally but that event's signature no longer checks.
@@ -106,7 +142,7 @@ async fn a_bitrotted_medium_fails_self_verification() {
     let mut parsed = backup::parse_medium(&std::fs::read(&medium).unwrap()).unwrap();
     let mid = parsed[0].len() / 2;
     parsed[0][mid] ^= 0xff;
-    let corrupted = backup::serialize_medium(&parsed);
+    let corrupted = cairn_node::medium::serialize_container(None, &parsed);
     let report = backup::verify_medium_bytes(&corrupted).unwrap();
     assert!(!report.all_intact(), "a corrupted medium must fail verification");
     assert_eq!(report.first_bad, Some(0), "verification must point at the corrupt event");
