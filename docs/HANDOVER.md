@@ -1,10 +1,24 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-26 (currency check) · **Spec/ADRs:** v0.31 (+ADR-0031) · **Phase:** architecture complete; proving viability
+**Session date:** 2026-06-27 · **Spec/ADRs:** v0.33 (+ADR-0032) · **Phase:** architecture complete; proving viability
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
+**This session (2026-06-27):** recovered the schema (DDL only, no patient data) from an old single-jurisdiction GP EHR
+backup as a private design reference (kept out of this repo — product-neutrality), mined it for Cairn (validations of
+principles 4/11/12 + dual-identifier discipline; full notes private), then resolved a real **demographics gap** it
+surfaced: address representation was under-specified for an international, anti-capture EHR. New **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)**
+(culture-neutral address) + **demographics §4.3** (the three-facet `AddressValue`: mandatory `display` legibility twin +
+optional precision-aware `geo` + optional culture-tagged `structured` parts via a content-addressed locale **profile** that
+*reuses* the ADR-0014 comparator bundle — one locale bundle carries comparator + grammar + formatter + validators). No
+canonical part names / no floor `CHECK`s (validation advisory; floor keeps only structural invariants); country is a part;
+`use`-scoped multi-valued; honest degradation when a profile is absent. Refined the §4.2 projection row (split Phone/Address,
+culture-aware matching), added an identity §5.13 cross-ref, bumped spec 0.32→0.33. Built brainstorm→design→plan→execute
+(design+plan under `docs/superpowers/`); mkdocs clean. **Open follow-ons (deliberately deferred):** demographics gap **B**
+(identifier representation — validation-as-advisory; provider IDs scoped to person×org; confirm home vs §7.5) and gap **C**
+(tie the legibility twin to all demographic assertions).
+
+**Prior session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
 self-identification on restore**. A federated backup medium holds the node's OWN genesis *and* every peer's; by
 set-union convergence a node's `node_event` set is byte-identical to its peers', so the events alone cannot say which
 enroll is "self" — `restore --superseded-node` could name a *peer* and write a wrong, immutable `supersede` edge + adopt
@@ -224,6 +238,10 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 **Desk-doable now (no external dependency):**
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
+- **Demographics gaps B & C** (surfaced 2026-06-27, deferred from the address work / ADR-0032): **B** — identifier
+  representation (validation-as-advisory per issuing system; provider/professional IDs scoped to person×org; confirm
+  home vs §7.5 actor registry, not conflated with patient IDs); **C** — tie the principle-11 legibility twin to all
+  demographic assertions so any jurisdiction-defined field shape stays human-readable.
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
   hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
@@ -322,6 +340,7 @@ ADR before reopening any of these.
 | [0029](spec/decisions/0029-skill-epoch-as-pinned-actor-determinant.md) | Skill-epoch + served-model digest as pinned actor determinants | §7.5 |
 | [0030](spec/decisions/0030-advisory-actor-integration-contract.md) | Advisory-actor integration contract | §9.8 |
 | [0031](spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md) | Canonical IDs + node-local `bigint` surrogate keys (dual-identifier discipline) | §3.1/§3.2 |
+| [0032](spec/decisions/0032-culture-neutral-address-representation.md) | Culture-neutral address: three-facet value (display twin + geo + culture-tagged parts) | §4.3 (refines 0014) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
