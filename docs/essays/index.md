@@ -23,3 +23,12 @@ fairly extreme set of distributed-systems choices — append-only set-union sync
 event stream, bitemporal uncertainty — and a concrete look at one subsystem (content-addressed
 binary attachment sync) validated over a real ~700 ms satellite link. Includes code drawn directly
 from the walking-skeleton implementation.
+
+## [How Cairn synchronizes data — a walkthrough](sync-walkthrough.md)
+
+A step-by-step technical walkthrough of the sync layer: set-union over an append-only event log, the
+Hybrid Logical Clock that orders writes without a coordinator, the two-plane split that keeps
+executable code off the clinical mesh, and the fast/slow lane design that lets a gigabyte of imaging
+travel the same link as a critical allergy without ever starving it. Grounded in the spec and the two
+working implementations, with a sequence diagram of a full partition-and-reconnect. The most
+implementation-level of the three essays.

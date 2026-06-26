@@ -1,0 +1,41 @@
+sequenceDiagram
+    autonumber
+    actor Clin as ED clinician
+    participant ED as ED node
+    participant Peer as Sibling / parent (swarm)
+    participant ICU as Receiving node
+
+    Note over ED,ICU: WAN is DOWN — both nodes operate locally<br/>(AP: availability over consistency)
+
+    Clin->>ED: Write note + order CT
+    activate ED
+    ED->>ED: Sign Ed25519/COSE, HLC.tick, commit locally
+    ED->>ED: Fold CT into a signed event reference,<br/>stage blob chunks locally
+    deactivate ED
+
+    Note over ED,ICU: Patient transferred mid-partition — no scope is "reassigned"<br/>(§6.4: a transfer gives a node reason to ASSEMBLE the patient)
+
+    Note over ED,ICU: ── Link returns ──
+
+    rect rgb(232, 245, 233)
+    Note over ED,ICU: FAST LANE — eager event plane (small, latency-bound, JSON)
+    ICU->>ED: request EventsAfter wall/counter watermark
+    ED-->>ICU: verbatim signed event bytes, refs included
+    ICU->>ICU: verify_self_described — refuse if it does not verify
+    ICU->>ICU: INSERT ON CONFLICT DO NOTHING — set-union
+    ICU->>ICU: HLC.merge — local clock never falls behind
+    Note right of ICU: Chart now shows the note +<br/>"CT exists" — before any pixel arrives
+    end
+
+    rect rgb(255, 248, 225)
+    Note over ED,ICU: SLOW LANE — lazy byte tier (chunked, budgeted, swarm, zero-trust)
+    loop each missing 256 KiB chunk — resumable, skip indices already stored
+        ICU->>Peer: request BlobSlice addr/offset/len
+        Peer-->>ICU: binary frame found/total_len/slice
+        ICU->>ICU: verify_slice vs BLAKE3 root — reject and try next peer if it lies
+        ICU->>ICU: sleep budget_ms — preemptible, events interleave between chunks
+    end
+    ICU->>ICU: assemble, re-verify whole blob, flip to present
+    end
+
+    Note over ED,ICU: Convergence — byte-identical content addresses on both sides.<br/>Every projection shows freshness + known-missing parts (honest assembly).
