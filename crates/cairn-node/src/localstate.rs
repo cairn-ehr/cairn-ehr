@@ -20,6 +20,10 @@ use crate::seal::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+// `Zeroizing` wipes the freshly-minted LSK on drop (issue #54), matching the convention
+// in `seal.rs`. The LSK recovered inside `seal_local_state`/`unseal_local_state_*` is
+// already `Zeroizing` because `seal::try_unwrap` now returns it wrapped.
+use zeroize::Zeroizing;
 
 /// Magic for the `.lsk` sidecar (the dual-wrapped LSK). 8 bytes, like CAIRNK1/CAIRNB1.
 const SIDECAR_MAGIC: &[u8] = b"CAIRNX1\n";
@@ -135,7 +139,9 @@ pub struct SealedLocalState {
 /// Reuses `seal::wrap_dek` (the same audited Argon2id+AEAD wrap the signing key uses).
 pub fn establish_lsk(op_pass: &str, recovery_code: &str) -> Result<LskWraps, LocalStateError> {
     let argon = ArgonParams::default();
-    let lsk = rand_bytes::<32>().map_err(|e| LocalStateError::Seal(e.to_string()))?;
+    // The LSK is discarded after wrapping (every later export re-derives it from the
+    // op-pass), so hold it in `Zeroizing` — it must not linger on the stack afterwards.
+    let lsk = Zeroizing::new(rand_bytes::<32>().map_err(|e| LocalStateError::Seal(e.to_string()))?);
     let salt_op = rand_bytes::<16>().map_err(|e| LocalStateError::Seal(e.to_string()))?;
     let salt_rec = rand_bytes::<16>().map_err(|e| LocalStateError::Seal(e.to_string()))?;
     let wrap_op = seal::wrap_dek(&lsk, op_pass, &salt_op, &argon)

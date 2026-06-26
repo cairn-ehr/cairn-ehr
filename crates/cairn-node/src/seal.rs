@@ -12,6 +12,12 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
+// `Zeroizing<T>` wipes its wrapped bytes on drop (issue #54). We use it for every
+// transient secret in this module — the KEKs, the DEK, and the recovered seed — so
+// key material never lingers in freed stack/heap memory, and so the type itself tells
+// a reviewer "this value is a live secret." Deref/DerefMut let it stand in for the
+// bare array at the AEAD/Argon2 call sites with no extra ceremony.
+use zeroize::Zeroizing;
 
 /// Crockford base32 alphabet (excludes I, L, O, U to avoid transcription errors).
 const B32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -164,13 +170,18 @@ pub(crate) fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
     Ok(b)
 }
 
-/// Derive a 32-byte key-encryption-key from a secret + salt via Argon2id.
-fn derive_kek(secret: &str, salt: &[u8; 16], p: &ArgonParams) -> Result<[u8; 32], SealError> {
+/// Derive a 32-byte key-encryption-key from a secret + salt via Argon2id. The KEK is
+/// returned wrapped in `Zeroizing` so it is wiped once the caller (a wrap/unwrap step)
+/// is done with it — the memory-hard-derived KEK is the juiciest target in this module.
+fn derive_kek(secret: &str, salt: &[u8; 16], p: &ArgonParams)
+    -> Result<Zeroizing<[u8; 32]>, SealError> {
     let params = Params::new(p.m_cost, p.t_cost, p.p_cost, Some(32))
         .map_err(|e| SealError::Kdf(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut kek = [0u8; 32];
-    argon.hash_password_into(secret.as_bytes(), salt, &mut kek)
+    // Derive directly into the zeroizing buffer (`&mut *kek` is the inner `&mut [u8; 32]`),
+    // so the only copy of the KEK lives inside the wrapper that wipes it.
+    let mut kek = Zeroizing::new([0u8; 32]);
+    argon.hash_password_into(secret.as_bytes(), salt, &mut *kek)
         .map_err(|e| SealError::Kdf(e.to_string()))?;
     Ok(kek)
 }
@@ -195,16 +206,22 @@ pub(crate) fn wrap_dek(dek: &[u8; 32], secret: &str, salt: &[u8; 16], p: &ArgonP
     Ok(Wrap { nonce, ct })
 }
 
-pub(crate) fn try_unwrap(w: &Wrap, secret: &str, salt: &[u8; 16], p: &ArgonParams) -> Option<[u8; 32]> {
+pub(crate) fn try_unwrap(w: &Wrap, secret: &str, salt: &[u8; 16], p: &ArgonParams)
+    -> Option<Zeroizing<[u8; 32]>> {
     let kek = derive_kek(secret, salt, p).ok()?;
-    let dek = aead_decrypt(&kek, &w.nonce, &w.ct)?;
-    dek.try_into().ok()
+    // Hold the decrypted bytes in `Zeroizing` so the plaintext DEK on the heap is wiped
+    // even though we copy it out into the fixed-size array we return.
+    let dek = Zeroizing::new(aead_decrypt(&kek, &w.nonce, &w.ct)?);
+    let arr: [u8; 32] = dek.as_slice().try_into().ok()?;
+    Some(Zeroizing::new(arr))
 }
 
 /// Seal a 32-byte signing seed under two independent secrets (dual-recipient).
 pub fn seal(seed: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<SealedKey, SealError> {
     let argon = ArgonParams::default();
-    let dek = rand_bytes::<32>()?;
+    // The DEK is transient: it encrypts the seed and is wrapped under each secret, then
+    // dropped. Hold it in `Zeroizing` so it is wiped from the stack once `seal` returns.
+    let dek = Zeroizing::new(rand_bytes::<32>()?);
     let seed_nonce = rand_bytes::<24>()?;
     let seed_ct = aead_encrypt(&dek, &seed_nonce, seed)?;
     let salt_op = rand_bytes::<16>()?;
@@ -221,18 +238,22 @@ pub fn seal(seed: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<Seale
 /// Argon2 derivation. The passphrase is used byte-exact. For callers that already
 /// know the recipient (e.g. the read-after-write check on a migration); `unseal` is
 /// the public, recipient-agnostic entry point.
-pub fn unseal_op(s: &SealedKey, op_pass: &str) -> Option<[u8; 32]> {
+pub fn unseal_op(s: &SealedKey, op_pass: &str) -> Option<Zeroizing<[u8; 32]>> {
     let dek = try_unwrap(&s.wrap_op, op_pass, &s.salt_op, &s.argon)?;
-    let seed = aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?;
-    seed.try_into().ok()
+    // `Zeroizing` the decrypted seed wipes the heap plaintext; the returned array stays
+    // wrapped so the seed is never bare in the caller's frame (e.g. `keystore::load`).
+    let seed = Zeroizing::new(aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?);
+    let arr: [u8; 32] = seed.as_slice().try_into().ok()?;
+    Some(Zeroizing::new(arr))
 }
 
 /// Recover the seed via ONLY the recovery-code recipient: exactly one Argon2
 /// derivation. The code is normalized first so any spacing/case unseals.
-pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<[u8; 32]> {
+pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<Zeroizing<[u8; 32]>> {
     let dek = try_unwrap(&s.wrap_rec, &normalize_recovery_code(recovery_code), &s.salt_rec, &s.argon)?;
-    let seed = aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?;
-    seed.try_into().ok()
+    let seed = Zeroizing::new(aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?);
+    let arr: [u8; 32] = seed.as_slice().try_into().ok()?;
+    Some(Zeroizing::new(arr))
 }
 
 /// Recover the seed from either recipient, secret unknown. Tries the operational
@@ -242,7 +263,7 @@ pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<[u8; 32]> {
 /// decrypt failed. NOTE: a recovery-code unseal therefore pays the op-path Argon2
 /// derivation first — when the recipient IS known, call `unseal_op`/`unseal_rec`
 /// directly to do half the memory-hard work.
-pub fn unseal(s: &SealedKey, secret: &str) -> Option<[u8; 32]> {
+pub fn unseal(s: &SealedKey, secret: &str) -> Option<Zeroizing<[u8; 32]>> {
     unseal_op(s, secret).or_else(|| unseal_rec(s, secret))
 }
 
@@ -264,26 +285,64 @@ pub fn from_cbor(bytes: &[u8]) -> Result<SealedKey, SealError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::Zeroizing;
 
     const SEED: [u8; 32] = [7u8; 32];
+
+    // --- Issue #54: recovered key material must come back wrapped in `Zeroizing` ---
+    // so it is wiped from the caller's stack/heap on drop (defence-in-depth), and the
+    // type itself signals "this is a secret" to a reviewer. These tests pin the return
+    // TYPES via explicit annotations; they fail to compile if a function reverts to a
+    // bare array, which is exactly the regression we want to catch.
+
+    #[test]
+    fn unseal_helpers_yield_zeroizing_seed() {
+        let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
+        let any: Zeroizing<[u8; 32]> = unseal(&s, "op-pass").expect("op-pass must unseal");
+        let via_op: Zeroizing<[u8; 32]> = unseal_op(&s, "op-pass").expect("op helper unseals");
+        let via_rec: Zeroizing<[u8; 32]> = unseal_rec(&s, "REC-CODE").expect("rec helper unseals");
+        assert_eq!(*any, SEED);
+        assert_eq!(*via_op, SEED);
+        assert_eq!(*via_rec, SEED);
+    }
+
+    #[test]
+    fn try_unwrap_yields_zeroizing_dek() {
+        let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
+        let dek: Zeroizing<[u8; 32]> =
+            try_unwrap(&s.wrap_op, "op-pass", &s.salt_op, &s.argon).expect("op wrap unwraps");
+        // The unwrapped DEK is the real key: it decrypts the sealed seed.
+        assert_eq!(
+            aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct).as_deref(),
+            Some(SEED.as_slice())
+        );
+    }
+
+    #[test]
+    fn derive_kek_yields_zeroizing() {
+        let p = ArgonParams::default();
+        let _kek: Zeroizing<[u8; 32]> =
+            derive_kek("secret", &[0u8; 16], &p).expect("kdf must succeed");
+    }
 
     #[test]
     fn unseals_with_operational_passphrase() {
         let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
-        assert_eq!(unseal(&s, "op-pass"), Some(SEED));
+        // `.as_deref()` reads through the `Zeroizing` wrapper to compare the seed bytes.
+        assert_eq!(unseal(&s, "op-pass").as_deref(), Some(&SEED));
     }
 
     #[test]
     fn unseals_with_recovery_code_any_formatting() {
         let s = seal(&SEED, "op-pass", "ab12c-d34ef").unwrap();
         // re-typed with different case/spacing still works
-        assert_eq!(unseal(&s, "AB12C D34EF"), Some(SEED));
+        assert_eq!(unseal(&s, "AB12C D34EF").as_deref(), Some(&SEED));
     }
 
     #[test]
     fn wrong_secret_returns_none() {
         let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
-        assert_eq!(unseal(&s, "nope"), None);
+        assert!(unseal(&s, "nope").is_none());
     }
 
     #[test]
@@ -291,30 +350,30 @@ mod tests {
         let base = seal(&SEED, "op-pass", "REC-CODE").unwrap();
         let mutate = |f: fn(&mut SealedKey)| { let mut s = base.clone(); f(&mut s); s };
         // Flipping a byte in any ciphertext, salt, or nonce must fail the AEAD tag.
-        assert_eq!(unseal(&mutate(|s| s.seed_ct[0] ^= 1), "op-pass"), None);
-        assert_eq!(unseal(&mutate(|s| s.wrap_op.ct[0] ^= 1), "op-pass"), None);
-        assert_eq!(unseal(&mutate(|s| s.wrap_rec.ct[0] ^= 1), "REC-CODE"), None);
-        assert_eq!(unseal(&mutate(|s| s.salt_op[0] ^= 1), "op-pass"), None);
-        assert_eq!(unseal(&mutate(|s| s.seed_nonce[0] ^= 1), "op-pass"), None);
+        assert!(unseal(&mutate(|s| s.seed_ct[0] ^= 1), "op-pass").is_none());
+        assert!(unseal(&mutate(|s| s.wrap_op.ct[0] ^= 1), "op-pass").is_none());
+        assert!(unseal(&mutate(|s| s.wrap_rec.ct[0] ^= 1), "REC-CODE").is_none());
+        assert!(unseal(&mutate(|s| s.salt_op[0] ^= 1), "op-pass").is_none());
+        assert!(unseal(&mutate(|s| s.seed_nonce[0] ^= 1), "op-pass").is_none());
         // Recovery-path tamper: the assertions above all unseal via "op-pass" (the op
         // path), which masks any mutation to the recovery wrap's KDF inputs. Exercise the
         // second recipient explicitly: a flipped recovery salt yields a wrong KEK, and a
         // flipped recovery nonce yields a wrong Poly1305 key — either must fail unseal via
         // the recovery code, closing the coverage gap for the second recipient.
-        assert_eq!(unseal(&mutate(|s| s.salt_rec[0] ^= 1), "REC-CODE"), None);
-        assert_eq!(unseal(&mutate(|s| s.wrap_rec.nonce[0] ^= 1), "REC-CODE"), None);
+        assert!(unseal(&mutate(|s| s.salt_rec[0] ^= 1), "REC-CODE").is_none());
+        assert!(unseal(&mutate(|s| s.wrap_rec.nonce[0] ^= 1), "REC-CODE").is_none());
     }
 
     #[test]
     fn per_recipient_unseal_helpers_isolate_their_recipient() {
         let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
         // Each helper recovers the seed via its own recipient only.
-        assert_eq!(unseal_op(&s, "op-pass"), Some(SEED));
-        assert_eq!(unseal_rec(&s, "REC-CODE"), Some(SEED));
+        assert_eq!(unseal_op(&s, "op-pass").as_deref(), Some(&SEED));
+        assert_eq!(unseal_rec(&s, "REC-CODE").as_deref(), Some(&SEED));
         // ...and refuses the other recipient's secret (no cross-talk): the op helper
         // must not accept the recovery code, nor the recovery helper the passphrase.
-        assert_eq!(unseal_op(&s, "REC-CODE"), None);
-        assert_eq!(unseal_rec(&s, "op-pass"), None);
+        assert!(unseal_op(&s, "REC-CODE").is_none());
+        assert!(unseal_rec(&s, "op-pass").is_none());
     }
 
     #[test]
@@ -335,7 +394,7 @@ mod tests {
         let bytes = to_cbor(&s);
         assert!(bytes.starts_with(b"CAIRNK1\n"), "magic header must be present");
         let back = from_cbor(&bytes).unwrap();
-        assert_eq!(unseal(&back, "op-pass"), Some(SEED));
+        assert_eq!(unseal(&back, "op-pass").as_deref(), Some(&SEED));
         assert!(back.has_recovery_wrap());
     }
 

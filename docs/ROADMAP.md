@@ -72,17 +72,20 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
   once at provisioning (op-pass + recovery code, point-5 compliant); `CAIRNL1` export co-located with the backup medium +
   `CAIRNX1` `.lsk` sidecar; additive-CBOR `LocalState` with typed-empty slots + DB read/apply **seams** the clinical tier
   extends; signing key never in the bundle (point 4); `establish-local-state-key` + `status` line; honest-degrades on
-  absent/corrupt export. `localstate.rs` (no schema change). **All ADR-0026 slices (A–D) complete.** Optional follow-ons:
-  uniform key zeroization ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)) + escrow rungs (Shamir M-of-N, QR,
-  TPM/keyring) ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
+  absent/corrupt export. `localstate.rs` (no schema change). **All ADR-0026 slices (A–D) complete.**
+- **Uniform key-material zeroization** — ✓ done ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54), 2026-06-26):
+  every transient KEK/DEK/seed/LSK held in `Zeroizing` (wiped on drop) across `seal.rs` + `localstate.rs`; key-yielding
+  functions return `Zeroizing<[u8;32]>`. Remaining optional follow-on: escrow rungs (Shamir M-of-N, QR, TPM/keyring)
+  ([ADR-0026](spec/decisions/0026-node-durability-and-disaster-recovery.md)).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).
 
 ## Phase 6 — Federation hardening
 
 - **Revocation cascade; anchor-as-power** ([ADR-0018](spec/decisions/0018-federation-revocation-cascade-and-the-anchor-as-power.md)).
-- **DR / recovery escrow** — ✓ done at node level (ADR-0026 slices A–D, see Phase 5). Federation-tier follow-ons:
-  peer-quorum (social) recovery + escrow rungs (Shamir M-of-N, QR, TPM/keyring); uniform key zeroization ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)).
+- **DR / recovery escrow** — ✓ done at node level (ADR-0026 slices A–D, see Phase 5); uniform key zeroization
+  ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)) ✓ done. Federation-tier follow-ons: peer-quorum (social)
+  recovery + escrow rungs (Shamir M-of-N, QR, TPM/keyring).
 - **Node-identity `supersede`** — ✓ done (ADR-0026 slice C). **Signing-key rotation** (`rotate-key` actor event) — still reserved, not built.
 
 ## Phase 7 — Attachments / byte tier
@@ -111,6 +114,6 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
 
 ## Parallel build-prep (not blocking the critical path)
 
-- **Bet B — Pi compute-cost run** — the [ADR-0001](spec/decisions/0001-fat-postgres-thin-daemon.md) projection/keystore go/no-go; also settles ARM SHA-256-vs-BLAKE3 (ADR-0015 provisional default). Awaiting Pi 5 hardware.
+- **Bet B — Pi compute-cost run** — **Ran 2026-06-25 on Pi 5 / 8 GB → PASS** ([PR #57](https://github.com/cairn-ehr/cairn-ehr/pull/57)): all §6 gates green with headroom; B4 confirms ADR-0015's BLAKE3 blob-digest default (BLAKE3 ~4× SHA-256 on Cortex-A76). `cairn_pgx` now PG-18-capable (pgrx 0.18.1, [PR #56](https://github.com/cairn-ehr/cairn-ehr/pull/56)). Open follow-ups: clean re-run on PG 18 + USB-3 SSD + 27 W PSU for authoritative precision numbers; drop "provisional" from the ADR-0015 blob-digest line.
 - **Spike 0003 — Postgres on Android** — **Ran 2026-06-25, G0–G3 PASS**: native PG 18.2 + a cross-built pgrx extension (incl. SPI) on a stock Android 16 phone; validates the fractal-topology invariant at the phone tier. Runnable kit at [`poc/pg-android-kit/`](../poc/pg-android-kit/). Remaining gaps (from-source PG build, APK packaging) are non-load-bearing.
 - **Continued clinical case-mining** — the highest-signal mode for stress-testing the primitives before product build.

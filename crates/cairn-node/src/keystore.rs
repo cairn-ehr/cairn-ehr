@@ -82,7 +82,9 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
     let seed_rec = seal::unseal_rec(&readback_sealed, recovery_code)
         .ok_or_else(|| KeystoreError::Key(
             "seal verification failed after write: recovery code did not unseal".into()))?;
-    if seed_op != seed || seed_rec != seed {
+    // `seed_op`/`seed_rec` are `Zeroizing<[u8; 32]>` (issue #54); deref to compare bytes
+    // against the original plaintext seed.
+    if *seed_op != seed || *seed_rec != seed {
         return Err(KeystoreError::Key(
             "seal verification failed after write: recovered seed does not match original".into()));
     }

@@ -1,10 +1,22 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-25 · **Spec/ADRs:** v0.31 (+ADR-0031) · **Phase:** architecture complete; proving viability
+**Session date:** 2026-06-26 (currency check) · **Spec/ADRs:** v0.31 (+ADR-0031) · **Phase:** architecture complete; proving viability
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-25):** ADR-0026 **slice D** — the sealed **local-state export** (point 3), which **closes the
+**This session (2026-06-26):** closed [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54) — **uniform
+key-material zeroization** across `seal.rs` + `localstate.rs`. Every transient secret (the Argon2id KEKs, the DEK,
+the recovered signing seed, the local-state LSK) is now held in `zeroize::Zeroizing`, wiped from stack/heap on drop;
+the functions that *yield* key material (`derive_kek`, `try_unwrap`, `unseal`/`unseal_op`/`unseal_rec`) now return
+`Zeroizing<[u8;32]>`, so the seed is never bare in a caller's frame (`keystore::load` gains wipe-on-drop for free).
+The type now also *signals* "this is a secret" to a reviewer. Defence-in-depth only — no secret leaks to disk/logs
+today, round-trip behaviour unchanged (existing tests green). TDD via type-asserting tests (red = type mismatch →
+green). The `unseal_local_state_*` **bundle** `Vec` is intentionally left un-wrapped (it's payload, not key material,
+and empty at this tier; revisit when the clinical tier puts DEKs in it). Full `cairn-node` suite green (63 lib +
+all integration binaries), clippy clean. **All ADR-0026 node-durability follow-ons are now closed; only the optional
+escrow rungs (Shamir/QR/TPM) remain as upward options.**
+
+**Prior session (2026-06-25):** ADR-0026 **slice D** — the sealed **local-state export** (point 3), which **closes the
 last open ADR-0026 slice (A–D all done)**. No spec/ADR change (implementation of point 3). The federation-node tier has
 **no clinical surface yet**, so the export's *content* is intentionally **empty today**; the deliverable is the
 can't-retrofit **shape**: a long-lived **local-state DEK (LSK)** dual-wrapped **once at provisioning** (op-passphrase +
@@ -21,8 +33,8 @@ when the export can't be sealed (no passphrase in an unattended run, wrong passp
 already-complete event backup — review fix, drove the `localstate::build_export_container` helper. The day-one escrow is
 **re-established under fresh secrets** on every key-minting/re-sealing path (`init`/`seal-key`/`restore`, `overwrite=true`)
 so the `.lsk` never desyncs from a just-resealed signing key; the explicit `establish-local-state-key` verb still refuses
-to clobber an existing escrow — review fix. Full `cairn-node` suite green (19/19 binaries). Follow-up: [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54)
-(uniform LSK/DEK zeroization across `seal.rs`+`localstate.rs` — deferred, consistent with existing convention).
+to clobber an existing escrow — review fix. Full `cairn-node` suite green (19/19 binaries). Follow-up [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54)
+(uniform LSK/DEK zeroization across `seal.rs`+`localstate.rs`) — **closed this session (2026-06-26), see above.**
 
 **Prior sessions (2026-06-25):** ADR-0026 **slice C** — restore (apply) + new-identity `supersede`
 ([PR #52](https://github.com/cairn-ehr/cairn-ehr/pull/52), [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
@@ -199,8 +211,8 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   and **all four ADR-0026 durability slices** — A (at-rest seal + recovery escrow, PR #44), B (cold-peer export+health,
   PR #51), C (restore + `supersede`, PR #52), **D (sealed local-state export, this session)** — are all **closed**
   (see node gaps above). **ADR-0026 is fully implemented at the node tier.** No remaining required node-hardening thread;
-  optional follow-ons: [#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) (uniform key zeroization) + escrow rungs
-  (Shamir/QR/TPM). The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
+  ~~[#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) (uniform key zeroization)~~ **closed 2026-06-26**; only optional
+  escrow rungs (Shamir/QR/TPM) remain. The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 
@@ -212,9 +224,10 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   storage ran on a **USB-2-limited dock** (power-offload workaround after a Pi 5 brown-out saga — see the §9.2
   *deployment-BOM finding*: PSU + storage-attachment path are part of the validated BOM), and on **PG 16**
   because **`cairn_pgx` is pgrx-0.12.9 / `pg16`-pinned and won't build on PG 18** (§9.3). Bonus: `cairn_pgx`
-  builds+loads on Pi arm64 (in-DB Rust surface confirmed on ARM). **Open follow-ups:** (a) port `cairn_pgx` to a
-  PG-18-capable pgrx; (b) clean re-run on **PG 18 + USB-3 SSD + official 27 W PSU** for authoritative precision
-  numbers; (c) fold the B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
+  builds+loads on Pi arm64 (in-DB Rust surface confirmed on ARM). **Open follow-ups:** ~~(a) port `cairn_pgx` to a
+  PG-18-capable pgrx~~ **done 2026-06-25 ([PR #56](https://github.com/cairn-ehr/cairn-ehr/pull/56): pgrx 0.12.9 → 0.18.1,
+  default feature `pg16`→`pg18`)**; (b) clean re-run on **PG 18 + USB-3 SSD + official 27 W PSU** for authoritative
+  precision numbers; (c) fold the B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
 - **easyGP session** — port the [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
   deferred items with live easyGP schema access: the `rx!`/`tx!` type-through parser + state machine; the
   formulation/drug data source + renal/hepatic/pregnancy/paediatric **forced-manual** rule table; the
