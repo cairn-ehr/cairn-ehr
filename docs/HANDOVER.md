@@ -1,20 +1,29 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-27 · **Spec/ADRs:** v0.35 (+ADR-0034) · **Phase:** architecture complete; proving viability
+**Session date:** 2026-06-27 · **Spec/ADRs:** v0.36 (+ADR-0035) · **Phase:** architecture complete; proving viability
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-27):** closed demographics **gap C** — tied the [principle 11](index.md) legibility twin to
-**all** demographic assertions. New **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** + **demographics §4.5**.
-One uniform rule: every demographic assertion is a §3.13 event, so it already carries the mandatory signed plaintext twin;
-§4.5 binds demographics to it, requires the twin **materialised at authoring + profile-independent** (a profile-less node
-always reads the fact), reconciles the ad-hoc §4.3 `display` / §4.4 `value` facets as the **value-core** the one twin wraps
-(no second twin that can drift), and guarantees any **future** field shape inherits it by construction. Floor enforces only
-"non-empty twin present" (never twin content); cross-facet `twin == render(value)` is advisory. Explicit **legibility ≠
-matching** boundary: the twin is for reading, matching still degrades to human review per ADR-0032/0033. §3.13 cross-ref
-added; spec 0.34→0.35; brainstorm→design→plan→execute (under `docs/superpowers/`); mkdocs clean. **Open demographics
-follow-on:** gap B remainder — the **provider-number person×org** relational model (professional IDs already fixed in the
-§7.5 actor registry, never conflated with patient IDs).
+**This session (2026-06-27):** closed demographics **gap B** — the provider-number person×org relational model (the last
+deferred piece of ADR-0033). New **[ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md)** +
+**demographics §4.6**; spec 0.35→0.36. Model: an abstract identity-bearing **entity** (open `kind`: person/org/location/…)
+carrying §4.4-verbatim identifier sets; **reified relationships** between entities carrying their own identifier sets
+(where the AU Medicare provider number lives, tying a person to an org at a location); **subject-kind partitioning**
+(`{patient, entity, relationship}`) that makes ADR-0033's non-conflation **structural** — a billing number can never be a
+patient match key or a signing credential; a **one-way non-authorizing `actor_ref`** keeping signing distinct from billing;
+and **position-not-value** (the same AHPRA string may validly appear both as a §7.5 actor licensure credential and a §4.6
+billing identifier — the WorkCover case). Entity/relationship *data* is fit-for-purpose; the partition tag + `actor_ref` +
+floor invariants are safety-critical. Cross-refs added in identity §5.2 and security §7.5/§7.7. No new founding principle.
+Design/spec work only — no code. **Demographics gaps A (§4.2), B (§4.4/§4.6), and C (§4.5) are all now closed.**
+
+**Earlier today (2026-06-27):** closed demographics **gap C** — tied the [principle 11](index.md) legibility twin to
+**all** demographic assertions. New **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** + **demographics
+§4.5**. One uniform rule: every demographic assertion is a §3.13 event, so it already carries the mandatory signed
+plaintext twin; §4.5 binds demographics to it, requires the twin **materialised at authoring + profile-independent**,
+reconciles the ad-hoc §4.3 `display` / §4.4 `value` facets as the **value-core** the one twin wraps, and guarantees any
+**future** field shape inherits it by construction. Floor enforces only "non-empty twin present"; `twin == render(value)`
+is advisory. Explicit **legibility ≠ matching** boundary: the twin is for reading, matching still degrades to human review
+per ADR-0032/0033. §3.13 cross-ref added; spec 0.34→0.35.
 
 **Earlier today (2026-06-27):** closed the two demographics *representation* gaps that preceded gap C. **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)** + **§4.4** — patient-**identifier**
 representation: splits the content-addressed **`system` namespace** (stable hard-veto key, e.g. `nhs-number`) from the
@@ -248,9 +257,6 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 **Desk-doable now (no external dependency):**
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
-- **Demographics gap B remainder** (gap **C** closed this session — ADR-0034/§4.5; gap B *representation* half closed
-  via ADR-0033/§4.4): the open piece is the **provider-number person×org** relational model (professional IDs already
-  fixed in the §7.5 actor registry, never conflated with patient IDs — boundary stated in ADR-0033/§4.4).
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
   hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
@@ -352,6 +358,7 @@ ADR before reopening any of these.
 | [0032](spec/decisions/0032-culture-neutral-address-representation.md) | Culture-neutral address: three-facet value (display twin + geo + culture-tagged parts) | §4.3 (refines 0014) |
 | [0033](spec/decisions/0033-patient-identifier-representation.md) | Patient-identifier representation: namespace/profile split + matching-survivable normalized form | §4.4 (refines 0014) |
 | [0034](spec/decisions/0034-demographic-legibility-twin.md) | The demographic legibility twin: every demographic assertion legible without its profile | §4.5 (refines 0012) |
+| [0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md) | The entity/relationship model + provider-number person×org (subject-kind partitioning) | §4.6 (refines 0033) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

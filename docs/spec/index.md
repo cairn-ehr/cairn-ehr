@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture spec essentially complete (all open questions resolved); now proving viability through build-prep spikes (walking skeleton, WAN sync, a first federating node) — clinical implementation not yet begun.
-**Spec version:** 0.35 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.36 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
