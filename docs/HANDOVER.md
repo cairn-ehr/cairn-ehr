@@ -1,13 +1,36 @@
 # HANDOVER — Cairn
 
 **Session date:** 2026-06-27 · **Spec/ADRs:** v0.36 · **Phase:** architecture complete; **first production clinical
-surface now under construction** — the demographics §4.4 identifier-assertion tier on `cairn-node` (slice 1). Viability
-proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
+surface under construction** — the demographics tier on `cairn-node` (slice 1 = §4.4 identifiers; **slice 2 = §4.2 DOB +
+sex-at-birth, this session**). Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating
+node, Postgres-on-Android).
 
-**This session (2026-06-27):** began the demographics **implementation** — the first production clinical surface,
-answering *"what's stopping us from building demographics?"* (nothing architectural; the can't-retrofit foundation —
-signed append-only `event_log`, the validated in-DB `submit_event` floor, the trigger-maintained projection — already
-runs in `cairn-node`, which loads `db/001–006`). Built **slice 1 = the §4.4 patient-identifier assertion** end-to-end
+**This session (2026-06-27):** built demographics **slice 2 = the §4.2 DOB + sex-at-birth provenance-locked fields**
+(brainstorm→spec→plan→subagent-SDD, 5 TDD tasks; spec+plan under `docs/superpowers/`). Introduces the **new mechanic
+slice 1 deliberately avoided**: *provenance-precedence projection*. A generic **`demographic.field.asserted`** event (a
+`field` discriminator) flows through the **reused** `submit_event` door (never re-declared); **`db/011_demographics_fields.sql`**
+adds **`cairn_provenance_rank`** — the §4.1 ladder as a total order, with a **new `fact-proven` top tier (70)** above
+`document-verified` (laboratory/scientifically-established truth overriding mere attestation; unrecognized→0 so it can never
+displace a known value) — the culture-neutral floor **`cairn_check_demographic_field`** (generic checks + a dob-only
+`facets.precision` requirement, principle 4; never parses a date/sex), and the **winner-by-`(rank, HLC, origin)`
+`patient_demographic` projection** (PK `(patient_id, field)`; "verified value **locks** vs. lower provenance" falls out;
+recency breaks equal-provenance ties). **The load-bearing design call: the floor stays OPEN, the projection is GATED** — an
+unknown `field` (a newer node's `gender-identity`) **passes the floor, is stored + legible via its twin, but is not projected**
+(required for set-union federation, ADR-0012; never reject a peer's field). Full assertion history stays in `event_log` as the
+matching evidence (winner-only projection, no retained-set table). Pure **`cairn-event::demographics`** builders
+(`dob_assertion_body`/`sex_at_birth_assertion_body` + twins). Canonical **spec §4.1 ladder** prose extended to name
+`fact-proven`. TDD on **PG18+cairn_pgx**: 7 integration tests (happy path · provenance-beats-recency + verified-locks ·
+recency-among-equals · 6 floor rejections · unknown-field carried-not-projected · fact-proven displacement · slice-1/legacy
+regression), all green; full workspace suite green, clippy clean. Final opus whole-branch review: **ready to merge, no
+Critical/Important**. Filed **[issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69)** (codebase-wide: projection
+winner tiebreak compares `node_origin` as collation-sensitive text — negligible blast radius, left consistent with
+`patient_chart`/`patient_identifier`). **Noted clinical caveat** carried into the design for the later sex-expansion slice:
+`fact-proven` karyotype auto-displacing a `document-verified` assigned-sex is a *field-semantics* question (sex-**at-birth** =
+assigned vs. karyotype = a different fact), deliberately deferred; `event_log` retains both regardless. **Explicit deferrals:**
+names (multi-valued + display-winner), administrative-sex, gender-identity (recency-wins), the §5.2 matcher/veto, globalising
+the authored twin, a CLI verb.
+
+**Earlier today (2026-06-27):** built demographics **slice 1 = the §4.4 patient-identifier assertion** end-to-end
 (brainstorm→spec→plan→subagent-SDD, 4 TDD tasks; spec+plan under `docs/superpowers/`): an additive
 **`EventBody.plaintext_twin`** field carrying the §4.5 authored twin in the signed body (additive-only — a `None` twin
 omits from the wire, content-addresses unchanged; two CBOR tests pin it); pure **`cairn-event::demographics`** builders
@@ -279,13 +302,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **Demographics build — next slices** (the live build front; reuse the slice-1 spine in `db/010` + `cairn-event::demographics`):
-  **slice 2** = the §4.3 **address** three-facet value (display/geo/structured + locale profile) or the §4.2
-  **names/DOB/sex** fields (these add provenance-precedence + recency projection rules); then the §5.2 **matching
-  pipeline + the §4.4 hard veto** (advisory matcher — Python/fit-for-purpose); then **globalise the authored twin** to
-  every event type (retire the `db/010` step-7 `ELSE` skeleton-twin + its TODO). DB-gated tests need
-  `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx). ([Issue #67](https://github.com/cairn-ehr/cairn-ehr/issues/67),
-  the db/008 SCHEMA gap, is **closed** — confirmed intentional, db/008 is a Bet-B spike artefact, documented in `db.rs`.)
+- **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011` +
+  `cairn-event::demographics`). Slice 1 (§4.4 identifiers, set-union) and **slice 2 (§4.2 DOB + sex-at-birth,
+  provenance-precedence) are done.** Remaining: **slice 3 candidates** — the §4.2 **names** field (multi-valued retained
+  set **+** a display-winner pointer — a *different* projection shape) · **administrative-sex** + **gender-identity**
+  (new `field` values reusing the slice-2 spine; gender-identity is the inverse *recency-wins* toggle) · the §4.3
+  **address** three-facet value (display/geo/structured + locale profile). Then the §5.2 **matching pipeline + the §4.4
+  hard veto** (advisory matcher — Python/fit-for-purpose) and **globalising the authored twin** to every event type
+  (retire the `cairn_event_twin` skeleton fallback + its TODO). The slice-2 design carries a **deferred decision** for the
+  sex-expansion slice: whether a `fact-proven` karyotype is the *same field* as assigned sex-at-birth (it currently
+  auto-displaces in the projection) or a distinct field. DB-gated tests need
+  `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
