@@ -12,16 +12,20 @@ runs in `cairn-node`, which loads `db/001–006`). Built **slice 1 = the §4.4 p
 **`EventBody.plaintext_twin`** field carrying the §4.5 authored twin in the signed body (additive-only — a `None` twin
 omits from the wire, content-addresses unchanged; two CBOR tests pin it); pure **`cairn-event::demographics`** builders
 (`identifier_assertion_body` + `render_identifier_twin`); **`db/010_demographics.sql`** — the culture-neutral §4.4 floor
-helper `cairn_check_identifier_assertion` (5 distinct structural RAISEs: value/system/provenance non-empty,
-normalized-string-when-present, **normalized⇒profile**; never a checksum/format/profile-hold), a **byte-faithful
-`submit_event` re-declaration** carrying the **authored** twin for demographic events (legacy types keep the derived
-skeleton twin), and the **set-union `patient_identifier` projection** (PK `(patient_id, system, coalesce(normalized,
-value))`, `ON CONFLICT DO NOTHING`, trigger scoped to the demographic type). Integration tests on **PG18+cairn_pgx**:
-happy-path (proves authored-twin passthrough), set-union dedup, honest degradation (profile-less accepted), all **6 floor
-rejections** (each isolated, triple-gated: error + empty `event_log` + empty projection), legacy regression. All green
-(cairn-event 19, cairn-node 130), clippy clean; **opus final review merge-ready** (verified the ADR-0021 grant floor
-survives `CREATE OR REPLACE`). **Explicit deferrals:** matching/veto (§5.2, the advisory matcher), a CLI authoring verb,
-and globalising the authored twin to all event types. Filed **[issue #67](https://github.com/cairn-ehr/cairn-ehr/issues/67)**
+helper `cairn_check_identifier_assertion` (distinct structural RAISEs: value/system/provenance non-empty,
+**normalized non-empty string when present**, **normalized⇒profile**; never a checksum/format/profile-hold), a per-type
+**`cairn_event_twin` hook** (called by the **unchanged** db/005 `submit_event` — *not* a re-declaration of the door)
+that runs the §4.4 floor and carries the **authored** twin for demographic events, with legacy types falling back to the
+derived skeleton twin (`cairn_twin_skeleton`), and the **set-union `patient_identifier` projection** (PK `(patient_id,
+system, coalesce(normalized, value))`, `ON CONFLICT DO NOTHING`, trigger scoped to the demographic type). Integration
+tests on **PG18+cairn_pgx**: happy-path (proves authored-twin passthrough), set-union dedup, honest degradation
+(profile-less accepted), all **floor rejections** (each isolated, triple-gated: error + empty `event_log` + empty
+projection), legacy regression. All green (cairn-event 19, cairn-node 130+), clippy clean. **Post-review fixes (this
+session):** (1) the floor now also rejects a whitespace-only `normalized` (it would otherwise project a whitespace
+`match_key`, silently conflating distinct identifiers); (2) the demographic twin/floor was lifted out of a 140-line
+byte-faithful `submit_event` copy into the `cairn_event_twin` hook above, so the validated write door stays
+single-source in db/005 and cannot drift. **Explicit deferrals:** matching/veto (§5.2, the advisory matcher), a CLI
+authoring verb, and globalising the authored twin to all event types. Filed **[issue #67](https://github.com/cairn-ehr/cairn-ehr/issues/67)**
 (pre-existing: `db/008` surrogate-projection migration is absent from the `cairn-node` SCHEMA array).
 
 **Earlier today (2026-06-27):** closed demographics **gap B** — the provider-number person×org relational model (the last

@@ -212,6 +212,12 @@ async fn floor_rejects_each_invariant_violation() {
     assert_rejected_and_empty(&c, &sk, &kid, Uuid::now_v7(),
         serde_json::json!({"field":"identifier","value":"v","system":"s","provenance":"x","normalized":"vv"}),
         good_twin, "normalized-without-profile").await;
+    // normalized whitespace-only — §4.4: a materialised key must be a real non-empty
+    // string. Without this the projection's match_key = coalesce(norm, value) becomes
+    // pure whitespace, silently conflating two distinct identifiers under one PK row.
+    assert_rejected_and_empty(&c, &sk, &kid, Uuid::now_v7(),
+        serde_json::json!({"field":"identifier","value":"v","system":"s","provenance":"x","normalized":"   ","profile":"p@h"}),
+        good_twin, "normalized-whitespace").await;
     // empty authored twin — §4.5: demographic assertions must carry a non-empty twin
     assert_rejected_and_empty(&c, &sk, &kid, Uuid::now_v7(),
         serde_json::json!({"field":"identifier","value":"v","system":"s","provenance":"x"}),
