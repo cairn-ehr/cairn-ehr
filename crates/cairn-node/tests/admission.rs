@@ -24,6 +24,7 @@ async fn admission_admits_trusted_peer_genesis_and_rejects_strangers() {
         signer_key_id: kid_b.clone(),
         contributors: serde_json::json!([{"actor_id": kid_b, "role": "device"}]),
         payload: serde_json::json!({"display_name":"B","address":"127.0.0.1:7801"}), attachments: vec![],
+        plaintext_twin: None,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let b_node_id = hex::encode(event_address(&signed_b.signed_bytes));
@@ -94,6 +95,7 @@ async fn admission_rejects_peer_event_from_an_unknown_signer() {
             "fingerprint": "X"
         }),
         attachments: vec![],
+        plaintext_twin: None,
     };
     let signed_z = sign(&body_z, &sk_z).unwrap();
     let bytes = signed_z.signed_bytes.clone();
@@ -138,6 +140,7 @@ async fn admission_rejects_genesis_when_pinned_pubkey_mismatches_signer() {
         contributors: serde_json::json!([{"actor_id": kid_b, "role": "device"}]),
         payload: serde_json::json!({"display_name": "B", "address": "127.0.0.1:7821"}),
         attachments: vec![],
+        plaintext_twin: None,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let b_node_id = hex::encode(event_address(&signed_b.signed_bytes));
@@ -184,6 +187,7 @@ async fn admission_rejects_genesis_when_pinned_pubkey_mismatches_signer() {
         contributors: serde_json::json!([{"actor_id": kid_a2, "role": "device"}]),
         payload: serde_json::json!({"display_name": "A2", "address": "127.0.0.1:7822"}),
         attachments: vec![],
+        plaintext_twin: None,
     };
     let signed_a2 = sign(&body_a2, &sk_a2).unwrap();
     let a2_bytes = signed_a2.signed_bytes.clone();

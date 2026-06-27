@@ -339,6 +339,7 @@ fn emit_event(
         contributors: serde_json::json!([{ "role": "author", "kind": "human", "node": node }]),
         payload,
         attachments: vec![],
+        plaintext_twin: None,
     };
 
     let signed = sign(&body, sk)?;

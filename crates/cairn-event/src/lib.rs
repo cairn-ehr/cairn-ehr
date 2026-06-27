@@ -86,6 +86,14 @@ pub struct EventBody {
     pub payload: serde_json::Value,      // clinical/demographic content; becomes the DB `body`
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
+    /// The §4.5 materialised legibility twin, authored into the signed body. Absent
+    /// (None) for legacy event types whose twin submit_event still derives; present
+    /// for demographic assertions, where the in-DB floor (db/010) requires it.
+    /// `skip_serializing_if` ⇒ a None twin is omitted from the wire, so adding this
+    /// field never changes an existing event's bytes/content-address (additive-only,
+    /// principle 11 / ADR-0012).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plaintext_twin: Option<String>,
 }
 
 /// A signed event ready to enter `event_log`: the verbatim signed bytes plus
@@ -540,6 +548,7 @@ mod tests {
             contributors: json!([{"role": "author", "kind": "human"}]),
             payload: json!({"name": "Test Patient", "dob": "1980-01-01", "sex": "F"}),
             attachments: vec![],
+            plaintext_twin: None,
         }
     }
 
@@ -743,6 +752,55 @@ mod tests {
         let (_sk2, kid2) = generate_key().unwrap();
         assert_ne!(fp1, short_fingerprint(&kid2).unwrap(), "different key -> different fingerprint");
         assert!(short_fingerprint("not-hex").is_err());
+    }
+
+    // A None authored-twin must NOT change the wire bytes vs. the pre-field shape,
+    // so every existing event's content-address is preserved (append-only, principle 1).
+    #[test]
+    fn twin_absent_is_wire_identical_to_pre_field_shape() {
+        #[derive(serde::Serialize)]
+        struct LegacyBody<'a> {
+            event_id: &'a str, patient_id: &'a str, event_type: &'a str,
+            schema_version: &'a str, hlc: &'a Hlc, t_effective: Option<String>,
+            signer_key_id: &'a str, contributors: &'a serde_json::Value,
+            payload: &'a serde_json::Value, attachments: &'a Vec<AttachmentRef>,
+        }
+        let hlc = Hlc { wall: 1, counter: 0, node_origin: "n".into() };
+        let contributors = serde_json::json!([{"actor_id": "k", "role": "triaged"}]);
+        let payload = serde_json::json!({"text": "hi"});
+        let attachments: Vec<AttachmentRef> = vec![];
+        let legacy = LegacyBody {
+            event_id: "e", patient_id: "p", event_type: "note.added",
+            schema_version: "advisory/1", hlc: &hlc, t_effective: None,
+            signer_key_id: "k", contributors: &contributors, payload: &payload,
+            attachments: &attachments,
+        };
+        let body = EventBody {
+            event_id: "e".into(), patient_id: "p".into(), event_type: "note.added".into(),
+            schema_version: "advisory/1".into(), hlc: hlc.clone(), t_effective: None,
+            signer_key_id: "k".into(), contributors: contributors.clone(),
+            payload: payload.clone(), attachments: vec![], plaintext_twin: None,
+        };
+        let mut legacy_bytes = Vec::new();
+        ciborium::into_writer(&legacy, &mut legacy_bytes).unwrap();
+        assert_eq!(canonical_cbor(&body).unwrap(), legacy_bytes,
+                   "None twin must encode byte-identically to the pre-field shape");
+    }
+
+    // Bytes authored before the field existed must still decode (forward-compat).
+    #[test]
+    fn legacy_bytes_decode_with_twin_none() {
+        let body = EventBody {
+            event_id: "e".into(), patient_id: "p".into(), event_type: "note.added".into(),
+            schema_version: "advisory/1".into(),
+            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() }, t_effective: None,
+            signer_key_id: "k".into(),
+            contributors: serde_json::json!([]), payload: serde_json::json!({}),
+            attachments: vec![], plaintext_twin: None,
+        };
+        let bytes = canonical_cbor(&body).unwrap();
+        let decoded: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
+        assert_eq!(decoded.plaintext_twin, None);
     }
 
     #[test]
