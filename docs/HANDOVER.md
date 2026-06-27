@@ -1,10 +1,30 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-27 · **Spec/ADRs:** v0.36 (+ADR-0035) · **Phase:** architecture complete; proving viability
-through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
-no clinical implementation yet.
+**Session date:** 2026-06-27 · **Spec/ADRs:** v0.36 · **Phase:** architecture complete; **first production clinical
+surface now under construction** — the demographics §4.4 identifier-assertion tier on `cairn-node` (slice 1). Viability
+proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-27):** closed demographics **gap B** — the provider-number person×org relational model (the last
+**This session (2026-06-27):** began the demographics **implementation** — the first production clinical surface,
+answering *"what's stopping us from building demographics?"* (nothing architectural; the can't-retrofit foundation —
+signed append-only `event_log`, the validated in-DB `submit_event` floor, the trigger-maintained projection — already
+runs in `cairn-node`, which loads `db/001–006`). Built **slice 1 = the §4.4 patient-identifier assertion** end-to-end
+(brainstorm→spec→plan→subagent-SDD, 4 TDD tasks; spec+plan under `docs/superpowers/`): an additive
+**`EventBody.plaintext_twin`** field carrying the §4.5 authored twin in the signed body (additive-only — a `None` twin
+omits from the wire, content-addresses unchanged; two CBOR tests pin it); pure **`cairn-event::demographics`** builders
+(`identifier_assertion_body` + `render_identifier_twin`); **`db/010_demographics.sql`** — the culture-neutral §4.4 floor
+helper `cairn_check_identifier_assertion` (5 distinct structural RAISEs: value/system/provenance non-empty,
+normalized-string-when-present, **normalized⇒profile**; never a checksum/format/profile-hold), a **byte-faithful
+`submit_event` re-declaration** carrying the **authored** twin for demographic events (legacy types keep the derived
+skeleton twin), and the **set-union `patient_identifier` projection** (PK `(patient_id, system, coalesce(normalized,
+value))`, `ON CONFLICT DO NOTHING`, trigger scoped to the demographic type). Integration tests on **PG18+cairn_pgx**:
+happy-path (proves authored-twin passthrough), set-union dedup, honest degradation (profile-less accepted), all **6 floor
+rejections** (each isolated, triple-gated: error + empty `event_log` + empty projection), legacy regression. All green
+(cairn-event 19, cairn-node 130), clippy clean; **opus final review merge-ready** (verified the ADR-0021 grant floor
+survives `CREATE OR REPLACE`). **Explicit deferrals:** matching/veto (§5.2, the advisory matcher), a CLI authoring verb,
+and globalising the authored twin to all event types. Filed **[issue #67](https://github.com/cairn-ehr/cairn-ehr/issues/67)**
+(pre-existing: `db/008` surrogate-projection migration is absent from the `cairn-node` SCHEMA array).
+
+**Earlier today (2026-06-27):** closed demographics **gap B** — the provider-number person×org relational model (the last
 deferred piece of ADR-0033). New **[ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md)** +
 **demographics §4.6**; spec 0.35→0.36. Model: an abstract identity-bearing **entity** (open `kind`: person/org/location/…)
 carrying §4.4-verbatim identifier sets; **reified relationships** between entities carrying their own identifier sets
@@ -255,6 +275,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
+- **Demographics build — next slices** (the live build front; reuse the slice-1 spine in `db/010` + `cairn-event::demographics`):
+  **slice 2** = the §4.3 **address** three-facet value (display/geo/structured + locale profile) or the §4.2
+  **names/DOB/sex** fields (these add provenance-precedence + recency projection rules); then the §5.2 **matching
+  pipeline + the §4.4 hard veto** (advisory matcher — Python/fit-for-purpose); then **globalise the authored twin** to
+  every event type (retire the `db/010` step-7 `ELSE` skeleton-twin + its TODO). DB-gated tests need
+  `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx). Resolve **[issue #67](https://github.com/cairn-ehr/cairn-ehr/issues/67)** (db/008 SCHEMA gap) along the way.
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
