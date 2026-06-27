@@ -129,6 +129,7 @@ nav:
       - ADR-0031 · Canonical identifiers & node-local surrogate keys: spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md
       - ADR-0032 · Culture-neutral address representation — the three-facet value: spec/decisions/0032-culture-neutral-address-representation.md
       - ADR-0033 · Patient-identifier representation — namespace/profile split: spec/decisions/0033-patient-identifier-representation.md
+      - ADR-0034 · The demographic legibility twin: spec/decisions/0034-demographic-legibility-twin.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

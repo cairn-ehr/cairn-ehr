@@ -1,39 +1,32 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-27 · **Spec/ADRs:** v0.34 (+ADR-0033) · **Phase:** architecture complete; proving viability
+**Session date:** 2026-06-27 · **Spec/ADRs:** v0.35 (+ADR-0034) · **Phase:** architecture complete; proving viability
 through proof-of-concept spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android) —
 no clinical implementation yet.
 
-**This session (2026-06-27):** closed the *representation* half of demographics **gap B** — patient-**identifier**
-representation, the identifier analogue of the address work below. New **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)**
-+ **demographics §4.4**. The sharp divergence from the address case: address matching is advisory, but identifier matching
-carries a **hard veto** (same-system different-value = very strong evidence against link), so the design *splits* the
-content-addressed **`system` namespace** (stable veto key, e.g. `nhs-number`) from the separately-versioned **`profile`**
-(format/checksum/normalizer/comparator bundle, rides the §7.6 distribution plane). The veto keys on a **`normalized` form
-materialised into the signed event at authoring** (the identifier analogue of §4.3's materialised `display`) so the veto
-**survives honest degradation** — a node lacking the profile compares materialised normalized forms, and if absent **holds
-for human review, never declares a mismatch from formatting noise** (`9434765919` == `943 476 5919`). Facets:
-`value`(mand, never rewritten) · `system`(mand, may be `unknown` → weak, no veto) · `normalized`(opt, materialised) ·
-`profile`(opt) · `use`(opt). Validation advisory (flag, never reject); floor enforces only structural invariants
-(`normalized` ⇒ `profile` named), never holds a profile. Added the **patient-vs-professional boundary** paragraph
-(professional/provider IDs live in the §7.5 actor registry, never conflated; provider-number person×org model **deferred**).
-identity §5.2 cross-ref; spec 0.33→0.34; brainstorm→design→plan→execute (under `docs/superpowers/`); mkdocs clean.
-**Open follow-ons:** gap B remainder (**provider-number person×org** relational model) and gap **C** (tie the legibility
-twin to all demographic assertions).
+**This session (2026-06-27):** closed demographics **gap C** — tied the [principle 11](index.md) legibility twin to
+**all** demographic assertions. New **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** + **demographics §4.5**.
+One uniform rule: every demographic assertion is a §3.13 event, so it already carries the mandatory signed plaintext twin;
+§4.5 binds demographics to it, requires the twin **materialised at authoring + profile-independent** (a profile-less node
+always reads the fact), reconciles the ad-hoc §4.3 `display` / §4.4 `value` facets as the **value-core** the one twin wraps
+(no second twin that can drift), and guarantees any **future** field shape inherits it by construction. Floor enforces only
+"non-empty twin present" (never twin content); cross-facet `twin == render(value)` is advisory. Explicit **legibility ≠
+matching** boundary: the twin is for reading, matching still degrades to human review per ADR-0032/0033. §3.13 cross-ref
+added; spec 0.34→0.35; brainstorm→design→plan→execute (under `docs/superpowers/`); mkdocs clean. **Open demographics
+follow-on:** gap B remainder — the **provider-number person×org** relational model (professional IDs already fixed in the
+§7.5 actor registry, never conflated with patient IDs).
 
-**Earlier today (2026-06-27):** recovered the schema (DDL only, no patient data) from an old single-jurisdiction GP EHR
-backup as a private design reference (kept out of this repo — product-neutrality), mined it for Cairn (validations of
-principles 4/11/12 + dual-identifier discipline; full notes private), then resolved a real **demographics gap** it
-surfaced: address representation was under-specified for an international, anti-capture EHR. New **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)**
-(culture-neutral address) + **demographics §4.3** (the three-facet `AddressValue`: mandatory `display` legibility twin +
-optional precision-aware `geo` + optional culture-tagged `structured` parts via a content-addressed locale **profile** that
-*reuses* the ADR-0014 comparator bundle — one locale bundle carries comparator + grammar + formatter + validators). No
-canonical part names / no floor `CHECK`s (validation advisory; floor keeps only structural invariants); country is a part;
-`use`-scoped multi-valued; honest degradation when a profile is absent. Refined the §4.2 projection row (split Phone/Address,
-culture-aware matching), added an identity §5.13 cross-ref, bumped spec 0.32→0.33. Built brainstorm→design→plan→execute
-(design+plan under `docs/superpowers/`); mkdocs clean. **Open follow-ons (deliberately deferred):** demographics gap **B**
-(identifier representation — validation-as-advisory; provider IDs scoped to person×org; confirm home vs §7.5) and gap **C**
-(tie the legibility twin to all demographic assertions).
+**Earlier today (2026-06-27):** closed the two demographics *representation* gaps that preceded gap C. **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)** + **§4.4** — patient-**identifier**
+representation: splits the content-addressed **`system` namespace** (stable hard-veto key, e.g. `nhs-number`) from the
+separately-versioned **`profile`** (format/checksum/normalizer/comparator bundle); veto keys on a **`normalized` form
+materialised at authoring** so it **survives honest degradation** (a profile-less node holds for human review, never
+declares a mismatch from formatting noise — `9434765919` == `943 476 5919`); validation advisory; patient-vs-professional
+boundary stated (provider-number person×org model **deferred**). **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)** + **§4.3** — culture-neutral address: the
+three-facet value (mandatory `display` + optional precision-aware `geo` + optional culture-tagged `structured` parts via a
+content-addressed locale **profile** reusing the ADR-0014 bundle); no canonical part names, country is a part, honest
+degradation when a profile is absent. Both: floor keeps only structural invariants, never holds a profile; spec 0.32→0.34.
+(Also recovered an old single-jurisdiction GP EHR schema — DDL only, no patient data — as a private, out-of-repo design
+reference; full notes private, product-neutrality preserved.)
 
 **Prior session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
 self-identification on restore**. A federated backup medium holds the node's OWN genesis *and* every peer's; by
@@ -255,10 +248,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 **Desk-doable now (no external dependency):**
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
-- **Demographics gaps B & C** (surfaced 2026-06-27): **B** — patient-identifier *representation* **closed** (ADR-0033,
-  §4.4, this session); the remainder is the **provider-number person×org** relational model (professional IDs already
-  fixed in the §7.5 actor registry, not conflated with patient IDs — boundary stated). **C** — tie the principle-11
-  legibility twin to all demographic assertions so any jurisdiction-defined field shape stays human-readable.
+- **Demographics gap B remainder** (gap **C** closed this session — ADR-0034/§4.5; gap B *representation* half closed
+  via ADR-0033/§4.4): the open piece is the **provider-number person×org** relational model (professional IDs already
+  fixed in the §7.5 actor registry, never conflated with patient IDs — boundary stated in ADR-0033/§4.4).
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
   hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
@@ -359,6 +351,7 @@ ADR before reopening any of these.
 | [0031](spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md) | Canonical IDs + node-local `bigint` surrogate keys (dual-identifier discipline) | §3.1/§3.2 |
 | [0032](spec/decisions/0032-culture-neutral-address-representation.md) | Culture-neutral address: three-facet value (display twin + geo + culture-tagged parts) | §4.3 (refines 0014) |
 | [0033](spec/decisions/0033-patient-identifier-representation.md) | Patient-identifier representation: namespace/profile split + matching-survivable normalized form | §4.4 (refines 0014) |
+| [0034](spec/decisions/0034-demographic-legibility-twin.md) | The demographic legibility twin: every demographic assertion legible without its profile | §4.5 (refines 0012) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

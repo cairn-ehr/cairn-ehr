@@ -54,6 +54,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0031](0031-canonical-identifiers-and-node-local-surrogate-keys.md) | Canonical identifiers and node-local surrogate keys: the dual-identifier discipline | Accepted (refines 0021) | 2026-06-22 |
 | [0032](0032-culture-neutral-address-representation.md) | Culture-neutral address representation: the three-facet address value | Accepted (refines 0014) | 2026-06-27 |
 | [0033](0033-patient-identifier-representation.md) | Patient-identifier representation: namespace/profile split and the matching-survivable normalized form | Accepted (refines 0014) | 2026-06-27 |
+| [0034](0034-demographic-legibility-twin.md) | The demographic legibility twin: every demographic assertion stays human-readable without its profile | Accepted (refines 0012) | 2026-06-27 |
 
 ## Template
 
