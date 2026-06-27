@@ -24,6 +24,26 @@ INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('visibility.suppress','suppressing', TRUE)
 ON CONFLICT (event_type) DO NOTHING;
 
+-- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
+-- helper so the per-type twin hook below can fall back to it without duplicating the
+-- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
+CREATE OR REPLACE FUNCTION cairn_twin_skeleton(p_type text, b jsonb)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT format('[%s] %s for patient %s', p_type, b ->> 'schema_version', b ->> 'patient_id');
+$$;
+
+-- Per-event-type twin hook (§3.13/§4.5). Returns the plaintext legibility twin for an
+-- event and, for a type that has one, enforces its structural floor (raising on
+-- violation). The DEFAULT delegates every type to the skeleton; a later migration
+-- CREATE OR REPLACEs this to add its own branch WITHOUT re-declaring the whole
+-- validated submit_event door (so the safety-critical surface stays single-source).
+CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
+RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN cairn_twin_skeleton(p_type, b);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -116,8 +136,10 @@ BEGIN
         END IF;
     END IF;
 
-    -- 7. Derive the plaintext twin (mechanical; the §3.13 substrate) and append.
-    v_twin := format('[%s] %s for patient %s', v_type, b ->> 'schema_version', b ->> 'patient_id'); -- TODO: skeleton twin — spec §3.13/ADR-0012 want the clinical payload rendered too
+    -- 7. Plaintext twin (§3.13/§4.5) + any per-type structural floor, via the
+    --    cairn_event_twin hook so a new event type adds its branch there, not by
+    --    re-declaring this whole door.
+    v_twin := cairn_event_twin(v_type, b);
 
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,

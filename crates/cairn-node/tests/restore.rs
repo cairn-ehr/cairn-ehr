@@ -52,6 +52,7 @@ fn synth_peer(sk: &SigningKey, name: &str, peer_node_id_hex: &str, peer_pubkey: 
             "fingerprint": "fp", "role": "peer"
         }),
         attachments: vec![],
+        plaintext_twin: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -71,6 +72,7 @@ fn synth_enroll(sk: &SigningKey, name: &str) -> Vec<u8> {
         contributors: serde_json::json!([]),
         payload: serde_json::json!({ "display_name": name, "address": "127.0.0.1:7999" }),
         attachments: vec![],
+        plaintext_twin: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -277,6 +279,7 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
         contributors: serde_json::json!([{"actor_id": kid_b, "role": "device"}]),
         payload: serde_json::json!({"display_name": "Peer-B", "address": "127.0.0.1:7951"}),
         attachments: vec![],
+        plaintext_twin: None,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let peer_id = hex::encode(cairn_event::event_address(&signed_b.signed_bytes));

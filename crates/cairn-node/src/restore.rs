@@ -302,6 +302,7 @@ mod tests {
             contributors: serde_json::json!([]),
             payload: serde_json::json!({ "display_name": name, "address": "10.0.0.1:7843" }),
             attachments: vec![],
+            plaintext_twin: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }

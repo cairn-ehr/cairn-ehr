@@ -5,13 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repository is
 
 Cairn is an **offline-first, vendor-independent electronic health record**. The **architecture spec is
-essentially complete** (all open questions resolved, spec v0.31); the code that exists so far is
-**proof-of-concept spikes proving the architecture is viable** (walking skeleton + WAN sync in
-`poc/walking-skeleton`, an advisory-actor write-contract spike, and a first federating node `cairn-node`
-under `/crates`) — **the clinical product is not yet being built.** So most work is still design work:
-clinical case-mining, stress-testing the data model, and writing/refining specification prose — plus
-build-prep spikes. There is a Rust/Cargo workspace (`/crates`, `/extensions`, `/db`) and an mkdocs docs
-build, but **no clinical application** yet; don't assume product build/run instructions that don't exist.
+complete** (all open questions resolved, spec v0.36); viability was proven by **proof-of-concept spikes**
+(walking skeleton + WAN sync in `poc/walking-skeleton`, an advisory-actor write-contract spike, a first
+federating node `cairn-node` under `/crates`, Postgres-on-Android). As of 2026-06-27 the **first
+production clinical surface is now under construction** — the demographics §4.4 patient-identifier
+assertion tier on `cairn-node` (`db/010_demographics.sql` + `cairn-event::demographics`; PR #68, slice 1
+of many). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
+event/floor/projection spine into real product code, brainstorm→spec→plan→TDD) **and continued design
+work** (clinical case-mining, stress-testing the data model, refining spec prose). There is a Rust/Cargo
+workspace (`/crates`, `/extensions`, `/db`) and an mkdocs docs build; the clinical application is **early
+and partial** — only the §4.4 identifier slice exists, so don't assume product build/run instructions
+beyond what `cairn-node` actually provides.
 
 ## Document hierarchy (what wins when sources disagree)
 

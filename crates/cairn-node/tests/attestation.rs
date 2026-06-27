@@ -61,6 +61,7 @@ fn body(
         contributors: contrib,
         payload,
         attachments: vec![],
+        plaintext_twin: None,
     }
 }
 

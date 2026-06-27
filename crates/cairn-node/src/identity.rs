@@ -24,6 +24,7 @@ fn node_event_body(event_type: &str, signer_key_id: &str, node_origin: &str,
         contributors: serde_json::json!([{"actor_id": signer_key_id, "role": "device"}]),
         payload,
         attachments: vec![],
+        plaintext_twin: None,
     }
 }
 

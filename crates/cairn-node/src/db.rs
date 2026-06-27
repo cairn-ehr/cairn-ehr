@@ -1,6 +1,6 @@
 use tokio_postgres::{Client, NoTls};
 
-const SCHEMA: [(&str, &str); 8] = [
+const SCHEMA: [(&str, &str); 9] = [
     ("001_envelope",      include_str!("../../../db/001_envelope.sql")),
     ("002_projection",    include_str!("../../../db/002_projection.sql")),
     ("003_blobs",         include_str!("../../../db/003_blobs.sql")),
@@ -8,7 +8,12 @@ const SCHEMA: [(&str, &str); 8] = [
     ("005_submit",        include_str!("../../../db/005_submit.sql")),
     ("006_recall",        include_str!("../../../db/006_recall.sql")),
     ("007_node_federation", include_str!("../../../db/007_node_federation.sql")),
+    // NOTE: db/008_surrogate_projection.sql is INTENTIONALLY not loaded here. It is a
+    // spike artefact (the ADR-0031 dense-bigint surrogate-key measurement, exercised on
+    // Bet B), not part of the node's runtime schema — hence the 007 -> 009 jump. Leave
+    // the gap; do not "fix" it by inserting 008. (Confirmed spike-only; see issue #67.)
     ("009_node_supersede_and_restore", include_str!("../../../db/009_node_supersede_and_restore.sql")),
+    ("010_demographics",  include_str!("../../../db/010_demographics.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

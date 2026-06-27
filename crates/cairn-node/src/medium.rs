@@ -150,6 +150,7 @@ pub fn build_self_attestation(
             "event_set_commitment": event_set_commitment(events),
         }),
         attachments: vec![],
+        plaintext_twin: None,
     };
     // A signing failure here is a programming error (bad key), not a runtime condition.
     sign(&body, sk).expect("self-attestation signing").signed_bytes
@@ -421,6 +422,7 @@ mod tests {
             contributors: serde_json::json!([]),
             payload: serde_json::json!({ "display_name": name, "address": "10.0.0.1:7843" }),
             attachments: vec![],
+            plaintext_twin: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }
