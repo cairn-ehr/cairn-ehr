@@ -57,6 +57,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0034](0034-demographic-legibility-twin.md) | The demographic legibility twin: every demographic assertion stays human-readable without its profile | Accepted (refines 0012) | 2026-06-27 |
 | [0035](0035-entities-relationships-and-provider-numbers.md) | Entities, relationships, and the provider-number relational model | Accepted (refines 0033, 0014) | 2026-06-27 |
 | [0036](0036-demographic-name-display-recency-first.md) | Demographic name display: recency-first within the legal tier | Accepted (refines §4.2, 0014) | 2026-06-28 |
+| [0037](0037-demographic-administrative-sex-and-per-field-winner-policy.md) | Administrative-sex provenance-first + per-field winner-policy selector; karyotype = distinct field | Accepted (refines §4.2, 0036, 0014) | 2026-06-28 |
 
 ## Template
 

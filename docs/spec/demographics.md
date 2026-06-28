@@ -14,7 +14,7 @@ Each change is an immutable **assertion event**: *source S asserts at HLC t that
 |---|---|---|---|
 | Names | Multi-valued set (legal, maiden, alias, transliteration) | All retained; display = **most-recent legal name (recency-first; provenance and origin break ties)**, falling back to the most-recent name of any `use` when no legal name exists ([ADR-0036](decisions/0036-demographic-name-display-recency-first.md)) | Weak evidence |
 | DOB | Stable, precision-aware: `(value, precision, basis)` | Provenance beats recency; verified value locks vs. lower provenance | **Strong evidence against link** |
-| Sex / gender | Three fields: sex-at-birth, administrative sex, gender identity | Sex-at-birth provenance-locked; gender identity patient-stated authoritative, recency wins | Sex-at-birth conflict: strong evidence against link |
+| Sex / gender | Three fields: sex-at-birth, administrative sex, gender identity | Sex-at-birth provenance-locked; **administrative sex provenance-first** (document-anchored marker; recency wins among equal provenance) ([ADR-0037](decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)); gender identity patient-stated authoritative, recency wins | Sex-at-birth conflict: strong evidence against link |
 | Identifiers (national ID, insurance, program IDs) | Multi-valued set keyed by issuing system; representation per [§4.4](#44-identifiers-representation) | Set union, never LWW | Same-system different-value = **very strong evidence against link** (a hard veto; keys on the [§4.4](#44-identifiers-representation) normalized form, degrades honestly) |
 | Phone | Volatile | Recency (HLC) wins; history retained | Nearly meaningless |
 | Address | Multi-valued, volatile, `use`-scoped (§4.3) | Per `use`: displayed current = highest-provenance most-recent non-superseded assertion; full history retained; supersession is an explicit assertion, never an overwrite | Weak evidence (culture-aware via the profile comparator; tight `geo` or exact structured match is mild positive evidence, weighted by `accuracy_m`) |
@@ -28,6 +28,10 @@ Notes:
   (marriage, transition), so the current name the patient goes by displays; the old name
   is retained as evidence. A verified document does not pin a stale name or a deadname
   ([ADR-0036](decisions/0036-demographic-name-display-recency-first.md)).
+- Sex-at-birth is the sex **assigned/observed at birth**; a **karyotype** (chromosomal
+  sex) is a distinct fact with its own field, never asserted as a sex-at-birth value
+  (the AIS/Swyer case records two facts, not one overwriting the other)
+  ([ADR-0037](decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)).
 
 ## 4.3 Address: the three-facet value
 
