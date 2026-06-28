@@ -17,7 +17,7 @@ Each change is an immutable **assertion event**: *source S asserts at HLC t that
 | Sex / gender | Three fields: sex-at-birth, administrative sex, gender identity | Sex-at-birth provenance-locked; **administrative sex provenance-first** (document-anchored marker; recency wins among equal provenance) ([ADR-0037](decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)); gender identity patient-stated authoritative, recency wins | Sex-at-birth conflict: strong evidence against link |
 | Identifiers (national ID, insurance, program IDs) | Multi-valued set keyed by issuing system; representation per [§4.4](#44-identifiers-representation) | Set union, never LWW | Same-system different-value = **very strong evidence against link** (a hard veto; keys on the [§4.4](#44-identifiers-representation) normalized form, degrades honestly) |
 | Phone | Volatile | Recency (HLC) wins; history retained | Nearly meaningless |
-| Address | Multi-valued, volatile, `use`-scoped (§4.3) | Per `use`: displayed current = highest-provenance most-recent non-superseded assertion; full history retained; supersession is an explicit assertion, never an overwrite | Weak evidence (culture-aware via the profile comparator; tight `geo` or exact structured match is mild positive evidence, weighted by `accuracy_m`) |
+| Address | Multi-valued, volatile, `use`-scoped (§4.3) | Per `use`: displayed current = **most-recent** assertion within the use (recency-first — addresses are volatile; provenance/origin break ties; [ADR-0038](decisions/0038-demographic-address-winner-per-use-recency.md)); full history retained; supersession is an explicit assertion, never an overwrite | Weak evidence (culture-aware via the profile comparator; tight `geo` or exact structured match is mild positive evidence, weighted by `accuracy_m`) |
 | Deceased status | Safety-asymmetric | Sets easily, never auto-clears; reversal = explicit human event | Strong evidence against link |
 | Photo | Optional; powerful in low-ID settings | Append-only gallery, newest displayed | Human-reviewable evidence |
 
@@ -46,6 +46,14 @@ Demographic shape varies by nation, legislation, and culture; the **infrastructu
 **Multi-valued, `use`-scoped.** A patient holds a *set* of addresses; each assertion carries an optional `use` from a **recommended-but-open** vocabulary (`residential`, `postal`, `temporary`, `work`, …) — recommended so the common case interoperates, open so it cannot become capture. Multiple scripts/transliterations are multiple assertions, each with its own `profile`+`display`.
 
 **Honest degradation.** A node lacking a record's profile still shows `display` and uses `geo`; `parts` render as opaque labelled strings (never reinterpreted under a substitute profile); matching degrades to human review. Cross-facet consistency (`display == formatter(parts)`) is an *advisory verification* by profile-holding nodes, not a floor gate — keeping the floor culture-neutral ([ADR-0032](decisions/0032-culture-neutral-address-representation.md)). Confidentiality (refuge addresses, geo especially) is [ADR-0006](decisions/0006-visibility-scope-replication-and-the-safety-projection.md) key-custody + safety-projection; a clinic that requires structured entry enforces it as soft UI policy ([ADR-0021](decisions/0021-layering-the-node-api-and-ui-pluralism.md)), never on the wire.
+
+**Display-winner: per-use recency-first.** A patient holds one *current* address per `use`
+(residential, postal, work are independently current). Within a use the **newest** assertion wins
+(recency-first — addresses are volatile; a fresh patient-stated move must displace a stale
+document-verified address, the same reasoning names follow and the inverse of DOB's
+provenance-lock), with provenance then origin as deterministic tiebreaks. All addresses are
+retained as matching evidence; the UI surfaces past/other-use addresses from the retained set
+([ADR-0038](decisions/0038-demographic-address-winner-per-use-recency.md)).
 
 ## 4.4 Identifiers: representation
 

@@ -1,10 +1,23 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-28 · **Spec/ADRs:** v0.38 · **Phase:** architecture complete; **first production clinical
-surface under construction** — the demographics tier on `cairn-node` (slices 1–4 done; §4.3 address + §5.2 matcher next).
+**Session date:** 2026-06-28 · **Spec/ADRs:** v0.39 · **Phase:** architecture complete; **first production clinical
+surface under construction** — the demographics tier on `cairn-node` (slices 1–5 done; §5.2 matcher + globalise authored twin next).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-28):** built demographics **slice 4 = the two remaining §4.2 sex/gender fields** on the existing
+**This session (2026-06-28):** built demographics **slice 5 = §4.3 address three-facet value** (per-use recency-first winner).
+`cairn-event::demographics` address builders: `AddressAssertion`/`Geo`/`StructuredAddress` + `address_assertion_body` +
+`render_address_twin`. `db/014_demographics_address.sql`: address branch in the shared floor (structured⇒profile, parts-text,
+geo-shape); retained-set `patient_address` (keyed `(patient, use, display)`) + per-use recency-first `patient_address_current`
+VIEW (one current address per `use`). Display-winner: **recency-first** within a `use` — addresses are volatile (people move);
+a fresh patient-stated "I moved last month" must displace a stale document-verified address. Identical logic to names
+([ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)); deliberate inverse of DOB's provenance-lock.
+Provenance/origin are tiebreaks, not the winner gate. All addresses retained as evidence; provenance feeds the §5.2 matcher.
+No new event type, no `submit_event` change; SCHEMA array 12→13. New **[ADR-0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md)**
+(per-use recency-first winner; fixes the stale §4.3 table line); spec **0.38 → 0.39**. **cairn-event** 4 new unit tests (33/33
+suite green); **cairn-node** 9 new integration tests (`demographics_address`); slices 1–4 regress green; clippy clean.
+**Demographics slices 1–5 are now done.** §4.3 address is complete.
+
+**Prior session (2026-06-28):** built demographics **slice 4 = the two remaining §4.2 sex/gender fields** on the existing
 `demographic.field.asserted` spine (`db/011`). **Administrative-sex** → provenance-first (document-anchored marker; recency
 wins among equal provenance — the same ordering as DOB/sex-at-birth). **Gender-identity** → recency-first regardless of
 provenance (the inverse: the patient's current stated identity always wins; provenance still feeds the §5.2 matcher).
@@ -20,7 +33,7 @@ is a field-semantics error — they record different facts. Spec/ADR only, no ka
 **[ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)**; spec 0.37 → 0.38. Additive-only: no new
 event type, no floor change, no `patient_demographic` schema change. **cairn-event** 3 new unit tests (29/29 suite green);
 **cairn-node** 6 new integration tests (`demographics_sex_gender` — incl. apply-order convergence + the backfill catch-up),
-slices 1–3 regress green; clippy clean. PR on `demographics-sex-gender`.
+slices 1–3 regress green; clippy clean. **Merged to `main` as [PR #73](https://github.com/cairn-ehr/cairn-ehr/pull/73) (2026-06-28); slice 4 complete on `main`.**
 
 **Prior session (2026-06-28):** built demographics **slice 3 = the §4.2 names field** — a retained-set
 `patient_name` projection (every asserted name kept as evidence) plus a `patient_name_current` display-winner VIEW.
@@ -338,11 +351,10 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013` +
-  `cairn-event::demographics`). Slices 1–4 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
-  §4.2 administrative-sex + gender-identity). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
-  **Next:** the §4.3 **address** three-facet value (display/geo/structured + locale profile) · the §5.2
-  **matching pipeline + §4.4 hard veto** (advisory matcher — Python/fit-for-purpose) · **globalising the
+- **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
+  `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
+  §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
+  **Next:** the §5.2 **matching pipeline + §4.4 hard veto** (advisory matcher — Python/fit-for-purpose) · **globalising the
   authored twin** to every event type (retire the `cairn_event_twin` skeleton fallback + its TODO).
   DB-gated tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
@@ -451,6 +463,7 @@ ADR before reopening any of these.
 | [0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md) | The entity/relationship model + provider-number person×org (subject-kind partitioning) | §4.6 (refines 0033) |
 | [0036](spec/decisions/0036-demographic-name-display-recency-first.md) | Demographic name display: recency-first within the legal tier (diverges from DOB's provenance-lock by design) | §4.2 (refines 0014) |
 | [0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md) | Sex/gender/karyotype field semantics: per-field winner policy; karyotype is a distinct field, never displaces assigned sex-at-birth | §4.2 (refines 0011/0014) |
+| [0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows ADR-0036) | §4.3 (refines 0032, follows 0036) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

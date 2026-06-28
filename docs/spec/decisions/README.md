@@ -58,6 +58,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0035](0035-entities-relationships-and-provider-numbers.md) | Entities, relationships, and the provider-number relational model | Accepted (refines 0033, 0014) | 2026-06-27 |
 | [0036](0036-demographic-name-display-recency-first.md) | Demographic name display: recency-first within the legal tier | Accepted (refines §4.2, 0014) | 2026-06-28 |
 | [0037](0037-demographic-administrative-sex-and-per-field-winner-policy.md) | Administrative-sex provenance-first + per-field winner-policy selector; karyotype = distinct field | Accepted (refines §4.2, 0036, 0014) | 2026-06-28 |
+| [0038](0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows 0036) | Accepted (refines §4.3, 0032, follows 0036) | 2026-06-28 |
 
 ## Template
 
