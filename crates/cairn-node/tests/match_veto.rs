@@ -4,7 +4,10 @@
 //! serialized cluster-wide via `db::test_serial_guard`. The advisory probabilistic
 //! matcher (§5.2 piece B, Python) and the §5.7 link-apply seam are separate
 //! subsystems and are NOT exercised here.
-use cairn_event::demographics::{identifier_assertion_body, render_identifier_twin, IdentifierAssertion};
+use cairn_event::demographics::{
+    dob_assertion_body, identifier_assertion_body, render_dob_twin, render_identifier_twin,
+    render_sex_at_birth_twin, sex_at_birth_assertion_body, IdentifierAssertion,
+};
 use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use tokio_postgres::Client;
@@ -174,4 +177,81 @@ async fn multi_valued_shared_value_is_no_veto() {
     submit_identifier(&c, &sk, &kid, a, 2, &idassert("medicare-au", "2000000000", Some("2000000000"))).await;
     submit_identifier(&c, &sk, &kid, b, 3, &idassert("medicare-au", "2000000000", Some("2000000000"))).await;
     assert!(veto_rows(&c, a, b).await.is_empty(), "one shared normalized in the set = no veto");
+}
+
+/// Submit one §4.2 DOB assertion.
+#[allow(clippy::too_many_arguments)]
+async fn submit_dob(
+    c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall: i64,
+    value: &str, precision: &str, provenance: &str,
+) {
+    submit(c, sk, kid, patient, wall, "demographic.field.asserted", "demographic.field/1",
+           dob_assertion_body(value, precision, Some("document"), provenance),
+           Some(&render_dob_twin(value, precision, provenance)))
+        .await.expect("valid dob accepted");
+}
+
+/// Submit one §4.2 sex-at-birth assertion.
+async fn submit_sex(
+    c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall: i64,
+    value: &str, provenance: &str,
+) {
+    submit(c, sk, kid, patient, wall, "demographic.field.asserted", "demographic.field/1",
+           sex_at_birth_assertion_body(value, provenance),
+           Some(&render_sex_at_birth_twin(value, provenance)))
+        .await.expect("valid sex-at-birth accepted");
+}
+
+#[tokio::test]
+async fn dob_hard_veto_when_both_verified_same_precision_differ() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_dob(&c, &sk, &kid, a, 1, "1980-03-15", "day", "document-verified").await;
+    submit_dob(&c, &sk, &kid, b, 2, "1980-03-16", "day", "document-verified").await;
+    let rows = veto_rows(&c, a, b).await;
+    assert_eq!(rows, vec![("dob".into(), "hard_veto".into(), "dob".into())]);
+    assert!(has_hard_veto(&c, a, b).await);
+}
+
+#[tokio::test]
+async fn dob_no_veto_when_precision_differs() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // `1980` (year) vs `1980-03-15` (day): a consistent coarsening, not a clash (principle 4).
+    submit_dob(&c, &sk, &kid, a, 1, "1980", "year", "document-verified").await;
+    submit_dob(&c, &sk, &kid, b, 2, "1980-03-15", "day", "document-verified").await;
+    assert!(veto_rows(&c, a, b).await.is_empty(), "different precision = no finding");
+}
+
+#[tokio::test]
+async fn dob_no_veto_when_not_both_verified() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // One verified, one patient-stated (rank < 60) -> not a hard veto.
+    submit_dob(&c, &sk, &kid, a, 1, "1980-03-15", "day", "document-verified").await;
+    submit_dob(&c, &sk, &kid, b, 2, "1980-03-16", "day", "patient-stated").await;
+    assert!(veto_rows(&c, a, b).await.is_empty(), "clash only on verified-vs-verified");
+}
+
+#[tokio::test]
+async fn sex_at_birth_hard_veto_when_both_verified_differ() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_sex(&c, &sk, &kid, a, 1, "female", "document-verified").await;
+    submit_sex(&c, &sk, &kid, b, 2, "male", "document-verified").await;
+    let rows = veto_rows(&c, a, b).await;
+    assert_eq!(rows, vec![("sex-at-birth".into(), "hard_veto".into(), "sex-at-birth".into())]);
+    assert!(has_hard_veto(&c, a, b).await);
 }
