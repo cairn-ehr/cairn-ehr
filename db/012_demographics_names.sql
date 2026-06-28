@@ -13,11 +13,16 @@ BEGIN;
 
 -- The §4.2 retained set: one row per distinct (patient, use, value) name. use_key
 -- folds an absent/blank `use` to 'unspecified' so it is a valid NOT-NULL key component
--- (mirrors patient_identifier.match_key). provenance_rank is cached (reuses db/011's
--- cairn_provenance_rank) so the trigger's recency/provenance test is a plain tuple compare.
+-- (mirrors patient_identifier.match_key), AND ASCII-lower-cases it (COLLATE "C"): `use`
+-- is an OPEN, author-chosen vocabulary, so "Legal"/"LEGAL"/"legal" are the same category —
+-- a deterministic fold makes the display-winner's legal-tier test (and member dedup)
+-- case-insensitive AND convergent across nodes (a locale lower() is collation-dependent),
+-- while use_raw below keeps the authored casing for legibility/audit. provenance_rank is
+-- cached (reuses db/011's cairn_provenance_rank) so the recency/provenance test is a plain
+-- tuple compare.
 CREATE TABLE IF NOT EXISTS patient_name (
     patient_id         UUID    NOT NULL,
-    use_key            TEXT    NOT NULL,   -- coalesce(NULLIF(trim(use),''),'unspecified')
+    use_key            TEXT    NOT NULL,   -- lower(coalesce(NULLIF(trim(use),''),'unspecified') COLLATE "C")
     value              TEXT    NOT NULL,   -- the authored display string (opaque to the core)
     use_raw            TEXT,               -- the original `use` facet (NULL when absent)
     provenance         TEXT    NOT NULL,
@@ -47,7 +52,15 @@ BEGIN
     IF fld <> 'name' THEN
         RETURN NULL;
     END IF;
-    v_key  := coalesce(v_use, 'unspecified');
+    -- Lower-case the key: `use` is open vocabulary, so "Legal"==="legal" as a category.
+    -- Folding here makes the legal-tier display test case-insensitive and collapses
+    -- casing variants of the same use to one member; use_raw keeps the authored form.
+    -- COLLATE "C" forces a deterministic ASCII fold (A-Z→a-z, bytes ≥128 untouched): a
+    -- locale-default lower() is collation-dependent (e.g. Turkic 'I'→dotless 'ı'), which
+    -- would make two nodes compute a DIFFERENT use_key for the same event and diverge the
+    -- retained-set PK across the fleet — federation must stay convergent (the legal token
+    -- is ASCII, so C-folding loses nothing here).
+    v_key  := lower(coalesce(v_use, 'unspecified') COLLATE "C");
     v_rank := cairn_provenance_rank(p ->> 'provenance');
 
     INSERT INTO patient_name AS pn
@@ -86,7 +99,8 @@ CREATE TRIGGER patient_name_apply_trg
 -- The §4.2 display-winner: one row per patient, selected from the retained set with NO
 -- stored pointer. The ORDER BY is the whole rule:
 --   1) prefer use_key='legal' (a legal name always outranks any non-legal — a 2010 legal
---      beats a 2024 alias);
+--      beats a 2024 alias). use_key is stored lower-cased, so this matches any authored
+--      casing of the legal-use token ("Legal"/"LEGAL");
 --   2) recency-first within the tier (newest legal name wins — recency beats provenance
 --      for names, the deliberate divergence from DOB's provenance-lock);
 --   3) provenance_rank then asserted_origin break exact-recency ties deterministically.

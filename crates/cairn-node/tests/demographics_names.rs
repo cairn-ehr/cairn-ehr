@@ -152,6 +152,35 @@ async fn legal_name_takes_over_from_a_newer_alias() {
 }
 
 #[tokio::test]
+async fn legal_tier_is_case_insensitive() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // `use` is an OPEN, author-chosen vocabulary — a peer node, a FHIR import, or a UI
+    // may legitimately author the legal-use token with different casing ("Legal", "LEGAL").
+    // The legal tier MUST recognise it regardless of case, or the deadname/wrong-name
+    // display failure ADR-0036 exists to prevent comes back: a capitalised legal name
+    // would silently lose its tier and be displaced by a more-recent alias.
+    submit_field(&c, &sk, &kid, p, 1, 0,
+        name_assertion_body("Mary Jones", Some("Legal"), "patient-stated"),
+        Some(&render_name_twin("Mary Jones", Some("Legal"), "patient-stated"))).await.unwrap();
+    submit_field(&c, &sk, &kid, p, 2, 0,
+        name_assertion_body("MJ", Some("alias"), "patient-stated"),
+        Some(&render_name_twin("MJ", Some("alias"), "patient-stated"))).await.unwrap();
+    assert_eq!(current_name(&c, p).await.as_deref(), Some("Mary Jones"),
+        "a capitalised 'Legal' use is still the legal tier and outranks a newer alias");
+    // The authored casing survives in use_raw (legibility/audit), only the key is folded.
+    let p_str = p.to_string();
+    let use_raw: String = c.query_one(
+        "SELECT use_raw FROM patient_name WHERE patient_id::text=$1 AND value='Mary Jones'",
+        &[&p_str]).await.unwrap().get(0);
+    assert_eq!(use_raw, "Legal", "the authored `use` casing is preserved verbatim in use_raw");
+}
+
+#[tokio::test]
 async fn set_union_reassertion_is_idempotent() {
     let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
     let _guard = db::test_serial_guard(&base).await.unwrap();

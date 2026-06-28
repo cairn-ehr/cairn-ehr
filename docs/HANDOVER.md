@@ -14,10 +14,14 @@ This deliberately **diverges from DOB's provenance-lock** — names are a volati
 patient-stated legal name (a dignity and safety failure, paper-parity violation). All names are retained as
 evidence regardless; provenance still feeds the §5.2 matcher. The displayed name is the legal-preferred reference
 point; surfacing a preferred/chosen "a.k.a." name is **UI soft-policy above the floor** (principle 12), reading
-the same retained set. Spec-only session: ADR + §4.2 refinement + doc currency (no code). New
-**[ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)**; spec 0.36 → 0.37. **Explicit
-deferrals:** the `patient_name`/`patient_name_current` implementation code and integration tests are Task 1/2 of
-the sdd-plan; this session is Task 3 (doc currency) only — code committed separately.
+the same retained set. New **[ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)**; spec
+0.36 → 0.37. **Implementation landed in this PR** (#71, brainstorm→spec→plan→subagent-SDD): `db/012_demographics_names.sql`
+(the `patient_name` retained-set trigger + `patient_name_current` display VIEW), the `cairn-event::demographics`
+`name_assertion_body`/`render_name_twin` builders, and 8 integration + 3 unit tests (all green; slices 1–2 regress
+green; clippy clean). The display tier folds `use_key` to lower-case (deterministic `COLLATE "C"`) so the open `use`
+vocabulary's legal token is recognised case-insensitively ("Legal"/"LEGAL") and convergently across nodes, with
+`use_raw` preserving the authored casing. **Note:** #71 was merged early (before the review fix landed), so that
+case-insensitivity fix + this currency note ship in a small **follow-up PR** off `demographics-names`, not in #71.
 
 **Prior session (2026-06-27):** built demographics **slice 2 = the §4.2 DOB + sex-at-birth provenance-locked fields**
 (brainstorm→spec→plan→subagent-SDD, 5 TDD tasks; spec+plan under `docs/superpowers/`). Introduces the **new mechanic
