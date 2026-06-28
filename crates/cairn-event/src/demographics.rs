@@ -73,6 +73,26 @@ pub fn sex_at_birth_assertion_body(value: &str, provenance: &str) -> Value {
     demographic_field_body("sex-at-birth", value, None, provenance)
 }
 
+/// One §4.2 name assertion. `value` is the authored display string, carried
+/// verbatim ("田中 太郎", a mononym, a patronymic — culture-neutral as-authored;
+/// the core never parses or normalises it). `use_` is the recommended-but-open
+/// category (legal/maiden/alias/transliteration/…), placed in the `facets.use`
+/// bag and omitted entirely when None so the in-DB floor sees exactly what was
+/// asserted. Structured parts (given/family + a locale profile) are a later slice.
+pub fn name_assertion_body(value: &str, use_: Option<&str>, provenance: &str) -> Value {
+    let facets = use_.map(|u| json!({ "use": u }));
+    demographic_field_body("name", value, facets, provenance)
+}
+
+/// Render the §4.5 legibility twin for a name. Matches the spec example
+/// "Name (legal): 田中 太郎": the `use` sits in the parens when present; when it is
+/// absent the parens fall back to the provenance ("Name (patient-stated): Mary")
+/// so the parenthetical is never empty and the fact stays legible without a profile.
+pub fn render_name_twin(value: &str, use_: Option<&str>, provenance: &str) -> String {
+    let context = use_.unwrap_or(provenance);
+    format!("Name ({context}): {value}")
+}
+
 /// Render the §4.5 materialised legibility twin for a date of birth:
 /// `"Date of birth (<provenance>): <value> (<precision>)"`. Profile-independent —
 /// readable on a node that has never seen the dob field's schema.
@@ -169,6 +189,36 @@ mod tests {
         assert_eq!(
             render_sex_at_birth_twin("female", "clinician-observed"),
             "Sex at birth (clinician-observed): female"
+        );
+    }
+
+    #[test]
+    fn name_body_carries_field_value_use_and_provenance() {
+        let v = name_assertion_body("田中 太郎", Some("legal"), "document-verified");
+        assert_eq!(v["field"], "name");
+        assert_eq!(v["value"], "田中 太郎");
+        assert_eq!(v["provenance"], "document-verified");
+        assert_eq!(v["facets"]["use"], "legal");
+    }
+
+    #[test]
+    fn name_body_omits_absent_use_never_null() {
+        let v = name_assertion_body("Ronaldinho", None, "patient-stated");
+        assert_eq!(v["field"], "name");
+        assert_eq!(v["value"], "Ronaldinho");
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("facets"), "absent use carries no facets bag, never null");
+    }
+
+    #[test]
+    fn name_twin_uses_use_when_present_else_provenance() {
+        assert_eq!(
+            render_name_twin("田中 太郎", Some("legal"), "document-verified"),
+            "Name (legal): 田中 太郎"
+        );
+        assert_eq!(
+            render_name_twin("Mary", None, "patient-stated"),
+            "Name (patient-stated): Mary"
         );
     }
 }
