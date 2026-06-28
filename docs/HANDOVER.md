@@ -20,7 +20,7 @@ is a field-semantics error — they record different facts. Spec/ADR only, no ka
 **[ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)**; spec 0.37 → 0.38. Additive-only: no new
 event type, no floor change, no `patient_demographic` schema change. **cairn-event** 3 new unit tests (29/29 suite green);
 **cairn-node** 6 new integration tests (`demographics_sex_gender` — incl. apply-order convergence + the backfill catch-up),
-slices 1–3 regress green; clippy clean. PR on `demographics-sex-gender`.
+slices 1–3 regress green; clippy clean. **Merged to `main` as [PR #73](https://github.com/cairn-ehr/cairn-ehr/pull/73) (2026-06-28); slice 4 complete on `main`.**
 
 **Prior session (2026-06-28):** built demographics **slice 3 = the §4.2 names field** — a retained-set
 `patient_name` projection (every asserted name kept as evidence) plus a `patient_name_current` display-winner VIEW.
