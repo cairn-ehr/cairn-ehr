@@ -118,6 +118,9 @@ CREATE OR REPLACE FUNCTION cairn_field_clash(p_a uuid, p_b uuid, p_field text)
 RETURNS TABLE(veto_kind text, severity text, subject text, detail text)
 LANGUAGE sql STABLE AS $$
     SELECT
+        -- veto_kind = p_field is intentional: the closed vocabulary
+        -- {'identifier', 'dob', 'sex-at-birth'} is owned by cairn_match_veto,
+        -- the only caller, which passes only valid literals from that set.
         p_field,
         'hard_veto'::text,
         p_field,
@@ -141,7 +144,8 @@ $$;
 -- patient candidates. Empty set = no veto (clear to auto-link, subject to the
 -- matcher's own conservative threshold — not this function's concern). Symmetric,
 -- deterministic; a = b yields empty naturally (identical identifier sets share a
--- normalized; identical demographic winners are value-equal).
+-- normalized value, or when profile-less, share their raw value; identical
+-- demographic winners are value-equal).
 --
 -- DECEASED-STATUS CONFLICT (§5.13 closed set) IS DEFERRED — no deceased field is
 -- projected yet (patient_demographic projects only dob + sex-at-birth). When a

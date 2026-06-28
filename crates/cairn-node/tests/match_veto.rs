@@ -154,6 +154,24 @@ async fn identifier_degrade_hold_when_profile_absent_and_values_differ() {
 }
 
 #[tokio::test]
+async fn identifier_degrade_hold_when_one_side_normalized_other_not() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // A carries a normalized form (profile present); B is profile-less (normalized absent).
+    // The two sides cannot be trustworthily compared (B's difference may be pure formatting
+    // noise), so a same-system mismatch must DEGRADE to human review — never escalate to a
+    // trustworthy hard veto. (both_have_norm is false because B lacks a normalized form.)
+    submit_identifier(&c, &sk, &kid, a, 1, &idassert("local-mrn", "00123", Some("00123"))).await;
+    submit_identifier(&c, &sk, &kid, b, 2, &idassert("local-mrn", "00999", None)).await;
+    let rows = veto_rows(&c, a, b).await;
+    assert_eq!(rows, vec![("identifier".into(), "degrade_hold".into(), "local-mrn".into())]);
+    assert!(!has_hard_veto(&c, a, b).await, "asymmetric-normalized mismatch must not be a hard veto");
+}
+
+#[tokio::test]
 async fn unknown_system_never_vetoes() {
     let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
     let _guard = db::test_serial_guard(&base).await.unwrap();
