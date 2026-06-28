@@ -4,7 +4,29 @@
 surface under construction** — the demographics tier on `cairn-node` (slices 1–5 done; §5.2 matcher next).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-28):** **globalised the §3.13/§4.5 author-materialised legibility twin to every event type**
+**This session (2026-06-28):** built the **§4.4/§5.2 in-DB hard-veto + coherence-check floor** — the matching
+pipeline's safety-critical floor, piece A of §5.2. New `db/016_match_veto.sql` (SCHEMA array 14→15):
+`cairn_match_veto(patient_a, patient_b) RETURNS TABLE(veto_kind, severity, subject, detail)` + scalar
+`cairn_has_hard_veto`. Returns the closed hard-veto set per §5.13: **same-system identifier mismatch ·
+verified-DOB clash · verified-sex-at-birth clash**. Forces a human decision — never auto-link, never
+auto-reject. **Two verdict levels:** `hard_veto` (trustworthy clash — both `normalized` present & disjoint,
+or both DOBs/sexes verified + same-precision + differ; may demote a future link) vs `degrade_hold`
+(profile-less node, can't tell formatting noise from a real mismatch — holds for human, never demotes).
+Honours §4.4's honest-degradation wording (ADR-0033). **Precision-gated DOB, parses no dates** (floor stays
+culture-neutral): different precision = no finding (consistent coarsening, principle 4); same-precision
+verified mismatch = hard_veto. **Set-based per-system identifier comparison** (sharing any value = positive
+evidence, not a veto); `system: unknown` never vetoes. Pure SQL helpers (`cairn_identifier_veto`,
+`cairn_field_clash`) over the existing `patient_identifier`/`patient_demographic` projections; no event-format
+change, no `submit_event` change, no new table. **12 integration tests** on PG18+cairn_pgx (identifier
+hard_veto/degrade_hold/same-normalized/unknown/multi-valued; DOB same-precision/diff-precision/not-both-verified;
+sex-at-birth; multi-finding; symmetry) — all green; full workspace regression + clippy clean. **Brainstorm→spec→plan→subagent-SDD**; spec+plan under `docs/superpowers/`. No new ADR (implements settled spec §5.2/§5.13/§4.4;
+refines ADR-0014/0033). No spec-version bump. **Deferred (recorded, not lost):** the **deceased-status conflict**
+veto (4th in the §5.13 closed set — no deceased field is projected yet; a commented stub + this note mark it);
+the **advisory probabilistic matcher** (§5.2 piece B — Python/Fellegi–Sunter, blocking, comparators); the
+**proposal→`link` apply seam + coherence-check demotion** (piece C — needs the §5.7 identity event algebra,
+unbuilt); a candidate/worklist table. **The §5.2/§4.4 in-DB hard-veto floor is now BUILT.**
+
+**Prior session (2026-06-28):** **globalised the §3.13/§4.5 author-materialised legibility twin to every event type**
 (ADR-0039; spec v0.39 → v0.40), via brainstorm→spec→plan→subagent-SDD (5 tasks, spec+plan under `docs/superpowers/`).
 The in-DB floor (`db/015_globalise_twin.sql`, SCHEMA 13→14) now PREFERS the authored twin for every type; non-demographic
 types **degrade honestly** to a flagged, payload-rendering derived skeleton when absent (older/non-conformant peer) —
@@ -130,26 +152,7 @@ billing identifier — the WorkCover case). Entity/relationship *data* is fit-fo
 floor invariants are safety-critical. Cross-refs added in identity §5.2 and security §7.5/§7.7. No new founding principle.
 Design/spec work only — no code. **Demographics gaps A (§4.2), B (§4.4/§4.6), and C (§4.5) are all now closed.**
 
-**Earlier today (2026-06-27):** closed demographics **gap C** — tied the [principle 11](index.md) legibility twin to
-**all** demographic assertions. New **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** + **demographics
-§4.5**. One uniform rule: every demographic assertion is a §3.13 event, so it already carries the mandatory signed
-plaintext twin; §4.5 binds demographics to it, requires the twin **materialised at authoring + profile-independent**,
-reconciles the ad-hoc §4.3 `display` / §4.4 `value` facets as the **value-core** the one twin wraps, and guarantees any
-**future** field shape inherits it by construction. Floor enforces only "non-empty twin present"; `twin == render(value)`
-is advisory. Explicit **legibility ≠ matching** boundary: the twin is for reading, matching still degrades to human review
-per ADR-0032/0033. §3.13 cross-ref added; spec 0.34→0.35.
-
-**Earlier today (2026-06-27):** closed the two demographics *representation* gaps that preceded gap C. **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)** + **§4.4** — patient-**identifier**
-representation: splits the content-addressed **`system` namespace** (stable hard-veto key, e.g. `nhs-number`) from the
-separately-versioned **`profile`** (format/checksum/normalizer/comparator bundle); veto keys on a **`normalized` form
-materialised at authoring** so it **survives honest degradation** (a profile-less node holds for human review, never
-declares a mismatch from formatting noise — `9434765919` == `943 476 5919`); validation advisory; patient-vs-professional
-boundary stated (provider-number person×org model **deferred**). **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)** + **§4.3** — culture-neutral address: the
-three-facet value (mandatory `display` + optional precision-aware `geo` + optional culture-tagged `structured` parts via a
-content-addressed locale **profile** reusing the ADR-0014 bundle); no canonical part names, country is a part, honest
-degradation when a profile is absent. Both: floor keeps only structural invariants, never holds a profile; spec 0.32→0.34.
-(Also recovered an old single-jurisdiction GP EHR schema — DDL only, no patient data — as a private, out-of-repo design
-reference; full notes private, product-neutrality preserved.)
+**Earlier today (2026-06-27):** closed demographics representation gaps B+C — **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)** (culture-neutral address: three-facet display/geo/structured+profile, §4.3), **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)** (identifier: namespace/profile split + normalized form survives profile-less nodes, §4.4), **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** (demographic legibility twin bound to principle 11/§4.5 — floor enforces non-empty twin, `twin==render` advisory), **[ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md)** (entity/relationship + provider-number person×org, §4.6; subject-kind partitioning; design/spec only — no code). Spec 0.32→0.35.
 
 **Prior session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
 self-identification on restore**. A federated backup medium holds the node's OWN genesis *and* every peer's; by
@@ -372,7 +375,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 - **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
-  **Next:** the §5.2 **matching pipeline + §4.4 hard veto** (advisory matcher — Python/fit-for-purpose).
+  **§5.2/§4.4 in-DB hard-veto floor (piece A)** is now BUILT (`db/016`, SCHEMA 14→15). **Next:** the **advisory
+  Python probabilistic matcher (piece B)** (Python/Fellegi–Sunter, blocking, locale-pluggable comparators per
+  ADR-0014) and/or the **§5.7 identity-event link-apply seam (piece C)** (the destination for match proposals;
+  needs the identity event algebra — `link`/`unlink`/etc. — which is not yet built). Deferred: deceased-status
+  veto (no projection yet; stub in db/016); candidate/worklist table.
   DB-gated tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
