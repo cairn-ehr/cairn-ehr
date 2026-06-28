@@ -10,13 +10,17 @@ wins among equal provenance — the same ordering as DOB/sex-at-birth). **Gender
 provenance (the inverse: the patient's current stated identity always wins; provenance still feeds the §5.2 matcher).
 Mechanism: one IMMUTABLE `cairn_demographic_field_policy(field)` classifier (`db/013_demographics_sex_gender.sql`) drives
 BOTH the projection gate and the winner ordering; supersedes db/011's `patient_demographic_apply` via CREATE OR REPLACE;
-db/012 untouched; SCHEMA array 11→12. **Karyotype resolved** (the slice-2 deferred decision): a distinct field, never
+db/012 untouched; SCHEMA array 11→12. db/013 also adds an idempotent `cairn_demographic_backfill()` (called once at load)
+that re-folds events ALREADY in `event_log` for a now-projectable field — the ADR-0012 "carry now, project once the node
+understands the field" catch-up; without it a federated node that carried gender-identity/administrative-sex under db/011
+would never surface them on upgrade until a fresh assertion arrived (review fix on PR #73). **Karyotype resolved** (the
+slice-2 deferred decision): a distinct field, never
 displaces sex-at-birth (= assigned at birth); a `fact-proven` karyotype auto-displacing a `document-verified` assigned-sex
 is a field-semantics error — they record different facts. Spec/ADR only, no karyotype code. New
 **[ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)**; spec 0.37 → 0.38. Additive-only: no new
 event type, no floor change, no `patient_demographic` schema change. **cairn-event** 3 new unit tests (29/29 suite green);
-**cairn-node** 4 new integration tests (`demographics_sex_gender`), slices 1–3 regress green; clippy clean. PR on
-`demographics-sex-gender`.
+**cairn-node** 6 new integration tests (`demographics_sex_gender` — incl. apply-order convergence + the backfill catch-up),
+slices 1–3 regress green; clippy clean. PR on `demographics-sex-gender`.
 
 **Prior session (2026-06-28):** built demographics **slice 3 = the §4.2 names field** — a retained-set
 `patient_name` projection (every asserted name kept as evidence) plus a `patient_name_current` display-winner VIEW.

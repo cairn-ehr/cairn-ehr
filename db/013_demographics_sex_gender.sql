@@ -96,4 +96,75 @@ CREATE TRIGGER patient_demographic_apply_trg
     FOR EACH ROW WHEN (NEW.event_type = 'demographic.field.asserted')
     EXECUTE FUNCTION patient_demographic_apply();
 
+-- One-time catch-up for events ALREADY in event_log when this node gains projection
+-- capability for a field. The apply trigger only fires for NEW inserts, so a field that
+-- was *carried-not-projected* under an earlier schema (db/011 recognised only
+-- dob/sex-at-birth; a federated node can already hold gender-identity/administrative-sex
+-- assertions synced forward from a newer peer — exactly the ADR-0012 federation degrade)
+-- would otherwise stay invisible in patient_demographic until the next fresh assertion
+-- happened to arrive. That silently breaks the ADR-0012 promise of "carry now, project
+-- once the node understands the field". This re-folds the retained set so the projection
+-- catches up on the load that introduces the policy.
+--
+-- It is a pure function of event_log + the (immutable) policy, so it is idempotent and
+-- convergent: it recomputes the SAME policy-correct winner every node would. The
+-- ON CONFLICT guard is the SAME winner comparison as the trigger, so an already-correct
+-- projection row incurs no write (cheap on every reload — connect_and_load_schema replays
+-- every file), a missing row is inserted, and a stale row is healed. Never a downgrade.
+CREATE OR REPLACE FUNCTION cairn_demographic_backfill()
+RETURNS void LANGUAGE sql AS $$
+    INSERT INTO patient_demographic AS pd
+        (patient_id, field, value, facets, provenance, provenance_rank,
+         asserted_hlc_wall, asserted_hlc_count, asserted_origin)
+    SELECT DISTINCT ON (patient_id, field)
+        patient_id, field, value, facets, provenance, provenance_rank,
+        hlc_wall, hlc_counter, node_origin
+    FROM (
+        SELECT
+            e.patient_id,
+            e.body ->> 'field'                                 AS field,
+            e.body ->> 'value'                                 AS value,
+            e.body -> 'facets'                                 AS facets,
+            e.body ->> 'provenance'                            AS provenance,
+            cairn_provenance_rank(e.body ->> 'provenance')     AS provenance_rank,
+            e.hlc_wall, e.hlc_counter, e.node_origin,
+            cairn_demographic_field_policy(e.body ->> 'field') AS policy
+        FROM event_log e
+        WHERE e.event_type = 'demographic.field.asserted'
+          -- only fields this node now projects; carried-not-projected stays carried.
+          AND cairn_demographic_field_policy(e.body ->> 'field') IS NOT NULL
+    ) s
+    -- DISTINCT ON keeps the policy-winner per (patient, field): the SAME tuple order as
+    -- the trigger, expressed as a per-policy sort. recency-first leads with HLC;
+    -- provenance-first leads with rank; node_origin is the final deterministic tiebreak.
+    ORDER BY patient_id, field,
+        (CASE WHEN policy = 'recency-first' THEN hlc_wall        ELSE provenance_rank END) DESC,
+        (CASE WHEN policy = 'recency-first' THEN hlc_counter     ELSE hlc_wall END)        DESC,
+        (CASE WHEN policy = 'recency-first' THEN provenance_rank ELSE hlc_counter END)     DESC,
+        node_origin DESC
+    ON CONFLICT (patient_id, field) DO UPDATE SET
+        value              = EXCLUDED.value,
+        facets             = EXCLUDED.facets,
+        provenance         = EXCLUDED.provenance,
+        provenance_rank    = EXCLUDED.provenance_rank,
+        asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
+        asserted_hlc_count = EXCLUDED.asserted_hlc_count,
+        asserted_origin    = EXCLUDED.asserted_origin,
+        updated_at         = clock_timestamp()
+    WHERE CASE cairn_demographic_field_policy(pd.field)
+        WHEN 'recency-first' THEN
+            (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin)
+          > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
+             pd.provenance_rank, pd.asserted_origin)
+        ELSE
+            (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin)
+          > (pd.provenance_rank, pd.asserted_hlc_wall,
+             pd.asserted_hlc_count, pd.asserted_origin)
+    END;
+$$;
+
+SELECT cairn_demographic_backfill();
+
 COMMIT;
