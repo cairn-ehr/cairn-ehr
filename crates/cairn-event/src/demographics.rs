@@ -134,6 +134,73 @@ pub fn render_gender_identity_twin(value: &str, provenance: &str) -> String {
     format!("Gender identity ({provenance}): {value}")
 }
 
+/// A precision-aware geolocation facet (§4.3, principle 4 in space). `accuracy_m` is
+/// the honest uncertainty radius (GPS ±10 m, village centroid ±2 km); `basis` is its
+/// provenance (`device_gps` / `map_pin` / `geocoded_from_text` / `region_centroid` /
+/// `declared`). The culture-neutral universal locator — often the only viable address
+/// in informal-settlement / refugee / disaster / remote contexts.
+pub struct Geo<'a> {
+    pub lat: f64,
+    pub lon: f64,
+    pub accuracy_m: f64,
+    pub basis: &'a str,
+}
+
+/// The optional structured-address facet (§4.3): an open bag of named `parts` plus a
+/// content-addressed locale `profile` (`namespace@hash`). The core never interprets a
+/// part name or value — the profile (which travels the distribution plane) does. `parts`
+/// is expected to be a JSON object of text values; the in-DB floor enforces that shape.
+pub struct StructuredAddress<'a> {
+    pub profile: &'a str,
+    pub parts: Value,
+}
+
+/// One §4.3 address assertion. `display` is the mandatory, complete human-readable
+/// address — the value-core of the §4.5 legibility twin and the projection's member key
+/// — carried as the generic field `value`, so the existing non-empty-`value` floor check
+/// covers it. `geo` and `structured` are optional facets. `use_` is the recommended-but-
+/// open use category (`residential`/`postal`/`work`/…), omitted entirely when None.
+pub struct AddressAssertion<'a> {
+    pub display: &'a str,
+    pub provenance: &'a str,
+    pub use_: Option<&'a str>,
+    pub geo: Option<Geo<'a>>,
+    pub structured: Option<StructuredAddress<'a>>,
+}
+
+/// Build the §4.3 address-assertion payload (the value of `EventBody.payload`). `display`
+/// becomes the generic `value`; `use`/`geo`/`structured` go in the `facets` bag and are
+/// each omitted when absent (never serialized null) so the in-DB floor's key-presence
+/// checks see exactly what the author asserted. When no facet is present, no `facets` key
+/// is emitted at all (matching the names/identifier builders).
+pub fn address_assertion_body(a: &AddressAssertion) -> Value {
+    let mut facets = serde_json::Map::new();
+    if let Some(u) = a.use_ {
+        facets.insert("use".into(), json!(u));
+    }
+    if let Some(g) = &a.geo {
+        facets.insert("geo".into(), json!({
+            "lat": g.lat, "lon": g.lon, "accuracy_m": g.accuracy_m, "basis": g.basis,
+        }));
+    }
+    if let Some(s) = &a.structured {
+        facets.insert("structured".into(), json!({
+            "profile": s.profile, "parts": s.parts,
+        }));
+    }
+    let facets = if facets.is_empty() { None } else { Some(Value::Object(facets)) };
+    demographic_field_body("address", a.display, facets, a.provenance)
+}
+
+/// Render the §4.5 legibility twin for an address: `"Address (<use|provenance>): <display>"`.
+/// Mirrors `render_name_twin` — the `use` sits in the parens when present, else the
+/// provenance, so the parenthetical is never empty. `geo`/`structured` do not enter the
+/// twin: `display` is by definition the complete human-readable address.
+pub fn render_address_twin(a: &AddressAssertion) -> String {
+    let context = a.use_.unwrap_or(a.provenance);
+    format!("Address ({context}): {}", a.display)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +347,76 @@ mod tests {
             render_gender_identity_twin("non-binary", "patient-stated"),
             "Gender identity (patient-stated): non-binary"
         );
+    }
+
+    fn sample_address() -> AddressAssertion<'static> {
+        AddressAssertion {
+            display: "12 Main St, Springfield",
+            provenance: "patient-stated",
+            use_: Some("residential"),
+            geo: Some(Geo { lat: -33.87, lon: 151.21, accuracy_m: 10.0, basis: "device_gps" }),
+            structured: Some(StructuredAddress {
+                profile: "au-address@b3-xyz",
+                parts: json!({ "street": "12 Main St", "town": "Springfield", "country": "AU" }),
+            }),
+        }
+    }
+
+    #[test]
+    fn address_body_carries_display_as_value_and_all_facets() {
+        let v = address_assertion_body(&sample_address());
+        assert_eq!(v["field"], "address");
+        assert_eq!(v["value"], "12 Main St, Springfield"); // display is the value-core
+        assert_eq!(v["provenance"], "patient-stated");
+        assert_eq!(v["facets"]["use"], "residential");
+        assert_eq!(v["facets"]["geo"]["lat"], -33.87);
+        assert_eq!(v["facets"]["geo"]["lon"], 151.21);
+        assert_eq!(v["facets"]["geo"]["accuracy_m"], 10.0);
+        assert_eq!(v["facets"]["geo"]["basis"], "device_gps");
+        assert_eq!(v["facets"]["structured"]["profile"], "au-address@b3-xyz");
+        assert_eq!(v["facets"]["structured"]["parts"]["town"], "Springfield");
+    }
+
+    #[test]
+    fn address_body_omits_absent_facets_never_null() {
+        let a = AddressAssertion {
+            display: "Refugee camp sector 4, tent 27",
+            provenance: "clinician-observed",
+            use_: None, geo: None, structured: None,
+        };
+        let v = address_assertion_body(&a);
+        assert_eq!(v["field"], "address");
+        assert_eq!(v["value"], "Refugee camp sector 4, tent 27");
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("facets"), "no use/geo/structured ⇒ no facets bag, never null");
+    }
+
+    #[test]
+    fn address_body_geo_only_omits_use_and_structured() {
+        let a = AddressAssertion {
+            display: "-33.87, 151.21",
+            provenance: "declared",
+            use_: None,
+            geo: Some(Geo { lat: -33.87, lon: 151.21, accuracy_m: 2000.0, basis: "region_centroid" }),
+            structured: None,
+        };
+        let v = address_assertion_body(&a);
+        let facets = v["facets"].as_object().unwrap();
+        assert!(facets.contains_key("geo"));
+        assert!(!facets.contains_key("use"), "absent use omitted");
+        assert!(!facets.contains_key("structured"), "absent structured omitted");
+    }
+
+    #[test]
+    fn address_twin_uses_use_when_present_else_provenance() {
+        assert_eq!(
+            render_address_twin(&sample_address()),
+            "Address (residential): 12 Main St, Springfield"
+        );
+        let a = AddressAssertion {
+            display: "Tent 27", provenance: "clinician-observed",
+            use_: None, geo: None, structured: None,
+        };
+        assert_eq!(render_address_twin(&a), "Address (clinician-observed): Tent 27");
     }
 }
