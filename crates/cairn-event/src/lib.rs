@@ -268,9 +268,11 @@ pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventErro
     Ok(body)
 }
 
-/// Mechanically derive the §3.13 plaintext legibility twin from a body. Crude on
-/// purpose: the twin must be derivable by *any* node from the structured content,
-/// so a node generations behind can still read the event as prose.
+/// Mechanically derive the §3.13 plaintext legibility twin from a body. This is BOTH the
+/// canonical generic *authoring* renderer (a conformant author materialises this into the body
+/// via `materialise_generic_twin`, then signs it in — ADR-0039) AND the crude shape the floor
+/// falls back to when an event arrives without an authored twin. Crude on purpose: derivable by
+/// *any* node from the structured content, so a node generations behind still reads it as prose.
 pub fn plaintext_twin(body: &EventBody) -> String {
     let when = body.t_effective.as_deref().unwrap_or("(time unknown)");
     let content = serde_json::to_string_pretty(&body.payload).unwrap_or_default();
@@ -285,6 +287,41 @@ pub fn plaintext_twin(body: &EventBody) -> String {
         when,
         content,
     )
+}
+
+/// True iff an Option twin is present and not just whitespace. The single blank-test
+/// shared by `resolve_twin` and `materialise_generic_twin` (DRY).
+fn twin_is_present(twin: &Option<String>) -> bool {
+    matches!(twin.as_deref(), Some(t) if !t.trim().is_empty())
+}
+
+/// Resolve the twin to STORE for an event, following the globalised-twin rule (ADR-0039):
+/// prefer the author-materialised twin (principle 11 — the author renders it faithfully and
+/// signs it in, so a reader generations behind never re-derives from a schema it may not
+/// understand); fall back to the mechanically-derived twin only when the author left it absent
+/// or blank (an older / non-conformant peer). The in-DB floor (db/015 `cairn_event_twin`)
+/// mirrors this exact rule for the validated write door — keep the two in sync.
+/// Note: the derived (fallback) twin is a non-authoritative LOCAL projection — two nodes may
+/// render a twin-less event's derived twin differently, but the signed body is the convergent
+/// artifact, so this never breaks set-union.
+pub fn resolve_twin(body: &EventBody) -> String {
+    if twin_is_present(&body.plaintext_twin) {
+        // Safe: twin_is_present guarantees Some(non-blank).
+        body.plaintext_twin.clone().unwrap()
+    } else {
+        plaintext_twin(body)
+    }
+}
+
+/// Materialise the generic authored twin into a body BEFORE signing, so a conformant author
+/// globalises the §3.13 twin in one call (ADR-0039). Idempotent: an already-authored twin
+/// (e.g. a demographic builder's tailored twin) is left untouched, so this is safe to call on
+/// any body. Must run before `sign`, as the twin becomes part of the signed/content-addressed body.
+pub fn materialise_generic_twin(mut body: EventBody) -> EventBody {
+    if !twin_is_present(&body.plaintext_twin) {
+        body.plaintext_twin = Some(plaintext_twin(&body));
+    }
+    body
 }
 
 /// Bet B (B4) — Ed25519 sign/verify throughput, ops/s. Pure CPU; the number that
@@ -844,5 +881,61 @@ mod tests {
         let mut t = token.clone();
         let m = t.len() / 2; t[m] ^= 0x01;
         assert!(verify_pairing_bundle(&t).is_err());
+    }
+
+    // Globalised-twin helpers (ADR-0039). A reusable note body whose payload renders into a twin.
+    fn sample_note_body() -> EventBody {
+        EventBody {
+            event_id: "00000000-0000-7000-8000-000000000001".into(),
+            patient_id: "00000000-0000-7000-8000-000000000002".into(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc { wall: 7, counter: 0, node_origin: "n".into() },
+            t_effective: None,
+            signer_key_id: "k".into(),
+            contributors: serde_json::json!([{"actor_id": "k", "role": "recorded"}]),
+            payload: serde_json::json!({"text": "BP 120/80, afebrile"}),
+            attachments: vec![],
+            plaintext_twin: None,
+        }
+    }
+
+    #[test]
+    fn resolve_twin_prefers_authored_else_derives() {
+        let mut body = sample_note_body();
+        // Absent authored twin → derive (identical to the mechanical renderer).
+        assert_eq!(resolve_twin(&body), plaintext_twin(&body));
+        // Whitespace-only authored twin → still derive (treated as blank).
+        body.plaintext_twin = Some("   \n".into());
+        assert_eq!(resolve_twin(&body), plaintext_twin(&body));
+        // Non-empty authored twin → carried verbatim.
+        body.plaintext_twin = Some("Progress note: BP 120/80".into());
+        assert_eq!(resolve_twin(&body), "Progress note: BP 120/80");
+    }
+
+    #[test]
+    fn materialise_generic_twin_fills_blank_and_is_idempotent() {
+        let body = sample_note_body();
+        let m = materialise_generic_twin(body.clone());
+        let twin = m.plaintext_twin.as_deref().expect("twin materialised");
+        assert!(!twin.trim().is_empty(), "materialised twin is non-empty");
+        assert_eq!(twin, plaintext_twin(&body), "materialised == the generic rendering");
+        // Idempotent: an already-authored twin is preserved unchanged.
+        let mut authored = sample_note_body();
+        authored.plaintext_twin = Some("kept verbatim".into());
+        let m2 = materialise_generic_twin(authored);
+        assert_eq!(m2.plaintext_twin.as_deref().unwrap(), "kept verbatim");
+    }
+
+    #[test]
+    fn materialised_twin_roundtrips_through_sign_verify() {
+        let (sk, kid) = generate_key().unwrap();
+        let mut body = sample_note_body();
+        body.signer_key_id = kid;
+        let body = materialise_generic_twin(body);
+        let signed = sign(&body, &sk).unwrap();
+        let decoded = verify_self_described(&signed.signed_bytes).unwrap();
+        assert_eq!(decoded.plaintext_twin, body.plaintext_twin);
+        assert!(decoded.plaintext_twin.is_some(), "a materialised twin survives the wire");
     }
 }

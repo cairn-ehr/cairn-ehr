@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cairn_event::{blob_address, plaintext_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey};
+use cairn_event::{blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
 
 const SCHEMA: [(&str, &str); 6] = [
@@ -170,7 +170,9 @@ fn apply_signed(client: &mut postgres::Client, signed_bytes: &[u8]) -> R<bool> {
     let body_json = serde_json::to_string(&body.payload)?;
     let contributors_json = serde_json::to_string(&body.contributors)?;
     let attachments_json = serde_json::to_string(&body.attachments)?;
-    let twin = plaintext_twin(&body);
+    // ADR-0039: carry the author-materialised twin; derive only if the author omitted it.
+    // Mirrors the in-DB floor (db/015 cairn_event_twin) for this spike-grade write path.
+    let twin = resolve_twin(&body);
 
     let mut tx = client.transaction()?;
     let inserted = tx.execute(
@@ -342,10 +344,13 @@ fn emit_event(
         plaintext_twin: None,
     };
 
+    // ADR-0039: globalise the authored twin — materialise it into the body BEFORE signing, so
+    // this node emits a conformant author-faithful twin rather than relying on receivers to derive.
+    let body = materialise_generic_twin(body);
     let signed = sign(&body, sk)?;
     let body_json = serde_json::to_string(&body.payload)?;
     let contributors_json = serde_json::to_string(&body.contributors)?;
-    let twin = plaintext_twin(&body);
+    let twin = resolve_twin(&body);
 
     tx.execute(
         "INSERT INTO event_log

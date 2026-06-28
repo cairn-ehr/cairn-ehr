@@ -1,10 +1,28 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-28 · **Spec/ADRs:** v0.39 · **Phase:** architecture complete; **first production clinical
-surface under construction** — the demographics tier on `cairn-node` (slices 1–5 done; §5.2 matcher + globalise authored twin next).
+**Session date:** 2026-06-28 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+surface under construction** — the demographics tier on `cairn-node` (slices 1–5 done; §5.2 matcher next).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-28):** built demographics **slice 5 = §4.3 address three-facet value** (per-use recency-first winner).
+**This session (2026-06-28):** **globalised the §3.13/§4.5 author-materialised legibility twin to every event type**
+(ADR-0039; spec v0.39 → v0.40), via brainstorm→spec→plan→subagent-SDD (5 tasks, spec+plan under `docs/superpowers/`).
+The in-DB floor (`db/015_globalise_twin.sql`, SCHEMA 13→14) now PREFERS the authored twin for every type; non-demographic
+types **degrade honestly** to a flagged, payload-rendering derived skeleton when absent (older/non-conformant peer) —
+set-union convergence preserved; the two demographic types KEEP ADR-0034's HARD authored-twin requirement. Authored-vs-derived
+is **NOT stored** — it is derivable from the immutable signed body via `cairn_twin_is_authored(bytea)` + the
+`event_twin_provenance` view; **no new column, `submit_event` NOT re-declared** (only the `cairn_event_twin` hook changed).
+Improved `cairn_twin_skeleton` now renders the payload — **closes the `db/005:29` TODO**. `cairn-event` gained pure
+`resolve_twin` + `materialise_generic_twin` (the single rule both cairn-sync and the SQL floor follow); `cairn-sync` now
+carries the authored twin on apply and materialises it on authoring. Tests: cairn-event 3 unit (36/36 suite green); cairn-node
+4 integration (`twin_globalise` — authored verbatim+flag; twin-less degrade+flag+payload; twin-less demographic hard-reject
+triple-gated; + a whitespace-twin demographic hard-reject); demographics + attestation regress green; clippy clean. A
+**floor bug** surfaced by the whitespace hardening test was fixed in the same branch: PG `trim()` strips only ASCII space
+(not `\n`/`\t`), so the blank-test used `length(regexp_replace(x,'\s+','','g'))>0` in **both** the write gate (`v_authored`)
+and read predicate (`cairn_twin_is_authored`), realigning them with Rust `str::trim()`. Residual Unicode-whitespace
+asymmetry (PG `\s` ⊂ Rust `char::is_whitespace`; degrades safe) tracked as [issue #75](https://github.com/cairn-ehr/cairn-ehr/issues/75).
+**The "globalise the authored twin" deferral is now CLOSED.**
+
+**Prior session (2026-06-28):** built demographics **slice 5 = §4.3 address three-facet value** (per-use recency-first winner).
 `cairn-event::demographics` address builders: `AddressAssertion`/`Geo`/`StructuredAddress` + `address_assertion_body` +
 `render_address_twin`. `db/014_demographics_address.sql`: address branch in the shared floor (structured⇒profile, parts-text,
 geo-shape); retained-set `patient_address` (keyed `(patient, use, display)`) + per-use recency-first `patient_address_current`
@@ -354,8 +372,7 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 - **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
-  **Next:** the §5.2 **matching pipeline + §4.4 hard veto** (advisory matcher — Python/fit-for-purpose) · **globalising the
-  authored twin** to every event type (retire the `cairn_event_twin` skeleton fallback + its TODO).
+  **Next:** the §5.2 **matching pipeline + §4.4 hard veto** (advisory matcher — Python/fit-for-purpose).
   DB-gated tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
@@ -464,6 +481,7 @@ ADR before reopening any of these.
 | [0036](spec/decisions/0036-demographic-name-display-recency-first.md) | Demographic name display: recency-first within the legal tier (diverges from DOB's provenance-lock by design) | §4.2 (refines 0014) |
 | [0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md) | Sex/gender/karyotype field semantics: per-field winner policy; karyotype is a distinct field, never displaces assigned sex-at-birth | §4.2 (refines 0011/0014) |
 | [0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows ADR-0036) | §4.3 (refines 0032, follows 0036) |
+| [0039](spec/decisions/0039-globalise-authored-legibility-twin.md) | Globalise the author-materialised legibility twin to every event type; honest-degradation fallback for non-demographic types | §3.13/§4.5 (refines 0012/0034) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
