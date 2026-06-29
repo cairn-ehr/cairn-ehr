@@ -28,5 +28,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cairn_matcher"]
 
+[project.optional-dependencies]
+pipeline = ["psycopg[binary]>=3.1"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
