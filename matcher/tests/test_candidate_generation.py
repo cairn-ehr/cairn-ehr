@@ -68,3 +68,37 @@ def test_pairs_are_canonical_and_self_excluded(pg_conn):
     assert len(pairs) == 3
     for low, high in pairs:
         assert low < high
+
+
+PD = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+
+
+def test_oversized_block_is_skipped_and_reported(pg_conn):
+    # cap=2: three patients share one DOB -> group size 3 > 2 -> skipped, no pairs from it.
+    for p in (PA, PB, PC):
+        seed_patient(pg_conn, p, dob=("1980-07-15", 20))
+    pairs, skipped = __import__(
+        "cairn_matcher.pipeline.db", fromlist=["generate_candidate_pairs"]
+    ).generate_candidate_pairs(pg_conn, max_block_size=2)
+    assert pairs == []
+    assert any(pn == "dob" and sz == 3 for pn, _key, sz in skipped)
+
+
+def test_cap_is_per_group_not_global(pg_conn):
+    # An oversized DOB block (PA,PB,PC) is skipped, but an in-cap identifier block
+    # (PA,PD) in the SAME run is still generated.
+    for p in (PA, PB, PC):
+        seed_patient(pg_conn, p, dob=("1980-07-15", 20))
+    seed_patient(pg_conn, PD)
+    with pg_conn.cursor() as cur:
+        cur.execute("INSERT INTO patient_identifier (patient_id, system, match_key, value, "
+                    "normalized, profile, use_type, provenance, asserted_hlc_wall, "
+                    "asserted_hlc_count, asserted_origin) VALUES "
+                    "(%s,'mrn:a','55','55','55',NULL,NULL,'seed',0,0,'seed'),"
+                    "(%s,'mrn:a','55','55','55',NULL,NULL,'seed',0,0,'seed')", (PA, PD))
+    pg_conn.commit()
+    pairs, skipped = __import__(
+        "cairn_matcher.pipeline.db", fromlist=["generate_candidate_pairs"]
+    ).generate_candidate_pairs(pg_conn, max_block_size=2)
+    assert canonical_pair(PA, PD) in pairs
+    assert any(pn == "dob" and sz == 3 for pn, _key, sz in skipped)

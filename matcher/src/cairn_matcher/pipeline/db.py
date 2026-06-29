@@ -7,6 +7,7 @@ Requires the optional `pipeline` extra (psycopg). The pure core never imports it
 """
 
 import json
+import uuid
 
 from psycopg.rows import dict_row
 
@@ -51,68 +52,69 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
         return [VetoFinding(*row) for row in cur.fetchall()]
 
 
-# The three blocking passes share one shape: group patients by a blocking value, keep
-# groups with >= 2 members, and emit every within-group pair. Group-based (not direct
-# self-joins) because Task 2's oversized-block guard needs each group's member count.
-#
-# Canonical order is enforced in SQL by m1 < m2 on the uuid VALUES (Postgres uuid byte
-# order == uuid.UUID 128-bit order == runner.canonical_pair), so a pair is one stable row.
+# Each pass yields rows of (pass_name, key, members) so the cap can be applied uniformly:
+# a group is kept (pairs generated) iff cardinality(members) <= cap, else reported skipped.
 # Blocking is RECALL-oriented and advisory: the SQL name tokenizer is deliberately simple
 # (lower + whitespace split); the Python scorer remains the source of truth for comparison.
-_CANDIDATE_SQL = """
-WITH ident_groups AS (
-    SELECT array_agg(patient_id) AS members
-    FROM patient_identifier
-    WHERE system <> 'unknown'
-    GROUP BY system, match_key
-    HAVING count(DISTINCT patient_id) >= 2
-),
-dob_groups AS (
-    SELECT array_agg(patient_id) AS members
-    FROM patient_demographic
-    WHERE field = 'dob'
-    GROUP BY value
-    HAVING count(DISTINCT patient_id) >= 2
-),
-name_tokens AS (
+_GROUPS_SQL = """
+WITH name_tokens AS (
     SELECT DISTINCT patient_id, token
     FROM patient_name, regexp_split_to_table(lower(value), '\\s+') AS token
     WHERE token <> ''
-),
-name_groups AS (
-    SELECT array_agg(patient_id) AS members
-    FROM name_tokens
-    GROUP BY token
-    HAVING count(*) >= 2
-),
-all_groups AS (
-    SELECT members FROM ident_groups
-    UNION ALL SELECT members FROM dob_groups
-    UNION ALL SELECT members FROM name_groups
 )
-SELECT DISTINCT m1::text AS patient_low, m2::text AS patient_high
-FROM all_groups g, unnest(g.members) m1, unnest(g.members) m2
-WHERE m1 < m2
+SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
+       array_agg(patient_id) AS members
+FROM patient_identifier WHERE system <> 'unknown'
+GROUP BY system, match_key HAVING count(DISTINCT patient_id) >= 2
+UNION ALL
+SELECT 'dob', value, array_agg(patient_id)
+FROM patient_demographic WHERE field = 'dob'
+GROUP BY value HAVING count(DISTINCT patient_id) >= 2
+UNION ALL
+SELECT 'name', token, array_agg(patient_id)
+FROM name_tokens
+GROUP BY token HAVING count(*) >= 2
 """
+
+
+def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
+    """Every canonical within-group pair (uuid value order), as lowercase-uuid-text.
+
+    Pure: the same uuid ordering as runner.canonical_pair, so a pair has one identity no
+    matter which group (or pass) surfaces it. Self-pairs are excluded by the strict order.
+    """
+    ordered = [str(uuid.UUID(str(m))) for m in members]
+    out: set[tuple[str, str]] = set()
+    for i, a in enumerate(ordered):
+        for b in ordered[i + 1:]:
+            out.add((a, b) if uuid.UUID(a) < uuid.UUID(b) else (b, a))
+    return out
 
 
 def generate_candidate_pairs(
     conn, *, max_block_size: int = 100
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
-    """Generate the canonical candidate pairs worth scoring, via three blocking passes.
+    """Generate canonical candidate pairs via three blocking passes, capping huge blocks.
 
-    Returns (pairs, skipped_blocks): `pairs` is a list of unique canonical
-    (patient_low, patient_high) lowercase-uuid-text tuples; `skipped_blocks` reports
-    oversized blocks excluded from generation (empty until the cap is wired in).
+    Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
+    tuples from every group with <= max_block_size members. `skipped_blocks`: the
+    (pass_name, key, size) of each group EXCLUDED for exceeding the cap — a block shared
+    by hundreds of people is non-discriminating (a group of size k contributes C(k,2)
+    pairs), and the §5.13 hub duplicate-sweep is the declared backstop for what it drops.
 
-    Read-only — opens a read transaction the CALLER must close (sweep does conn.rollback
-    before its write loop, so a long sweep does not pin the xmin horizon).
+    Read-only — opens a read transaction the CALLER must close.
     """
-    with conn.cursor() as cur:
-        cur.execute(_CANDIDATE_SQL)
-        pairs = [(low, high) for low, high in cur.fetchall()]
+    pairs: set[tuple[str, str]] = set()
     skipped_blocks: list[tuple[str, str, int]] = []
-    return pairs, skipped_blocks
+    with conn.cursor() as cur:
+        cur.execute(_GROUPS_SQL)
+        for pass_name, key, members in cur.fetchall():
+            size = len(members)
+            if size > max_block_size:
+                skipped_blocks.append((pass_name, key, size))
+            else:
+                pairs.update(_pairs_from_members(members))
+    return sorted(pairs), skipped_blocks
 
 
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
