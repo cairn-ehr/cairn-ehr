@@ -9,6 +9,8 @@ fully testable, reviewer-legible, and keeps the project dependency-free (supply-
 hygiene, house rule #1).
 """
 
+from collections.abc import Mapping
+
 from cairn_matcher.agreement import AgreementLevel, Context
 from cairn_matcher.records import DateValue, MatcherTypeError, Name
 
@@ -211,3 +213,21 @@ def compare_name_set(
             if best is AgreementLevel.EXACT:
                 return best
     return best
+
+
+def compare_identifier_sets(
+    a: "Mapping[str, frozenset[str]]", b: "Mapping[str, frozenset[str]]", ctx: Context
+) -> AgreementLevel:
+    """POSITIVE-ONLY identifier agreement: EXACT if any shared system shares a value.
+
+    A shared strong identifier is powerful POSITIVE evidence. But identifier MISMATCH is
+    deliberately NOT a B1 concern: the same-system mismatch veto is the safety-critical
+    in-DB floor's job (db/016, cairn_identifier_veto), which knows the normalized form
+    and the honest-degradation rules. So a disjoint or non-overlapping comparison grades
+    INSUFFICIENT_DATA (no positive evidence), never DISAGREE — B1 never penalises an ID.
+    """
+    for system, values_a in a.items():
+        values_b = b.get(system)
+        if values_b and (values_a & values_b):
+            return AgreementLevel.EXACT
+    return AgreementLevel.INSUFFICIENT_DATA
