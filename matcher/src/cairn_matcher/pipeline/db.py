@@ -7,6 +7,7 @@ Requires the optional `pipeline` extra (psycopg). The pure core never imports it
 """
 
 import json
+import uuid
 
 from psycopg.rows import dict_row
 
@@ -49,6 +50,77 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
         cur.execute("SELECT veto_kind, severity, subject, detail FROM cairn_match_veto(%s, %s)",
                     (a, b))
         return [VetoFinding(*row) for row in cur.fetchall()]
+
+
+# Each pass yields rows of (pass_name, key, members) so the cap can be applied uniformly:
+# a group is kept (pairs generated) iff cardinality(members) <= cap, else reported skipped.
+# Blocking is RECALL-oriented and advisory: the SQL name tokenizer is deliberately simple
+# (lower + whitespace split); the Python scorer remains the source of truth for comparison.
+_GROUPS_SQL = """
+WITH name_tokens AS (
+    SELECT DISTINCT patient_id, token
+    FROM patient_name, regexp_split_to_table(lower(value), '\\s+') AS token
+    WHERE token <> ''
+)
+SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
+       array_agg(patient_id) AS members
+FROM patient_identifier WHERE system <> 'unknown'
+GROUP BY system, match_key HAVING count(DISTINCT patient_id) >= 2
+UNION ALL
+SELECT 'dob', value, array_agg(patient_id)
+FROM patient_demographic WHERE field = 'dob'
+GROUP BY value HAVING count(DISTINCT patient_id) >= 2
+UNION ALL
+SELECT 'name', token, array_agg(patient_id)
+FROM name_tokens
+GROUP BY token HAVING count(*) >= 2
+"""
+
+
+def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
+    """Every canonical within-group pair (uuid value order), as lowercase-uuid-text.
+
+    Pure: the same uuid ordering as runner.canonical_pair, so a pair has one identity no
+    matter which group (or pass) surfaces it. Self-pairs are excluded by the strict order.
+
+    Members are first normalized to canonical lowercase-hyphenated uuid text. In that form
+    a plain string compare is order-equivalent to the 128-bit value compare (fixed width,
+    lowercase hex, hyphens aligned) == runner.canonical_pair's uuid order — so we order by
+    string and avoid re-parsing each uuid inside the O(k^2) inner loop.
+    """
+    ordered = sorted(str(uuid.UUID(str(m))) for m in members)
+    out: set[tuple[str, str]] = set()
+    for i, a in enumerate(ordered):
+        for b in ordered[i + 1:]:
+            out.add((a, b))
+    return out
+
+
+def generate_candidate_pairs(
+    conn, *, max_block_size: int = 100
+) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
+    """Generate canonical candidate pairs via three blocking passes, capping huge blocks.
+
+    Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
+    tuples from every group with <= max_block_size members. `skipped_blocks`: the
+    (pass_name, key, size) of each group EXCLUDED for exceeding the cap — a block shared
+    by hundreds of people is non-discriminating (a group of size k contributes C(k,2)
+    pairs), and the §5.13 hub duplicate-sweep is the declared backstop for what it drops.
+
+    Read-only — opens a read transaction the CALLER must close (sweep does conn.rollback
+    before its write loop, so a long sweep does not pin the xmin horizon).
+    """
+    pairs: set[tuple[str, str]] = set()
+    skipped_blocks: list[tuple[str, str, int]] = []
+    with conn.cursor() as cur:
+        cur.execute(_GROUPS_SQL)
+        for pass_name, key, members in cur.fetchall():
+            size = len(members)
+            if size > max_block_size:
+                skipped_blocks.append((pass_name, key, size))
+            else:
+                pairs.update(_pairs_from_members(members))
+    return sorted(pairs), skipped_blocks
 
 
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:

@@ -79,13 +79,24 @@ persists nothing; `matcher_version` = pkg+weights digest, ADR-0014) + `db.py`/`r
 runner). `db/017` is an **advisory** worklist (PK `(low,high)`, `CHECK(low<high)`, JSONB veto/evidence, human `status`
 preserved on re-run) — *not a safety gate*. **psycopg** optional (`pipeline` extra; LGPL→AGPL-ok), B1's pure core
 unchanged. 92 tests with DB (5 gated integration) / 87 + 5 skipped without; opus whole-branch review MERGE-READY (0
-Critical/0 Important; one Important — commit moved to runner — fixed in-branch). **Remaining matcher pieces:** **B2b** —
-blocking/candidate-pair generation across the patient set (B2 is pairwise — it scores a given pair); **B3** — locale
-comparator packs (phonetic/nickname + content-addressed profiles) + weight-learning + eval harness + hub duplicate-sweep +
-full §7.5 matcher actor registration; **piece C** — the **§5.7 link-apply seam** (needs the identity event algebra).
-**Next:** piece B2b and/or piece C; a `compare_address` comparator; B2 follow-up Minors (Thresholds `review<auto` guard,
-`band` CHECK, `updated_at` trigger, conftest env read-at-import) — pair-order str-vs-uuid M1, sub-threshold txn-leak, and
-`parse_dob` range-check all fixed in-branch post-review. ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
+Critical/0 Important; one Important — commit moved to runner — fixed in-branch).
+**Slice 9 — §5.2 advisory matcher blocking + batch sweep (piece B2b)** (`cairn_matcher/pipeline/`, **no `db/` file, no
+SCHEMA bump** — advisory): B2 scored a *given* pair; B2b decides **which** pairs to score across the whole patient set
+(no O(n²)). Pure read-only `db.generate_candidate_pairs(conn, *, max_block_size=100)` — a **3-pass blocking disjunction**
+(shared identifier excl. `unknown` · exact DOB · shared name token), group-based CTEs, deduped to one **canonical**
+`(low,high)` per pair by **uuid VALUE** order, self-pairs structurally excluded; an **oversized-block guard** skips +
+**reports** (`skipped_blocks`) any group `> max_block_size` (never a silent cap; *C(k,2)* reasoning; hub sweep is the
+backstop). New `pipeline/sweep.py` — `SkippedBlock`/`SweepError`/`SweepResult` frozen dataclasses + `sweep()`: phase 1
+generate→`rollback` (close read snapshot, xmin guard), phase 2 loop the existing `runner.propose()` per pair (one txn each,
+idempotent, human `status` preserved) with **skip-and-report** errors (never aborts the batch). Recall-oriented blocking;
+the pure scorer stays the source of truth. No new dep. 113 tests with DB (9 candidate-gen + 5 sweep, incl. a real-monkeypatch
+failing-pair) / 93 + 20 skipped without; opus whole-branch review READY-TO-MERGE (0 Critical/0 Important). **Remaining
+matcher pieces:** **B3** — compound blocking keys (token+birth-year to shrink blocks, measurement-driven) + locale
+comparator packs (phonetic/nickname + content-addressed profiles) + weight-learning + eval harness + hub-tier aggressive
+duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; **piece C** — the **§5.7 link-apply seam**
+(needs the identity event algebra). **Next:** piece C and/or B3; a `compare_address` comparator; a CLI sweep entry; a
+`SweepResult` dropped-*pair* estimate for B3 miss-rate telemetry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
 

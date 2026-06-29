@@ -1,12 +1,40 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-29 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-06-30 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB
-veto floor done; piece B1 advisory scoring core done; **piece B2 veto-gated pairwise pipeline + proposal worklist
-done this session**; B2b blocking / B3 locale packs / piece C link-seam next).
-Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
+veto floor done; piece B1 advisory scoring core done; piece B2 veto-gated pairwise pipeline + proposal worklist
+done; **piece B2b blocking / candidate-pair generation + batch sweep done this session**; B3 locale packs / piece C
+link-seam next). Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-29):** built the **§5.2 advisory matcher pipeline — piece B2** (the veto-gated pairwise
+**This session (2026-06-30):** built the **§5.2 advisory matcher — piece B2b** (blocking / candidate-pair generation
++ a batch sweep driver), via **brainstorm→spec→plan→subagent-SDD** (3 TDD tasks; spec+plan under `docs/superpowers/`).
+B2 scored a *given* pair; B2b decides **which** pairs to score across the whole patient set (no O(n²) all-pairs).
+Two additions to `cairn_matcher/pipeline/`, both **advisory** — **no `db/` floor file, no SCHEMA bump, no spec/ADR
+change** (implements settled §5.2/§5.13/ADR-0014, like B1/B2): **`db.generate_candidate_pairs(conn, *, max_block_size=100)`**
+(the one new query, in the only-IO module so policy can't fork the safety floor) — a read-only **3-pass blocking
+disjunction** (shared identifier `(system,match_key)` excl. `unknown` · exact-DOB `value` · shared name token via
+`regexp_split_to_table(lower(value),'\s+')`), group-based CTEs, deduped to one **canonical** `(low,high)` per pair by
+**uuid VALUE** order (== `runner.canonical_pair`, not text), self-pairs structurally excluded; an **oversized-block
+guard** skips any blocking-value group with `> max_block_size` members and **reports it** in `skipped_blocks`
+(`(pass_name,key,size)`) — never a silent cap (a block of size *k* is *C(k,2)* pairs; a value shared by hundreds is
+non-discriminating; the §5.13 hub sweep is the declared backstop). New **`pipeline/sweep.py`** — `SkippedBlock`/`SweepError`/`SweepResult`
+frozen dataclasses + **`sweep(conn, *, max_block_size=100, thresholds, weights)`**: phase 1 generate→`conn.rollback()`
+(close the read snapshot before the write loop, xmin-horizon guard), phase 2 loop the existing `runner.propose()` per
+pair (one txn each; idempotent, human `status` preserved) with **skip-and-report** errors (a failing pair → `rollback`
++ `SweepError`, never aborts the batch; catches `Exception` not `BaseException`). Blocking is **recall-oriented**: the
+SQL tokenizer is deliberately simple; the pure scorer stays the source of truth. **No new dep** (psycopg already the
+optional `pipeline` extra; pure core untouched). Tests: **113 with DB** (9 candidate-gen + 5 sweep integration incl. a
+real-monkeypatch failing-pair proving error-capture + connection recovery) / **93 + 20 skipped** without (`uv run
+pytest`). Final **opus whole-branch review: READY-TO-MERGE, 0 Critical / 0 Important** (SQL recall/dedup/self+unknown
+exclusion/per-group cap all verified; zero `db/` floor changes; no psycopg leak; sweep connection-safe). Post-review
+nits applied in-branch: `SweepResult.generated` comment → "attempted (scored+errored)"; no-signal test also asserts
+`below_threshold==0`/`errors==[]`; README documents B2b. **Deferred (recorded, not lost):** **compound blocking keys**
+(token+birth-year to shrink blocks — B3, measurement-driven), a **CLI** sweep entry, the **hub-tier** aggressive sweep
++ proposal retraction (B3), and a `SweepResult` dropped-*pair* estimate (Σ`C(size,2)`) for B3 miss-rate telemetry;
+**piece C** — the proposal→`link` apply seam (still needs the §5.7 identity event algebra, unbuilt). **The §5.2 blocking
+/ candidate-pair generation (B2b) is now BUILT.**
+
+**Prior session (2026-06-29):** built the **§5.2 advisory matcher pipeline — piece B2** (the veto-gated pairwise
 pipeline + advisory proposal worklist), via **brainstorm→spec→plan→subagent-SDD** (7 TDD tasks; spec+plan under
 `docs/superpowers/`). A new IO-bearing sub-package **`cairn_matcher/pipeline/`** beside B1's untouched pure core:
 **`adapter.py`** (pure — `patient_*` projection rows → B1 `CandidateRecord`: precision-gated **ISO** DOB extraction
@@ -41,52 +69,19 @@ algebra, unbuilt); a `compare_address` comparator; a clutch of non-blocking Mino
 (no-proposal) path so a batch driver can't pin the xmin horizon; `parse_dob` range-checks month/day
 (out-of-range → safe `None`). **The §5.2 veto-gated pairwise pipeline (B2) is now BUILT.**
 
-**Earlier today (2026-06-29):** built the **§5.2/§5.13 advisory matcher scoring core — piece B1** (the first
-**Python** component): a new top-level **`matcher/`** uv project, package `cairn-matcher`, **AGPL-3.0, zero runtime
-deps**, **pure functions only — no Postgres/IO/thresholds/link-decisions** (the fit-for-purpose §9 tier; a defect is
-a bad *proposal* a human reviews). It turns two already-projected patient records into an **explainable `MatchScore`**.
-Modules: `agreement.py` (the `Comparator` contract + ordinal `AgreementLevel` ladder; `PHONETIC`/`NICKNAME` reserved
-plug points **no core comparator emits** — anti-cultural-capture, ADR-0014); `comparators.py` (in-house **Jaro–Winkler**
-+ 4 **culture-neutral** comparators: `compare_exact`, `compare_edit_distance`, precision-aware `compare_dob` (**parses
-no date strings**), history-set order/role-tolerant `compare_name_set`, plus positive-only `compare_identifier_sets`
-that **never emits DISAGREE** — identifier *mismatch* stays db/016's job); `records.py` (frozen value types);
-`orchestrator.py` (the field→comparator registry seam locale packs will extend; provenance = weaker side `min(rank_a,
-rank_b)`); `scoring.py` (**Fellegi–Sunter** combiner with `provenance_factor` scaling; `INSUFFICIENT_DATA`→0). The three
-principle-bearing invariants hold end-to-end (no-data-never-disagreement §3.7; provenance-aware §4.2; name-history-set).
-**brainstorm→spec→plan→subagent-SDD** (10 TDD tasks; spec+plan under `docs/superpowers/`); **55 tests green** (`uv run
-pytest`). **No new ADR** (implements settled §5.2/§5.13/ADR-0014), **no spec bump**. Final opus whole-branch review caught
-**one Critical (C1): `score(a,b)≠score(b,a)`** — the greedy name-token pairing was order-dependent and sign-flipped the
-name field (the symmetry property test was vacuously comparing a record to itself, I1). **Fixed in-branch**
-(`_compare_two_names` now `max(greedy(a,b),greedy(b,a))` — symmetric by construction; the symmetry test is now
-heterogeneous + a 200-pair seeded sweep). **Deferred (recorded, not lost):** **B2** — the PG adapter populating
-`CandidateRecord` from `patient_*`, blocking/candidate-generation, the `db/016` veto-gate call, band classification +
-conservative threshold, the advisory proposal worklist; **B3** — phonetic/nickname/transliteration comparators + the
-content-addressed locale-profile loader, weight-learning, eval harness, hub duplicate-sweep; **piece C** — the
-proposal→`link` apply seam (needs the §5.7 identity algebra, unbuilt); a `compare_address` comparator; a clutch of
-non-blocking Minors (see PR/ledger: raw-dict defaults, helper docstrings, a redundant pre-call, a DOB gappy-precision
-adapter-contract comment). **The §5.2 advisory scoring core (B1) is now BUILT.**
-
-**Prior session (2026-06-28):** built the **§4.4/§5.2 in-DB hard-veto + coherence-check floor** — the matching
-pipeline's safety-critical floor, piece A of §5.2. New `db/016_match_veto.sql` (SCHEMA array 14→15):
-`cairn_match_veto(patient_a, patient_b) RETURNS TABLE(veto_kind, severity, subject, detail)` + scalar
-`cairn_has_hard_veto`. Returns the closed hard-veto set per §5.13: **same-system identifier mismatch ·
-verified-DOB clash · verified-sex-at-birth clash**. Forces a human decision — never auto-link, never
-auto-reject. **Two verdict levels:** `hard_veto` (trustworthy clash — both `normalized` present & disjoint,
-or both DOBs/sexes verified + same-precision + differ; may demote a future link) vs `degrade_hold`
-(profile-less node, can't tell formatting noise from a real mismatch — holds for human, never demotes).
-Honours §4.4's honest-degradation wording (ADR-0033). **Precision-gated DOB, parses no dates** (floor stays
-culture-neutral): different precision = no finding (consistent coarsening, principle 4); same-precision
-verified mismatch = hard_veto. **Set-based per-system identifier comparison** (sharing any value = positive
-evidence, not a veto); `system: unknown` never vetoes. Pure SQL helpers (`cairn_identifier_veto`,
-`cairn_field_clash`) over the existing `patient_identifier`/`patient_demographic` projections; no event-format
-change, no `submit_event` change, no new table. **12 integration tests** on PG18+cairn_pgx (identifier
-hard_veto/degrade_hold/same-normalized/unknown/multi-valued; DOB same-precision/diff-precision/not-both-verified;
-sex-at-birth; multi-finding; symmetry) — all green; full workspace regression + clippy clean. **Brainstorm→spec→plan→subagent-SDD**; spec+plan under `docs/superpowers/`. No new ADR (implements settled spec §5.2/§5.13/§4.4;
-refines ADR-0014/0033). No spec-version bump. **Deferred (recorded, not lost):** the **deceased-status conflict**
-veto (4th in the §5.13 closed set — no deceased field is projected yet; a commented stub + this note mark it);
-the **advisory probabilistic matcher** (§5.2 piece B — Python/Fellegi–Sunter, blocking, comparators); the
-**proposal→`link` apply seam + coherence-check demotion** (piece C — needs the §5.7 identity event algebra,
-unbuilt); a candidate/worklist table. **The §5.2/§4.4 in-DB hard-veto floor is now BUILT.**
+**Prior sessions (2026-06-28/29) — §5.2 matcher pieces A + B1 (condensed; full detail in ROADMAP slices 6–7 + git):**
+**piece A** = the **§4.4/§5.2 in-DB hard-veto floor** (`db/016_match_veto.sql`, SCHEMA 14→15; `cairn_match_veto` returns
+the closed hard-veto set — same-system identifier mismatch · verified-DOB clash · verified-sex-at-birth clash; two
+verdicts `hard_veto`/`degrade_hold`; precision-gated, parses no dates; `system:unknown` never vetoes; forces a human
+decision, never auto-link/auto-reject; 12 integration tests; deceased-status veto deferred, stub in db/016). **piece B1**
+= the **§5.2/§5.13 advisory scoring core** (new `matcher/` uv project, `cairn-matcher`, AGPL-3.0, **zero runtime deps,
+pure functions only** — the fit-for-purpose §9 tier): the `Comparator`/ordinal `AgreementLevel` contract (`PHONETIC`/`NICKNAME`
+reserved but never emitted by core — anti-cultural-capture), in-house **Jaro–Winkler** + 4 culture-neutral comparators
+(`compare_exact`/`compare_edit_distance`/`compare_dob` [parses no date strings]/`compare_name_set`) + positive-only
+`compare_identifier_sets` (never DISAGREE) + the field→comparator registry + the **Fellegi–Sunter** combiner producing an
+explainable `MatchScore`; 55 pure tests; final review caught + fixed one Critical (`score(a,b)≠score(b,a)` from greedy
+name-pairing → now `max(greedy(a,b),greedy(b,a))`, symmetric). No new ADR, no spec bump (both implement settled
+§5.2/§5.13/§4.4; refine ADR-0014/0033).
 
 **Prior session (2026-06-28):** **globalised the §3.13/§4.5 author-materialised legibility twin to every event type**
 (ADR-0039; spec v0.39 → v0.40), via brainstorm→spec→plan→subagent-SDD (5 tasks, spec+plan under `docs/superpowers/`).
@@ -250,20 +245,6 @@ current build state, open threads, and time-sensitive items.
 
 ---
 
-## Stale-doc cleanup — done this session
-
-- **Status lines realigned** (spec/index.md, README.md ×2, GOVERNANCE.md ×2): were "Architecture / specification
-  phase — no implementation yet" (and GOVERNANCE flatly claimed *"implementation has not started"*); now framed as
-  *spec complete; proving viability through proof-of-concept spikes; no clinical implementation yet.*
-- **`docs/spikes/README.md` Spike 0002 row fixed** — was *"Proposed — not yet run,"* now *"Ran ✓ — C1–C5 PASS
-  (PR #27) → ADR-0029/0030."*
-- **CLAUDE.md updated** — opening reframed from "no code, build system, or tests yet" to the
-  proof-of-concept-spikes framing, and a new **"Coding house rules"** section enshrined (AGPL-3.0 + compatible
-  deps · TDD · inline docs for a junior dev · pure reusable functions over clever complexity · fix review findings
-  or file a GitHub issue).
-
----
-
 ## Where the build actually is (the live, in-progress state)
 
 ### First federating node — built 2026-06-21, [PR #28](https://github.com/cairn-ehr/cairn-ehr/pull/28)
@@ -390,15 +371,16 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 - **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
-  **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`), piece B1 (advisory **Python** scoring core), **and
-  piece B2** (the veto-gated **pairwise** pipeline + `db/017` advisory proposal worklist, `cairn_matcher/pipeline/`)
-  are now BUILT. **Next:** **piece B2b** — blocking / candidate-pair generation across the whole patient set (B2 is
-  pairwise: it scores a *given* pair, so something must currently supply the pairs); **piece B3** (locale comparator
-  packs / weight-learning / eval harness / hub duplicate-sweep + proposal retraction / full §7.5 matcher actor
-  registration); **piece C** — the §5.7 identity-event link-apply seam (the destination for match proposals; needs the
-  `link`/`unlink`/… algebra, unbuilt). Deferred: deceased-status veto (no projection yet; stub in db/016); a
-  `compare_address` comparator; B2 follow-up Minors (Thresholds `review<auto` guard, `band` CHECK, `updated_at`
-  trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79) (pair-order str-vs-uuid M1 fixed in-branch post-review).
+  **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`), piece B1 (advisory **Python** scoring core), piece B2
+  (the veto-gated **pairwise** pipeline + `db/017` advisory proposal worklist), **and piece B2b** (blocking /
+  candidate-pair generation + the `sweep()` batch driver, `cairn_matcher/pipeline/{db.generate_candidate_pairs,sweep}`)
+  are now BUILT. **Next:** **piece B3** — compound blocking keys (token+birth-year, to shrink blocks — measurement-driven)
+  + locale comparator packs / weight-learning / eval harness / hub-tier aggressive duplicate-sweep + proposal retraction
+  / full §7.5 matcher actor registration; **piece C** — the §5.7 identity-event link-apply seam (the destination for
+  match proposals; needs the `link`/`unlink`/… algebra, unbuilt). Deferred: deceased-status veto (no projection yet;
+  stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; a `SweepResult` dropped-*pair* estimate
+  (Σ`C(size,2)`) for B3 miss-rate telemetry; B2 follow-up Minors (Thresholds `review<auto` guard, `band` CHECK,
+  `updated_at` trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
   Rust DB-gated tests + the matcher integration tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
   dbname=cairn_test"` (PG18+cairn_pgx); matcher integration: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline
   pytest`. The pure matcher suite is dependency-free: `cd matcher && uv run pytest` (uv, never venv/pip).
