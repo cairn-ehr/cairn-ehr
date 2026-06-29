@@ -9,7 +9,6 @@ backstop for missed signal).
 
 from cairn_matcher.agreement import AgreementLevel
 from cairn_matcher.pipeline.banding import (
-    DEFAULT_THRESHOLDS,
     Band,
     ProposalPayload,
     Thresholds,
