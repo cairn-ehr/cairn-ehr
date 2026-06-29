@@ -10,7 +10,7 @@ hygiene, house rule #1).
 """
 
 from cairn_matcher.agreement import AgreementLevel, Context
-from cairn_matcher.records import DateValue, MatcherTypeError
+from cairn_matcher.records import DateValue, MatcherTypeError, Name
 
 
 def jaro_winkler(s1: str, s2: str, prefix_scale: float = 0.1) -> float:
@@ -147,3 +147,67 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
     depth_a = sum(1 for p in _DOB_PARTS if getattr(a, p) is not None)
     depth_b = sum(1 for p in _DOB_PARTS if getattr(b, p) is not None)
     return AgreementLevel.EXACT if depth_a == depth_b else AgreementLevel.PARTIAL
+
+
+def _name_token_bag(name: Name) -> list[str]:
+    """Flatten a role-tagged name into a flat bag of tokens (role-tolerant).
+
+    Role tolerance matters because given/family is often swapped or mis-tagged on entry,
+    and many cultures do not split names the way the data-entry form assumes.
+    """
+    bag: list[str] = []
+    for tokens in name.tokens.values():
+        bag.extend(tokens)
+    return bag
+
+
+def _compare_two_names(a: Name, b: Name, ctx: Context) -> AgreementLevel:
+    """Best agreement between two single names, comparing token bags order-tolerantly.
+
+    Greedy one-to-one token pairing: each a-token claims its best-agreeing unused
+    b-token. The name's level is the WEAKEST link across the bag (every token must find
+    a partner), and the bags must be the same size — a missing/extra token is a real
+    difference, not a free pass.
+    """
+    bag_a = _name_token_bag(a)
+    bag_b = list(_name_token_bag(b))
+    if not bag_a or not bag_b or len(bag_a) != len(bag_b):
+        return AgreementLevel.DISAGREE
+
+    worst = AgreementLevel.EXACT
+    for token in bag_a:
+        best_level = AgreementLevel.DISAGREE
+        best_idx = -1
+        for idx, other in enumerate(bag_b):
+            level = compare_exact(token, other, ctx)
+            if level is not AgreementLevel.EXACT:
+                level = compare_edit_distance(token, other, ctx)
+            if level > best_level:
+                best_level = level
+                best_idx = idx
+        if best_idx < 0:
+            return AgreementLevel.DISAGREE
+        bag_b.pop(best_idx)
+        worst = min(worst, best_level)
+    return worst
+
+
+def compare_name_set(
+    a: frozenset[Name] | None, b: frozenset[Name] | None, ctx: Context
+) -> AgreementLevel:
+    """Agreement over two NAME HISTORY SETS — match if ANY historical name pair agrees.
+
+    Operating over the retained set (not just the current display name) is principle-
+    bearing (§4.2 / ADR-0014): maiden/married switching, changed family names, and
+    discarded aliases still match. Returns the BEST agreement across the cross-product;
+    an empty/absent set on either side -> INSUFFICIENT_DATA (zero evidence, not a clash).
+    """
+    if not a or not b:
+        return AgreementLevel.INSUFFICIENT_DATA
+    best = AgreementLevel.DISAGREE
+    for name_a in a:
+        for name_b in b:
+            best = max(best, _compare_two_names(name_a, name_b, ctx))
+            if best is AgreementLevel.EXACT:
+                return best
+    return best
