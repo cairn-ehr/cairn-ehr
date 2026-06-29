@@ -82,12 +82,17 @@ def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
 
     Pure: the same uuid ordering as runner.canonical_pair, so a pair has one identity no
     matter which group (or pass) surfaces it. Self-pairs are excluded by the strict order.
+
+    Members are first normalized to canonical lowercase-hyphenated uuid text. In that form
+    a plain string compare is order-equivalent to the 128-bit value compare (fixed width,
+    lowercase hex, hyphens aligned) == runner.canonical_pair's uuid order — so we order by
+    string and avoid re-parsing each uuid inside the O(k^2) inner loop.
     """
-    ordered = [str(uuid.UUID(str(m))) for m in members]
+    ordered = sorted(str(uuid.UUID(str(m))) for m in members)
     out: set[tuple[str, str]] = set()
     for i, a in enumerate(ordered):
         for b in ordered[i + 1:]:
-            out.add((a, b) if uuid.UUID(a) < uuid.UUID(b) else (b, a))
+            out.add((a, b))
     return out
 
 
