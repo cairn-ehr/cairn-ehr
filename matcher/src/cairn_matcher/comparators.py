@@ -10,6 +10,7 @@ hygiene, house rule #1).
 """
 
 from cairn_matcher.agreement import AgreementLevel, Context
+from cairn_matcher.records import MatcherTypeError
 
 
 def jaro_winkler(s1: str, s2: str, prefix_scale: float = 0.1) -> float:
@@ -74,3 +75,43 @@ def jaro_winkler(s1: str, s2: str, prefix_scale: float = 0.1) -> float:
             break
 
     return jaro + prefix * prefix_scale * (1.0 - jaro)
+
+
+def _require_str_or_none(value: object, field_name: str) -> str | None:
+    """Normalize a string field input: None passes through; a str is trimmed; anything
+    else is an adapter bug and raises (we never silently coerce)."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise MatcherTypeError(f"{field_name} expected str or None, got {type(value)!r}")
+    return value.strip()
+
+
+def compare_exact(a: str | None, b: str | None, ctx: Context) -> AgreementLevel:
+    """Exact string agreement after trimming surrounding whitespace only.
+
+    Deliberately does NOT casefold or transliterate — those are culture-touching and
+    belong to locale packs, not the neutral core.
+    """
+    sa = _require_str_or_none(a, "compare_exact.a")
+    sb = _require_str_or_none(b, "compare_exact.b")
+    if sa is None or sb is None:
+        return AgreementLevel.INSUFFICIENT_DATA
+    return AgreementLevel.EXACT if sa == sb else AgreementLevel.DISAGREE
+
+
+def compare_edit_distance(a: str | None, b: str | None, ctx: Context) -> AgreementLevel:
+    """Graded string agreement by Jaro–Winkler similarity.
+
+    EXACT if identical, EDIT_DISTANCE if similarity >= ctx.edit_distance_threshold,
+    else DISAGREE. Missing side -> INSUFFICIENT_DATA.
+    """
+    sa = _require_str_or_none(a, "compare_edit_distance.a")
+    sb = _require_str_or_none(b, "compare_edit_distance.b")
+    if sa is None or sb is None:
+        return AgreementLevel.INSUFFICIENT_DATA
+    if sa == sb:
+        return AgreementLevel.EXACT
+    if jaro_winkler(sa, sb) >= ctx.edit_distance_threshold:
+        return AgreementLevel.EDIT_DISTANCE
+    return AgreementLevel.DISAGREE
