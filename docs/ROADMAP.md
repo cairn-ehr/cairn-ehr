@@ -59,10 +59,20 @@ node — holds for human, never auto-demotes). Precision-gated DOB, no date pars
 set-based per-system identifier comparison (sharing any value = positive evidence); `system: unknown` never
 vetoes. Pure SQL helpers over existing projections; no event-format change, no `submit_event` change, no new
 table. 12 integration tests, all green. Deceased-status veto deferred (no projection yet; stub in db/016).
-**Remaining matcher pieces:** the **advisory Python probabilistic matcher (piece B)** (Fellegi–Sunter, blocking,
-locale-pluggable comparators per ADR-0014) and the **§5.7 link-apply seam (piece C)** (destination for match
-proposals; needs the identity event algebra). **Next:** piece B (Python matcher) and/or piece C (§5.7 link
-algebra). ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
+**Slice 7 — §5.2/§5.13 advisory matcher scoring core (piece B1)** (`matcher/`, `cairn-matcher` — the first **Python**
+component; AGPL-3.0, zero runtime deps, **pure functions only**, fit-for-purpose §9 tier): the comparator API contract
+(`agreement.py`; ordinal `AgreementLevel`, `PHONETIC`/`NICKNAME` reserved but never emitted by core — anti-cultural-capture)
++ in-house Jaro–Winkler + 4 culture-neutral comparators (`compare_exact`/`compare_edit_distance`/precision-aware
+`compare_dob` (parses no date strings)/history-set `compare_name_set`) + positive-only `compare_identifier_sets` (never
+DISAGREE — mismatch stays db/016's job) + the field→comparator registry seam (`orchestrator.py`) + the **Fellegi–Sunter**
+combiner (`scoring.py`; `provenance_factor` scaling, `INSUFFICIENT_DATA`→0) producing an explainable `MatchScore`. The three
+principle-bearing invariants hold end-to-end (no-data-never-disagreement §3.7; provenance-aware §4.2; name-history-set). 55
+pure tests (`uv run pytest`); brainstorm→spec→plan→subagent-SDD; final opus review caught + fixed one Critical (score
+symmetry under greedy name-pairing). No new ADR, no spec bump. **Remaining matcher pieces:** **B2** — PG adapter (populate
+`CandidateRecord` from `patient_*`) + blocking + the `db/016` veto-gate call + banding/threshold + proposal worklist; **B3**
+— locale comparator packs (phonetic/nickname + content-addressed profiles) + weight-learning + eval harness + hub
+duplicate-sweep; **piece C** — the **§5.7 link-apply seam** (needs the identity event algebra). **Next:** piece B2 and/or
+piece C; a `compare_address` comparator. ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
 

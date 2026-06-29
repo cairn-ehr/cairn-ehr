@@ -1,10 +1,36 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-28 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
-surface under construction** — the demographics tier on `cairn-node` (slices 1–5 done; §5.2 matcher next).
+**Session date:** 2026-06-29 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB
+veto floor done; **piece B1 advisory scoring core done this session**; B2 adapter / piece C link-seam next).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-28):** built the **§4.4/§5.2 in-DB hard-veto + coherence-check floor** — the matching
+**This session (2026-06-29):** built the **§5.2/§5.13 advisory matcher scoring core — piece B1** (the first
+**Python** component): a new top-level **`matcher/`** uv project, package `cairn-matcher`, **AGPL-3.0, zero runtime
+deps**, **pure functions only — no Postgres/IO/thresholds/link-decisions** (the fit-for-purpose §9 tier; a defect is
+a bad *proposal* a human reviews). It turns two already-projected patient records into an **explainable `MatchScore`**.
+Modules: `agreement.py` (the `Comparator` contract + ordinal `AgreementLevel` ladder; `PHONETIC`/`NICKNAME` reserved
+plug points **no core comparator emits** — anti-cultural-capture, ADR-0014); `comparators.py` (in-house **Jaro–Winkler**
++ 4 **culture-neutral** comparators: `compare_exact`, `compare_edit_distance`, precision-aware `compare_dob` (**parses
+no date strings**), history-set order/role-tolerant `compare_name_set`, plus positive-only `compare_identifier_sets`
+that **never emits DISAGREE** — identifier *mismatch* stays db/016's job); `records.py` (frozen value types);
+`orchestrator.py` (the field→comparator registry seam locale packs will extend; provenance = weaker side `min(rank_a,
+rank_b)`); `scoring.py` (**Fellegi–Sunter** combiner with `provenance_factor` scaling; `INSUFFICIENT_DATA`→0). The three
+principle-bearing invariants hold end-to-end (no-data-never-disagreement §3.7; provenance-aware §4.2; name-history-set).
+**brainstorm→spec→plan→subagent-SDD** (10 TDD tasks; spec+plan under `docs/superpowers/`); **55 tests green** (`uv run
+pytest`). **No new ADR** (implements settled §5.2/§5.13/ADR-0014), **no spec bump**. Final opus whole-branch review caught
+**one Critical (C1): `score(a,b)≠score(b,a)`** — the greedy name-token pairing was order-dependent and sign-flipped the
+name field (the symmetry property test was vacuously comparing a record to itself, I1). **Fixed in-branch**
+(`_compare_two_names` now `max(greedy(a,b),greedy(b,a))` — symmetric by construction; the symmetry test is now
+heterogeneous + a 200-pair seeded sweep). **Deferred (recorded, not lost):** **B2** — the PG adapter populating
+`CandidateRecord` from `patient_*`, blocking/candidate-generation, the `db/016` veto-gate call, band classification +
+conservative threshold, the advisory proposal worklist; **B3** — phonetic/nickname/transliteration comparators + the
+content-addressed locale-profile loader, weight-learning, eval harness, hub duplicate-sweep; **piece C** — the
+proposal→`link` apply seam (needs the §5.7 identity algebra, unbuilt); a `compare_address` comparator; a clutch of
+non-blocking Minors (see PR/ledger: raw-dict defaults, helper docstrings, a redundant pre-call, a DOB gappy-precision
+adapter-contract comment). **The §5.2 advisory scoring core (B1) is now BUILT.**
+
+**Prior session (2026-06-28):** built the **§4.4/§5.2 in-DB hard-veto + coherence-check floor** — the matching
 pipeline's safety-critical floor, piece A of §5.2. New `db/016_match_veto.sql` (SCHEMA array 14→15):
 `cairn_match_veto(patient_a, patient_b) RETURNS TABLE(veto_kind, severity, subject, detail)` + scalar
 `cairn_has_hard_veto`. Returns the closed hard-veto set per §5.13: **same-system identifier mismatch ·
@@ -154,62 +180,15 @@ Design/spec work only — no code. **Demographics gaps A (§4.2), B (§4.4/§4.6
 
 **Earlier today (2026-06-27):** closed demographics representation gaps B+C — **[ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md)** (culture-neutral address: three-facet display/geo/structured+profile, §4.3), **[ADR-0033](spec/decisions/0033-patient-identifier-representation.md)** (identifier: namespace/profile split + normalized form survives profile-less nodes, §4.4), **[ADR-0034](spec/decisions/0034-demographic-legibility-twin.md)** (demographic legibility twin bound to principle 11/§4.5 — floor enforces non-empty twin, `twin==render` advisory), **[ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md)** (entity/relationship + provider-number person×org, §4.6; subject-kind partitioning; design/spec only — no code). Spec 0.32→0.35.
 
-**Prior session (2026-06-26):** closed [issue #53](https://github.com/cairn-ehr/cairn-ehr/issues/53) — **cold-medium
-self-identification on restore**. A federated backup medium holds the node's OWN genesis *and* every peer's; by
-set-union convergence a node's `node_event` set is byte-identical to its peers', so the events alone cannot say which
-enroll is "self" — `restore --superseded-node` could name a *peer* and write a wrong, immutable `supersede` edge + adopt
-the peer's name. Fix: a **container-level self-marker** written at backup time (when `local_node` is authoritative), NOT
-derivable from events. New **`crates/cairn-node/src/medium.rs`** (the medium container format, extracted out of
-`backup.rs`): `CAIRNB2` carries a `SelfMarker` — **Signed** (a `node.self_attested` event held only in the container,
-never inserted/synced) or **Unsigned** (self node-id, operator-error-safe). `restore::resolve_dead_node` reads the
-marker (Signed → authoritative; explicit `--superseded-node` validated against it, a peer/off-medium id rejected
-fail-closed `NotSelf`; Unsigned/legacy flagged for confirmation). The signed attestation is **unforgeable** (no private
-key on the medium) AND **event-set-bound** — a sorted `event_set_commitment` ties it to this exact set, rejecting a
-marker spliced from a backup with a *different* set. **Known residual (caught in code review of this PR):** the
-commitment binds to set *content*, and two fully-converged peers hold *byte-identical* sets, so it **cannot** reject a
-peer's genuine marker spliced between converged media. That splice is impossible on a **sole-enroll** medium (foreign id
-absent → fail closed), so the risk is exactly the **multi-enroll/federated** case → restore reports
-`Provenance::SignedFederated` and asks the operator to confirm the echoed name/address (defence: confirm-on-restore +
-physical custody, not the commitment). So: **forgery-proof always; misdirect-proof for sole-enroll media and
-different-set splices; a converged-peer splice is a confirm-on-restore residual, never a silent misdirect.** Unsigned
-never blocks a backup (just flagged); legacy `CAIRNB1` media degrade honestly. `backup` signs when the key is
-non-interactively available else unsigned+warning; `restore` warns per provenance + echoes the adopted identity
-(paper-parity). Brainstorm→TDD, `medium.rs` no-DB; full `cairn-node` suite green (76 lib + all integration), clippy
-clean. An adversarial subagent review caught the different-set splice (→ commitment bind); the PR code review then caught
-the converged-identical-set residual (→ honest `SignedFederated` provenance + tests pinning the limitation).
-
-**Prior session (2026-06-26):** closed [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54) — **uniform
-key-material zeroization** across `seal.rs` + `localstate.rs`: every transient secret (Argon2id KEKs, DEK, recovered
-signing seed, local-state LSK) held in `zeroize::Zeroizing`; key-yielding fns return `Zeroizing<[u8;32]>`. Defence-in-depth
-(no secret leaked to disk/logs today). **All ADR-0026 node-durability follow-ons now closed; only optional escrow rungs
-(Shamir/QR/TPM) remain.**
-
-**Prior session (2026-06-25):** ADR-0026 **slice D** — the sealed **local-state export** (point 3), which **closes the
-last open ADR-0026 slice (A–D all done)**. No spec/ADR change (implementation of point 3). The federation-node tier has
-**no clinical surface yet**, so the export's *content* is intentionally **empty today**; the deliverable is the
-can't-retrofit **shape**: a long-lived **local-state DEK (LSK)** dual-wrapped **once at provisioning** (op-passphrase +
-recovery code) so `backup` re-encrypts under it with the op-pass alone (ADR-0026 point-5 compliant — no recovery code at
-backup time) and `restore` decrypts via the old recovery code. The **signing key is never in the bundle** (point 4). New
-`crates/cairn-node/src/localstate.rs` (versioned `LocalState` with typed-empty slots + additive CBOR; reuses `seal.rs`
-primitives — no duplicated crypto; `CAIRNL1` export container co-located with the backup medium + `CAIRNX1` `.lsk`
-sidecar; DB read/apply **seams** the clinical tier extends, empty/noop today). CLI: `.lsk` established at
-`init`/`seal-key`, new `establish-local-state-key` verb, `backup` writes the export sibling, `restore` consumes it,
-`status` `local_state` line. **No DB schema change.** Built via brainstorm→plan→subagent-SDD (6 TDD tasks, per-task +
-opus whole-branch review; spec+plan under `docs/superpowers/`). **Honest degradation on both ends** (the events are the
-load-bearing copy, the export is optional): `restore` warns+skips an absent/corrupt/unsealable export; `backup` warns+skips
-when the export can't be sealed (no passphrase in an unattended run, wrong passphrase, I/O error) rather than aborting an
-already-complete event backup — review fix, drove the `localstate::build_export_container` helper. The day-one escrow is
-**re-established under fresh secrets** on every key-minting/re-sealing path (`init`/`seal-key`/`restore`, `overwrite=true`)
-so the `.lsk` never desyncs from a just-resealed signing key; the explicit `establish-local-state-key` verb still refuses
-to clobber an existing escrow — review fix. Full `cairn-node` suite green (19/19 binaries). Follow-up [issue #54](https://github.com/cairn-ehr/cairn-ehr/issues/54)
-(uniform LSK/DEK zeroization across `seal.rs`+`localstate.rs`) — **closed this session (2026-06-26), see above.**
-
-**Prior sessions (2026-06-25):** ADR-0026 **slice C** — restore (apply) + new-identity `supersede`
-([PR #52](https://github.com/cairn-ehr/cairn-ehr/pull/52), [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
-`cairn-node restore` rehydrates `node_event` into a fresh DB under a freshly-minted key, records `supersede`(dead→new);
-self-trusting `restore_node_event` door (empty-genesis fenced); `db/009` + `node_lineage`. **Slice B** — backup-as-cold-peer
-export+verify+health ([PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51)). And Spike 0003 (Postgres on Android)
-**G0–G3 PASS** ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47), [PR #48](https://github.com/cairn-ehr/cairn-ehr/pull/48)).
+**Prior sessions (2026-06-25/26) — ADR-0026 node durability + Spike 0003 (condensed; full detail in git + the ADR log):**
+**slice C** restore-apply + new-identity `supersede` ([PR #52](https://github.com/cairn-ehr/cairn-ehr/pull/52); `db/009`
++ `node_lineage`); **slice B** backup-as-cold-peer export/verify/health ([PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51));
+**slice D** sealed local-state export (`localstate.rs`, LSK dual-wrap, `CAIRNL1`/`CAIRNX1`, empty content / can't-retrofit
+shape; **A–D all done**); [#53](https://github.com/cairn-ehr/cairn-ehr/issues/53) cold-medium self-identification (the
+`medium.rs` `CAIRNB2` container self-marker — signed+event-set-bound or unsigned; forgery-proof always, converged-peer
+splice is a confirm-on-restore residual); [#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) uniform key zeroization
+(`Zeroizing` across `seal.rs`+`localstate.rs`). **All ADR-0026 follow-ons closed; only optional escrow rungs (Shamir/QR/TPM)
+remain.** Also **Spike 0003 (Postgres on Android) G0–G3 PASS** ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47)/[#48](https://github.com/cairn-ehr/cairn-ehr/pull/48)).
 
 **Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
 of each session. If it ever disagrees with the canonical docs, **the canonical docs win.** The *why* lives
@@ -375,12 +354,15 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 - **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
-  **§5.2/§4.4 in-DB hard-veto floor (piece A)** is now BUILT (`db/016`, SCHEMA 14→15). **Next:** the **advisory
-  Python probabilistic matcher (piece B)** (Python/Fellegi–Sunter, blocking, locale-pluggable comparators per
-  ADR-0014) and/or the **§5.7 identity-event link-apply seam (piece C)** (the destination for match proposals;
-  needs the identity event algebra — `link`/`unlink`/etc. — which is not yet built). Deferred: deceased-status
-  veto (no projection yet; stub in db/016); candidate/worklist table.
-  DB-gated tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx).
+  **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`, SCHEMA 14→15) **and** piece B1 (advisory **Python**
+  scoring core, `matcher/`, `cairn-matcher`) are now BUILT. **Next:** **piece B2** — the PG adapter populating
+  `CandidateRecord` from the `patient_*` projections + blocking/candidate generation + the `db/016` veto-gate call +
+  banding/threshold + an advisory proposal worklist; and/or **piece B3** (locale comparator packs / weight-learning /
+  eval harness / hub duplicate-sweep) and **piece C** — the §5.7 identity-event link-apply seam (the destination for
+  match proposals; needs the `link`/`unlink`/… algebra, unbuilt). Deferred: deceased-status veto (no projection yet;
+  stub in db/016); a `compare_address` comparator; B1 follow-up Minors (see the B1 PR).
+  Rust DB-gated tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"` (PG18+cairn_pgx);
+  the `matcher/` Python tests are pure — `cd matcher && uv run pytest` (uv, never venv/pip).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
