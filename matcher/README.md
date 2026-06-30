@@ -37,8 +37,10 @@ whole patient set, so an O(n²) all-pairs comparison is avoided:
   over the `patient_*` projections, deduped to one canonical `(low, high)` pair. The
   `name+year` compound pass is **additive** — it partitions an over-broad single-name-token
   block by birth-year so the sub-blocks survive the cap, and because pairs are deduped across
-  passes it can only raise recall. Birth-year is the leading 4 digits of an ISO-ish DOB value
-  (`value ~ '^[0-9]{4}'`); a null/non-ISO DOB simply stays covered by the single-token pass.
+  passes it can only raise recall. Birth-year is the first 4-consecutive-digit run in the DOB
+  value (`substring(value FROM '[0-9]{4}')`), so an ISO value and a day-first import of the
+  same person both yield the same year; a DOB with no 4-digit run stays covered by the
+  single-token pass.
   A blocking value shared by more than `max_block_size` patients is **skipped and reported**
   (`skipped_blocks`), never silently dropped — a huge block is non-discriminating and the B3
   hub sweep is the backstop.

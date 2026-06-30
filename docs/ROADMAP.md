@@ -109,11 +109,13 @@ validates name/identifier keys).
 — advisory): one **additive** `UNION ALL` branch in `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass) partitions an
 over-broad single-name-token block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match
 pairs the cap drops wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes);
-also rescues precision-mismatched DOBs (`left(value,4)` groups `"1990"`/`"1990-05-12"`, exact-DOB does not). Honest,
-culture-neutral degrade (principle 4): `left(value,4)` only when `value ~ '^[0-9]{4}'` — no date parsing; null/non-ISO DOB
-stays covered by the single-token pass. 4 new DB-gated tests (rescue / honest-degrade / precision-mismatch / cross-pass
-dedup); 150 with DB / 123 + 27 skipped without; clean per-task reviews. Known limitation (user-flagged): the `'^[0-9]{4}'`
-guard is an empirical bet on leading-year DOBs, to revisit on real data. Discovered + filed
+also rescues precision-mismatched DOBs (first 4-digit run groups `"1990"`/`"1990-05-12"`, exact-DOB does not). Honest,
+culture-neutral degrade (principle 4): birth-year is the **first 4-consecutive-digit run** (`substring(value FROM
+'[0-9]{4}')`) — no date parsing, so an ISO value and a day-first import (`"12/05/1990"`) of the same person both group;
+a DOB with no 4-digit run stays covered by the single-token pass. 5 new DB-gated tests (rescue / honest-degrade /
+precision-mismatch / cross-format / cross-pass dedup); 151 with DB / 123 + 28 skipped without; clean per-task reviews.
+Known limitation (user-flagged): year extraction still degrades on 2-digit years and non-Gregorian calendars, to revisit
+on real data (advisory — a wrong year only feeds the scorer extra pairs, never a false link). Discovered + filed
 [issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (pre-existing test-leak + harness `KeyError`).
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier

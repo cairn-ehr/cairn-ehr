@@ -60,13 +60,18 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
 # The 'name+year' pass is a COMPOUND key (name token + birth-year). It is ADDITIVE: the
 # single-token 'name' pass is retained, and pairs are deduped by canonical uuid pair across
 # passes, so adding this pass can only RAISE recall (it rescues pairs from an oversized
-# single-token block, which the cap would otherwise drop wholesale). Birth-year is taken as
-# the leading 4 digits of the stored DOB value ONLY when the value begins with 4 digits
-# (`value ~ '^[0-9]{4}'`) -- an honest, culture-neutral degrade that parses no date and
-# assumes no calendar (principle 4); a record with a null/non-ISO DOB simply does not join
-# this pass and stays covered by the single-token 'name' pass. Because left() truncates,
+# single-token block, which the cap would otherwise drop wholesale). Birth-year is the
+# FIRST 4-consecutive-digit run in the stored DOB value (`substring(value FROM '[0-9]{4}')`,
+# guarded by `value ~ '[0-9]{4}'`) -- an honest, culture-neutral degrade that parses no date
+# and assumes no calendar (principle 4). The 4-digit-run (not leading-4) extraction means a
+# day-first import ("12/05/1990") and an ISO value ("1990-05-12") for the same person both
+# yield "1990" and group together; a value with no 4-digit run (a 2-digit year "07/15/80",
+# a null DOB) simply does not join this pass and stays covered by the single-token 'name'
+# pass -- never a false group, only a withheld rescue. Because the run ignores month/day,
 # this pass also groups precision-mismatched true matches ("1990" vs "1990-05-12") that the
-# exact-DOB pass never groups.
+# exact-DOB pass never groups. This is advisory: a mis-extracted year only ever feeds the
+# Python scorer a few extra pairs (which it rejects), never an auto-link, so erring toward
+# more grouping is safe. Real-world extraction adequacy is to be revisited on richer data.
 _GROUPS_SQL = """
 WITH name_tokens AS (
     SELECT DISTINCT patient_id, token
@@ -74,9 +79,9 @@ WITH name_tokens AS (
     WHERE token <> ''
 ),
 birth_year AS (
-    SELECT patient_id, left(value, 4) AS year
+    SELECT patient_id, substring(value FROM '[0-9]{4}') AS year
     FROM patient_demographic
-    WHERE field = 'dob' AND value ~ '^[0-9]{4}'
+    WHERE field = 'dob' AND value ~ '[0-9]{4}'
 )
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members

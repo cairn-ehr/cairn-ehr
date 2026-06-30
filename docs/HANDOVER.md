@@ -12,14 +12,18 @@ Viability proven by spikes (walking skeleton, advisory-actor contract, a first f
 `pipeline/db.py`'s `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass): it partitions an over-broad single-name-token
 block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match pairs the cap would drop
 wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes); also rescues
-**precision-mismatched** DOBs (`"1990"` vs `"1990-05-12"` — `left(value,4)` groups them, exact-DOB never does). Birth-year
-is an **honest, culture-neutral degrade** (principle 4): `left(value,4)` only when `value ~ '^[0-9]{4}'` — no date parsing;
-a null/non-ISO DOB stays covered by the single-token pass. **Advisory — no `db/` floor, no SCHEMA bump, no spec/ADR change**
-(implements settled §5.2/§5.13/ADR-0014); no new dep; `db.py` 166 lines. Tests: 4 new DB-gated integration tests (rescue,
-honest-degrade, precision-mismatch, cross-pass dedup); full matcher suite **150 with DB / 123 + 27 skipped** without.
+**precision-mismatched** DOBs (`"1990"` vs `"1990-05-12"` — same first 4-digit run groups them, exact-DOB never does).
+Birth-year is an **honest, culture-neutral degrade** (principle 4): the **first 4-consecutive-digit run**
+(`substring(value FROM '[0-9]{4}')`, guarded by `value ~ '[0-9]{4}'`) — no date parsing, no calendar; an ISO value and a
+day-first import (`"12/05/1990"`) of the same person both yield `1990` and group, while a DOB with no 4-digit run stays
+covered by the single-token pass. (Originally a leading-only `left(value,4)`/`^[0-9]{4}` guard; widened to the 4-digit-run
+form 2026-07-01 so cross-format imports group — advisory, so a mis-extracted year only ever feeds the scorer extra pairs it
+rejects, never a false link.) **Advisory — no `db/` floor, no SCHEMA bump, no spec/ADR change**
+(implements settled §5.2/§5.13/ADR-0014); no new dep; `db.py` 166 lines. Tests: 5 new DB-gated integration tests (rescue,
+honest-degrade, precision-mismatch, cross-format, cross-pass dedup); full matcher suite **151 with DB / 123 + 28 skipped** without.
 Harness sanity check on a clean DB: `pair_completeness=1.000`, `reduction_ratio=0.911`, 0 dropped true matches on `gold_v1`
-(additivity confirmed). Per-task opus/sonnet reviews clean (spec ✅). **Known limitation** (user-flagged): the `'^[0-9]{4}'`
-guard is an empirical bet on leading-year DOBs — revisit on richer/real data (safe degrade, not a false group, if wrong).
+(additivity confirmed). Per-task opus/sonnet reviews clean (spec ✅). **Known limitation** (user-flagged): year extraction
+still degrades on 2-digit years and non-Gregorian calendars — revisit on richer/real data (safe degrade, not a false group).
 Discovered + filed **[issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84)** (pre-existing: integration tests
 commit-leak rows via `seed_patient`; `evaluate_blocking` `KeyError`-crashes on a dirty DB — out of this slice's scope).
 **Deferred (recorded):** the **synthetic corruption / volume generator** (quantitative before/after at volume); **further
