@@ -144,11 +144,13 @@ nav:
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
       - Spike 0002 · Advisory-actor write contract — kastellan ↔ Cairn: spikes/0002-advisory-actor-write-contract.md
       - Spike 0003 · A Cairn node on an Android phone — native bionic PostgreSQL 18 + pgrx: spikes/0003-postgres-on-android-bionic-node.md
+      - Spike 0004 · iced as the reference-UI framework — against an EHR's hard bars: spikes/0004-iced-reference-ui-viability.md
   - Ecosystem (plugin evaluations):
       - ecosystem/README.md
       - Eval 0001 · Agent & messaging plugins — kastellan & localmail: ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md
       - Eval 0002 · Reasoning-primitive catalog — clinical evidence advisory service: ecosystem/0002-cairn-advisor-reasoning-primitives.md
       - Eval 0003 · External reference-data sourcing — medicines & terminologies: ecosystem/0003-reference-data-sourcing-medicines-and-terminologies.md
+      - Eval 0004 · Reference-UI framework — iced vs Tauri (the L3 desktop client): ecosystem/0004-reference-ui-framework-iced-vs-tauri.md
   - Principles:
       - Governance & contributing: principles/GOVERNANCE.md
       - Stewardship of the name: principles/STEWARDSHIP-OF-THE-NAME.md
