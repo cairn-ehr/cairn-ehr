@@ -1,0 +1,101 @@
+{
+  "name": "gold_v1",
+  "description": "Hand-authored culture-plural gold set for the matcher eval harness. Tiny: a regression/tuning instrument, NOT a statistical accuracy claim. Spans mononym, patronymic, multi-token, and transliteration name shapes.",
+  "entities": [
+    {
+      "entity_id": "alex",
+      "records": [
+        {
+          "record_id": "alex-1",
+          "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
+          "sex_at_birth": {"value": "female", "provenance_rank": 70},
+          "names": [{"value": "Alex Nguyen", "provenance_rank": 30}],
+          "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}]
+        },
+        {
+          "record_id": "alex-2",
+          "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
+          "names": [{"value": "Nguyen Van Alex", "provenance_rank": 20}],
+          "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}]
+        }
+      ]
+    },
+    {
+      "entity_id": "suharto",
+      "records": [
+        {
+          "record_id": "mono-1",
+          "dob": {"value": "1955-06-08", "precision": "day", "provenance_rank": 40},
+          "sex_at_birth": {"value": "male", "provenance_rank": 40},
+          "names": [{"value": "Suharto", "provenance_rank": 30}]
+        },
+        {
+          "record_id": "mono-2",
+          "dob": {"value": "1955-06-08", "precision": "day", "provenance_rank": 20},
+          "names": [{"value": "Suharto", "provenance_rank": 20}],
+          "identifiers": [{"system": "national-id", "match_key": "ID-7", "value": "ID-7"}]
+        }
+      ]
+    },
+    {
+      "entity_id": "einarsson",
+      "records": [
+        {
+          "record_id": "pat-1",
+          "dob": {"value": "1978-03-03", "precision": "day", "provenance_rank": 40},
+          "names": [{"value": "Jon Einarsson", "provenance_rank": 30}],
+          "identifiers": [{"system": "kennitala", "match_key": "070378", "value": "070378"}]
+        },
+        {
+          "record_id": "pat-2",
+          "dob": {"value": "1978-03-03", "precision": "day", "provenance_rank": 20},
+          "names": [{"value": "Jón Einarsson", "provenance_rank": 20}],
+          "identifiers": [{"system": "kennitala", "match_key": "070378", "value": "070378"}]
+        }
+      ]
+    },
+    {
+      "entity_id": "garcia",
+      "records": [
+        {
+          "record_id": "garcia-1",
+          "dob": {"value": "2001-11-30", "precision": "day", "provenance_rank": 70},
+          "sex_at_birth": {"value": "female", "provenance_rank": 70},
+          "names": [{"value": "Maria Garcia", "provenance_rank": 30}],
+          "identifiers": [{"system": "au-medicare", "match_key": "99999", "value": "99999"}]
+        }
+      ]
+    },
+    {
+      "entity_id": "smith",
+      "records": [
+        {
+          "record_id": "smith-1",
+          "dob": {"value": "1965-01-01", "precision": "day", "provenance_rank": 40},
+          "sex_at_birth": {"value": "male", "provenance_rank": 40},
+          "names": [{"value": "Robin Smith", "provenance_rank": 30}]
+        }
+      ]
+    },
+    {
+      "entity_id": "coincidence-a",
+      "records": [
+        {
+          "record_id": "rev-a",
+          "dob": {"value": "2010-10-10", "precision": "day", "provenance_rank": 70},
+          "sex_at_birth": {"value": "female", "provenance_rank": 70}
+        }
+      ]
+    },
+    {
+      "entity_id": "coincidence-b",
+      "records": [
+        {
+          "record_id": "rev-b",
+          "dob": {"value": "2010-10-10", "precision": "day", "provenance_rank": 70},
+          "sex_at_birth": {"value": "female", "provenance_rank": 70}
+        }
+      ]
+    }
+  ]
+}
