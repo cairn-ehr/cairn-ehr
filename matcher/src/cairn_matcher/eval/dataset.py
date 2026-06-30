@@ -9,8 +9,12 @@ operates over, so the pure scorer eval and the DB blocking eval both derive from
 shape with no parallel construction logic (see record_to_candidate / blocking_eval).
 """
 
+import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+
+from cairn_matcher.pipeline.adapter import candidate_from_rows
+from cairn_matcher.records import CandidateRecord
 
 
 class DatasetError(ValueError):
@@ -102,12 +106,6 @@ def load_dataset(obj: Mapping) -> LabelledDataset:
         description=str(obj.get("description", "")),
         entities=tuple(entities),
     )
-
-
-import itertools
-
-from cairn_matcher.pipeline.adapter import candidate_from_rows
-from cairn_matcher.records import CandidateRecord
 
 
 def record_to_candidate(rec: DatasetRecord) -> CandidateRecord:
