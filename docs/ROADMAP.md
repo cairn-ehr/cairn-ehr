@@ -104,12 +104,23 @@ extra: seeds `patient_*` label→uuid5, calls the **real** `generate_candidate_p
 / reduction-ratio / dropped-true-matches / Σ`C(size,2)` estimate) + a culture-plural `gold_v1.json` fixture. No new dep
 (pure core stdlib-only). 146 with DB / 123 + 23 skipped without; opus whole-branch review READY-TO-MERGE (0 Critical/0
 Important) + post-review fixes in PR #83 (ephemeral/idempotent blocking seed — no `conn.commit()`; dataset loader
-validates name/identifier keys). **Remaining matcher pieces:** **B3** — compound blocking keys + weight-learning (both now measurable via the
-harness) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier aggressive duplicate-sweep
-+ proposal retraction + full §7.5 matcher actor registration; **piece C** — the **§5.7 link-apply seam** (needs the
-identity event algebra). **Next:** compound blocking keys / weight-learning, or piece C; a synthetic corruption generator
-(same dataset format) + veto-aware scorer mode; a `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors →
-[issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+validates name/identifier keys).
+**Slice 11 — §5.2 compound blocking key (name-token + birth-year)** (`pipeline/db.py`, **no `db/` file, no SCHEMA bump**
+— advisory): one **additive** `UNION ALL` branch in `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass) partitions an
+over-broad single-name-token block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match
+pairs the cap drops wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes);
+also rescues precision-mismatched DOBs (`left(value,4)` groups `"1990"`/`"1990-05-12"`, exact-DOB does not). Honest,
+culture-neutral degrade (principle 4): `left(value,4)` only when `value ~ '^[0-9]{4}'` — no date parsing; null/non-ISO DOB
+stays covered by the single-token pass. 4 new DB-gated tests (rescue / honest-degrade / precision-mismatch / cross-pass
+dedup); 150 with DB / 123 + 27 skipped without; clean per-task reviews. Known limitation (user-flagged): the `'^[0-9]{4}'`
+guard is an empirical bet on leading-year DOBs, to revisit on real data. Discovered + filed
+[issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (pre-existing test-leak + harness `KeyError`).
+**Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
+(`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
+aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; **piece C** — the **§5.7
+link-apply seam** (needs the identity event algebra). **Next:** weight-learning, or piece C; a synthetic corruption /
+volume generator (same dataset format; unblocks quantitative compound-key before/after) + veto-aware scorer mode; a
+`compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).

@@ -56,11 +56,27 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
 # a group is kept (pairs generated) iff cardinality(members) <= cap, else reported skipped.
 # Blocking is RECALL-oriented and advisory: the SQL name tokenizer is deliberately simple
 # (lower + whitespace split); the Python scorer remains the source of truth for comparison.
+#
+# The 'name+year' pass is a COMPOUND key (name token + birth-year). It is ADDITIVE: the
+# single-token 'name' pass is retained, and pairs are deduped by canonical uuid pair across
+# passes, so adding this pass can only RAISE recall (it rescues pairs from an oversized
+# single-token block, which the cap would otherwise drop wholesale). Birth-year is taken as
+# the leading 4 digits of the stored DOB value ONLY when the value begins with 4 digits
+# (`value ~ '^[0-9]{4}'`) -- an honest, culture-neutral degrade that parses no date and
+# assumes no calendar (principle 4); a record with a null/non-ISO DOB simply does not join
+# this pass and stays covered by the single-token 'name' pass. Because left() truncates,
+# this pass also groups precision-mismatched true matches ("1990" vs "1990-05-12") that the
+# exact-DOB pass never groups.
 _GROUPS_SQL = """
 WITH name_tokens AS (
     SELECT DISTINCT patient_id, token
     FROM patient_name, regexp_split_to_table(lower(value), '\\s+') AS token
     WHERE token <> ''
+),
+birth_year AS (
+    SELECT patient_id, left(value, 4) AS year
+    FROM patient_demographic
+    WHERE field = 'dob' AND value ~ '^[0-9]{4}'
 )
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
@@ -74,6 +90,10 @@ UNION ALL
 SELECT 'name', token, array_agg(patient_id)
 FROM name_tokens
 GROUP BY token HAVING count(*) >= 2
+UNION ALL
+SELECT 'name+year', nt.token || '|' || byr.year, array_agg(nt.patient_id)
+FROM name_tokens nt JOIN birth_year byr USING (patient_id)
+GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
 
@@ -99,7 +119,7 @@ def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
 def generate_candidate_pairs(
     conn, *, max_block_size: int = 100
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
-    """Generate canonical candidate pairs via three blocking passes, capping huge blocks.
+    """Generate canonical candidate pairs via four blocking passes (identifier / exact-DOB / name-token / name-token+birth-year), capping huge blocks.
 
     Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
     tuples from every group with <= max_block_size members. `skipped_blocks`: the

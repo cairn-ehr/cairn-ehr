@@ -33,10 +33,15 @@ threshold nothing is persisted (the B3 hub duplicate-sweep is the backstop).
 whole patient set, so an O(n²) all-pairs comparison is avoided:
 
 - `db.generate_candidate_pairs(conn, *, max_block_size=100)` — a read-only blocking query:
-  three passes (shared identifier / exact DOB / shared name token) over the `patient_*`
-  projections, deduped to one canonical `(low, high)` pair. A blocking value shared by more
-  than `max_block_size` patients is **skipped and reported** (`skipped_blocks`), never
-  silently dropped — a huge block is non-discriminating and the B3 hub sweep is the backstop.
+  four passes (shared identifier / exact DOB / shared name token / name-token+birth-year)
+  over the `patient_*` projections, deduped to one canonical `(low, high)` pair. The
+  `name+year` compound pass is **additive** — it partitions an over-broad single-name-token
+  block by birth-year so the sub-blocks survive the cap, and because pairs are deduped across
+  passes it can only raise recall. Birth-year is the leading 4 digits of an ISO-ish DOB value
+  (`value ~ '^[0-9]{4}'`); a null/non-ISO DOB simply stays covered by the single-token pass.
+  A blocking value shared by more than `max_block_size` patients is **skipped and reported**
+  (`skipped_blocks`), never silently dropped — a huge block is non-discriminating and the B3
+  hub sweep is the backstop.
 - `sweep.sweep(conn, ...)` — generates the candidates, closes the read snapshot, then runs
   `propose()` on each (one transaction per pair; idempotent, so re-running is safe and a human
   `status` is preserved). A pair whose `propose()` raises is recorded in the result and

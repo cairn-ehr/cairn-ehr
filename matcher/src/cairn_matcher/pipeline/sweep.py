@@ -26,8 +26,8 @@ from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
 class SkippedBlock:
     """A blocking-value group excluded from pair generation for exceeding the cap."""
 
-    pass_name: str   # 'identifier' | 'dob' | 'name'
-    key: str         # the human-readable blocking value (system:match_key, dob, or token)
+    pass_name: str   # 'identifier' | 'dob' | 'name' | 'name+year'
+    key: str         # the human-readable blocking value (system:match_key, dob, token, or token|year)
     size: int        # number of patients sharing it
 
 

@@ -1,13 +1,31 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-06-30 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-07-01 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
-generation + batch sweep · **B3 eval harness — scorer + blocking-recall measurement — done this session**; remaining
-B3 compound-blocking-keys / weight-learning / locale packs + piece C link-seam next). Viability proven by spikes
-(walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
+generation + batch sweep · B3 eval harness — scorer + blocking-recall measurement · **B3 compound blocking key
+(name-token+birth-year) — done this session**; remaining B3 weight-learning / locale packs + piece C link-seam next).
+Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-06-30):** built the **§5.2 matcher eval harness (piece B3 keystone)** — a labelled-dataset
+**This session (2026-07-01):** built the **§5.2 matcher B3 compound blocking key — name-token + birth-year**
+(brainstorm→spec→plan→subagent-SDD; spec+plan under `docs/superpowers/`). One **additive** `UNION ALL` branch in
+`pipeline/db.py`'s `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass): it partitions an over-broad single-name-token
+block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match pairs the cap would drop
+wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes); also rescues
+**precision-mismatched** DOBs (`"1990"` vs `"1990-05-12"` — `left(value,4)` groups them, exact-DOB never does). Birth-year
+is an **honest, culture-neutral degrade** (principle 4): `left(value,4)` only when `value ~ '^[0-9]{4}'` — no date parsing;
+a null/non-ISO DOB stays covered by the single-token pass. **Advisory — no `db/` floor, no SCHEMA bump, no spec/ADR change**
+(implements settled §5.2/§5.13/ADR-0014); no new dep; `db.py` 166 lines. Tests: 4 new DB-gated integration tests (rescue,
+honest-degrade, precision-mismatch, cross-pass dedup); full matcher suite **150 with DB / 123 + 27 skipped** without.
+Harness sanity check on a clean DB: `pair_completeness=1.000`, `reduction_ratio=0.911`, 0 dropped true matches on `gold_v1`
+(additivity confirmed). Per-task opus/sonnet reviews clean (spec ✅). **Known limitation** (user-flagged): the `'^[0-9]{4}'`
+guard is an empirical bet on leading-year DOBs — revisit on richer/real data (safe degrade, not a false group, if wrong).
+Discovered + filed **[issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84)** (pre-existing: integration tests
+commit-leak rows via `seed_patient`; `evaluate_blocking` `KeyError`-crashes on a dirty DB — out of this slice's scope).
+**Deferred (recorded):** the **synthetic corruption / volume generator** (quantitative before/after at volume); **further
+compound keys** (`dob+first-initial`, `name+sex`); **weight-learning**. **The §5.2 compound-blocking-keys item is now BUILT.**
+
+**Prior session (2026-06-30):** built the **§5.2 matcher eval harness (piece B3 keystone)** — a labelled-dataset
 measurement substrate to unblock the measurement-driven B3 items (compound blocking keys, weight-learning), via
 **brainstorm→spec→plan→subagent-SDD** (8 TDD tasks + final review; spec+plan under `docs/superpowers/`). New
 pure-by-default **`matcher/src/cairn_matcher/eval/`** sub-package mirroring the `pipeline/` pure-core + optional-DB split:
@@ -356,15 +374,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`), B1 (advisory **Python** scoring core), B2 (veto-gated
   **pairwise** pipeline + `db/017` proposal worklist), B2b (blocking / candidate-pair generation + `sweep()` driver,
   `cairn_matcher/pipeline/{db,sweep}`), **and the B3 eval harness** (`cairn_matcher/eval/` — scorer metrics +
-  DB-gated blocking-recall measurement + culture-plural `gold_v1.json` + `python -m cairn_matcher.eval` CLI) are now
-  BUILT. **Next (B3 measurement-driven, now unblocked by the harness):** **compound blocking keys** (token+birth-year,
-  to shrink blocks) + **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold set) +
-  locale comparator packs / hub-tier aggressive duplicate-sweep + proposal retraction / full §7.5 matcher actor
-  registration; **piece C** — the §5.7 identity-event link-apply seam (the destination for match proposals; needs the
-  `link`/`unlink`/… algebra, unbuilt). Deferred: a **synthetic corruption generator** (volume + recall curves, same
-  dataset format) + a **veto-aware / end-to-end scorer mode**; deceased-status veto (stub in db/016); a `compare_address`
-  comparator; a **CLI** sweep entry; B2 follow-up Minors (Thresholds `review<auto` guard, `band` CHECK, `updated_at`
-  trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+  DB-gated blocking-recall measurement + culture-plural `gold_v1.json` + `python -m cairn_matcher.eval` CLI) and the
+  **B3 compound blocking key** (`name+year` additive pass in `pipeline/db.py`) are now BUILT. **Next (B3
+  measurement-driven):** **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold set) +
+  **further compound keys** (`dob+first-initial`, `name+sex`) + locale comparator packs / hub-tier aggressive
+  duplicate-sweep + proposal retraction / full §7.5 matcher actor registration; **piece C** — the §5.7 identity-event
+  link-apply seam (the destination for match proposals; needs the `link`/`unlink`/… algebra, unbuilt). Deferred: a
+  **synthetic corruption / volume generator** (volume + recall curves, same dataset format; would unblock quantitative
+  before/after for compound keys) + a **veto-aware / end-to-end scorer mode**; deceased-status veto (stub in db/016); a
+  `compare_address` comparator; a **CLI** sweep entry; the matcher test-leak + harness `KeyError`
+  ([issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84)); B2 follow-up Minors (Thresholds `review<auto` guard,
+  `band` CHECK, `updated_at` trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
   Rust DB-gated tests + the matcher integration tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
   dbname=cairn_test"` (PG18+cairn_pgx); matcher integration: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline
   pytest`. The pure matcher suite is dependency-free: `cd matcher && uv run pytest` (uv, never venv/pip).

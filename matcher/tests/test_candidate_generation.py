@@ -1,8 +1,9 @@
 # matcher/tests/test_candidate_generation.py
 """Integration tests for db.generate_candidate_pairs (blocking).
 
-Seed patient_* projection rows directly, then assert which canonical pairs the three
-blocking passes (identifier / exact-DOB / name-token) generate. Gated on CAIRN_TEST_PG.
+Seed patient_* projection rows directly, then assert which canonical pairs the four
+blocking passes (identifier / exact-DOB / name-token / name-token+birth-year) generate.
+Gated on CAIRN_TEST_PG.
 """
 
 import uuid
@@ -105,3 +106,53 @@ def test_cap_is_per_group_not_global(pg_conn):
     pairs, skipped = _gen(pg_conn, max_block_size=2)
     assert canonical_pair(PA, PD) in pairs
     assert any(pn == "dob" and sz == 3 for pn, _key, sz in skipped)
+
+
+def test_name_year_rescues_pair_from_oversized_name_block(pg_conn):
+    # Three patients share the name token "smith" -> the single-token 'name' block is
+    # size 3. At cap=2 that block is oversized and skipped today, dropping every pair in
+    # it. PA and PB also share a birth-year (1980) but NOT an exact DOB, so only the new
+    # 'name+year' compound pass can rescue their pair.
+    seed_patient(pg_conn, PA, dob=("1980-01-01", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PB, dob=("1980-06-06", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PC, dob=("1991-01-01", 20), names=[("Smith", 20)])
+    pairs, skipped = _gen(pg_conn, max_block_size=2)
+    # The oversized single-token block is still reported as skipped...
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    # ...but the same-year sub-block (smith|1980) survives and yields PA-PB.
+    assert canonical_pair(PA, PB) in pairs
+    # The different-year patient (PC, 1991) is alone in its sub-block -> no pair with it.
+    assert canonical_pair(PA, PC) not in pairs
+    assert canonical_pair(PB, PC) not in pairs
+
+
+def test_name_year_honest_degrade_no_recall_regression(pg_conn):
+    # PB has no DOB, so it cannot join the 'name+year' pass. The shared "jones" token must
+    # still group PA-PB via the single-token 'name' pass -> coverage never regresses for a
+    # record with a missing (or non-ISO) DOB. (A non-ISO value like "07/15/80" fails the
+    # `^[0-9]{4}` guard identically.)
+    seed_patient(pg_conn, PA, dob=("1985-03-03", 20), names=[("Jones", 20)])
+    seed_patient(pg_conn, PB, names=[("Jones", 20)], identifiers=[("mrn:a", "2", "2")])
+    assert canonical_pair(PA, PB) in _pairs(pg_conn)
+
+
+def test_name_year_rescues_precision_mismatched_dob(pg_conn):
+    # Year-precision "1990" vs day-precision "1990-05-12": left(value,4) = "1990" for both,
+    # so they share the 'name|1990' sub-block -- though the exact-DOB pass never groups them.
+    # A different-year decoy (PC) oversizes the single "garcia" token block at cap=2, so only
+    # the compound pass can produce PA-PB.
+    seed_patient(pg_conn, PA, dob=("1990", 20, "year"), names=[("Garcia", 20)])
+    seed_patient(pg_conn, PB, dob=("1990-05-12", 20, "day"), names=[("Garcia", 20)])
+    seed_patient(pg_conn, PC, dob=("2000-01-01", 20), names=[("Garcia", 20)])
+    pairs, skipped = _gen(pg_conn, max_block_size=2)
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    assert canonical_pair(PA, PB) in pairs
+
+
+def test_name_and_name_year_pair_is_emitted_once(pg_conn):
+    # PA and PB share BOTH a name token and a birth-year, so the 'name' and 'name+year'
+    # passes both surface the pair. After canonical-pair dedup it appears exactly once.
+    seed_patient(pg_conn, PA, dob=("1975-08-08", 20), names=[("Patel", 20)])
+    seed_patient(pg_conn, PB, dob=("1975-08-08", 20), names=[("Patel", 20)])
+    pairs = _pairs(pg_conn)
+    assert pairs.count(canonical_pair(PA, PB)) == 1
