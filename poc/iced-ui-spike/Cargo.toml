@@ -1,0 +1,51 @@
+# Spike 0004 — iced reference-UI viability harness.
+#
+# Standalone crate, deliberately NOT a member of the root /Cargo.toml workspace:
+# iced + cosmic-text + winit must never enter the cairn-node dependency tree
+# (the UI is a pure L3 producer — ADR-0021 / §9.5). The empty [workspace] table
+# below detaches this package from the parent workspace so `cargo` treats it as
+# its own root.
+[workspace]
+
+[package]
+name = "iced-ui-spike"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "AGPL-3.0-only"
+description = "Spike 0004: is iced viable as Cairn's L3 reference-UI framework (a11y, complex text, Pi latency)?"
+publish = false
+
+# The library is the PURE, GUI-free core: latency statistics + the multi-script
+# corpus. It has zero heavy dependencies so `cargo test` (no features) compiles
+# and runs in CI without the toolkit. This is the part the spike actually
+# verifies headlessly.
+[lib]
+name = "iced_ui_spike"
+path = "src/lib.rs"
+
+# The iced GUI is operator-run (needs a display + screen reader), so it lives
+# behind the `gui` feature and never builds in the default `cargo test` path.
+[features]
+default = []
+# Headless shaping check over the same shaper iced uses (cosmic-text → rustybuzz).
+# Answers "does the text stack shape Arabic/Devanagari/Han without tofu" given a font.
+shaping = ["dep:rustybuzz", "dep:fontdb", "dep:ttf-parser"]
+# The dense clinical form (AccessKit + tiny-skia software renderer). Targets iced
+# 0.14; pre-1.0 churn means the API may need touch-ups on a future iced.
+gui = ["dep:iced"]
+
+[dependencies]
+# `shaping` feature only — the HarfBuzz-derived shaper cosmic-text wraps, so it is
+# a faithful proxy for iced's own shaping behaviour, kept self-contained for the test.
+rustybuzz = { version = "0.20", optional = true }
+fontdb = { version = "0.18", optional = true }
+ttf-parser = { version = "0.21", optional = true }
+
+# `gui` feature only.
+iced = { version = "0.14", optional = true, features = ["tiny-skia", "wgpu"] }
+
+[[bin]]
+name = "iced-ui-spike-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
