@@ -14,7 +14,7 @@ def test_gold_blocking_recall_is_total(pg_conn):
     m = evaluate_blocking(pg_conn, load_bundled_gold())
     assert m.pair_completeness == 1.0
     assert m.dropped_true_matches == ()
-    assert m.reduction_ratio > 0.0  # blocking generated fewer than all C(10,2)=45 pairs
+    assert m.reduction_ratio > 0.0  # blocking generated fewer than all possible pairs
 
 
 def test_oversized_block_is_skipped_and_estimated(pg_conn):

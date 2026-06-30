@@ -10,6 +10,7 @@ uuid5 per label (deterministic, so a re-run is reproducible) and reverse-map the
 generated uuid pairs back to labels to compare against the label-space ground truth.
 """
 
+import json
 import uuid
 from dataclasses import dataclass
 
@@ -54,7 +55,6 @@ def seed_dataset(conn, ds: LabelledDataset) -> dict[str, str]:
             pid = record_uuid(rec.record_id)
             reverse[pid] = rec.record_id
             if rec.dob is not None:
-                import json
                 cur.execute(
                     "INSERT INTO patient_demographic (patient_id, field, value, facets, "
                     "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, "
