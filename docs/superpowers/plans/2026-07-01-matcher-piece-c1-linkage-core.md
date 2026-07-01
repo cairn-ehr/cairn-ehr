@@ -659,9 +659,15 @@ Add to `crates/cairn-node/tests/identity_linkage.rs`:
 
 ```rust
 /// The person_id a UUID currently projects to, or None if it has no person_member row.
+/// UUIDs are passed as text and cast in SQL (`$1::text::uuid`) and read back via
+/// `::text` — this project's tokio-postgres has no uuid ToSql/FromSql (project
+/// convention: see `match_veto.rs`).
 async fn person_of(c: &Client, p: Uuid) -> Option<Uuid> {
-    c.query_opt("SELECT person_id FROM person_member WHERE patient_id = $1", &[&p])
-        .await.unwrap().map(|r| r.get::<_, Uuid>(0))
+    let p_s = p.to_string();
+    c.query_opt(
+        "SELECT person_id::text FROM person_member WHERE patient_id = $1::text::uuid",
+        &[&p_s],
+    ).await.unwrap().map(|r| r.get::<_, String>(0).parse().unwrap())
 }
 
 #[tokio::test]
@@ -908,10 +914,10 @@ async fn person_chart_unions_member_streams() {
     submit_patient_created(&c, &sk, &kid, a, 100).await;
     submit_patient_created(&c, &sk, &kid, b, 101).await;
     submit_link(&c, &sk, &kid, a, b, 110, true).await.unwrap();
-    let person = a.min(b);
+    let person = a.min(b).to_string();
     // Selecting by the shared person_id returns BOTH member charts.
     let n: i64 = c.query_one(
-        "SELECT count(*) FROM person_chart WHERE person_id = $1", &[&person],
+        "SELECT count(*) FROM person_chart WHERE person_id = $1::text::uuid", &[&person],
     ).await.unwrap().get(0);
     assert_eq!(n, 2, "person_chart must union both member UUIDs' chart rows under one person_id");
 }
@@ -924,10 +930,11 @@ async fn person_chart_defaults_unlinked_to_self() {
     let (sk, kid) = setup(&c).await;
     let a = Uuid::now_v7();
     submit_patient_created(&c, &sk, &kid, a, 100).await; // never linked → no person_member row
-    let pid: Uuid = c.query_one(
-        "SELECT person_id FROM person_chart WHERE patient_id = $1", &[&a],
+    let a_s = a.to_string();
+    let pid: String = c.query_one(
+        "SELECT person_id::text FROM person_chart WHERE patient_id = $1::text::uuid", &[&a_s],
     ).await.unwrap().get(0);
-    assert_eq!(pid, a, "a UUID unknown to the link graph is its own person");
+    assert_eq!(pid, a_s, "a UUID unknown to the link graph is its own person");
 }
 ```
 
