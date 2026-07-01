@@ -57,6 +57,7 @@ async fn submit_link(
 
 /// As `submit_link`, but with an explicit provenance string (for the empty-provenance
 /// rejection test). Sends the provenance verbatim; an empty string must be rejected.
+#[allow(clippy::too_many_arguments)] // mirrors the `submit` test helper in match_veto.rs
 async fn submit_link_prov(
     c: &Client, sk: &SigningKey, kid: &str, a: Uuid, b: Uuid, wall: i64, is_link: bool, prov: &str,
 ) -> Result<u64, tokio_postgres::Error> {
