@@ -9,7 +9,6 @@ The disk/CLI edge lives in generate.py (the dataset.py <-> loader.py split).
 """
 
 import copy
-import random
 import unicodedata
 from collections.abc import Mapping
 
