@@ -1,14 +1,41 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-01 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-07-02 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
 generation + batch sweep · B3 eval harness — scorer + blocking-recall measurement · B3 compound blocking key
-(name-token+birth-year) · **B3 synthetic volume generator — done this session**; remaining B3 weight-learning / locale
-packs / A-B pass-toggle + piece C link-seam next). Viability proven by spikes (walking skeleton, advisory-actor
-contract, a first federating node, Postgres-on-Android).
+(name-token+birth-year) · B3 synthetic volume generator) + the **§5.1/§5.7 identity linkage core (piece C1) — done
+this session**; remaining B3 weight-learning / locale packs / A-B pass-toggle + identity pieces C2 (proposal→apply
+seam) + C3+ (rest of the §5.7 algebra) next. Viability proven by spikes (walking skeleton, advisory-actor contract,
+a first federating node, Postgres-on-Android).
 
-**This session (2026-07-01):** built the **§5.2 matcher B3 synthetic blocking-eval volume generator**
+**This session (2026-07-02):** built matcher piece **C1 — the §5.1/§5.7 identity linkage core** (the first slice of
+the §5.7 identity-event algebra; brainstorm→spec→plan→subagent-SDD, spec+plan under `docs/superpowers/`). All
+**additive, advisory-independent, matcher-independent**. Rust `crates/cairn-event/src/identity.rs`: a pure
+`LinkAssertion` builder (`link_assertion_body`/`unlink_assertion_body` + `render_link_twin`/`render_unlink_twin`;
+confidence omit-when-absent). **`db/018_identity_linkage.sql`** (wired into `cairn-node` `db.rs` SCHEMA array, length
+16→17; **no SCHEMA-floor version bump**, additive DDL only): registers two additive event types
+`identity.link.asserted`/`identity.unlink.asserted` through the **reused** `submit_event` door (never re-declared);
+`cairn_check_link_assertion` culture-neutral structural floor (distinct valid UUID subjects + non-empty provenance;
+self-link rejected); extends the `cairn_event_twin` hook (preserves the demographic + honest-degrade branches, adds
+an identity branch with a HARD authored-twin requirement). `patient_link` HLC-overlay edge table (canonical
+`(low,high)`, latest-HLC-wins state via `ON CONFLICT … WHERE` strict-greater — out-of-order convergent).
+`person_member` golden-identity projection: `person_id` = min-UUID of the connected component, maintained by
+`cairn_recompute_component` (a bounded recursive-CTE walk over standing link edges from **both** touched endpoints —
+correct on merge **and** unmerge/split) with a fail-loud oversize guard (`cairn_max_component_size()` GUC, default
+10000; rejects the offending event, never a silent cap). `person_chart` thin demonstrated unified-read VIEW
+(`COALESCE` to self for UUIDs unknown to the link graph). **Tests:** `crates/cairn-node/tests/identity_linkage.rs` —
+15 DB-gated integration tests (accept/reject floor; edge overlay + out-of-order convergence; pair/transitive/
+diamond-unlink-stays-merged/chain-unlink-splits/idempotent/oversize-guard component cases; VIEW union +
+unlinked-defaults-to-self); full cairn-node suite green; clippy `--tests` clean. **Principle 2 made real:** never
+merge/always link; unmerge is always clean (component recompute splits correctly). **This is C1 only** — deferred
+(recorded, next): **C2** = the `match_proposal`→apply seam (`db/017` → link event); **C3+** = the rest of the §5.7
+algebra (identify/repudiate/dispute/reattribute). Also deferred (Minor): an accept-at-cap boundary test for the
+oversize guard. Test command: `cd crates/cairn-node && CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
+dbname=cairn_test" cargo test --test identity_linkage` (PG18 + `cairn_pgx`). No new ADR, no spec bump (implements
+settled §5.1/§5.7/ADR-0014). **The §5.1/§5.7 identity linkage core (piece C1) is now BUILT.**
+
+**Prior session (2026-07-01):** built the **§5.2 matcher B3 synthetic blocking-eval volume generator**
 (brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under `docs/superpowers/`) in `matcher/`. Pure,
 stdlib-only **`eval/generator.py`** (no psycopg, 274 lines): `shares_blocking_key` mirrors the three base blocking
 passes; four pure corruption operators (`corrupt_dob_format`, `corrupt_dob_typo`, `corrupt_name`,
@@ -149,15 +176,9 @@ winner ordering — sex provenance-first, gender-identity recency-first; karyoty
 [ADR-0034](spec/decisions/0034-demographic-legibility-twin.md) legibility twin). Spec 0.32→0.39 across this run.
 **Demographics slices 1–5 + gaps A/B/C all done; §4.2/§4.3/§4.4/§4.5/§4.6 complete.**
 
-**Prior sessions (2026-06-25/26) — ADR-0026 node durability + Spike 0003 (condensed; full detail in git + the ADR log):**
-**slice C** restore-apply + new-identity `supersede` ([PR #52](https://github.com/cairn-ehr/cairn-ehr/pull/52); `db/009`
-+ `node_lineage`); **slice B** backup-as-cold-peer export/verify/health ([PR #51](https://github.com/cairn-ehr/cairn-ehr/pull/51));
-**slice D** sealed local-state export (`localstate.rs`, LSK dual-wrap, `CAIRNL1`/`CAIRNX1`, empty content / can't-retrofit
-shape; **A–D all done**); [#53](https://github.com/cairn-ehr/cairn-ehr/issues/53) cold-medium self-identification (the
-`medium.rs` `CAIRNB2` container self-marker — signed+event-set-bound or unsigned; forgery-proof always, converged-peer
-splice is a confirm-on-restore residual); [#54](https://github.com/cairn-ehr/cairn-ehr/issues/54) uniform key zeroization
-(`Zeroizing` across `seal.rs`+`localstate.rs`). **All ADR-0026 follow-ons closed; only optional escrow rungs (Shamir/QR/TPM)
-remain.** Also **Spike 0003 (Postgres on Android) G0–G3 PASS** ([PR #47](https://github.com/cairn-ehr/cairn-ehr/pull/47)/[#48](https://github.com/cairn-ehr/cairn-ehr/pull/48)).
+**Prior sessions (2026-06-25/26)** — ADR-0026 node durability slices B/C/D closed (backup-as-cold-peer, restore +
+`supersede`, sealed local-state export) + issues #53/#54 (cold-medium self-identification, uniform key zeroization)
++ **Spike 0003 (Postgres on Android) G0–G3 PASS**. Full detail: ROADMAP Phase 5/6 + git + the ADR-0026 log.
 
 **Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
 of each session. If it ever disagrees with the canonical docs, **the canonical docs win.** The *why* lives
@@ -320,8 +341,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   compound-key change, which needs the still-deferred A/B pass-toggle below. **Next (B3 measurement-driven):**
   **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold set) + **further compound
   keys** (`dob+first-initial`, `name+sex`) + locale comparator packs / hub-tier aggressive duplicate-sweep +
-  proposal retraction / full §7.5 matcher actor registration; **piece C** — the §5.7 identity-event link-apply seam
-  (the destination for match proposals; needs the `link`/`unlink`/… algebra, unbuilt). Deferred: an **A/B pass-toggle**
+  proposal retraction / full §7.5 matcher actor registration. **Identity: piece C1 — the §5.1/§5.7 identity linkage
+  core (`db/018_identity_linkage.sql`, `cairn-event::identity`, `patient_link`/`person_member`/`person_chart`) is now
+  BUILT** (this session) — the `link`/`unlink` algebra exists end-to-end. **Next identity slices: C2** — the
+  `match_proposal`→apply seam (`db/017` proposals become link events) and **C3+** — the rest of the §5.7 algebra
+  (identify/repudiate/dispute/reattribute). Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto

@@ -130,14 +130,34 @@ feeding the existing `python -m cairn_matcher.eval` CLI unchanged. No new dep. A
 suite. 147 + 29 skipped without DB (pure suite; DB suite 173). DB-gated volume test on a generated 200-entity set at `max_block_size=10_000`:
 `pair_completeness==1.0`, 0 dropped true matches, `reduction_ratio≈0.919` (6,467/79,800 pairs) — confirms the recoverability
 invariant end-to-end through the real blocking SQL.
+**Slice 13 — §5.1/§5.7 identity linkage core (piece C1)** (`crates/cairn-event/src/identity.rs`,
+`db/018_identity_linkage.sql` wired into `cairn-node`'s `db.rs` SCHEMA array, length 16→17): the first slice of the
+closed §5.7 identity-event algebra. Pure Rust `LinkAssertion` builder (`link_assertion_body`/`unlink_assertion_body`
++ `render_link_twin`/`render_unlink_twin`; confidence omit-when-absent). Two additive event types
+`identity.link.asserted`/`identity.unlink.asserted` through the **reused** `submit_event` door (never re-declared);
+`cairn_check_link_assertion` culture-neutral structural floor (distinct valid UUID subjects + non-empty provenance;
+self-link rejected); extends the `cairn_event_twin` hook (preserves demographic + honest-degrade branches, adds an
+identity branch with a HARD authored-twin requirement). `patient_link` HLC-overlay edge table (canonical `(low,high)`,
+latest-HLC-wins via `ON CONFLICT … WHERE` strict-greater — out-of-order convergent). `person_member` golden-identity
+projection: `person_id` = min-UUID of the connected component, maintained by `cairn_recompute_component` (bounded
+recursive-CTE walk from both touched endpoints — correct on merge **and** unmerge/split) with a fail-loud oversize
+guard (`cairn_max_component_size()` GUC, default 10000; rejects the offending event, never a silent cap).
+`person_chart` thin demonstrated union VIEW (`COALESCE` to self for UUIDs unknown to the link graph). 15 DB-gated
+integration tests (floor accept/reject; edge overlay + out-of-order convergence; pair/transitive/
+diamond-unlink-stays-merged/chain-unlink-splits/idempotent/oversize-guard component cases; VIEW union +
+unlinked-defaults-to-self); full cairn-node suite green, clippy `--tests` clean. **Additive, no `db/` floor bypass, no
+SCHEMA/ADR/spec change** (implements settled §5.1/§5.7/ADR-0014). Deferred: C2 (below), C3+ (below), an
+accept-at-cap boundary test for the oversize guard.
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
-`generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert); **piece C** — the **§5.7
-link-apply seam** (needs the identity event algebra). **Next:** weight-learning, or piece C; the A/B pass-toggle
-(would unblock quantitative compound-key before/after) + veto-aware scorer mode; variable cluster size / an unrecoverable
-fraction / hard negatives in the volume generator; a `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors
-→ [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+`generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert). **Identity: piece C1
+(the §5.1/§5.7 linkage core — `db/018`, `patient_link`/`person_member`/`person_chart`) is now BUILT** (slice 13,
+above). Remaining: **C2** — the `match_proposal`→apply seam (`db/017` proposals become link events, the destination
+for match proposals); **C3+** — the rest of the §5.7 algebra (identify/repudiate/dispute/reattribute). **Next:**
+weight-learning, or C2; the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
+scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
+`compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
