@@ -80,6 +80,28 @@ metrics (pair-completeness, reduction-ratio, dropped-true-matches) are the lever
 instrument, not a statistical accuracy claim. Dataset format: see
 `src/cairn_matcher/eval/fixtures/gold_v1.json`.
 
+### Synthetic volume generator
+
+`gold_v1.json` is small by design; measuring blocking at volume needs a bigger labelled
+set without hand-authoring one. `eval/generator.py` (pure, stdlib-only — no psycopg) builds
+one at any size: a clean "seed" record per entity plus one corrupted "clone" (cluster size
+2), corrupted by one of four operators (DOB reformat, DOB typo, name edit, identifier
+mangle). Every seed↔clone pair is **recoverable by construction** — guaranteed to share at
+least one base blocking key, repaired if corruption destroys them all — so this measures
+blocking recall/reduction at volume, not real-world matching accuracy. Deterministic given
+a seed. Generate, then feed straight into the eval CLI above:
+
+```bash
+python -m cairn_matcher.eval.generate --entities 200 --seed 1 --out synth.json
+CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=<your-pg-user> dbname=cairn_test" \
+  uv run --extra pipeline python -m cairn_matcher.eval synth.json
+```
+
+Deferred (not built this slice): variable cluster size (>2 records/entity), a deliberately
+unrecoverable fraction (to model the hub-sweep floor), hard negatives / scorer-precision
+curves, and an A/B pass-toggle in `generate_candidate_pairs` for one-command before/after
+comparisons across compound-key changes.
+
 ## Develop
 
 ```bash

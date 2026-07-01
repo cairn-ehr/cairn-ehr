@@ -117,12 +117,26 @@ precision-mismatch / cross-format / cross-pass dedup); 151 with DB / 123 + 28 sk
 Known limitation (user-flagged): year extraction still degrades on 2-digit years and non-Gregorian calendars, to revisit
 on real data (advisory — a wrong year only feeds the scorer extra pairs, never a false link). Discovered + filed
 [issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (pre-existing test-leak + harness `KeyError`).
+**Slice 12 — §5.2 matcher eval synthetic volume generator (piece B3)** (`cairn_matcher/eval/generator.py` +
+`eval/generate.py`, **no `db/` file, no SCHEMA bump** — advisory tooling): unblocks measuring blocking at volume without
+hand-authoring a large gold set. Pure, stdlib-only `generator.py` (no psycopg): `shares_blocking_key` mirrors the three
+base blocking passes; four pure corruption operators (DOB reformat, DOB typo, name edit, identifier mangle); culture-plural
+curated name pools; `GenSpec` + `generate_dataset` build seed+one-corrupted-clone entity clusters (cluster size fixed at 2)
+with a `_repair` step that **guarantees** every seed↔clone pair stays recoverable by >=1 base blocking key — a regression/
+volume instrument, not a statistical accuracy claim (recoverable by construction, not by real-world resemblance). `generate.py`
+is the disk/CLI edge (`python -m cairn_matcher.eval.generate --entities N --seed S --out path`), byte-deterministic JSON,
+feeding the existing `python -m cairn_matcher.eval` CLI unchanged. No new dep. 144 with DB / 144 + 29 skipped without
+(pure suite; DB suite 173). DB-gated volume test on a generated 200-entity set at `max_block_size=10_000`:
+`pair_completeness==1.0`, 0 dropped true matches, `reduction_ratio≈0.919` (6,467/79,800 pairs) — confirms the recoverability
+invariant end-to-end through the real blocking SQL.
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
-aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; **piece C** — the **§5.7
-link-apply seam** (needs the identity event algebra). **Next:** weight-learning, or piece C; a synthetic corruption /
-volume generator (same dataset format; unblocks quantitative compound-key before/after) + veto-aware scorer mode; a
-`compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
+`generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert); **piece C** — the **§5.7
+link-apply seam** (needs the identity event algebra). **Next:** weight-learning, or piece C; the A/B pass-toggle
+(would unblock quantitative compound-key before/after) + veto-aware scorer mode; variable cluster size / an unrecoverable
+fraction / hard negatives in the volume generator; a `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors
+→ [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
