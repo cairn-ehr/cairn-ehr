@@ -126,11 +126,75 @@ CREATE TABLE IF NOT EXISTS patient_link (
 );
 GRANT SELECT ON patient_link TO cairn_agent;
 
+-- 5. person_member: the golden-identity projection. person_id = the MINIMUM UUID in
+--    the connected component (a derived canonical representative — the "person" is a
+--    projection, never a stored immortal id; principle 2). A UUID that once had an edge
+--    and is now isolated gets a row mapping to itself; a UUID never touched by any
+--    linkage event has no row at all (the person_chart VIEW coalesces to self).
+CREATE TABLE IF NOT EXISTS person_member (
+    patient_id UUID PRIMARY KEY,
+    person_id  UUID NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON person_member TO cairn_agent;
+
+-- Configurable oversize guard. A component larger than this is a matcher pathology
+-- (mass false-merge); we REFUSE the offending event rather than silently corrupt
+-- membership (never a silent cap — the db/017b oversized-block discipline). Reads a
+-- session GUC so it is operationally tunable and testable; default 10000.
+CREATE OR REPLACE FUNCTION cairn_max_component_size()
+RETURNS integer LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(NULLIF(current_setting('cairn.max_component_size', true), '')::integer, 10000);
+$$;
+
+-- Recompute the connected component around one seed UUID over the STANDING link edges
+-- (state='link'), and rewrite person_member for every member to point at the min-UUID
+-- representative. Cost is bounded by the touched component's size, not the table's —
+-- keeping chart reads O(1) (the ADR-0001/Bet-B incremental-projection discipline).
+CREATE OR REPLACE FUNCTION cairn_recompute_component(p_seed uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_members uuid[];
+    v_person  uuid;
+BEGIN
+    -- Bounded BFS: walk standing link edges outward from the seed (undirected — an
+    -- edge stored as (low, high) is traversable from either endpoint).
+    WITH RECURSIVE comp(node) AS (
+        SELECT p_seed
+        UNION
+        SELECT CASE WHEN pl.low = comp.node THEN pl.high ELSE pl.low END
+        FROM comp
+        JOIN patient_link pl
+          ON pl.state = 'link' AND (pl.low = comp.node OR pl.high = comp.node)
+    )
+    SELECT array_agg(node) INTO v_members FROM comp;
+
+    -- Fail loud on a pathological component (mass false-merge) — never silently cap.
+    IF array_length(v_members, 1) > cairn_max_component_size() THEN
+        RAISE EXCEPTION
+            'identity linkage: component around % exceeds max size % — refusing to project (matcher pathology)',
+            p_seed, cairn_max_component_size();
+    END IF;
+
+    -- The canonical representative is the minimum UUID in the component. Postgres has
+    -- no min()/max() aggregate for the uuid type, so order by the uuid `<` operator
+    -- (which uuid does provide) and take the first — semantically identical to min().
+    v_person := (SELECT m FROM unnest(v_members) AS m ORDER BY m LIMIT 1);
+
+    INSERT INTO person_member (patient_id, person_id, updated_at)
+    SELECT m, v_person, clock_timestamp() FROM unnest(v_members) AS m
+    ON CONFLICT (patient_id) DO UPDATE SET
+        person_id  = EXCLUDED.person_id,
+        updated_at = clock_timestamp();
+END;
+$$;
+
 -- Incremental maintenance: fold exactly the one new link/unlink event into the edge
 -- overlay. The whole row overlays atomically only when the incoming HLC is strictly
 -- greater than the stored one (ON CONFLICT ... WHERE) — so out-of-order arrival
--- converges to the highest-HLC assertion. (Component recompute is added in the next
--- task; this version maintains the edge only.)
+-- converges to the highest-HLC assertion. After the edge overlay, recompute the
+-- connected-component projection around both endpoints (see cairn_recompute_component
+-- above).
 CREATE OR REPLACE FUNCTION patient_link_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -156,6 +220,13 @@ BEGIN
         updated_at  = clock_timestamp()
     WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
         > (patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin);
+
+    -- Recompute the touched component(s). Recomputing BOTH endpoints is always
+    -- correct: a link merges (both endpoints reach the same union); an unlink splits
+    -- into at most the piece containing `lo` and the piece containing `hi`, and every
+    -- previously-connected node is reachable from one of them.
+    PERFORM cairn_recompute_component(lo);
+    PERFORM cairn_recompute_component(hi);
     RETURN NULL;  -- AFTER trigger
 END;
 $$;

@@ -195,3 +195,111 @@ async fn missing_twin_is_rejected() {
     let err = c.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await.unwrap_err();
     assert!(db_msg(&err).contains("authored twin"), "twin-less identity event must be refused: {}", db_msg(&err));
 }
+
+/// The person_id a UUID currently projects to, or None if it has no person_member row.
+/// UUIDs are passed as text and cast in SQL (`$1::text::uuid`) and read back via
+/// `::text` — this project's tokio-postgres has no uuid ToSql/FromSql (project
+/// convention: see `match_veto.rs`).
+async fn person_of(c: &Client, p: Uuid) -> Option<Uuid> {
+    let p_s = p.to_string();
+    c.query_opt(
+        "SELECT person_id::text FROM person_member WHERE patient_id = $1::text::uuid",
+        &[&p_s],
+    ).await.unwrap().map(|r| r.get::<_, String>(0).parse().unwrap())
+}
+
+#[tokio::test]
+async fn linked_pair_shares_min_uuid_person() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
+    let expected = a.min(b);
+    assert_eq!(person_of(&c, a).await, Some(expected));
+    assert_eq!(person_of(&c, b).await, Some(expected));
+}
+
+#[tokio::test]
+async fn transitive_links_form_one_person() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
+    submit_link(&c, &sk, &kid, b, d, 110, true).await.unwrap();
+    let expected = a.min(b).min(d);
+    assert_eq!(person_of(&c, a).await, Some(expected));
+    assert_eq!(person_of(&c, b).await, Some(expected));
+    assert_eq!(person_of(&c, d).await, Some(expected));
+}
+
+#[tokio::test]
+async fn diamond_unlink_stays_merged() {
+    // A-B, B-C, A-C all linked; unlink A-B. Still connected via A-C-B → one person.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
+    submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
+    submit_link(&c, &sk, &kid, a, cc, 120, true).await.unwrap();
+    submit_link(&c, &sk, &kid, a, b, 130, false).await.unwrap(); // unlink A-B (not a bridge)
+    let expected = a.min(b).min(cc);
+    assert_eq!(person_of(&c, a).await, Some(expected));
+    assert_eq!(person_of(&c, b).await, Some(expected));
+    assert_eq!(person_of(&c, cc).await, Some(expected));
+}
+
+#[tokio::test]
+async fn chain_unlink_splits_component() {
+    // Chain A-B-C; unlink A-B (a bridge) → {A} and {B,C}.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
+    submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
+    submit_link(&c, &sk, &kid, a, b, 120, false).await.unwrap(); // unlink the A-B bridge
+    assert_eq!(person_of(&c, a).await, Some(a), "A now isolated → maps to itself");
+    let bc = b.min(cc);
+    assert_eq!(person_of(&c, b).await, Some(bc));
+    assert_eq!(person_of(&c, cc).await, Some(bc));
+}
+
+#[tokio::test]
+async fn re_link_is_idempotent() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
+    submit_link(&c, &sk, &kid, a, b, 105, true).await.unwrap(); // a second, later link of the same pair
+    let expected = a.min(b);
+    assert_eq!(person_of(&c, a).await, Some(expected));
+    assert_eq!(person_of(&c, b).await, Some(expected));
+    let n: i64 = c.query_one("SELECT count(*) FROM patient_link WHERE state='link'", &[])
+        .await.unwrap().get(0);
+    assert_eq!(n, 1, "re-linking the same pair is one standing edge, not two");
+}
+
+#[tokio::test]
+async fn oversize_component_guard_rejects() {
+    // With a tiny cap, the link that would grow the component past it is refused
+    // wholesale (fail-loud, never a silent cap). Cap is a per-session GUC.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    c.batch_execute("SET cairn.max_component_size = 3").await.unwrap();
+    let (a, b, cc, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();  // {A,B} size 2 — ok
+    submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap(); // {A,B,C} size 3 — ok
+    let err = submit_link(&c, &sk, &kid, cc, d, 120, true).await.unwrap_err(); // size 4 — refuse
+    assert!(db_msg(&err).contains("exceeds max size"), "oversize component must be refused: {}", db_msg(&err));
+}
