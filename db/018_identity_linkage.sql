@@ -237,4 +237,17 @@ CREATE TRIGGER patient_link_apply_trg
     FOR EACH ROW WHEN (NEW.event_type IN ('identity.link.asserted', 'identity.unlink.asserted'))
     EXECUTE FUNCTION patient_link_apply();
 
+-- 6. Demonstrated unified-read VIEW (§5.1 "the unified chart unions the event streams
+--    of all member UUIDs"). Thin by design: every patient_chart row is tagged with its
+--    person_id — its component representative, or its own patient_id when unknown to the
+--    link graph. Selecting WHERE person_id = X returns all member charts. The REAL
+--    unified-chart read surface (ordering, dedup, trust states) is the API/UI tier,
+--    above the foundation line — deliberately out of scope for C1.
+CREATE OR REPLACE VIEW person_chart AS
+    SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id, pc.*
+    FROM patient_chart pc
+    LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id;
+
+GRANT SELECT ON person_chart TO cairn_agent;
+
 COMMIT;

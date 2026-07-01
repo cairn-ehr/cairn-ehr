@@ -288,6 +288,59 @@ async fn re_link_is_idempotent() {
     assert_eq!(n, 1, "re-linking the same pair is one standing edge, not two");
 }
 
+/// Submit a minimal patient.created so the patient has a patient_chart row to union.
+async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid, wall: i64) {
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: "patient.created".into(),
+        schema_version: "patient/1".into(),
+        hlc: Hlc { wall, counter: 0, node_origin: "n".into() },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
+        attachments: vec![],
+        plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
+    };
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await
+        .expect("patient.created accepted");
+}
+
+#[tokio::test]
+async fn person_chart_unions_member_streams() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    submit_patient_created(&c, &sk, &kid, a, 100).await;
+    submit_patient_created(&c, &sk, &kid, b, 101).await;
+    submit_link(&c, &sk, &kid, a, b, 110, true).await.unwrap();
+    let person = a.min(b).to_string();
+    // Selecting by the shared person_id returns BOTH member charts.
+    let n: i64 = c.query_one(
+        "SELECT count(*) FROM person_chart WHERE person_id = $1::text::uuid", &[&person],
+    ).await.unwrap().get(0);
+    assert_eq!(n, 2, "person_chart must union both member UUIDs' chart rows under one person_id");
+}
+
+#[tokio::test]
+async fn person_chart_defaults_unlinked_to_self() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let a = Uuid::now_v7();
+    submit_patient_created(&c, &sk, &kid, a, 100).await; // never linked → no person_member row
+    let a_s = a.to_string();
+    let pid: String = c.query_one(
+        "SELECT person_id::text FROM person_chart WHERE patient_id = $1::text::uuid", &[&a_s],
+    ).await.unwrap().get(0);
+    assert_eq!(pid, a_s, "a UUID unknown to the link graph is its own person");
+}
+
 #[tokio::test]
 async fn oversize_component_guard_rejects() {
     // With a tiny cap, the link that would grow the component past it is refused
