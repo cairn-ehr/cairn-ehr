@@ -66,6 +66,8 @@ DECLARE
     v_t_eff        TIMESTAMPTZ;
     v_att          BYTEA;
     v_att_key      BYTEA;
+    v_actor_ids    BYTEA[];
+    v_actor_id     BYTEA;
     c              JSONB;
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
@@ -107,10 +109,19 @@ BEGIN
             b ->> 't_effective', b -> 'hlc' ->> 'wall';
     END IF;
 
-    -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked).
-    IF NOT EXISTS (SELECT 1 FROM actor_current WHERE signing_key_id = b ->> 'signer_key_id') THEN
+    -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
+    --    and RECORD the resolution (issue #99): a unique key->actor mapping stamps the
+    --    admitting actor_id on the row, so a later contamination-cascade recall selects
+    --    this event exactly even after the key is re-enrolled under a new skill_epoch.
+    --    A key concurrently registered to several actors stamps NULL — attribution
+    --    honestly unknown (principle 4) — and the recall query (db/006) over-selects
+    --    NULL rows rather than ever missing one.
+    SELECT array_agg(DISTINCT actor_id) INTO v_actor_ids
+        FROM actor_current WHERE signing_key_id = b ->> 'signer_key_id';
+    IF v_actor_ids IS NULL THEN
         RAISE EXCEPTION 'submit_event: signer % is not an enrolled, non-revoked actor', b ->> 'signer_key_id';
     END IF;
+    v_actor_id := CASE WHEN array_length(v_actor_ids, 1) = 1 THEN v_actor_ids[1] END;
 
     -- 3. Classify (fail closed on unknown type).
     SELECT mode, targets_other_author INTO v_mode, v_targets_other
@@ -177,7 +188,7 @@ BEGIN
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
-         signer_key_id, plaintext_twin, attachments, attestation, attester_key)
+         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
@@ -185,7 +196,7 @@ BEGIN
         v_t_eff,
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
         b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb),
-        v_att, v_att_key)
+        v_att, v_att_key, v_actor_id)
     ON CONFLICT (event_id) DO NOTHING;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).

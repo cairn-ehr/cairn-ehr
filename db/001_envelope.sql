@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS event_log (
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS attestation  BYTEA;
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS attester_key BYTEA;
 
+-- Node-local actor attribution (issue #99 / review A10). At admission each door
+-- resolves the signer against the LOCAL actor registry; when that resolution is
+-- UNIQUE, the admitting actor_id (ADR-0011: the content-address of the pinned
+-- determinant set, skill_epoch included) is stamped here. When the key is
+-- concurrently registered to several actors the stamp is NULL — attribution
+-- honestly unknown (principle 4), never a guess. Derived, node-local state (like
+-- recorded_at): NOT part of the signed bytes, never on the wire. It exists so a
+-- contamination-cascade recall (ADR-0029/0030) can answer "which events did actor
+-- (key, epoch) author?" exactly, even after a supersede re-registers the same key
+-- under a new epoch; NULL rows are conservatively over-selected by
+-- events_by_actor_epoch (db/006), never silently missed.
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS actor_id BYTEA;
+
 CREATE INDEX IF NOT EXISTS event_log_order_idx
     ON event_log (hlc_wall, hlc_counter, node_origin);
 CREATE INDEX IF NOT EXISTS event_log_patient_idx
