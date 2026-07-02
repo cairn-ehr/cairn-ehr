@@ -1,6 +1,8 @@
 use tokio_postgres::{Client, NoTls};
 
-const SCHEMA: [(&str, &str); 19] = [
+// A slice (not a fixed-size array) so appending a migration is a one-line change
+// — the hand-counted length annotation bought nothing and taxed every migration.
+const SCHEMA: &[(&str, &str)] = &[
     ("001_envelope",      include_str!("../../../db/001_envelope.sql")),
     ("002_projection",    include_str!("../../../db/002_projection.sql")),
     ("003_blobs",         include_str!("../../../db/003_blobs.sql")),
@@ -24,6 +26,14 @@ const SCHEMA: [(&str, &str); 19] = [
     ("018_identity_linkage", include_str!("../../../db/018_identity_linkage.sql")),
     ("019_apply_proposal", include_str!("../../../db/019_apply_proposal.sql")),
     ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
+    // Durable quarantine + re-offer floor for unverifiable pulled CLINICAL
+    // events (issue #108): node-local operational state beside sync_state,
+    // granted to cairn_node so the cairn-sync runtime can quarantine/requeue
+    // without owner privileges. NOTE: cairn-node's own node-event pull loop
+    // (sync.rs) does NOT use this pen yet — a deterministically-refused
+    // node_event still leaves only a stderr line there (tracked as issue #111;
+    // the clinical plane is the safety-critical one).
+    ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

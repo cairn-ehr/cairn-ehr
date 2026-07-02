@@ -10,7 +10,41 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, latest) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
+**This session (2026-07-02, latest) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
+integrity failures in cairn-sync:** closed the clinical-plane pull loop's silent skip-and-advance, then hardened it
+against its own review (8 confirmed findings, all fixed in-PR). Before: an unverifiable pulled event left only a
+transient stderr line while later verifiable events advanced the watermark past it (silent permanent set-union
+exclusion, the A1 class), and a pre-ADR-0040 peer livelocked silently. Now: **(a)** **`db/021_sync_quarantine.sql`**
+(explicit REVOKE floor, full lifecycle granted to `cairn_node`) — every refused event is persisted VERBATIM (signed
+bytes + travelling attestation pair, enriched by COALESCE if a later re-offer carries a token an earlier one lacked +
+legible `EventError` reason) with dedupe-on-re-offer and a **per-peer quota** (10k rows / 64 MiB; at quota the
+watermark freezes rather than the pen growing — remote bytes can never fill the clinical node's disk). **(b)** the
+**re-offer floor** (`sync_state.quarantine_floor_*`): a durable trace alone is NOT a license to advance past an event
+(the review's mixed-batch finding: a re-signed history below a moved watermark would never be refetched) — refusing
+an event pins the fetch point below its slot, so every cycle re-offers it (dedupes in the pen) while the watermark
+still advances for valid events; a clean cycle from the floor auto-clears it (a repaired/re-signed peer is picked up
+with NO operator surgery), and a human can license a permanent exclusion via **`acked = TRUE`** (recorded decision,
+releases the floor). **(c)** **ANY unacked refusal fails the pull loudly, every cycle** — not just the all-unverifiable
+batch (the old heuristic structurally missed mixed legacy+new batches and already-synced links, exactly where the
+livelock lived) — via a typed `PullIntegrityError` that still carries the cycle metrics; `run` logs `integrity: true`
+(distinct from `partition`, which bet_a counts as downtime; bet_a `analyze` now reports integrity cycles separately).
+Non-hex wire entries are penned like any other garbage (never a whole-pull abort). **(d)** additive
+`EventsResponse.signing_context` declared by serve; a DIFFERENT declared context refuses the batch up front naming
+both strings (per-event verify binds CTX_EVENT cryptographically anyway — the gate only adds legibility).
+**(e)** CLI: `quarantine` (JSON lines incl. `last_requeue_error`/`acked`) + `requeue` (through the REAL
+`apply_remote_event` door, streamed row-by-row; the door's refusal goes to `last_requeue_error`, NEVER overwriting the
+verify-time `reason` forensics); `pull`/`run`/`quarantine`/`requeue` fail fast with a legible "run `cairn-sync init`"
+if the DB predates db/021 (only init applies migrations). TDD: 11 DB-gated integration tests in
+`cairn-sync::quarantine_tests` (mixed batch pens+pins floor+recovers on repaired peer · acked releases floor ·
+all-unverifiable loud · synced-link unverifiable tail loud · non-hex penned · row quota freezes · byte quota refuses
+an overshooting frame · floor SURVIVES a pen-failure re-offer cycle (fresh-eyes catch: clearing it would permanently
+release the slot) · skew refused · requeue preserves reason · connect_checked legible) + wire-additivity unit +
+`db/tests/021_sync_quarantine_test.sql`. Full
+workspace (34 suites) + clippy green on Mac PG18 rig (cairn_pgx rebuilt post-ADR-0040 — stale-dylib gotcha again);
+live two-DB smoke green. Closes #108. Split out: #101 (EventsAfter pagination — floor re-ships the suffix wholesale
+until then), #111 (node-event plane still lacks a quarantine; db.rs comment points at it).
+
+**Earlier this session (2026-07-02) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
 closed the review-B4 wire-freeze pair before more signatures accumulate. **(a)** The Sign1-vs-multi-signer
 ambiguity in ADR-0015's rationale is resolved: an event carries **exactly one envelope signature** (the
 authoring actor's); plurality is contributor-set-in-body + attestation tokens + overlay co-signing (ADR-0007 §6)
