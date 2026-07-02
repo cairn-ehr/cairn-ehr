@@ -18,6 +18,28 @@ fn cairn_verify(signed: &[u8]) -> bool {
     cairn_event::verify_self_described(signed).is_ok()
 }
 
+/// Diagnostic companion to `cairn_verify`: NULL when the bytes verify, else the
+/// legible `EventError` string ("signing-context mismatch…", "signature
+/// verification failed", …). The doors keep gating on the boolean; this exists so
+/// an operator (or a future door version) can surface WHY a blob was rejected —
+/// without it, ADR-0040's legible `ContextMismatch` dies at the SQL boundary and a
+/// wire-format skew is indistinguishable from tampering.
+#[pg_extern(immutable, parallel_safe)]
+fn cairn_verify_error(signed: &[u8]) -> Option<String> {
+    cairn_event::verify_self_described(signed).err().map(|e| e.to_string())
+}
+
+/// The version of the verify floor actually LOADED into this backend — the
+/// compiled .so, not the extension-catalog entry (`\dx` can lie after a rebuild
+/// without `ALTER EXTENSION`). Lets a daemon at startup, or an operator mid-outage,
+/// detect a stale library after a wire-format change (e.g. the ADR-0040 signing
+/// contexts, which this floor enforces from 0.2.0) instead of diagnosing a generic
+/// "signature verification failed" write outage.
+#[pg_extern(immutable, parallel_safe)]
+fn cairn_pgx_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Verify and parse an event's signed bytes into its EventBody as JSONB. Returns
 /// NULL when the bytes do not verify — submit_event calls cairn_verify first for a
 /// legible rejection, then this to read the body PL/pgSQL cannot parse (COSE/CBOR).
@@ -96,6 +118,31 @@ mod tests {
         // Fail closed on a malformed (wrong-length) key — never panic.
         assert!(!crate::cairn_attestation_ok(&token, &ca, &[]));
         assert!(!crate::cairn_attestation_ok(&token, &ca, &[0u8; 33]));
+    }
+
+    // The diagnostics surface: a good event yields NULL, a bad blob yields the
+    // legible EventError string, and the loaded-library version is readable so a
+    // daemon/operator can detect a stale .so after a wire-format change.
+    #[pg_test]
+    fn verify_error_and_version_are_legible() {
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        let body = cairn_event::EventBody {
+            event_id: "00000000-0000-7000-8000-000000000020".into(),
+            patient_id: "00000000-0000-7000-8000-000000000021".into(),
+            event_type: "advisory.added".into(),
+            schema_version: "advisory/1".into(),
+            hlc: cairn_event::Hlc { wall: 7, counter: 0, node_origin: "t".into() },
+            t_effective: None,
+            signer_key_id: kid,
+            contributors: serde_json::json!([]),
+            payload: serde_json::json!({"k": "v"}),
+            attachments: vec![],
+            plaintext_twin: None,
+        };
+        let signed = cairn_event::sign(&body, &sk).unwrap();
+        assert!(crate::cairn_verify_error(&signed.signed_bytes).is_none());
+        assert!(crate::cairn_verify_error(b"not an event").is_some());
+        assert_eq!(crate::cairn_pgx_version(), env!("CARGO_PKG_VERSION"));
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,

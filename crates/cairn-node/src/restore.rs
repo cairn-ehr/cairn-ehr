@@ -19,12 +19,24 @@
 //! (operator-error-safe) but is flagged; a marker-less legacy medium falls back to an explicit
 //! `--superseded-node` (or a sole-enroll medium).
 
-use crate::medium::{enrolls, verify_self_attestation, Container, SelfMarker};
+use crate::medium::{enrolls, scan_enrolls, verify_self_attestation, Container, SelfMarker};
 
 #[derive(thiserror::Error, Debug)]
 pub enum RestoreError {
     #[error("medium has no genesis (node.enrolled) event")]
     NoGenesis,
+    /// The medium DOES carry events, but none verified and so no genesis could be read.
+    /// Distinct from [`RestoreError::NoGenesis`] for honest degradation at the
+    /// disaster-recovery seam: "the genesis is absent" and "the genesis may well be
+    /// present but the signatures do not verify (corrupt medium, or a backup written
+    /// before the ADR-0040 signing contexts — such media need re-signing/re-init)"
+    /// send the operator down entirely different paths.
+    #[error(
+        "medium has no VERIFIABLE genesis: {unverifiable} of {total} event(s) failed signature \
+         verification (corrupt bytes, or signatures predating the ADR-0040 signing contexts — \
+         pre-ADR-0040 backups fail closed and need re-initialization)"
+    )]
+    NoVerifiableGenesis { unverifiable: usize, total: usize },
     /// A marker-less (legacy) medium with more than one enroll: self cannot be identified from
     /// the events (set-union convergence), so the operator must name the dead node explicitly.
     #[error("marker-less medium carries {0} enrolls; pass --superseded-node <hex> to pick the dead node")]
@@ -127,8 +139,18 @@ pub fn resolve_dead_node(
     container: &Container,
     explicit: Option<&str>,
 ) -> Result<DeadNode, RestoreError> {
-    let all = enrolls(&container.events);
+    let scan = scan_enrolls(&container.events);
+    let all = scan.enrolls;
     if all.is_empty() {
+        // Distinguish "no genesis on the medium" from "events present but none
+        // verified" — the latter means corruption or pre-ADR-0040 signatures, and
+        // misreporting it as a missing genesis misdirects disaster recovery.
+        if scan.unverifiable > 0 {
+            return Err(RestoreError::NoVerifiableGenesis {
+                unverifiable: scan.unverifiable,
+                total: container.events.len(),
+            });
+        }
         return Err(RestoreError::NoGenesis);
     }
 
@@ -479,6 +501,30 @@ mod tests {
             resolve_dead_node(&c, None),
             Err(RestoreError::NoGenesis)
         ));
+    }
+
+    #[test]
+    fn medium_whose_events_fail_verification_reports_that_not_a_missing_genesis() {
+        // Honest degradation at the disaster-recovery seam: a medium whose genesis IS
+        // present but fails signature verification (corrupt bytes, or signatures
+        // predating the ADR-0040 signing contexts) must NOT be misdiagnosed as
+        // "medium has no genesis" — that sends the operator hunting for a missing
+        // event instead of a verification problem.
+        let k = sk();
+        let mut g = enroll(&k, "Self");
+        let mid = g.len() / 2;
+        g[mid] ^= 0x01; // the genesis is on the medium; it merely no longer verifies
+        let c = Container {
+            self_marker: None,
+            events: vec![g],
+        };
+        match resolve_dead_node(&c, None) {
+            Err(RestoreError::NoVerifiableGenesis {
+                unverifiable: 1,
+                total: 1,
+            }) => {}
+            other => panic!("expected NoVerifiableGenesis {{1,1}}, got {other:?}"),
+        }
     }
 
     #[test]

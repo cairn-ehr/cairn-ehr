@@ -55,6 +55,8 @@ pub enum EventError {
     BadAddress,
     #[error("signing-context mismatch: the blob was not signed for this context (wrong or missing domain-separation tag)")]
     ContextMismatch,
+    #[error("algorithm mismatch: the protected header does not declare EdDSA (Ed25519)")]
+    AlgMismatch,
     #[error("blob slice extraction: {0}")]
     BlobSlice(String),
     #[error("blob slice failed verification against the content address")]
@@ -123,31 +125,86 @@ fn cose_sign1_in_context(
     sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
 }
 
-/// Verify a COSE_Sign1 against `vk` *in context `ctx`* and return its payload.
-/// Fail-closed on both halves of the domain separation: a missing or different
-/// content type is a legible [`EventError::ContextMismatch`] (this also rejects all
-/// pre-ADR-0040 uncontextualized blobs), and the signature itself is checked with
-/// the context as `external_aad`, so a header that lies about its context still
-/// fails cryptographically.
+/// The context-bound verification core over an already-parsed COSE_Sign1. Both
+/// byte-level entry points below delegate here, so every verifier applies the same
+/// fail-closed checks and a blob is parsed exactly once per verification:
+///
+///  1. the protected content type must name `ctx` — a wrong or missing tag is a
+///     legible [`EventError::ContextMismatch`] (this also rejects all pre-ADR-0040
+///     uncontextualized blobs);
+///  2. no content type may ride in the UNPROTECTED bucket: it sits outside the
+///     signed Sig_structure, so it could be added after signing to make a verified
+///     blob carry a second, conflicting self-description to any consumer reading
+///     headers with generic COSE tooling (RFC 9052 §3 makes a label present in
+///     both buckets malformed anyway);
+///  3. the protected `alg` must be EdDSA — the check below is Ed25519 regardless
+///     of what the header claims, so without this gate a genuine key holder could
+///     mint bytes that permanently lie about their own primitive (and the
+///     module-doc re-attestation ladder keys off this header);
+///  4. the signature is checked with `ctx` as `external_aad`, so a header that
+///     lies about its context still fails cryptographically.
+fn cose_verify1_parsed(
+    sign1: coset::CoseSign1,
+    vk: &VerifyingKey,
+    ctx: SigningContext,
+) -> Result<Vec<u8>, EventError> {
+    use coset::{iana, ContentType, RegisteredLabelWithPrivate};
+    match &sign1.protected.header.content_type {
+        Some(ContentType::Text(t)) if t == ctx.as_str() => {}
+        _ => return Err(EventError::ContextMismatch),
+    }
+    if sign1.unprotected.content_type.is_some() {
+        return Err(EventError::ContextMismatch);
+    }
+    match sign1.protected.header.alg {
+        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::EdDSA)) => {}
+        _ => return Err(EventError::AlgMismatch),
+    }
+    sign1.verify_signature(ctx.as_bytes(), |sig, tbs| {
+        let signature =
+            ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
+        vk.verify(tbs, &signature).map_err(|_| EventError::BadSignature)
+    })?;
+    sign1.payload.ok_or(EventError::NoPayload)
+}
+
+/// Verify a COSE_Sign1 against a KNOWN key `vk` *in context `ctx`* and return its
+/// payload (see [`cose_verify1_parsed`] for the fail-closed checks applied).
 fn cose_verify1_in_context(
     signed_bytes: &[u8],
     vk: &VerifyingKey,
     ctx: SigningContext,
 ) -> Result<Vec<u8>, EventError> {
-    use coset::{CborSerializable, ContentType, CoseSign1};
+    use coset::{CborSerializable, CoseSign1};
     let sign1 =
         CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
-    if sign1.protected.header.content_type != Some(ContentType::Text(ctx.as_str().to_string())) {
-        return Err(EventError::ContextMismatch);
-    }
-    sign1
-        .verify_signature(ctx.as_bytes(), |sig, tbs| {
-            let signature =
-                ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
-            vk.verify(tbs, &signature).map_err(|_| EventError::BadSignature)
-        })
-        .map_err(|_| EventError::BadSignature)?;
-    sign1.payload.ok_or(EventError::NoPayload)
+    cose_verify1_parsed(sign1, vk, ctx)
+}
+
+/// Verify a SELF-DESCRIBED COSE_Sign1 *in context `ctx`*: parse once, derive the
+/// verifying key from the blob's own protected key id, and run the full
+/// context-bound verification against it. Returns the 32 key bytes the signature
+/// actually verified against plus the payload, so callers can bind the payload's
+/// CLAIMED key to the PROVEN one (the `SignerKeyMismatch` gates). The shared seam
+/// for `verify_self_described` and `verify_pairing_bundle` — one parse, not a
+/// `key_id()`-then-reparse stitch at each call site.
+fn cose_verify1_self_described(
+    signed_bytes: &[u8],
+    ctx: SigningContext,
+) -> Result<([u8; 32], Vec<u8>), EventError> {
+    use coset::{CborSerializable, CoseSign1};
+    let sign1 =
+        CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
+    let key_bytes: [u8; 32] = sign1
+        .protected
+        .header
+        .key_id
+        .as_slice()
+        .try_into()
+        .map_err(|_| EventError::BadKeyId)?;
+    let vk = VerifyingKey::from_bytes(&key_bytes).map_err(|_| EventError::BadKeyId)?;
+    let payload = cose_verify1_parsed(sign1, &vk, ctx)?;
+    Ok((key_bytes, payload))
 }
 
 /// Hybrid Logical Clock stamp — the objective `t_recorded` ceiling (§3.6).
@@ -309,6 +366,11 @@ pub fn sign(body: &EventBody, signing_key: &SigningKey) -> Result<SignedEvent, E
 }
 
 /// Read the COSE key id (the claimed Ed25519 public key) without verifying.
+///
+/// This proves NOTHING about the blob — no signature, no signing context, no kind
+/// (it reads the header of an event, attestation, pairing bundle, or foreign junk
+/// alike). Any decision based on it must be followed by a context-bound
+/// verification (`verify_with` / `verify_self_described` / the token verifiers).
 pub fn key_id(signed_bytes: &[u8]) -> Result<Vec<u8>, EventError> {
     use coset::{CborSerializable, CoseSign1};
     let sign1 = CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
@@ -326,10 +388,9 @@ pub fn verify_with(signed_bytes: &[u8], vk: &VerifyingKey) -> Result<EventBody, 
 /// Verify using the self-described key id (skeleton convenience — see the note on
 /// [`generate_key`]; the registry replaces "trust the embedded key" in production).
 pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventError> {
-    let kid = key_id(signed_bytes)?;
-    let bytes: [u8; 32] = kid.try_into().map_err(|_| EventError::BadKeyId)?;
-    let vk = VerifyingKey::from_bytes(&bytes).map_err(|_| EventError::BadKeyId)?;
-    let body = verify_with(signed_bytes, &vk)?;
+    let (key_bytes, payload) = cose_verify1_self_described(signed_bytes, CTX_EVENT)?;
+    let body: EventBody =
+        ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
     // Bind the body's claimed signer to the key the signature actually verified
     // against. The COSE header key is what the signature *proves*; body.signer_key_id
     // is what the registry resolves and what the projection records as the author.
@@ -337,7 +398,7 @@ pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventErro
     // that verify yet are ATTRIBUTED to an enrolled victim — forged authorship that
     // also leaves signed_bytes (header key) inconsistent with the signer_key_id
     // column. The signature must prove the claimed origin (founding principle 2).
-    if body.signer_key_id != hex::encode(bytes) {
+    if body.signer_key_id != hex::encode(key_bytes) {
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(body)
@@ -596,16 +657,14 @@ pub fn sign_pairing_bundle(b: &PairingBundle, sk: &SigningKey) -> Result<Vec<u8>
 /// (ADR-0040) — and confirm it does not lie about its own fingerprint (the
 /// fingerprint must derive from the embedded key).
 pub fn verify_pairing_bundle(token: &[u8]) -> Result<PairingBundle, EventError> {
-    // The bundle is self-described: read the claimed key from the header first,
-    // then run the full context-bound verification against that key.
-    let kid = key_id(token)?;
-    let bytes: [u8; 32] = kid.try_into().map_err(|_| EventError::BadKeyId)?;
-    let vk = VerifyingKey::from_bytes(&bytes).map_err(|_| EventError::BadKeyId)?;
-    let payload = cose_verify1_in_context(token, &vk, CTX_PAIRING)?;
+    // The bundle is self-described: the claimed key comes from the blob's own
+    // protected header and is proven by the context-bound verification (one
+    // parse — see `cose_verify1_self_described`).
+    let (key_bytes, payload) = cose_verify1_self_described(token, CTX_PAIRING)?;
     let b: PairingBundle =
         ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
     // The bundle must be honest about the key it carries and that key's fingerprint.
-    if b.pubkey_hex != hex::encode(bytes) || b.fingerprint != short_fingerprint(&b.pubkey_hex)? {
+    if b.pubkey_hex != hex::encode(key_bytes) || b.fingerprint != short_fingerprint(&b.pubkey_hex)? {
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(b)
@@ -1181,6 +1240,127 @@ mod tests {
             Err(EventError::ContextMismatch) => {}
             other => panic!("expected ContextMismatch, got {other:?}"),
         }
+    }
+
+    // ── ADR-0040 review hardening: the remaining lying-header classes ──────────
+
+    /// Mint a Sign1 with an arbitrary (or absent) protected `alg` but everything
+    /// else right for `ctx`: kid, content type, context-bound aad, and a genuine
+    /// Ed25519 signature. Only a real key holder can produce these — the attack is
+    /// a signed self-MISdescription, not a forgery.
+    fn sign1_with_alg(
+        payload: Vec<u8>,
+        sk: &SigningKey,
+        ctx: SigningContext,
+        alg: Option<coset::iana::Algorithm>,
+    ) -> Vec<u8> {
+        use coset::{CborSerializable, CoseSign1Builder, HeaderBuilder};
+        let mut hb = HeaderBuilder::new()
+            .key_id(sk.verifying_key().to_bytes().to_vec())
+            .content_type(ctx.as_str().to_string());
+        if let Some(a) = alg {
+            hb = hb.algorithm(a);
+        }
+        CoseSign1Builder::new()
+            .protected(hb.build())
+            .payload(payload)
+            .create_signature(ctx.as_bytes(), |tbs| sk.sign(tbs).to_bytes().to_vec())
+            .build()
+            .to_vec()
+            .unwrap()
+    }
+
+    // A header lying about its ALGORITHM is the same class as a header lying about
+    // its context, and must fail the same way: the signature below is genuine
+    // Ed25519, but accepting it would freeze into the immutable log signed bytes
+    // that permanently misdescribe their own primitive — and the module-doc
+    // re-attestation ladder (move 3) keys off exactly this header.
+    #[test]
+    fn lying_or_missing_alg_header_is_rejected() {
+        let (sk, kid) = generate_key().unwrap();
+        let mut body = sample();
+        body.signer_key_id = kid;
+        let payload = canonical_cbor(&body).unwrap();
+
+        let lying = sign1_with_alg(payload.clone(), &sk, CTX_EVENT, Some(coset::iana::Algorithm::ES256));
+        match verify_self_described(&lying) {
+            Err(EventError::AlgMismatch) => {}
+            other => panic!("an ES256-claiming header must be rejected as AlgMismatch, got {other:?}"),
+        }
+
+        let missing = sign1_with_alg(payload.clone(), &sk, CTX_EVENT, None);
+        match verify_self_described(&missing) {
+            Err(EventError::AlgMismatch) => {}
+            other => panic!("an alg-less header must be rejected as AlgMismatch, got {other:?}"),
+        }
+
+        // Control: the identical payload under an honest EdDSA header verifies, so
+        // rejection above is attributable to the alg claim alone.
+        let honest = sign1_with_alg(payload, &sk, CTX_EVENT, Some(coset::iana::Algorithm::EdDSA));
+        assert!(
+            verify_self_described(&honest).is_ok(),
+            "the honest-EdDSA control must verify"
+        );
+    }
+
+    // The unprotected bucket sits OUTSIDE the Sig_structure, so anyone can add a
+    // conflicting content type there after signing without breaking the signature.
+    // Cairn's gate reads only the protected bucket, but generic COSE tooling may
+    // surface either — a verified blob must not carry a second, unsigned
+    // self-description (RFC 9052 §3 makes a label present in both buckets
+    // malformed anyway).
+    #[test]
+    fn conflicting_unprotected_content_type_is_rejected() {
+        use coset::{CborSerializable, ContentType, CoseSign1};
+        let (sk, kid) = generate_key().unwrap();
+        let mut body = sample();
+        body.signer_key_id = kid;
+        let signed = sign(&body, &sk).unwrap();
+        // Control: untampered, the blob verifies.
+        assert!(verify_self_described(&signed.signed_bytes).is_ok());
+
+        // Post-signing mutation: an unprotected content type claiming another
+        // context. The signature still passes (that is the attack surface), so the
+        // verifier must reject by policy.
+        let mut s1 = CoseSign1::from_slice(&signed.signed_bytes).unwrap();
+        s1.unprotected.content_type = Some(ContentType::Text(CTX_ATTESTATION.as_str().to_string()));
+        let mutated = s1.to_vec().unwrap();
+        match verify_self_described(&mutated) {
+            Err(EventError::ContextMismatch) => {}
+            other => panic!("a conflicting unprotected content type must be rejected, got {other:?}"),
+        }
+    }
+
+    // The registry literals are WIRE-FROZEN: every signature ever minted binds one
+    // of these exact strings, so the expected values are RE-TYPED here rather than
+    // derived from the consts — a test deriving its expectation from the const it
+    // checks would stay green through exactly the edit it exists to catch.
+    #[test]
+    fn signing_context_registry_is_pinned_and_distinct() {
+        assert_eq!(CTX_EVENT.as_str(), "application/cairn-event+cbor");
+        assert_eq!(CTX_ATTESTATION.as_str(), "application/cairn-attestation+cbor");
+        assert_eq!(CTX_PAIRING.as_str(), "application/cairn-pairing+cbor");
+        // Pairwise distinct: a copy-paste collision between two consts would
+        // silently merge two signing domains (the issue #95 class reborn).
+        assert_ne!(CTX_EVENT, CTX_ATTESTATION);
+        assert_ne!(CTX_EVENT, CTX_PAIRING);
+        assert_ne!(CTX_ATTESTATION, CTX_PAIRING);
+    }
+
+    // The cross-context tests above all use CTX_EVENT as the wrong context; this
+    // pins the remaining pair (attestation vs pairing) so no two-context collision
+    // can hide in the gaps of the suite.
+    #[test]
+    fn attestation_and_pairing_contexts_do_not_cross() {
+        let (sk, kid) = generate_key().unwrap();
+        let vk = sk.verifying_key();
+        let ca = event_address(b"some event");
+        let pairing_signed =
+            cose_sign1_in_context(attestation_payload(&ca, &kid), &sk, CTX_PAIRING).unwrap();
+        assert!(
+            !verify_attestation(&pairing_signed, &ca, &vk),
+            "a pairing-context signature must not verify as an attestation"
+        );
     }
 
     #[test]

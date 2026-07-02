@@ -30,6 +30,18 @@ payload as an attestation (the live vulnerability), aad-is-load-bearing (lying h
 fail-closed, wire self-description, and legible cross-context `ContextMismatch`. cairn-event 48/48; workspace +
 clippy green. **Operational note:** the local rig's `cairn_pgx` must be rebuilt (`cargo pgrx install`) and any
 dev federation re-initialized — old signatures now fail closed (intended).
+**PR-review hardening (same PR, post-review):** the verify core now also (a) rejects a protected `alg` header
+missing or ≠ EdDSA (`AlgMismatch` — the "header lies about its algorithm" twin of the context check: a genuine
+signer could otherwise freeze bytes misdescribing their own primitive, and the re-attestation ladder keys off
+this header); (b) rejects any content type in the UNPROTECTED bucket (outside Sig_structure ⇒ an
+attacker-appendable second self-description); (c) parses each blob once (`cose_verify1_parsed` /
+`cose_verify1_self_described`; the `key_id()`-then-reparse stitch is gone); (d) pins the three wire-frozen
+`CTX_*` literals + pairwise distinctness in tests (expectations re-typed, not derived from the consts). Honest
+degradation at the seams: restore now distinguishes `NoVerifiableGenesis {unverifiable, total}` (corrupt or
+pre-ADR-0040 medium) from a genuinely missing genesis (`medium::scan_enrolls` counts verify failures instead
+of silently dropping them); `cairn_pgx` bumped to **0.2.0** (the wire-format break is version-visible) with
+new `cairn_verify_error(bytea)` (the legible rejection reason at the SQL boundary) and `cairn_pgx_version()`
+(detect a stale .so at daemon startup / mid-outage). cairn-event 52/52, cairn-node 82/82, clippy clean.
 
 **Earlier this session (2026-07-02) — issue #99 (part): the contamination-cascade recall key (review A10):**
 fixed the recall-epoch resolution bug + the related deferred floor items on the recall surface, TDD against a
