@@ -139,6 +139,11 @@ nav:
       - ADR-0033 · Patient-identifier representation — namespace/profile split: spec/decisions/0033-patient-identifier-representation.md
       - ADR-0034 · The demographic legibility twin: spec/decisions/0034-demographic-legibility-twin.md
       - ADR-0035 · Entities, relationships & the provider-number relational model: spec/decisions/0035-entities-relationships-and-provider-numbers.md
+      - ADR-0036 · Demographic name display — recency-first within the legal tier: spec/decisions/0036-demographic-name-display-recency-first.md
+      - ADR-0037 · Administrative sex & the per-field winner policy: spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md
+      - ADR-0038 · Demographic address display — per-use recency-first: spec/decisions/0038-demographic-address-winner-per-use-recency.md
+      - ADR-0039 · Globalise the authored legibility twin: spec/decisions/0039-globalise-authored-legibility-twin.md
+      - ADR-0040 · Signing-context domain separation & one signature per event: spec/decisions/0040-signing-context-domain-separation.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

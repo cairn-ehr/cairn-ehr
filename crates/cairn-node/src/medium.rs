@@ -89,17 +89,48 @@ pub struct Container {
 // Enroll scan (shared by restore + self-attestation verification).
 // ---------------------------------------------------------------------------
 
-/// Every verified `node.enrolled` on the medium as (node_id_hex, body) pairs. A node-id is
-/// the content-address of its genesis, so we hash each VERIFIED enroll's bytes (a corrupt
-/// enroll cannot name a node). Pure.
+/// What an enroll scan found: the verified enrolls PLUS a count of events that failed
+/// signature verification. The count exists for honest degradation (principle 4): an
+/// event that fails verify is invisible to every downstream decision, but "0 enrolls
+/// because the medium is empty of them" and "0 enrolls because every event failed
+/// verification (corrupt, or signed before the ADR-0040 signing contexts)" are very
+/// different operator situations and must stay distinguishable — see
+/// [`crate::restore::RestoreError::NoVerifiableGenesis`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrollScan {
+    /// Every verified `node.enrolled` as (node_id_hex, body) pairs.
+    pub enrolls: Vec<(String, EventBody)>,
+    /// Events on the medium whose signature did NOT verify (any event type).
+    pub unverifiable: usize,
+}
+
+/// Scan a medium's events for verified `node.enrolled` events, counting (never silently
+/// dropping) events that fail signature verification. A node-id is the content-address
+/// of its genesis, so we hash each VERIFIED enroll's bytes (a corrupt enroll cannot
+/// name a node). Pure.
+pub fn scan_enrolls(events: &[Vec<u8>]) -> EnrollScan {
+    let mut found = Vec::new();
+    let mut unverifiable = 0;
+    for e in events {
+        match verify_self_described(e) {
+            Ok(body) => {
+                if body.event_type == "node.enrolled" {
+                    found.push((hex::encode(event_address(e)), body));
+                }
+            }
+            Err(_) => unverifiable += 1,
+        }
+    }
+    EnrollScan {
+        enrolls: found,
+        unverifiable,
+    }
+}
+
+/// Every verified `node.enrolled` on the medium as (node_id_hex, body) pairs — the
+/// scan without the failure count, for callers that only need the enrolls. Pure.
 pub fn enrolls(events: &[Vec<u8>]) -> Vec<(String, EventBody)> {
-    events
-        .iter()
-        .filter_map(|e| {
-            let body = verify_self_described(e).ok()?;
-            (body.event_type == "node.enrolled").then(|| (hex::encode(event_address(e)), body))
-        })
-        .collect()
+    scan_enrolls(events).enrolls
 }
 
 // ---------------------------------------------------------------------------

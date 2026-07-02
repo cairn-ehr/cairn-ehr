@@ -1,5 +1,5 @@
 comment = 'Cairn in-database verify gate — COSE_Sign1/Ed25519 event verification (Spike 0002)'
-default_version = '0.1.0'
+default_version = '0.2.0'
 module_pathname = '$libdir/cairn_pgx'
 relocatable = false
 # spike only — production install policy TBD
