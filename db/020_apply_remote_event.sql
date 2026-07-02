@@ -67,6 +67,8 @@ DECLARE
     v_t_eff         TIMESTAMPTZ;
     v_att           BYTEA;
     v_att_key       BYTEA;
+    v_actor_ids     BYTEA[];
+    v_actor_id      BYTEA;
     v_rows          INTEGER;
     c               JSONB;
 BEGIN
@@ -103,11 +105,28 @@ BEGIN
             b ->> 't_effective', b -> 'hlc' ->> 'wall';
     END IF;
 
-    -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked).
+    -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
+    --    and RECORD the resolution (issue #99). The admission GATE is actor_current,
+    --    exactly as at the authoring door. The attribution STAMP, though, must be
+    --    resolved against the key's ENTIRE local registry history, not its current
+    --    state: a replicated event was authored under whatever epoch its origin node
+    --    held AT AUTHORING TIME, which this node cannot know (the signed bytes carry
+    --    only signer_key_id — the ADR-0029 refinement that would fix this is future
+    --    work). Stamping the merely-current actor would misattribute an old-epoch
+    --    event that arrives after a local epoch bump — silent recall under-selection,
+    --    the exact #99 failure. So: unique stamp only when the key has only ever
+    --    meant ONE actor on this node; otherwise NULL (honest unknown, principle 4;
+    --    over-selected at recall, never missed). Node-local derived state — the
+    --    signed bytes are untouched, so set-union convergence is unaffected.
     --    See the KNOWN LIMITATION note in the header: local registry, by design for now.
     IF NOT EXISTS (SELECT 1 FROM actor_current WHERE signing_key_id = b ->> 'signer_key_id') THEN
         RAISE EXCEPTION 'apply_remote_event: signer % is not an enrolled, non-revoked actor', b ->> 'signer_key_id';
     END IF;
+    SELECT array_agg(DISTINCT ae.actor_id) INTO v_actor_ids
+        FROM actor_event ae
+        WHERE ae.op IN ('enroll','supersede')
+          AND ae.signing_key_id = b ->> 'signer_key_id';
+    v_actor_id := CASE WHEN array_length(v_actor_ids, 1) = 1 THEN v_actor_ids[1] END;
 
     -- 3. Classify (fail closed on unknown type; ADR-0010/ADR-0012 — an older node
     --    refuses a type it cannot classify rather than guessing its mode).
@@ -175,7 +194,7 @@ BEGIN
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
-         signer_key_id, plaintext_twin, attachments, attestation, attester_key)
+         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
@@ -183,7 +202,7 @@ BEGIN
         v_t_eff,
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
         b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb),
-        v_att, v_att_key)
+        v_att, v_att_key, v_actor_id)
     ON CONFLICT (event_id) DO NOTHING;
     -- Capture the insert outcome BEFORE the set_config below: PERFORM overwrites
     -- FOUND, which would silently disable the substitution guard.

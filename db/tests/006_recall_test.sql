@@ -14,3 +14,58 @@ BEGIN
         RAISE NOTICE 'recall OK: overlay added, no data erased';
     END IF;
 END $$;
+
+-- A recall naming an event that is NOT in the log must fail loud (issue #99):
+-- a fat-fingered UUID silently "recalling" nothing is the worst failure mode.
+DO $$ BEGIN
+    BEGIN
+        PERFORM recall_event(gen_random_uuid(), 'fat-fingered target');
+        RAISE EXCEPTION 'FK check FAILED: recall of a nonexistent event succeeded';
+    EXCEPTION WHEN foreign_key_violation THEN
+        RAISE NOTICE 'recall FK OK: unknown target refused';
+    END;
+END $$;
+
+-- events_by_actor_epoch resolves against registry HISTORY (issue #99): after an
+-- epoch bump (revoke + re-enroll of the same key), the OLD epoch's events must
+-- remain selectable — exactly those, none of the new epoch's — and an event with
+-- no attribution stamp is over-selected into every registered epoch, flagged.
+BEGIN;
+DO $$
+DECLARE
+    aid_a bytea; aid_b bytea;
+    e_a uuid := gen_random_uuid(); e_b uuid := gen_random_uuid(); e_null uuid := gen_random_uuid();
+BEGIN
+    aid_a := enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-a"}'::jsonb, 'histkey');
+    INSERT INTO actor_event (actor_id, op) VALUES (aid_a, 'revoke');
+    aid_b := enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-b"}'::jsonb, 'histkey');
+
+    -- Owner-path rows (bypassing the doors) with explicit attribution stamps: one
+    -- per epoch, plus one honestly-unattributed (NULL) row for the same key.
+    INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall,
+        hlc_counter, node_origin, signed_bytes, content_address, body, contributors,
+        signer_key_id, plaintext_twin, actor_id)
+    VALUES
+      (e_a,    gen_random_uuid(), 'note.added','x',1,0,'n','\x01'::bytea,'\x1220'||digest('\x01'::bytea,'sha256'),'{}','[]','histkey','t', aid_a),
+      (e_b,    gen_random_uuid(), 'note.added','x',2,0,'n','\x02'::bytea,'\x1220'||digest('\x02'::bytea,'sha256'),'{}','[]','histkey','t', aid_b),
+      (e_null, gen_random_uuid(), 'note.added','x',3,0,'n','\x03'::bytea,'\x1220'||digest('\x03'::bytea,'sha256'),'{}','[]','histkey','t', NULL);
+
+    -- The superseded epoch selects its own event + the unattributed one — never e_b.
+    IF NOT EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-a') x
+                   WHERE x.event_id = e_a AND x.attribution = 'pinned') THEN
+        RAISE EXCEPTION 'epoch-history FAILED: superseded epoch lost its pinned event (issue #99)';
+    END IF;
+    IF EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-a') x WHERE x.event_id = e_b) THEN
+        RAISE EXCEPTION 'epoch-history FAILED: another epoch''s pinned event leaked into hist-a';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-a') x
+                   WHERE x.event_id = e_null AND x.attribution = 'unattributed') THEN
+        RAISE EXCEPTION 'epoch-history FAILED: unattributed event missing from recall set (must over-select)';
+    END IF;
+    -- A never-registered epoch selects nothing.
+    IF EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-z')) THEN
+        RAISE EXCEPTION 'epoch-history FAILED: unregistered epoch selected events';
+    END IF;
+    RAISE NOTICE 'events_by_actor_epoch history resolution OK';
+END $$;
+ROLLBACK;
