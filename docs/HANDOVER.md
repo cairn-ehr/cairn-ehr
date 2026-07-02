@@ -10,7 +10,45 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, later) — issue #91: the clinical-plane in-DB apply door (review A2/A5b/M8/H4):**
+**This session (2026-07-02, latest) — issue #99 (part): the contamination-cascade recall key (review A10):**
+fixed the recall-epoch resolution bug + the related deferred floor items on the recall surface, TDD against a
+local PG16+cairn_pgx rig. **The bug:** `events_by_actor_epoch` joined `actor_current`, so the moment a
+supersede/re-enroll bumped a key's `skill_epoch`, a recall of the OLD epoch silently returned nothing — a
+production ADR-0011/0029/0030 contamination cascade would under-select (the dangerous direction). **The fix,
+in three layers:** (1) an additive node-local `event_log.actor_id` attribution stamp (db/001) written by BOTH
+doors — `submit_event` stamps the unique current key→actor resolution (NULL when the key is concurrently
+registered to several actors: honest unknown, principle 4); `apply_remote_event` resolves the stamp against the
+key's ENTIRE local registry history (unique only if the key has only ever meant one actor on this node) because
+a replicated event's authoring-time epoch is unknowable from the wire (only `signer_key_id` is signed — the
+ADR-0029 refinement that would carry actor_id in the signed bytes stays future work); (2) `events_by_actor_epoch`
+(db/006) now resolves (key, epoch) against historical `actor_event` rows and returns an `attribution` column —
+`'pinned'` (exact stamp match) or `'unattributed'` (NULL-stamped rows, over-selected into EVERY epoch the key
+ever registered: a recall over-selects, never silently misses; an unregistered epoch selects nothing); (3) the
+deferred neighbours — `actor_event.seq` identity column + deterministic `(recorded_at, seq)` tiebreak in
+`actor_current` (same-microsecond registry rows no longer nondeterministic); an FK on
+`recall_overlay.target_event_id` (a fat-fingered recall now fails loud instead of "succeeding" on nothing;
+recall_overlay is node-local so no out-of-order-sync concern today); explicit REVOKEs on
+`recall_overlay`/`recall_event` (the A6 explicit-floor pattern). **PR #106 review hardening (applied
+in-branch):** the review caught a residual under-selection in the same family — an origin-side epoch bump
+replicating in BEFORE this node registers the new epoch gets confidently mis-stamped to the old (locally
+unique) actor, and a later recall of the new epoch would exclude it. Fixed (review-pushed guard commit,
+adopted + verified green on the rig) with a third attribution rung `'pre-registration'`: a pinned stamp
+excludes an event from a queried epoch ONLY if that epoch was already locally registered when the event was
+admitted; older events over-select (noise bounded to events predating the epoch's first local registration —
+exactly the set the node cannot attribute; the ADR-0029 refinement carrying actor identity in the signed
+bytes retires the rung). Also `actor_event.seq` hardened `BY DEFAULT`→`GENERATED ALWAYS` (+ idempotent
+`SET GENERATED ALWAYS` self-heal), so forging the trust-anchor tiebreak needs a loud
+`OVERRIDING SYSTEM VALUE`; and the supersede-row integrity caveat (no supersede door yet ⇒
+`actor_id = cairn_actor_id(pinned)` unenforced for hand-inserted supersede rows; safe direction) is
+documented in db/006. Tests: `crates/cairn-node/tests/recall_epoch.rs`
+(6 — superseded-epoch exact recall through both doors · ambiguous-key NULL stamp over-selects · late-arriving
+remote event never misattributed after a local epoch bump · registry-lag/late-registered epoch never silently
+buried · FK fail-loud + legitimate recall lands) + extended
+`db/tests/004`/`006` SQL floor tests (tiebreak, history resolution, registry-lag rung, FK). All additive DDL, no SCHEMA-array change,
+no spec/ADR bump (implements settled ADR-0011/0029/0030). **Still open in #99 (deliberately untouched):** the
+suppression owner-gate (db/005 step 5 `DEFERRED`) — *who* may suppress *whose* event is an ADR-level decision.
+
+**Earlier this session (2026-07-02) — issue #91: the clinical-plane in-DB apply door (review A2/A5b/M8/H4):**
 built **`db/020_apply_remote_event.sql`** — `apply_remote_event`, the sibling of `apply_remote_node_event`, closing
 the review's highest-priority structural finding: the cairn-sync apply path no longer raw-INSERTs with owner
 privileges; a replicated clinical event now faces the SAME in-DB floor as a locally-authored one (signature,
@@ -350,10 +388,11 @@ token accepted) was never exercised E2E — now closed by `cairn-sync attest-std
 `crates/cairn-node/tests/attestation.rs` (accept for responsibility-bearing + suppressing events; reject for
 wrong-address, tampered, and non-human-attester), and `spike_0002.py` selftest (external-actor accept +
 wrong-address/tamper). No `submit_event` logic changed — the accept branch already existed; this is the
-coverage that was missing. **Smaller deferred items remain open** (commented in code):
+coverage that was missing. ~~**Smaller deferred items remain open** (commented in code):
 `events_by_actor_epoch` resolves against `actor_current` not historical `actor_event` rows;
 `actor_current` wall-clock ordering needs a monotonic tiebreaker before production; no FK on
-`recall_overlay.target_event_id`; plaintext twin is skeletal.
+`recall_overlay.target_event_id`; plaintext twin is skeletal.~~ **All four closed:** the three recall-surface
+items 2026-07-02 (issue #99 session, see top); the skeletal twin by ADR-0039 (2026-06-28).
 
 ### Dual-identifier discipline — ADR-0031, merged 2026-06-22 ([PR #34](https://github.com/cairn-ehr/cairn-ehr/pull/34); `local_ref` honesty fix merged 2026-06-24 [PR #43](https://github.com/cairn-ehr/cairn-ehr/pull/43))
 New **[ADR-0031](spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)** (canonical

@@ -19,6 +19,25 @@ CREATE TABLE IF NOT EXISTS actor_event (
     recorded_at     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
+-- Monotonic insertion tiebreak (issue #99). recorded_at is clock_timestamp() with
+-- microsecond resolution, so two registry rows written by one ceremony (or one
+-- transaction) can carry the SAME timestamp; ordering actor_current on recorded_at
+-- alone then makes "which row is current?" nondeterministic. seq is assigned in
+-- insertion order and never reused, so latest-row-wins is exact. Additive column
+-- (ADR-0012 discipline); existing rows are backfilled in table order, which for an
+-- append-only table is insertion order.
+--
+-- GENERATED ALWAYS, deliberately (PR #106 review finding 2): the tiebreak decides
+-- which registration/revocation is CURRENT on a trust anchor, so a quiet explicit
+-- seq (e.g. a revoke back-dated below a registration's seq) must not be one stray
+-- INSERT away. ALWAYS refuses an explicit value unless the writer says
+-- OVERRIDING SYSTEM VALUE — still possible for the owner, but loud in review.
+ALTER TABLE actor_event ADD COLUMN IF NOT EXISTS seq BIGINT GENERATED ALWAYS AS IDENTITY;
+-- Self-heal a database that ran the earlier BY DEFAULT revision of this file
+-- (ADD COLUMN IF NOT EXISTS skips existing columns, so the line above alone
+-- would leave it soft). SET GENERATED ALWAYS is idempotent.
+ALTER TABLE actor_event ALTER COLUMN seq SET GENERATED ALWAYS;
+
 CREATE INDEX IF NOT EXISTS actor_event_actor_idx ON actor_event (actor_id);
 CREATE INDEX IF NOT EXISTS actor_event_key_idx ON actor_event (signing_key_id);
 
@@ -34,7 +53,10 @@ CREATE TRIGGER actor_event_no_update BEFORE UPDATE OR DELETE ON actor_event
     FOR EACH ROW EXECUTE FUNCTION actor_event_is_append_only();
 
 -- Current, non-revoked identities: the latest enroll/supersede per actor_id with
--- no later revoke.
+-- no later revoke. "Later" is (recorded_at, seq) — the seq tiebreak makes both the
+-- winner and the revoke comparison deterministic when timestamps collide (a revoke
+-- inserted after a same-microsecond registration still kills it; one inserted
+-- before does not resurrect against a re-enrollment).
 CREATE OR REPLACE VIEW actor_current AS
 SELECT DISTINCT ON (ae.actor_id)
        ae.actor_id, ae.kind, ae.pinned, ae.signing_key_id, ae.recorded_at
@@ -42,8 +64,9 @@ FROM actor_event ae
 WHERE ae.op IN ('enroll','supersede')
   AND NOT EXISTS (
       SELECT 1 FROM actor_event r
-      WHERE r.actor_id = ae.actor_id AND r.op = 'revoke' AND r.recorded_at >= ae.recorded_at)
-ORDER BY ae.actor_id, ae.recorded_at DESC;
+      WHERE r.actor_id = ae.actor_id AND r.op = 'revoke'
+        AND (r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq))
+ORDER BY ae.actor_id, ae.recorded_at DESC, ae.seq DESC;
 
 -- Enroll an actor; its identity is derived in-DB from the pinned set (cairn_pgx),
 -- so "identity = hash of what is pinned" is enforced, not asserted.
