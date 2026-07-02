@@ -251,6 +251,18 @@ enum Cmd {
         #[arg(long, default_value_t = 5)]
         interval_secs: u64,
     },
+    /// List the durable node-event quarantine (issue #111): every pulled node_event
+    /// this node refused as UNVERIFIABLE, with its reason, re-offer floor seq, and
+    /// ack state. One JSON object per line. An unacked row makes the pull loud every
+    /// cycle until its cause is fixed (auto-releases) or it is acked.
+    Quarantine,
+    /// License a permanent exclusion for one quarantined node_event: mark it acked so
+    /// it no longer pins the re-offer floor or makes the pull loud. Takes the hex
+    /// content digest from `quarantine`.
+    AckQuarantine {
+        /// The hex `digest` shown by `cairn-node quarantine`.
+        digest: String,
+    },
 }
 
 #[tokio::main]
@@ -672,6 +684,29 @@ async fn main() -> anyhow::Result<()> {
             use cairn_node::sync;
             let sk = load_signing_key(&cli.key, false)?; // unattended: never prompt, fail fast
             sync::run(listen, peer, &cli.conn, &sk, interval_secs).await?;
+        }
+        Cmd::Quarantine => {
+            // Read-only inspection: no signing key needed.
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let rows = cairn_node::sync::list_node_quarantine(&db).await?;
+            if rows.is_empty() {
+                println!("no quarantined node_events");
+            } else {
+                for r in &rows {
+                    println!("{r}");
+                }
+            }
+        }
+        Cmd::AckQuarantine { digest } => {
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let n = cairn_node::sync::ack_node_quarantine(&db, &digest).await?;
+            if n == 0 {
+                anyhow::bail!(
+                    "no quarantined node_event has digest {digest} \
+                     (list them with `cairn-node quarantine`)"
+                );
+            }
+            println!("acked node_event {digest} ({n} row) — it no longer pins the floor or fails the pull");
         }
     }
     Ok(())
