@@ -60,6 +60,69 @@ const MAX_QUARANTINE_BYTES_PER_PEER: i64 = 64 * 1024 * 1024;
 
 type R<T> = Result<T, Box<dyn Error>>;
 
+/// The minimum `cairn_pgx` version this daemon requires. Bumped to 0.2.0 for the
+/// ADR-0040 signing-context wire format: a pre-0.2.0 `.so` verifies the OLD
+/// (uncontextualized) bytes and would reject every event this daemon now signs —
+/// a total, silent write outage whose only symptom is a generic "signature
+/// verification failed". Gating on the loaded version turns that into a legible
+/// "rebuild the extension" at connect time instead (issue #109).
+const REQUIRED_PGX_FLOOR: &str = "0.2.0";
+
+/// Parse an `"X.Y.Z"` version string into a comparable tuple. Returns `None` for
+/// anything that is not exactly three dot-separated non-negative integers — a
+/// pre-release suffix or garbage is treated as unparseable so the caller can fail
+/// closed rather than guess. Pure (no I/O) so it is unit-testable.
+fn parse_pgx_version(s: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = s.trim().split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None; // more than three components — not a plain X.Y.Z
+    }
+    Some((major, minor, patch))
+}
+
+/// True iff the `loaded` cairn_pgx version is at least the `floor`. Fails CLOSED
+/// (returns false) when either string is unparseable: an unrecognizable version is
+/// "cannot confirm compatibility", never silently accepted. Pure — unit-testable.
+fn pgx_version_ok(loaded: &str, floor: &str) -> bool {
+    match (parse_pgx_version(loaded), parse_pgx_version(floor)) {
+        (Some(l), Some(f)) => l >= f,
+        _ => false,
+    }
+}
+
+/// The actionable rejection message for a stale/too-old extension — one place so
+/// the `cmd_init` and `connect_checked` call sites read identically.
+fn pgx_floor_message(loaded: &str) -> String {
+    format!(
+        "cairn_pgx {loaded} is loaded, but this cairn-sync requires >= {REQUIRED_PGX_FLOOR} \
+         (the ADR-0040 signing-context wire format). The installed extension library is stale — \
+         rebuild + reinstall it: `cargo pgrx install` against this cluster's PostgreSQL, then retry."
+    )
+}
+
+/// Fail fast if the LOADED cairn_pgx `.so` is older than the wire-format floor this
+/// daemon needs. Distinct from `connect_checked`'s schema probe: the SQL migrations
+/// can be current while the compiled verify library is stale (a `\dx`-invisible skew
+/// after a rebuild without reinstall). A pre-0.2.0 library lacks `cairn_pgx_version()`
+/// entirely — that missing-function error IS the stale-library signal, so we translate
+/// it into the same actionable message rather than leaking a raw "function does not exist".
+fn assert_pgx_floor(client: &mut postgres::Client) -> R<()> {
+    let loaded: String = match client.query_one("SELECT cairn_pgx_version()", &[]) {
+        Ok(row) => row.get(0),
+        Err(e) if e.code() == Some(&postgres::error::SqlState::UNDEFINED_FUNCTION) => {
+            return Err(pgx_floor_message("pre-0.2.0 (cairn_pgx_version() not found)").into());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if !pgx_version_ok(&loaded, REQUIRED_PGX_FLOOR) {
+        return Err(pgx_floor_message(&loaded).into());
+    }
+    Ok(())
+}
+
 /// A pull that FAILED LOUDLY for data-integrity reasons (unverifiable events
 /// quarantined, quarantine pen full, or declared signing-context skew) rather
 /// than transport reasons. Distinguished from a plain transport error so:
@@ -368,6 +431,11 @@ fn cmd_init(conn: &str) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
     // 004/005 call cairn_pgx functions; the extension must exist first.
     client.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")?;
+    // `CREATE EXTENSION IF NOT EXISTS` will NOT upgrade an already-installed extension,
+    // so a stale library survives it silently. Check the loaded version now — init is the
+    // operator's first action, the right place to surface a stale `.so` before it becomes
+    // a mystery write outage (issue #109).
+    assert_pgx_floor(&mut client)?;
     for (name, sql) in SCHEMA {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
@@ -1326,6 +1394,11 @@ fn connect_checked(conn: &str) -> R<postgres::Client> {
              the migrations, then retry"
             .into());
     }
+    // The schema can be current while the compiled verify library is stale (a rebuild
+    // without reinstall) — that skew is a total, silent write outage on every apply. Gate
+    // the operational commands (pull/run/quarantine/requeue) on the loaded version too, so
+    // the failure is a legible "rebuild the extension" instead (issue #109).
+    assert_pgx_floor(&mut client)?;
     Ok(client)
 }
 
@@ -1965,6 +2038,39 @@ mod tests {
     use cairn_event::{event_address, generate_key, verify_attestation};
 
     #[test]
+    fn parse_pgx_version_accepts_plain_triples_and_rejects_the_rest() {
+        assert_eq!(parse_pgx_version("0.2.0"), Some((0, 2, 0)));
+        assert_eq!(parse_pgx_version(" 1.20.3 "), Some((1, 20, 3)));
+        // Not exactly three numeric components → unparseable (fail-closed input).
+        assert_eq!(parse_pgx_version("0.2"), None);
+        assert_eq!(parse_pgx_version("0.2.0.1"), None);
+        assert_eq!(parse_pgx_version("0.2.0-rc1"), None);
+        assert_eq!(parse_pgx_version("garbage"), None);
+        assert_eq!(parse_pgx_version(""), None);
+    }
+
+    #[test]
+    fn pgx_version_ok_enforces_the_floor_and_fails_closed() {
+        // At or above the floor passes; below fails.
+        assert!(pgx_version_ok("0.2.0", "0.2.0"), "exact floor is OK");
+        assert!(pgx_version_ok("0.2.1", "0.2.0"), "patch above floor is OK");
+        assert!(pgx_version_ok("0.3.0", "0.2.0"), "minor above floor is OK");
+        assert!(pgx_version_ok("1.0.0", "0.2.0"), "major above floor is OK");
+        assert!(!pgx_version_ok("0.1.9", "0.2.0"), "the pre-ADR-0040 line is refused");
+        assert!(!pgx_version_ok("0.1.0", "0.2.0"), "an older library is refused");
+        // Unparseable EITHER side → refused, never silently accepted.
+        assert!(!pgx_version_ok("nonsense", "0.2.0"));
+        assert!(!pgx_version_ok("0.2.0", "nonsense"));
+    }
+
+    #[test]
+    fn required_pgx_floor_is_itself_a_valid_triple() {
+        // Guards against a typo in the const turning every floor check into a
+        // fail-closed refusal of a perfectly good library.
+        assert!(parse_pgx_version(REQUIRED_PGX_FLOOR).is_some());
+    }
+
+    #[test]
     fn attest_token_hex_is_verifiable_and_address_bound() {
         // The CLI core must produce a token the verifier accepts for the right
         // key+address and rejects for a different address (the binding guarantee).
@@ -2586,5 +2692,16 @@ mod quarantine_tests {
         // Restore for whatever suite runs next under the shared lock.
         c.batch_execute(include_str!("../../../db/021_sync_quarantine.sql")).unwrap();
         assert!(connect_checked(&base).is_ok(), "schema restored, probe passes");
+    }
+
+    /// The loaded cairn_pgx on the test rig satisfies the ADR-0040 wire-format floor —
+    /// the happy path of the #109 startup skew check. The stale-library FAILURE path
+    /// can't be exercised without installing an old `.so`; its parse/compare logic and
+    /// the missing-`cairn_pgx_version()` translation are covered in `mod tests`.
+    #[test]
+    fn assert_pgx_floor_passes_on_the_current_rig() {
+        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let mut c = locked_client(&base);
+        assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
     }
 }

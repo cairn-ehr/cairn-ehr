@@ -80,7 +80,12 @@ BEGIN
 
     -- 1. Signature floor (C5.1). cairn_verify is the in-DB pgrx gate.
     IF NOT cairn_verify(p_signed) THEN
-        RAISE EXCEPTION 'submit_event: signature verification failed (unsigned or malformed event)';
+        -- Keep the boolean floor; attach the legible reason as DETAIL so an operator can
+        -- tell a wire-format skew / pre-ADR-0040 context mismatch from actual tampering
+        -- (issue #109). cairn_verify already returned false, so cairn_verify_error is
+        -- non-NULL here; the coalesce guards only the impossible NULL case.
+        RAISE EXCEPTION 'submit_event: signature verification failed (unsigned or malformed event)'
+            USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
     IF b IS NULL THEN

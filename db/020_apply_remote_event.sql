@@ -82,7 +82,11 @@ BEGIN
     -- 1. Signature floor: the in-DB pgrx gate, unbypassable even for a caller with
     --    direct DB access (the whole point of moving apply in-DB).
     IF NOT cairn_verify(p_signed) THEN
-        RAISE EXCEPTION 'apply_remote_event: signature verification failed (unsigned or malformed event)';
+        -- Legible reason as DETAIL (issue #109): on the sync apply path a context
+        -- mismatch (a peer still on the pre-ADR-0040 wire format) reads very differently
+        -- from tampering, and the quarantine reason is only as good as this.
+        RAISE EXCEPTION 'apply_remote_event: signature verification failed (unsigned or malformed event)'
+            USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
     IF b IS NULL THEN

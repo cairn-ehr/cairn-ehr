@@ -69,8 +69,18 @@ $$;
 
 -- Worklist surface for a future re-authoring / duplicate-sweep / audit pass: which stored
 -- events carry an author-faithful twin vs a best-effort derived one.
+--
+-- `twin_authored` folds a verification failure into "not authored": for a row whose bytes no
+-- longer verify (a pre-ADR-0040 legacy row in an upgraded-in-place dev DB), cairn_body returns
+-- NULL and the row reports twin_authored=false — indistinguishable from a genuine author-omitted
+-- twin. A worklist that then re-derived skeletons would clobber genuinely-authored twins. So the
+-- view ALSO exposes `verifiable` (issue #109): consumers filter on `WHERE verifiable` (or handle
+-- `verifiable=false` as "no longer verifies", NOT "author omitted the twin"). Appended last so
+-- CREATE OR REPLACE VIEW stays additive over the prior two-column shape.
 CREATE OR REPLACE VIEW event_twin_provenance AS
-    SELECT event_id, cairn_twin_is_authored(signed_bytes) AS twin_authored
+    SELECT event_id,
+           cairn_twin_is_authored(signed_bytes) AS twin_authored,
+           cairn_verify(signed_bytes)           AS verifiable
     FROM event_log;
 
 GRANT SELECT ON event_twin_provenance TO cairn_agent;
