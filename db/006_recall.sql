@@ -48,34 +48,57 @@ CREATE TRIGGER recall_overlay_no_update BEFORE UPDATE OR DELETE ON recall_overla
 -- would silently under-select (issue #99, the dangerous direction).
 --
 -- Selection is exact where attribution is exact, conservative where it is not:
---   * 'pinned'       — the event's admission-time attribution stamp
---                      (event_log.actor_id, written by both doors) matches a
---                      historical registration of (key, epoch);
---   * 'unattributed' — the event is signed by the key but carries no stamp
---                      (admitted before the stamp existed, or the key mapped to
---                      several actors at admission — principle 4's honest unknown).
---                      Included for EVERY epoch the key ever registered: a recall
---                      must over-select, never silently miss.
+--   * 'pinned'           — the event's admission-time attribution stamp
+--                          (event_log.actor_id, written by both doors) matches a
+--                          historical registration of (key, epoch);
+--   * 'unattributed'     — the event is signed by the key but carries no stamp
+--                          (admitted before the stamp existed, or the key mapped to
+--                          several actors at admission — principle 4's honest
+--                          unknown). Included for EVERY epoch the key ever
+--                          registered: a recall must over-select, never silently
+--                          miss.
+--   * 'pre-registration' — the event carries a stamp, but was admitted BEFORE this
+--                          node first registered (key, p_epoch). A stamp written
+--                          before the node knew this epoch existed cannot be
+--                          trusted to EXCLUDE the event from this epoch's recall:
+--                          the local registry lags origin-side epoch bumps by
+--                          design (db/020 KNOWN LIMITATION — enrollment is a local
+--                          ceremony), so an event authored under a newer epoch at
+--                          origin gets confidently-but-wrongly stamped with the
+--                          only actor its key had ever meant here. "Locally
+--                          unambiguous" is not "actually unambiguous"; treating it
+--                          so is the precise untruth principle 4 forbids. So the
+--                          stamp excludes only events admitted AFTER the epoch's
+--                          first local registration; older ones over-select here.
+--                          (The ADR-0029 refinement — actor identity inside the
+--                          signed bytes — retires this rung; until then the noise
+--                          is bounded to events predating the epoch's local
+--                          registration, exactly the set this node cannot
+--                          attribute.)
 -- A (key, epoch) pair that was never registered selects nothing.
 -- (DROP first: the return shape gained the attribution column, which
 --  CREATE OR REPLACE cannot change.)
 DROP FUNCTION IF EXISTS events_by_actor_epoch(text, text);
 CREATE FUNCTION events_by_actor_epoch(p_key TEXT, p_epoch TEXT)
 RETURNS TABLE(event_id UUID, event_type TEXT, attribution TEXT) LANGUAGE sql STABLE AS $$
-    WITH epoch_actors AS (
-        SELECT DISTINCT ae.actor_id
+    WITH epoch_regs AS (
+        SELECT ae.actor_id, ae.recorded_at
         FROM actor_event ae
         WHERE ae.op IN ('enroll','supersede')
           AND ae.signing_key_id = p_key
           AND ae.pinned ->> 'skill_epoch' = p_epoch
     )
     SELECT el.event_id, el.event_type,
-           CASE WHEN el.actor_id IS NULL THEN 'unattributed' ELSE 'pinned' END
+           CASE WHEN el.actor_id IS NULL THEN 'unattributed'
+                WHEN el.actor_id IN (SELECT r.actor_id FROM epoch_regs r) THEN 'pinned'
+                ELSE 'pre-registration'
+           END
     FROM event_log el
     WHERE el.signer_key_id = p_key
-      AND EXISTS (SELECT 1 FROM epoch_actors)
-      AND (el.actor_id IN (SELECT ea.actor_id FROM epoch_actors ea)
-           OR el.actor_id IS NULL);
+      AND EXISTS (SELECT 1 FROM epoch_regs)
+      AND (el.actor_id IN (SELECT r.actor_id FROM epoch_regs r)
+           OR el.actor_id IS NULL
+           OR el.recorded_at < (SELECT min(r.recorded_at) FROM epoch_regs r));
 $$;
 
 -- Mark one event recalled (append-only overlay, never erase).

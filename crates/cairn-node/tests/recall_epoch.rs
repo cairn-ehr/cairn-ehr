@@ -97,7 +97,10 @@ async fn epoch_events(c: &Client, kid: &str, epoch: &str) -> Vec<(String, String
 
 /// The regression at the heart of issue #99: after an epoch bump (revoke + re-enroll
 /// of the SAME key under a new skill_epoch), a recall of the OLD epoch must still
-/// find its events — exactly those, and none of the new epoch's.
+/// find its events — exactly those, and none of the new epoch's. (The NEW epoch's
+/// set additionally over-selects the old event as 'pre-registration': it was
+/// admitted before this node registered epoch B, so its stamp cannot be trusted
+/// to exclude it — the registry-lag guard, see db/006.)
 #[tokio::test]
 async fn superseded_epoch_events_remain_selectable() {
     let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
@@ -127,9 +130,17 @@ async fn superseded_epoch_events_remain_selectable() {
         "a superseded epoch must keep selecting exactly its own events (issue #99)"
     );
 
-    // The new epoch's recall set: exactly e2.
+    // The new epoch's recall set: e2 exactly attributed, plus e1 over-selected as
+    // 'pre-registration' — e1 was admitted before this node first registered epoch
+    // B, so its stamp was written without knowledge of B and cannot be trusted to
+    // exclude it here (over-select, never silently miss).
+    let mut expected_b = vec![
+        (e1.event_id.clone(), "pre-registration".to_string()),
+        (e2.event_id.clone(), "pinned".to_string()),
+    ];
+    expected_b.sort(); // epoch_events orders by event_id text; mirror that here
     let b = epoch_events(&c, &kid, "epoch-b").await;
-    assert_eq!(b, vec![(e2.event_id.clone(), "pinned".to_string())]);
+    assert_eq!(b, expected_b);
 
     // A (key, epoch) pair never registered selects nothing.
     let z = epoch_events(&c, &kid, "epoch-z").await;
@@ -225,6 +236,53 @@ async fn late_arriving_remote_event_is_never_misattributed() {
     assert_eq!(epoch_events(&c, &kid, "epoch-a").await, expected,
         "a late-arriving old-epoch event must never vanish from the old epoch's recall set");
     assert_eq!(epoch_events(&c, &kid, "epoch-b").await, expected);
+}
+
+/// The registry-lag hole (review of this PR, finding 1): key K is enrolled locally
+/// ONLY as epoch A when an event replicates in. The gate passes on the key, and the
+/// "unique across entire local history" stamp rule confidently pins the event to
+/// epoch A's actor — but the origin may have authored it under a NEWER epoch this
+/// node has not yet registered (enrollment is a local ceremony; lag is the
+/// documented steady state, db/020). When the operator later enrolls (K, epoch B),
+/// a recall of epoch B must still surface the event — flagged 'pre-registration',
+/// because its stamp predates this node's knowledge of epoch B — never exclude it
+/// on the strength of that stamp. "Locally unambiguous" is not "actually
+/// unambiguous" (principle 4).
+#[tokio::test]
+async fn registry_lag_never_buries_a_late_registered_epoch() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+
+    let (sk, kid) = generate_key().unwrap();
+    let patient = Uuid::now_v7();
+
+    // Only epoch A is registered locally when the event arrives: the stamp rule
+    // pins it to actor A (the only actor the key has ever meant HERE).
+    let actor_a = enroll_epoch(&c, &kid, "epoch-a").await;
+    let e1 = note(patient, &kid, 1);
+    let signed = sign(&e1, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .unwrap();
+
+    // The operator later performs the epoch-B enrollment ceremony for the same key.
+    revoke(&c, &actor_a).await;
+    enroll_epoch(&c, &kid, "epoch-b").await;
+
+    // A recall of epoch B — where the event may truly belong — must not be blinded
+    // by the pre-B stamp: the event over-selects, flagged.
+    assert_eq!(
+        epoch_events(&c, &kid, "epoch-b").await,
+        vec![(e1.event_id.clone(), "pre-registration".to_string())],
+        "an event stamped before this node knew the queried epoch must over-select into it"
+    );
+    // And epoch A keeps its exact attribution.
+    assert_eq!(
+        epoch_events(&c, &kid, "epoch-a").await,
+        vec![(e1.event_id.clone(), "pinned".to_string())]
+    );
 }
 
 /// A recall naming an event that is not in the log must fail loud (FK), not

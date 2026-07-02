@@ -66,6 +66,21 @@ BEGIN
     IF EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-z')) THEN
         RAISE EXCEPTION 'epoch-history FAILED: unregistered epoch selected events';
     END IF;
+
+    -- Registry lag: an epoch registered AFTER events were admitted cannot trust
+    -- those events' stamps for exclusion — the stamps were written before this node
+    -- knew the epoch existed (the origin may have authored under it all along). The
+    -- earlier events must over-select into the late epoch, flagged
+    -- 'pre-registration'; NULL-stamped rows stay 'unattributed'.
+    PERFORM enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-c"}'::jsonb, 'histkey');
+    IF NOT EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-c') x
+                   WHERE x.event_id = e_a AND x.attribution = 'pre-registration') THEN
+        RAISE EXCEPTION 'registry-lag FAILED: pre-registration event missing from late epoch''s recall set';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-c') x
+                   WHERE x.event_id = e_null AND x.attribution = 'unattributed') THEN
+        RAISE EXCEPTION 'registry-lag FAILED: unattributed event missing from late epoch''s recall set';
+    END IF;
     RAISE NOTICE 'events_by_actor_epoch history resolution OK';
 END $$;
 ROLLBACK;
