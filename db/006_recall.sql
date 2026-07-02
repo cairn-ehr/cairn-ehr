@@ -76,6 +76,15 @@ CREATE TRIGGER recall_overlay_no_update BEFORE UPDATE OR DELETE ON recall_overla
 --                          registration, exactly the set this node cannot
 --                          attribute.)
 -- A (key, epoch) pair that was never registered selects nothing.
+--
+-- Integrity caveat (PR #106 review finding 3, theoretical today): epoch membership
+-- trusts actor_event.pinned as written. enroll_actor derives
+-- actor_id = cairn_actor_id(pinned) in-DB (enforced, not asserted), but there is no
+-- supersede door yet, so a hand-inserted supersede row whose pinned disagrees with
+-- its actor_id could make one stamped event report 'pinned' under two epochs.
+-- Owner-ceremony-only today, and the failure direction is over-selection (safe);
+-- a future supersede door must enforce the same actor_id = cairn_actor_id(pinned)
+-- invariant enroll_actor does.
 -- (DROP first: the return shape gained the attribution column, which
 --  CREATE OR REPLACE cannot change.)
 DROP FUNCTION IF EXISTS events_by_actor_epoch(text, text);

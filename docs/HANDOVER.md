@@ -28,10 +28,23 @@ deferred neighbours — `actor_event.seq` identity column + deterministic `(reco
 `actor_current` (same-microsecond registry rows no longer nondeterministic); an FK on
 `recall_overlay.target_event_id` (a fat-fingered recall now fails loud instead of "succeeding" on nothing;
 recall_overlay is node-local so no out-of-order-sync concern today); explicit REVOKEs on
-`recall_overlay`/`recall_event` (the A6 explicit-floor pattern). Tests: `crates/cairn-node/tests/recall_epoch.rs`
-(5 — superseded-epoch exact recall through both doors · ambiguous-key NULL stamp over-selects · late-arriving
-remote event never misattributed after a local epoch bump · FK fail-loud + legitimate recall lands) + extended
-`db/tests/004`/`006` SQL floor tests (tiebreak, history resolution, FK). All additive DDL, no SCHEMA-array change,
+`recall_overlay`/`recall_event` (the A6 explicit-floor pattern). **PR #106 review hardening (applied
+in-branch):** the review caught a residual under-selection in the same family — an origin-side epoch bump
+replicating in BEFORE this node registers the new epoch gets confidently mis-stamped to the old (locally
+unique) actor, and a later recall of the new epoch would exclude it. Fixed (review-pushed guard commit,
+adopted + verified green on the rig) with a third attribution rung `'pre-registration'`: a pinned stamp
+excludes an event from a queried epoch ONLY if that epoch was already locally registered when the event was
+admitted; older events over-select (noise bounded to events predating the epoch's first local registration —
+exactly the set the node cannot attribute; the ADR-0029 refinement carrying actor identity in the signed
+bytes retires the rung). Also `actor_event.seq` hardened `BY DEFAULT`→`GENERATED ALWAYS` (+ idempotent
+`SET GENERATED ALWAYS` self-heal), so forging the trust-anchor tiebreak needs a loud
+`OVERRIDING SYSTEM VALUE`; and the supersede-row integrity caveat (no supersede door yet ⇒
+`actor_id = cairn_actor_id(pinned)` unenforced for hand-inserted supersede rows; safe direction) is
+documented in db/006. Tests: `crates/cairn-node/tests/recall_epoch.rs`
+(6 — superseded-epoch exact recall through both doors · ambiguous-key NULL stamp over-selects · late-arriving
+remote event never misattributed after a local epoch bump · registry-lag/late-registered epoch never silently
+buried · FK fail-loud + legitimate recall lands) + extended
+`db/tests/004`/`006` SQL floor tests (tiebreak, history resolution, registry-lag rung, FK). All additive DDL, no SCHEMA-array change,
 no spec/ADR bump (implements settled ADR-0011/0029/0030). **Still open in #99 (deliberately untouched):** the
 suppression owner-gate (db/005 step 5 `DEFERRED`) — *who* may suppress *whose* event is an ADR-level decision.
 
