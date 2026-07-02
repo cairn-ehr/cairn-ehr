@@ -10,7 +10,30 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02) — comprehensive review + hardening pass:** an adversarial full-repo review (7 parallel
+**This session (2026-07-02, later) — issue #91: the clinical-plane in-DB apply door (review A2/A5b/M8/H4):**
+built **`db/020_apply_remote_event.sql`** — `apply_remote_event`, the sibling of `apply_remote_node_event`, closing
+the review's highest-priority structural finding: the cairn-sync apply path no longer raw-INSERTs with owner
+privileges; a replicated clinical event now faces the SAME in-DB floor as a locally-authored one (signature,
+enrollment, fail-closed classification, the attestation gate on suppressing events, the demographic/identity
+hard-twin rule, the t_effective ceiling, size ceiling, substitution guard — shared helpers, so the doors cannot
+drift). Replication-appropriate deltas, each reasoned in the file header: idempotent set-union no-op; in-door HLC
+merge; **attestation tokens now STORED** (`db/001` additive `attestation`/`attester_key` columns; also closes the
+M7 residual "verified then discarded") **and shipped on the sync wire** (additive parallel arrays in
+`EventsResponse`) so the suppress gate is re-runnable at every hop; **t_effective wire-pinned** to an explicit UTC
+offset via the single `cairn_t_effective` validator (db/001, both doors + author-side CLI check — H4); **node-local
+projection guards clamp-and-flag at apply instead of vetoing** (db/018 component cap → `identity_projection_flag`
+worklist under the transaction-local `cairn.remote_apply` marker; local authoring keeps its fail-loud veto — A5b);
+the M8 twin triple-implementation collapses (apply-path Rust fallback deleted; one in-DB skeleton renderer at both
+doors; Rust `plaintext_twin` remains only as the authoring renderer). `cairn-sync` gained an **`enroll`** subcommand
+(operator ceremony) and the bet_a harness enrolls every authoring key on every node — **known residual:** the actor
+registry does not replicate yet (ADR-0011 future work), so an event from a not-yet-enrolled signer freezes the
+puller's watermark (A1 discipline: delayed, never lost) until enrollment. Tests: 15 new DB-gated integration tests
+(`crates/cairn-node/tests/apply_remote_event.rs`), `db/tests/020` grant-floor SQL tests, wire-compat + offset-pin
+unit tests; end-to-end two-DB converge + unenrolled-freeze + enroll-heal exercised live. cairn-node SCHEMA array
+18→19 entries (020 added); no spec/ADR bump (implements settled ADR-0021/0022/0030). Possible follow-up: a
+one-line spec note in §3.6/ADR-0015 prose recording the t_effective explicit-offset wire pin.
+
+**Earlier this session (2026-07-02) — comprehensive review + hardening pass:** an adversarial full-repo review (7 parallel
 agents over the SQL floor, the Rust crates, the Python matcher, and all 39 ADRs; findings cross-checked and re-verified
 against the code). Report + full disposition table: **`docs/code_reviews/2026-07-02-comprehensive-review.md`**. The
 foundations held up well (crypto, grant floor, sign-the-bytes canonicalization, ADR honesty); trouble clustered in the
