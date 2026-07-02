@@ -13,7 +13,13 @@ DO $$ BEGIN
     SET LOCAL ROLE cairn_node;
     INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, reason)
     VALUES ('\x0021', '\xdeadbeef', 'test-peer', 'grant-floor probe');
-    UPDATE sync_quarantine SET seen_count = seen_count + 1
+    -- The full lifecycle includes the requeue bookkeeping and the human ack
+    -- (the #110-review columns), not just the seen_count bump.
+    UPDATE sync_quarantine
+       SET seen_count = seen_count + 1,
+           last_requeue_error = 'probe refusal',
+           last_requeue_at = clock_timestamp(),
+           acked = TRUE
     WHERE content_digest = '\x0021';
     PERFORM 1 FROM sync_quarantine WHERE content_digest = '\x0021';
     DELETE FROM sync_quarantine WHERE content_digest = '\x0021';

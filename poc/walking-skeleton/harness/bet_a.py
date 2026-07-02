@@ -296,6 +296,10 @@ def cmd_analyze(args):
 
     cycles = len(rows)
     partitions = sum(1 for r in rows if r.get("partition"))
+    # Since PR #110 a pull can also fail LOUDLY for data-integrity reasons
+    # (unverifiable events quarantined / signing-context skew) — those cycles
+    # carry `integrity: true` and are NOT partitions: the peer answered.
+    integrity = sum(1 for r in rows if r.get("integrity"))
     dur_s = (rows[-1]["ts"] - rows[0]["ts"]) / 1000.0
     lat = [r["pull"]["elapsed_ms"] for r in rows if "pull" in r]
     # Post-A1 metric name; .get() keeps old pre-rename logs analysable.
@@ -310,6 +314,9 @@ def cmd_analyze(args):
     print(f"  duration        {dur_s:.0f}s over {cycles} cycles")
     print(f"  partitions      {partitions} cycle(s) the peer was unreachable "
           f"({100*partitions/cycles:.0f}% of cycles)")
+    if integrity:
+        print(f"  INTEGRITY       {integrity} cycle(s) failed loud on unverifiable/skewed "
+              f"events (peer was reachable; see pull_error in the raw log)")
     print(f"  pull latency    p50 {median(lat):.0f}ms  p95 {p95(lat):.0f}ms  "
           f"max {max(lat):.0f}ms" if lat else "  pull latency    (no successful pulls)")
     print(f"  A2 verify-fails {vf}  ({'PASS' if vf == 0 else 'FAIL'})")
