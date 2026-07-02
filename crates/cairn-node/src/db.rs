@@ -29,11 +29,14 @@ const SCHEMA: &[(&str, &str)] = &[
     // Durable quarantine + re-offer floor for unverifiable pulled CLINICAL
     // events (issue #108): node-local operational state beside sync_state,
     // granted to cairn_node so the cairn-sync runtime can quarantine/requeue
-    // without owner privileges. NOTE: cairn-node's own node-event pull loop
-    // (sync.rs) does NOT use this pen yet — a deterministically-refused
-    // node_event still leaves only a stderr line there (tracked as issue #111;
-    // the clinical plane is the safety-critical one).
+    // without owner privileges.
     ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
+    // The node-plane sibling (issue #111): the same durable-trace + re-offer
+    // floor for a node_event the pull loop (sync.rs) refuses as UNVERIFIABLE.
+    // Keyed off the seq-ordered node plane (derived floor = MIN(refused_seq)),
+    // and a separate table so a node-plane requeue is unambiguously routed
+    // through apply_remote_node_event, never the clinical door.
+    ("022_node_event_quarantine", include_str!("../../../db/022_node_event_quarantine.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
@@ -137,7 +140,7 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
 pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()> {
     client
         .batch_execute(
-            "TRUNCATE node_event, local_node, sync_cursor, hlc_state;
+            "TRUNCATE node_event, local_node, sync_cursor, hlc_state, node_event_quarantine;
              INSERT INTO hlc_state (id) VALUES (TRUE) ON CONFLICT DO NOTHING;",
         )
         .await

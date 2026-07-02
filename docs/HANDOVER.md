@@ -10,7 +10,30 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, latest) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
+**This session — issue #111: durable quarantine for the NODE-EVENT pull plane (cairn-node `sync.rs`).** The
+node-plane sibling of the clinical quarantine (#108/PR #110). Before this, ANY refusal in `pull_into` was a stderr
+line + a bumped counter while the seq cursor advanced past it — so an UNVERIFIABLE node_event (corrupt frame, or a
+peer still serving pre-ADR-0040 signatures) was a *silent, permanent* set-union exclusion. Now, mirroring #110 but
+adapted to the node plane's deny-all steady state: **(a)** new **`db/022_node_event_quarantine.sql`** (SCHEMA
+21→22) — a **separate** table (not a reuse of `sync_quarantine`, so a node-plane requeue is unambiguously routed
+through `apply_remote_node_event`, and no idle clinical attestation columns), granted the full lifecycle to
+`cairn_node`. **(b)** Classification in `pull_into`: only an **UNVERIFIABLE** event (re-verified in Rust) is
+penned durably (recording the serving `seq`); a **verifiable-but-refused** event (untrusted author / unknown type)
+stays skip-and-swept as before — the normal deny-all case, self-healing on a later `peer.added` or code arrival +
+full sweep; a **transient/transport** error freezes the cursor. **(c)** A **derived re-offer floor** =
+`MIN(refused_seq)` over the peer's unacked rows; the incremental pull fetches from `refused_seq - 1` (load-bearing:
+`serve` streams `seq > after_seq` STRICTLY, so `refused_seq` itself would be skipped), so a penned slot keeps being
+re-offered (deduping onto its row) while the cursor advances for valid events. **(d)** **Auto-release**: a penned
+event whose cause is fixed re-applies on a sweep and is DELETEd on success — no manual requeue command needed.
+**(e)** **Loud**: `PullStats.pending` (unacked rows after the cycle) drives a per-cycle integrity line in `run`
+until fixed or acked; per-peer row+byte quota (10k / 64 MiB) freezes the cursor rather than growing the pen.
+**(f)** CLI `quarantine` (JSON list) + `ack-quarantine <digest>` (license a permanent exclusion). TDD:
+`crates/cairn-node/tests/node_quarantine.rs` (5 DB-gated — penned+loud+dedupe · derived floor re-offers on an
+INCREMENTAL pull · ack silences · auto-release on apply · verifiable-refusal NOT penned) + `db/tests/022` grant
+floor. Full cairn-node suite (229) + workspace clippy green on the Mac PG18 / cairn_pgx 0.2.0 rig. Additive only —
+no spec/ADR bump (implements settled ADR-0017/0021). Closes #111. Sibling of #109 (PR #112).
+
+**Earlier this session (2026-07-02) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
 integrity failures in cairn-sync:** closed the clinical-plane pull loop's silent skip-and-advance, then hardened it
 against its own review (8 confirmed findings, all fixed in-PR). Before: an unverifiable pulled event left only a
 transient stderr line while later verifiable events advanced the watermark past it (silent permanent set-union

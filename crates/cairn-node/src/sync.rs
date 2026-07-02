@@ -30,10 +30,19 @@ use tokio_postgres::Client;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use cairn_event::SigningKey;
+use cairn_event::{event_address, verify_self_described, SigningKey};
 
 use crate::db;
 use crate::transport::{self, TrustStore};
+
+/// Per-peer bounds on the node-plane quarantine pen (issue #111, mirroring the
+/// clinical plane's #110 quota). Identical re-offers dedupe onto one row, so only
+/// a peer shipping ever-DIFFERENT unverifiable bytes (corruption or malice) can
+/// grow the pen — and remote bytes must never be able to fill this node's disk.
+/// At the cap the pen refuses further inserts and the pull FREEZES the cursor
+/// rather than growing: delayed, never lost — and loud.
+const MAX_NODE_QUARANTINE_ROWS_PER_PEER: i64 = 10_000;
+const MAX_NODE_QUARANTINE_BYTES_PER_PEER: i64 = 64 * 1024 * 1024;
 
 /// Full-sweep cadence: the puller does an incremental `seq`-cursor pull each cycle and a
 /// full sweep (cursor reset to 0) every `FULL_SWEEP_EVERY` cycles. The sweep is the
@@ -81,12 +90,19 @@ pub enum Request {
 
 /// What one `pull_once` did. `received` = frames read off the wire; `admitted` =
 /// events the in-DB gate accepted (new or idempotent re-apply); `rejected` =
-/// events the gate refused (deny-all for an un-trusted author is the normal case).
+/// events the gate refused but that self-heal on a later sweep (deny-all for an
+/// un-trusted author, or an event type this node has no code for yet — the normal
+/// node-plane case, skipped-and-swept as before); `quarantined` = UNVERIFIABLE
+/// events penned this cycle (issue #111); `pending` = this peer's UNACKED pen rows
+/// AFTER the cycle — a non-zero value is the LOUD integrity signal `run` logs
+/// every cycle until the cause is fixed or a human acks the row.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PullStats {
     pub received: u64,
     pub admitted: u64,
     pub rejected: u64,
+    pub quarantined: u64,
+    pub pending: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -349,13 +365,149 @@ pub async fn pull_once(peer: SocketAddr, cfg: PullConfig, full_sweep: bool) -> a
     pull_into(peer, cfg.tls, &db, full_sweep).await
 }
 
+/// Pen an UNVERIFIABLE node_event durably (issue #111). Content-addressed dedupe:
+/// a re-offer of the same bytes bumps `seen_count`/`last_seen` on the one row
+/// rather than duplicating it. A genuinely-new digest is inserted only if this
+/// peer is under BOTH the row-count and byte-sum quota — at the cap the insert is
+/// refused (`Ok(false)`) so the caller can freeze the cursor instead of letting a
+/// hostile/corrupt peer grow the pen without bound. Returns `Ok(true)` when the
+/// bytes are (now) held here, `Ok(false)` when the quota refused a new row.
+async fn quarantine_node_event(
+    db: &Client,
+    peer: &str,
+    signed: &[u8],
+    digest: &[u8],
+    refused_seq: i64,
+    reason: &str,
+) -> anyhow::Result<bool> {
+    // Dedupe-first: an existing row for these bytes just gets its re-offer bookkeeping
+    // bumped (the original reason/refused_seq/first_seen are the forensics — untouched).
+    let bumped = db
+        .execute(
+            "UPDATE node_event_quarantine
+                SET seen_count = seen_count + 1, last_seen = clock_timestamp()
+              WHERE content_digest = $1",
+            &[&digest],
+        )
+        .await
+        .context("bumping an existing node quarantine row")?;
+    if bumped > 0 {
+        return Ok(true);
+    }
+    // New bytes: insert only if this peer is under quota. The INSERT ... SELECT ...
+    // WHERE gates atomically on the current row count AND byte sum for the peer, so
+    // two concurrent pens cannot both slip past the cap.
+    let inserted = db
+        .execute(
+            "INSERT INTO node_event_quarantine
+                 (content_digest, signed_bytes, peer, refused_seq, reason)
+             SELECT $1::bytea, $2::bytea, $3::text, $4::bigint, $5::text
+              WHERE (SELECT count(*) FROM node_event_quarantine WHERE peer = $3::text)
+                        < $6::bigint
+                AND (SELECT coalesce(sum(octet_length(signed_bytes)), 0)
+                       FROM node_event_quarantine WHERE peer = $3::text)
+                        + octet_length($2::bytea) <= $7::bigint
+             ON CONFLICT (content_digest) DO NOTHING",
+            &[
+                &digest,
+                &signed.to_vec(),
+                &peer,
+                &refused_seq,
+                &reason,
+                &MAX_NODE_QUARANTINE_ROWS_PER_PEER,
+                &MAX_NODE_QUARANTINE_BYTES_PER_PEER,
+            ],
+        )
+        .await
+        .context("penning a new node quarantine row")?;
+    if inserted > 0 {
+        return Ok(true);
+    }
+    // Zero rows inserted: either a benign ON CONFLICT race (another cycle penned the
+    // same bytes first — still "held here") or the quota refused it. Disambiguate.
+    let exists: bool = db
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM node_event_quarantine WHERE content_digest = $1)",
+            &[&digest],
+        )
+        .await
+        .context("checking whether the node quarantine row landed")?
+        .get(0);
+    Ok(exists)
+}
+
+/// Operator inspection surface (issue #111): one JSON value per pen row, oldest
+/// first — the durable, legible trace of every node_event this node refused as
+/// unverifiable, with the reason and the re-offer floor seq. Content digest is hex
+/// so it can be passed straight to [`ack_node_quarantine`].
+pub async fn list_node_quarantine(db: &Client) -> anyhow::Result<Vec<serde_json::Value>> {
+    let rows = db
+        .query(
+            "SELECT encode(content_digest,'hex'), peer, refused_seq, reason,
+                    octet_length(signed_bytes), first_seen::text, last_seen::text,
+                    seen_count, acked
+               FROM node_event_quarantine ORDER BY first_seen",
+            &[],
+        )
+        .await
+        .context("listing node_event_quarantine")?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "digest": r.get::<_, String>(0),
+                "peer": r.get::<_, String>(1),
+                "refused_seq": r.get::<_, i64>(2),
+                "reason": r.get::<_, String>(3),
+                "bytes": r.get::<_, i32>(4),
+                "first_seen": r.get::<_, String>(5),
+                "last_seen": r.get::<_, String>(6),
+                "seen_count": r.get::<_, i32>(7),
+                "acked": r.get::<_, bool>(8),
+            })
+        })
+        .collect())
+}
+
+/// License a permanent exclusion (issue #111): set `acked = TRUE` on the row whose
+/// content digest is `digest_hex`. An acked row stops pinning the re-offer floor and
+/// stops making the pull loud — the exclusion becomes a recorded human decision.
+/// Returns the number of rows updated (0 ⇒ no such digest is quarantined).
+pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Result<u64> {
+    let digest = hex::decode(digest_hex.trim())
+        .context("the content digest must be hex (copy it from `cairn-node quarantine`)")?;
+    let n = db
+        .execute(
+            "UPDATE node_event_quarantine SET acked = TRUE WHERE content_digest = $1",
+            &[&digest],
+        )
+        .await
+        .context("acking a node quarantine row")?;
+    Ok(n)
+}
+
 /// The pull itself, applying admitted events into an already-open `db`. Reads the
 /// per-peer cursor (keyed by the peer ADDRESS — known before connecting, so no protocol
 /// round-trip), requests `seq > cursor` (or `> 0` on a full sweep), parses the 8-byte seq
 /// prefix from each frame, applies the signed bytes via the unchanged admission gate, and
-/// — only at a CLEAN EOF — checkpoints the highest seq received through the advance-only
+/// — only at a CLEAN EOF — checkpoints the highest handled seq through the advance-only
 /// door. A mid-stream failure returns early WITHOUT checkpointing, so the next cycle
 /// re-pulls from the last committed cursor and no event is lost (idempotent apply).
+///
+/// Classification of a refusal (issue #111), mirroring PR #110 adapted to the node
+/// plane's deny-all steady state:
+///   * UNVERIFIABLE bytes (signature/context) — never apply without repair — are
+///     PENNED durably (`node_event_quarantine`), recording the serving `seq` as a
+///     derived re-offer floor; the cursor still advances (the row is durably held)
+///     and later pulls fetch from `min(last_seq, MIN(refused_seq))` so the slot keeps
+///     being re-offered. While any UNACKED pen exists the pull is loud (`pending`).
+///   * A VERIFIABLE-but-refused event (untrusted author / unknown type) is the normal
+///     deny-all case: skip-and-advance as before — a later `peer.added` or code arrival
+///     + full sweep admits it (self-healing).
+///   * A transient/transport error FREEZES the cursor (no advance), retried next cycle.
+///
+/// A penned event whose cause is later fixed re-applies on a sweep and is auto-released
+/// (DELETEd) — so no manual requeue command is needed.
 pub async fn pull_into(
     peer: SocketAddr,
     tls: Arc<ClientConfig>,
@@ -363,18 +515,44 @@ pub async fn pull_into(
     full_sweep: bool,
 ) -> anyhow::Result<PullStats> {
     let peer_key = peer.to_string();
-    // Cursor: 0 on a full sweep (everything) or when we have never pulled this peer.
-    let after_seq: i64 = if full_sweep {
-        0
-    } else {
-        db.query_one(
+    // The committed cursor for this peer (0 if never pulled). Read even on a full
+    // sweep: it tells us whether we are RE-processing already-seen seqs, which gates
+    // the (cheap) auto-release delete below.
+    let last_seq: i64 = db
+        .query_one(
             "SELECT coalesce((SELECT last_seq FROM sync_cursor WHERE peer_addr = $1), 0)",
             &[&peer_key],
         )
         .await
         .context("reading sync cursor")?
-        .get(0)
+        .get(0);
+    // The DERIVED re-offer floor (issue #111): the lowest serving `seq` at which this
+    // peer still has an UNACKED quarantined event. Fetching from BELOW it keeps a penned
+    // slot re-offered every cycle (deduping onto its row) even though the cursor advances
+    // for valid events. NULL (no unresolved pen) ⇒ no pull-back.
+    let floor: Option<i64> = db
+        .query_one(
+            "SELECT min(refused_seq) FROM node_event_quarantine
+              WHERE peer = $1 AND NOT acked",
+            &[&peer_key],
+        )
+        .await
+        .context("reading the node quarantine re-offer floor")?
+        .get(0);
+    // Request point: full sweep pulls everything; otherwise from the cursor, pulled back
+    // to just BELOW the earliest refused slot when a floor is set. The `- 1` is load-bearing:
+    // `serve` streams `seq > after_seq` (STRICT), so fetching from `refused_seq` itself would
+    // skip the very event we need re-offered — we must request from `refused_seq - 1`.
+    let after_seq: i64 = if full_sweep {
+        0
+    } else {
+        floor.map_or(last_seq, |f| (f - 1).min(last_seq))
     };
+    // On a full sweep (or when the floor pulled us back below the cursor) we are
+    // re-processing seqs we have already handled, so a previously-penned event may now
+    // apply — enable the auto-release DELETE on a successful apply. On a plain forward
+    // pull there are no pen rows for the fresh seqs, so skip that extra round-trip.
+    let reoffering = full_sweep || after_seq < last_seq;
 
     let connector = TlsConnector::from(tls);
     // Every network step is stall-bounded (review finding A7b): a black-holed address, a
@@ -399,6 +577,9 @@ pub async fn pull_into(
         .context("sending request")?;
 
     let mut stats = PullStats::default();
+    // Highest seq we have HANDLED (applied, penned, or skip-and-swept). A frozen event
+    // (transient error / pen at quota) stops the advance BELOW its seq so the cursor
+    // never moves silently past an unresolved refusal.
     let mut max_seq = after_seq;
     while let Some(frame) = with_io_timeout("response frame read", read_frame(&mut tls))
         .await
@@ -412,26 +593,91 @@ pub async fn pull_into(
         let seq = i64::from_be_bytes(frame[..8].try_into().expect("8 bytes"));
         let signed = &frame[8..];
         match db.execute("SELECT apply_remote_node_event($1)", &[&signed]).await {
-            Ok(_) => stats.admitted += 1,
+            Ok(_) => {
+                stats.admitted += 1;
+                // Auto-release (issue #111): a re-offered event that now applies is no
+                // longer quarantined — drop any stale pen row for these bytes. Only when
+                // re-processing (a sweep or a floor pull-back); the forward path never
+                // has a pen row for a fresh seq, so it skips this round-trip.
+                if reoffering {
+                    let digest = event_address(signed);
+                    db.execute(
+                        "DELETE FROM node_event_quarantine WHERE content_digest = $1",
+                        &[&digest],
+                    )
+                    .await
+                    .context("auto-releasing a node quarantine row on successful apply")?;
+                }
+            }
             Err(e) => {
-                // Non-fatal: the admission gate refused this event (un-trusted
-                // author / malformed / fail-closed). Log the legible reason, keep going.
-                stats.rejected += 1;
-                eprintln!("pull: node_event rejected (non-fatal): {e}");
+                if verify_self_described(signed).is_err() {
+                    // UNVERIFIABLE: never applies without repair. Pen it durably and record
+                    // the serving seq as the re-offer floor. The Rust verify error is the
+                    // legible reason (same vocabulary the DB DETAIL carries, issue #109).
+                    let reason = verify_self_described(signed)
+                        .err()
+                        .map(|ve| ve.to_string())
+                        .unwrap_or_else(|| e.to_string());
+                    let digest = event_address(signed);
+                    match quarantine_node_event(db, &peer_key, signed, &digest, seq, &reason).await
+                    {
+                        Ok(true) => stats.quarantined += 1, // penned/held → cursor may advance
+                        Ok(false) => {
+                            // Pen at quota: FREEZE below this seq (delayed, never lost, loud).
+                            eprintln!(
+                                "pull: node_event_quarantine for {peer_key} at capacity — \
+                                 freezing the cursor at seq {seq} (inspect + ack to release)"
+                            );
+                            break;
+                        }
+                        Err(qe) => {
+                            // A pen WRITE error is transient infrastructure trouble; freeze
+                            // conservatively rather than advancing past an un-penned refusal.
+                            eprintln!("pull: could not pen node_event at seq {seq}: {qe} — freezing");
+                            break;
+                        }
+                    }
+                } else if e.as_db_error().is_some() {
+                    // The gate refused a VERIFIABLE event (un-trusted author / unknown type):
+                    // the normal deny-all case — self-heals on a later peer.added or code
+                    // arrival + full sweep. Skip-and-advance (unchanged behaviour).
+                    stats.rejected += 1;
+                    eprintln!("pull: node_event refused (recoverable, non-fatal): {e}");
+                } else {
+                    // No DB error object ⇒ a transport/connection failure, not a decision by
+                    // the gate. FREEZE (do not advance): retried next cycle, nothing lost.
+                    eprintln!("pull: transient error applying node_event at seq {seq}: {e} — freezing");
+                    break;
+                }
             }
         }
-        // Advance over RECEIVED events (stream is seq-ordered); rejections are re-tried
-        // on the next full sweep. Tracking the max — not the last — is robust to any
-        // server-side reordering.
-        if seq > max_seq { max_seq = seq; }
+        // Advance over the HANDLED event (applied / penned / skipped). Tracking the max —
+        // not the last — is robust to any server-side reordering. A frozen event `break`s
+        // above, so it is never counted as handled.
+        if seq > max_seq {
+            max_seq = seq;
+        }
     }
-    // Clean EOF reached: checkpoint through the advance-only door. Only now — a mid-stream
-    // error returned above without advancing the cursor.
+    // Clean EOF (or a freeze `break`) reached: checkpoint the handled prefix through the
+    // advance-only door. A mid-stream *transport* error returned above without reaching here,
+    // so the cursor never moves past an event we did not durably handle.
     if max_seq > after_seq || full_sweep {
         db.execute("SELECT checkpoint_sync_cursor($1,$2)", &[&peer_key, &max_seq])
             .await
             .context("checkpointing sync cursor")?;
     }
+    // The LOUD signal: this peer's unacked pen rows AFTER the cycle. `run` logs a distinct
+    // integrity line every cycle while this is non-zero — until the cause is fixed (the
+    // event auto-releases) or a human acks the row.
+    let pending: i64 = db
+        .query_one(
+            "SELECT count(*) FROM node_event_quarantine WHERE peer = $1 AND NOT acked",
+            &[&peer_key],
+        )
+        .await
+        .context("counting unacked node quarantine rows")?
+        .get(0);
+    stats.pending = pending as u64;
     Ok(stats)
 }
 
@@ -515,10 +761,24 @@ pub async fn run(
         let full_sweep = trust_changed || cycle % FULL_SWEEP_EVERY == 0;
 
         match pull_into(peer, client_tls.clone(), &cycle_db, full_sweep).await {
-            Ok(s) => eprintln!(
-                "run: pull {peer}: full_sweep={full_sweep} received={} admitted={} rejected={}",
-                s.received, s.admitted, s.rejected
-            ),
+            Ok(s) => {
+                eprintln!(
+                    "run: pull {peer}: full_sweep={full_sweep} received={} admitted={} \
+                     rejected={} quarantined={} pending={}",
+                    s.received, s.admitted, s.rejected, s.quarantined, s.pending
+                );
+                // LOUD integrity signal (issue #111): while this peer has unacked
+                // quarantined node_events, say so every cycle — the operator must fix the
+                // cause (the event then auto-releases) or ack the row. Not fatal: the loop
+                // keeps serving and pulling (availability over consistency).
+                if s.pending > 0 {
+                    eprintln!(
+                        "run: INTEGRITY: {} unacked quarantined node_event(s) from {peer} — \
+                         inspect `cairn-node quarantine`, then fix trust/code or `ack-quarantine`",
+                        s.pending
+                    );
+                }
+            }
             // A sustained outage = a partition. Logged, never fatal.
             Err(e) => eprintln!("run: PARTITION pulling {peer}: {e}"),
         }
