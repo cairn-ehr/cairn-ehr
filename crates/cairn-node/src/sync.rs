@@ -394,18 +394,24 @@ async fn quarantine_node_event(
     if bumped > 0 {
         return Ok(true);
     }
-    // New bytes: insert only if this peer is under quota. The INSERT ... SELECT ...
-    // WHERE gates atomically on the current row count AND byte sum for the peer, so
-    // two concurrent pens cannot both slip past the cap.
+    // New bytes: insert only if this peer is under quota. The INSERT ... SELECT ... WHERE
+    // gates on the current row count AND byte sum for the peer. Only UNACKED rows count:
+    // an acked row is a resolved human decision (retained as the record of it, never
+    // auto-deleted), so it must NOT consume quota — otherwise acking, the documented
+    // remedy, could not free the pen and a peer that floods then gets acked would wedge
+    // the cursor with a SILENT alarm (pending counts only unacked too). Under READ
+    // COMMITTED this bounds the pen in the single-loop steady state; two concurrent
+    // writers can overshoot by a bounded amount (not a hard cap — acceptable here).
     let inserted = db
         .execute(
             "INSERT INTO node_event_quarantine
                  (content_digest, signed_bytes, peer, refused_seq, reason)
              SELECT $1::bytea, $2::bytea, $3::text, $4::bigint, $5::text
-              WHERE (SELECT count(*) FROM node_event_quarantine WHERE peer = $3::text)
+              WHERE (SELECT count(*) FROM node_event_quarantine
+                       WHERE peer = $3::text AND NOT acked)
                         < $6::bigint
                 AND (SELECT coalesce(sum(octet_length(signed_bytes)), 0)
-                       FROM node_event_quarantine WHERE peer = $3::text)
+                       FROM node_event_quarantine WHERE peer = $3::text AND NOT acked)
                         + octet_length($2::bytea) <= $7::bigint
              ON CONFLICT (content_digest) DO NOTHING",
             &[
@@ -543,16 +549,15 @@ pub async fn pull_into(
     // to just BELOW the earliest refused slot when a floor is set. The `- 1` is load-bearing:
     // `serve` streams `seq > after_seq` (STRICT), so fetching from `refused_seq` itself would
     // skip the very event we need re-offered — we must request from `refused_seq - 1`.
+    // KNOWN COST (bounded, acceptable): an unresolved pen at the LOWEST seq (refused_seq = 1)
+    // pulls after_seq to 0, so each incremental cycle re-streams the whole node_event log until
+    // that pen auto-releases or is acked. node_event is low-volume (enroll/peer/revoke), so this
+    // is a small, self-limiting cost, not a growth path.
     let after_seq: i64 = if full_sweep {
         0
     } else {
         floor.map_or(last_seq, |f| (f - 1).min(last_seq))
     };
-    // On a full sweep (or when the floor pulled us back below the cursor) we are
-    // re-processing seqs we have already handled, so a previously-penned event may now
-    // apply — enable the auto-release DELETE on a successful apply. On a plain forward
-    // pull there are no pen rows for the fresh seqs, so skip that extra round-trip.
-    let reoffering = full_sweep || after_seq < last_seq;
 
     let connector = TlsConnector::from(tls);
     // Every network step is stall-bounded (review finding A7b): a black-holed address, a
@@ -595,11 +600,15 @@ pub async fn pull_into(
         match db.execute("SELECT apply_remote_node_event($1)", &[&signed]).await {
             Ok(_) => {
                 stats.admitted += 1;
-                // Auto-release (issue #111): a re-offered event that now applies is no
-                // longer quarantined — drop any stale pen row for these bytes. Only when
-                // re-processing (a sweep or a floor pull-back); the forward path never
-                // has a pen row for a fresh seq, so it skips this round-trip.
-                if reoffering {
+                // Auto-release (issue #111): a re-offered event that now applies is no longer
+                // quarantined — drop any stale pen row for these bytes. Gate on `floor.is_some()`
+                // (this peer has at least one unresolved pen), NOT on "after_seq < last_seq":
+                // when a pen's refused_seq sits ABOVE the committed cursor (a pen written, then a
+                // transport error before the EOF checkpoint), the pull STILL re-offers and may
+                // re-apply it, and the release must fire — otherwise the resolved row lingers and
+                // the pull stays loud forever. With no pen (the common forward path) this is
+                // skipped entirely, so a clean full sweep does no per-event DELETE.
+                if floor.is_some() {
                     let digest = event_address(signed);
                     db.execute(
                         "DELETE FROM node_event_quarantine WHERE content_digest = $1",
@@ -609,24 +618,26 @@ pub async fn pull_into(
                     .context("auto-releasing a node quarantine row on successful apply")?;
                 }
             }
-            Err(e) => {
-                if verify_self_described(signed).is_err() {
-                    // UNVERIFIABLE: never applies without repair. Pen it durably and record
-                    // the serving seq as the re-offer floor. The Rust verify error is the
-                    // legible reason (same vocabulary the DB DETAIL carries, issue #109).
-                    let reason = verify_self_described(signed)
-                        .err()
-                        .map(|ve| ve.to_string())
-                        .unwrap_or_else(|| e.to_string());
+            // Classify the refusal by RE-VERIFYING the bytes ONCE (bind the error for the
+            // reason — do not verify twice). Three outcomes: unverifiable → pen; a verifiable
+            // event the door DELIBERATELY refused → skip-and-sweep; anything else → freeze.
+            Err(e) => match verify_self_described(signed) {
+                Err(ve) => {
+                    // UNVERIFIABLE: never applies without repair. Pen it durably and record the
+                    // serving seq as the re-offer floor. `ve` is the legible reason (same
+                    // vocabulary the DB DETAIL carries, issue #109).
+                    let reason = ve.to_string();
                     let digest = event_address(signed);
                     match quarantine_node_event(db, &peer_key, signed, &digest, seq, &reason).await
                     {
                         Ok(true) => stats.quarantined += 1, // penned/held → cursor may advance
                         Ok(false) => {
                             // Pen at quota: FREEZE below this seq (delayed, never lost, loud).
+                            // Acking pen rows genuinely frees quota now (only UNACKED rows count),
+                            // so "ack to release" is a real remedy.
                             eprintln!(
                                 "pull: node_event_quarantine for {peer_key} at capacity — \
-                                 freezing the cursor at seq {seq} (inspect + ack to release)"
+                                 freezing the cursor at seq {seq} (inspect + ack, or delete, to release)"
                             );
                             break;
                         }
@@ -637,23 +648,35 @@ pub async fn pull_into(
                             break;
                         }
                     }
-                } else if e.as_db_error().is_some() {
-                    // The gate refused a VERIFIABLE event (un-trusted author / unknown type):
-                    // the normal deny-all case — self-heals on a later peer.added or code
-                    // arrival + full sweep. Skip-and-advance (unchanged behaviour).
+                }
+                // Bytes VERIFY, but the door refused. Distinguish a DELIBERATE deny-all from a
+                // transient DB fault by SQLSTATE: apply_remote_node_event's refusals are all
+                // bare `RAISE EXCEPTION` (P0001). A P0001 is the normal, self-healing deny-all
+                // (un-trusted author / unknown type) — skip-and-advance; it is re-offered on a
+                // later peer.added / code arrival + full sweep.
+                Ok(_) if e.code().map(|c| c.code()) == Some("P0001") => {
                     stats.rejected += 1;
                     eprintln!("pull: node_event refused (recoverable, non-fatal): {e}");
-                } else {
-                    // No DB error object ⇒ a transport/connection failure, not a decision by
-                    // the gate. FREEZE (do not advance): retried next cycle, nothing lost.
-                    eprintln!("pull: transient error applying node_event at seq {seq}: {e} — freezing");
+                }
+                // Any OTHER error on a verifiable event is NOT a deliberate refusal: a transient
+                // DB fault (serialization_failure / deadlock / statement_timeout / disk-full …)
+                // or a dropped connection (no db_error object). FREEZE — advancing past it would
+                // silently lose a valid event until the next full sweep (the #111 review's A1).
+                Ok(_) => {
+                    eprintln!(
+                        "pull: transient/unexpected error applying node_event at seq {seq}: {e} \
+                         — freezing (not skipped past)"
+                    );
                     break;
                 }
-            }
+            },
         }
-        // Advance over the HANDLED event (applied / penned / skipped). Tracking the max —
-        // not the last — is robust to any server-side reordering. A frozen event `break`s
-        // above, so it is never counted as handled.
+        // Advance over the HANDLED event (applied / penned / skipped); a frozen event `break`s
+        // above, so it is never counted as handled. NOTE: with the freeze `break`, correctness
+        // relies on `serve` streaming in `seq` order (it does — `ORDER BY seq`): the `break`
+        // stops the advance BELOW the frozen seq, and tracking the max keeps the checkpoint at
+        // the contiguous handled prefix. (If serve ever streamed out of order, a frozen low seq
+        // arriving after a handled higher seq could be checkpointed past — so keep serve ordered.)
         if seq > max_seq {
             max_seq = seq;
         }

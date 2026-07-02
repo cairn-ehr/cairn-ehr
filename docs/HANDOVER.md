@@ -28,10 +28,19 @@ event whose cause is fixed re-applies on a sweep and is DELETEd on success — n
 **(e)** **Loud**: `PullStats.pending` (unacked rows after the cycle) drives a per-cycle integrity line in `run`
 until fixed or acked; per-peer row+byte quota (10k / 64 MiB) freezes the cursor rather than growing the pen.
 **(f)** CLI `quarantine` (JSON list) + `ack-quarantine <digest>` (license a permanent exclusion). TDD:
-`crates/cairn-node/tests/node_quarantine.rs` (5 DB-gated — penned+loud+dedupe · derived floor re-offers on an
-INCREMENTAL pull · ack silences · auto-release on apply · verifiable-refusal NOT penned) + `db/tests/022` grant
-floor. Full cairn-node suite (229) + workspace clippy green on the Mac PG18 / cairn_pgx 0.2.0 rig. Additive only —
-no spec/ADR bump (implements settled ADR-0017/0021). Closes #111. Sibling of #109 (PR #112).
+`crates/cairn-node/tests/node_quarantine.rs` (6 DB-gated — penned+loud+dedupe · derived floor re-offers on an
+INCREMENTAL pull · ack silences · auto-release on apply · verifiable-refusal NOT penned · list+ack CLI helpers) +
+`db/tests/022` grant floor. Full cairn-node suite (230) + workspace clippy green on the Mac PG18 / cairn_pgx 0.2.0
+rig. Additive only — no spec/ADR bump (implements settled ADR-0017/0021). Closes #111. Sibling of #109 (PR #112).
+**PR-review hardening (applied in-branch, 8 findings):** the quota now counts only UNACKED rows (an all-acked pen
+could otherwise wedge the cursor with a silenced alarm, and `ack` — the documented remedy — could not free it); a
+VERIFIABLE event that fails apply is now classified by SQLSTATE — a `P0001` deny-all skips-and-sweeps, but a
+transient fault (serialization/deadlock/timeout/disk-full) FREEZES instead of silently advancing past a valid event
+(the A1 loss class); auto-release is gated on `floor.is_some()` (a pen whose `refused_seq` sits above the cursor now
+releases, and a clean sweep does zero per-event DELETEs); the unverifiable arm verifies ONCE; + the list/ack CLI
+helpers get a driving test and comments were corrected (quota is a bounded cap under concurrency; the freeze relies
+on seq-ordered serve). The two HIGH fixes' failure conditions (10k-row quota boundary, injected transient DB faults)
+are impractical to exercise in the harness — reasoned + the P0001-skip path is tested.
 
 **Earlier this session (2026-07-02) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
 integrity failures in cairn-sync:** closed the clinical-plane pull loop's silent skip-and-advance, then hardened it

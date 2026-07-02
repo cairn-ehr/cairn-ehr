@@ -292,6 +292,54 @@ async fn a_penned_event_that_now_applies_is_auto_released() {
 }
 
 #[tokio::test]
+async fn list_and_ack_quarantine_helpers_drive_the_cli_surface() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let n = self_node(&base, "127.0.0.1:7935").await;
+    insert_corrupt_node_event(&n.a).await;
+    let cfg = sync::client_config(&base, &n.sk, sync::trust_store_from_db(&n.a).await.unwrap())
+        .await
+        .unwrap();
+    sync::pull_once(n.addr, cfg, true).await.unwrap(); // pens the corrupt event
+
+    // `cairn-node quarantine` (list): one row with the expected shape.
+    let rows = sync::list_node_quarantine(&n.a).await.unwrap();
+    assert_eq!(rows.len(), 1, "one penned row is listed");
+    let r = &rows[0];
+    let digest = r["digest"].as_str().expect("digest is hex text");
+    assert!(!digest.is_empty(), "digest present");
+    assert!(r["refused_seq"].as_i64().unwrap() >= 1, "refused_seq recorded");
+    assert!(!r["reason"].as_str().unwrap().trim().is_empty(), "legible reason");
+    assert_eq!(r["acked"], serde_json::json!(false), "fresh pen is unacked");
+
+    // An unknown-but-valid-hex digest acks nothing (0 rows) — the CLI reports "no such digest".
+    assert_eq!(
+        sync::ack_node_quarantine(&n.a, "00").await.unwrap(),
+        0,
+        "acking an absent digest updates no rows"
+    );
+    // A non-hex digest is a legible error, not a panic.
+    assert!(
+        sync::ack_node_quarantine(&n.a, "not-hex!").await.is_err(),
+        "a non-hex digest is rejected"
+    );
+
+    // `cairn-node ack-quarantine <digest>`: acks exactly the one row.
+    assert_eq!(
+        sync::ack_node_quarantine(&n.a, digest).await.unwrap(),
+        1,
+        "acking the listed digest updates its row"
+    );
+    let after = sync::list_node_quarantine(&n.a).await.unwrap();
+    assert_eq!(after[0]["acked"], serde_json::json!(true), "the row now reads acked");
+
+    n.serve.abort();
+}
+
+#[tokio::test]
 async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
