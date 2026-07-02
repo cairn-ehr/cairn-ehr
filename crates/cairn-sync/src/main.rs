@@ -113,7 +113,19 @@ fn assert_pgx_floor(client: &mut postgres::Client) -> R<()> {
     let loaded: String = match client.query_one("SELECT cairn_pgx_version()", &[]) {
         Ok(row) => row.get(0),
         Err(e) if e.code() == Some(&postgres::error::SqlState::UNDEFINED_FUNCTION) => {
-            return Err(pgx_floor_message("pre-0.2.0 (cairn_pgx_version() not found)").into());
+            // The function is unresolvable. The common cause is a stale/pre-0.2.0 library
+            // (which lacks it), but a current extension installed in a schema off this
+            // role's search_path presents the same 42883 — so name both rather than
+            // sending a fine install down a needless rebuild (issue #109 review).
+            return Err(format!(
+                "cairn_pgx_version() is not callable, so the loaded cairn_pgx cannot be \
+                 confirmed at the >= {REQUIRED_PGX_FLOOR} floor this cairn-sync requires \
+                 (the ADR-0040 signing-context wire format). Most likely the installed \
+                 extension library is stale/pre-0.2.0 — rebuild + reinstall it \
+                 (`cargo pgrx install` against this cluster's PostgreSQL); if it is current, \
+                 check that cairn_pgx's schema is on this connection role's search_path."
+            )
+            .into());
         }
         Err(e) => return Err(e.into()),
     };
@@ -359,11 +371,17 @@ fn apply_signed(
                 &attester_key.map(|k| k.to_vec()),
             ],
         )
-        // Surface the door's legible RAISE text: postgres::Error's Display is just
-        // "db error", which would strip the reason from the freeze/skip log lines.
+        // Surface the door's legible RAISE text AND its DETAIL: postgres::Error's Display is
+        // just "db error", and message() alone drops the cairn_verify_error DETAIL the doors
+        // now attach (issue #109) — the skew-vs-tampering reason that would otherwise reach
+        // only a direct psql caller. Appending it here carries it into the freeze/skip log
+        // lines, the quarantine reason, and last_requeue_error.
         .map_err(|e| -> Box<dyn Error> {
             match e.as_db_error() {
-                Some(db) => db.message().to_string().into(),
+                Some(db) => match db.detail() {
+                    Some(detail) => format!("{} ({detail})", db.message()).into(),
+                    None => db.message().to_string().into(),
+                },
                 None => e.into(),
             }
         })?;
@@ -1394,16 +1412,23 @@ fn connect_checked(conn: &str) -> R<postgres::Client> {
              the migrations, then retry"
             .into());
     }
-    // The schema can be current while the compiled verify library is stale (a rebuild
-    // without reinstall) — that skew is a total, silent write outage on every apply. Gate
-    // the operational commands (pull/run/quarantine/requeue) on the loaded version too, so
-    // the failure is a legible "rebuild the extension" instead (issue #109).
+    Ok(client)
+}
+
+/// `connect_checked` PLUS the loaded-`cairn_pgx` version floor — for the commands that
+/// APPLY events (`pull`/`run`/`requeue`), where a stale verify library is a silent write
+/// outage on every apply (issue #109). Deliberately NOT used by read-only `quarantine`:
+/// the version gate must not block an operator listing the pen during exactly that outage
+/// (issue #109 review — a pure SELECT over sync_quarantine needs no `cairn_pgx`).
+fn connect_checked_apply(conn: &str) -> R<postgres::Client> {
+    let mut client = connect_checked(conn)?;
     assert_pgx_floor(&mut client)?;
     Ok(client)
 }
 
 fn cmd_requeue(conn: &str, metrics: bool) -> R<()> {
-    let mut client = connect_checked(conn)?;
+    // Requeue re-applies through the in-DB door, so it needs a current cairn_pgx.
+    let mut client = connect_checked_apply(conn)?;
     let m = do_requeue(&mut client)?;
     if metrics {
         println!("{m}");
@@ -1450,6 +1475,9 @@ fn quarantine_listing(client: &mut postgres::Client) -> R<Vec<serde_json::Value>
 /// see exactly which events a link refused, from which peer, and why — without
 /// psql.
 fn cmd_quarantine(conn: &str) -> R<()> {
+    // Read-only pen listing: plain connect_checked (schema probe only), NOT the pgx-version
+    // gate — an operator must be able to inspect the pen during a stale-cairn_pgx outage
+    // (issue #109 review). This is a pure SELECT over sync_quarantine; it calls no cairn_pgx.
     let mut client = connect_checked(conn)?;
     let listing = quarantine_listing(&mut client)?;
     for row in &listing {
@@ -1460,7 +1488,7 @@ fn cmd_quarantine(conn: &str) -> R<()> {
 }
 
 fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
-    let mut client = connect_checked(conn)?;
+    let mut client = connect_checked_apply(conn)?;
     let m = do_pull(&mut client, peer, peer_name)?;
     if metrics {
         println!("{m}");
@@ -1721,7 +1749,7 @@ fn cmd_run(
         });
     }
     let mut log = OpenOptions::new().create(true).append(true).open(log_path)?;
-    let mut client = connect_checked(conn)?;
+    let mut client = connect_checked_apply(conn)?;
     eprintln!("run: serving on {listen}, pulling {peer_name} ({peer}) every {interval_ms}ms -> {log_path}");
 
     // The lazy byte tier runs on its OWN thread, never inline in the clinical pull
