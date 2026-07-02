@@ -148,6 +148,14 @@ fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
     }
     let (sk, kid) = cairn_event::generate_key()?;
     std::fs::write(path, hex::encode(sk.to_bytes()))?;
+    // Restrict the private-key file to the owner (0600). std::fs::write creates it 0644 by
+    // default, leaving the signing seed world-readable on a shared machine (review finding
+    // L12). Set the mode AFTER writing so the bytes are never briefly world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
     eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
     Ok((sk, kid))
 }
@@ -201,6 +209,42 @@ fn apply_signed(client: &mut postgres::Client, signed_bytes: &[u8]) -> R<bool> {
             &attachments_json,
         ],
     )?;
+
+    // Substitution guard (review fix H3): `ON CONFLICT DO NOTHING` (no target) silently
+    // absorbs BOTH a benign idempotent re-apply (identical bytes) AND a hostile/buggy event
+    // that reuses an existing event_id with DIFFERENT bytes. submit_event RAISES on the
+    // latter (db/005: "substitution refused"); the sync door must too, or two nodes end up
+    // holding different events under one event_id and diverge forever with no alarm. On a
+    // conflict, compare the stored content-address to the one we just verified. (Same bytes
+    // ⟹ same event_id, so looking up by event_id is sufficient.)
+    if inserted == 0 {
+        let existing: Option<Vec<u8>> = tx
+            .query_opt(
+                "SELECT content_address FROM event_log WHERE event_id = $1::text::uuid",
+                &[&body.event_id],
+            )?
+            .map(|r| r.get(0));
+        match existing {
+            Some(stored) if stored != content_address => {
+                return Err(format!(
+                    "event_id {} already present with different content (substitution refused)",
+                    body.event_id
+                )
+                .into());
+            }
+            None => {
+                // A conflict fired but no row carries this event_id — the bytes collided on
+                // content_address under a DIFFERENT event_id (should be impossible, since the
+                // event_id is inside the signed bytes). Treat as a divergence, never silent.
+                return Err(format!(
+                    "content-address conflict for event_id {} with no matching row (divergent event)",
+                    body.event_id
+                )
+                .into());
+            }
+            _ => {} // Some(stored) == content_address: genuine idempotent re-apply (set-union).
+        }
+    }
 
     // Learn any attachment references this event carries (reference-eager).
     for att in &body.attachments {
@@ -739,8 +783,20 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
-    let (mut applied, mut verify_failures, mut event_bytes) = (0usize, 0usize, 0usize);
+    // Watermark discipline (review fix A1). The OLD loop advanced the watermark to the max
+    // HLC of the *successfully-applied* events and counted every failure as a "verify
+    // failure", so a transient DB error (or a deterministic insert failure) on a VALIDLY
+    // SIGNED event silently dropped it: the watermark moved past it and the server never
+    // offered it again on this link — a permanent, silent set-union violation with only a
+    // counter as evidence. Fix: advance the watermark ONLY to the contiguous
+    // successfully-applied prefix. The server ships events HLC-ascending, so we FREEZE the
+    // watermark at the first still-verifiable event we fail to apply, and never advance past
+    // it (it is re-fetched and retried next cycle). An UNVERIFIABLE event is illegitimate
+    // (never validly part of the set), so it is skipped and logged WITHOUT freezing —
+    // otherwise a single corrupt byte from a peer would wedge the link forever.
+    let (mut applied, mut skipped_unverifiable, mut event_bytes) = (0usize, 0usize, 0usize);
     let (mut max_w, mut max_c) = (wall, counter);
+    let mut frozen = false;
     for hexed in &resp.events {
         let signed_bytes = hex::decode(hexed)?;
         event_bytes += signed_bytes.len(); // A5: real clinical-plane payload (the COSE blob)
@@ -749,15 +805,33 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                 if new {
                     applied += 1;
                 }
-                if let Ok(b) = verify_self_described(&signed_bytes) {
-                    if (b.hlc.wall, b.hlc.counter) > (max_w, max_c) {
-                        max_w = b.hlc.wall;
-                        max_c = b.hlc.counter;
+                // Only advance the watermark while the applied prefix is unbroken.
+                if !frozen {
+                    if let Ok(b) = verify_self_described(&signed_bytes) {
+                        if (b.hlc.wall, b.hlc.counter) > (max_w, max_c) {
+                            max_w = b.hlc.wall;
+                            max_c = b.hlc.counter;
+                        }
                     }
                 }
             }
-            // A2: a verification failure is recorded, never applied, never poisons the pull.
-            Err(_) => verify_failures += 1,
+            Err(e) => {
+                // Classify the failure. A still-verifiable event that failed to APPLY
+                // (transient DB error, deterministic insert failure, or a refused
+                // substitution) must NOT be lost — freeze the watermark so it is retried and
+                // never skipped. An unverifiable event is illegitimate — skip and quarantine
+                // it (log loudly) without freezing, so it cannot wedge the link.
+                if verify_self_described(&signed_bytes).is_ok() {
+                    frozen = true;
+                    eprintln!(
+                        "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — a valid event \
+                         failed to apply and must not be skipped: {e}"
+                    );
+                } else {
+                    skipped_unverifiable += 1;
+                    eprintln!("pull {peer_name}: skipping unverifiable event (quarantined): {e}");
+                }
+            }
         }
     }
     client.execute(
@@ -769,7 +843,8 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     Ok(serde_json::json!({
         "op": "pull", "peer": peer_name,
         "shipped": resp.events.len(), "applied_new": applied,
-        "verify_failures": verify_failures,
+        "skipped_unverifiable": skipped_unverifiable,
+        "watermark_frozen": frozen,
         "event_bytes": event_bytes, "wire_bytes": wire_bytes,
         "bytes_per_event": if resp.events.is_empty() { 0.0 }
                            else { event_bytes as f64 / resp.events.len() as f64 },
@@ -785,8 +860,8 @@ fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
         println!("{m}");
     } else {
         println!(
-            "pulled from {peer_name}: {} shipped, {} new, {} verify-failures",
-            m["shipped"], m["applied_new"], m["verify_failures"]
+            "pulled from {peer_name}: {} shipped, {} new, {} skipped-unverifiable, watermark-frozen={}",
+            m["shipped"], m["applied_new"], m["skipped_unverifiable"], m["watermark_frozen"]
         );
     }
     Ok(())

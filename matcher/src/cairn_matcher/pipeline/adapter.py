@@ -6,6 +6,7 @@ on absence or malformed input (principle 4: absence is never disagreement); a
 structurally wrong row raises MatcherTypeError elsewhere in this module (house rule #5).
 """
 
+import unicodedata
 from collections.abc import Mapping, Sequence
 
 from cairn_matcher.records import CandidateRecord, DateValue, FieldValue, MatcherTypeError, Name
@@ -14,6 +15,25 @@ from cairn_matcher.records import CandidateRecord, DateValue, FieldValue, Matche
 # (year, month, day) the value must supply. We never parse a locale date string; we only
 # read the dash-separated ISO fields the cairn-event writer already emits.
 _PRECISION_PARTS = {"year": 1, "month": 2, "day": 3}
+
+# Uncertainty sentinels that are legitimate recorded VALUES (principle 4: `unknown` is
+# first-class), but must NOT be compared as ordinary strings: "unknown" == "unknown"
+# would fabricate EXACT agreement, and "unknown" vs "male" a DISAGREE penalty — both
+# from acknowledged ignorance. Treated as field ABSENCE for matching.
+_VALUE_SENTINELS = {"unknown"}
+
+
+def _normalize_token(token: str) -> str:
+    """Culture-neutral canonicalisation for a name token: NFC then casefold.
+
+    Different upstream systems disagree on Unicode normalisation form (NFC precomposed
+    vs NFD decomposed) for the SAME name — "Jón" can arrive either way. Without this,
+    the two forms are different code points end to end: they grade DISAGREE and produce
+    different blocking tokens, so a true duplicate is never even generated. NFC + casefold
+    is culture-NEUTRAL (not the anglo transliteration ADR-0014 forbids); the SQL blocking
+    tokenizer applies the matching `lower(normalize(value,'NFC'))`.
+    """
+    return unicodedata.normalize("NFC", token).casefold()
 
 
 def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
@@ -30,6 +50,12 @@ def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
     needed = _PRECISION_PARTS[precision]
     if len(parts) < needed:
         return None  # value is coarser than the precision it claims
+    # The year field must be a full 4-digit run, mirroring the SQL blocking discipline
+    # (db.py requires `[0-9]{4}`). A 2-digit legacy year ("80") would otherwise parse to
+    # DateValue(year=80) and fabricate a DISAGREE clash against the same person's 1980
+    # record — a wrong DateValue from a formatting artefact, which principle 4 forbids.
+    if len(parts[0]) != 4 or not parts[0].isdigit():
+        return None
     try:
         nums = [int(p) for p in parts[:needed]]
     except ValueError:
@@ -58,7 +84,8 @@ def _name_bag(display: object) -> Name:
     """
     if not isinstance(display, str):
         raise MatcherTypeError(f"name value must be str, got {type(display).__name__}")
-    return Name(tokens={"unspecified": tuple(sorted(display.lower().split()))})
+    tokens = tuple(sorted(_normalize_token(t) for t in display.split()))
+    return Name(tokens={"unspecified": tokens})
 
 
 def build_names(rows: Sequence[Mapping]) -> FieldValue | None:
@@ -91,10 +118,18 @@ def build_identifiers(rows: Sequence[Mapping]) -> dict[str, frozenset[str]]:
 
 
 def single_field(row: Mapping | None) -> FieldValue | None:
-    """Map one patient_demographic winner row to a FieldValue, or None when absent."""
+    """Map one patient_demographic winner row to a FieldValue, or None when absent.
+
+    A recorded uncertainty sentinel (`unknown`) is a legitimate value but ZERO matching
+    evidence (principle 4): it maps to None so it neither fabricates EXACT agreement with
+    another `unknown` nor a DISAGREE penalty against a real value.
+    """
     if row is None:
         return None
-    return FieldValue(value=row["value"], provenance_rank=int(row["provenance_rank"]))
+    value = row["value"]
+    if isinstance(value, str) and value.strip().casefold() in _VALUE_SENTINELS:
+        return None
+    return FieldValue(value=value, provenance_rank=int(row["provenance_rank"]))
 
 
 def candidate_from_rows(

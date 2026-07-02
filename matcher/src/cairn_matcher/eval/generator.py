@@ -16,14 +16,15 @@ from dataclasses import dataclass
 
 
 def name_tokens(record: Mapping) -> set[str]:
-    """Lower-cased whitespace tokens across ALL of a record's names.
+    """NFC-normalised, lower-cased whitespace tokens across ALL of a record's names.
 
-    Mirrors the SQL 'name' blocking pass (lower(value) split on whitespace) so this
-    predicate agrees with what generate_candidate_pairs actually blocks on.
+    Mirrors the SQL 'name' blocking pass (lower(normalize(value, NFC)) split on
+    whitespace) so this predicate agrees with what generate_candidate_pairs actually
+    blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block.
     """
     tokens: set[str] = set()
     for n in record.get("names", ()):
-        tokens.update(str(n["value"]).lower().split())
+        tokens.update(unicodedata.normalize("NFC", str(n["value"])).lower().split())
     return tokens
 
 

@@ -52,9 +52,23 @@ pub enum LocalStateError {
 /// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
 /// must grant read access, never a signing identity. Do not add it here.
 ///
+/// The highest bundle `version` this build understands. A bundle declaring a higher
+/// version must be REFUSED, not partially applied — see [`from_cbor`].
+pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
+
 /// `serde(default)` on every content field makes this ADDITIVELY evolvable (principle 11):
 /// a bundle written before a field existed still deserializes, with that field defaulted.
+///
+/// `deny_unknown_fields` is the OTHER half of that contract, and the fix for review finding
+/// A7c: without it, a bundle written by a NEWER cairn-node carrying a content-bearing field
+/// this build doesn't know (e.g. a future clinical-tier `episode_deks` variant) would have
+/// that field SILENTLY DROPPED on read, and `is_empty()` would call the restore a success
+/// while quietly discarding key material — the exact failure the format is "can't-retrofit"
+/// to guard against. With this, an unknown field is a LOUD refusal instead. `default` (for
+/// missing fields) and `deny_unknown_fields` (for extra fields) are orthogonal and compose:
+/// an OLDER bundle still deserializes, a NEWER one is refused rather than silently lossy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalState {
     /// Bundle format version (bump only on a NON-additive change, which we avoid).
     /// NOT `#[serde(default)]`: absence of a version is always a malformed bundle —
@@ -104,9 +118,20 @@ pub fn to_cbor(ls: &LocalState) -> Vec<u8> {
     out
 }
 
-/// Parse a bundle from CBOR. Errors (never panics) on a malformed body.
+/// Parse a bundle from CBOR. Errors (never panics) on a malformed body, an UNKNOWN field
+/// (a newer-format bundle — `deny_unknown_fields`), or a `version` this build cannot fully
+/// honour. All three refuse rather than silently drop content (review finding A7c).
 pub fn from_cbor(bytes: &[u8]) -> Result<LocalState, LocalStateError> {
-    ciborium::from_reader(bytes).map_err(|e| LocalStateError::Decode(e.to_string()))
+    let ls: LocalState =
+        ciborium::from_reader(bytes).map_err(|e| LocalStateError::Decode(e.to_string()))?;
+    if ls.version > SUPPORTED_LOCAL_STATE_VERSION {
+        return Err(LocalStateError::Decode(format!(
+            "local-state bundle version {} exceeds supported {} — this build may not understand \
+             all of its content; upgrade cairn-node to restore it (refusing rather than dropping)",
+            ls.version, SUPPORTED_LOCAL_STATE_VERSION
+        )));
+    }
+    Ok(ls)
 }
 
 /// The dual-wraps of a long-lived local-state DEK (LSK), established ONCE at provisioning
@@ -360,6 +385,44 @@ mod tests {
         ciborium::into_writer(&val, &mut bytes).unwrap();
         let back = from_cbor(&bytes).expect("a bundle missing later fields must still parse");
         assert!(back.is_empty(), "omitted collections default to empty");
+    }
+
+    /// Helper: encode a top-level CBOR map from (key, Value) pairs, as a newer/older writer would.
+    fn encode_map(entries: Vec<(&str, ciborium::value::Value)>) -> Vec<u8> {
+        let val = ciborium::value::Value::Map(
+            entries
+                .into_iter()
+                .map(|(k, v)| (ciborium::value::Value::Text(k.to_string()), v))
+                .collect(),
+        );
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&val, &mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn newer_bundle_with_unknown_field_is_refused_not_silently_dropped() {
+        // Review fix A7c: a NEWER cairn-node adds a content-bearing field this build does
+        // not know. `deny_unknown_fields` must make that a LOUD refusal — never a silent
+        // drop that reports the restore a success while discarding (e.g.) episode DEKs.
+        let bytes = encode_map(vec![
+            ("version", ciborium::value::Value::Integer(1.into())),
+            // A field from the future carrying real content this build cannot represent.
+            ("episode_wrapped_deks_v2", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+        ]);
+        let err = from_cbor(&bytes).expect_err("an unknown field must be refused, not dropped");
+        assert!(matches!(err, LocalStateError::Decode(_)), "unknown field -> Decode error");
+    }
+
+    #[test]
+    fn bundle_version_beyond_supported_is_refused() {
+        // A bundle declaring a version this build cannot fully honour must be refused rather
+        // than partially applied (the version-gate half of the A7c contract).
+        let bytes = encode_map(vec![(
+            "version",
+            ciborium::value::Value::Integer(((SUPPORTED_LOCAL_STATE_VERSION + 1) as i32).into()),
+        )]);
+        assert!(from_cbor(&bytes).is_err(), "a too-new version must be refused");
     }
 
     const OP: &str = "op-pass";

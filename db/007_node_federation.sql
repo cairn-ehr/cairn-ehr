@@ -165,6 +165,11 @@ DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID;
     v_local_node BYTEA; v_local_key TEXT; v_signer TEXT; v_payload JSONB;
 BEGIN
+    -- Size ceiling (review fix A7a): an oversized event would wedge the read-capped wire.
+    IF octet_length(p_signed) > cairn_max_event_bytes() THEN
+        RAISE EXCEPTION 'submit_node_event: event is % bytes, over the % -byte admission ceiling',
+            octet_length(p_signed), cairn_max_event_bytes();
+    END IF;
     IF NOT cairn_verify(p_signed) THEN
         RAISE EXCEPTION 'submit_node_event: signature verification failed (unsigned or malformed)';
     END IF;
@@ -299,6 +304,12 @@ DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID; v_signer TEXT;
     v_payload JSONB; v_author_node BYTEA;
 BEGIN
+    -- Size ceiling (review fix A7a): refuse an oversized remote event at the gate; the
+    -- server-side stream skips any legacy oversized row, but the admission door is the floor.
+    IF octet_length(p_signed) > cairn_max_event_bytes() THEN
+        RAISE EXCEPTION 'apply_remote_node_event: event is % bytes, over the % -byte admission ceiling',
+            octet_length(p_signed), cairn_max_event_bytes();
+    END IF;
     IF NOT cairn_verify(p_signed) THEN
         RAISE EXCEPTION 'apply_remote_node_event: signature verification failed';
     END IF;

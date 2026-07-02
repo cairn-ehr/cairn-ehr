@@ -66,4 +66,17 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- Trust-anchor floor (make it EXPLICIT, do not rest on implicit defaults). The actor
+-- registry decides WHO may author: submit_event (005) trusts actor_current, so anyone who
+-- can enroll a pubkey can author "legitimately signed" events. Enrollment must stay an
+-- owner-privileged ceremony — never reachable by the runtime agent role or PUBLIC.
+-- enroll_actor is invoker-rights (deliberately NOT SECURITY DEFINER), so today the gate
+-- holds only because cairn_agent has no INSERT on actor_event by default. That is too
+-- fragile for a trust anchor: one stray `GRANT INSERT ON actor_event TO cairn_agent`, or
+-- copy-pasting the SECURITY DEFINER pattern the other doors use, would silently collapse
+-- it. State the floor so such a change stands out in review. (A negative test asserts
+-- cairn_agent cannot enroll — mirrors the C5.4 raw-INSERT floor tests.)
+REVOKE INSERT, UPDATE, DELETE ON actor_event FROM PUBLIC, cairn_agent;
+REVOKE EXECUTE ON FUNCTION enroll_actor(text, jsonb, text) FROM PUBLIC;
+
 COMMIT;

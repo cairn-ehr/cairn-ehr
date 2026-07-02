@@ -164,41 +164,61 @@ def _name_token_bag(name: Name) -> list[str]:
 
 
 def _compare_two_names_greedy(a: Name, b: Name, ctx: Context) -> AgreementLevel:
-    """Greedy one-to-one token pairing from A's perspective — ORDER-DEPENDENT.
+    """Greedy token pairing (smaller bag into larger) — ORDER-DEPENDENT within a bag.
 
-    Each token in bag_a claims its best-agreeing unused token from bag_b. The name's
-    level is the WEAKEST link across all pairs. Bags must be the same size — a
-    missing/extra token is a real difference, not a free pass.
+    Each token in the SMALLER bag claims its best-agreeing unused token from the larger.
+    The name's level is the WEAKEST link across all matched pairs.
 
-    An EMPTY token bag is ABSENCE, not a clash: a name that projected to no tokens
-    grades INSUFFICIENT_DATA (zero evidence, §3.7), never DISAGREE. Only two non-empty
-    bags of DIFFERING size count as a real difference (DISAGREE).
+    A differing bag SIZE is treated as MISSING DATA, not a clash. A shorter recorded name
+    ("Mary Smith" vs "Mary Jane Smith") is overwhelmingly missing tokens, not conflicting
+    ones — §3.7 (no-data-is-never-disagreement) applied at token granularity. So when
+    every token of the smaller bag finds a partner but sizes differ, the result is capped
+    at PARTIAL (a consistent coarsening — positive evidence), never DISAGREE. This is the
+    fix for a systematic cultural bias: multi-given-name and compound-surname conventions
+    are recorded at varying token depths far more often than Anglo two-token names, and
+    the old equal-size-or-DISAGREE rule penalised exactly the population ADR-0014 protects.
+
+    A genuine token CONFLICT (a smaller-bag token with NO agreeing partner) is still
+    DISAGREE — PARTIAL is reserved for pure missing-token coarsening.
+
+    An EMPTY token bag is ABSENCE, not a clash: grades INSUFFICIENT_DATA (zero evidence,
+    §3.7), never DISAGREE.
 
     This helper is intentionally NOT called directly from outside this module.
-    Use _compare_two_names, which neutralises the order-dependency.
+    Use _compare_two_names, which neutralises the pairing order-dependency.
     """
     bag_a = _name_token_bag(a)
-    bag_b = list(_name_token_bag(b))
+    bag_b = _name_token_bag(b)
     if not bag_a or not bag_b:
         return AgreementLevel.INSUFFICIENT_DATA
-    if len(bag_a) != len(bag_b):
-        return AgreementLevel.DISAGREE
+
+    # Pair the smaller bag into the larger so the surplus tokens on the longer side are
+    # unmatched DATA (a coarser name), never a penalty. Symmetric in |a|,|b| by taking
+    # the shorter as the driver regardless of argument order.
+    smaller = bag_a if len(bag_a) <= len(bag_b) else bag_b
+    larger = list(bag_b if len(bag_a) <= len(bag_b) else bag_a)
 
     worst = AgreementLevel.EXACT
-    for token in bag_a:
+    for token in smaller:
         best_level = AgreementLevel.DISAGREE
         best_idx = -1
-        for idx, other in enumerate(bag_b):
+        for idx, other in enumerate(larger):
             level = compare_exact(token, other, ctx)
             if level is not AgreementLevel.EXACT:
                 level = compare_edit_distance(token, other, ctx)
             if level > best_level:
                 best_level = level
                 best_idx = idx
-        if best_idx < 0:
+        # No agreeing partner for this token -> a real conflict -> DISAGREE.
+        if best_idx < 0 or best_level is AgreementLevel.DISAGREE:
             return AgreementLevel.DISAGREE
-        bag_b.pop(best_idx)
+        larger.pop(best_idx)
         worst = min(worst, best_level)
+
+    # Surplus tokens on the longer side are missing data on the shorter side: cap the
+    # matched result at PARTIAL (coarsening), never EXACT/EDIT_DISTANCE.
+    if len(bag_a) != len(bag_b):
+        worst = min(worst, AgreementLevel.PARTIAL)
     return worst
 
 

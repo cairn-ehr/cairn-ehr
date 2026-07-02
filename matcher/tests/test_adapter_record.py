@@ -57,6 +57,23 @@ def test_single_field_none_row_is_none():
     assert single_field(None) is None
 
 
+def test_single_field_unknown_sentinel_is_absence():
+    # `unknown` is a legitimate recorded value (principle 4) but ZERO matching evidence:
+    # it must not fabricate EXACT (unknown vs unknown) or DISAGREE (unknown vs male).
+    assert single_field({"value": "unknown", "provenance_rank": 60}) is None
+    assert single_field({"value": "Unknown", "provenance_rank": 0}) is None
+
+
+def test_build_names_normalizes_unicode_nfc_vs_nfd():
+    # The SAME name arriving precomposed (NFC) vs decomposed (NFD) must fold to identical
+    # tokens, else the two grade DISAGREE and never block together. "Jón":
+    nfc = "Jón"           # ó as one code point (U+00F3)
+    nfd = "Jón"          # o + combining acute (U+006F U+0301)
+    a = build_names([{"value": nfc, "provenance_rank": 60}])
+    b = build_names([{"value": nfd, "provenance_rank": 60}])
+    assert a == b
+
+
 def test_candidate_from_rows_assembles_all_fields():
     rec = candidate_from_rows(
         dob_row={"value": "1980-07-15", "facets": {"precision": "day"}, "provenance_rank": 60},

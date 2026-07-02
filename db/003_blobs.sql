@@ -23,10 +23,14 @@ CREATE TABLE IF NOT EXISTS blob_store (
     first_seen   TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     fetched_at   TIMESTAMPTZ,
 
-    -- The blob is self-verifying: when bytes are present, their BLAKE3 must equal
-    -- the address. cairn-sync checks this before flipping present := TRUE; the DB
-    -- restates the invariant so a wrong-hash blob can never masquerade as present.
-    CONSTRAINT blob_self_verifying
+    -- The blob is self-verifying: when bytes are present, their BLAKE3 must equal the
+    -- content address. That BLAKE3-vs-address check is performed by cairn-sync (L2) before
+    -- it flips present := TRUE — pgcrypto has no BLAKE3, so the DB CANNOT restate it here.
+    -- This CHECK is only the length-consistency floor it CAN enforce; it does NOT prove
+    -- the bytes hash to the address (a right-length wrong-bytes blob could sit present=TRUE
+    -- if L2 were bypassed). See issue: BLAKE3 verification belongs in cairn_pgx to make the
+    -- self-verifying property a true in-DB floor rather than an L2 promise.
+    CONSTRAINT blob_length_consistent
         CHECK (NOT present OR (content IS NOT NULL AND byte_len = octet_length(content)))
 );
 

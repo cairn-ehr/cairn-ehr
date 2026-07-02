@@ -125,6 +125,10 @@ CREATE TABLE IF NOT EXISTS patient_link (
     CHECK (low < high)
 );
 GRANT SELECT ON patient_link TO cairn_agent;
+-- The component BFS joins on (pl.low = node OR pl.high = node). The PK indexes the `low`
+-- side; without an index on `high` the walk sequentially scans the edge table, which
+-- cliffs as the link graph grows. Index the high side so both directions are indexed.
+CREATE INDEX IF NOT EXISTS patient_link_high_idx ON patient_link (high) WHERE state = 'link';
 
 -- 5. person_member: the golden-identity projection. person_id = the MINIMUM UUID in
 --    the connected component (a derived canonical representative — the "person" is a
@@ -205,6 +209,16 @@ DECLARE
     hi      uuid  := GREATEST(a, b);
     v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
 BEGIN
+    -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
+    -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
+    -- applies (e.g. link(A,B) and link(B,C)) each BFS without seeing the other's uncommitted
+    -- edge, so the union {A,B,C} is left half-computed until something else touches it.
+    -- A single transaction-scoped advisory lock serializes all linkage recomputes. It is a
+    -- coarse lock, but link/unlink is rare relative to clinical writes and the clinical hot
+    -- path never takes it, so there is no contention with normal event submission. (Keyed on
+    -- a fixed project constant distinct from the test-serialization guard key.)
+    PERFORM pg_advisory_xact_lock(x'4341524E4C4B'::bigint);  -- 'CARNLK'
+
     INSERT INTO patient_link
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence)
     VALUES

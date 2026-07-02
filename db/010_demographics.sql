@@ -60,9 +60,10 @@ END;
 $$;
 
 -- The §4.2 set-union projection: one row per (patient, system, match_key). Identifiers
--- are set-union, never LWW — first-seen wins, re-assertion is a no-op, same-system /
--- different-normalized keeps BOTH rows (the veto SIGNAL preserved as data; the veto
--- itself is out of scope). `use` is a reserved word, so the column is `use_type`.
+-- are set-union: same-system / different-normalized keeps BOTH rows (the veto SIGNAL
+-- preserved as data; the veto itself is out of scope). Within ONE (system, match_key)
+-- member, the representative is the HLC-latest assertion (deterministic overlay), NOT
+-- first-applied — see the apply function. `use` is a reserved word, so it is `use_type`.
 CREATE TABLE IF NOT EXISTS patient_identifier (
     patient_id         UUID    NOT NULL,
     system             TEXT    NOT NULL,
@@ -94,7 +95,28 @@ BEGIN
         (NEW.patient_id, p ->> 'system', COALESCE(norm, p ->> 'value'),
          p ->> 'value', norm, p ->> 'profile', p ->> 'use', p ->> 'provenance',
          NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-    ON CONFLICT (patient_id, system, match_key) DO NOTHING;
+    -- CONVERGENCE FIX: DO NOTHING kept the FIRST-APPLIED row, whose non-key columns
+    -- (value, provenance, ...) can differ between two assertions that share a match_key
+    -- (e.g. "943 476 5919" vs "9434765919", or patient-stated then document-verified).
+    -- "First applied" is node-local apply ORDER, not a function of the event set, so two
+    -- honest nodes could keep DIFFERENT rows for the same patient — and the db/016 veto
+    -- reads .value/.normalized, so they could then compute DIFFERENT hard-veto verdicts.
+    -- Keep the HLC-latest assertion as the deterministic representative instead (the same
+    -- apply-order-independent overlay every other demographic projection uses), with
+    -- `value` as the final total-order tiebreak against a duplicate-HLC authoring bug.
+    ON CONFLICT (patient_id, system, match_key) DO UPDATE SET
+        value              = EXCLUDED.value,
+        normalized         = EXCLUDED.normalized,
+        profile            = EXCLUDED.profile,
+        use_type           = EXCLUDED.use_type,
+        provenance         = EXCLUDED.provenance,
+        asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
+        asserted_hlc_count = EXCLUDED.asserted_hlc_count,
+        asserted_origin    = EXCLUDED.asserted_origin
+    WHERE (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
+           EXCLUDED.asserted_origin, EXCLUDED.value)
+        > (patient_identifier.asserted_hlc_wall, patient_identifier.asserted_hlc_count,
+           patient_identifier.asserted_origin, patient_identifier.value);
     RETURN NULL;
 END;
 $$;

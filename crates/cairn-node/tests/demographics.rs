@@ -254,3 +254,102 @@ async fn legacy_patient_created_still_uses_derived_twin() {
         &[&body.event_id]).await.unwrap().get(0);
     assert!(twin.starts_with("[patient.created]"), "legacy derives the skeleton twin");
 }
+
+// ── Review fix A4: patient_identifier winner is HLC-deterministic, not first-applied ──
+
+/// Two assertions collapsing to the SAME match_key but carrying different `value`
+/// (e.g. spaced vs unspaced NHS number) must resolve to the HLC-LATEST representative
+/// REGARDLESS of apply order — otherwise two nodes applying the same event set in
+/// different orders keep different rows, and the db/016 veto (which reads .value) can
+/// then compute divergent verdicts. Proves the DO-UPDATE overlay replaced the old
+/// first-applied-wins DO NOTHING.
+#[tokio::test]
+async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+
+    // Same normalized "9434765919" (same match_key), different displayed value.
+    let earlier = IdentifierAssertion {
+        value: "943 476 5919", system: "nhs-number", provenance: "patient-stated",
+        normalized: Some("9434765919"), profile: Some("nhs-number@b3-abc"), use_: None,
+    };
+    let later = IdentifierAssertion { value: "9434765919", ..same_clone(&earlier) };
+
+    // Node 1: apply earlier (wall=1) THEN later (wall=2).
+    let p1 = Uuid::now_v7();
+    assert_identifier(&c, &sk, &kid, p1, 1, &earlier).await.unwrap();
+    assert_identifier(&c, &sk, &kid, p1, 2, &later).await.unwrap();
+
+    // Node 2 (same DB, distinct patient): apply later (wall=2) FIRST, then earlier (wall=1).
+    let p2 = Uuid::now_v7();
+    assert_identifier(&c, &sk, &kid, p2, 2, &later).await.unwrap();
+    assert_identifier(&c, &sk, &kid, p2, 1, &earlier).await.unwrap();
+
+    // Both converge to the HLC-latest value ("9434765919"), independent of apply order.
+    for (p, label) in [(p1, "forward order"), (p2, "reverse order")] {
+        let p_str = p.to_string();
+        let (n, value): (i64, String) = {
+            let row = c.query_one(
+                "SELECT count(*) OVER (), value FROM patient_identifier \
+                 WHERE patient_id::text=$1 AND system='nhs-number' LIMIT 1",
+                &[&p_str]).await.unwrap();
+            (row.get(0), row.get(1))
+        };
+        assert_eq!(n, 1, "{label}: one row per (patient, system, match_key)");
+        assert_eq!(value, "9434765919", "{label}: HLC-latest value wins deterministically");
+    }
+}
+
+// ── Review fix A3: bitemporal tier-1 ceiling (t_effective ≤ t_recorded) ──
+
+/// Build + sign one identifier assertion with an explicit `t_effective` and a chosen
+/// HLC wall (ms), so we can drive the ceiling both ways. Returns the raw submit result.
+async fn submit_with_t_effective(
+    c: &Client, sk: &SigningKey, kid: &str, patient: Uuid,
+    wall_ms: i64, t_effective: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    let a = IdentifierAssertion {
+        value: "X1", system: "s", provenance: "document-verified",
+        normalized: None, profile: None, use_: None,
+    };
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "demographic.identifier.asserted".into(),
+        schema_version: "demographic.identifier/1".into(),
+        hlc: Hlc { wall: wall_ms, counter: 0, node_origin: "n".into() },
+        t_effective: Some(t_effective.to_string()),
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: identifier_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(render_identifier_twin(&a)),
+    };
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await
+}
+
+#[tokio::test]
+async fn t_effective_after_t_recorded_is_rejected_but_backdating_is_accepted() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+
+    // t_recorded ceiling ≈ 2020-09-13 (wall = 1_600_000_000_000 ms). Forward-dating the
+    // effective time to 2031 is prima-facie falsification and must be REJECTED.
+    let p_future = Uuid::now_v7();
+    let r = submit_with_t_effective(&c, &sk, &kid, p_future, 1_600_000_000_000, "2031-01-01T00:00:00Z").await;
+    assert!(r.is_err(), "t_effective after t_recorded must be rejected (ADR-0003 tier-1)");
+    let n: i64 = c.query_one("SELECT count(*) FROM event_log WHERE patient_id::text=$1",
+        &[&p_future.to_string()]).await.unwrap().get(0);
+    assert_eq!(n, 0, "a forward-dated event must not be appended");
+
+    // Backdating (effective time in the PAST relative to t_recorded) is legitimate and
+    // must be ACCEPTED — the whole point of a freely-backdatable t_effective.
+    let p_past = Uuid::now_v7();
+    submit_with_t_effective(&c, &sk, &kid, p_past, 1_600_000_000_000, "2005-06-01T00:00:00Z").await
+        .expect("backdated t_effective (<= t_recorded) must be accepted");
+}

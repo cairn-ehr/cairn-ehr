@@ -48,6 +48,13 @@ BEGIN
     IF EXISTS (SELECT 1 FROM local_node WHERE id) THEN
         RAISE EXCEPTION 'restore_node_event: node already enrolled; restore applies only into a fresh node (live admission is apply_remote_node_event)';
     END IF;
+    -- Size ceiling (review fix A7a): keep the ceiling consistent across every door,
+    -- including the restore path, so a restored image can never smuggle in an oversized
+    -- event that later wedges this node's outbound sync.
+    IF octet_length(p_signed) > cairn_max_event_bytes() THEN
+        RAISE EXCEPTION 'restore_node_event: event is % bytes, over the % -byte admission ceiling',
+            octet_length(p_signed), cairn_max_event_bytes();
+    END IF;
     IF NOT cairn_verify(p_signed) THEN
         RAISE EXCEPTION 'restore_node_event: signature verification failed';
     END IF;

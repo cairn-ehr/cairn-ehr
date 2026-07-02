@@ -67,3 +67,37 @@ def test_real_name_rescues_a_co_present_empty_token_name():
     a = frozenset({Name(tokens={}), n(["alex"], ["kim"])})
     b = frozenset({n(["alex"], ["kim"])})
     assert compare_name_set(a, b, CTX) is AgreementLevel.EXACT
+
+
+def test_subset_name_grades_partial_not_disagree():
+    # §3.7 at token granularity (the fix for the ADR-0014 cultural-bias footgun): a
+    # SHORTER recorded name is overwhelmingly MISSING tokens, not CONFLICTING ones.
+    # "Mary Smith" vs "Mary Jane Smith" — every token in the shorter bag matches — must
+    # be PARTIAL positive evidence (a consistent coarsening), never the DISAGREE penalty
+    # that systematically punishes multi-given-name / compound-surname cultures.
+    a = frozenset({n(["mary"], ["smith"])})
+    b = frozenset({n(["mary", "jane"], ["smith"])})
+    assert compare_name_set(a, b, CTX) is AgreementLevel.PARTIAL
+
+
+def test_subset_name_with_a_second_extra_token_still_partial():
+    # More than one extra token on the longer side is still pure coarsening as long as
+    # every shorter-bag token finds a partner.
+    a = frozenset({n(["mary"], ["smith"])})
+    b = frozenset({n(["mary", "jane", "wei"], ["smith"])})
+    assert compare_name_set(a, b, CTX) is AgreementLevel.PARTIAL
+
+
+def test_subset_name_with_a_real_token_clash_disagrees():
+    # A genuinely conflicting token (no partner for the shorter bag) is still DISAGREE —
+    # PARTIAL is reserved for pure missing-token coarsening, not for a real mismatch.
+    a = frozenset({n(["mary", "zhang"], ["smith"])})
+    b = frozenset({n(["mary", "jane", "wei"], ["smith"])})  # 'zhang' has no partner
+    assert compare_name_set(a, b, CTX) is AgreementLevel.DISAGREE
+
+
+def test_subset_grading_is_symmetric():
+    # Argument order must not change the outcome (design §7: score(A,B) == score(B,A)).
+    a = frozenset({n(["mary"], ["smith"])})
+    b = frozenset({n(["mary", "jane"], ["smith"])})
+    assert compare_name_set(a, b, CTX) is compare_name_set(b, a, CTX)

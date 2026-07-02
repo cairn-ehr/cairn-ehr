@@ -103,7 +103,18 @@ CREATE TRIGGER patient_name_apply_trg
 --      casing of the legal-use token ("Legal"/"LEGAL");
 --   2) recency-first within the tier (newest legal name wins — recency beats provenance
 --      for names, the deliberate divergence from DOB's provenance-lock);
---   3) provenance_rank then asserted_origin break exact-recency ties deterministically.
+--   3) provenance_rank then asserted_origin break exact-recency ties deterministically;
+--   4) use_key then value are the FINAL total-order tiebreak. asserted_origin alone is
+--      unique per event ONLY while every node stamps a distinct (wall,counter,origin) —
+--      true for honest nodes, but a single buggy/hostile authoring node could mint two
+--      events with an identical HLC tuple, leaving DISTINCT ON to pick arbitrarily and
+--      two nodes to display DIFFERENT names from the SAME event set (a silent set-union
+--      divergence in the field this project most obsesses about). Appending the retained
+--      set's remaining PK columns (use_key, value) makes the order total over rows, so
+--      the displayed name converges regardless of client HLC hygiene. (These appended keys
+--      are text, so like node_origin they share the collation-sensitivity tracked in #69 —
+--      convergence holds across nodes that share a DB collation; the codebase-wide COLLATE
+--      "C" fix for the origin/text comparisons is #69's remit, not re-litigated here.)
 -- When no legal name exists, the newest name of ANY use wins (the unidentified-patient
 -- fallback) — paper-parity: the chart header always shows something.
 CREATE OR REPLACE VIEW patient_name_current AS
@@ -114,7 +125,8 @@ FROM patient_name
 ORDER BY patient_id,
          (use_key = 'legal') DESC,
          last_hlc_wall DESC, last_hlc_count DESC,
-         provenance_rank DESC, asserted_origin DESC;
+         provenance_rank DESC, asserted_origin DESC,
+         use_key DESC, value DESC;
 
 GRANT SELECT ON patient_name, patient_name_current TO cairn_agent;
 

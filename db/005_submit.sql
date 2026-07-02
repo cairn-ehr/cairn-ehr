@@ -65,6 +65,14 @@ DECLARE
     v_twin         TEXT;
     c              JSONB;
 BEGIN
+    -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
+    --    so an event too large to replicate or back up can never be admitted (it would
+    --    otherwise wedge sync at its seq forever). See cairn_max_event_bytes() (db/001).
+    IF octet_length(p_signed) > cairn_max_event_bytes() THEN
+        RAISE EXCEPTION 'submit_event: event is % bytes, over the % -byte admission ceiling (would wedge sync/backup)',
+            octet_length(p_signed), cairn_max_event_bytes();
+    END IF;
+
     -- 1. Signature floor (C5.1). cairn_verify is the in-DB pgrx gate.
     IF NOT cairn_verify(p_signed) THEN
         RAISE EXCEPTION 'submit_event: signature verification failed (unsigned or malformed event)';
@@ -78,6 +86,22 @@ BEGIN
     v_type     := b ->> 'event_type';
     -- content_address = sha256 of the signed wire bytes (the COSE envelope), identical to event_address() in cairn-event and the db/001 CHECK. (Distinct from canonical_json_address, which hashes the actor pinned-set body for actor_id.) Attestation tokens bind to THIS value.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
+
+    -- 1b. Bitemporal tier-1 ceiling (ADR-0003 §3.6): t_recorded (the HLC wall) is the
+    --     OBJECTIVE ceiling; t_effective is the freely-BACKDATABLE claim. Backdating is
+    --     legitimate (t_effective in the past); forward-dating past t_recorded is not —
+    --     a node cannot have "recorded" a fact before its own clock reached that instant,
+    --     so t_effective > t_recorded is prima-facie falsification and is rejected here (a
+    --     signed envelope invariant, not soft policy). NOTE: the string->timestamptz cast
+    --     of an offset-less t_effective is session-TimeZone dependent (see issue: pin the
+    --     t_effective wire format to an explicit offset); the comparison of two absolute
+    --     instants below is itself timezone-independent.
+    IF NULLIF(b ->> 't_effective','null') IS NOT NULL
+       AND (b ->> 't_effective')::timestamptz
+           > to_timestamp((b -> 'hlc' ->> 'wall')::bigint / 1000.0) THEN
+        RAISE EXCEPTION 'submit_event: t_effective (%) is after t_recorded ceiling (HLC wall % ms) — prima-facie forward-dating / falsification (ADR-0003 tier-1)',
+            b ->> 't_effective', b -> 'hlc' ->> 'wall';
+    END IF;
 
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked).
     IF NOT EXISTS (SELECT 1 FROM actor_current WHERE signing_key_id = b ->> 'signer_key_id') THEN

@@ -49,8 +49,36 @@ def test_degrade_hold_also_caps_high_score_at_review():
 
 
 def test_veto_does_not_resurrect_a_sub_threshold_pair():
-    # No positive signal + a veto -> still nothing to propose.
+    # WEAK positive signal (name only) + a veto -> still nothing to propose. The rescue
+    # below is scoped to a SHARED IDENTIFIER; a mere name overlap must not flood the
+    # worklist (db/016 fires a veto on any shared blocked name token + verified-dob clash).
     assert band(_score(1.0), [VetoFinding("dob", "hard_veto", "dob", "x")]) is None
+
+
+def _score_with_identifier_exact(total: float) -> MatchScore:
+    # A pair sharing a strong identifier (identifier field graded EXACT) but scored below
+    # the review floor because the veto's own subject (e.g. a verified-DOB clash) carries a
+    # large negative weight that drags the total down.
+    return MatchScore(total=total, fields=(
+        FieldEvidence("identifier", AgreementLevel.EXACT, 0, 4.0),
+        FieldEvidence("dob", AgreementLevel.DISAGREE, 60, -3.7),
+        FieldEvidence("name", AgreementLevel.DISAGREE, 60, -1.3),
+    ))
+
+
+def test_veto_plus_shared_identifier_forces_review_even_below_threshold():
+    # ADR-0014 §6: a hard veto must force a HUMAN decision, never a silent auto-reject.
+    # Two charts sharing a national identifier yet flagged (verified-dob clash) is the
+    # classic wrong-chart / mistyped-identifier contamination signal; the veto suppressing
+    # its OWN surfacing (by dragging the score sub-threshold) would be an auto-reject.
+    v = [VetoFinding("dob", "hard_veto", "dob", "verified dob clash")]
+    assert band(_score_with_identifier_exact(-1.0), v) is Band.REVIEW
+
+
+def test_shared_identifier_below_threshold_without_a_veto_stays_none():
+    # The rescue is veto-gated: strong evidence alone that scores sub-threshold is still
+    # the ordinary noise floor (no anomaly to force in front of a human).
+    assert band(_score_with_identifier_exact(-1.0), []) is None
 
 
 def test_review_threshold_is_inclusive():

@@ -75,14 +75,14 @@ BEGIN
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin)
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin, EXCLUDED.value)
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin)
+             pd.provenance_rank, pd.asserted_origin, pd.value)
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin)
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin)
+             pd.asserted_hlc_count, pd.asserted_origin, pd.value)
     END;
     RETURN NULL;
 END;
@@ -141,7 +141,10 @@ RETURNS void LANGUAGE sql AS $$
         (CASE WHEN policy = 'recency-first' THEN hlc_wall        ELSE provenance_rank END) DESC,
         (CASE WHEN policy = 'recency-first' THEN hlc_counter     ELSE hlc_wall END)        DESC,
         (CASE WHEN policy = 'recency-first' THEN provenance_rank ELSE hlc_counter END)     DESC,
-        node_origin DESC
+        node_origin DESC,
+        -- `value` is the final total-order tiebreak (see 011): guarantees a
+        -- display-convergent winner even if a buggy node minted a duplicate HLC tuple.
+        value DESC
     ON CONFLICT (patient_id, field) DO UPDATE SET
         value              = EXCLUDED.value,
         facets             = EXCLUDED.facets,
@@ -154,14 +157,14 @@ RETURNS void LANGUAGE sql AS $$
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin)
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin, EXCLUDED.value)
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin)
+             pd.provenance_rank, pd.asserted_origin, pd.value)
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin)
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin)
+             pd.asserted_hlc_count, pd.asserted_origin, pd.value)
     END;
 $$;
 

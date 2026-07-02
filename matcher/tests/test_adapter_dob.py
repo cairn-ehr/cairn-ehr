@@ -53,3 +53,17 @@ def test_out_of_range_day_degrades_to_none():
     # Numeric but not a real day-of-month -> degrade rather than emit a wrong DateValue.
     assert parse_dob("1980-07-45", "day") is None
     assert parse_dob("1980-07-00", "day") is None
+
+
+def test_two_digit_year_degrades_to_none():
+    # A legacy import wrote a 2-digit year ("80"). Accepting it would emit DateValue(80),
+    # which then grades DISAGREE (the largest negative weight) against the SAME person's
+    # 1980 record — a fabricated clash from a formatting artefact. The SQL blocking layer
+    # already requires a 4-digit year run; the extractor must match that discipline.
+    assert parse_dob("80", "year") is None
+    assert parse_dob("80-07-15", "day") is None
+
+
+def test_non_four_digit_year_degrades_to_none():
+    assert parse_dob("198-07-15", "day") is None
+    assert parse_dob("19800-07-15", "day") is None

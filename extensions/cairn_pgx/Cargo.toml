@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 
+# This crate is deliberately OUTSIDE the repo workspace (the root Cargo.toml excludes it:
+# pgrx pins its own dependency graph). The empty [workspace] table makes that standalone
+# status self-declared, so cargo stops walking up in search of a parent workspace —
+# without it, a build from a nested checkout (e.g. a git worktree under .claude/worktrees/)
+# walks past the checkout root and errors against whatever manifest sits above it.
+[workspace]
+
 [lib]
 crate-type = ["cdylib", "lib"]
 

@@ -58,6 +58,14 @@ pub fn node_cert(
 fn peer_pubkey_hex(cert: &CertificateDer<'_>) -> Result<String, Error> {
     let (_, parsed) = x509_parser::parse_x509_certificate(cert.as_ref())
         .map_err(|_| Error::InvalidCertificate(CertificateError::BadEncoding))?;
+    // Pin the SPKI ALGORITHM before reading the 32 bytes (review hardening): assert the key
+    // is Ed25519 (OID 1.3.101.112), not merely 32 bytes long. TLS 1.3 proof-of-possession
+    // (aws-lc-rs) already forces the handshake to fail for a substituted key, so this is
+    // defence-in-depth — but it keeps the pinned string unambiguously an Ed25519 key rather
+    // than any 32-byte SPKI blob a future/odd peer might present under another algorithm.
+    if parsed.public_key().algorithm.algorithm.to_id_string() != "1.3.101.112" {
+        return Err(Error::InvalidCertificate(CertificateError::BadEncoding));
+    }
     let spki = parsed.public_key().subject_public_key.as_ref();
     if spki.len() != 32 {
         return Err(Error::InvalidCertificate(CertificateError::BadEncoding));

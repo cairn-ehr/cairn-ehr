@@ -42,6 +42,30 @@ use crate::transport::{self, TrustStore};
 /// skip. `node_event` is low-volume, so a frequent sweep is cheap.
 const FULL_SWEEP_EVERY: u64 = 10;
 
+/// Stall bound for any single network step (connect, handshake, one frame, one write).
+/// This bounds STALL, not transfer size: a long full sweep is fine as long as frames keep
+/// arriving inside the window. Without it a pinned-but-hung peer (compromised,
+/// half-crashed, black-holed) parks `pull_into` on a read forever — which in `run` also
+/// freezes the per-cycle trust refresh, so a `peer.revoked` never takes effect on the
+/// running daemon: a peer you are cutting off could keep itself trusted by stalling your
+/// pull (review finding A7b).
+const IO_TIMEOUT_SECS: u64 = 30;
+
+/// `tokio::time::timeout` wrapper that turns an elapsed timer into a legible io::Error,
+/// so every caller keeps its existing `?`/`context` error plumbing.
+async fn with_io_timeout<T>(
+    what: &str,
+    fut: impl std::future::Future<Output = std::io::Result<T>>,
+) -> std::io::Result<T> {
+    match tokio::time::timeout(std::time::Duration::from_secs(IO_TIMEOUT_SECS), fut).await {
+        Ok(r) => r,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("{what}: no progress within {IO_TIMEOUT_SECS}s (stalled peer)"),
+        )),
+    }
+}
+
 /// A request on the clinical-federation plane. JSON, one per connection.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "op")]
@@ -190,8 +214,15 @@ pub async fn bind_serve(
 /// a config from [`trust_store_from_set`] (the `run` path) honours live updates on
 /// the next handshake; a frozen [`trust_store_from_db`] snapshot (the one-shot
 /// `serve` CLI command) is restart-scoped.
+/// Cap on concurrent serve sessions. Without it an UNAUTHENTICATED client can open
+/// connections and stall mid-handshake, each parking a task + FD indefinitely
+/// (slowloris); with the cap + the handshake timeout in `serve_conn`, a stalled
+/// session is bounded in both number and lifetime (review finding A7b).
+const MAX_SERVE_SESSIONS: usize = 64;
+
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     let acceptor = TlsAcceptor::from(cfg.tls);
+    let sessions = Arc::new(tokio::sync::Semaphore::new(MAX_SERVE_SESSIONS));
     loop {
         let (tcp, peer) = match cfg.listener.accept().await {
             Ok(v) => v,
@@ -200,9 +231,16 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
                 continue;
             }
         };
+        // At capacity: shed the newest connection rather than queueing unbounded work.
+        // Legitimate peers simply retry next pull cycle; a flood is bounded here.
+        let Ok(permit) = sessions.clone().try_acquire_owned() else {
+            eprintln!("serve: at {MAX_SERVE_SESSIONS}-session capacity, dropping {peer}");
+            continue;
+        };
         let acceptor = acceptor.clone();
         let db_conn = cfg.db_conn.clone();
         tokio::spawn(async move {
+            let _permit = permit; // held for the session's lifetime
             if let Err(e) = serve_conn(acceptor, tcp, &db_conn).await {
                 eprintln!("serve: session with {peer} ended: {e}");
             }
@@ -213,9 +251,13 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
 /// Handle one accepted connection: complete the mTLS handshake (which pins the
 /// client), read one request frame, and stream the requested `node_event` bytes.
 async fn serve_conn(acceptor: TlsAcceptor, tcp: TcpStream, db_conn: &str) -> anyhow::Result<()> {
-    let mut tls = acceptor.accept(tcp).await.context("mTLS handshake (client pin)")?;
+    // Both the handshake and the request read are stall-bounded: an unauthenticated
+    // client that connects and goes silent is disconnected, not parked forever.
+    let mut tls = with_io_timeout("serve handshake", acceptor.accept(tcp))
+        .await
+        .context("mTLS handshake (client pin)")?;
 
-    let req_bytes = match read_frame(&mut tls).await? {
+    let req_bytes = match with_io_timeout("serve request read", read_frame(&mut tls)).await? {
         Some(b) => b,
         None => return Ok(()), // client connected and hung up without a request
     };
@@ -252,11 +294,27 @@ async fn stream_node_events<S: AsyncWriteExt + Unpin>(
     for row in &rows {
         let seq: i64 = row.get(0);
         let bytes: Vec<u8> = row.get(1);
+        // Write-side counterpart of the read-side MAX_FRAME_BYTES cap (review finding
+        // A7a): an oversized stored event would be REFUSED by every puller's read cap,
+        // and because the puller aborts mid-stream without checkpointing, one such event
+        // would wedge the link at this seq forever. The DB doors now reject oversized
+        // events at admission, so this fires only for a legacy/hand-inserted row — skip
+        // it LOUDLY rather than poisoning the stream for everything after it.
+        if 8 + bytes.len() > MAX_FRAME_BYTES {
+            eprintln!(
+                "serve: node_event seq {seq} is {} bytes, over the {MAX_FRAME_BYTES}-byte \
+                 frame cap — skipping (unreplicable; investigate how it was admitted)",
+                bytes.len()
+            );
+            continue;
+        }
         // Frame payload = 8-byte BE seq ++ signed_bytes.
         let mut framed = Vec::with_capacity(8 + bytes.len());
         framed.extend_from_slice(&seq.to_be_bytes());
         framed.extend_from_slice(&bytes);
-        write_frame(tls, &framed).await.context("writing a node_event frame")?;
+        with_io_timeout("node_event frame write", write_frame(tls, &framed))
+            .await
+            .context("writing a node_event frame")?;
     }
     Ok(())
 }
@@ -319,19 +377,33 @@ pub async fn pull_into(
     };
 
     let connector = TlsConnector::from(tls);
-    let tcp = TcpStream::connect(peer).await.with_context(|| format!("connecting to {peer}"))?;
+    // Every network step is stall-bounded (review finding A7b): a black-holed address, a
+    // peer that accepts TCP then never completes the handshake, or one that goes silent
+    // mid-stream all surface as a timeout error — the pull fails LOUDLY (and, in `run`,
+    // the loop continues: trust refresh and the next cycle still happen) instead of
+    // parking the daemon on a read forever.
+    let tcp = with_io_timeout("connect", TcpStream::connect(peer))
+        .await
+        .with_context(|| format!("connecting to {peer}"))?;
     // The pinned server cert's SAN is "cairn-node" (see transport::node_cert); the
     // ServerName is cosmetic here because the custom verifier pins on the key, not
     // the name, but rustls still requires a syntactically valid name.
     let name = ServerName::try_from("cairn-node").context("building server name")?;
-    let mut tls = connector.connect(name, tcp).await.context("mTLS handshake (server pin)")?;
+    let mut tls = with_io_timeout("pull handshake", connector.connect(name, tcp))
+        .await
+        .context("mTLS handshake (server pin)")?;
 
     let req = Request::NodeEventsAfterSeq { after_seq };
-    write_frame(&mut tls, &serde_json::to_vec(&req)?).await.context("sending request")?;
+    with_io_timeout("request write", write_frame(&mut tls, &serde_json::to_vec(&req)?))
+        .await
+        .context("sending request")?;
 
     let mut stats = PullStats::default();
     let mut max_seq = after_seq;
-    while let Some(frame) = read_frame(&mut tls).await.context("reading a response frame")? {
+    while let Some(frame) = with_io_timeout("response frame read", read_frame(&mut tls))
+        .await
+        .context("reading a response frame")?
+    {
         stats.received += 1;
         // Frame = [8-byte BE seq][signed_bytes]. A short frame is a protocol error.
         if frame.len() < 8 {

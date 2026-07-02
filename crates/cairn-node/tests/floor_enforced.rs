@@ -106,6 +106,56 @@ async fn floor_binds_the_unprivileged_runtime_role() {
         .ok();
 }
 
+/// Review fix A6: the actor-enrollment trust anchor is CLOSED to a non-owner role.
+///
+/// The actor registry decides who may author (submit_event trusts actor_current), so
+/// enrollment must never be reachable by the unprivileged runtime role — otherwise a
+/// self-enrolled pubkey could author "legitimately signed" events. Proves both halves of
+/// the explicit floor added to db/004: (a) a raw INSERT into actor_event is denied, and
+/// (b) EXECUTE on enroll_actor is revoked from PUBLIC, so the runtime role cannot call it.
+#[tokio::test]
+async fn enrollment_gate_closed_for_runtime_role() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+
+    let owner = db::connect_and_load_schema(&base).await.unwrap();
+    let role = "cairn_enroll_gate_test";
+    db::provision_runtime_role(&owner, role).await.unwrap();
+    let runtime: Client = db::connect(&conn_as_role(&base, role)).await.unwrap();
+
+    // (a) Raw INSERT into actor_event must be denied (append-only floor is privilege-gated).
+    let raw = runtime
+        .execute(
+            "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id) \
+             VALUES ('\\x00', 'enroll', 'agent', '{}', 'attacker-key')",
+            &[],
+        )
+        .await;
+    let err = raw.expect_err("raw INSERT into actor_event must be denied for the runtime role");
+    assert_eq!(
+        err.code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+        "raw actor_event INSERT must fail with insufficient_privilege (42501), got: {err:?}"
+    );
+
+    // (b) EXECUTE on enroll_actor is revoked from PUBLIC → the runtime role cannot call it.
+    let call = runtime
+        .execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"x\",\"version\":\"1\",\"skill_epoch\":\"e\"}', 'attacker-key')",
+            &[],
+        )
+        .await;
+    let err = call.expect_err("enroll_actor must not be executable by the runtime role");
+    assert_eq!(
+        err.code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+        "enroll_actor EXECUTE must be denied (42501), got: {err:?}"
+    );
+
+    drop(runtime);
+    owner.batch_execute(&format!("DROP ROLE IF EXISTS {role}")).await.ok();
+}
+
 /// The role-name charset gate must reject anything that could break out of the
 /// interpolated DDL — this is the SQL-injection floor for `provision_runtime_role`.
 ///

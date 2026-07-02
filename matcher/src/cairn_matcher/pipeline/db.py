@@ -74,8 +74,12 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
 # more grouping is safe. Real-world extraction adequacy is to be revisited on richer data.
 _GROUPS_SQL = """
 WITH name_tokens AS (
+    -- normalize(value, NFC) so a name recorded decomposed (NFD) on one feed and
+    -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
+    -- are different code points and a true duplicate is never even grouped. Mirrors the
+    -- adapter's _normalize_token (NFC) on the Python comparison side.
     SELECT DISTINCT patient_id, token
-    FROM patient_name, regexp_split_to_table(lower(value), '\\s+') AS token
+    FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
     WHERE token <> ''
 ),
 birth_year AS (

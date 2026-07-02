@@ -26,7 +26,7 @@ from cairn_matcher.pipeline.db import _GROUPS_SQL  # noqa: E402
 _MIRRORED_PASSES = [
     ("exact-DOB pass (shares_blocking_key dob branch)", "FROM patient_demographic WHERE field = 'dob'"),
     ("identifier pass excluding 'unknown' (_identifier_keys)", "FROM patient_identifier WHERE system <> 'unknown'"),
-    ("name-token pass: lower + whitespace split (name_tokens)", "regexp_split_to_table(lower(value), '\\s+')"),
+    ("name-token pass: NFC + lower + whitespace split (name_tokens)", "regexp_split_to_table(lower(normalize(value, NFC)), '\\s+')"),
 ]
 
 

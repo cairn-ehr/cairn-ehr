@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from cairn_matcher import __version__
+from cairn_matcher.agreement import AgreementLevel
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
 
@@ -50,6 +51,18 @@ class Thresholds:
 DEFAULT_THRESHOLDS = Thresholds(review=3.0, auto=8.0)
 
 
+def _has_shared_identifier(score: MatchScore) -> bool:
+    """Does the evidence carry a SHARED STRONG IDENTIFIER (identifier field EXACT)?
+
+    A shared national/system identifier is the rare, high-value signal a veto must never
+    silently bury: two charts sharing an identifier yet flagged (e.g. a verified-DOB
+    clash) is the classic wrong-chart / mistyped-identifier contamination case.
+    """
+    return any(
+        e.field == "identifier" and e.level is AgreementLevel.EXACT for e in score.fields
+    )
+
+
 def band(
     score: MatchScore,
     vetoes: Sequence[VetoFinding],
@@ -59,9 +72,18 @@ def band(
 
     ANY veto finding (hard_veto or degrade_hold) forbids AUTO_CANDIDATE and caps the band
     at REVIEW — never an auto-link, never an auto-reject. A pair below the review
-    threshold yields None regardless of vetoes (no positive signal to act on).
+    threshold normally yields None (no positive signal to act on).
+
+    Exception (ADR-0014 §6, never auto-reject): a veto coexisting with a SHARED STRONG
+    IDENTIFIER is forced to REVIEW even below threshold. Otherwise the veto's own subject
+    (e.g. a verified-DOB clash carrying a large negative weight) could drag the score
+    sub-threshold and silently suppress the very anomaly it flags — an auto-reject in
+    effect. The rescue is scoped to a shared identifier (not any veto) so it surfaces the
+    contamination signal without flooding the worklist with common-name coincidences.
     """
     if score.total < thresholds.review:
+        if vetoes and _has_shared_identifier(score):
+            return Band.REVIEW
         return None
     if score.total >= thresholds.auto and not vetoes:
         return Band.AUTO_CANDIDATE

@@ -68,6 +68,7 @@ mod tests {
             contributors: serde_json::json!([{"actor_id": "x", "role": "triaged"}]),
             payload: serde_json::json!({"urgency": 3}),
             attachments: vec![],
+            plaintext_twin: None,
         };
         let signed = cairn_event::sign(&body, &sk).unwrap();
         let parsed = crate::cairn_body(&signed.signed_bytes).expect("verifies");
@@ -113,6 +114,7 @@ mod tests {
             contributors: serde_json::json!([]),
             payload: serde_json::json!({"k": "v"}),
             attachments: vec![],
+            plaintext_twin: None,
         };
         let signed = cairn_event::sign(&body, &sk).unwrap();
         assert!(crate::cairn_verify(&signed.signed_bytes));

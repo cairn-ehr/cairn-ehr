@@ -428,7 +428,14 @@ pub fn sign_attestation(
     sign1.to_vec().map_err(|e| EventError::Cose(e.to_string()))
 }
 
-/// Verify an attestation token against `vk` and confirm it binds `content_address`.
+/// Verify an attestation token against `vk`, confirm it binds `content_address`, AND
+/// confirm the token's CLAIMED `attester_key_id` is the key that actually signed it.
+///
+/// That last check mirrors the event-side `signer_key_id` gate (see `verify_self_described`
+/// / `SignerKeyMismatch`): without it, the `attester_key_id` field is forgeable attribution
+/// to any consumer that reads it out of a stored token (audit UI, re-verification on sync) —
+/// the signature would verify while naming a different attester. Responsibility attribution
+/// (ADR-0007) must not be forgeable, so the claimed key must equal the verifying key.
 pub fn verify_attestation(token: &[u8], content_address: &[u8], vk: &VerifyingKey) -> bool {
     use coset::{CborSerializable, CoseSign1};
     let sign1 = match CoseSign1::from_slice(token) {
@@ -455,6 +462,7 @@ pub fn verify_attestation(token: &[u8], content_address: &[u8], vk: &VerifyingKe
         Err(_) => return false,
     };
     body.content_address_hex == hex::encode(content_address)
+        && body.attester_key_id == hex::encode(vk.to_bytes())
 }
 
 /// Recursively sort object keys so the encoding is canonical regardless of input
@@ -755,6 +763,25 @@ mod tests {
         let m = bad.len() / 2;
         bad[m] ^= 0x01;
         assert!(!verify_attestation(&bad, &ca, &vk));
+    }
+
+    #[test]
+    fn attestation_rejects_forged_attester_key_id() {
+        // Review fix M7: a token that SIGNS with sk but CLAIMS a different attester in the
+        // payload must be rejected — otherwise the attester_key_id field is forgeable
+        // attribution to any consumer that reads it out of a stored token.
+        let (sk, _kid) = generate_key().unwrap();
+        let vk = sk.verifying_key();
+        let ca = event_address(b"evt");
+        // Claim a victim's key id while signing with our own key.
+        let victim_kid = hex::encode(SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes());
+        let forged = sign_attestation(&ca, &victim_kid, "attested", &sk).unwrap();
+        // Signature verifies against vk and the content-address matches, but the claimed
+        // attester_key_id != hex(vk), so the binding check must reject it.
+        assert!(
+            !verify_attestation(&forged, &ca, &vk),
+            "a token whose attester_key_id != signing key must be rejected"
+        );
     }
 
     #[test]

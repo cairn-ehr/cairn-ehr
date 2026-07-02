@@ -149,10 +149,14 @@ BEGIN
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
         updated_at         = clock_timestamp()
+    -- `value` is the FINAL total-order tiebreak: (rank,wall,counter,origin) is unique per
+    -- event only while nodes stamp distinct HLC tuples; a buggy node minting a duplicate
+    -- HLC would otherwise leave the winner apply-order-dependent (cross-node divergence).
+    -- With value appended the projected winner is display-convergent unconditionally.
     WHERE (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin)
+           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
         > (pd.provenance_rank, pd.asserted_hlc_wall,
-           pd.asserted_hlc_count, pd.asserted_origin);
+           pd.asserted_hlc_count, pd.asserted_origin, pd.value);
     RETURN NULL;
 END;
 $$;

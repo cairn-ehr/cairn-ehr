@@ -20,6 +20,19 @@ BEGIN;
 -- Content-addressing and the legibility twin lean on pgcrypto's digest().
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Maximum size of one signed event, enforced at EVERY admission door (submit_event,
+-- submit_node_event, apply_remote_node_event, restore_node_event). This is the WRITE-side
+-- counterpart of the wire/backup read caps (sync.rs MAX_FRAME_BYTES / medium.rs
+-- MAX_CHUNK_BYTES, both 8 MiB): those caps REFUSE an oversized event on read, and because
+-- a puller aborts mid-stream without checkpointing, a single oversized-but-admitted event
+-- would wedge sync at that seq forever AND could clobber a good backup medium. Refusing
+-- oversize at admission makes that unreachable — the read caps become true dead paths for
+-- honest data. Set below the 8 MiB (8,388,608-byte) frame cap with headroom for framing.
+-- (Review finding A7a. Attachments are content-addressed blobs on the byte tier, NOT
+-- inlined here, so a legitimate clinical event never approaches this bound — ADR-0013.)
+CREATE OR REPLACE FUNCTION cairn_max_event_bytes()
+RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT 8000000 $$;
+
 -- ---------------------------------------------------------------------------
 -- The append-only, signed clinical event log (governing principle #1).
 -- ---------------------------------------------------------------------------

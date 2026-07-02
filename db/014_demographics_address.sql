@@ -192,7 +192,15 @@ CREATE TRIGGER patient_address_apply_trg
 -- set with NO stored pointer. The ORDER BY is the whole rule: recency-first within the use
 -- (newest address wins — recency beats provenance for a volatile field, the deliberate
 -- divergence from DOB's provenance-lock), with provenance_rank then asserted_origin as
--- deterministic tiebreaks so every node converges to the same current address per use.
+-- deterministic tiebreaks, and `display` as the FINAL total-order key. asserted_origin is
+-- unique per event only while nodes stamp distinct (wall,counter,origin) tuples; a buggy
+-- authoring node minting a duplicate HLC would otherwise leave DISTINCT ON to pick
+-- arbitrarily and two nodes to show different addresses per use (silent set-union
+-- divergence — wrong post-discharge letters / ambulance dispatch). Appending `display`
+-- (the retained set's remaining PK column) makes the order total, so the current address
+-- converges regardless of client HLC hygiene. (`display` is text, so like node_origin it
+-- shares the collation-sensitivity tracked in #69: convergence holds across nodes sharing
+-- a DB collation; the codebase-wide COLLATE "C" fix lives in #69.)
 CREATE OR REPLACE VIEW patient_address_current AS
 SELECT DISTINCT ON (patient_id, use_key)
     patient_id, use_key, display, use_raw, geo, structured,
@@ -200,7 +208,8 @@ SELECT DISTINCT ON (patient_id, use_key)
 FROM patient_address
 ORDER BY patient_id, use_key,
          last_hlc_wall DESC, last_hlc_count DESC,
-         provenance_rank DESC, asserted_origin DESC;
+         provenance_rank DESC, asserted_origin DESC,
+         display DESC;
 
 GRANT SELECT ON patient_address, patient_address_current TO cairn_agent;
 
