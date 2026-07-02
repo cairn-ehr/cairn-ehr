@@ -171,7 +171,9 @@ BEGIN
             octet_length(p_signed), cairn_max_event_bytes();
     END IF;
     IF NOT cairn_verify(p_signed) THEN
-        RAISE EXCEPTION 'submit_node_event: signature verification failed (unsigned or malformed)';
+        -- Legible reason as DETAIL (issue #109): tells a wire-format skew apart from tampering.
+        RAISE EXCEPTION 'submit_node_event: signature verification failed (unsigned or malformed)'
+            USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
     IF b IS NULL THEN
@@ -311,7 +313,9 @@ BEGIN
             octet_length(p_signed), cairn_max_event_bytes();
     END IF;
     IF NOT cairn_verify(p_signed) THEN
-        RAISE EXCEPTION 'apply_remote_node_event: signature verification failed';
+        -- Legible reason as DETAIL (issue #109): tells a wire-format skew apart from tampering.
+        RAISE EXCEPTION 'apply_remote_node_event: signature verification failed'
+            USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
     v_type := b ->> 'event_type'; v_eid := (b ->> 'event_id')::uuid;

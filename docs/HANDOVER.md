@@ -10,7 +10,31 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, latest) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
+**This session (2026-07-02, latest) — issue #109: wire the ADR-0040 legibility/skew primitives into the doors +
+daemon.** PR #107 added the primitives (`cairn_verify_error(bytea)`, `cairn_pgx_version()`, extension bumped to
+0.2.0) but left the consumers unwired; this closes all three parts. **(1) Legible rejection reason at every
+signature door** — `submit_event` (db/005), `apply_remote_event` (db/020), `submit_node_event` +
+`apply_remote_node_event` (db/007), `restore_node_event` (db/009) keep the boolean `cairn_verify` gate but now
+attach `USING DETAIL = coalesce(cairn_verify_error(p_signed),'unknown')`, so a wire-format skew / pre-ADR-0040
+context mismatch is distinguishable from tampering at the SQL boundary (during a skew-induced write outage the
+generic message misdirected the operator badly). **(2) Daemon startup skew check** — a pure
+`parse_pgx_version`/`pgx_version_ok` pair (fail-closed on unparseable) + `assert_pgx_floor` gate cairn-sync on
+`cairn_pgx_version() >= 0.2.0` (const `REQUIRED_PGX_FLOOR`) at BOTH startup hooks the issue names: `cmd_init`
+(right after `CREATE EXTENSION`, which won't upgrade a stale lib) and `connect_checked` (covers
+pull/run/quarantine/requeue); a pre-0.2.0 lib lacks the function entirely → that `UNDEFINED_FUNCTION` error is
+translated to the same actionable "rebuild + `cargo pgrx install`" message instead of leaking a raw
+"function does not exist". **(3) db/015 `event_twin_provenance`** gains a `verifiable` column
+(`cairn_verify(signed_bytes)`, appended last so CREATE OR REPLACE VIEW stays additive): a row whose bytes no
+longer verify was silently reported `twin_authored=false` ("author omitted the twin"), so a re-authoring
+worklist could clobber genuinely-authored twins — now `verifiable=false` surfaces it as "no longer verifies".
+TDD: `crates/cairn-node/tests/verify_error_detail.rs` (2 DB-gated — every door surfaces a non-empty DETAIL;
+the view distinguishes an unverifiable row) + 3 pure version-compare unit tests + 1 DB-gated
+`assert_pgx_floor_passes_on_the_current_rig`. Full cairn-sync (18) + cairn-node suites + the touched
+`db/tests/{005,007,009,020,021}` SQL self-checks + workspace clippy all green on the Mac PG18 / cairn_pgx 0.2.0
+rig. Additive only — no SCHEMA-floor bump, no spec/ADR change (implements settled ADR-0040). Closes #109.
+Sibling follow-on #111 (node-event-plane quarantine) is the next slice.
+
+**Earlier this session (2026-07-02) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
 integrity failures in cairn-sync:** closed the clinical-plane pull loop's silent skip-and-advance, then hardened it
 against its own review (8 confirmed findings, all fixed in-PR). Before: an unverifiable pulled event left only a
 transient stderr line while later verifiable events advanced the watermark past it (silent permanent set-union
