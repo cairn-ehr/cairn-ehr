@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-02 · **Spec/ADRs:** v0.40 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-07-02 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
 generation + batch sweep · B3 eval harness — scorer + blocking-recall measurement · B3 compound blocking key
@@ -10,7 +10,28 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, latest) — issue #99 (part): the contamination-cascade recall key (review A10):**
+**This session (2026-07-02, latest) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
+closed the review-B4 wire-freeze pair before more signatures accumulate. **(a)** The Sign1-vs-multi-signer
+ambiguity in ADR-0015's rationale is resolved: an event carries **exactly one envelope signature** (the
+authoring actor's); plurality is contributor-set-in-body + attestation tokens + overlay co-signing (ADR-0007 §6)
+— COSE_Sign dismissed. **(b)** Every signature is now **domain-separated by a registered signing context**,
+bound twice: the context string as COSE protected-header content type (self-describing wire, legible
+`ContextMismatch` rejection — principle 11) AND as `external_aad` in the Sig_structure (cross-context
+verification fails in the signature math, not just a policy check). Closed additive-only registry:
+`application/cairn-event+cbor` (clinical AND node planes — both sign an `EventBody`; plane separation stays
+`event_type` + fail-closed classification inside the payload), `application/cairn-attestation+cbor`,
+`application/cairn-pairing+cbor`. **Fail closed, no grandfathering:** pre-ADR-0040 uncontextualized blobs are
+rejected everywhere (no production data; dev federations/rigs re-init + re-sign — deliberate, recorded in the
+ADR). Implementation: one generic `cose_sign1_in_context`/`cose_verify1_in_context` pair in `cairn-event` that
+every public sign/verify function delegates to (the triplicated COSE code collapsed; forgetting the context is
+now impossible by construction); `cairn_pgx`/DB doors inherit unchanged (they already delegate). TDD: 6 new
+red-first tests incl. a demonstration that the pre-fix code DID verify a legacy-signed attestation-shaped
+payload as an attestation (the live vulnerability), aad-is-load-bearing (lying header rejected), legacy
+fail-closed, wire self-description, and legible cross-context `ContextMismatch`. cairn-event 48/48; workspace +
+clippy green. **Operational note:** the local rig's `cairn_pgx` must be rebuilt (`cargo pgrx install`) and any
+dev federation re-initialized — old signatures now fail closed (intended).
+
+**Earlier this session (2026-07-02) — issue #99 (part): the contamination-cascade recall key (review A10):**
 fixed the recall-epoch resolution bug + the related deferred floor items on the recall surface, TDD against a
 local PG16+cairn_pgx rig. **The bug:** `events_by_actor_epoch` joined `actor_current`, so the moment a
 supersede/re-enroll bumped a key's `skill_epoch`, a recall of the OLD epoch silently returned nothing — a
@@ -567,6 +588,7 @@ ADR before reopening any of these.
 | [0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md) | Sex/gender/karyotype field semantics: per-field winner policy; karyotype is a distinct field, never displaces assigned sex-at-birth | §4.2 (refines 0011/0014) |
 | [0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows ADR-0036) | §4.3 (refines 0032, follows 0036) |
 | [0039](spec/decisions/0039-globalise-authored-legibility-twin.md) | Globalise the author-materialised legibility twin to every event type; honest-degradation fallback for non-demographic types | §3.13/§4.5 (refines 0012/0034) |
+| [0040](spec/decisions/0040-signing-context-domain-separation.md) | Signing-context domain separation (content-type + `external_aad`); one signature per event, co-signing by overlay | §3.5 (refines 0015/0007/0030) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
