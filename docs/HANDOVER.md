@@ -30,8 +30,9 @@ registry does not replicate yet (ADR-0011 future work), so an event from a not-y
 puller's watermark (A1 discipline: delayed, never lost) until enrollment. Tests: 15 new DB-gated integration tests
 (`crates/cairn-node/tests/apply_remote_event.rs`), `db/tests/020` grant-floor SQL tests, wire-compat + offset-pin
 unit tests; end-to-end two-DB converge + unenrolled-freeze + enroll-heal exercised live. cairn-node SCHEMA array
-18→19 entries (020 added); no spec/ADR bump (implements settled ADR-0021/0022/0030). Possible follow-up: a
-one-line spec note in §3.6/ADR-0015 prose recording the t_effective explicit-offset wire pin.
+18→19 entries (020 added); no spec/ADR bump (implements settled ADR-0021/0022/0030). The t_effective
+explicit-offset wire pin is recorded in spec §3.6 prose (one line on the `t_effective` bullet, refining
+ADR-0015 — the ADR itself stays untouched per immutability).
 
 **Earlier this session (2026-07-02) — comprehensive review + hardening pass:** an adversarial full-repo review (7 parallel
 agents over the SQL floor, the Rust crates, the Python matcher, and all 39 ADRs; findings cross-checked and re-verified
