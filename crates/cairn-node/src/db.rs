@@ -1,6 +1,6 @@
 use tokio_postgres::{Client, NoTls};
 
-const SCHEMA: [(&str, &str); 19] = [
+const SCHEMA: [(&str, &str); 20] = [
     ("001_envelope",      include_str!("../../../db/001_envelope.sql")),
     ("002_projection",    include_str!("../../../db/002_projection.sql")),
     ("003_blobs",         include_str!("../../../db/003_blobs.sql")),
@@ -24,6 +24,10 @@ const SCHEMA: [(&str, &str); 19] = [
     ("018_identity_linkage", include_str!("../../../db/018_identity_linkage.sql")),
     ("019_apply_proposal", include_str!("../../../db/019_apply_proposal.sql")),
     ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
+    // Durable quarantine for unverifiable pulled clinical events (issue #108):
+    // node-local operational state beside sync_state, granted to cairn_node so the
+    // sync runtime can quarantine/requeue without owner privileges.
+    ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

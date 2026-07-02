@@ -24,10 +24,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cairn_event::{blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey};
+use cairn_event::{blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey, CTX_EVENT};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA: [(&str, &str); 7] = [
+const SCHEMA: [(&str, &str); 8] = [
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
     ("002_projection", include_str!("../../../db/002_projection.sql")),
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
@@ -37,6 +37,9 @@ const SCHEMA: [(&str, &str); 7] = [
     // The clinical-plane sync apply door (issue #91): replicated events enter
     // event_log only through the in-DB floor, never a daemon-side raw INSERT.
     ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
+    // Durable quarantine for unverifiable pulled events (issue #108): a skipped
+    // event leaves a durable, re-processable trace, never just a stderr line.
+    ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -76,6 +79,15 @@ struct EventsResponse {
     /// Per-event attester public key (hex), parallel to `attestations`.
     #[serde(default)]
     attester_keys: Vec<Option<String>>,
+    /// The ADR-0040 signing context this server's events are minted under
+    /// (issue #108). Lets the puller tell deterministic wire-format skew ("your
+    /// events are signed for a context I don't speak") from tampering BEFORE
+    /// burning a whole batch on per-event verify failures. Additive (serde
+    /// default): a response from a peer predating this field decodes as None —
+    /// "undeclared" — and the puller falls back to the all-unverifiable
+    /// heuristic for the mixed-version diagnosis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signing_context: Option<String>,
 }
 
 /// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
@@ -785,6 +797,42 @@ fn cmd_gen_blob(conn: &str, size_mb: usize, media: &str) -> R<()> {
     Ok(())
 }
 
+/// Persist an unverifiable pulled event into `sync_quarantine` (db/021, issue
+/// #108): verbatim bytes + travelling attestation + the legible verify-failure
+/// reason. A re-offer of the same bytes dedupes onto its existing row (bumping
+/// `last_seen`/`seen_count`) — repeated cycles against a broken peer must not
+/// grow the table. This durable trace is what LICENSES the pull loop to advance
+/// the watermark past the event; if this INSERT fails the caller must freeze
+/// the watermark instead, exactly as for a valid-but-unapplied event.
+fn quarantine_event(
+    client: &mut postgres::Client,
+    peer_name: &str,
+    signed_bytes: &[u8],
+    attestation: Option<&[u8]>,
+    attester_key: Option<&[u8]>,
+    reason: &str,
+) -> R<()> {
+    client.execute(
+        "INSERT INTO sync_quarantine
+             (content_digest, signed_bytes, attestation, attester_key, peer, reason)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (content_digest) DO UPDATE
+            SET last_seen  = clock_timestamp(),
+                seen_count = sync_quarantine.seen_count + 1,
+                reason     = EXCLUDED.reason,
+                peer       = EXCLUDED.peer",
+        &[
+            &cairn_event::event_address(signed_bytes),
+            &signed_bytes.to_vec(),
+            &attestation.map(|a| a.to_vec()),
+            &attester_key.map(|k| k.to_vec()),
+            &peer_name,
+            &reason,
+        ],
+    )?;
+    Ok(())
+}
+
 fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serde_json::Value> {
     client.execute(
         "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
@@ -801,17 +849,41 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
-    // Watermark discipline (review fix A1). The OLD loop advanced the watermark to the max
-    // HLC of the *successfully-applied* events and counted every failure as a "verify
-    // failure", so a transient DB error (or a deterministic insert failure) on a VALIDLY
-    // SIGNED event silently dropped it: the watermark moved past it and the server never
-    // offered it again on this link — a permanent, silent set-union violation with only a
-    // counter as evidence. Fix: advance the watermark ONLY to the contiguous
-    // successfully-applied prefix. The server ships events HLC-ascending, so we FREEZE the
-    // watermark at the first still-verifiable event we fail to apply, and never advance past
-    // it (it is re-fetched and retried next cycle). An UNVERIFIABLE event is illegitimate
-    // (never validly part of the set), so it is skipped and logged WITHOUT freezing —
-    // otherwise a single corrupt byte from a peer would wedge the link forever.
+    // Deterministic wire-format skew check (issue #108): a peer that DECLARES a
+    // signing context we don't speak would fail verification for every event it
+    // ships — refuse the batch up front with an error naming both contexts,
+    // rather than burning per-event failures whose generic "unverifiable" reason
+    // misdirects the operator toward tampering. Nothing is quarantined and the
+    // watermark is untouched: the peer still holds the events, and they apply
+    // normally once the skew (one side needs upgrading) is fixed. A peer that
+    // declares NOTHING is an older build — per-event verification decides, and
+    // the all-unverifiable diagnosis below catches the pure-legacy case.
+    if let Some(peer_ctx) = &resp.signing_context {
+        if peer_ctx != CTX_EVENT.as_str() {
+            return Err(format!(
+                "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
+                 node expects '{}' — wire-format skew, not tampering; upgrade the older \
+                 side. Batch refused, watermark untouched.",
+                CTX_EVENT.as_str()
+            )
+            .into());
+        }
+    }
+
+    // Watermark discipline (review fix A1 + issue #108). The OLD loop advanced the
+    // watermark to the max HLC of the *successfully-applied* events and counted every
+    // failure as a "verify failure", so a transient DB error (or a deterministic insert
+    // failure) on a VALIDLY SIGNED event silently dropped it: the watermark moved past it
+    // and the server never offered it again on this link — a permanent, silent set-union
+    // violation with only a counter as evidence. Fix: advance the watermark ONLY to the
+    // contiguous successfully-applied prefix. The server ships events HLC-ascending, so we
+    // FREEZE the watermark at the first still-verifiable event we fail to apply, and never
+    // advance past it (it is re-fetched and retried next cycle). An UNVERIFIABLE event is
+    // illegitimate (never validly part of the set), so it must not wedge the link — but
+    // "skip" is only admissible once the event is QUARANTINED DURABLY (db/021): bytes +
+    // reason survive for inspection and requeue, so the skip is recorded, never silent.
+    // If even the quarantine INSERT fails, the watermark freezes exactly as for a valid
+    // event — delayed, never lost.
     let (mut applied, mut skipped_unverifiable, mut event_bytes) = (0usize, 0usize, 0usize);
     let (mut max_w, mut max_c) = (wall, counter);
     let mut frozen = false;
@@ -846,22 +918,72 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
             Err(e) => {
                 // Classify the failure. A still-verifiable event that failed to APPLY
                 // (transient DB error, deterministic insert failure, or a refused
-                // substitution) must NOT be lost — freeze the watermark so it is retried and
-                // never skipped. An unverifiable event is illegitimate — skip and quarantine
-                // it (log loudly) without freezing, so it cannot wedge the link.
-                if verify_self_described(&signed_bytes).is_ok() {
-                    frozen = true;
-                    eprintln!(
-                        "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — a valid event \
-                         failed to apply and must not be skipped: {e}"
-                    );
-                } else {
-                    skipped_unverifiable += 1;
-                    eprintln!("pull {peer_name}: skipping unverifiable event (quarantined): {e}");
+                // substitution) must NOT be lost — freeze the watermark so it is retried
+                // and never skipped. An unverifiable event is illegitimate — quarantine
+                // it durably, and only a successful quarantine permits skipping on.
+                match verify_self_described(&signed_bytes) {
+                    Ok(_) => {
+                        frozen = true;
+                        eprintln!(
+                            "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — a valid \
+                             event failed to apply and must not be skipped: {e}"
+                        );
+                    }
+                    Err(verr) => match quarantine_event(
+                        client,
+                        peer_name,
+                        &signed_bytes,
+                        att.as_deref(),
+                        akey.as_deref(),
+                        &verr.to_string(),
+                    ) {
+                        Ok(()) => {
+                            skipped_unverifiable += 1;
+                            eprintln!(
+                                "pull {peer_name}: unverifiable event quarantined durably \
+                                 (sync_quarantine): {verr}; apply door said: {e}"
+                            );
+                        }
+                        Err(qe) => {
+                            frozen = true;
+                            eprintln!(
+                                "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — an \
+                                 unverifiable event could not be durably quarantined, so it \
+                                 must not be skipped: {qe}; verify error: {verr}"
+                            );
+                        }
+                    },
                 }
             }
         }
     }
+
+    // Loud mixed-version detection (issue #108): a batch that is unverifiable IN
+    // ITS ENTIRETY is not the odd corrupt frame — it is the signature of a peer
+    // whose whole history predates ADR-0040 (or a systematically broken link).
+    // Silently returning "0 applied" every cycle would livelock the link with no
+    // operator-visible failure; fail the pull instead, so `run` logs it as loudly
+    // as a partition on every cycle until the peer is fixed. Everything shipped
+    // was already preserved durably above, and the watermark never moved (no
+    // event verified), so nothing is lost. Note an already-synced link never
+    // trips this: the boundary event at the watermark re-ships and re-applies
+    // (idempotent Ok), making the batch mixed.
+    if !resp.events.is_empty() && skipped_unverifiable == resp.events.len() {
+        let declared = match &resp.signing_context {
+            Some(ctx) => format!("declares signing context '{ctx}'"),
+            None => "declares no signing context (a pre-ADR-0040 build would not)".to_string(),
+        };
+        return Err(format!(
+            "pull {peer_name}: ALL {} shipped events are unverifiable and the peer {declared} — \
+             it appears to serve pre-ADR-0040 (or corrupt) signatures. Every event was preserved \
+             in sync_quarantine (inspect with `cairn-sync quarantine`); re-initialize/re-sign the \
+             peer, or if THIS node was at fault run `cairn-sync requeue` after fixing it. \
+             Watermark untouched.",
+            resp.events.len()
+        )
+        .into());
+    }
+
     client.execute(
         "UPDATE sync_state SET hlc_wall=$1, hlc_counter=$2, last_pull_at=clock_timestamp() WHERE peer=$3",
         &[&max_w, &max_c, &peer_name],
@@ -879,6 +1001,104 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         "elapsed_ms": elapsed_ms,
         "watermark_wall": max_w, "watermark_counter": max_c
     }))
+}
+
+/// Re-process every quarantined event through the real apply door (issue #108's
+/// "inspectable and re-processable"): an event that now verifies — e.g. it was
+/// falsely rejected by a version-skewed daemon binary since upgraded — is applied
+/// and its row cleared; one that still fails stays held with its reason refreshed
+/// from the door. Never a raw INSERT: release goes through `apply_remote_event`
+/// (db/020), so requeue can only ever ADMIT what the floor admits.
+fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
+    let rows = client.query(
+        "SELECT content_digest, signed_bytes, attestation, attester_key
+         FROM sync_quarantine ORDER BY first_seen",
+        &[],
+    )?;
+    let (mut released, mut still_quarantined) = (0usize, 0usize);
+    for row in &rows {
+        let digest: Vec<u8> = row.get(0);
+        let signed: Vec<u8> = row.get(1);
+        let att: Option<Vec<u8>> = row.get(2);
+        let akey: Option<Vec<u8>> = row.get(3);
+        match apply_signed(client, &signed, att.as_deref(), akey.as_deref()) {
+            Ok(_) => {
+                client.execute(
+                    "DELETE FROM sync_quarantine WHERE content_digest=$1",
+                    &[&digest],
+                )?;
+                released += 1;
+                eprintln!("requeue: released {} through the apply door", hex_prefix(&digest));
+            }
+            Err(e) => {
+                // Still refused: keep the row, refresh the reason so the operator
+                // sees the CURRENT rejection, not the one from quarantine time.
+                client.execute(
+                    "UPDATE sync_quarantine
+                     SET last_seen = clock_timestamp(), reason = $2
+                     WHERE content_digest = $1",
+                    &[&digest, &e.to_string()],
+                )?;
+                still_quarantined += 1;
+                eprintln!("requeue: {} still refused: {e}", hex_prefix(&digest));
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "op": "requeue",
+        "examined": rows.len(),
+        "released": released,
+        "still_quarantined": still_quarantined
+    }))
+}
+
+/// First 16 hex chars of a content digest — enough to identify a row in logs and
+/// to paste into a `WHERE encode(content_digest,'hex') LIKE '…%'` inspection query.
+fn hex_prefix(digest: &[u8]) -> String {
+    let h = hex::encode(digest);
+    h[..h.len().min(16)].to_string()
+}
+
+fn cmd_requeue(conn: &str, metrics: bool) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let m = do_requeue(&mut client)?;
+    if metrics {
+        println!("{m}");
+    } else {
+        println!(
+            "requeue: {} examined, {} released, {} still quarantined",
+            m["examined"], m["released"], m["still_quarantined"]
+        );
+    }
+    Ok(())
+}
+
+/// List the quarantine (one JSON line per row, newest last) so an operator can see
+/// exactly which events a link skipped, from which peer, and why — without psql.
+fn cmd_quarantine(conn: &str) -> R<()> {
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let rows = client.query(
+        "SELECT encode(content_digest,'hex'), peer, reason, octet_length(signed_bytes),
+                first_seen::text, last_seen::text, seen_count
+         FROM sync_quarantine ORDER BY first_seen",
+        &[],
+    )?;
+    for r in &rows {
+        println!(
+            "{}",
+            serde_json::json!({
+                "digest": r.get::<_, String>(0),
+                "peer": r.get::<_, String>(1),
+                "reason": r.get::<_, String>(2),
+                "bytes": r.get::<_, i32>(3),
+                "first_seen": r.get::<_, String>(4),
+                "last_seen": r.get::<_, String>(5),
+                "seen_count": r.get::<_, i32>(6)
+            })
+        );
+    }
+    eprintln!("{} event(s) in quarantine", rows.len());
+    Ok(())
 }
 
 fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
@@ -1184,8 +1404,11 @@ fn cmd_run(
                 line["pull"] = m;
             }
             Err(e) => {
-                // A sustained outage (retries exhausted) = a partition. Logged, not fatal.
-                status += ": PARTITION (pull unreachable)";
+                // A sustained outage (retries exhausted) = a partition; since issue
+                // #108 a pull also fails LOUDLY on wire-format skew / an
+                // all-unverifiable peer, so surface the reason on the status line
+                // rather than a blanket "unreachable".
+                status += &format!(": PULL FAILED: {e}");
                 line["partition"] = serde_json::json!(true);
                 line["pull_error"] = serde_json::json!(e.to_string());
             }
@@ -1233,7 +1456,14 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
             let events = rows.iter().map(|r| r.get::<_, String>(0)).collect();
             let attestations = rows.iter().map(|r| r.get::<_, Option<String>>(1)).collect();
             let attester_keys = rows.iter().map(|r| r.get::<_, Option<String>>(2)).collect();
-            serde_json::to_vec(&EventsResponse { events, attestations, attester_keys })?
+            serde_json::to_vec(&EventsResponse {
+                events,
+                attestations,
+                attester_keys,
+                // Declare the context we mint under (issue #108) so a skewed
+                // puller can refuse the batch deterministically and legibly.
+                signing_context: Some(CTX_EVENT.as_str().to_string()),
+            })?
         }
         Request::BlobSlice {
             addr_hex,
@@ -1303,6 +1533,9 @@ USAGE (all take --conn <postgres-uri>):
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
   gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
   pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics]
+  quarantine  --conn URI    (list events skipped as unverifiable: digest, peer, reason)
+  requeue     --conn URI [--metrics]
+              (re-process quarantined events through the apply door after fixing the cause)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
   serve       --conn URI --listen HOST:PORT [--corrupt]
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
@@ -1376,6 +1609,8 @@ fn main() -> R<()> {
             &need(flag(&args, "--peer-name")),
             args.iter().any(|a| a == "--metrics"),
         )?,
+        "quarantine" => cmd_quarantine(&need(conn))?,
+        "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
         "gen-blob" => cmd_gen_blob(
             &need(conn),
             flag(&args, "--size-mb").and_then(|s| s.parse().ok()).unwrap_or(8),
@@ -1492,5 +1727,282 @@ mod tests {
             None,
             "per-event lookup on the short array reads None (no token shipped)"
         );
+        // Same additivity for the issue #108 signing-context declaration: a peer
+        // predating it decodes as None ("undeclared"), never an error.
+        assert_eq!(resp.signing_context, None);
+    }
+}
+
+/// Issue #108 integration coverage: durable quarantine + loud mixed-version
+/// handling on the clinical-plane pull path. Real Postgres + cairn_pgx, gated on
+/// `$CAIRN_TEST_PG`, serialized against every other DB-gated suite via the shared
+/// advisory-lock key (see cairn-node `db::test_serial_guard`). Each test serves a
+/// CANNED `EventsResponse` from a throwaway local TCP listener, so the exact
+/// mixed-batch / all-unverifiable / skewed-context wire shapes are constructed
+/// byte-for-byte rather than hoped for.
+#[cfg(test)]
+mod quarantine_tests {
+    use super::*;
+
+    fn cs() -> Option<String> {
+        std::env::var("CAIRN_TEST_PG").ok()
+    }
+
+    /// A realistic HLC wall (≈2026) so ceiling checks compare against a sane instant.
+    const WALL_2026: i64 = 1_782_000_000_000;
+
+    /// Connect + take the cluster-wide test advisory lock (same 'CARN' key every
+    /// DB-gated suite uses), then (re)apply the schema and reset the tables this
+    /// suite touches. The returned client HOLDS the lock until dropped.
+    fn locked_client(base: &str) -> postgres::Client {
+        let mut c = postgres::Client::connect(base, postgres::NoTls).unwrap();
+        c.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64]).unwrap();
+        c.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;").unwrap();
+        for (_name, sql) in SCHEMA {
+            c.batch_execute(sql).unwrap();
+        }
+        c.batch_execute(
+            "TRUNCATE event_log, actor_event, patient_chart, sync_state, sync_quarantine CASCADE;
+             UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0;",
+        )
+        .unwrap();
+        c
+    }
+
+    /// Enroll a fresh agent signing key so the apply door admits its events.
+    fn enrolled_key(c: &mut postgres::Client) -> (SigningKey, String) {
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        c.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"quarantine-test-peer\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+            &[&kid],
+        )
+        .unwrap();
+        (sk, kid)
+    }
+
+    /// A validly-signed note.added "arriving from a peer" at the given HLC wall.
+    fn peer_note(sk: &SigningKey, kid: &str, wall: i64) -> Vec<u8> {
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: uuid::Uuid::now_v7().to_string(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc { wall, counter: 0, node_origin: "peer-src".into() },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"text": "replicated note"}),
+            attachments: vec![],
+            plaintext_twin: Some("Progress note: replicated note".into()),
+        };
+        sign(&body, sk).unwrap().signed_bytes
+    }
+
+    /// Serve `raw` (a pre-encoded EventsResponse JSON) to up to `times` connections
+    /// on a throwaway local port; returns the address for `do_pull`.
+    fn serve_canned(raw: Vec<u8>, times: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for _ in 0..times {
+                let Ok((mut s, _)) = listener.accept() else { break };
+                let _ = read_frame(&mut s);
+                let _ = write_frame(&mut s, &raw);
+            }
+        });
+        addr
+    }
+
+    fn response_json(events: &[&[u8]], signing_context: Option<&str>) -> Vec<u8> {
+        serde_json::to_vec(&EventsResponse {
+            events: events.iter().map(hex::encode).collect(),
+            attestations: vec![None; events.len()],
+            attester_keys: vec![None; events.len()],
+            signing_context: signing_context.map(str::to_string),
+        })
+        .unwrap()
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct QRow {
+        peer: String,
+        reason: String,
+        seen_count: i32,
+    }
+
+    fn quarantine_rows(c: &mut postgres::Client) -> Vec<QRow> {
+        c.query(
+            "SELECT peer, reason, seen_count FROM sync_quarantine ORDER BY first_seen",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| QRow { peer: r.get(0), reason: r.get(1), seen_count: r.get(2) })
+        .collect()
+    }
+
+    fn watermark(c: &mut postgres::Client, peer: &str) -> (i64, i32) {
+        let row = c
+            .query_one("SELECT hlc_wall, hlc_counter FROM sync_state WHERE peer=$1", &[&peer])
+            .unwrap();
+        (row.get(0), row.get(1))
+    }
+
+    /// A mixed batch (valid · garbage · valid): the garbage event is quarantined
+    /// DURABLY (bytes + legible reason), the valid events apply, and the watermark
+    /// may then advance past the quarantined one — the durable trace is what makes
+    /// that admissible (issue #108: no more silent set-union violation). A re-offer
+    /// of the same bytes dedupes onto the same row (seen_count bumps).
+    #[test]
+    fn pull_quarantines_unverifiable_and_advances_watermark() {
+        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let garbage = b"not a COSE_Sign1 at all".to_vec();
+        let e2 = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let raw = response_json(&[&e1, &garbage, &e2], Some(CTX_EVENT.as_str()));
+
+        let addr = serve_canned(raw.clone(), 1);
+        let m = do_pull(&mut c, &addr, "peer-a").unwrap();
+        assert_eq!(m["applied_new"], 2, "both valid events applied");
+        assert_eq!(m["skipped_unverifiable"], 1);
+        assert_eq!(m["watermark_frozen"], false, "quarantine is durable, no freeze");
+
+        let events: i64 =
+            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        assert_eq!(events, 2);
+
+        // The durable trace: verbatim bytes + peer + a legible reason.
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(rows.len(), 1, "exactly the garbage event is quarantined");
+        assert_eq!(rows[0].peer, "peer-a");
+        assert!(!rows[0].reason.trim().is_empty(), "reason must be legible, got empty");
+        assert_eq!(rows[0].seen_count, 1);
+        let held: Vec<u8> = c
+            .query_one("SELECT signed_bytes FROM sync_quarantine", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(held, garbage, "quarantine holds the verbatim wire bytes");
+
+        // Watermark advanced to the LAST VALID event — past the quarantined one,
+        // which is safe now that its durable trace exists.
+        assert_eq!(watermark(&mut c, "peer-a"), (WALL_2026 + 2_000, 0));
+
+        // Re-offer of the identical batch: idempotent applies, deduped quarantine.
+        let addr = serve_canned(raw, 1);
+        let m = do_pull(&mut c, &addr, "peer-a").unwrap();
+        assert_eq!(m["applied_new"], 0, "set-union no-op on re-apply");
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(rows.len(), 1, "same bytes dedupe onto one row");
+        assert_eq!(rows[0].seen_count, 2, "re-offer bumps seen_count");
+    }
+
+    /// A peer whose ENTIRE batch is unverifiable (and that declares no signing
+    /// context — the pre-ADR-0040 legacy shape) must fail the pull LOUDLY instead
+    /// of silently skipping and livelocking, while still preserving every event
+    /// durably. The watermark must not move.
+    #[test]
+    fn pull_fails_loud_when_every_event_is_unverifiable() {
+        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let mut c = locked_client(&base);
+
+        let g1 = b"legacy or corrupt blob one".to_vec();
+        let g2 = b"legacy or corrupt blob two".to_vec();
+        // Legacy peer shape: NO signing_context field at all.
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "events": [hex::encode(&g1), hex::encode(&g2)],
+        }))
+        .unwrap();
+
+        let addr = serve_canned(raw.clone(), 1);
+        let err = do_pull(&mut c, &addr, "peer-legacy").unwrap_err().to_string();
+        assert!(
+            err.contains("pre-ADR-0040"),
+            "diagnosis must name the likely cause (mixed-version peer), got: {err}"
+        );
+        assert!(
+            err.contains("unverifiable"),
+            "diagnosis must say what happened, got: {err}"
+        );
+
+        // Loud, but nothing lost: both events preserved durably, watermark untouched.
+        assert_eq!(quarantine_rows(&mut c).len(), 2);
+        assert_eq!(watermark(&mut c, "peer-legacy"), (0, 0));
+
+        // The next cycle fails loudly AGAIN (no silent livelock) and the
+        // quarantine dedupes rather than growing without bound.
+        let addr = serve_canned(raw, 1);
+        assert!(do_pull(&mut c, &addr, "peer-legacy").is_err());
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.seen_count == 2), "re-offers bump, never duplicate");
+    }
+
+    /// A peer that DECLARES a different signing context is deterministic wire-format
+    /// skew: refuse the whole batch up front with a legible error naming both
+    /// contexts — don't burn per-event verify failures or quarantine anything
+    /// (the peer still holds the events; they apply after the skew is fixed).
+    #[test]
+    fn pull_refuses_declared_context_mismatch_deterministically() {
+        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let raw = response_json(&[&e1], Some("application/cairn-event+cbor;v=999"));
+
+        let addr = serve_canned(raw, 1);
+        let err = do_pull(&mut c, &addr, "peer-skew").unwrap_err().to_string();
+        assert!(
+            err.contains("application/cairn-event+cbor;v=999")
+                && err.contains(CTX_EVENT.as_str()),
+            "error must name BOTH contexts so the operator sees the skew, got: {err}"
+        );
+
+        let events: i64 =
+            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        assert_eq!(events, 0, "nothing applied from a batch refused for skew");
+        assert!(quarantine_rows(&mut c).is_empty(), "skew-refused batch is not quarantined");
+        assert_eq!(watermark(&mut c, "peer-skew"), (0, 0));
+    }
+
+    /// Re-processing after the operator fixes the cause (the issue's "inspectable
+    /// and re-processable"): a quarantined event that NOW verifies (e.g. it was
+    /// falsely rejected by a version-skewed daemon binary since upgraded) is
+    /// released through the real apply door and its row cleared; one that still
+    /// fails stays held with a refreshed reason.
+    #[test]
+    fn requeue_releases_quarantined_events_once_cause_is_fixed() {
+        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        // Simulate a past false rejection: a perfectly valid event sitting in
+        // quarantine (as if the daemon that pulled it was version-skewed), plus
+        // one genuinely corrupt blob that can never be released.
+        let good = peer_note(&sk, &kid, WALL_2026 + 5_000);
+        let junk = b"permanently corrupt".to_vec();
+        for (bytes, why) in [(&good, "simulated version-skew rejection"), (&junk, "corrupt")] {
+            c.execute(
+                "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, reason)
+                 VALUES ($1, $2, 'peer-a', $3)",
+                &[&cairn_event::event_address(bytes), bytes, &why],
+            )
+            .unwrap();
+        }
+
+        let m = do_requeue(&mut c).unwrap();
+        assert_eq!(m["examined"], 2);
+        assert_eq!(m["released"], 1, "the now-valid event goes through the apply door");
+        assert_eq!(m["still_quarantined"], 1);
+
+        let events: i64 =
+            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        assert_eq!(events, 1, "released event landed in event_log via the door");
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(rows.len(), 1, "released row is cleared, corrupt row stays");
+        assert!(rows[0].reason.contains("verification"), "reason refreshed from the door");
     }
 }

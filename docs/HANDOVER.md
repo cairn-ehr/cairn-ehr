@@ -10,7 +10,34 @@ pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3
 Viability proven by spikes (walking skeleton, advisory-actor contract,
 a first federating node, Postgres-on-Android).
 
-**This session (2026-07-02, latest) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
+**This session (2026-07-02, latest) — issue #108: durable quarantine + loud mixed-version handling in cairn-sync:**
+closed the highest-stakes open review finding — the clinical-plane pull loop's silent skip-and-advance. Before:
+an unverifiable pulled event left only a transient stderr line ("quarantined" was a misnomer — no table existed)
+while later verifiable events advanced the watermark past it (silent permanent set-union exclusion, the A1 class),
+and a pure-legacy peer (post-ADR-0040 this means: *any* peer still serving pre-ADR-0040 signatures) livelocked —
+re-fetching and re-skipping the same batch forever with no loud failure. Now: **(a)** new **`db/021_sync_quarantine.sql`**
+(cairn-sync SCHEMA 7→8, cairn-node SCHEMA 19→20; explicit REVOKE floor, full lifecycle granted to `cairn_node`) —
+every skipped event is persisted VERBATIM (signed bytes + travelling attestation pair + the legible `EventError`
+reason, ContextMismatch vs BadSignature etc.) with dedupe-on-re-offer (`seen_count` bump, table can't grow unbounded);
+**the durable trace is what licenses the skip** — if the quarantine INSERT itself fails, the watermark freezes
+exactly as for a valid-but-unapplied event (delayed, never lost). **(b)** additive `EventsResponse.signing_context`
+(serde-default None): serve declares the ADR-0040 context it mints under; a puller seeing a DIFFERENT declared
+context refuses the whole batch up front with an error naming both strings (deterministic skew diagnosis, nothing
+quarantined — the peer still holds the events). **(c)** an ALL-unverifiable non-empty batch now FAILS the pull
+loudly ("peer appears to serve pre-ADR-0040 (or corrupt) signatures…") instead of silently returning — `run` logs
+it as loudly as a partition every cycle (status line now carries the pull error text, not blanket "unreachable");
+an already-synced link never trips this (the boundary event re-applies idempotently, making the batch mixed).
+**(d)** new CLI: `quarantine` (list: digest/peer/reason/seen_count JSON lines) + `requeue` (re-process each held
+event through the REAL `apply_remote_event` door — release only what the floor admits — clearing released rows,
+refreshing the reason on still-refused ones; the operator path for "the daemon was version-skewed, now upgraded").
+TDD: 4 red-first DB-gated integration tests in `cairn-sync::quarantine_tests` (mixed batch quarantines durably +
+watermark advances + re-offer dedupes · all-unverifiable fails loud twice, no growth · declared-context mismatch
+refused deterministically · requeue releases the now-valid, keeps the still-corrupt) against canned wire frames on
+a local listener + 1 wire-additivity unit + `db/tests/021_sync_quarantine_test.sql` grant-floor tests. Full
+workspace + clippy green on a fresh PG16+cairn_pgx rig; live two-DB serve→pull→requeue smoke green (real serve
+ships the context field; idempotent re-pull). Closes #108; the `EventsAfter` pagination sibling stays #101.
+
+**Earlier this session (2026-07-02) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
 closed the review-B4 wire-freeze pair before more signatures accumulate. **(a)** The Sign1-vs-multi-signer
 ambiguity in ADR-0015's rationale is resolved: an event carries **exactly one envelope signature** (the
 authoring actor's); plurality is contributor-set-in-body + attestation tokens + overlay co-signing (ADR-0007 §6)
