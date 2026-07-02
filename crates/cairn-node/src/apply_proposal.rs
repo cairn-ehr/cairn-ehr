@@ -127,6 +127,8 @@ pub async fn apply_accepted_proposal(
     .await?;
 
     // 5. Mark the proposal applied, pointing at the emitted link event.
+    //    params: $1=low, $2=high, $3=event_id (positional — $3 in the SET clause,
+    //    $1/$2 in the WHERE, is just textual order, not a binding mismatch).
     let event_id_s = event_id.to_string();
     tx.execute(
         "UPDATE match_proposal SET status='applied', applied_event_id=$3::text::uuid, updated_at=clock_timestamp() \
