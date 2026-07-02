@@ -67,11 +67,42 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     FROM (SELECT cairn_body(p_signed) ->> 'plaintext_twin' AS t) s;
 $$;
 
+-- Both provenance facts from ONE verify+parse (issue #109 review): a row's `verifiable`
+-- and `twin_authored` both derive from the single `cairn_body` call, so the view does one
+-- full COSE+Ed25519 verification per row, not two. (The naive form —
+-- `cairn_twin_is_authored(x)` AND `cairn_verify(x)` — verifies each row TWICE, since
+-- cairn_twin_is_authored already verifies via cairn_body.) PL/pgSQL, not SQL: it holds the
+-- body in a variable so the planner cannot re-inline cairn_body into two calls.
+-- `verifiable := body IS NOT NULL` means "verifies AND parses" — a hair stricter than a bare
+-- signature check, but the difference (a signed body that fails to re-serialize) is
+-- unreachable for a well-formed EventBody and degrades SAFE (surfaced, never hidden).
+CREATE OR REPLACE FUNCTION cairn_twin_provenance_of(p_signed bytea)
+RETURNS TABLE(twin_authored boolean, verifiable boolean)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_body jsonb := cairn_body(p_signed);
+    v_twin text  := v_body ->> 'plaintext_twin';
+BEGIN
+    twin_authored := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
+    verifiable    := v_body IS NOT NULL;
+    RETURN NEXT;
+END;
+$$;
+
 -- Worklist surface for a future re-authoring / duplicate-sweep / audit pass: which stored
 -- events carry an author-faithful twin vs a best-effort derived one.
+--
+-- `twin_authored` folds a verification failure into "not authored": for a row whose bytes no
+-- longer verify (a pre-ADR-0040 legacy row in an upgraded-in-place dev DB), cairn_body returns
+-- NULL and the row reports twin_authored=false — indistinguishable from a genuine author-omitted
+-- twin. A worklist that then re-derived skeletons would clobber genuinely-authored twins. So the
+-- view ALSO exposes `verifiable` (issue #109): consumers filter on `WHERE verifiable` (or handle
+-- `verifiable=false` as "no longer verifies", NOT "author omitted the twin"). Columns stay in the
+-- prior (event_id, twin_authored, verifiable) order so CREATE OR REPLACE VIEW is additive.
 CREATE OR REPLACE VIEW event_twin_provenance AS
-    SELECT event_id, cairn_twin_is_authored(signed_bytes) AS twin_authored
-    FROM event_log;
+    SELECT el.event_id, p.twin_authored, p.verifiable
+    FROM event_log el
+    CROSS JOIN LATERAL cairn_twin_provenance_of(el.signed_bytes) p;
 
 GRANT SELECT ON event_twin_provenance TO cairn_agent;
 
