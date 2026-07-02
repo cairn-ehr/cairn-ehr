@@ -63,6 +63,9 @@ DECLARE
     v_bears        BOOLEAN;
     v_target_id    UUID;
     v_twin         TEXT;
+    v_t_eff        TIMESTAMPTZ;
+    v_att          BYTEA;
+    v_att_key      BYTEA;
     c              JSONB;
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
@@ -87,18 +90,19 @@ BEGIN
     -- content_address = sha256 of the signed wire bytes (the COSE envelope), identical to event_address() in cairn-event and the db/001 CHECK. (Distinct from canonical_json_address, which hashes the actor pinned-set body for actor_id.) Attestation tokens bind to THIS value.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
 
-    -- 1b. Bitemporal tier-1 ceiling (ADR-0003 §3.6): t_recorded (the HLC wall) is the
+    -- 1b. t_effective wire pin (issue #91/H4): parse the asserted claim through the ONE
+    --     explicit-offset validator (db/001 cairn_t_effective), so the stored instant is
+    --     identical on every node regardless of session TimeZone/DateStyle.
+    v_t_eff := cairn_t_effective(b ->> 't_effective');
+
+    --     Bitemporal tier-1 ceiling (ADR-0003 §3.6): t_recorded (the HLC wall) is the
     --     OBJECTIVE ceiling; t_effective is the freely-BACKDATABLE claim. Backdating is
     --     legitimate (t_effective in the past); forward-dating past t_recorded is not —
     --     a node cannot have "recorded" a fact before its own clock reached that instant,
     --     so t_effective > t_recorded is prima-facie falsification and is rejected here (a
-    --     signed envelope invariant, not soft policy). NOTE: the string->timestamptz cast
-    --     of an offset-less t_effective is session-TimeZone dependent (see issue: pin the
-    --     t_effective wire format to an explicit offset); the comparison of two absolute
-    --     instants below is itself timezone-independent.
-    IF NULLIF(b ->> 't_effective','null') IS NOT NULL
-       AND (b ->> 't_effective')::timestamptz
-           > to_timestamp((b -> 'hlc' ->> 'wall')::bigint / 1000.0) THEN
+    --     signed envelope invariant, not soft policy).
+    IF v_t_eff IS NOT NULL
+       AND v_t_eff > to_timestamp((b -> 'hlc' ->> 'wall')::bigint / 1000.0) THEN
         RAISE EXCEPTION 'submit_event: t_effective (%) is after t_recorded ceiling (HLC wall % ms) — prima-facie forward-dating / falsification (ADR-0003 tier-1)',
             b ->> 't_effective', b -> 'hlc' ->> 'wall';
     END IF;
@@ -133,6 +137,11 @@ BEGIN
                        WHERE signing_key_id = encode(p_attester_key,'hex') AND kind = 'human') THEN
             RAISE EXCEPTION 'submit_event: attester is not an enrolled human actor (forged human author refused)';
         END IF;
+        -- Store the VERIFIED responsibility proof beside the event (issue #91/M7):
+        -- it must keep travelling with the event on the sync wire, or a downstream
+        -- node could never re-run this gate at its own apply door.
+        v_att     := p_attestation;
+        v_att_key := p_attester_key;
     END IF;
 
     -- 5. Target-existence gate for an overlay on another author's event.
@@ -168,14 +177,15 @@ BEGIN
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
-         signer_key_id, plaintext_twin, attachments)
+         signer_key_id, plaintext_twin, attachments, attestation, attester_key)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
         b -> 'hlc' ->> 'node_origin',
-        NULLIF(b ->> 't_effective','null')::timestamptz,
+        v_t_eff,
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
-        b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb))
+        b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb),
+        v_att, v_att_key)
     ON CONFLICT (event_id) DO NOTHING;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).

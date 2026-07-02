@@ -67,6 +67,13 @@ class Node:
     def init(self):
         self._run("init")
 
+    def enroll(self, key, kind="device"):
+        # The in-DB apply door (db/020, issue #91) admits only events whose signer is
+        # enrolled in the RECEIVING node's actor registry, and the registry does not
+        # replicate yet — so the harness performs the operator ceremony: every
+        # authoring key is enrolled on every node that will apply its events.
+        self._run("enroll", "--key", key, "--kind", kind)
+
     def reset(self):
         subprocess.run(
             ["psql", self.conn, "-qc",
@@ -113,7 +120,9 @@ def converge(a: Node, b: Node, max_rounds=50):
     for _ in range(max_rounds):
         m1 = a.pull(b.listen, b.name)
         m2 = b.pull(a.listen, a.name)
-        vf += m1["verify_failures"] + m2["verify_failures"]
+        # "skipped_unverifiable" is the post-A1 name for events refused as unverifiable
+        # (the watermark freezes instead for valid-but-unappliable events).
+        vf += m1["skipped_unverifiable"] + m2["skipped_unverifiable"]
         for m in (m1, m2):
             if m["shipped"]:
                 bpe.append(m["bytes_per_event"])
@@ -201,6 +210,13 @@ def cmd_selftest(args):
         n.reset()
         n.init()
 
+    # Enrollment ceremony (issue #91): every authoring key must be enrolled on every
+    # node that will APPLY its events — the db/020 door refuses unenrolled signers.
+    # (enroll creates the key file if it does not exist yet.)
+    for key in ("/tmp/cairn_a.key", "/tmp/cairn_b.key", "/tmp/cairn_floor_src.key"):
+        a.enroll(key)
+        b.enroll(key)
+
     # Partition: each node writes independently (no link yet).
     a.gen("/tmp/cairn_a.key", patients=args.patients, count=args.notes)
     b.gen("/tmp/cairn_b.key", patients=args.patients, count=args.notes)
@@ -282,7 +298,9 @@ def cmd_analyze(args):
     partitions = sum(1 for r in rows if r.get("partition"))
     dur_s = (rows[-1]["ts"] - rows[0]["ts"]) / 1000.0
     lat = [r["pull"]["elapsed_ms"] for r in rows if "pull" in r]
-    vf = sum(r["pull"]["verify_failures"] for r in rows if "pull" in r)
+    # Post-A1 metric name; .get() keeps old pre-rename logs analysable.
+    vf = sum(r["pull"].get("skipped_unverifiable", r["pull"].get("verify_failures", 0))
+             for r in rows if "pull" in r)
     applied = sum(r["pull"]["applied_new"] for r in rows if "pull" in r)
     bpe = [r["pull"]["bytes_per_event"] for r in rows if r.get("pull", {}).get("shipped")]
     fps = [r["fingerprint"] for r in rows if "fingerprint" in r]

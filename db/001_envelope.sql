@@ -94,17 +94,54 @@ CREATE TABLE IF NOT EXISTS event_log (
     CONSTRAINT hlc_nonnegative CHECK (hlc_wall >= 0 AND hlc_counter >= 0)
 );
 
+-- The responsibility proof travels WITH the event (issue #91 / review A2+M7). A
+-- suppressing event (or any asserted responsibility) is admitted only against a valid
+-- human attestation token bound to its content-address; if that token were verified
+-- and discarded (the pre-#91 behavior), a downstream node re-serving the event could
+-- never re-prove the responsibility, and the apply door could not re-run the gate.
+-- So the token (and the attester's pubkey) are stored beside the signed bytes and
+-- shipped on the clinical sync wire. NULL for events that needed no attestation.
+-- Additive columns (ADR-0012): ADD COLUMN IF NOT EXISTS does not fire the
+-- append-only trigger (that fires on UPDATE/DELETE).
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS attestation  BYTEA;
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS attester_key BYTEA;
+
 CREATE INDEX IF NOT EXISTS event_log_order_idx
     ON event_log (hlc_wall, hlc_counter, node_origin);
 CREATE INDEX IF NOT EXISTS event_log_patient_idx
     ON event_log (patient_id);
 
--- NOTE (safety-critical seam, §9 / ADR-0002): Ed25519 signature verification is
--- the one check this skeleton performs in the Rust apply path (cairn-sync), not
--- in SQL, because core PostgreSQL cannot verify EdDSA. In production this gate
--- moves into an in-database pgrx function so it is *unbypassable* — no row
--- enters event_log unless its COSE_Sign1 verifies against a registered key.
--- The content-address CHECK above is the part that IS expressible in core SQL.
+-- The t_effective wire pin (issue #91 / review H4). t_effective travels inside the
+-- signed body as a STRING; the naive `::timestamptz` cast of an offset-less string is
+-- resolved under the session's TimeZone GUC, so the SAME signed event would denote a
+-- DIFFERENT UTC instant on differently-configured nodes — a silent cross-node
+-- divergence inside a signed artifact. Pin the wire format: an asserted t_effective
+-- must be a full ISO-8601 instant WITH an explicit UTC offset ('Z' or ±HH[:MM]).
+-- With the offset explicit (and the unambiguous ISO date shape), the cast below is
+-- independent of both TimeZone and DateStyle, so every node stores the same instant.
+-- Both admission doors (submit_event, apply_remote_event) route through this ONE
+-- validator. Returns NULL for an absent/'null' claim (principle 4: unknown is honest).
+CREATE OR REPLACE FUNCTION cairn_t_effective(p_raw text)
+RETURNS timestamptz LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    IF p_raw IS NULL OR p_raw = 'null' THEN
+        RETURN NULL;
+    END IF;
+    IF p_raw !~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|z|[+-]\d{2}(:?\d{2})?)$' THEN
+        RAISE EXCEPTION
+            't_effective "%" must be an ISO-8601 instant with an explicit UTC offset (e.g. 2026-06-20T10:00:00+02:00) — an offset-less timestamp names a different instant on different nodes (wire pin, issue #91/H4)',
+            p_raw;
+    END IF;
+    RETURN p_raw::timestamptz;
+END;
+$$;
+
+-- NOTE (safety-critical seam, §9 / ADR-0002): Ed25519 signature verification runs
+-- IN-DATABASE (the cairn_pgx `cairn_verify` gate) at every admission door —
+-- submit_event (db/005) for local authors and apply_remote_event (db/020, issue
+-- #91) for replicated events — so it is *unbypassable*: no row enters event_log
+-- unless its COSE_Sign1 verifies against a registered key. The content-address
+-- CHECK above is the part that is expressible in core SQL.
 
 -- Append-only enforcement (principle #1): refuse UPDATE and DELETE outright.
 CREATE OR REPLACE FUNCTION event_log_is_append_only()

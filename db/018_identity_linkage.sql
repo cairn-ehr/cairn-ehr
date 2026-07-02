@@ -151,6 +151,21 @@ RETURNS integer LANGUAGE sql STABLE AS $$
     SELECT COALESCE(NULLIF(current_setting('cairn.max_component_size', true), '')::integer, 10000);
 $$;
 
+-- Worklist of projection recomputes SKIPPED on the sync apply path (issue #91/A5b).
+-- The cap above is a NODE-LOCAL GUC; RAISE-ing on it while applying a validly-signed
+-- replicated event that peers already accepted would let a config difference fork the
+-- event set between honest nodes. So at apply time the recompute clamps-and-flags:
+-- the event lands, person_member is left stale-but-honest, and a row here is the loud
+-- alarm + repair worklist. Append-only by usage (rows are evidence, never edited).
+CREATE TABLE IF NOT EXISTS identity_projection_flag (
+    flag_id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    seed          UUID        NOT NULL,   -- the component endpoint whose recompute was skipped
+    observed_size INTEGER     NOT NULL,   -- how big the BFS said the component is
+    cap           INTEGER     NOT NULL,   -- cairn_max_component_size() at the time
+    flagged_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON identity_projection_flag TO cairn_agent;
+
 -- Recompute the connected component around one seed UUID over the STANDING link edges
 -- (state='link'), and rewrite person_member for every member to point at the min-UUID
 -- representative. Cost is bounded by the touched component's size, not the table's —
@@ -173,8 +188,21 @@ BEGIN
     )
     SELECT array_agg(node) INTO v_members FROM comp;
 
-    -- Fail loud on a pathological component (mass false-merge) — never silently cap.
+    -- Pathological component (mass false-merge) — never a SILENT cap, but the loud
+    -- response differs by door (issue #91/A5b):
+    --   * local authoring (submit_event): FAIL LOUD — refuse the event. Nothing has
+    --     accepted it yet, so refusal loses no data and stops the pathology earliest.
+    --   * sync apply (apply_remote_event sets the transaction-local marker below):
+    --     CLAMP AND FLAG — peers already hold this validly-signed event, and this cap
+    --     is a node-local GUC, so vetoing here would fork the event set between honest
+    --     nodes on a config difference. The event applies; the recompute is skipped
+    --     (person_member stays stale-but-honest); the flag row is the alarm/worklist.
     IF array_length(v_members, 1) > cairn_max_component_size() THEN
+        IF current_setting('cairn.remote_apply', true) = 'on' THEN
+            INSERT INTO identity_projection_flag (seed, observed_size, cap)
+            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size());
+            RETURN;
+        END IF;
         RAISE EXCEPTION
             'identity linkage: component around % exceeds max size % — refusing to project (matcher pathology)',
             p_seed, cairn_max_component_size();

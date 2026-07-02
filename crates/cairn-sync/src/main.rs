@@ -5,8 +5,10 @@
 //! separates them:
 //!
 //!   * **clinical plane** (`serve` events / `pull`): eager, small, high priority —
-//!     ships signed event bytes; the receiver *verifies on apply* (Bet A2) and
-//!     inserts idempotently (`ON CONFLICT DO NOTHING` — set-union, Bet A1).
+//!     ships signed event bytes (plus any attestation token that vouches them); the
+//!     receiver applies through the in-DB door `apply_remote_event` (db/020), which
+//!     verifies in-DB and inserts idempotently (set-union, Bet A1) — the daemon
+//!     itself runs no checks and no raw DML (issue #91 / ADR-0021).
 //!   * **byte tier** (`serve` blob slices / `blobd`): lazy, windowed, resumable,
 //!     preemptible, separately budgeted — must never starve the clinical plane (Bet A4).
 //!
@@ -25,13 +27,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use cairn_event::{blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey};
 use serde::{Deserialize, Serialize};
 
-const SCHEMA: [(&str, &str); 6] = [
+const SCHEMA: [(&str, &str); 7] = [
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
     ("002_projection", include_str!("../../../db/002_projection.sql")),
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
     ("004_actors", include_str!("../../../db/004_actors.sql")),
     ("005_submit", include_str!("../../../db/005_submit.sql")),
     ("006_recall", include_str!("../../../db/006_recall.sql")),
+    // The clinical-plane sync apply door (issue #91): replicated events enter
+    // event_log only through the in-DB floor, never a daemon-side raw INSERT.
+    ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -59,6 +64,18 @@ struct EventsResponse {
     /// Verbatim signed_bytes, hex-encoded (skeleton simplification; the real
     /// tier ships raw). The receiver reconstructs everything from these bytes.
     events: Vec<String>,
+    /// Per-event attestation token (hex), PARALLEL to `events` (issue #91). A
+    /// suppressing event (or asserted responsibility) is admitted at the in-DB
+    /// apply door only against its human attestation token, so the token must
+    /// travel with the event or a legitimately-attested suppress could never
+    /// replicate. Additive field (serde default): an older peer's response
+    /// decodes with empty arrays, which simply means "no attestation shipped" —
+    /// its suppressing events are then refused fail-closed at the door.
+    #[serde(default)]
+    attestations: Vec<Option<String>>,
+    /// Per-event attester public key (hex), parallel to `attestations`.
+    #[serde(default)]
+    attester_keys: Vec<Option<String>>,
 }
 
 /// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
@@ -167,106 +184,74 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// True iff an asserted t_effective string carries an explicit UTC offset — the
+/// issue #91/H4 wire pin, checked at AUTHORING time so this node never signs a
+/// timestamp every peer's apply door would refuse. (An offset-less timestamp names a
+/// different instant on differently-configured nodes.) The strict format validation
+/// lives in-DB (db/001 `cairn_t_effective`); this is only the author-side conformance
+/// check for the `--effective` CLI flag: after the 10-char date + separator, the
+/// string must end with 'Z'/'z' or a ±HH / ±HHMM / ±HH:MM offset.
+fn t_effective_has_explicit_offset(t: &str) -> bool {
+    if t.ends_with('Z') || t.ends_with('z') {
+        return true;
+    }
+    // Search for the offset sign only AFTER the date part (index 11 on): the date's
+    // own '-' separators must not read as an offset.
+    let Some(time) = t.get(11..) else { return false };
+    match time.rfind(['+', '-']) {
+        Some(p) => {
+            let off = &time[p + 1..];
+            matches!(off.len(), 2 | 4 | 5) && off.chars().all(|c| c.is_ascii_digit() || c == ':')
+        }
+        None => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Apply: insert a verified event idempotently (set-union) and merge the HLC.
-// Shared by `pull`. Verification happens HERE (Bet A2 / the §9 seam); in
-// production this gate is an in-DB pgrx function so it cannot be bypassed.
+// Apply: hand a replicated event (and any attestation that travelled with it)
+// to the in-DB apply door. Shared by `pull`. Since issue #91 the daemon runs
+// ZERO checks and ZERO raw DML here: apply_remote_event (db/020) verifies the
+// signature in-DB (pgrx), resolves the signer against the actor registry,
+// classifies fail-closed, runs the attestation/twin/t_effective floors, guards
+// against event_id substitution, learns attachment references, and merges the
+// HLC forward — the same floor local authors face at submit_event (ADR-0021:
+// the enforcement floor sits BELOW the inter-node path). Returns Ok(true) iff
+// the event was NEW to this node (set-union accounting for the pull metrics).
 // ---------------------------------------------------------------------------
-fn apply_signed(client: &mut postgres::Client, signed_bytes: &[u8]) -> R<bool> {
-    let body = verify_self_described(signed_bytes)?; // refuse anything that doesn't verify
+fn apply_signed(
+    client: &mut postgres::Client,
+    signed_bytes: &[u8],
+    attestation: Option<&[u8]>,
+    attester_key: Option<&[u8]>,
+) -> R<bool> {
+    // Newness probe for the metrics only: the door itself is idempotent (a re-apply
+    // of identical bytes is a silent set-union no-op), so "did we already hold these
+    // bytes" is read before knocking. Never a gate — the door decides admission.
     let content_address = cairn_event::event_address(signed_bytes);
-    let body_json = serde_json::to_string(&body.payload)?;
-    let contributors_json = serde_json::to_string(&body.contributors)?;
-    let attachments_json = serde_json::to_string(&body.attachments)?;
-    // ADR-0039: carry the author-materialised twin; derive only if the author omitted it.
-    // Mirrors the in-DB floor (db/015 cairn_event_twin) for this spike-grade write path.
-    let twin = resolve_twin(&body);
-
-    let mut tx = client.transaction()?;
-    let inserted = tx.execute(
-        "INSERT INTO event_log
-           (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
-            node_origin, t_effective, signed_bytes, content_address, body, contributors,
-            signer_key_id, plaintext_twin, attachments)
-         VALUES ($1::text::uuid,$2::text::uuid,$3,$4,$5,$6,$7,$8::text::timestamptz,$9,$10,
-                 $11::text::jsonb,$12::text::jsonb,$13,$14,$15::text::jsonb)
-         ON CONFLICT DO NOTHING",
-        &[
-            &body.event_id,
-            &body.patient_id,
-            &body.event_type,
-            &body.schema_version,
-            &body.hlc.wall,
-            &body.hlc.counter,
-            &body.hlc.node_origin,
-            &body.t_effective,
-            &signed_bytes.to_vec(),
-            &content_address,
-            &body_json,
-            &contributors_json,
-            &body.signer_key_id,
-            &twin,
-            &attachments_json,
-        ],
-    )?;
-
-    // Substitution guard (review fix H3): `ON CONFLICT DO NOTHING` (no target) silently
-    // absorbs BOTH a benign idempotent re-apply (identical bytes) AND a hostile/buggy event
-    // that reuses an existing event_id with DIFFERENT bytes. submit_event RAISES on the
-    // latter (db/005: "substitution refused"); the sync door must too, or two nodes end up
-    // holding different events under one event_id and diverge forever with no alarm. On a
-    // conflict, compare the stored content-address to the one we just verified. (Same bytes
-    // ⟹ same event_id, so looking up by event_id is sufficient.)
-    if inserted == 0 {
-        let existing: Option<Vec<u8>> = tx
-            .query_opt(
-                "SELECT content_address FROM event_log WHERE event_id = $1::text::uuid",
-                &[&body.event_id],
-            )?
-            .map(|r| r.get(0));
-        match existing {
-            Some(stored) if stored != content_address => {
-                return Err(format!(
-                    "event_id {} already present with different content (substitution refused)",
-                    body.event_id
-                )
-                .into());
+    let existed: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM event_log WHERE content_address = $1)",
+            &[&content_address],
+        )?
+        .get(0);
+    client
+        .execute(
+            "SELECT apply_remote_event($1, $2, $3)",
+            &[
+                &signed_bytes.to_vec(),
+                &attestation.map(|a| a.to_vec()),
+                &attester_key.map(|k| k.to_vec()),
+            ],
+        )
+        // Surface the door's legible RAISE text: postgres::Error's Display is just
+        // "db error", which would strip the reason from the freeze/skip log lines.
+        .map_err(|e| -> Box<dyn Error> {
+            match e.as_db_error() {
+                Some(db) => db.message().to_string().into(),
+                None => e.into(),
             }
-            None => {
-                // A conflict fired but no row carries this event_id — the bytes collided on
-                // content_address under a DIFFERENT event_id (should be impossible, since the
-                // event_id is inside the signed bytes). Treat as a divergence, never silent.
-                return Err(format!(
-                    "content-address conflict for event_id {} with no matching row (divergent event)",
-                    body.event_id
-                )
-                .into());
-            }
-            _ => {} // Some(stored) == content_address: genuine idempotent re-apply (set-union).
-        }
-    }
-
-    // Learn any attachment references this event carries (reference-eager).
-    for att in &body.attachments {
-        if let Ok(addr) = hex::decode(&att.digest_hex) {
-            tx.execute(
-                "SELECT blob_note_reference($1,$2,$3)",
-                &[&addr, &att.media_type, &att.byte_len],
-            )?;
-        }
-    }
-
-    // HLC merge: local clock never falls behind an event we have accepted (A3).
-    tx.execute(
-        "UPDATE hlc_state SET hlc_wall = GREATEST(hlc_wall, $1),
-             hlc_counter = CASE WHEN $1 > hlc_wall THEN $2
-                                WHEN $1 = hlc_wall THEN GREATEST(hlc_counter, $2)
-                                ELSE hlc_counter END
-         WHERE id",
-        &[&body.hlc.wall, &body.hlc.counter],
-    )?;
-    tx.commit()?;
-    Ok(inserted == 1)
+        })?;
+    Ok(!existed)
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +319,26 @@ fn cmd_init(conn: &str) -> R<()> {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
     }
+    Ok(())
+}
+
+/// Enroll a signing key as an actor in the LOCAL registry (an owner-privileged
+/// ceremony, ADR-0011 — deliberately NOT part of `init` or `pull`). The in-DB apply
+/// door (db/020) refuses events whose signer is not enrolled here, and the actor
+/// registry does not replicate yet, so an operator enrolls each authoring key on
+/// every node that will apply its events (the harness does this for the skeleton).
+fn cmd_enroll(conn: &str, key_path: &str, kind: &str) -> R<()> {
+    let (_sk, kid) = load_or_create_key(key_path)?;
+    // Minimal pinned-determinant set for a node/device key: the key itself. A real
+    // agent enrollment pins model/version/skill-epoch (ADR-0029); that ceremony
+    // lives with the agent deployment, not this CLI.
+    let pinned = serde_json::json!({ "kind": kind, "signing_key": kid }).to_string();
+    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    client.execute(
+        "SELECT enroll_actor($1, $2::text::jsonb, $3)",
+        &[&kind, &pinned, &kid],
+    )?;
+    println!("enrolled {kind} actor {kid}");
     Ok(())
 }
 
@@ -435,6 +440,19 @@ fn cmd_write(
     json_body: &str,
     t_effective: Option<String>,
 ) -> R<()> {
+    // Author-side wire conformance (issue #91/H4): refuse to SIGN an offset-less
+    // t_effective — once signed it is immutable, and every conformant apply door
+    // would refuse it, wedging this event out of the fleet forever.
+    if let Some(eff) = &t_effective {
+        if !t_effective_has_explicit_offset(eff) {
+            return Err(format!(
+                "--effective '{eff}' must carry an explicit UTC offset \
+                 (e.g. 2026-06-20T10:00:00+02:00 or ...T08:00:00Z): an offset-less \
+                 timestamp names a different instant on different nodes"
+            )
+            .into());
+        }
+    }
     let (sk, kid) = load_or_create_key(key_path)?;
     let payload: serde_json::Value = serde_json::from_str(json_body)?;
     let patient_id = if patient == "new" {
@@ -797,10 +815,20 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     let (mut applied, mut skipped_unverifiable, mut event_bytes) = (0usize, 0usize, 0usize);
     let (mut max_w, mut max_c) = (wall, counter);
     let mut frozen = false;
-    for hexed in &resp.events {
+    for (i, hexed) in resp.events.iter().enumerate() {
         let signed_bytes = hex::decode(hexed)?;
         event_bytes += signed_bytes.len(); // A5: real clinical-plane payload (the COSE blob)
-        match apply_signed(client, &signed_bytes) {
+        // The attestation arrays are PARALLEL to events; an older peer (or an
+        // un-attested event) yields None, and the in-DB door decides what that means.
+        let att = match resp.attestations.get(i).and_then(|o| o.as_deref()) {
+            Some(h) => Some(hex::decode(h)?),
+            None => None,
+        };
+        let akey = match resp.attester_keys.get(i).and_then(|o| o.as_deref()) {
+            Some(h) => Some(hex::decode(h)?),
+            None => None,
+        };
+        match apply_signed(client, &signed_bytes, att.as_deref(), akey.as_deref()) {
             Ok(new) => {
                 if new {
                     applied += 1;
@@ -1191,14 +1219,21 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
     let req: Request = serde_json::from_slice(&raw)?;
     let resp: Vec<u8> = match req {
         Request::EventsAfter { wall, counter } => {
+            // Ship the attestation token (and attester key) beside each event: the
+            // receiver's in-DB apply door re-runs the attestation gate, so a
+            // suppressing event without its travelling proof is refused there.
             let rows = client.query(
-                "SELECT encode(signed_bytes,'hex') FROM event_log
+                "SELECT encode(signed_bytes,'hex'), encode(attestation,'hex'),
+                        encode(attester_key,'hex')
+                 FROM event_log
                  WHERE (hlc_wall, hlc_counter) >= ($1,$2)
                  ORDER BY hlc_wall, hlc_counter, node_origin",
                 &[&wall, &counter],
             )?;
             let events = rows.iter().map(|r| r.get::<_, String>(0)).collect();
-            serde_json::to_vec(&EventsResponse { events })?
+            let attestations = rows.iter().map(|r| r.get::<_, Option<String>>(1)).collect();
+            let attester_keys = rows.iter().map(|r| r.get::<_, Option<String>>(2)).collect();
+            serde_json::to_vec(&EventsResponse { events, attestations, attester_keys })?
         }
         Request::BlobSlice {
             addr_hex,
@@ -1260,6 +1295,8 @@ fn usage() -> ! {
 
 USAGE (all take --conn <postgres-uri>):
   init        --conn URI
+  enroll      --conn URI --key PATH [--kind human|agent|device]
+              (owner ceremony: register the key as an actor so the apply door admits its events)
   write       --conn URI --node NAME --key PATH --type T --patient (UUID|new)
               --schema SV --json '<body>' [--effective ISO8601]
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
@@ -1292,6 +1329,11 @@ fn main() -> R<()> {
 
     match cmd {
         "init" => cmd_init(&need(conn))?,
+        "enroll" => cmd_enroll(
+            &need(conn),
+            &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
+            &flag(&args, "--kind").unwrap_or_else(|| "device".into()),
+        )?,
         "write" => cmd_write(
             &need(conn),
             &need(flag(&args, "--node")),
@@ -1407,5 +1449,48 @@ mod tests {
         assert!(verify_attestation(&token, &ca, &vk), "token verifies for right key + address");
         let other = event_address(b"a different event");
         assert!(!verify_attestation(&token, &other, &vk), "token is bound to its content-address");
+    }
+
+    #[test]
+    fn t_effective_offset_pin_accepts_explicit_and_refuses_naive() {
+        // Conformant: explicit offsets in every accepted shape (H4 wire pin).
+        for ok in [
+            "2026-06-20T10:00:00Z",
+            "2026-06-20t10:00:00z",
+            "2026-06-20T10:00:00+02:00",
+            "2026-06-20 10:00:00-05:30",
+            "2026-06-20T10:00:00.123+0200",
+            "2026-06-20T10:00+02",
+        ] {
+            assert!(t_effective_has_explicit_offset(ok), "should accept {ok}");
+        }
+        // Non-conformant: offset-less (a different instant on different nodes),
+        // date-only, or garbage — the author must not sign these.
+        for bad in [
+            "2026-06-20T10:00:00",
+            "2026-06-20 10:00:00.123",
+            "2026-06-20",
+            "yesterday",
+            "",
+        ] {
+            assert!(!t_effective_has_explicit_offset(bad), "should refuse {bad}");
+        }
+    }
+
+    #[test]
+    fn events_response_decodes_pre_attestation_wire_format() {
+        // Additive wire evolution (ADR-0012 / principle 11): a response from a peer
+        // predating the attestation arrays must still decode — the arrays default
+        // empty, which the pull loop reads as "no attestation travelled".
+        let old = br#"{"events":["deadbeef"]}"#;
+        let resp: EventsResponse = serde_json::from_slice(old).unwrap();
+        assert_eq!(resp.events.len(), 1);
+        assert!(resp.attestations.is_empty(), "missing field defaults empty");
+        assert!(resp.attester_keys.is_empty());
+        assert_eq!(
+            resp.attestations.first().and_then(|o| o.as_deref()),
+            None,
+            "per-event lookup on the short array reads None (no token shipped)"
+        );
     }
 }
