@@ -5,13 +5,57 @@ surface under construction** — demographics on `cairn-node` (slices 1–5 done
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
 generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator) + the
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
-`dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state — done this session**
-(the §5.7 confirmed/unconfirmed/under-review contract is now COMPLETE); remaining B3 weight-learning / locale packs /
-A-B pass-toggle + identity **C5+** (rest of the §5.7 algebra: reattribute/repudiate + the full §5.4 John-Doe
-registration subsystem) next.
+`dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
+known-alias pool — done this session** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE, and C5 adds
+the first *suppressing* identity event); remaining B3 weight-learning / locale packs / A-B pass-toggle + identity
+**C5+** (`reattribute` — waits on a clinical-note surface — + the full §5.4 John-Doe registration subsystem) next.
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-07-03) — identity C4, `identify` + the *unconfirmed* trust state** (brainstorm→spec→plan→
+**This session (2026-07-03) — identity C5, `repudiate` + the known-alias pool** (brainstorm→spec→plan→inline-TDD;
+spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c5-repudiate-alias-pool*`). The **first
+*suppressing*** identity event — C1–C4 were all additive/annotative; `repudiate` strikes a known-false name from the
+display projection. The §5.5(a) **fabricated-persona** case: a patient presented under a deliberately false name; once
+established false, the name leaves the header but **stays in the record** (fact of presentation preserved, principle 1)
+and enters a matcher-visible **known-alias pool** (aliases are reused). One event type **`identity.repudiate.asserted`**
+through the reused `submit_event` door, registered **`mode='suppressing'`** — so the db/005 attestation gate
+**structurally forces a valid human token** (§5.7's "Human" made unbypassable, *no floor special-case*: it reuses the
+exact gate that guards `salience.downgrade`). This is the deliberate design contrast with the additive C1/C3/C4 (whose
+"human vouches" bit only when a responsibility-bearing contributor was named). **Digital strike-through** (principle
+1+2): the assertion event and db/012's `patient_name` retained set are **left untouched**; a **value-grained**
+`name_repudiation` overlay (keyed by `(subject, value)` — a false name is false *however* labelled, and value-keying
+**avoids replicating db/012's `use`-fold** so there is nothing to drift; HLC-latest-wins so a future reversal composes)
+records the struck value, and `patient_name_current` is `CREATE-OR-REPLACE`d to **anti-join** it (column contract
+UNCHANGED ⇒ reload-idempotent). New **`patient_alias_pool`** VIEW surfaces struck names to the §5.2 matcher.
+`cairn_check_repudiation_assertion` culture-neutral structural floor (valid subject uuid, non-empty value + reason) +
+**HARD-required legibility twin**. **Documented design call:** striking a chart's *only* name → `patient_name_current`
+has **no** row for it — honest (the name is genuinely unknown-now; displaying the known-false one is a *precise
+untruth*, principle 4); "the header always shows something" is satisfied one layer up by the §5.4 callsign /
+*unconfirmed* rendering (C4), not by lying. **Honest limit:** the value match is **exact-string** on an opaque value
+(the only culture-neutral, deterministic, convergent choice — the suppression floor must be precise or it risks
+striking the wrong, possibly true, name); fuzzy recognition of a returning alias is the **advisory matcher's** job over
+`patient_alias_pool`, never the floor's. **`db/025_identity_repudiate.sql` (wired into `db.rs`) + a pure `cairn-event`
+builder; NO SCHEMA/ADR/spec bump, db/010–024 left UNTOUCHED** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the
+shared twin hook + `patient_name_current`). TDD: 2 pure builder unit tests + 10 DB-gated integration tests
+(`crates/cairn-node/tests/identity_repudiate.rs`: struck name leaves winner + surviving name takes over + alias-pool
+entry + retained-set evidence preserved · only-name → no winner (honest, never the lie) · idempotent re-assert +
+HLC-latest reason · **newer re-assertion does NOT un-strike** (the HLC-blind anti-join pinned) · **un-attested AND
+agent-attested repudiation refused** — the suppressing "Human" floor, both branches · four floor rejections [empty
+value, empty reason, bad subject, missing twin]). Full `cargo test --workspace` (**364 passed / 0 failed**, incl.
+C1/C3/C4 + demographics-names regression green) + workspace clippy clean on a **PG16 + cairn_pgx 0.2.0** rig stood up
+from scratch in-container this session (pgrx 0.18.1, `--features pg16`, `postgresql-server-dev-16` headers, local-TCP
+`trust` in pg_hba). **Review hardening** (3-agent adversarial pass; SQL-correctness agent found 0 hard bugs):
+(a) **confidentiality split** — `patient_alias_pool` is now **reason-free** and the base `name_repudiation` table is
+**not** granted to `cairn_agent`, so the free-text forensic `reason` can't leak cross-patient on the name-searchable
+matcher view (ADR-0006); (b) `reason` made `NOT NULL` (the floor already guarantees it); (c) the HLC-blind anti-join +
+the agent-attested-refused branch got explicit tests; (d) floor-rejection tests now also assert they reject at the
+**floor**, not the attestation gate; (e) the `origin`-tiebreak collation note folded into #115. **Deferred (recorded):** a **reversal / de-repudiation** event (the overlay is HLC-versioned so it
+composes with no rewrite — the append-only correction path is a separate §5.5 decision); a **chart-history VIEW**
+rendering struck names (the retained set + overlay already carry the data); **matcher wiring** that *consumes*
+`patient_alias_pool`; `reattribute` (§5.5 event-granular strike-through of *clinical documentation* — waits on a
+clinical-note surface that does not yet exist; premature) and the full §5.4 John-Doe registration subsystem.
+**Identity C5 is now BUILT — the first suppressing identity event, `repudiate` + the alias pool.**
+
+**Prior session (2026-07-03) — identity C4, `identify` + the *unconfirmed* trust state** (brainstorm→spec→plan→
 inline-TDD; spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c4-identify-unconfirmed*`). The third
 and final state of the §5.7 chart trust-state contract C3 opened. Two **additive** event types through the reused
 `submit_event` door: **`identity.pending.asserted`** (the §5.4 John-Doe front door — marks a chart identity-pending →
@@ -435,10 +479,15 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   the §5.7 projection-side contract, driven by the patient-initiated dispute front door), **and C4** (`identify` +
   the *unconfirmed* trust state — `db/024`; the §5.4 John-Doe identity-pending front door + the `identify` resolver,
   composing the third trust state into a severity-max `chart_trust`) **are now BUILT — the §5.7
-  confirmed/unconfirmed/under-review contract is COMPLETE**. **Next identity slice: C5+** — the rest of the §5.7
-  algebra (`reattribute` [§5.5 event-granular strike-through + tiered adjudication], `repudiate` [alias pool +
-  suppressing semantics]) + the full §5.4 John-Doe registration subsystem (callsign, clinician-observed evidence
-  assertions, matcher re-run); each composes one more source into the `chart_trust` VIEW C3/C4 built. Deferred: an **A/B pass-toggle**
+  confirmed/unconfirmed/under-review contract is COMPLETE**, **and C5** (`repudiate` + the known-alias pool — `db/025`;
+  the first *suppressing* identity event, a value-grained `name_repudiation` overlay striking a known-false name from
+  `patient_name_current` and surfacing it via `patient_alias_pool`, `mode='suppressing'` forcing the human-attestation
+  floor) **is now BUILT**. **Next identity slice: C5+** — `reattribute` (§5.5 event-granular strike-through of *clinical
+  documentation* + tiered adjudication — **waits on a clinical-note surface** that does not yet exist; premature to
+  build against demographics) + the full §5.4 John-Doe registration subsystem (callsign, clinician-observed evidence
+  assertions, matcher re-run); reattribute composes one more *under-review* source into the `chart_trust` VIEW when it
+  lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
+  a **chart-history VIEW** rendering struck names; **matcher wiring** consuming `patient_alias_pool`. Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto

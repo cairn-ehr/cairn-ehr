@@ -49,6 +49,14 @@ const SCHEMA: &[(&str, &str)] = &[
     // completing the §5.7 confirmed/unconfirmed/under-review contract C3 opened. Leaves
     // db/023 untouched (CREATE-OR-REPLACEs the shared twin hook + chart_trust view).
     ("024_identity_identify", include_str!("../../../db/024_identity_identify.sql")),
+    // §5.5(a)/§5.7 `repudiate` + the known-alias pool (C5): the FIRST *suppressing* identity
+    // event. A fabricated-persona name marked known-false is struck from the display winner
+    // (patient_name_current anti-joins a new name_repudiation overlay) and surfaced to the
+    // matcher as a reusable alias (patient_alias_pool) — a digital strike-through that leaves
+    // the assertion event and db/012's retained set untouched. suppressing-mode forces the
+    // db/005 human-attestation gate (§5.7 "Human"). Leaves db/010–024 untouched
+    // (CREATE-OR-REPLACEs the shared twin hook + patient_name_current, same column contract).
+    ("025_identity_repudiate", include_str!("../../../db/025_identity_repudiate.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

@@ -181,6 +181,51 @@ pub fn render_identify_twin(a: &IdentifyAssertion) -> String {
     format!("identity confirmed: {} via {}", a.subject, a.method)
 }
 
+// ---------------------------------------------------------------------------
+// §5.5(a)/§5.7 `repudiate` (piece C5). The FIRST *suppressing* identity event:
+// link/dispute/identify all annotate or add, never remove; a repudiation strikes a
+// known-false name from the display projection. It is the fabricated-persona case —
+// a patient presented under a deliberately false name; once established as false, the
+// name leaves the chart header but stays in the record (the fact of presentation under
+// it is medico-legally required, principle 1) and enters a matcher-visible known-alias
+// pool (aliases are reused). Mechanism is a digital strike-through: the name assertion
+// event and db/012's retained-set row are untouched; a separate overlay (db/025) marks
+// the value repudiated and the display winner anti-joins it.
+//
+// The repudiation is VALUE-grained: it names the exact known-false `value` (opaque
+// string, matched by exact equality — the only culture-neutral, convergent choice), not
+// a name `use` and not a specific event id. A false name is false however it was
+// labelled, and the matcher alias pool is a set of name strings. See the db/025 design.
+//
+// Unlike its additive siblings, a repudiation flows through submit_event as a
+// `suppressing`-mode event, so the db/005 attestation gate ALWAYS demands a
+// responsibility-bearing human's token — the structural form of §5.7's "Human" for
+// repudiate (no floor special-case; it reuses the salience.downgrade gate).
+// ---------------------------------------------------------------------------
+
+/// One §5.5(a)/§5.7 `identity.repudiate.asserted` — marks a name value known-false.
+pub struct RepudiationAssertion<'a> {
+    pub subject: &'a str, // the patient UUID whose chart carried the known-false name
+    pub value: &'a str,   // the exact known-false name string (opaque; struck from display, kept as alias)
+    pub reason: &'a str,  // §4.1 — required-present, value-open ("confessed fabricated persona", "unknown")
+}
+
+/// Build the `identity.repudiate.asserted` payload. All three fields are mandatory —
+/// no omit-when-absent discipline (like dispute; unlike link's optional confidence).
+pub fn repudiation_assertion_body(a: &RepudiationAssertion) -> Value {
+    json!({
+        "subject": a.subject,
+        "value": a.value,
+        "reason": a.reason,
+    })
+}
+
+/// Render the §4.5-style legibility twin for a repudiation: profile-independent plaintext
+/// (the db/025 floor HARD-requires a non-empty authored twin, like every identity event).
+pub fn render_repudiate_twin(a: &RepudiationAssertion) -> String {
+    format!("name repudiated: {} — \"{}\" ({})", a.subject, a.value, a.reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +370,37 @@ mod tests {
         assert!(confirmed.starts_with("identity confirmed: "));
         assert!(confirmed.contains("aaaaaaaa-0000-0000-0000-000000000001")); // subject
         assert!(confirmed.contains("driver's licence")); // method
+    }
+
+    // --- §5.5(a)/§5.7 repudiate builders (C5) ---
+
+    fn sample_repudiation() -> RepudiationAssertion<'static> {
+        RepudiationAssertion {
+            subject: "aaaaaaaa-0000-0000-0000-000000000001",
+            value: "John Smith",
+            reason: "confessed fabricated persona at intake interview",
+        }
+    }
+
+    #[test]
+    fn repudiation_body_carries_subject_value_and_reason_only() {
+        let b = repudiation_assertion_body(&sample_repudiation());
+        assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(b["value"], "John Smith");
+        assert_eq!(b["reason"], "confessed fabricated persona at intake interview");
+        // A repudiation carries no name `use` and no target event id — it is value-grained
+        // (see the db/025 design); those keys must be absent.
+        assert!(b.get("use").is_none());
+        assert!(b.get("target_event_id").is_none());
+    }
+
+    #[test]
+    fn repudiate_twin_is_nonempty_and_carries_subject_value_reason() {
+        let t = render_repudiate_twin(&sample_repudiation());
+        assert!(t.starts_with("name repudiated: "));
+        assert!(!t.trim().is_empty());
+        assert!(t.contains("aaaaaaaa-0000-0000-0000-000000000001")); // subject
+        assert!(t.contains("John Smith")); // the struck value
+        assert!(t.contains("fabricated persona")); // reason
     }
 }
