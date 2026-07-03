@@ -22,6 +22,23 @@ def test_name_tokens_empty_when_no_names():
     assert name_tokens({"record_id": "r"}) == set()
 
 
+def test_name_tokens_excludes_placeholder_use_names():
+    # §5.4 / issue #124: the real name_tokens CTE excludes placeholder-use (callsign) names
+    # (`use_key <> ALL(PLACEHOLDER_NAME_USES)`); this pure mirror must agree, or the eval's
+    # "recoverable by blocking" guarantee would over-claim for a callsign-carrying record.
+    # A name carrying a placeholder `use`/`use_key` contributes ZERO tokens.
+    rec = {"names": [{"value": "Unknown-ed-site1-2026-07-03-00ab", "use_key": "callsign"}]}
+    assert name_tokens(rec) == set()
+    # ... but a real name on the SAME record still tokenizes (exclusion is placeholder-only).
+    rec2 = {
+        "names": [
+            {"value": "Alex Nguyen"},
+            {"value": "Unknown-ed-site1-2026-07-03-00ab", "use": "callsign"},
+        ]
+    }
+    assert name_tokens(rec2) == {"alex", "nguyen"}
+
+
 def test_shares_key_via_exact_dob():
     a = {"dob": {"value": "1990-05-12"}, "names": [{"value": "Ann"}]}
     b = {"dob": {"value": "1990-05-12"}, "names": [{"value": "Bob"}]}

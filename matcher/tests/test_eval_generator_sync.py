@@ -27,6 +27,10 @@ _MIRRORED_PASSES = [
     ("exact-DOB pass (shares_blocking_key dob branch)", "FROM patient_demographic WHERE field = 'dob'"),
     ("identifier pass excluding 'unknown' (_identifier_keys)", "FROM patient_identifier WHERE system <> 'unknown'"),
     ("name-token pass: NFC + lower + whitespace split (name_tokens)", "regexp_split_to_table(lower(normalize(value, NFC)), '\\s+')"),
+    # §5.4: the placeholder-use exclusion the name_tokens mirror (generator._is_placeholder_name)
+    # depends on. If the SQL drops it, the SQL blocks on callsigns while the mirror excludes
+    # them — the two disagree, and the eval mis-reports blocking recall.
+    ("placeholder-use exclusion in name_tokens (§5.4)", "use_key <> ALL(%s)"),
 ]
 
 

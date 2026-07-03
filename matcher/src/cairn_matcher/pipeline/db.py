@@ -13,16 +13,16 @@ from psycopg.rows import dict_row
 
 from cairn_matcher.pipeline.adapter import candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
+from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
 # §5.4 placeholder-name exclusion. A "John Doe" chart carries a system-generated CALLSIGN
 # (`Unknown-ED-<site>-<date>-<suffix>`, cairn-event::john_doe) as a real, displayed name so
 # the header is never blank — but §5.4 requires the matcher EXCLUDE placeholder names from
-# its feature space so two unidentified patients can never match via their callsigns. The
-# carrier is the name's `use` facet (db/012 folds it to `use_key`); `callsign` is a
-# system-set, culture-neutral reserved token. This is an ADVISORY exclusion (the matcher owns
-# its feature space, §5.2/§5.13) — the callsign stays a normal name in `patient_name`; it is
-# only withheld from SCORING (load_candidate) and BLOCKING (the name_tokens CTE) here.
+# its feature space so two unidentified patients can never match via their callsigns. This is
+# an ADVISORY exclusion (the matcher owns its feature space, §5.2/§5.13) — the callsign stays a
+# normal name in `patient_name`; it is only withheld from SCORING (load_candidate) and BLOCKING
+# (the name_tokens CTE) here.
 #
 # Which of the two is load-bearing: the SCORING exclusion. The blocking tokenizer splits on
 # WHITESPACE and a callsign is hyphen-joined with none, so a whole callsign is a SINGLE
@@ -32,18 +32,12 @@ from cairn_matcher.records import CandidateRecord
 # ordinary John Does from grouping (they already don't). The scoring exclusion is what keeps
 # a callsign out of the scorer's name feature.
 #
-# A reserved SET (not one literal) so a future placeholder kind joins by adding one member —
-# additive, never a rewrite. This is the hand-maintained mirror of
-# cairn-event::john_doe::CALLSIGN_USE, with NO mechanical guard coupling the two (a deferred
-# item). Drift is NOT recall-safe in the dangerous direction: if a use Rust emits as a
-# placeholder is MISSING here, those callsign names UNDER-exclude — they re-enter the feature
-# space, and two same-site/same-day John Does can then block+score+auto-band into a FALSE
-# MERGE (§5.2's "false merge >> false split"). So an addition on the Rust side MUST be
-# mirrored here; the safe-failure framing ("only lost recall") does not hold for an omission.
-PLACEHOLDER_NAME_USES = frozenset({"callsign"})
-# The parameter form psycopg binds to a Postgres text[] for `use_key <> ALL(%s)`. Sorted so
-# the bound array is deterministic (readability/log stability); order is irrelevant to ALL.
-_PLACEHOLDER_USES_PARAM = sorted(PLACEHOLDER_NAME_USES)
+# The reserved set (`PLACEHOLDER_NAME_USES`) and its bound-array form now live in the pure,
+# psycopg-free `cairn_matcher.placeholder_uses` module — the single source of truth shared with
+# the pure synthetic-eval mirror (`eval/generator.py`), which could not import it from here.
+# The Rust↔Python drift guard lives in `tests/test_placeholder_uses_sync.py` (see that module
+# for why an omission here is a FALSE-MERGE hazard, not merely lost recall).
+_PLACEHOLDER_USES_PARAM = PLACEHOLDER_USES_PARAM
 
 
 def load_candidate(conn, patient_id) -> CandidateRecord:
