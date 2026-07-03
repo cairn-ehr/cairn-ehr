@@ -47,8 +47,10 @@ be enrolled. The chosen model (the deferred §7.5 piece, now built):
 
 - **One `agent` actor per `matcher_version`.** `matcher_version` (already `"{pkg}+{weights-digest}"`,
   ADR-0014's config-pin, present on every proposal) **is** the pinned epoch (ADR-0029). The pinned
-  determinant set is `{"kind":"agent","actor":"cairn-matcher","matcher_version":"<v>"}`; the actor_id
-  is its content-address (`cairn_actor_id`, in-DB).
+  determinant set is `{"kind":"agent","actor":"cairn-matcher","skill_epoch":"<matcher_version>"}` —
+  the epoch is carried under the ADR-0029 **`skill_epoch`** field because the existing recall surface
+  `events_by_actor_epoch(p_key, p_epoch)` (db/006) matches on `pinned->>'skill_epoch' = p_epoch`. The
+  actor_id is the content-address of that set (`cairn_actor_id`, in-DB).
 - **A fresh signing key per epoch.** Because each epoch has its own key AND its own actor_id, and
   `submit_event` step 2 stamps `event_log.actor_id` only when the key→actor mapping is **unique**, a
   per-epoch key gives **unique attribution**: `event_log.actor_id` is stamped precisely, so a
@@ -108,7 +110,7 @@ Honest ceiling, documented.
 ```
 // pure
 matcher_pinned(matcher_version: &str) -> serde_json::Value
-    // {"kind":"agent","actor":"cairn-matcher","matcher_version": v}
+    // {"kind":"agent","actor":"cairn-matcher","skill_epoch": v}  // skill_epoch = the recall key (db/006)
 matcher_key_filename(matcher_version: &str) -> String   // sanitized, collision-free per epoch
 
 // IO
