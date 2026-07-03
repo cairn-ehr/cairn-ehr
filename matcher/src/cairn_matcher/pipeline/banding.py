@@ -67,6 +67,8 @@ def band(
     score: MatchScore,
     vetoes: Sequence[VetoFinding],
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    *,
+    has_known_alias: bool = False,
 ) -> Band | None:
     """Classify a scored pair into AUTO_CANDIDATE / REVIEW / None (no proposal).
 
@@ -80,7 +82,19 @@ def band(
     sub-threshold and silently suppress the very anomaly it flags — an auto-reject in
     effect. The rescue is scoped to a shared identifier (not any veto) so it surfaces the
     contamination signal without flooding the worklist with common-name coincidences.
+
+    Exception (§5.5(a) known alias): when the pair's name agreement is driven by a name a
+    chart has REPUDIATED as known-false (`has_known_alias`), the band is REVIEW — never
+    None (the "recognised returning persona" signal is never dropped below threshold) and
+    never AUTO_CANDIDATE (two charts are never auto-linked on the strength of a name one of
+    them declared false — §5.7 reserves that call for a Human). This mirrors the
+    shared-identifier rescue: a scoped strong signal forced in front of a human, and like
+    it can only ever SURFACE the pair, never auto-reject it. The matcher cannot tell a
+    returning fabricated persona from a real, different bearer of that false name, so it
+    flags rather than decides.
     """
+    if has_known_alias:
+        return Band.REVIEW
     if score.total < thresholds.review:
         if vetoes and _has_shared_identifier(score):
             return Band.REVIEW
@@ -122,9 +136,15 @@ def build_payload(
     vetoes: Sequence[VetoFinding],
     band_value: Band,
     weights: Weights = DEFAULT_WEIGHTS,
+    alias_evidence: Sequence[dict] = (),
 ) -> ProposalPayload:
     """Shape a self-explaining proposal payload: the band, the score, and WHY (evidence
-    breakdown + veto findings), plus the matcher version that produced it."""
+    breakdown + veto findings), plus the matcher version that produced it.
+
+    `alias_evidence` (the §5.5(a) `known_alias` entries, if any) is appended after the
+    field breakdown so a reviewer sees that the match involves a repudiated known alias —
+    the paper-registry "known alias" flag, restored to the worklist.
+    """
     evidence = tuple(
         {
             "field": e.field,
@@ -133,7 +153,7 @@ def build_payload(
             "weight_contribution": e.weight_contribution,
         }
         for e in score.fields
-    )
+    ) + tuple(alias_evidence)
     findings = tuple(
         {"veto_kind": v.veto_kind, "severity": v.severity, "subject": v.subject, "detail": v.detail}
         for v in vetoes
