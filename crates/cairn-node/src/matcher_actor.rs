@@ -86,7 +86,7 @@ pub async fn resolve_matcher_actor(
         // call in tests/apply_proposal.rs).
         let pinned = matcher_pinned(matcher_version).to_string();
         client
-            .execute("SELECT enroll_actor('agent', $1::jsonb, $2)", &[&pinned, &kid])
+            .execute("SELECT enroll_actor('agent', $1::text::jsonb, $2)", &[&pinned, &kid])
             .await?;
     }
 
