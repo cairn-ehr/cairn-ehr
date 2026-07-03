@@ -280,6 +280,23 @@ enum Cmd {
         #[arg(long)]
         insecure_plaintext: bool,
     },
+
+    /// Register an unidentified ("John Doe") patient (§5.4): mint a UUID, author a
+    /// system-generated callsign name + the identity-pending marker so the chart renders
+    /// *unconfirmed*. Care can proceed against the printed UUID immediately. OWNER
+    /// ceremony: enrolls the node key as a `device` registration actor on first use (a
+    /// real clinical UI would attach the operating clerk's human actor instead).
+    RegisterJohnDoe {
+        /// Care context for the callsign (e.g. ED, ward).
+        #[arg(long, default_value = "ED")]
+        class: String,
+        /// Registering-site label for the callsign (defaults to this node's id).
+        #[arg(long)]
+        site: Option<String>,
+        /// Why the chart is identity-pending — §4.1 value-open.
+        #[arg(long, default_value = "unidentified patient, no ID")]
+        basis: String,
+    },
 }
 
 #[tokio::main]
@@ -776,6 +793,50 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Cmd::RegisterJohnDoe { class, site, basis } => {
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // The callsign's site defaults to this node's id; its date comes from the node's
+            // own DB clock (no date dependency — the DB is the integration substrate).
+            let site = site.unwrap_or_else(|| id.node_id_hex.clone());
+            let date: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            // Owner ceremony: make the signing key an enrolled actor so it may author the
+            // additive registration events (idempotent — enrolls only on first use).
+            ensure_registration_actor(&db, &kid).await?;
+            let (pid, call) = cairn_node::john_doe::register_john_doe(
+                &mut db, &sk, &kid, &id.node_id_hex, &class, &site, &date, &basis,
+            )
+            .await?;
+            println!("registered John Doe {pid}\ncallsign {call}");
+        }
+    }
+    Ok(())
+}
+
+/// Ensure the node's signing key is enrolled as a `device` registration actor, so it may
+/// author the additive §5.4 John-Doe registration events. Idempotent (mirrors
+/// `matcher_actor`'s `actor_current` guard): it enrolls only when this key is not already a
+/// live device actor. An owner ceremony — the runtime `cairn_agent` role deliberately
+/// cannot enroll. A real clinical UI would attach the operating clerk's *human* actor
+/// instead; this device-key path is the headless-node/CLI convenience.
+async fn ensure_registration_actor(
+    db: &tokio_postgres::Client,
+    kid: &str,
+) -> anyhow::Result<()> {
+    let already: bool = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1 AND kind = 'device')",
+            &[&kid],
+        )
+        .await?
+        .get(0);
+    if !already {
+        let pinned =
+            serde_json::json!({ "role": "registration-desk", "node_key": kid }).to_string();
+        db.execute("SELECT enroll_actor('device', $1::text::jsonb, $2)", &[&pinned, &kid])
+            .await?;
     }
     Ok(())
 }
