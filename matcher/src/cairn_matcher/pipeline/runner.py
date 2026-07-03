@@ -8,6 +8,7 @@ duplicate-sweep is the declared backstop for any signal missed at the noise floo
 """
 
 import uuid
+from collections.abc import Mapping
 
 from cairn_matcher.orchestrator import field_comparisons
 from cairn_matcher.pipeline.alias import known_alias_evidence
@@ -43,12 +44,18 @@ def propose(
     *,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
+    aliases: Mapping[str, "frozenset[str]"] | None = None,
 ) -> Band | None:
     """Score the pair (a, b), gate on the in-DB veto, and persist a proposal if warranted.
 
     Returns the Band (AUTO_CANDIDATE | REVIEW) when a proposal is written, or None when
     the pair is below the review threshold (nothing persisted). The pair is stored in
     canonical (low, high) order so the row is symmetric in a and b.
+
+    `aliases` is an optional preloaded {patient_id_text: known-aliases} lookup a BATCH
+    caller (sweep) supplies so this function issues no per-pair alias SELECT — it reads
+    both charts' aliases from the map instead. A direct single-pair call leaves it None
+    and each chart's aliases are loaded on demand (`db.load_aliases`).
     """
     # Imported lazily so `runner` (and its pure helper canonical_pair) is importable
     # without the optional `pipeline` extra; only an actual propose() call needs psycopg.
@@ -62,10 +69,17 @@ def propose(
 
     # §5.5(a) known-alias recognition: does the pair match (partly) on a name a chart has
     # REPUDIATED as known-false? This is advisory evidence for the human reviewer — never a
-    # suppression and never an auto-link (banding forces REVIEW when present).
+    # suppression and never an auto-link (banding forces REVIEW when present). Aliases come
+    # from the caller's preloaded map when batching, else a single-pair on-demand load.
+    if aliases is None:
+        aliases_a = db.load_aliases(conn, a)
+        aliases_b = db.load_aliases(conn, b)
+    else:
+        aliases_a = aliases.get(str(a), frozenset())
+        aliases_b = aliases.get(str(b), frozenset())
     alias_evidence = known_alias_evidence(
-        str(a), rec_a.names.value if rec_a.names else None, db.load_aliases(conn, a),
-        str(b), rec_b.names.value if rec_b.names else None, db.load_aliases(conn, b),
+        str(a), rec_a.names.value if rec_a.names else None, aliases_a,
+        str(b), rec_b.names.value if rec_b.names else None, aliases_b,
     )
     band_value = band(
         match_score, vetoes, thresholds, has_known_alias=bool(alias_evidence)

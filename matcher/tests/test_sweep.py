@@ -5,7 +5,7 @@ Gated on CAIRN_TEST_PG (skips cleanly without a database).
 """
 
 from cairn_matcher.pipeline.runner import canonical_pair
-from tests.conftest import seed_patient
+from tests.conftest import seed_patient, seed_repudiation
 
 PA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 PB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -91,3 +91,25 @@ def test_sweep_skips_and_reports_a_failing_pair(pg_conn, monkeypatch):
     assert "boom" in result.errors[0].message
     # the other pair was still scored and persisted
     assert _proposal_status(pg_conn, *canonical_pair(PC, PD)) == "pending"
+
+
+def test_sweep_tags_a_returning_known_alias_pair(pg_conn):
+    # End-to-end over the batch alias PRELOAD path: sweep() reads the candidate set's
+    # aliases once (load_aliases_for) and threads the map into propose(), so a returning
+    # persona still lands a REVIEW proposal carrying the known_alias flag.
+    from cairn_matcher.pipeline.sweep import sweep
+
+    false_name = "John Fakename"
+    seed_patient(pg_conn, PA, names=[("Jane Realname", 20), (false_name, 20)])
+    seed_repudiation(pg_conn, PA, false_name)
+    seed_patient(pg_conn, PB, names=[(false_name, 20)])
+
+    result = sweep(pg_conn)
+    assert result.review >= 1
+    low, high = canonical_pair(PA, PB)
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT band, evidence FROM match_proposal WHERE patient_low=%s AND patient_high=%s",
+                    (low, high))
+        band_value, evidence = cur.fetchone()
+    assert band_value == "review"
+    assert any(e.get("kind") == "known_alias" and e["alias_of"] == PA for e in evidence)

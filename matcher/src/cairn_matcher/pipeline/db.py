@@ -47,10 +47,45 @@ def load_aliases(conn, patient_id) -> frozenset[str]:
     exposed, never the forensic `reason`. The matcher recognises a returning fabricated
     persona (§5.5(a)) by these values; how a value got there (the C5 suppressing event
     floor) is not this module's concern — it only reads the projection.
+
+    Single-pair path only. A BATCH driver must not call this per pair: it would re-fetch
+    the same chart's aliases once per pair the chart appears in, and issue two empty SELECTs
+    for every pair in the (overwhelmingly common) no-repudiation case. `load_aliases_for`
+    below reads the whole candidate set once instead.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT value FROM patient_alias_pool WHERE patient_id=%s", (patient_id,))
         return frozenset(row[0] for row in cur.fetchall())
+
+
+def load_aliases_for(conn, patient_ids) -> dict[str, frozenset[str]]:
+    """Read the repudiated known-aliases for a whole set of charts in ONE query.
+
+    The batch counterpart to `load_aliases`. A sweep scores every candidate pair, and a
+    chart appears in many pairs; loading its aliases per pair (as `load_aliases` does) is
+    redundant I/O, and in the common no-repudiation case it is two empty SELECTs on every
+    pair. Instead the sweep pre-loads the aliases for its whole candidate-patient set once
+    and hands the lookup to `propose` (which then hits the DB zero extra times per pair).
+
+    Scoped to the given `patient_ids` (never the fleet-wide pool, which grows with every
+    repudiation ever synced): the `WHERE patient_id = ANY(...)` probes the base table's
+    (subject, value) PK on its leading `subject` column, so this stays an index probe.
+    Charts with no repudiated alias are simply absent from the returned dict; the caller
+    treats a miss as the empty frozenset. Keys are canonical lowercase uuid text, matching
+    `str(patient_id)` at the call site.
+    """
+    ids = [str(p) for p in patient_ids]
+    if not ids:
+        return {}
+    out: dict[str, set[str]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT patient_id, value FROM patient_alias_pool WHERE patient_id = ANY(%s::uuid[])",
+            (ids,),
+        )
+        for pid, value in cur.fetchall():
+            out.setdefault(str(pid), set()).add(value)
+    return {pid: frozenset(values) for pid, values in out.items()}
 
 
 def match_veto(conn, a, b) -> list[VetoFinding]:

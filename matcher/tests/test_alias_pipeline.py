@@ -65,3 +65,47 @@ def test_no_repudiation_means_no_known_alias_evidence(pg_conn):
     if row is not None:  # a name-only match may or may not cross the review threshold
         _, evidence = row
         assert not any(e.get("kind") == "known_alias" for e in evidence)
+
+
+# --- batch alias preload (the sweep path) -----------------------------------------------
+# A sweep must not re-fetch a chart's aliases once per pair; load_aliases_for reads the
+# whole candidate set in one scoped query and propose() consumes that map.
+
+C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+
+def test_load_aliases_for_batch_reads_every_chart_in_one_dict(pg_conn):
+    from cairn_matcher.pipeline.db import load_aliases_for
+
+    seed_repudiation(pg_conn, A, FALSE_NAME)
+    seed_repudiation(pg_conn, B, "Other Fake")
+    got = load_aliases_for(pg_conn, [A, B, C])
+    # Each requested chart's aliases, keyed by canonical uuid text; a chart with none absent.
+    assert got == {A: frozenset({FALSE_NAME}), B: frozenset({"Other Fake"})}
+    assert C not in got
+
+
+def test_load_aliases_for_empty_input_returns_empty(pg_conn):
+    from cairn_matcher.pipeline.db import load_aliases_for
+
+    assert load_aliases_for(pg_conn, []) == {}
+
+
+def test_propose_reads_preloaded_aliases_not_the_db(pg_conn, monkeypatch):
+    # With a preloaded map, propose() must issue NO per-pair alias SELECT. Force
+    # db.load_aliases to explode; the known_alias tag must still appear, proving the map path.
+    from cairn_matcher.pipeline import db as db_mod
+
+    seed_patient(pg_conn, A, names=[("Jane Realname", 20), (FALSE_NAME, 20)])
+    seed_patient(pg_conn, B, names=[(FALSE_NAME, 20)])
+
+    def _boom(*a, **k):
+        raise AssertionError("propose() must not call load_aliases when aliases= is supplied")
+
+    monkeypatch.setattr(db_mod, "load_aliases", _boom)
+    preloaded = {A: frozenset({FALSE_NAME})}  # B carries none — a plain map miss
+    result = propose(pg_conn, A, B, aliases=preloaded)
+    assert result is Band.REVIEW
+
+    _, evidence = _evidence(pg_conn)
+    assert {"kind": "known_alias", "value": FALSE_NAME, "alias_of": A} in evidence

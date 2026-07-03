@@ -87,11 +87,19 @@ def band(
     chart has REPUDIATED as known-false (`has_known_alias`), the band is REVIEW — never
     None (the "recognised returning persona" signal is never dropped below threshold) and
     never AUTO_CANDIDATE (two charts are never auto-linked on the strength of a name one of
-    them declared false — §5.7 reserves that call for a Human). This mirrors the
-    shared-identifier rescue: a scoped strong signal forced in front of a human, and like
-    it can only ever SURFACE the pair, never auto-reject it. The matcher cannot tell a
-    returning fabricated persona from a real, different bearer of that false name, so it
-    flags rather than decides.
+    them declared false — §5.7 reserves that call for a Human). Like the shared-identifier
+    rescue it can only ever SURFACE the pair, never auto-reject it.
+
+    Deliberately UNSCOPED, unlike that rescue. The shared-identifier rescue is gated (fires
+    only with a veto AND a shared identifier) precisely to avoid flooding the worklist with
+    common-name coincidences. The known-alias forcing CANNOT borrow that discipline: the
+    matcher cannot tell a returning fabricated persona from a real, different bearer of the
+    same false name — from the name alone they are identical — so any score/veto gate would
+    risk suppressing the very §5.5(a) recognition the alias pool exists to serve. So it
+    flags every corroborated known-alias match and defers to a Human. Do NOT "fix" this into
+    a scoped rule: that would silently drop returning-persona pairs. Worklist VOLUME is
+    managed downstream instead — every such proposal carries a `known_alias` evidence entry
+    (build_payload), so a hub worklist can filter/prioritise them without any suppression here.
     """
     if has_known_alias:
         return Band.REVIEW
