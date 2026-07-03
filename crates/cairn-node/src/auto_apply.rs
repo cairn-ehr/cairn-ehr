@@ -189,13 +189,6 @@ pub struct AutoSummary {
 const AUTO_APPLY_LOCK_NS: i32 = 0x4341524E;
 const AUTO_APPLY_LOCK_SLOT: i32 = 2;
 
-/// Tick the node HLC once (the same door node authoring uses) and stamp `node_origin`.
-/// Authoring is single-threaded on a node, so tick->sign->submit per event is safe here.
-async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<Hlc> {
-    let row = client.query_one("SELECT wall, counter FROM node_hlc_tick()", &[]).await?;
-    Ok(Hlc { wall: row.get(0), counter: row.get(1), node_origin: node_origin.into() })
-}
-
 /// Auto-apply EVERY pending auto_candidate proposal. Resolves the matcher actor once per
 /// distinct epoch (cached), then applies each pair in its own transaction so one bad pair
 /// never rolls back the batch (skip-and-report, mirroring pipeline/sweep.py). Owner-run:
@@ -279,7 +272,7 @@ pub async fn apply_auto_candidates(
             (sk.clone(), kid.clone())
         };
 
-        let hlc = next_hlc(client, node_origin).await?;
+        let hlc = crate::db::next_hlc(client, node_origin).await?;
         match apply_auto_candidate(client, low, high, &sk, &kid, hlc).await {
             Ok(AutoOutcome::Applied(_)) => summary.applied += 1,
             Ok(AutoOutcome::VetoedToReview) => summary.vetoed_to_review += 1,

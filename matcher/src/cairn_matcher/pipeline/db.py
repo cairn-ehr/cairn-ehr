@@ -15,6 +15,36 @@ from cairn_matcher.pipeline.adapter import candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
 from cairn_matcher.records import CandidateRecord
 
+# §5.4 placeholder-name exclusion. A "John Doe" chart carries a system-generated CALLSIGN
+# (`Unknown-ED-<site>-<date>-<suffix>`, cairn-event::john_doe) as a real, displayed name so
+# the header is never blank — but §5.4 requires the matcher EXCLUDE placeholder names from
+# its feature space so two unidentified patients can never match via their callsigns. The
+# carrier is the name's `use` facet (db/012 folds it to `use_key`); `callsign` is a
+# system-set, culture-neutral reserved token. This is an ADVISORY exclusion (the matcher owns
+# its feature space, §5.2/§5.13) — the callsign stays a normal name in `patient_name`; it is
+# only withheld from SCORING (load_candidate) and BLOCKING (the name_tokens CTE) here.
+#
+# Which of the two is load-bearing: the SCORING exclusion. The blocking tokenizer splits on
+# WHITESPACE and a callsign is hyphen-joined with none, so a whole callsign is a SINGLE
+# token; two distinct callsigns thus never share a blocking token to begin with. The blocking
+# exclusion earns its keep only in the rare IDENTICAL-callsign collision (same site/day/suffix
+# — see cairn-node SUFFIX_HEX_LEN) and as cheap defense-in-depth; it is NOT what stops two
+# ordinary John Does from grouping (they already don't). The scoring exclusion is what keeps
+# a callsign out of the scorer's name feature.
+#
+# A reserved SET (not one literal) so a future placeholder kind joins by adding one member —
+# additive, never a rewrite. This is the hand-maintained mirror of
+# cairn-event::john_doe::CALLSIGN_USE, with NO mechanical guard coupling the two (a deferred
+# item). Drift is NOT recall-safe in the dangerous direction: if a use Rust emits as a
+# placeholder is MISSING here, those callsign names UNDER-exclude — they re-enter the feature
+# space, and two same-site/same-day John Does can then block+score+auto-band into a FALSE
+# MERGE (§5.2's "false merge >> false split"). So an addition on the Rust side MUST be
+# mirrored here; the safe-failure framing ("only lost recall") does not hold for an omission.
+PLACEHOLDER_NAME_USES = frozenset({"callsign"})
+# The parameter form psycopg binds to a Postgres text[] for `use_key <> ALL(%s)`. Sorted so
+# the bound array is deterministic (readability/log stability); order is irrelevant to ALL.
+_PLACEHOLDER_USES_PARAM = sorted(PLACEHOLDER_NAME_USES)
+
 
 def load_candidate(conn, patient_id) -> CandidateRecord:
     """Read one patient's matching-relevant projection rows and shape a CandidateRecord.
@@ -29,8 +59,10 @@ def load_candidate(conn, patient_id) -> CandidateRecord:
         cur.execute("SELECT value, provenance_rank FROM patient_demographic "
                     "WHERE patient_id=%s AND field='sex-at-birth'", (patient_id,))
         sex_row = cur.fetchone()
-        cur.execute("SELECT value, provenance_rank FROM patient_name WHERE patient_id=%s",
-                    (patient_id,))
+        # Exclude placeholder-use names (callsigns) from the scoring feature space (§5.4).
+        cur.execute("SELECT value, provenance_rank FROM patient_name "
+                    "WHERE patient_id=%s AND use_key <> ALL(%s)",
+                    (patient_id, _PLACEHOLDER_USES_PARAM))
         name_rows = cur.fetchall()
         cur.execute("SELECT system, match_key FROM patient_identifier WHERE patient_id=%s",
                     (patient_id,))
@@ -126,9 +158,15 @@ WITH name_tokens AS (
     -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
     -- are different code points and a true duplicate is never even grouped. Mirrors the
     -- adapter's _normalize_token (NFC) on the Python comparison side.
+    -- Exclude placeholder-use names (callsigns) from BLOCKING (§5.4). A callsign is a
+    -- single whitespace-free token, so this bites only when two callsign STRINGS are
+    -- identical (the rare same-suffix collision) — defense-in-depth, not what keeps two
+    -- ordinary John Does apart (distinct callsigns are already distinct tokens; the
+    -- load-bearing exclusion is the scoring one in load_candidate). The `name+year` pass
+    -- reads this same CTE, so it inherits the exclusion for free.
     SELECT DISTINCT patient_id, token
     FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
-    WHERE token <> ''
+    WHERE token <> '' AND use_key <> ALL(%s)
 ),
 birth_year AS (
     SELECT patient_id, substring(value FROM '[0-9]{4}') AS year
@@ -190,7 +228,8 @@ def generate_candidate_pairs(
     pairs: set[tuple[str, str]] = set()
     skipped_blocks: list[tuple[str, str, int]] = []
     with conn.cursor() as cur:
-        cur.execute(_GROUPS_SQL)
+        # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
+        cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
         for pass_name, key, members in cur.fetchall():
             size = len(members)
             if size > max_block_size:

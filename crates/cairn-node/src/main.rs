@@ -280,6 +280,23 @@ enum Cmd {
         #[arg(long)]
         insecure_plaintext: bool,
     },
+
+    /// Register an unidentified ("John Doe") patient (§5.4): mint a UUID, author a
+    /// system-generated callsign name + the identity-pending marker so the chart renders
+    /// *unconfirmed*. Care can proceed against the printed UUID immediately. OWNER
+    /// ceremony: enrolls the node key as a `device` registration actor on first use (a
+    /// real clinical UI would attach the operating clerk's human actor instead).
+    RegisterJohnDoe {
+        /// Care context for the callsign (e.g. ED, ward).
+        #[arg(long, default_value = "ED")]
+        class: String,
+        /// Registering-site label for the callsign (defaults to this node's id).
+        #[arg(long)]
+        site: Option<String>,
+        /// Why the chart is identity-pending — §4.1 value-open.
+        #[arg(long, default_value = "unidentified patient, no ID")]
+        basis: String,
+    },
 }
 
 #[tokio::main]
@@ -776,6 +793,58 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Cmd::RegisterJohnDoe { class, site, basis } => {
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // The callsign's site defaults to this node's id; its date comes from the node's
+            // own DB clock (no date dependency — the DB is the integration substrate).
+            let site = site.unwrap_or_else(|| id.node_id_hex.clone());
+            let date: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            // Owner ceremony: make the signing key an enrolled actor so it may author the
+            // additive registration events (idempotent — enrolls only on first use).
+            ensure_registration_actor(&db, &kid).await?;
+            let (pid, call) = cairn_node::john_doe::register_john_doe(
+                &mut db, &sk, &kid, &id.node_id_hex, &class, &site, &date, &basis,
+            )
+            .await?;
+            println!("registered John Doe {pid}\ncallsign {call}");
+        }
+    }
+    Ok(())
+}
+
+/// Ensure the node's signing key is enrolled as an actor that may author the additive §5.4
+/// John-Doe registration events. Enrolls a `device` actor ONLY when this key is not already
+/// enrolled under ANY kind. An owner ceremony — the runtime `cairn_agent` role deliberately
+/// cannot enroll. A real clinical UI would attach the operating clerk's *human* actor
+/// instead; this device-key path is the headless-node/CLI convenience.
+///
+/// The existence check is deliberately kind-AGNOSTIC. `submit_event` resolves a signer to an
+/// actor purely by `signing_key_id` (kind matters only for attestation), and if one key maps
+/// to MORE than one `actor_current` row it sets `actor_id = NULL` for EVERY event that key
+/// authors node-wide (db/005 `array_length(v_actor_ids, 1) = 1`), silently and irreversibly
+/// degrading attribution. A kind-scoped `AND kind = 'device'` guard would happily add a
+/// second actor to a key already enrolled as (say) a matcher `agent` or a `human`, tripping
+/// exactly that dual-mapping. Keying on `signing_key_id` alone means a key already usable for
+/// authoring is left untouched — never split into two actors.
+async fn ensure_registration_actor(
+    db: &tokio_postgres::Client,
+    kid: &str,
+) -> anyhow::Result<()> {
+    let already: bool = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1)",
+            &[&kid],
+        )
+        .await?
+        .get(0);
+    if !already {
+        let pinned =
+            serde_json::json!({ "role": "registration-desk", "node_key": kid }).to_string();
+        db.execute("SELECT enroll_actor('device', $1::text::jsonb, $2)", &[&pinned, &kid])
+            .await?;
     }
     Ok(())
 }

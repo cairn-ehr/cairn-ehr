@@ -168,6 +168,18 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Tick the node HLC once (`node_hlc_tick`, the same door node authoring uses) and stamp
+/// `node_origin`. Authoring is single-threaded on a node, so a tick->sign->submit per event
+/// is safe. The single home for every in-node authoring path — auto_apply's C2b link and
+/// john_doe's §5.4 registration both call this, rather than each re-writing the round-trip.
+pub(crate) async fn next_hlc(
+    client: &Client,
+    node_origin: &str,
+) -> anyhow::Result<cairn_event::Hlc> {
+    let row = client.query_one("SELECT wall, counter FROM node_hlc_tick()", &[]).await?;
+    Ok(cairn_event::Hlc { wall: row.get(0), counter: row.get(1), node_origin: node_origin.into() })
+}
+
 /// Test-support: a serialization guard for the DB-gated integration tests. They
 /// share Postgres databases and each `TRUNCATE`s its tables on entry, so running
 /// them concurrently — across test binaries OR within one binary — races. This

@@ -65,11 +65,16 @@ def pg_conn():
         conn.close()
 
 
-def seed_patient(conn, patient_id, *, dob=None, sex=None, names=(), identifiers=()):
+def seed_patient(
+    conn, patient_id, *, dob=None, sex=None, names=(), identifiers=(), callsign_names=()
+):
     """Insert projection rows for one patient directly (bypassing submit_event).
 
     dob/sex: (value, provenance_rank[, precision]) tuples or None.
-    names: iterable of (value, provenance_rank). identifiers: iterable of (system, match_key, value).
+    names: iterable of (value, provenance_rank) — seeded under use_key='legal'.
+    callsign_names: iterable of (value, provenance_rank) — seeded under use_key='callsign',
+        the §5.4 placeholder use the matcher excludes from its feature space.
+    identifiers: iterable of (system, match_key, value).
     """
     import json
 
@@ -96,6 +101,13 @@ def seed_patient(conn, patient_id, *, dob=None, sex=None, names=(), identifiers=
                 "INSERT INTO patient_name (patient_id, use_key, value, use_raw, provenance, "
                 "provenance_rank, last_hlc_wall, last_hlc_count, asserted_origin) "
                 "VALUES (%s,'legal',%s,'legal','seed',%s,0,0,'seed') ON CONFLICT DO NOTHING",
+                (patient_id, value, rank),
+            )
+        for value, rank in callsign_names:
+            cur.execute(
+                "INSERT INTO patient_name (patient_id, use_key, value, use_raw, provenance, "
+                "provenance_rank, last_hlc_wall, last_hlc_count, asserted_origin) "
+                "VALUES (%s,'callsign',%s,'callsign','seed',%s,0,0,'seed') ON CONFLICT DO NOTHING",
                 (patient_id, value, rank),
             )
         for system, match_key, value in identifiers:

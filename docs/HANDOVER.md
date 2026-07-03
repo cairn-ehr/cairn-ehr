@@ -8,11 +8,80 @@ now consumes `patient_alias_pool` (known-alias evidence) — done this session**
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
 known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE, and C5 added
-the first *suppressing* identity event); remaining B3 weight-learning / locale packs / A-B pass-toggle + identity
-**C5+** (`reattribute` — waits on a clinical-note surface — + the full §5.4 John-Doe registration subsystem) next.
-Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
+the first *suppressing* identity event) + the **§5.4 John-Doe registration front door — slice A: callsign minting +
+matcher placeholder exclusion — done this session**; remaining B3 weight-learning / locale packs / A-B pass-toggle +
+identity **C5+** (`reattribute` — waits on a clinical-note surface —) + the **rest of the §5.4 subsystem** (clinician-
+observed evidence assertions, the "prior history now available" push-alert, the search-before-create registration-class
+funnel) next. Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
+Postgres-on-Android).
 
-**This session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
+**This session (2026-07-03) — §5.4 John-Doe registration, slice A: callsign minting + matcher placeholder exclusion**
+(brainstorm→spec→plan→inline-TDD; spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-john-doe-callsign-registration*`).
+The §5.4 **registration front door** C4 explicitly deferred: what a clinician invokes when an unconscious/unknown patient
+arrives. C4 (db/024) had already built the *unconfirmed* trust state + `identity.pending.asserted`; this slice supplies
+the **UUID + system-generated callsign** and the matcher exclusion that makes the callsign safe, **composing built
+primitives — NO new event types, NO `db/` migration, NO floor change, NO SCHEMA/ADR/spec bump.** Three parts:
+(1) **pure callsign generator** in `cairn-event` (`john_doe::callsign` → `Unknown-<class>-<site>-<date>-<suffix>`; a
+culture-neutral, deterministic, obviously-not-a-real-name string; `sanitize_part` is **Unicode-aware** — a non-Latin
+site label is preserved, not dropped, per the anti-cultural-capture mission); (2) **`register_john_doe`** in `cairn-node`
+(`john_doe.rs` + a `register-john-doe` CLI subcommand) — mints a UUID, then authors a **callsign name assertion**
+(`demographic.field.asserted`, `facets.use="callsign"`, reusing `name_assertion_body`/`render_name_twin`) **and** the C4
+`identity.pending.asserted` in **one transaction**, so the chart is never half-registered and renders *unconfirmed*;
+(3) **matcher placeholder exclusion** (advisory, `matcher/pipeline/db.py`) — both the blocking `name_tokens` CTE and the
+`load_candidate` scoring query exclude `use_key ∈ {callsign}` (`use_key <> ALL(%s)`), so two John Does registered at the
+same site on the same day **never false-match on shared callsign tokens** ("unknown", the site, the date). **The
+load-bearing calls:** the callsign is a **real, displayed name** in `patient_name` (db/012's unidentified-patient
+fallback makes it the header winner) — §5.4's "exclude from feature space" is therefore a **query-time exclusion in the
+advisory matcher**, the correct layer (§5.2/§5.13, principle 12), never a floor rule or a decision to withhold the name;
+the suffix is **UUID-derived** (last **8 hex = 32 bits**, `SUFFIX_HEX_LEN`), **partition-safe with zero coordination** (a
+readable per-site-per-day A/B/C counter would race under partition — §5.4 is local-by-construction); a duplicate callsign
+string is never a false-merge issue (the UUID is identity, the callsign is excluded from matching) but is **not merely
+cosmetic** — two identical bedside/worklist headers are a wrong-chart hazard (principle 3), so 32 bits sizes the collision
+to ~1-in-4.3-billion-per-pair rather than tolerating it; registration-class = C4's pending marker (no new "unidentified"
+flag). The **load-bearing** exclusion is the **scoring** one (`load_candidate`): a callsign is a single whitespace-free
+token, so distinct callsigns never share a blocking token anyway — the blocking exclusion is cheap defense-in-depth for
+the rare identical-callsign collision on the C2b auto-link path, not what keeps two ordinary John Does apart. TDD: 8 pure callsign tests
+(`cairn-event`) + 4 pure builder + 3 DB-gated integration tests (`cairn-node/tests/john_doe.rs`: unconfirmed chart ·
+callsign is a placeholder-use display-winner · two John Does coexist distinct) + 4 DB-gated matcher tests
+(`test_john_doe_exclusion.py`: two IDENTICAL callsigns → no pair · callsign excluded from scoring · a real name on the
+SAME chart still blocks/scores · a real name equal to a callsign token does not pair — the blocking tests force the
+shared-token condition so they actually exercise the exclusion, not pass vacuously); `conftest.seed_patient` gained a
+`callsign_names` param. Full `cargo test --workspace` **379 passed / 0 failed** + workspace clippy clean; matcher **207 passed** (DB) /
+164 passed (pure); ruff clean — all on a **PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container this session
+(pgrx 0.18.1, `--features pg16`, `postgresql-server-dev-16` headers, local-TCP `trust`). **End-to-end CLI smoke:**
+`register-john-doe` on a provisioned node minted `Unknown-ed-bay3-2026-07-03-dc88`, chart *unconfirmed*, callsign stored
+`use_key='callsign'`; a second run produced a distinct callsign and reused the actor (idempotent `device`-actor enroll).
+**Review hardening** (2-agent adversarial pass — correctness agent found **0 bugs**): (a) extracted the triplicated
+`next_hlc` HLC-tick helper into a shared `db::next_hlc` (`auto_apply` + `john_doe` now both call it — house-rule #4);
+(b) dropped a dead `.to_ascii_uppercase()` in `suffix_from_uuid` (the sanitizer lower-cases it anyway — doc/output now
+agree); (c) made `sanitize_part` Unicode-aware (was ASCII-only, folding non-Latin labels to "unknown" — a cultural-
+capture smell; now preserves any script). **Review round 2** (PR #123 code review — 5 findings addressed): (1) widened
+the callsign suffix from **4 hex → 8 hex (16→32 bits)** — 4 hex collided ~1/65 536, a real coexistence-test flake AND a
+bedside wrong-chart hazard (identical worklist headers, principle 3), not "cosmetic"; (2) made `ensure_registration_actor`'s
+enrolment guard **kind-AGNOSTIC** (`WHERE signing_key_id=$1`, was `AND kind='device'`) — the narrow guard could add a
+2nd actor to a key already enrolled under another kind, and db/005 NULLs `actor_id` for EVERY event a dual-mapped key
+authors node-wide (silent, irreversible attribution loss); (3) rewrote the two **blocking** matcher tests to force the
+shared-token condition (identical callsign; a real name equal to a callsign token) — they were vacuous because a callsign
+is a single whitespace-free token, so distinct callsigns never share a blocking token (the load-bearing exclusion is the
+**scoring** one), and corrected the false "share the tokens unknown/ed/site1/date" rationale in `db.py` + the design doc;
+(4) corrected the **inverted drift note** — a Python placeholder-set *omission* UNDER-excludes → false-**merge** (dangerous
+direction), NOT "reduced recall"; (5) documented the eval `shares_blocking_key` placeholder-blind spot + filed **issue #124**
+(hoist `PLACEHOLDER_NAME_USES` into a pure shared module + a Rust↔Python set-equality guard; the pure-stdlib eval cannot
+import the psycopg-bound constant, and a 3rd hand-copy would worsen the very drift hazard). **All suites re-run green on
+a PG18.1 + cairn_pgx 0.2.0 rig (:5532):** `cargo test --workspace` all-pass (incl. the 3 DB-gated `john_doe.rs`) + workspace
+clippy clean; matcher **207 passed** (DB) / 167 (pure) + ruff clean — and the two rewritten blocking tests were proven
+non-vacuous (an identical-callsign pair blocks WITHOUT the exclusion, drops WITH it). **Deferred (recorded):** the
+**clinician-observed evidence assertions**
+(estimated age with basis → dob, observed sex → sex reuse existing fields; photo/marks/belongings/EMS context need a new
+field home — larger, separate slice); the **"prior history now available — N allergies, M meds" push-alert** on link
+(§5.12, no notification tier yet); the **search-before-create registration-class funnel** (§5.3/§5.8, UI/API tier); a
+**readable sequential callsign suffix** (`-A`/`-B`; needs a partition-safe per-day count); wiring `identify`→optional-link
+into one resolution flow; a **cross-language guard** for the `CALLSIGN_USE`↔`PLACEHOLDER_NAME_USES` constant (documented
+both sides; drift is **NOT** recall-safe — a Python set *missing* a use Rust emits UNDER-excludes → false-merge risk, the
+dangerous direction, so any Rust addition MUST be mirrored; a set-equality test is the intended guard, deferred not built).
+**§5.4 John-Doe slice A (callsign + matcher exclusion) is now BUILT.**
+
+**Prior session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
 (brainstorm→spec→plan→inline-TDD; spec+plan under
 `docs/superpowers/{specs,plans}/2026-07-03-matcher-consume-alias-pool*`). Closes C5's deferred matcher wiring — the
 `patient_alias_pool` VIEW C5 built was inert. **Advisory Python only (`matcher/…/pipeline/{alias,db,runner,banding}.py`);
@@ -520,9 +589,16 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   `patient_name_current` and surfacing it via `patient_alias_pool`, `mode='suppressing'` forcing the human-attestation
   floor) **is now BUILT**. **Next identity slice: C5+** — `reattribute` (§5.5 event-granular strike-through of *clinical
   documentation* + tiered adjudication — **waits on a clinical-note surface** that does not yet exist; premature to
-  build against demographics) + the full §5.4 John-Doe registration subsystem (callsign, clinician-observed evidence
-  assertions, matcher re-run); reattribute composes one more *under-review* source into the `chart_trust` VIEW when it
-  lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
+  build against demographics) + the rest of the §5.4 John-Doe registration subsystem. **§5.4 slice A (callsign minting +
+  matcher placeholder exclusion) is now BUILT this session** — `cairn-event::john_doe::callsign` + `cairn-node::john_doe::
+  register_john_doe` (composes a `use_key='callsign'` name assertion + C4's `identity.pending.asserted`) + a
+  `register-john-doe` CLI + the advisory matcher exclusion (`use_key <> ALL(%s)`) in `pipeline/db.py`; NO new event
+  type / migration / floor / SCHEMA bump. **Remaining §5.4:** clinician-observed evidence assertions (age/observed-sex
+  reuse existing demographic fields; photo/marks/belongings/EMS-context need a new field home — separate slice), the
+  "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
+  registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
+  count), and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
+  source into the `chart_trust` VIEW when it lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; ~~**matcher wiring** consuming `patient_alias_pool`~~ **(DONE this
   session — known-alias evidence; flag-never-suppress; fuzzy recognition + a dedicated `alias` blocking pass deferred)**. Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that

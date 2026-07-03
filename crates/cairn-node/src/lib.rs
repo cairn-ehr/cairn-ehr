@@ -4,6 +4,7 @@ pub mod backup;
 pub mod db;
 pub mod fsio;
 pub mod identity;
+pub mod john_doe;
 pub mod keystore;
 pub mod localstate;
 pub mod matcher_actor;
