@@ -168,6 +168,15 @@ Three edits, advisory-only (no `db/` floor, no SCHEMA bump):
 - The "prior history now available — N allergies, M meds" push-alert on link (§5.12, no
   notification tier yet).
 - Fuzzy / graded age-range comparison beyond binary overlap (e.g. near-miss softening).
+- **A birth-year-*range* blocking pass.** This slice makes the estimated range a positive
+  *scoring* signal (`compare_dob`), which fires once a pair is already blocked together by
+  another key (a shared identifier off belongings, a later refined name, or the hub duplicate
+  sweep). It does **not** add a blocking key: `"1981/1991"` yields first-4-digit `1981`, which
+  only blocks against a 1981-born candidate, not one born 1985 *inside* the range; and a John
+  Doe's only name is an excluded callsign. So pure-age evidence alone won't auto-surface the
+  prior chart via blocking — honest and safe (never a false merge/split), and consistent with
+  §5.4's accreting-evidence workflow. A range-vs-point blocking pass (analogous to the existing
+  name+birth-year compound pass) is a clean future slice.
 - An explicit `--observed-year` override on the CLI (default = node wall-clock year now).
 - Folding evidence capture into `register-john-doe` as a convenience (composition, not new
   mechanism).
