@@ -65,9 +65,12 @@ shared-token condition (identical callsign; a real name equal to a callsign toke
 is a single whitespace-free token, so distinct callsigns never share a blocking token (the load-bearing exclusion is the
 **scoring** one), and corrected the false "share the tokens unknown/ed/site1/date" rationale in `db.py` + the design doc;
 (4) corrected the **inverted drift note** — a Python placeholder-set *omission* UNDER-excludes → false-**merge** (dangerous
-direction), NOT "reduced recall"; (5) documented the eval `shares_blocking_key` placeholder-blind spot + filed **issue #124**
-(hoist `PLACEHOLDER_NAME_USES` into a pure shared module + a Rust↔Python set-equality guard; the pure-stdlib eval cannot
-import the psycopg-bound constant, and a 3rd hand-copy would worsen the very drift hazard). **All suites re-run green on
+direction), NOT "reduced recall"; (5) **RESOLVED the sync issue (issue #124, now closed)** — hoisted the placeholder-use
+set into a pure, psycopg-free `cairn_matcher.placeholder_uses` module (single source of truth, importable by both the
+psycopg-bound `pipeline/db.py` AND the pure `eval/generator.py` mirror), made the eval `name_tokens` mirror
+placeholder-aware, and added `tests/test_placeholder_uses_sync.py` — a **cross-language guard** that reads the Rust
+`CALLSIGN_USE` literal from source and fails CI if it drifts out of the Python set (proven to bite: a Rust-side rename that
+forgets Python fails 2 tests with a FALSE-MERGE message). **All suites re-run green on
 a PG18.1 + cairn_pgx 0.2.0 rig (:5532):** `cargo test --workspace` all-pass (incl. the 3 DB-gated `john_doe.rs`) + workspace
 clippy clean; matcher **207 passed** (DB) / 167 (pure) + ruff clean — and the two rewritten blocking tests were proven
 non-vacuous (an identical-callsign pair blocks WITHOUT the exclusion, drops WITH it). **Deferred (recorded):** the
@@ -76,10 +79,8 @@ non-vacuous (an identical-callsign pair blocks WITHOUT the exclusion, drops WITH
 field home — larger, separate slice); the **"prior history now available — N allergies, M meds" push-alert** on link
 (§5.12, no notification tier yet); the **search-before-create registration-class funnel** (§5.3/§5.8, UI/API tier); a
 **readable sequential callsign suffix** (`-A`/`-B`; needs a partition-safe per-day count); wiring `identify`→optional-link
-into one resolution flow; a **cross-language guard** for the `CALLSIGN_USE`↔`PLACEHOLDER_NAME_USES` constant (documented
-both sides; drift is **NOT** recall-safe — a Python set *missing* a use Rust emits UNDER-excludes → false-merge risk, the
-dangerous direction, so any Rust addition MUST be mirrored; a set-equality test is the intended guard, deferred not built).
-**§5.4 John-Doe slice A (callsign + matcher exclusion) is now BUILT.**
+into one resolution flow. (The cross-language `CALLSIGN_USE`↔placeholder-set guard, previously listed here, is now BUILT —
+see review-round-2 item (5) / issue #124.) **§5.4 John-Doe slice A (callsign + matcher exclusion) is now BUILT.**
 
 **Prior session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
 (brainstorm→spec→plan→inline-TDD; spec+plan under

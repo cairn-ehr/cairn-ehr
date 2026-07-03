@@ -134,13 +134,15 @@ it removes only the placeholder signal, never a real one.
   deferred behind the UUID-derived suffix (see design call 3).
 - **A human-tagged `placeholder` name use** beyond the system callsign — the matcher exclusion is written
   as a reserved *set* so this joins by adding one member, but no UI/authoring path is built for it here.
-- **A mechanical guard coupling the two placeholder-use constants** — `cairn-event::john_doe::CALLSIGN_USE`
-  (Rust, the emitter) and `matcher…pipeline.db.PLACEHOLDER_NAME_USES` (Python, the excluder) are a
-  hand-maintained mirror. Note the drift direction is **not recall-safe**: if a use Rust emits as a
-  placeholder is *missing* from the Python set, those callsign names UNDER-exclude, re-enter the feature
-  space, and two same-site/same-day John Does can block+score+auto-band into a **false merge** (the
-  dangerous direction, §5.2). So any addition on the Rust side MUST be mirrored in Python; a cross-language
-  test asserting set-equality is the intended guard (deferred, documented on both sides).
+- ~~**A mechanical guard coupling the two placeholder-use constants**~~ — **BUILT (issue #124).**
+  `cairn-event::john_doe::CALLSIGN_USE` (Rust, the emitter) and the Python placeholder set were a
+  hand-maintained mirror. The drift direction is **not recall-safe**: if a use Rust emits as a placeholder
+  is *missing* from the Python set, those callsign names UNDER-exclude, re-enter the feature space, and two
+  same-site/same-day John Does can block+score+auto-band into a **false merge** (the dangerous direction,
+  §5.2). Resolved by (a) hoisting the set into a pure, psycopg-free `cairn_matcher.placeholder_uses` module
+  (single source of truth, importable by both the psycopg-bound pipeline AND the pure eval mirror), and (b)
+  `matcher/tests/test_placeholder_uses_sync.py`, which reads the Rust `CALLSIGN_USE` literal from source and
+  fails CI if it drifts out of the Python set. The eval `name_tokens` mirror is now placeholder-aware too.
 
 ## Files
 

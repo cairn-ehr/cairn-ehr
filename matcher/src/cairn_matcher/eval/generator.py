@@ -14,24 +14,36 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from cairn_matcher.placeholder_uses import PLACEHOLDER_NAME_USES
+
+
+def _is_placeholder_name(n: Mapping) -> bool:
+    """True iff this name record carries a placeholder `use` (a callsign), mirroring the SQL
+    `use_key <> ALL(PLACEHOLDER_NAME_USES)` exclusion. Accepts either `use_key` (the db/012
+    projection column) or `use` (the raw facet); a name with neither is a real name and never
+    a placeholder. Compared lower-cased to match the folded `use_key`."""
+    raw = n.get("use_key") or n.get("use")
+    return raw is not None and str(raw).lower() in PLACEHOLDER_NAME_USES
+
 
 def name_tokens(record: Mapping) -> set[str]:
-    """NFC-normalised, lower-cased whitespace tokens across ALL of a record's names.
+    """NFC-normalised, lower-cased whitespace tokens across a record's NON-placeholder names.
 
     Mirrors the SQL 'name' blocking pass (lower(normalize(value, NFC)) split on
     whitespace) so this predicate agrees with what generate_candidate_pairs actually
-    blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block.
+    blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block, and
+    the §5.4 exclusion of placeholder-use (callsign) names (`use_key <> ALL(...)`). The
+    placeholder set is imported from the shared `cairn_matcher.placeholder_uses` (the single
+    source of truth), so this mirror can never drift from what `pipeline/db.py` excludes.
 
-    KNOWN LIMITATION (issue-tracked): the real CTE now also excludes placeholder-use
-    (callsign) names (`use_key <> ALL(PLACEHOLDER_NAME_USES)`, §5.4), but this mirror does
-    NOT — so if a synthetic record ever carried a callsign-use name this predicate would
-    over-claim recoverability. It is safe TODAY only because the generator emits no `use`
-    field and never mints callsigns. The clean fix is to hoist PLACEHOLDER_NAME_USES into a
-    pure (psycopg-free) shared module both this eval and pipeline.db import, rather than add
-    a third hand-copied constant here (which would worsen the cross-language drift hazard).
+    Today's generator emits no `use`/`use_key` field, so this is a no-op for the current
+    synthetic data — but it keeps the "recoverable by blocking" guarantee honest the moment a
+    dataset carries a callsign, instead of silently over-claiming recovery (issue #124).
     """
     tokens: set[str] = set()
     for n in record.get("names", ()):
+        if _is_placeholder_name(n):
+            continue
         tokens.update(unicodedata.normalize("NFC", str(n["value"])).lower().split())
     return tokens
 
