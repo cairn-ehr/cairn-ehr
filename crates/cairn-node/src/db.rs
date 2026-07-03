@@ -42,6 +42,13 @@ const SCHEMA: &[(&str, &str)] = &[
     // overlay, and the chart_trust (confirmed / under-review) projection surfaced on
     // person_chart — the projection-side contract the rest of the §5.7 algebra composes into.
     ("023_identity_dispute", include_str!("../../../db/023_identity_dispute.sql")),
+    // §5.4/§5.7 identity-pending + `identify` + the *unconfirmed* trust state (C4): two
+    // additive event types through the reused submit_event door, a chart_identity_state
+    // standing overlay keyed by subject, and the reworked chart_trust projection that
+    // composes under-review (dispute) ⊔ unconfirmed (pending) by highest severity —
+    // completing the §5.7 confirmed/unconfirmed/under-review contract C3 opened. Leaves
+    // db/023 untouched (CREATE-OR-REPLACEs the shared twin hook + chart_trust view).
+    ("024_identity_identify", include_str!("../../../db/024_identity_identify.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

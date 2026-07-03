@@ -114,6 +114,73 @@ pub fn render_dispute_resolved_twin(d: &DisputeResolution) -> String {
     format!("dispute resolved: {} — {} (dispute {})", d.subject, d.resolution, d.dispute_id)
 }
 
+// ---------------------------------------------------------------------------
+// §5.4/§5.7 identity-pending + `identify` (piece C4). These two events open and
+// close the *unconfirmed* chart trust state — the third state of the §5.7 contract
+// C3 built (confirmed / unconfirmed / under-review).
+//
+// `identity.pending.asserted` marks a chart identity-pending (the §5.4 "John Doe"
+// front door: an unconscious/unknown patient gets a UUID immediately, care proceeds,
+// and the chart renders in *unconfirmed* trust mode). `identity.identify.asserted`
+// establishes who the patient is — "who, method" (§5.7) — flipping the chart to
+// *confirmed*; linking to a PRIOR chart, when one exists, is a separate ordinary
+// `link` assertion (C1), so identify records only this chart's own identity + method.
+//
+// Deliberate contrast with `dispute`: identity-pending is a SINGLE per-chart lifecycle
+// state (a chart is pending or not), so the in-DB overlay (db/024) keys on the SUBJECT
+// itself — there is no separate id and no subject-consistency guard. The standing state
+// (pending -> identified, and a later pending re-opening it) overlays by HLC per subject,
+// converging under out-of-order sync exactly like the dispute open/resolve pair.
+//
+// Both are ADDITIVE (they annotate the trust state; they never erase, move, or block
+// anything), so they flow through the existing submit_event door with the same low
+// ceremony as a link. §5.7's "Human; method recorded": `method` is structurally required
+// (below + the db/024 floor), and the "human vouches" requirement composes via the
+// existing attestation gate when a responsibility-bearing contributor is named.
+// ---------------------------------------------------------------------------
+
+/// One §5.7 `identity.pending.asserted` — marks a chart identity-pending (unconfirmed).
+pub struct PendingAssertion<'a> {
+    pub subject: &'a str, // the patient UUID registered identity-pending (string uuid)
+    pub basis: &'a str,   // §4.1 — required-present, value-open ("unconscious ED arrival, no ID", "unknown")
+}
+
+/// One §5.7 `identity.identify.asserted` — establishes identity → confirmed.
+pub struct IdentifyAssertion<'a> {
+    pub subject: &'a str, // the patient UUID now identified
+    pub method: &'a str,  // §5.7 "method recorded" — required-present, value-open ("driver's licence", ...)
+}
+
+/// Build the `identity.pending.asserted` payload. Both fields are mandatory — no
+/// omit-when-absent discipline (unlike link's optional confidence).
+pub fn pending_assertion_body(a: &PendingAssertion) -> Value {
+    json!({
+        "subject": a.subject,
+        "basis": a.basis,
+    })
+}
+
+/// Build the `identity.identify.asserted` payload — same key discipline, but the
+/// descriptive field is `method` (how identity was established) rather than `basis`.
+pub fn identify_assertion_body(a: &IdentifyAssertion) -> Value {
+    json!({
+        "subject": a.subject,
+        "method": a.method,
+    })
+}
+
+/// Render the §4.5-style legibility twin for an identity-pending marker: profile-
+/// independent plaintext (the db/024 floor HARD-requires a non-empty authored twin,
+/// like every other identity event).
+pub fn render_pending_twin(a: &PendingAssertion) -> String {
+    format!("identity pending: {} — {}", a.subject, a.basis)
+}
+
+/// Render the §4.5-style legibility twin for an `identify` event.
+pub fn render_identify_twin(a: &IdentifyAssertion) -> String {
+    format!("identity confirmed: {} via {}", a.subject, a.method)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +278,52 @@ mod tests {
         assert!(resolved.starts_with("dispute resolved: "));
         assert!(resolved.contains("dddddddd-0000-0000-0000-000000000009"));
         assert!(resolved.contains("dismissed")); // resolution
+    }
+
+    // --- §5.4/§5.7 identity-pending + identify builders (C4) ---
+
+    fn sample_pending() -> PendingAssertion<'static> {
+        PendingAssertion {
+            subject: "aaaaaaaa-0000-0000-0000-000000000001",
+            basis: "unconscious ED arrival, no ID",
+        }
+    }
+
+    fn sample_identify() -> IdentifyAssertion<'static> {
+        IdentifyAssertion {
+            subject: "aaaaaaaa-0000-0000-0000-000000000001",
+            method: "driver's licence + family confirmation",
+        }
+    }
+
+    #[test]
+    fn pending_body_carries_subject_and_basis_only() {
+        let b = pending_assertion_body(&sample_pending());
+        assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(b["basis"], "unconscious ED arrival, no ID");
+        // A pending marker is not an identify: it must NOT carry a `method` key.
+        assert!(b.get("method").is_none());
+    }
+
+    #[test]
+    fn identify_body_carries_subject_and_method_only() {
+        let b = identify_assertion_body(&sample_identify());
+        assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(b["method"], "driver's licence + family confirmation");
+        // An identify is not a pending marker: it must NOT carry a `basis` key.
+        assert!(b.get("basis").is_none());
+    }
+
+    #[test]
+    fn identity_state_twins_distinguish_pending_from_confirmed() {
+        let pending = render_pending_twin(&sample_pending());
+        assert!(pending.starts_with("identity pending: "));
+        assert!(pending.contains("aaaaaaaa-0000-0000-0000-000000000001")); // subject
+        assert!(pending.contains("unconscious ED arrival")); // basis
+
+        let confirmed = render_identify_twin(&sample_identify());
+        assert!(confirmed.starts_with("identity confirmed: "));
+        assert!(confirmed.contains("aaaaaaaa-0000-0000-0000-000000000001")); // subject
+        assert!(confirmed.contains("driver's licence")); // method
     }
 }
