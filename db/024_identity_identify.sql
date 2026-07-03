@@ -227,7 +227,16 @@ CREATE OR REPLACE VIEW chart_trust AS
     )
     SELECT patient_id,
            (CASE max(severity) WHEN 2 THEN 'under-review'
-                               WHEN 1 THEN 'unconfirmed' END)::text AS trust_state
+                               WHEN 1 THEN 'unconfirmed'
+                               -- FAIL-SAFE, not dead code: today severity is only ever 1 or 2,
+                               -- so this ELSE is unreachable. But if a future editor adds a
+                               -- `SELECT ... n` source branch and forgets its matching `WHEN n`,
+                               -- an un-elsed CASE would yield NULL — and person_chart_trust's
+                               -- COALESCE(trust_state,'confirmed') would then render a genuinely
+                               -- trust-flagged chart as *confirmed*: a silent fail-OPEN on a
+                               -- safety signal. Degrade to the most cautious state instead, so a
+                               -- missing WHEN can only ever OVER-warn, never under-warn.
+                               ELSE 'under-review' END)::text AS trust_state
     FROM trust_source
     GROUP BY patient_id;
 
