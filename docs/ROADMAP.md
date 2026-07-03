@@ -236,6 +236,34 @@ clinician-observed evidence assertions, matcher re-run), the "prior history now 
 registration-class funnel partitioning (§5.3/§5.8); `reattribute` (§5.5 strike-through + tiered adjudication) and
 `repudiate` (alias pool); the §5.2 coherence feedback loop; person-level trust aggregation (read-surface tier).
 
+**Slice 18 — §5.5(a)/§5.7 `repudiate` + the known-alias pool (piece C5)** (`db/025_identity_repudiate.sql` wired into
+`db.rs`; `crates/cairn-event/src/identity.rs` repudiate builder): the **first *suppressing*** identity event (C1–C4 were
+all additive/annotative). The §5.5(a) fabricated-persona case — a patient presented under a deliberately false name;
+once established false, the name is struck from the display header but stays in the record (fact of presentation
+preserved, principle 1) and enters a matcher-visible **known-alias pool** (aliases are reused). One event type
+`identity.repudiate.asserted` registered **`mode='suppressing'`**, so the db/005 attestation gate structurally forces a
+valid **human** attestation token — §5.7's "Human" made unbypassable in the DB (no floor special-case; reuses the
+`salience.downgrade` gate). This is the deliberate contrast with the additive C1/C3/C4 (whose "human vouches" bit only
+when a responsibility contributor was named). **Digital strike-through** (principle 1+2): the assertion event and
+db/012's `patient_name` retained set are **untouched**; a **value-grained** `name_repudiation` overlay (keyed by
+`(subject, value)` — a false name is false however labelled, and value-keying avoids replicating db/012's `use`-fold →
+no drift; HLC-latest-wins so a future reversal composes) records the struck value, and `patient_name_current` is
+`CREATE-OR-REPLACE`d to **anti-join** it (same column contract ⇒ reload-idempotent). New `patient_alias_pool` VIEW
+surfaces struck names to the §5.2 matcher. `cairn_check_repudiation_assertion` structural floor (valid subject uuid,
+non-empty value + reason) + **HARD-required legibility twin**. **Design call** (documented): striking a chart's *only*
+name → `patient_name_current` has *no* row for it — honest (name genuinely unknown-now; showing the known-false one is
+a precise untruth, principle 4); "header shows something" is satisfied one layer up by the §5.4 callsign / *unconfirmed*
+rendering (C4). **Honest limit:** value match is exact-string on an opaque value (culture-neutral, deterministic — the
+floor must be precise); fuzzy recognition of a returning alias is the advisory matcher's job over `patient_alias_pool`.
+**No SCHEMA/ADR/spec bump; db/010–024 untouched** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the shared twin
+hook + `patient_name_current`). 2 pure builder unit tests + 8 DB-gated integration tests (struck name leaves winner +
+surviving name takes over + alias-pool entry + retained-set evidence preserved; only-name → no winner; idempotent
+re-assert + HLC-latest reason; **un-attested repudiation refused** — the suppressing "Human" floor; four floor
+rejections). Full workspace suite (362 passed / 0 failed) + clippy green on a from-scratch PG16 / cairn_pgx 0.2.0
+in-container rig. **Deferred:** a reversal / de-repudiation event (the overlay is HLC-versioned so it composes without a
+rewrite); a chart-history VIEW rendering struck names (data already present); matcher wiring that *consumes*
+`patient_alias_pool`; `reattribute` (needs a clinical-note surface that does not yet exist — premature).
+
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
@@ -243,9 +271,10 @@ aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor regi
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
 are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above),
 **C3** — `dispute` + the chart trust-state projection (slice 16, above) — and **C4** — `identify` + the *unconfirmed*
-trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract. Remaining:
-**C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication;
-`repudiate` alias pool + suppressing semantics) + the full §5.4 John-Doe registration subsystem. **Next:**
+trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract, and **C5** —
+`repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
+**C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
+a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Next:**
 weight-learning, C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
 the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
