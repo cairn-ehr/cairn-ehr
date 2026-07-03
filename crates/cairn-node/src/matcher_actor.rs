@@ -27,15 +27,15 @@ pub fn matcher_pinned(matcher_version: &str) -> Value {
 }
 
 /// A filesystem-safe, collision-free filename for a per-epoch key. `matcher_version`
-/// contains `.` and `+` (e.g. `0.3.0+ab12cd34ef56`); we keep ASCII alphanumerics and map
-/// every other byte to `_`, then append `.key`. Never escapes the keystore dir (no `/`,
-/// no `..`); the digest suffix keeps distinct epochs distinct after sanitizing.
+/// carries punctuation (`.` and `+`, plus `/`/`=` for a base64 weights digest), so the
+/// old "map every non-alphanumeric byte to `_`" scheme was NOT injective: `0.3.0+abc`
+/// and `0_3_0+abc` collapsed to one file, silently loading the WRONG epoch's key — and
+/// hiding one epoch's auto-links under another actor, which defeats the db/006
+/// contamination-cascade recall this whole module exists to make precise. We instead
+/// hex-encode the version: hex is `[0-9a-f]` (filesystem-safe, no `/`, no `..`) and
+/// injective, so distinct versions ALWAYS get distinct files.
 pub fn matcher_key_filename(matcher_version: &str) -> String {
-    let safe: String = matcher_version
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect();
-    format!("matcher_{safe}.key")
+    format!("matcher_{}.key", hex::encode(matcher_version.as_bytes()))
 }
 
 /// Resolve (load-or-create) the per-epoch matcher signing key AND ensure its `agent`
@@ -71,16 +71,39 @@ pub async fn resolve_matcher_actor(
         keystore::generate_plaintext(&path)?
     };
 
-    // 2. Ensure the actor is enrolled EXACTLY once (idempotent). actor_current holds only
-    //    non-revoked current identities; enroll only when this key has none yet.
-    let already: bool = client
+    // 2. Decide enroll vs reuse vs REFUSE from the registry history, NOT from a bare
+    //    actor_current check. actor_current holds only non-revoked identities, so a naive
+    //    "enroll when absent" would RE-ENROLL a deliberately revoked epoch: the fresh enroll
+    //    outranks the earlier revoke in the actor_current view (db/004 orders on
+    //    (recorded_at, seq)), silently RESURRECTING a recalled matcher and re-authorising
+    //    its auto-links. The point of the per-epoch actor is that a contamination-cascade
+    //    recall STAYS recalled, so the three cases are:
+    //      - live in actor_current       -> already enrolled and current: reuse, no write.
+    //      - ever enrolled, not current  -> revoked/superseded: REFUSE (never resurrect).
+    //      - never enrolled              -> first sight: enroll.
+    let live: bool = client
         .query_one(
             "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1 AND kind = 'agent')",
             &[&kid],
         )
         .await?
         .get(0);
-    if !already {
+    if !live {
+        let ever_enrolled: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM actor_event \
+                 WHERE signing_key_id = $1 AND kind = 'agent' AND op = 'enroll')",
+                &[&kid],
+            )
+            .await?
+            .get(0);
+        if ever_enrolled {
+            anyhow::bail!(
+                "matcher epoch '{matcher_version}' (key {kid}) was enrolled and is no longer \
+                 current (revoked or superseded) — refusing to re-enroll and resurrect a \
+                 recalled matcher actor"
+            );
+        }
         // tokio-postgres in this crate has no serde_json ToSql; pass the pinned set as a
         // text string and cast with `$1::jsonb` (the project convention — see the enroll
         // call in tests/apply_proposal.rs).
@@ -117,8 +140,11 @@ mod tests {
         let f = matcher_key_filename("0.3.0+abc123");
         assert!(f.starts_with("matcher_") && f.ends_with(".key"));
         assert!(!f.contains('/') && !f.contains(".."));
-        // The only '.' is the extension; the version's '.'/'+' were sanitized to '_'.
-        assert_eq!(f, "matcher_0_3_0_abc123.key");
+        // Hex-encoded body: only [0-9a-f]; the single '.' is the extension.
+        assert_eq!(f, format!("matcher_{}.key", hex::encode("0.3.0+abc123")));
         assert_ne!(matcher_key_filename("0.3.0+aaa"), matcher_key_filename("0.3.0+bbb"));
+        // The collision the old sanitize-to-underscore scheme allowed is now impossible:
+        // two versions differing only in punctuation map to DIFFERENT files.
+        assert_ne!(matcher_key_filename("0.3.0+abc"), matcher_key_filename("0_3_0+abc"));
     }
 }

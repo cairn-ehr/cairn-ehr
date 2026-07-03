@@ -182,6 +182,58 @@ async fn distinct_epochs_get_distinct_actors_and_keys() {
     assert_eq!(n, 2);
 }
 
+/// A revoked (contamination-cascade-recalled) matcher epoch whose key file still sits in
+/// the keystore must NOT be silently re-enrolled: the idempotency check keys on the
+/// registry HISTORY (actor_event), not on actor_current (which lists only non-revoked
+/// identities), so a resurrecting re-enroll can never re-authorise a recalled matcher.
+#[tokio::test]
+async fn revoked_matcher_epoch_is_refused_not_resurrected() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+
+    // Enroll the epoch once (its key is written to `dir`), then REVOKE it by appending a
+    // revoke actor_event for the same actor_id (what a db/006 recall of a bad config does).
+    let (_sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bad").await.unwrap();
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op, kind, signing_key_id) \
+         SELECT actor_id, 'revoke', 'agent', signing_key_id FROM actor_event \
+         WHERE signing_key_id=$1 AND op='enroll'",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+    let live: i64 = c
+        .query_one("SELECT count(*) FROM actor_current WHERE signing_key_id=$1", &[&kid])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(live, 0, "revoked epoch is no longer current (precondition)");
+
+    // Resolving again (the key file is still on disk) must REFUSE — never re-enroll.
+    let again = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bad").await;
+    assert!(again.is_err(), "a revoked matcher epoch must not be re-enrolled/resurrected");
+
+    // No second enroll was appended: the revoke stands.
+    let enrolls: i64 = c
+        .query_one(
+            "SELECT count(*) FROM actor_event WHERE signing_key_id=$1 AND op='enroll'",
+            &[&kid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(enrolls, 1, "no resurrecting re-enroll");
+    let still_dead: i64 = c
+        .query_one("SELECT count(*) FROM actor_current WHERE signing_key_id=$1", &[&kid])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(still_dead, 0, "the recalled matcher stays recalled");
+}
+
 // ---------------------------------------------------------------------------
 // Task 4 — apply_auto_candidate (single proposal)
 // ---------------------------------------------------------------------------

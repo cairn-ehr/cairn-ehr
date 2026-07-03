@@ -175,9 +175,11 @@ production human-key custody (ADR-0011).
 **Slice 15 — §5.2/§5.7 auto-apply of the `auto_candidate` band (piece C2b)** (`crates/cairn-node/src/matcher_actor.rs`
 + `auto_apply.rs`; `apply-auto-candidates` CLI): a matcher proposal banded `auto_candidate` (score ≥ auto AND zero
 vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted` event —
-**no human in the loop** — through the *same* `submit_event` door. **Rust-only, no `db/` migration, no floor change,
+**no human in the loop** — through the *same* `submit_event` door. **No `db/` migration, no floor change,
 no SCHEMA/ADR/spec bump** (the db/018 floor already made an identity link additive + `targets_other_author=FALSE`, so
-an un-attested matcher link needs no attestation). Realises the deferred **§7.5 matcher-actor** piece: each distinct
+an un-attested matcher link needs no attestation) — the change is Rust plus two comment-only clarifications in
+`db/017`/`db/019` (the new `auto_applied` status makes db/019's documented `applied` invariant honest; no DDL).
+Realises the deferred **§7.5 matcher-actor** piece: each distinct
 `matcher_version` is its OWN `agent` actor with its OWN key (auto-enrolled, owner ceremony), pinned under `skill_epoch`
 so the db/006 `events_by_actor_epoch` recall selects a bad config's auto-links **precisely** (contamination cascade).
 Contributor role `suggested` (ADR-0028 contributory, no `responsibility`) ⇒ authorship present, accountability absent

@@ -175,7 +175,19 @@ pub struct AutoSummary {
     pub applied: usize,
     pub vetoed_to_review: usize,
     pub skipped: usize,
+    /// Pairs that hit a HARD error (matcher-actor resolve failed, or the apply txn errored).
+    /// Kept separate from the benign `skipped` bucket so a systematic failure (a floor
+    /// change rejecting every submit, a sealed-but-unopenable key, a revoked epoch) can
+    /// never masquerade as a healthy quiet run — the CLI turns any `errored` into a
+    /// non-zero exit.
+    pub errored: usize,
 }
+
+/// Session advisory-lock key for the auto-apply ceremony. Two-int form (namespace
+/// 0x4341524E = "CARN", slot 2) so it occupies a DIFFERENT lock space from the
+/// single-bigint `db::test_serial_guard` and can never collide with it.
+const AUTO_APPLY_LOCK_NS: i32 = 0x4341524E;
+const AUTO_APPLY_LOCK_SLOT: i32 = 2;
 
 /// Tick the node HLC once (the same door node authoring uses) and stamp `node_origin`.
 /// Authoring is single-threaded on a node, so tick->sign->submit per event is safe here.
@@ -194,6 +206,24 @@ pub async fn apply_auto_candidates(
     secret: Option<&str>,
     node_origin: &str,
 ) -> anyhow::Result<AutoSummary> {
+    // Serialize concurrent owner ceremonies. Two apply-auto-candidates runs racing on a
+    // brand-new epoch would BOTH see no key file and BOTH mint+enroll it (a TOCTOU on the
+    // per-epoch key file -> divergent on-disk keys and duplicate enroll rows). A session
+    // advisory lock makes the ceremony single-writer; it auto-releases when this
+    // short-lived connection closes (and we unlock explicitly on the happy path below).
+    let got_lock: bool = client
+        .query_one(
+            "SELECT pg_try_advisory_lock($1, $2)",
+            &[&AUTO_APPLY_LOCK_NS, &AUTO_APPLY_LOCK_SLOT],
+        )
+        .await?
+        .get(0);
+    if !got_lock {
+        anyhow::bail!(
+            "another apply-auto-candidates run holds the auto-apply lock — retry once it finishes"
+        );
+    }
+
     // Snapshot the worklist first (a read), then act — so we never hold a cursor across
     // the per-pair transactions.
     let rows = client
@@ -206,19 +236,41 @@ pub async fn apply_auto_candidates(
         .await?;
 
     let mut keys: HashMap<String, (SigningKey, String)> = HashMap::new();
-    let mut summary = AutoSummary { applied: 0, vetoed_to_review: 0, skipped: 0 };
+    // Epochs whose resolve already failed this run — so we neither re-resolve nor re-log
+    // for every remaining pair of a broken/revoked epoch, but STILL count each affected
+    // pair as errored (the operator sees the true blast radius, not one line).
+    let mut failed_versions: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut summary = AutoSummary { applied: 0, vetoed_to_review: 0, skipped: 0, errored: 0 };
 
     for r in rows {
         let low: Uuid = r.get::<_, String>(0).parse()?;
         let high: Uuid = r.get::<_, String>(1).parse()?;
         let version: String = r.get(2);
 
+        if failed_versions.contains(&version) {
+            summary.errored += 1;
+            continue;
+        }
+
         // Resolve (and cache) the matcher key/actor for this epoch. Enrollment happens
         // BEFORE the event is submitted, so the event's admission-time stamp attributes
-        // it 'pinned' to this epoch (db/006), not 'pre-registration'.
+        // it 'pinned' to this epoch (db/006), not 'pre-registration'. A resolve FAILURE
+        // (sealed key with no secret, or a revoked epoch we refuse to resurrect) must NOT
+        // abort the batch — skip this epoch's pairs, count them errored, keep going, so one
+        // bad epoch never strands healthy pairs of other epochs (the skip-and-report the
+        // doc-comment promises).
         if !keys.contains_key(&version) {
-            let resolved = resolve_matcher_actor(client, keystore_dir, secret, &version).await?;
-            keys.insert(version.clone(), resolved);
+            match resolve_matcher_actor(client, keystore_dir, secret, &version).await {
+                Ok(resolved) => {
+                    keys.insert(version.clone(), resolved);
+                }
+                Err(e) => {
+                    eprintln!("auto-apply resolve epoch '{version}': {e}");
+                    failed_versions.insert(version.clone());
+                    summary.errored += 1;
+                    continue;
+                }
+            }
         }
         // Clone out of the cache so no immutable borrow of `client`/`keys` is held across
         // the `&mut client` apply call below.
@@ -234,10 +286,19 @@ pub async fn apply_auto_candidates(
             Ok(AutoOutcome::Skipped(_)) => summary.skipped += 1,
             Err(e) => {
                 eprintln!("auto-apply ({low},{high}): {e}");
-                summary.skipped += 1;
+                summary.errored += 1;
             }
         }
     }
+
+    // Release the ceremony lock (also released on disconnect; explicit keeps a long-lived
+    // owner connection clean if it runs more commands after this one).
+    let _ = client
+        .execute(
+            "SELECT pg_advisory_unlock($1, $2)",
+            &[&AUTO_APPLY_LOCK_NS, &AUTO_APPLY_LOCK_SLOT],
+        )
+        .await;
     Ok(summary)
 }
 

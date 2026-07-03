@@ -20,11 +20,18 @@ CREATE TABLE IF NOT EXISTS match_proposal (
     patient_low        UUID    NOT NULL,
     patient_high       UUID    NOT NULL,
     score_total        DOUBLE PRECISION NOT NULL,
-    band               TEXT    NOT NULL,   -- 'auto_candidate' | 'review'
+    -- The matcher's IMMUTABLE propose-time assessment ('auto_candidate' | 'review'). It is
+    -- NOT the disposition axis: when C2b (cairn-node::auto_apply) re-checks the veto and
+    -- finds a pair vetoed since propose, it moves `status` to 'review' but leaves `band`
+    -- unchanged (the matcher still assessed it auto_candidate). A human-review worklist must
+    -- therefore filter on `status`, not `band`.
+    band               TEXT    NOT NULL,   -- 'auto_candidate' | 'review' (matcher's assessment)
     veto_findings      JSONB   NOT NULL,   -- cairn_match_veto rows, verbatim (explainability)
     evidence           JSONB   NOT NULL,   -- per-field MatchScore breakdown (explainability)
     matcher_version    TEXT    NOT NULL,   -- cairn_matcher version + config digest (ADR-0014)
-    status             TEXT    NOT NULL DEFAULT 'pending',  -- human disposition
+    -- The disposition axis: 'pending' -> human 'accepted'/'rejected'/'applied' (C2) or
+    -- matcher 'auto_applied'/'review' (C2b). No CHECK — deliberately open (advisory table).
+    status             TEXT    NOT NULL DEFAULT 'pending',  -- disposition (see band note above)
     created_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (patient_low, patient_high),
