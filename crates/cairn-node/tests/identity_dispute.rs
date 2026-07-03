@@ -55,7 +55,7 @@ async fn submit_dispute(
     let (d_s, s_s) = (dispute_id.to_string(), subject.to_string());
     let (etype, sver, payload, twin) = if is_open {
         let d = DisputeAssertion { dispute_id: &d_s, subject: &s_s, reason: descriptive };
-        ("identity.dispute.asserted", "identity.dispute/1",
+        ("identity.dispute.asserted", "identity.dispute.asserted/1",
          dispute_assertion_body(&d), render_dispute_twin(&d))
     } else {
         let d = DisputeResolution { dispute_id: &d_s, subject: &s_s, resolution: descriptive };
@@ -194,6 +194,28 @@ async fn reassert_same_dispute_is_one_row() {
     assert_eq!(n, 1, "re-opening the same dispute_id is one standing row, not two");
 }
 
+#[tokio::test]
+async fn local_subject_change_is_rejected() {
+    // A dispute_id names ONE chart for its whole life. On the LOCAL submit door a second
+    // assertion re-binding the same dispute_id to a DIFFERENT subject is a caller bug and
+    // must be refused loudly (nothing is accepted yet — no data lost). The sync-apply path
+    // deliberately does NOT raise (it converges by HLC, so honest nodes never fork); that
+    // asymmetry is covered by the db/020 apply tests, not here.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let (d, subj_a, subj_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    open_dispute(&c, &sk, &kid, d, subj_a, 100).await.unwrap();
+    let err = open_dispute(&c, &sk, &kid, d, subj_b, 110).await.unwrap_err();
+    assert!(db_msg(&err).contains("subject cannot change"),
+            "rebinding a dispute_id to a new subject must be refused: {}", db_msg(&err));
+    // The original binding is untouched — the reject changed nothing.
+    assert_eq!(dispute_state(&c, d).await.as_deref(), Some("open"));
+    assert_eq!(trust_of(&c, subj_a).await.as_deref(), Some("under-review"));
+    assert_eq!(trust_of(&c, subj_b).await, None, "the rejected subject never entered the overlay");
+}
+
 // --- the trust-state projection ---
 
 #[tokio::test]
@@ -314,7 +336,7 @@ async fn missing_twin_is_rejected() {
         event_id: Uuid::now_v7().to_string(),
         patient_id: s_s.clone(),
         event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute/1".into(),
+        schema_version: "identity.dispute.asserted/1".into(),
         hlc: Hlc { wall: 100, counter: 0, node_origin: "n".into() },
         t_effective: None,
         signer_key_id: kid.clone(),
@@ -342,7 +364,7 @@ async fn bad_dispute_id_is_rejected() {
         event_id: Uuid::now_v7().to_string(),
         patient_id: subj.to_string(),
         event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute/1".into(),
+        schema_version: "identity.dispute.asserted/1".into(),
         hlc: Hlc { wall: 100, counter: 0, node_origin: "n".into() },
         t_effective: None,
         signer_key_id: kid.clone(),
@@ -368,7 +390,7 @@ async fn missing_subject_is_rejected() {
         event_id: Uuid::now_v7().to_string(),
         patient_id: Uuid::now_v7().to_string(),
         event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute/1".into(),
+        schema_version: "identity.dispute.asserted/1".into(),
         hlc: Hlc { wall: 100, counter: 0, node_origin: "n".into() },
         t_effective: None,
         signer_key_id: kid.clone(),

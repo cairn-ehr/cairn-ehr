@@ -154,6 +154,26 @@ DECLARE
     v_detail text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved'
                            THEN p ->> 'resolution' ELSE p ->> 'reason' END;
 BEGIN
+    -- Subject-consistency guard, split exactly like C1's oversize guard (db/018):
+    -- FAIL LOUD locally, CONVERGE on sync. A dispute_id names ONE chart for its whole
+    -- life, so a second assertion binding the SAME dispute_id to a DIFFERENT subject is
+    -- malformed. On the LOCAL submit door (cairn.remote_apply unset) nothing has been
+    -- accepted yet, so we refuse it — catching a caller bug at source and losing no data.
+    -- On the SYNC-APPLY path (apply_remote_event sets cairn.remote_apply='on', db/020) we
+    -- must NOT raise: peers already hold this validly-signed event and this is a node-local
+    -- check, so vetoing would fork the event set between honest nodes. There the subject
+    -- simply converges to the highest-HLC assertion via the upsert below — deterministic
+    -- and arrival-order-independent (never "pin first-seen", which IS order-dependent and
+    -- would diverge under set-union sync).
+    IF current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on'
+       AND EXISTS (SELECT 1 FROM chart_dispute
+                   WHERE dispute_id = (p ->> 'dispute_id')::uuid
+                     AND subject   <> (p ->> 'subject')::uuid) THEN
+        RAISE EXCEPTION
+            'dispute %: subject cannot change — a dispute_id names one chart for life (§5.7)',
+            p ->> 'dispute_id';
+    END IF;
+
     INSERT INTO chart_dispute
         (dispute_id, subject, state, detail, hlc_wall, hlc_counter, origin)
     VALUES
