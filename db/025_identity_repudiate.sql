@@ -158,6 +158,16 @@ CREATE TABLE IF NOT EXISTS name_repudiation (
 -- below (a PG view runs with its owner's table privileges, so cairn_agent needs no direct
 -- grant here); `reason` stays confined to privileged/audit + a future per-chart chart-history
 -- read surface.
+--
+-- The PK (subject, value) serves the display anti-join (patient_name_current probes by the
+-- full (subject, value) pair — leading-column `subject` is bound). But the §5.2 matcher's
+-- own access pattern over patient_alias_pool is a CROSS-patient lookup keyed on `value`
+-- alone ("who has ever presented under this alias?" — SELECT patient_id … WHERE value = ?),
+-- which the subject-leading PK cannot serve, so it would seq-scan a fleet-wide alias pool
+-- that grows with every repudiation ever synced. Index `value` so that lookup stays a
+-- probe, mirroring db/024's proactive worklist index. (The matcher wiring that runs this
+-- query is deferred to a later slice; the index is cheap and pre-empts the cliff.)
+CREATE INDEX IF NOT EXISTS name_repudiation_value_idx ON name_repudiation (value);
 
 -- Incremental maintenance: fold exactly the one new repudiation into the overlay. The row
 -- overlays atomically only when the incoming HLC is strictly greater (ON CONFLICT … WHERE),
