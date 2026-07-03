@@ -213,15 +213,40 @@ cairn_pgx 0.2.0. Deferred: the *unconfirmed* (identity-pending) state + registra
 `identify`); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate` (alias pool); the §5.2 coherence
 feedback loop; notification/contamination cascade on dispute; person-level trust aggregation (read-surface tier).
 
+**Slice 17 — §5.4/§5.7 `identify` + the *unconfirmed* trust state (piece C4)** (`db/024_identity_identify.sql` wired
+into `db.rs`; `crates/cairn-event/src/identity.rs` pending/identify builders): the third and final state of the §5.7
+trust-state contract C3 opened. Two **additive** event types — `identity.pending.asserted` (the §5.4 John-Doe front
+door: marks a chart identity-pending → *unconfirmed*) and `identity.identify.asserted` (§5.7 "who, method": establishes
+identity → *confirmed*) — through the reused `submit_event` door (low-ceremony like C1/C3; `method` structurally
+required = "method recorded", the "Human" vouching composing via the existing attestation gate when a
+responsibility-bearing contributor is named). Keyed by the **subject itself** (a per-chart lifecycle state, unlike a
+dispute's own id ⇒ *no* subject-consistency guard is possible or needed); `chart_identity_state` HLC-overlay table
+(latest-HLC wins, full pending⇄identified lifecycle, out-of-order convergent, no BFS/oversize guard). `chart_trust`
+reworked into a **severity-max UNION** composing **under-review (open dispute, 2) over unconfirmed (pending, 1)** — the
+"highest standing assertion" discipline (§5.9) — with the column contract unchanged so `CREATE OR REPLACE VIEW` stays
+reload-idempotent and C3's `person_chart_trust` is untouched (it now surfaces `unconfirmed` for free). Precedence
+documented: under-review (attribution actively challenged, data present possibly wrong-patient) outranks unconfirmed
+(who-is-this unknown, absent history). **No SCHEMA/ADR/spec bump; `db/023` untouched** (implements settled
+§5.4/§5.7; CREATE-OR-REPLACEs the shared twin hook + `chart_trust`). 3 pure builder unit tests + 15 DB-gated
+integration tests (accept, HLC overlay both directions, re-pending-reopens lifecycle, idempotent re-assert, pending→
+unconfirmed on `chart_trust`+`person_chart_trust`, identify→confirmed, pending-before-chart safety signal, the **C3⊔C4
+compose/precedence proof** — dispute outranks pending → resolve → identify, five floor rejections); full workspace
+suite + clippy green on PG16 / cairn_pgx 0.2.0. Deferred: the full §5.4 John-Doe registration subsystem (callsign,
+clinician-observed evidence assertions, matcher re-run), the "prior history now available" push alert on link,
+registration-class funnel partitioning (§5.3/§5.8); `reattribute` (§5.5 strike-through + tiered adjudication) and
+`repudiate` (alias pool); the §5.2 coherence feedback loop; person-level trust aggregation (read-surface tier).
+
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
 `generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert). **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
-are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above) — and
-**C3** — `dispute` + the chart trust-state projection (slice 16, above). Remaining: **C4+** — the rest of the §5.7
-algebra (`identify`/`repudiate`/`reattribute`). **Next:**
-weight-learning, C4+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
+are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above),
+**C3** — `dispute` + the chart trust-state projection (slice 16, above) — and **C4** — `identify` + the *unconfirmed*
+trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract. Remaining:
+**C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication;
+`repudiate` alias pool + suppressing semantics) + the full §5.4 John-Doe registration subsystem. **Next:**
+weight-learning, C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
 the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).

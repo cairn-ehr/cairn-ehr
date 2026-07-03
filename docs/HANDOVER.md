@@ -5,11 +5,45 @@ surface under construction** — demographics on `cairn-node` (slices 1–5 done
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
 generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator) + the
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
-`dispute` + the chart trust-state projection — done this session**; remaining B3 weight-learning / locale packs /
-A-B pass-toggle + identity **C4+** (rest of the §5.7 algebra: identify/repudiate/reattribute) next.
+`dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state — done this session**
+(the §5.7 confirmed/unconfirmed/under-review contract is now COMPLETE); remaining B3 weight-learning / locale packs /
+A-B pass-toggle + identity **C5+** (rest of the §5.7 algebra: reattribute/repudiate + the full §5.4 John-Doe
+registration subsystem) next.
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-07-03) — issue: identity C3, `dispute` + the chart trust-state projection** (brainstorm→
+**This session (2026-07-03) — identity C4, `identify` + the *unconfirmed* trust state** (brainstorm→spec→plan→
+inline-TDD; spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c4-identify-unconfirmed*`). The third
+and final state of the §5.7 chart trust-state contract C3 opened. Two **additive** event types through the reused
+`submit_event` door: **`identity.pending.asserted`** (the §5.4 John-Doe front door — marks a chart identity-pending →
+*unconfirmed*) and **`identity.identify.asserted`** (§5.7 "who, method": establishes identity → *confirmed*).
+**Keyed by the SUBJECT itself** — a per-chart lifecycle state, unlike a dispute's own id ⇒ **no subject-consistency
+guard** is possible or needed (the design contrast with C3). `cairn_check_identity_state_assertion` culture-neutral
+structural floor (`basis` for pending / `method` for identify — required non-empty = "method recorded" enforced
+structurally) + **HARD-required legibility twin**; `chart_identity_state` HLC-overlay table (latest-HLC wins, full
+pending⇄identified lifecycle incl. re-registration re-opening unconfirmed, out-of-order convergent, no BFS/oversize
+guard — cheaper than C1). **`chart_trust` reworked into a severity-max UNION** composing **under-review (open dispute,
+2) over unconfirmed (pending, 1)** — the §5.9 "highest standing assertion" discipline — column contract UNCHANGED so
+`CREATE OR REPLACE VIEW` stays reload-idempotent and C3's `person_chart_trust` is untouched (it surfaces `unconfirmed`
+for free). **Precedence** (documented safety call): under-review (attribution actively challenged — data present
+possibly wrong-patient) outranks unconfirmed (who-is-this unknown — absent history). **§5.7 "Human" adjudication**:
+`method` structurally required; the human-vouches requirement composes via the existing attestation gate when a
+responsibility-bearing contributor is named (workflow-tier policy, not a floor special-case — considered/rejected
+forcing it at the type level). **`db/024_identity_identify.sql` (wired into `db.rs`) + pure `cairn-event` builders;
+NO SCHEMA/ADR/spec bump, and `db/023` left UNTOUCHED** (implements settled §5.4/§5.7; CREATE-OR-REPLACEs the shared
+twin hook + `chart_trust`). TDD: 3 pure builder unit tests + 15 DB-gated integration tests
+(`crates/cairn-node/tests/identity_identify.rs`: accept · HLC overlay both directions · re-pending-reopens · idempotent
+re-assert · pending→unconfirmed on `chart_trust`+`person_chart_trust` · identify→confirmed · pending-before-chart
+safety signal · the **C3⊔C4 compose/precedence proof** [dispute outranks pending → resolve→unconfirmed → identify→
+confirmed] · five floor rejections). Full `cargo test --workspace` (0 fail incl. C1/C3 regression green) + workspace
+clippy clean on a **PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container (pgrx 0.18.1, `--features pg16`,
+`postgresql-server-dev-16` headers). **Deferred (recorded):** the full §5.4 John-Doe registration subsystem
+(system-generated callsign, clinician-observed evidence assertions — age/marks/belongings/EMS context, matcher re-run
+on new evidence); the "prior history now available" push alert on link (§5.12); registration-class partitioning of the
+search-before-create funnel (§5.3/§5.8); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate`
+(alias pool + suppressing semantics); the §5.2 coherence feedback loop; person-level trust aggregation (read-surface
+tier). **Identity C4 is now BUILT — the §5.7 trust-state contract (confirmed/unconfirmed/under-review) is COMPLETE.**
+
+**Prior session (2026-07-03) — issue: identity C3, `dispute` + the chart trust-state projection** (brainstorm→
 spec→plan→inline-TDD; spec+plan under `docs/superpowers/2026-07-03-identity-c3-dispute-trust-state*`). The §5.7
 patient-initiated **`dispute`** front door (§5.5(b) identity theft) **and** the §5.7 projection-side contract —
 the chart **trust state** (*confirmed / under-review*) — the keystone C1 explicitly deferred and that the rest of
@@ -397,11 +431,14 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
   **C2** (`match_proposal`→apply seam — `db/019`, `apply_proposal.rs`; human-accepted → human-attested link), **and
   C2b** (auto-apply of the `auto_candidate` band — `matcher_actor.rs` + `auto_apply.rs`; matcher-authored, un-attested,
-  recallable link, apply-time veto re-check), **and C3** (`dispute` + the chart trust-state projection — `db/023`;
-  the §5.7 projection-side contract *confirmed / under-review*, driven by the patient-initiated dispute front door)
-  **are now BUILT**. **Next identity slice: C4+** — the rest of the §5.7 algebra (`identify` [needs registration
-  classes / John Doe, §5.4], `reattribute` [§5.5 strike-through + tiered adjudication], `repudiate` [alias pool]);
-  each composes one more source into the `chart_trust` VIEW C3 built. Deferred: an **A/B pass-toggle**
+  recallable link, apply-time veto re-check), **C3** (`dispute` + the chart trust-state projection — `db/023`;
+  the §5.7 projection-side contract, driven by the patient-initiated dispute front door), **and C4** (`identify` +
+  the *unconfirmed* trust state — `db/024`; the §5.4 John-Doe identity-pending front door + the `identify` resolver,
+  composing the third trust state into a severity-max `chart_trust`) **are now BUILT — the §5.7
+  confirmed/unconfirmed/under-review contract is COMPLETE**. **Next identity slice: C5+** — the rest of the §5.7
+  algebra (`reattribute` [§5.5 event-granular strike-through + tiered adjudication], `repudiate` [alias pool +
+  suppressing semantics]) + the full §5.4 John-Doe registration subsystem (callsign, clinician-observed evidence
+  assertions, matcher re-run); each composes one more source into the `chart_trust` VIEW C3/C4 built. Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto
