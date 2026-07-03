@@ -121,10 +121,22 @@ async fn name_count(c: &Client, p: Uuid) -> i64 {
         .await.unwrap().get(0)
 }
 
-async fn alias_reason(c: &Client, p: Uuid, value: &str) -> Option<String> {
+/// Is (patient, value) in the matcher-facing alias pool? The view is deliberately
+/// reason-free (ADR-0006 — no forensic free-text on the name-searchable cross-patient
+/// surface), so the pool check is presence-only.
+async fn in_alias_pool(c: &Client, p: Uuid, value: &str) -> bool {
+    let p_str = p.to_string();
+    c.query_one(
+        "SELECT count(*) FROM patient_alias_pool WHERE patient_id::text=$1 AND value=$2",
+        &[&p_str, &value]).await.unwrap().get::<_, i64>(0) == 1
+}
+
+/// The struck value's `reason`, read from the base overlay (where it is confined — the
+/// alias pool view does not expose it). None if no overlay row exists.
+async fn repudiation_reason(c: &Client, p: Uuid, value: &str) -> Option<String> {
     let p_str = p.to_string();
     c.query_opt(
-        "SELECT reason FROM patient_alias_pool WHERE patient_id::text=$1 AND value=$2",
+        "SELECT reason FROM name_repudiation WHERE subject::text=$1 AND value=$2",
         &[&p_str, &value]).await.unwrap().map(|r| r.get(0))
 }
 
@@ -152,9 +164,17 @@ async fn repudiated_name_leaves_the_winner_but_a_surviving_name_takes_over() {
                "the struck name leaves the winner; the surviving name takes over");
     // Evidence retention: the struck name is NOT deleted from the retained set (principle 1).
     assert_eq!(name_count(&c, p).await, 2, "the struck name stays in the retained set as evidence");
-    // Alias pool: the struck value is now a reusable known alias for the matcher.
-    assert_eq!(alias_reason(&c, p, "John Smith").await.as_deref(), Some("confessed fabricated persona"),
-               "the struck name enters the known-alias pool");
+    // Alias pool: the struck value is now a reusable known alias for the matcher (presence
+    // only — the pool view is reason-free); the forensic reason stays in the base overlay.
+    assert!(in_alias_pool(&c, p, "John Smith").await, "the struck name enters the known-alias pool");
+    assert_eq!(repudiation_reason(&c, p, "John Smith").await.as_deref(), Some("confessed fabricated persona"),
+               "the reason is retained in the base overlay (confined; not on the matcher view)");
+    // Confidentiality split: the matcher-facing view must NOT carry `reason` (ADR-0006).
+    let has_reason: bool = c.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_name='patient_alias_pool' AND column_name='reason')", &[])
+        .await.unwrap().get(0);
+    assert!(!has_reason, "patient_alias_pool must not expose the forensic reason free-text");
 }
 
 #[tokio::test]
@@ -194,8 +214,31 @@ async fn reassert_is_idempotent_and_reason_is_hlc_latest_wins() {
         "SELECT count(*) FROM name_repudiation WHERE subject::text=$1", &[&p.to_string()])
         .await.unwrap().get(0);
     assert_eq!(n, 1, "re-repudiating the same (subject,value) is one standing overlay row");
-    assert_eq!(alias_reason(&c, p, "Al Ias").await.as_deref(), Some("refined reason"),
+    assert_eq!(repudiation_reason(&c, p, "Al Ias").await.as_deref(), Some("refined reason"),
                "the highest-HLC reason wins; an older re-assert does not clobber it");
+}
+
+#[tokio::test]
+async fn newer_reassertion_does_not_unstrike_a_repudiated_name() {
+    // The anti-join is deliberately HLC-BLIND (db/025): a standing repudiation strikes its
+    // value even against a STRICTLY-NEWER re-assertion of the same string. Re-typing a
+    // known-false name (e.g. from the same old insurance card) must NOT resurrect it — a
+    // mistaken repudiation is undone only by an explicit reversal event (deferred), never by
+    // re-assertion. This test PINS that intended semantics so a future HLC-aware change (or a
+    // reversal slice) has to flip it consciously.
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+    submit_name(&c, &sk_a, &kid_a, p, 3, "John Smith", "legal", "patient-stated").await;
+    repudiate(&c, &sk_a, &kid_a, &sk_h, &kid_h, p, "John Smith", "believed fabricated", 5).await.unwrap();
+    assert_eq!(current_name(&c, p).await, None, "the struck sole name leaves the winner");
+    // A strictly-newer re-assertion of the SAME value (wall=10 > the repudiation's 5).
+    submit_name(&c, &sk_a, &kid_a, p, 10, "John Smith", "legal", "document-verified").await;
+    assert_eq!(current_name(&c, p).await, None,
+               "a newer re-assertion does NOT un-strike a standing repudiation (reversal is the only recourse)");
+    assert_eq!(name_count(&c, p).await, 1, "the re-assertion updates the one retained member, still struck");
 }
 
 // --- the §5.7 "Human" floor: suppressing-mode forces attestation ---
@@ -221,6 +264,35 @@ async fn unattested_repudiation_is_refused() {
     assert_eq!(current_name(&c, p).await.as_deref(), Some("No Token"));
 }
 
+#[tokio::test]
+async fn agent_attested_repudiation_is_refused() {
+    // The "Human" in §5.7 is specifically ENFORCED: a valid, correctly-bound token from an
+    // enrolled AGENT (not a human) is refused (db/005 gate check #3). Without this, an agent
+    // could self-attest a suppressing repudiation and strike a clinical name with no human
+    // vouching — the exact failure the suppressing-mode gate exists to prevent. (attestation.rs
+    // proves this generically for salience.downgrade; here it is pinned for repudiate itself,
+    // so a future identity-type special-case that skipped the human check would fail HERE.)
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+    submit_name(&c, &sk_a, &kid_a, p, 1, "Agent Vouch", "legal", "patient-stated").await;
+
+    // A valid token, correctly bound to THIS event — but signed by the AGENT key, and the
+    // agent's own verifying key presented as attester.
+    let body = repudiation_body(&kid_a, p, "Agent Vouch", "agent self-attested", true);
+    let signed = sign(&body, &sk_a).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let agent_tok = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
+    let vk_a = sk_a.verifying_key().to_bytes().to_vec();
+    let err = c.execute("SELECT submit_event($1,$2,$3)", &[&signed.signed_bytes, &agent_tok, &vk_a])
+        .await.unwrap_err();
+    assert!(db_msg(&err).contains("not an enrolled human actor"),
+            "an agent-attested repudiation must be refused (§5.7 'Human'): {}", db_msg(&err));
+    assert_eq!(current_name(&c, p).await.as_deref(), Some("Agent Vouch"), "nothing was struck");
+}
+
 // --- structural floor rejections (each a distinct legible exception) ---
 
 #[tokio::test]
@@ -231,7 +303,9 @@ async fn empty_value_is_rejected() {
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
     let err = repudiate(&c, &sk_a, &kid_a, &sk_h, &kid_h, p, "   ", "reason", 1).await.unwrap_err();
-    assert!(db_msg(&err).contains("value"), "empty value must be refused: {}", db_msg(&err));
+    let m = db_msg(&err);
+    assert!(m.contains("value"), "empty value must be refused: {m}");
+    assert!(!m.contains("attestation"), "must reject at the FLOOR, not the attestation gate: {m}");
 }
 
 #[tokio::test]
@@ -242,7 +316,9 @@ async fn empty_reason_is_rejected() {
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
     let err = repudiate(&c, &sk_a, &kid_a, &sk_h, &kid_h, p, "A Name", "", 1).await.unwrap_err();
-    assert!(db_msg(&err).contains("reason"), "empty reason must be refused: {}", db_msg(&err));
+    let m = db_msg(&err);
+    assert!(m.contains("reason"), "empty reason must be refused: {m}");
+    assert!(!m.contains("attestation"), "must reject at the FLOOR, not the attestation gate: {m}");
 }
 
 #[tokio::test]

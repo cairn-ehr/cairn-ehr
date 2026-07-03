@@ -256,11 +256,14 @@ a precise untruth, principle 4); "header shows something" is satisfied one layer
 rendering (C4). **Honest limit:** value match is exact-string on an opaque value (culture-neutral, deterministic — the
 floor must be precise); fuzzy recognition of a returning alias is the advisory matcher's job over `patient_alias_pool`.
 **No SCHEMA/ADR/spec bump; db/010–024 untouched** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the shared twin
-hook + `patient_name_current`). 2 pure builder unit tests + 8 DB-gated integration tests (struck name leaves winner +
+hook + `patient_name_current`). 2 pure builder unit tests + 10 DB-gated integration tests (struck name leaves winner +
 surviving name takes over + alias-pool entry + retained-set evidence preserved; only-name → no winner; idempotent
-re-assert + HLC-latest reason; **un-attested repudiation refused** — the suppressing "Human" floor; four floor
-rejections). Full workspace suite (362 passed / 0 failed) + clippy green on a from-scratch PG16 / cairn_pgx 0.2.0
-in-container rig. **Deferred:** a reversal / de-repudiation event (the overlay is HLC-versioned so it composes without a
+re-assert + HLC-latest reason; newer re-assertion does NOT un-strike [HLC-blind anti-join pinned]; **un-attested AND
+agent-attested repudiation refused** — the suppressing "Human" floor; four floor rejections). Full workspace suite
+(364 passed / 0 failed) + clippy green on a from-scratch PG16 / cairn_pgx 0.2.0 in-container rig. **Review hardening**
+(3-agent adversarial pass, 0 hard bugs): `patient_alias_pool` made reason-free + base overlay not agent-granted (no
+cross-patient forensic-`reason` leak, ADR-0006); `reason` NOT NULL; HLC-blind + agent-attested-refused tests added.
+**Deferred:** a reversal / de-repudiation event (the overlay is HLC-versioned so it composes without a
 rewrite); a chart-history VIEW rendering struck names (data already present); matcher wiring that *consumes*
 `patient_alias_pool`; `reattribute` (needs a clinical-note surface that does not yet exist — premature).
 

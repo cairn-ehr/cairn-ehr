@@ -35,14 +35,20 @@ untruth*, principle 4); "the header always shows something" is satisfied one lay
 striking the wrong, possibly true, name); fuzzy recognition of a returning alias is the **advisory matcher's** job over
 `patient_alias_pool`, never the floor's. **`db/025_identity_repudiate.sql` (wired into `db.rs`) + a pure `cairn-event`
 builder; NO SCHEMA/ADR/spec bump, db/010–024 left UNTOUCHED** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the
-shared twin hook + `patient_name_current`). TDD: 2 pure builder unit tests + 8 DB-gated integration tests
+shared twin hook + `patient_name_current`). TDD: 2 pure builder unit tests + 10 DB-gated integration tests
 (`crates/cairn-node/tests/identity_repudiate.rs`: struck name leaves winner + surviving name takes over + alias-pool
 entry + retained-set evidence preserved · only-name → no winner (honest, never the lie) · idempotent re-assert +
-HLC-latest reason · **un-attested repudiation refused** — the suppressing "Human" floor · four floor rejections [empty
-value, empty reason, bad subject, missing twin]). Full `cargo test --workspace` (**362 passed / 0 failed**, incl.
+HLC-latest reason · **newer re-assertion does NOT un-strike** (the HLC-blind anti-join pinned) · **un-attested AND
+agent-attested repudiation refused** — the suppressing "Human" floor, both branches · four floor rejections [empty
+value, empty reason, bad subject, missing twin]). Full `cargo test --workspace` (**364 passed / 0 failed**, incl.
 C1/C3/C4 + demographics-names regression green) + workspace clippy clean on a **PG16 + cairn_pgx 0.2.0** rig stood up
 from scratch in-container this session (pgrx 0.18.1, `--features pg16`, `postgresql-server-dev-16` headers, local-TCP
-`trust` in pg_hba). **Deferred (recorded):** a **reversal / de-repudiation** event (the overlay is HLC-versioned so it
+`trust` in pg_hba). **Review hardening** (3-agent adversarial pass; SQL-correctness agent found 0 hard bugs):
+(a) **confidentiality split** — `patient_alias_pool` is now **reason-free** and the base `name_repudiation` table is
+**not** granted to `cairn_agent`, so the free-text forensic `reason` can't leak cross-patient on the name-searchable
+matcher view (ADR-0006); (b) `reason` made `NOT NULL` (the floor already guarantees it); (c) the HLC-blind anti-join +
+the agent-attested-refused branch got explicit tests; (d) floor-rejection tests now also assert they reject at the
+**floor**, not the attestation gate; (e) the `origin`-tiebreak collation note folded into #115. **Deferred (recorded):** a **reversal / de-repudiation** event (the overlay is HLC-versioned so it
 composes with no rewrite — the append-only correction path is a separate §5.5 decision); a **chart-history VIEW**
 rendering struck names (the retained set + overlay already carry the data); **matcher wiring** that *consumes*
 `patient_alias_pool`; `reattribute` (§5.5 event-granular strike-through of *clinical documentation* — waits on a

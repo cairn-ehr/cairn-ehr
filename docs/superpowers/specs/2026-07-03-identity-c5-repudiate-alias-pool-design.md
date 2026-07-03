@@ -83,6 +83,11 @@ The overlay keys on `(subject, value)` — the raw name string — **not** `(sub
 - **Why not event-grained.** §5.5(a) says "repudiated **values**"; the matcher alias pool is a set of name
   *strings*; and a value re-asserted by several events is one member in the retained set. A `target_event_id`
   would be the wrong grain (it would strike one assertion of a value while others survive).
+- **Accepted degenerate case.** Because the strike is per `(subject, value)`, if one chart ever held the
+  *identical byte string* as both a legitimate name and a separately-fabricated one, repudiating it strikes
+  both from display. This is a contradiction in the data (the same exact string cannot be both this person's
+  true name and their fabrication), so treating it as one false value is the honest reading — and the strike
+  is auditable and reversible-by-overlay, never a data loss.
 - **Honest limit (documented, not a bug).** The match is **exact string equality** on an opaque value —
   culture-neutral and deterministic (the only convergent choice for arbitrary scripts). A repudiation must
   therefore name the *exact* value it strikes; in practice the repudiation UI pre-fills it from the chart's
@@ -122,10 +127,20 @@ the slices compose.
 **DB-gated integration (`crates/cairn-node/tests/identity_repudiate.rs`):**
 1. A human-attested repudiation is accepted; the struck name leaves `patient_name_current`; a surviving
    name becomes the new winner.
-2. The struck name enters `patient_alias_pool`.
+2. The struck name enters `patient_alias_pool` (presence only — the view is reason-free); the `reason` is
+   retained in the base overlay, and `patient_alias_pool` is asserted to carry **no** `reason` column
+   (the ADR-0006 confidentiality split — added in review).
 3. The retained set `patient_name` still contains the struck name (evidence preserved).
 4. Striking a chart's *only* name → `patient_name_current` has no row for it (honest, no lie).
 5. Idempotent re-assert = one overlay row; HLC-latest-wins on the `reason`.
-6. **Un-attested repudiation is refused** (the suppressing-mode gate — the §5.7 "Human" floor).
-7. Floor rejections, each a distinct legible exception: empty `value`, empty `reason`, bad/missing
-   `subject`, missing authored twin.
+6. **HLC-blind anti-join pinned:** a strictly-newer re-assertion of the struck value does NOT un-strike it
+   (reversal-only recourse — added in review).
+7. **The §5.7 "Human" floor, both branches:** an un-attested repudiation is refused; an *agent*-attested
+   repudiation is refused ("not an enrolled human actor" — added in review).
+8. Floor rejections, each a distinct legible exception: empty `value`, empty `reason`, bad/missing
+   `subject`, missing authored twin — and (added in review) each asserts it rejects at the *floor*, not the
+   attestation gate.
+
+*(All review additions came from a 3-agent adversarial review; the SQL-correctness agent found 0 hard bugs.
+The main functional change was reason-confinement — dropping `reason` from the matcher-facing view and
+withholding the base-table grant from `cairn_agent` — plus `reason NOT NULL`.)*

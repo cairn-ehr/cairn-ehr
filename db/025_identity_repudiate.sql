@@ -64,6 +64,17 @@ BEGIN
     -- value: the exact known-false name string. Present + non-empty — a repudiation that
     -- names no value would strike nothing (or, worse, be ambiguous). Opaque to the core
     -- (any script/culture); it is matched to the retained set by exact equality (§5.5(a)).
+    --
+    -- DELIBERATELY NO existence check that `value` matches a live patient_name member: a
+    -- repudiation may legitimately arrive BEFORE the name assertion it strikes (offline-first,
+    -- out-of-order set-union — the same reason the C3/C4 floors accept dispute/pending before
+    -- the chart exists). A hard reject would break that convergence; the overlay simply lands
+    -- and suppresses the member if/when it arrives. The residual footgun — a mistyped /
+    -- trailing-spaced value that matches nothing, so the false name keeps displaying with no
+    -- error — is a UI-layer responsibility (pre-fill the exact value from the chart's name
+    -- list; confirm the header actually changed), NOT the floor's: the floor cannot enforce
+    -- existence without sacrificing offline-first, and must stay precise (a fuzzy match could
+    -- strike the WRONG, possibly true, name).
     IF jsonb_typeof(p -> 'value') IS DISTINCT FROM 'string'
        OR length(trim(p ->> 'value')) = 0 THEN
         RAISE EXCEPTION 'repudiation assertion: value must be a non-empty string (§5.5a)';
@@ -133,14 +144,20 @@ $$;
 CREATE TABLE IF NOT EXISTS name_repudiation (
     subject     UUID    NOT NULL,
     value       TEXT    NOT NULL,   -- the exact known-false name string (opaque; struck from display, kept as alias)
-    reason      TEXT,               -- the winning assertion's reason (why known-false)
+    reason      TEXT    NOT NULL,   -- why known-false (the floor guarantees non-empty; NOT NULL self-documents that)
     hlc_wall    BIGINT  NOT NULL,
     hlc_counter INTEGER NOT NULL,
     origin      TEXT    NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (subject, value)
 );
-GRANT SELECT ON name_repudiation TO cairn_agent;
+-- NB: no broad GRANT on this base table. `reason` is free-text forensic context ("confessed
+-- fabricated persona to evade a warrant") that must NOT be exposed cross-patient on a
+-- name-searchable surface (ADR-0006: confidentiality lives in visibility/key-custody, not on
+-- a widely-readable view). The agent role reads the *reason-free* patient_alias_pool view
+-- below (a PG view runs with its owner's table privileges, so cairn_agent needs no direct
+-- grant here); `reason` stays confined to privileged/audit + a future per-chart chart-history
+-- read surface.
 
 -- Incremental maintenance: fold exactly the one new repudiation into the overlay. The row
 -- overlays atomically only when the incoming HLC is strictly greater (ON CONFLICT … WHERE),
@@ -162,6 +179,12 @@ BEGIN
         hlc_counter = EXCLUDED.hlc_counter,
         origin      = EXCLUDED.origin,
         updated_at  = clock_timestamp()
+    -- The (wall, counter, origin) tuple mirrors db/012/024; `origin` is TEXT, so it carries
+    -- the same collation-sensitivity tracked by #69 and the same "add content_address as a
+    -- deterministic final tiebreaker" follow-up as #115 (C3 review). Low-stakes here: `reason`
+    -- is advisory and the SUPPRESSION decision itself is value-keyed + idempotent (independent
+    -- of this tuple), so an equal-HLC cross-collation tie can only pick a different advisory
+    -- reason, never un-suppress a name. Folded into #115's codebase-wide overlay-tiebreak fix.
     WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
         > (name_repudiation.hlc_wall, name_repudiation.hlc_counter, name_repudiation.origin);
     RETURN NULL;  -- AFTER trigger
@@ -178,6 +201,13 @@ CREATE TRIGGER name_repudiation_apply_trg
 --    list + ORDER BY are copied VERBATIM from db/012 so the CREATE OR REPLACE keeps the
 --    exact column contract (reload-idempotent across connect_and_load_schema; any dependent
 --    stays valid); the ONLY change is the NOT EXISTS filter excluding repudiated members.
+--    The anti-join is deliberately HLC-BLIND: a standing repudiation strikes its (subject,
+--    value) regardless of any name assertion's HLC — INCLUDING a strictly-newer re-assertion
+--    of the same string. This is the safety-preserving choice: re-typing a known-false name
+--    (e.g. a clerk re-registering from the same old insurance card that bore the fabrication)
+--    must NOT silently resurrect it in the header. A repudiation made in error is undone by an
+--    explicit reversal event (append-only correction path — deferred this slice; the overlay
+--    is HLC-versioned so it composes in with no rewrite), never by re-asserting the value.
 --    A struck name is removed from the winner, so DISTINCT ON picks the next surviving name.
 --    If a chart's ONLY name is repudiated, it has NO winner row — the honest outcome: the
 --    name is genuinely unknown-now, and showing the known-false one would be a precise
@@ -203,8 +233,12 @@ ORDER BY patient_id,
 --    (patient_id, value); the matcher looks up "who has used this presenting name as a
 --    known alias?" (SELECT patient_id … WHERE value = ?). Fuzzy recognition of a returning
 --    alias is the ADVISORY matcher's job over this view — never the suppression floor's.
+--    DELIBERATELY REASON-FREE: the matcher only needs (patient_id, value) to reuse an alias,
+--    and this view is name-searchable ACROSS patients — surfacing another chart's forensic
+--    `reason` here would leak sensitive free-text to the agent role (ADR-0006). `reason`
+--    stays in the base overlay for privileged/chart-history reads only.
 CREATE OR REPLACE VIEW patient_alias_pool AS
-SELECT subject AS patient_id, value, reason, hlc_wall, hlc_counter, origin, updated_at
+SELECT subject AS patient_id, value, hlc_wall, hlc_counter, origin, updated_at
 FROM name_repudiation;
 
 GRANT SELECT ON patient_name_current, patient_alias_pool TO cairn_agent;
