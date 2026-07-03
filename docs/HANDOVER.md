@@ -4,12 +4,43 @@
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
 generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator) + the
-**§5.1/§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band —
-done this session**; remaining B3 weight-learning / locale packs / A-B pass-toggle + identity **C3+** (rest of the
-§5.7 algebra: identify/repudiate/dispute/reattribute) next.
+**§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
+`dispute` + the chart trust-state projection — done this session**; remaining B3 weight-learning / locale packs /
+A-B pass-toggle + identity **C4+** (rest of the §5.7 algebra: identify/repudiate/reattribute) next.
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-07-03) — issue: identity C2b, auto-apply of the matcher's `auto_candidate` band** (brainstorm→
+**This session (2026-07-03) — issue: identity C3, `dispute` + the chart trust-state projection** (brainstorm→
+spec→plan→inline-TDD; spec+plan under `docs/superpowers/2026-07-03-identity-c3-dispute-trust-state*`). The §5.7
+patient-initiated **`dispute`** front door (§5.5(b) identity theft) **and** the §5.7 projection-side contract —
+the chart **trust state** (*confirmed / under-review*) — the keystone C1 explicitly deferred and that the rest of
+the algebra composes into. Two **additive** dispute event types (`identity.dispute.asserted` / `.resolved`) through
+the reused `submit_event` door (low-ceremony like the C1 link — a dispute *annotates* trust, never erases/moves/blocks,
+so no attestation unless a responsibility-bearing contributor is named); a culture-neutral
+`cairn_check_dispute_assertion` structural floor + **HARD-required legibility twin**; a `chart_dispute` standing
+overlay keyed by the dispute's own id (HLC-latest-wins, converges out-of-order — the C1 `patient_link` shape, but a
+single-row fact ⇒ no BFS/oversize guard); a `chart_trust` effective-state **VIEW** deliberately shaped so
+`identify`/`reattribute`/the §5.2 coherence check ADD source branches later (never a rewrite); surfaced as
+a composed `person_chart_trust` view. **`db/023_identity_dispute.sql` (wired into `db.rs`) + pure `cairn-event`
+builders; NO SCHEMA/ADR/spec bump, and `db/018` left UNTOUCHED** (implements settled §5.7). **Review-driven design
+choice** (correctness-agent finding): `person_chart_trust` is a SEPARATE view *composing on top of* C1's
+`person_chart` (reusing its `person_member` join) rather than extending `person_chart` in place — the first cut
+`DROP+CREATE`-d `person_chart` in both db/018 and db/023 (because `CREATE OR REPLACE VIEW` cannot shrink an
+already-extended view across the `connect_and_load_schema` reload), but a bare `DROP` would abort node boot the moment
+any dependent view sits on `person_chart` (the API/UI read surface). Composing sidesteps it: `person_chart` stays
+droppable-free, and `person_chart_trust` is the view future trust-source slices extend. TDD: 3 pure builder unit tests + 14
+DB-gated integration tests (`crates/cairn-node/tests/identity_dispute.rs`: accept · HLC overlay · out-of-order
+convergence · multi-dispute resolve-one-stays / resolve-all-confirmed · idempotent re-assert · dispute-before-chart
+safety signal · five floor rejections). Full `cargo test --workspace` (38 binaries, 0 fail) + workspace clippy green
+on a stood-up **PG16 + cairn_pgx 0.2.0** rig (this session built the rig from scratch in-container: pgrx 0.18.1,
+`--features pg16`). **Deferred (recorded):** the *unconfirmed* (identity-pending) state + registration classes / John
+Doe (C4/C5 with `identify`); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate` (alias pool);
+the §5.2 coherence feedback loop; notification/contamination cascade on dispute; person-level trust aggregation
+(read-surface tier); a future refactor to collapse the per-slice identity-floor duplication (twin-hook ladder /
+uuid-check / HLC-upsert) into shared helpers **+ a deterministic final tiebreaker (content_address) on the HLC
+overlay upsert** so a Byzantine same-`(wall,counter,origin)` collision can't diverge honest nodes
+([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115), filed from this review). **Identity C3 is now BUILT.**
+
+**Prior session (2026-07-03) — issue: identity C2b, auto-apply of the matcher's `auto_candidate` band** (brainstorm→
 spec→plan→inline-TDD; spec+plan under `docs/superpowers/`). A matcher proposal banded `auto_candidate` (score ≥ auto
 AND zero vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted`
 event — **no human in the loop** — through the *same* `submit_event` door. **Rust-only in `cairn-node`
@@ -366,8 +397,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
   **C2** (`match_proposal`→apply seam — `db/019`, `apply_proposal.rs`; human-accepted → human-attested link), **and
   C2b** (auto-apply of the `auto_candidate` band — `matcher_actor.rs` + `auto_apply.rs`; matcher-authored, un-attested,
-  recallable link, apply-time veto re-check) **are now BUILT**. **Next identity slice: C3+** — the rest of the §5.7
-  algebra (identify/repudiate/dispute/reattribute). Deferred: an **A/B pass-toggle**
+  recallable link, apply-time veto re-check), **and C3** (`dispute` + the chart trust-state projection — `db/023`;
+  the §5.7 projection-side contract *confirmed / under-review*, driven by the patient-initiated dispute front door)
+  **are now BUILT**. **Next identity slice: C4+** — the rest of the §5.7 algebra (`identify` [needs registration
+  classes / John Doe, §5.4], `reattribute` [§5.5 strike-through + tiered adjudication], `repudiate` [alias pool]);
+  each composes one more source into the `chart_trust` VIEW C3 built. Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto

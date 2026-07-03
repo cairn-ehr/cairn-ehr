@@ -285,14 +285,7 @@ CREATE TRIGGER patient_link_apply_trg
 --    link graph. Selecting WHERE person_id = X returns all member charts. The REAL
 --    unified-chart read surface (ordering, dedup, trust states) is the API/UI tier,
 --    above the foundation line — deliberately out of scope for C1.
--- DROP+CREATE (not CREATE OR REPLACE): later slices EXTEND this "unified read" with
--- more columns (C3 adds trust_state, db/023). connect_and_load_schema re-runs every
--- migration on each start, so if this stayed CREATE OR REPLACE it would try to SHRINK
--- an already-extended person_chart back to these columns on reload — and Postgres forbids
--- dropping a column from a view via CREATE OR REPLACE. Dropping first makes the chain
--- idempotent: this rebuilds the base shape, then the extending migration re-adds its column.
-DROP VIEW IF EXISTS person_chart;
-CREATE VIEW person_chart AS
+CREATE OR REPLACE VIEW person_chart AS
     SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id, pc.*
     FROM patient_chart pc
     LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id;

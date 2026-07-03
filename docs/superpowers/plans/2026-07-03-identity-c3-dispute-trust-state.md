@@ -66,7 +66,7 @@ as `("023_identity_dispute", include_str!("../../../db/023_identity_dispute.sql"
 - `CREATE OR REPLACE VIEW person_chart` — copy db/018's definition and append
   `COALESCE(ct.trust_state,'confirmed') AS trust_state` with a `LEFT JOIN chart_trust ct ON
   ct.patient_id = pc.patient_id`. Column is appended last (CREATE OR REPLACE VIEW constraint).
-- Tests (red-first): `open_marks_chart_under_review` (chart_trust + person_chart.trust_state),
+- Tests (red-first): `open_marks_chart_under_review` (chart_trust + person_chart_trust.trust_state),
   `resolve_returns_to_confirmed`, `no_dispute_reads_confirmed`,
   `two_disputes_resolve_one_stays_under_review` / `resolve_all_confirmed`,
   `dispute_before_chart_still_under_review` (query chart_trust directly for a subject with no

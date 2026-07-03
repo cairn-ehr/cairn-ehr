@@ -130,11 +130,13 @@ async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid,
         .expect("patient.created accepted");
 }
 
-/// person_chart.trust_state for a given patient_id row.
+/// person_chart_trust.trust_state for a given patient_id row (the unified read composed
+/// on top of C1's person_chart — a chart read, so it lists a subject only once its chart
+/// has synced; chart_trust is the authoritative pre-sync safety signal).
 async fn person_chart_trust(c: &Client, subject: Uuid) -> Option<String> {
     let s_s = subject.to_string();
     c.query_opt(
-        "SELECT trust_state FROM person_chart WHERE patient_id = $1::text::uuid", &[&s_s],
+        "SELECT trust_state FROM person_chart_trust WHERE patient_id = $1::text::uuid", &[&s_s],
     ).await.unwrap().map(|r| r.get::<_, String>(0))
 }
 

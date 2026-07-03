@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS chart_dispute (
     dispute_id  UUID    PRIMARY KEY,
     subject     UUID    NOT NULL,
     state       TEXT    NOT NULL CHECK (state IN ('open', 'resolved')),
-    reason      TEXT,                       -- winning assertion's reason (open) or resolution (resolved)
+    detail      TEXT,                       -- the winning assertion's descriptive text: its `reason` (open) or `resolution` (resolved)
     hlc_wall    BIGINT  NOT NULL,
     hlc_counter INTEGER NOT NULL,
     origin      TEXT    NOT NULL,
@@ -149,19 +149,20 @@ DECLARE
     p        jsonb := NEW.body;
     v_state  text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved' THEN 'resolved' ELSE 'open' END;
     -- The descriptive field's key differs by type (reason opens, resolution closes);
-    -- store whichever one this assertion carries so the overlay row is self-describing.
-    v_reason text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved'
+    -- store whichever one this assertion carries in the neutrally-named `detail` column
+    -- so the overlay row is self-describing without a misleading column name.
+    v_detail text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved'
                            THEN p ->> 'resolution' ELSE p ->> 'reason' END;
 BEGIN
     INSERT INTO chart_dispute
-        (dispute_id, subject, state, reason, hlc_wall, hlc_counter, origin)
+        (dispute_id, subject, state, detail, hlc_wall, hlc_counter, origin)
     VALUES
-        ((p ->> 'dispute_id')::uuid, (p ->> 'subject')::uuid, v_state, v_reason,
+        ((p ->> 'dispute_id')::uuid, (p ->> 'subject')::uuid, v_state, v_detail,
          NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
     ON CONFLICT (dispute_id) DO UPDATE SET
         subject     = EXCLUDED.subject,
         state       = EXCLUDED.state,
-        reason      = EXCLUDED.reason,
+        detail      = EXCLUDED.detail,
         hlc_wall    = EXCLUDED.hlc_wall,
         hlc_counter = EXCLUDED.hlc_counter,
         origin      = EXCLUDED.origin,
@@ -200,24 +201,32 @@ CREATE OR REPLACE VIEW chart_trust AS
 
 GRANT SELECT ON chart_trust TO cairn_agent;
 
--- 6. Surface trust on the unified read. Extend db/018's person_chart with a trust_state
---    column (CREATE OR REPLACE VIEW allows appending a column at the end). Every member
---    row reports its OWN chart's trust, coalescing to 'confirmed' when unknown to
---    chart_trust. Trust attaches to the patient_id (the chart a dispute names), NOT the
---    aggregated person_id — whether an under-review member taints the whole person view
---    is a read-surface (API/UI) judgment above the foundation line.
--- DROP+CREATE, matching db/018's idiom for this view (see the note there): the migration
--- chain re-runs on every start, and a further slice may extend person_chart again, so
--- rebuilding it outright keeps every reload idempotent regardless of column-set drift.
-DROP VIEW IF EXISTS person_chart;
-CREATE VIEW person_chart AS
-    SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id,
-           pc.*,
+-- 6. Surface trust on the unified read. person_chart_trust COMPOSES on top of db/018's
+--    person_chart (reusing its person_member union — no re-join) and tags every member
+--    row with its OWN chart's trust, coalescing to 'confirmed' when unknown to chart_trust.
+--    Trust attaches to the patient_id (the chart a dispute names), NOT the aggregated
+--    person_id — whether an under-review member taints the whole person view is a
+--    read-surface (API/UI) judgment above the foundation line.
+--
+--    Deliberately a SEPARATE view, not an extension of person_chart. person_chart is the
+--    C1 read surface the API/UI tier builds on, so it must stay droppable-free: a later
+--    migration extending it in place would force a DROP+CREATE (CREATE OR REPLACE cannot
+--    add/shrink columns idempotently across the connect_and_load_schema reload), and a
+--    bare DROP would abort node boot the moment any dependent view sits on person_chart.
+--    Composing a new view sidesteps that entirely — CREATE OR REPLACE here is column-stable
+--    across reloads, and this view is the one future trust-source slices (identify /
+--    reattribute / §5.2 coherence) extend, keeping person_chart itself untouched.
+--
+--    NOTE: like person_chart, this lists a subject only once its patient_chart row exists.
+--    A dispute that arrives before the disputed body still reports under-review via
+--    chart_trust (the authoritative identity safety signal, queried directly); this view
+--    is the convenience join for charts that have synced, NOT the complete safety surface.
+CREATE OR REPLACE VIEW person_chart_trust AS
+    SELECT pc.*,
            COALESCE(ct.trust_state, 'confirmed') AS trust_state
-    FROM patient_chart pc
-    LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id
-    LEFT JOIN chart_trust   ct ON ct.patient_id = pc.patient_id;
+    FROM person_chart pc
+    LEFT JOIN chart_trust ct ON ct.patient_id = pc.patient_id;
 
-GRANT SELECT ON person_chart TO cairn_agent;
+GRANT SELECT ON person_chart_trust TO cairn_agent;
 
 COMMIT;

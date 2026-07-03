@@ -31,8 +31,8 @@ Building the trust projection here, driven by `dispute`, means `identify` (C4/C5
 rewrite.
 
 **Deliverable boundary.** This slice delivers: the two dispute event types, their structural floor, a
-standing `chart_dispute` edge overlay, and the `chart_trust` effective-state projection surfaced on the
-`person_chart` read. It does **not** deliver a separate queue subsystem (the open-dispute set *is* the
+standing `chart_dispute` edge overlay, and the `chart_trust` effective-state projection surfaced via a
+composed `person_chart_trust` view. It does **not** deliver a separate queue subsystem (the open-dispute set *is* the
 triage worklist — a query, not a new table), notification/contamination cascade (that is a
 `reattribute`-tier concern, §5.5), or the *unconfirmed* trust state (needs registration-class /
 identity-pending, C4/C5).
@@ -47,7 +47,7 @@ signed events that sync set-union.
 | Layer | File | What |
 |---|---|---|
 | Rust builders (pure) | `crates/cairn-event/src/identity.rs` | add `DisputeAssertion` / `DisputeResolution` body builders + twin renderers. Pure functions, no I/O — mirrors the C1 `LinkAssertion` builders in the same file. |
-| In-DB floor + projection | `db/023_identity_dispute.sql` | event-type registration, `cairn_check_dispute_assertion` structural floor, `cairn_event_twin` dispute branch, `chart_dispute` overlay table + AFTER-INSERT trigger, `chart_trust` effective-state VIEW, `person_chart` extended with a `trust_state` column. |
+| In-DB floor + projection | `db/023_identity_dispute.sql` | event-type registration, `cairn_check_dispute_assertion` structural floor, `cairn_event_twin` dispute branch, `chart_dispute` overlay table + AFTER-INSERT trigger, `chart_trust` effective-state VIEW, `person_chart_trust` composing view. |
 | Migration wiring | `crates/cairn-node/src/db.rs` | one `SCHEMA` list entry (`023_identity_dispute`). |
 | Tests | `crates/cairn-node/tests/identity_dispute.rs` + `cairn-event` unit tests | TDD, red-first. |
 
@@ -186,24 +186,35 @@ tiny and makes "the triage worklist" a trivial `SELECT * FROM chart_dispute WHER
 
 ### Surfacing on the unified read
 
-`person_chart` (C1) is extended with a `trust_state` column via `CREATE OR REPLACE VIEW` (append-only —
-allowed, and additive by principle 11). Every member row reports its **own** chart's trust state,
+Trust is surfaced by a **new** view `person_chart_trust` that **composes on top of** C1's `person_chart`
+(reusing its `person_member` union — no re-join), tagging each member row with its own chart's trust,
 coalescing to `'confirmed'` when unknown to `chart_trust`:
 
 ```sql
-CREATE OR REPLACE VIEW person_chart AS
-    SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id,
-           pc.*,
+CREATE OR REPLACE VIEW person_chart_trust AS
+    SELECT pc.*,
            COALESCE(ct.trust_state, 'confirmed') AS trust_state
-    FROM patient_chart pc
-    LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id
-    LEFT JOIN chart_trust   ct ON ct.patient_id = pc.patient_id;
+    FROM person_chart pc
+    LEFT JOIN chart_trust ct ON ct.patient_id = pc.patient_id;
 ```
+
+**Why a separate view rather than extending `person_chart`.** `person_chart` is the C1 read surface the
+API/UI tier builds on, so it must stay droppable-free. `CREATE OR REPLACE VIEW` cannot add or shrink a
+view's column set idempotently across the `connect_and_load_schema` reload (which re-runs *every*
+migration on each node start), so extending `person_chart` in place would force a `DROP+CREATE` — and a
+bare `DROP` would **abort node boot** the moment any dependent view sits on `person_chart`. Composing a
+new view sidesteps this entirely: `person_chart_trust`'s column set is stable, so its `CREATE OR REPLACE`
+is reload-idempotent, and it — not `person_chart` — is the view that future trust-source slices
+(`identify` / `reattribute` / §5.2 coherence) extend, keeping `person_chart` itself untouched.
 
 *Trust attaches to the `patient_id` (the chart the dispute names), not the aggregated `person_id`.* A
 dispute is against a specific registration; whether an under-review member taints the whole
 person-level view is a read-surface (API/UI) judgment above the foundation line, deliberately out of
-scope. Per-row trust is honest and composes cleanly.
+scope. Per-row trust is honest and composes cleanly. Like `person_chart`, `person_chart_trust` lists a
+subject only once its chart has synced; a dispute that arrives **before** the disputed body still reports
+under-review via **`chart_trust`** (the authoritative identity safety signal — a consumer needing the
+pre-sync signal queries `chart_trust` directly, exactly as the §5.9 safety projection is a separate
+signal from the chart body).
 
 ## Error handling & convergence edge cases (pinned by tests)
 
@@ -227,7 +238,7 @@ scope. Per-row trust is honest and composes cleanly.
   dispute_id.
 - **DB integration** (`crates/cairn-node/tests/identity_dispute.rs`, gated on `$CAIRN_TEST_PG`,
   serialized via `db::test_serial_guard`): valid dispute accepted; opens → `chart_trust`
-  under-review + `person_chart.trust_state='under-review'`; resolve → confirmed; out-of-order resolve
+  under-review + `person_chart_trust.trust_state='under-review'`; resolve → confirmed; out-of-order resolve
   wins; two disputes, resolve-one stays under-review, resolve-all confirmed; idempotent re-assert is one
   row; dispute-before-chart still reports under-review; no-dispute chart reads `'confirmed'`; floor
   rejections (bad dispute_id, missing subject, empty reason, empty resolution, missing twin).
