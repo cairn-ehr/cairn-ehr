@@ -1,10 +1,12 @@
 pub mod apply_proposal;
+pub mod auto_apply;
 pub mod backup;
 pub mod db;
 pub mod fsio;
 pub mod identity;
 pub mod keystore;
 pub mod localstate;
+pub mod matcher_actor;
 pub mod medium;
 pub mod pairing;
 pub mod restore;

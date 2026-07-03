@@ -263,6 +263,23 @@ enum Cmd {
         /// The hex `digest` shown by `cairn-node quarantine`.
         digest: String,
     },
+
+    /// Auto-apply every pending `auto_candidate` match proposal (§5.2/§5.7 C2b) as a
+    /// matcher-authored, un-attested, recallable identity link. OWNER ceremony: point
+    /// `--conn` at a role that may run `enroll_actor` (the per-epoch matcher actor is
+    /// enrolled on first sight), NOT the unprivileged runtime role. Re-checks the db/016
+    /// veto per pair; a since-vetoed pair is kicked to human `review` instead of linked.
+    ApplyAutoCandidates {
+        /// Operational passphrase to seal the per-epoch matcher keys (else
+        /// CAIRN_KEY_PASSPHRASE, else prompt). Matcher keys are regenerable, so there is no
+        /// separate recovery escrow — but they SIGN identity links, so seal them by default
+        /// exactly like the node key.
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
+        /// Write matcher keys UNSEALED (throwaway/test nodes only — no at-rest protection).
+        #[arg(long)]
+        insecure_plaintext: bool,
+    },
 }
 
 #[tokio::main]
@@ -707,6 +724,57 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             println!("acked node_event {digest} ({n} row) — it no longer pins the floor or fails the pull");
+        }
+        Cmd::ApplyAutoCandidates { passphrase, insecure_plaintext } => {
+            // Owner connection (needs enroll_actor for the per-epoch matcher actor).
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            // Fail fast (legibly) if the DB predates the db/018 identity floor.
+            let has_floor: bool = db
+                .query_one("SELECT to_regclass('public.patient_link') IS NOT NULL", &[])
+                .await?
+                .get(0);
+            if !has_floor {
+                anyhow::bail!(
+                    "this database predates db/018 (no patient_link) — run `cairn-node init` \
+                     to load the identity floor"
+                );
+            }
+            // The matcher keystore lives beside the node key. Seal the per-epoch matcher
+            // keys under the SAME policy as the node key: sealed by default (passphrase from
+            // --passphrase / CAIRN_KEY_PASSPHRASE / interactive prompt), plaintext ONLY on an
+            // explicit --insecure-plaintext. Reading the secret from the env var alone would
+            // silently write plaintext matcher keys beside a node key sealed via --passphrase
+            // or a prompt — a silent at-rest downgrade for keys that author identity links.
+            let keystore_dir = cli
+                .key
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("matcher-keys");
+            let secret: Option<Zeroizing<String>> = if insecure_plaintext {
+                None
+            } else {
+                Some(resolve_passphrase(passphrase)?)
+            };
+            let node_origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
+            let s = cairn_node::auto_apply::apply_auto_candidates(
+                &mut db,
+                &keystore_dir,
+                secret.as_ref().map(|z| z.as_str()),
+                &node_origin,
+            )
+            .await?;
+            println!(
+                "auto-apply: applied {}  vetoed->review {}  skipped {}  errored {}",
+                s.applied, s.vetoed_to_review, s.skipped, s.errored
+            );
+            // Non-zero exit when anything errored, so a systematic failure can't pass as a
+            // healthy quiet run in a cron/pipeline (the summary line is still printed above).
+            if s.errored > 0 {
+                anyhow::bail!(
+                    "{} pair(s) errored during auto-apply (see stderr above)",
+                    s.errored
+                );
+            }
         }
     }
     Ok(())

@@ -9,8 +9,14 @@
 -- which link event) and makes re-application idempotent (only status='accepted' rows
 -- are picked up).
 --
--- INVARIANT (documented, enforced by the seam's single transaction, not a DB trigger):
---   status='applied'  <=>  applied_event_id IS NOT NULL.
+-- INVARIANT (documented, enforced by each seam's single transaction, not a DB trigger):
+--   applied_event_id IS NOT NULL  <=>  status IN ('applied','auto_applied').
+--   C2 (human-accepted, cairn-node::apply_proposal) sets status='applied'; C2b (matcher
+--   auto-apply, cairn-node::auto_apply) sets status='auto_applied' — both record the id of
+--   the identity.link.asserted event they produced, and the two statuses stay distinct so
+--   the audit trail tells auto from human. A consumer asking "did this proposal produce a
+--   link?" must therefore test `applied_event_id IS NOT NULL`, NOT `status='applied'`
+--   alone (which silently misses every auto-applied link).
 --
 -- Additive: no event-format change, no submit_event change, no new event type. The
 -- existing GRANT ... UPDATE ON match_proposal TO cairn_agent (db/017) already permits

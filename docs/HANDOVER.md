@@ -1,263 +1,59 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-02 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-07-03 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
-generation + batch sweep · B3 eval harness — scorer + blocking-recall measurement · B3 compound blocking key
-(name-token+birth-year) · B3 synthetic volume generator) + the **§5.1/§5.7 identity linkage core (piece C1)** + the **§5.2/§5.7
-match_proposal→apply seam (piece C2) — done this session**; remaining B3 weight-learning / locale packs / A-B
-pass-toggle + identity pieces C2b (auto-apply of the `auto_candidate` band) + C3+ (rest of the §5.7 algebra) next.
-Viability proven by spikes (walking skeleton, advisory-actor contract,
-a first federating node, Postgres-on-Android).
+generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator) + the
+**§5.1/§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band —
+done this session**; remaining B3 weight-learning / locale packs / A-B pass-toggle + identity **C3+** (rest of the
+§5.7 algebra: identify/repudiate/dispute/reattribute) next.
+Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session — issue #111: durable quarantine for the NODE-EVENT pull plane (cairn-node `sync.rs`).** The
-node-plane sibling of the clinical quarantine (#108/PR #110). Before this, ANY refusal in `pull_into` was a stderr
-line + a bumped counter while the seq cursor advanced past it — so an UNVERIFIABLE node_event (corrupt frame, or a
-peer still serving pre-ADR-0040 signatures) was a *silent, permanent* set-union exclusion. Now, mirroring #110 but
-adapted to the node plane's deny-all steady state: **(a)** new **`db/022_node_event_quarantine.sql`** (SCHEMA
-21→22) — a **separate** table (not a reuse of `sync_quarantine`, so a node-plane requeue is unambiguously routed
-through `apply_remote_node_event`, and no idle clinical attestation columns), granted the full lifecycle to
-`cairn_node`. **(b)** Classification in `pull_into`: only an **UNVERIFIABLE** event (re-verified in Rust) is
-penned durably (recording the serving `seq`); a **verifiable-but-refused** event (untrusted author / unknown type)
-stays skip-and-swept as before — the normal deny-all case, self-healing on a later `peer.added` or code arrival +
-full sweep; a **transient/transport** error freezes the cursor. **(c)** A **derived re-offer floor** =
-`MIN(refused_seq)` over the peer's unacked rows; the incremental pull fetches from `refused_seq - 1` (load-bearing:
-`serve` streams `seq > after_seq` STRICTLY, so `refused_seq` itself would be skipped), so a penned slot keeps being
-re-offered (deduping onto its row) while the cursor advances for valid events. **(d)** **Auto-release**: a penned
-event whose cause is fixed re-applies on a sweep and is DELETEd on success — no manual requeue command needed.
-**(e)** **Loud**: `PullStats.pending` (unacked rows after the cycle) drives a per-cycle integrity line in `run`
-until fixed or acked; per-peer row+byte quota (10k / 64 MiB) freezes the cursor rather than growing the pen.
-**(f)** CLI `quarantine` (JSON list) + `ack-quarantine <digest>` (license a permanent exclusion). TDD:
-`crates/cairn-node/tests/node_quarantine.rs` (6 DB-gated — penned+loud+dedupe · derived floor re-offers on an
-INCREMENTAL pull · ack silences · auto-release on apply · verifiable-refusal NOT penned · list+ack CLI helpers) +
-`db/tests/022` grant floor. Full cairn-node suite (230) + workspace clippy green on the Mac PG18 / cairn_pgx 0.2.0
-rig. Additive only — no spec/ADR bump (implements settled ADR-0017/0021). Closes #111. Sibling of #109 (PR #112).
-**PR-review hardening (applied in-branch, 8 findings):** the quota now counts only UNACKED rows (an all-acked pen
-could otherwise wedge the cursor with a silenced alarm, and `ack` — the documented remedy — could not free it); a
-VERIFIABLE event that fails apply is now classified by SQLSTATE — a `P0001` deny-all skips-and-sweeps, but a
-transient fault (serialization/deadlock/timeout/disk-full) FREEZES instead of silently advancing past a valid event
-(the A1 loss class); auto-release is gated on `floor.is_some()` (a pen whose `refused_seq` sits above the cursor now
-releases, and a clean sweep does zero per-event DELETEs); the unverifiable arm verifies ONCE; + the list/ack CLI
-helpers get a driving test and comments were corrected (quota is a bounded cap under concurrency; the freeze relies
-on seq-ordered serve). The two HIGH fixes' failure conditions (10k-row quota boundary, injected transient DB faults)
-are impractical to exercise in the harness — reasoned + the P0001-skip path is tested.
-**This session (2026-07-02, latest) — issue #109: wire the ADR-0040 legibility/skew primitives into the doors +
-daemon.** PR #107 added the primitives (`cairn_verify_error(bytea)`, `cairn_pgx_version()`, extension bumped to
-0.2.0) but left the consumers unwired; this closes all three parts. **(1) Legible rejection reason at every
-signature door** — `submit_event` (db/005), `apply_remote_event` (db/020), `submit_node_event` +
-`apply_remote_node_event` (db/007), `restore_node_event` (db/009) keep the boolean `cairn_verify` gate but now
-attach `USING DETAIL = coalesce(cairn_verify_error(p_signed),'unknown')`, so a wire-format skew / pre-ADR-0040
-context mismatch is distinguishable from tampering at the SQL boundary (during a skew-induced write outage the
-generic message misdirected the operator badly). **(2) Daemon startup skew check** — a pure
-`parse_pgx_version`/`pgx_version_ok` pair (fail-closed on unparseable) + `assert_pgx_floor` gate cairn-sync on
-`cairn_pgx_version() >= 0.2.0` (const `REQUIRED_PGX_FLOOR`) at BOTH startup hooks the issue names: `cmd_init`
-(right after `CREATE EXTENSION`, which won't upgrade a stale lib) and `connect_checked` (covers
-pull/run/quarantine/requeue); a pre-0.2.0 lib lacks the function entirely → that `UNDEFINED_FUNCTION` error is
-translated to the same actionable "rebuild + `cargo pgrx install`" message instead of leaking a raw
-"function does not exist". **(3) db/015 `event_twin_provenance`** gains a `verifiable` column
-(`cairn_verify(signed_bytes)`, appended last so CREATE OR REPLACE VIEW stays additive): a row whose bytes no
-longer verify was silently reported `twin_authored=false` ("author omitted the twin"), so a re-authoring
-worklist could clobber genuinely-authored twins — now `verifiable=false` surfaces it as "no longer verifies".
-TDD: `crates/cairn-node/tests/verify_error_detail.rs` (2 DB-gated — every door surfaces a non-empty DETAIL;
-the view distinguishes an unverifiable row) + 3 pure version-compare unit tests + 1 DB-gated
-`assert_pgx_floor_passes_on_the_current_rig`. Full cairn-sync (18) + cairn-node suites + the touched
-`db/tests/{005,007,009,020,021}` SQL self-checks + workspace clippy all green on the Mac PG18 / cairn_pgx 0.2.0
-rig. Additive only — no SCHEMA-floor bump, no spec/ADR change (implements settled ADR-0040). Closes #109.
-Sibling follow-on #111 (node-event-plane quarantine) is the next slice.
+**This session (2026-07-03) — issue: identity C2b, auto-apply of the matcher's `auto_candidate` band** (brainstorm→
+spec→plan→inline-TDD; spec+plan under `docs/superpowers/`). A matcher proposal banded `auto_candidate` (score ≥ auto
+AND zero vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted`
+event — **no human in the loop** — through the *same* `submit_event` door. **Rust-only in `cairn-node`
+(`matcher_actor.rs` + `auto_apply.rs` + `apply-auto-candidates` CLI); NO `db/` migration, NO floor change, NO
+SCHEMA/ADR/spec bump** — the db/018 floor already made an identity link additive + `targets_other_author=FALSE`, so
+an un-attested matcher link needs no attestation. **Realises the deferred §7.5 matcher-actor:** each distinct
+`matcher_version` is its OWN `agent` actor with its OWN key (auto-enrolled on first sight, owner ceremony), pinned
+under **`skill_epoch`** (= matcher_version) so db/006 `events_by_actor_epoch` recall selects a bad config's auto-links
+**precisely** (contamination cascade). Contributor role **`suggested`** (ADR-0028 contributory, no `responsibility`)
+⇒ authorship present, accountability absent (principle 10). **Apply-time veto re-check** (the no-human-backstop safety
+add): a pair that acquired a veto since propose is kicked to human **`review`**, never auto-linked over. Status
+`pending → auto_applied` (distinct from C2's human `applied`) or `→ review`; idempotent (only `pending` picked up),
+respects a human `rejected`. Matcher key sealed under the op passphrase (no recovery escrow — regenerable). TDD: 6
+pure + 7 DB-gated tests (`crates/cairn-node/tests/auto_apply.rs`: enroll-once/reuse · distinct-epoch actors ·
+un-attested link + person projection · veto→review · human-rejected skipped · batch across epochs + idempotent ·
+recall precision) + end-to-end CLI smoke (applied 1 → 1 un-attested link + 2-member person + auto_applied; re-run
+applied 0). Full cairn-node suite + workspace clippy + `cargo test --workspace` green on the Mac PG18 / cairn_pgx
+0.2.0 rig. **Deferred:** no background scheduler (operator CLI only); ADR-0028 role enum still not DB-enforced
+([#96](https://github.com/cairn-ehr/cairn-ehr/issues/96)); richer §7.5 determinants (served-model digest). **Identity
+C2b is now BUILT.**
 
-**Earlier this session (2026-07-02) — issue #108 + PR #110 review: durable quarantine, re-offer floor, loud
-integrity failures in cairn-sync:** closed the clinical-plane pull loop's silent skip-and-advance, then hardened it
-against its own review (8 confirmed findings, all fixed in-PR). Before: an unverifiable pulled event left only a
-transient stderr line while later verifiable events advanced the watermark past it (silent permanent set-union
-exclusion, the A1 class), and a pre-ADR-0040 peer livelocked silently. Now: **(a)** **`db/021_sync_quarantine.sql`**
-(explicit REVOKE floor, full lifecycle granted to `cairn_node`) — every refused event is persisted VERBATIM (signed
-bytes + travelling attestation pair, enriched by COALESCE if a later re-offer carries a token an earlier one lacked +
-legible `EventError` reason) with dedupe-on-re-offer and a **per-peer quota** (10k rows / 64 MiB; at quota the
-watermark freezes rather than the pen growing — remote bytes can never fill the clinical node's disk). **(b)** the
-**re-offer floor** (`sync_state.quarantine_floor_*`): a durable trace alone is NOT a license to advance past an event
-(the review's mixed-batch finding: a re-signed history below a moved watermark would never be refetched) — refusing
-an event pins the fetch point below its slot, so every cycle re-offers it (dedupes in the pen) while the watermark
-still advances for valid events; a clean cycle from the floor auto-clears it (a repaired/re-signed peer is picked up
-with NO operator surgery), and a human can license a permanent exclusion via **`acked = TRUE`** (recorded decision,
-releases the floor). **(c)** **ANY unacked refusal fails the pull loudly, every cycle** — not just the all-unverifiable
-batch (the old heuristic structurally missed mixed legacy+new batches and already-synced links, exactly where the
-livelock lived) — via a typed `PullIntegrityError` that still carries the cycle metrics; `run` logs `integrity: true`
-(distinct from `partition`, which bet_a counts as downtime; bet_a `analyze` now reports integrity cycles separately).
-Non-hex wire entries are penned like any other garbage (never a whole-pull abort). **(d)** additive
-`EventsResponse.signing_context` declared by serve; a DIFFERENT declared context refuses the batch up front naming
-both strings (per-event verify binds CTX_EVENT cryptographically anyway — the gate only adds legibility).
-**(e)** CLI: `quarantine` (JSON lines incl. `last_requeue_error`/`acked`) + `requeue` (through the REAL
-`apply_remote_event` door, streamed row-by-row; the door's refusal goes to `last_requeue_error`, NEVER overwriting the
-verify-time `reason` forensics); `pull`/`run`/`quarantine`/`requeue` fail fast with a legible "run `cairn-sync init`"
-if the DB predates db/021 (only init applies migrations). TDD: 11 DB-gated integration tests in
-`cairn-sync::quarantine_tests` (mixed batch pens+pins floor+recovers on repaired peer · acked releases floor ·
-all-unverifiable loud · synced-link unverifiable tail loud · non-hex penned · row quota freezes · byte quota refuses
-an overshooting frame · floor SURVIVES a pen-failure re-offer cycle (fresh-eyes catch: clearing it would permanently
-release the slot) · skew refused · requeue preserves reason · connect_checked legible) + wire-additivity unit +
-`db/tests/021_sync_quarantine_test.sql`. Full
-workspace (34 suites) + clippy green on Mac PG18 rig (cairn_pgx rebuilt post-ADR-0040 — stale-dylib gotcha again);
-live two-DB smoke green. Closes #108. Split out: #101 (EventsAfter pagination — floor re-ships the suffix wholesale
-until then), #111 (node-event plane still lacks a quarantine; db.rs comment points at it).
-
-**Earlier this session (2026-07-02) — issue #95: signing-context domain separation (ADR-0040, spec v0.40→v0.41):**
-closed the review-B4 wire-freeze pair before more signatures accumulate. **(a)** The Sign1-vs-multi-signer
-ambiguity in ADR-0015's rationale is resolved: an event carries **exactly one envelope signature** (the
-authoring actor's); plurality is contributor-set-in-body + attestation tokens + overlay co-signing (ADR-0007 §6)
-— COSE_Sign dismissed. **(b)** Every signature is now **domain-separated by a registered signing context**,
-bound twice: the context string as COSE protected-header content type (self-describing wire, legible
-`ContextMismatch` rejection — principle 11) AND as `external_aad` in the Sig_structure (cross-context
-verification fails in the signature math, not just a policy check). Closed additive-only registry:
-`application/cairn-event+cbor` (clinical AND node planes — both sign an `EventBody`; plane separation stays
-`event_type` + fail-closed classification inside the payload), `application/cairn-attestation+cbor`,
-`application/cairn-pairing+cbor`. **Fail closed, no grandfathering:** pre-ADR-0040 uncontextualized blobs are
-rejected everywhere (no production data; dev federations/rigs re-init + re-sign — deliberate, recorded in the
-ADR). Implementation: one generic `cose_sign1_in_context`/`cose_verify1_in_context` pair in `cairn-event` that
-every public sign/verify function delegates to (the triplicated COSE code collapsed; forgetting the context is
-now impossible by construction); `cairn_pgx`/DB doors inherit unchanged (they already delegate). TDD: 6 new
-red-first tests incl. a demonstration that the pre-fix code DID verify a legacy-signed attestation-shaped
-payload as an attestation (the live vulnerability), aad-is-load-bearing (lying header rejected), legacy
-fail-closed, wire self-description, and legible cross-context `ContextMismatch`. cairn-event 48/48; workspace +
-clippy green. **Operational note:** the local rig's `cairn_pgx` must be rebuilt (`cargo pgrx install`) and any
-dev federation re-initialized — old signatures now fail closed (intended).
-**PR-review hardening (same PR, post-review):** the verify core now also (a) rejects a protected `alg` header
-missing or ≠ EdDSA (`AlgMismatch` — the "header lies about its algorithm" twin of the context check: a genuine
-signer could otherwise freeze bytes misdescribing their own primitive, and the re-attestation ladder keys off
-this header); (b) rejects any content type in the UNPROTECTED bucket (outside Sig_structure ⇒ an
-attacker-appendable second self-description); (c) parses each blob once (`cose_verify1_parsed` /
-`cose_verify1_self_described`; the `key_id()`-then-reparse stitch is gone); (d) pins the three wire-frozen
-`CTX_*` literals + pairwise distinctness in tests (expectations re-typed, not derived from the consts). Honest
-degradation at the seams: restore now distinguishes `NoVerifiableGenesis {unverifiable, total}` (corrupt or
-pre-ADR-0040 medium) from a genuinely missing genesis (`medium::scan_enrolls` counts verify failures instead
-of silently dropping them); `cairn_pgx` bumped to **0.2.0** (the wire-format break is version-visible) with
-new `cairn_verify_error(bytea)` (the legible rejection reason at the SQL boundary) and `cairn_pgx_version()`
-(detect a stale .so at daemon startup / mid-outage). cairn-event 52/52, cairn-node 82/82, clippy clean.
-
-**Earlier this session (2026-07-02) — issue #99 (part): the contamination-cascade recall key (review A10):**
-fixed the recall-epoch resolution bug + the related deferred floor items on the recall surface, TDD against a
-local PG16+cairn_pgx rig. **The bug:** `events_by_actor_epoch` joined `actor_current`, so the moment a
-supersede/re-enroll bumped a key's `skill_epoch`, a recall of the OLD epoch silently returned nothing — a
-production ADR-0011/0029/0030 contamination cascade would under-select (the dangerous direction). **The fix,
-in three layers:** (1) an additive node-local `event_log.actor_id` attribution stamp (db/001) written by BOTH
-doors — `submit_event` stamps the unique current key→actor resolution (NULL when the key is concurrently
-registered to several actors: honest unknown, principle 4); `apply_remote_event` resolves the stamp against the
-key's ENTIRE local registry history (unique only if the key has only ever meant one actor on this node) because
-a replicated event's authoring-time epoch is unknowable from the wire (only `signer_key_id` is signed — the
-ADR-0029 refinement that would carry actor_id in the signed bytes stays future work); (2) `events_by_actor_epoch`
-(db/006) now resolves (key, epoch) against historical `actor_event` rows and returns an `attribution` column —
-`'pinned'` (exact stamp match) or `'unattributed'` (NULL-stamped rows, over-selected into EVERY epoch the key
-ever registered: a recall over-selects, never silently misses; an unregistered epoch selects nothing); (3) the
-deferred neighbours — `actor_event.seq` identity column + deterministic `(recorded_at, seq)` tiebreak in
-`actor_current` (same-microsecond registry rows no longer nondeterministic); an FK on
-`recall_overlay.target_event_id` (a fat-fingered recall now fails loud instead of "succeeding" on nothing;
-recall_overlay is node-local so no out-of-order-sync concern today); explicit REVOKEs on
-`recall_overlay`/`recall_event` (the A6 explicit-floor pattern). **PR #106 review hardening (applied
-in-branch):** the review caught a residual under-selection in the same family — an origin-side epoch bump
-replicating in BEFORE this node registers the new epoch gets confidently mis-stamped to the old (locally
-unique) actor, and a later recall of the new epoch would exclude it. Fixed (review-pushed guard commit,
-adopted + verified green on the rig) with a third attribution rung `'pre-registration'`: a pinned stamp
-excludes an event from a queried epoch ONLY if that epoch was already locally registered when the event was
-admitted; older events over-select (noise bounded to events predating the epoch's first local registration —
-exactly the set the node cannot attribute; the ADR-0029 refinement carrying actor identity in the signed
-bytes retires the rung). Also `actor_event.seq` hardened `BY DEFAULT`→`GENERATED ALWAYS` (+ idempotent
-`SET GENERATED ALWAYS` self-heal), so forging the trust-anchor tiebreak needs a loud
-`OVERRIDING SYSTEM VALUE`; and the supersede-row integrity caveat (no supersede door yet ⇒
-`actor_id = cairn_actor_id(pinned)` unenforced for hand-inserted supersede rows; safe direction) is
-documented in db/006. Tests: `crates/cairn-node/tests/recall_epoch.rs`
-(6 — superseded-epoch exact recall through both doors · ambiguous-key NULL stamp over-selects · late-arriving
-remote event never misattributed after a local epoch bump · registry-lag/late-registered epoch never silently
-buried · FK fail-loud + legitimate recall lands) + extended
-`db/tests/004`/`006` SQL floor tests (tiebreak, history resolution, registry-lag rung, FK). All additive DDL, no SCHEMA-array change,
-no spec/ADR bump (implements settled ADR-0011/0029/0030). **Still open in #99 (deliberately untouched):** the
-suppression owner-gate (db/005 step 5 `DEFERRED`) — *who* may suppress *whose* event is an ADR-level decision.
-
-**Earlier this session (2026-07-02) — issue #91: the clinical-plane in-DB apply door (review A2/A5b/M8/H4):**
-built **`db/020_apply_remote_event.sql`** — `apply_remote_event`, the sibling of `apply_remote_node_event`, closing
-the review's highest-priority structural finding: the cairn-sync apply path no longer raw-INSERTs with owner
-privileges; a replicated clinical event now faces the SAME in-DB floor as a locally-authored one (signature,
-enrollment, fail-closed classification, the attestation gate on suppressing events, the demographic/identity
-hard-twin rule, the t_effective ceiling, size ceiling, substitution guard — shared helpers, so the doors cannot
-drift). Replication-appropriate deltas, each reasoned in the file header: idempotent set-union no-op; in-door HLC
-merge; **attestation tokens now STORED** (`db/001` additive `attestation`/`attester_key` columns; also closes the
-M7 residual "verified then discarded") **and shipped on the sync wire** (additive parallel arrays in
-`EventsResponse`) so the suppress gate is re-runnable at every hop; **t_effective wire-pinned** to an explicit UTC
-offset via the single `cairn_t_effective` validator (db/001, both doors + author-side CLI check — H4); **node-local
-projection guards clamp-and-flag at apply instead of vetoing** (db/018 component cap → `identity_projection_flag`
-worklist under the transaction-local `cairn.remote_apply` marker; local authoring keeps its fail-loud veto — A5b);
-the M8 twin triple-implementation collapses (apply-path Rust fallback deleted; one in-DB skeleton renderer at both
-doors; Rust `plaintext_twin` remains only as the authoring renderer). `cairn-sync` gained an **`enroll`** subcommand
-(operator ceremony) and the bet_a harness enrolls every authoring key on every node — **known residual:** the actor
-registry does not replicate yet (ADR-0011 future work), so an event from a not-yet-enrolled signer freezes the
-puller's watermark (A1 discipline: delayed, never lost) until enrollment. Tests: 15 new DB-gated integration tests
-(`crates/cairn-node/tests/apply_remote_event.rs`), `db/tests/020` grant-floor SQL tests, wire-compat + offset-pin
-unit tests; end-to-end two-DB converge + unenrolled-freeze + enroll-heal exercised live. cairn-node SCHEMA array
-18→19 entries (020 added); no spec/ADR bump (implements settled ADR-0021/0022/0030). The t_effective
-explicit-offset wire pin is recorded in spec §3.6 prose (one line on the `t_effective` bullet, refining
-ADR-0015 — the ADR itself stays untouched per immutability).
-
-**Earlier this session (2026-07-02) — comprehensive review + hardening pass:** an adversarial full-repo review (7 parallel
-agents over the SQL floor, the Rust crates, the Python matcher, and all 39 ADRs; findings cross-checked and re-verified
-against the code). Report + full disposition table: **`docs/code_reviews/2026-07-02-comprehensive-review.md`**. The
-foundations held up well (crypto, grant floor, sign-the-bytes canonicalization, ADR honesty); trouble clustered in the
-clinical sync door, a few settled-ADR promises the code didn't keep, and cheap-now/expensive-later wire decisions.
-**Fixed this session (all with tests where a harness exists; full workspace + 186 matcher tests + clippy green):**
-*floor* — `t_effective ≤ t_recorded` ceiling now enforced in `submit_event` (A3); `patient_identifier` made
-HLC-convergent (was first-apply-wins → cross-node divergence feeding the veto, A4); explicit REVOKEs on
-`actor_event`/`enroll_actor` + negative test (A6); linkage-recompute advisory lock (A5a); a shared
-`cairn_max_event_bytes()` ceiling at every admission door (A7a); total-order winner tiebreaks on
-names/address/demographic (A10; text-collation caveat tracked in #69); attestation `attester_key_id` binding (M7).
-*daemon* — cairn-sync watermark now advances only over the contiguous applied prefix so a transient failure can no
-longer silently drop a clinical event (A1); event_id-substitution guard on the sync apply path (H3); pull/serve I/O
-timeouts + serve session cap so a stalled peer can't freeze trust refresh (A7b); `LocalState` `deny_unknown_fields` +
-version gate so a newer bundle fails loud instead of dropping content (A7c); SPKI Ed25519 OID pin; 0600 signing-key
-perms (L12). *matcher* — subset-name → PARTIAL (the ADR-0014 cultural-bias footgun, A9a); veto+shared-identifier now
-forces REVIEW instead of silent burial (A9b); NFC normalization (A9c); 4-digit-year DOB gate (A9e); `unknown`
-sentinel → absence (A9f). *tests* — cairn_pgx `#[pg_test]` fixtures compile again (A8; `cargo check --features pg_test`
-clean). **Filed as issues (design / large-refactor), #91–#103:** clinical sync in-DB apply door (#91), erasure-ladder
-composition (#92), revocation-clock backdating (#93), human key custody (#94), COSE domain separation (#95), closed
-role-enum wire encoding (#96), demographic recency time-axis (#97), essential-tier vs ADR-0001 (#98), suppression
-owner-gate + recall epoch (#99), matcher recall-key (#100), sync pagination + blob wedge (#101), operational-hardening
-batch (#102), clinical-safety prose batch (#103). Matcher minors already tracked by #79/#84. No spec/ADR bump, no
-SCHEMA-floor version bump (all additive DDL + additive Rust).
-
-**Earlier the same day (2026-07-02):** built matcher/identity piece **C2 — the §5.2/§5.7 match_proposal→apply seam**
-(brainstorm→spec→plan→subagent-SDD, 5 tasks; spec+plan under `docs/superpowers/`). A **human-accepted** advisory
-`match_proposal` (B2 output, `db/017`) becomes a real **human-attested** `identity.link.asserted` event through the
-C1 door, projecting into `patient_link`/`person_member`. **Human-accepted only** (auto-apply of the `auto_candidate`
-band deferred to C2b); the accepting reviewer is a **responsibility-bearing (attested) contributor**. **Key property:
-no floor change** — the link is additive, but placing a responsibility-bearing contributor trips the **existing**
-db/005 attestation gate (valid human token, bound to the event, enrolled-human attester), so C2 composes settled §5.7
-(C1) + ADR-0030 (attestation) + ADR-0014 **verbatim**; `submit_event` untouched, no new event type, no spec/ADR bump.
-**`db/019_apply_proposal.sql`** (additive `applied_event_id UUID` column on `match_proposal`; wired into `db.rs`
-SCHEMA array 17→18, no floor version bump). **`crates/cairn-node/src/apply_proposal.rs`**: pure `compose_provenance`
-+ `build_attested_link_body` (event_id caller-supplied ⇒ deterministic/testable; responsibility-bearing contributor;
-authored twin) + IO `apply_accepted_proposal` — read accepted proposal → `sign`+`sign_attestation` with the human key
-→ 3-arg `submit_event` → mark `status='applied'`+`applied_event_id`, all in **one `client.transaction()`** so
-**atomicity is the idempotency guarantee** (any rejection rolls back ⇒ no event, proposal stays `'accepted'` for
-retry). Provenance = `matcher:{version} accepted-by:{kid}`; confidence = `{score:.3}`. **Tests:**
-`crates/cairn-node/tests/apply_proposal.rs` — 6 (3 pure unit + DB-gated happy-path [link event appended · edge ·
-both patients project to min-UUID person · proposal applied→event_id] + idempotency [one event on re-apply] +
-**non-human-attester refused** [floor rejects `not an enrolled human actor`, nothing leaks, stays accepted] +
-pending-not-applied + reverse-order-pair-still-applies); full cairn-node suite green; clippy `--tests` clean.
-**PR-review hardening (applied in-branch):** the accepted-proposal read is now `SELECT … FOR UPDATE` so concurrent
-applies of the same pair serialize (the loser sees `'applied'` and bails, instead of both appending a link event
-under READ COMMITTED); and `apply_accepted_proposal` canonicalizes its `(low, high)` args to `(least, greatest)`, so
-a caller supplying the pair reversed still finds the accepted proposal rather than silently missing it. **Deferred
-(recorded, next): C2b** = auto-apply of the `auto_candidate` band; the **matcher as a compositional contributor**
-(principle 10 — needs the §7.5 matcher-actor registration; lives in the provenance string for now); a **CLI
-subcommand** + production human-key custody (ADR-0011); **C3+** = the rest of the §5.7 algebra
-(identify/repudiate/dispute/reattribute). Test command: `cd crates/cairn-node && CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
-dbname=cairn_test" cargo test --test apply_proposal` (PG18 + `cairn_pgx`). **The §5.2/§5.7 C2 apply seam is now BUILT.**
-
-**Earlier this session (2026-07-02):** built matcher piece **C1 — the §5.1/§5.7 identity linkage core** (the C2 seam's
-destination; full detail in **ROADMAP slice 13** + git). Pure `cairn-event::identity` `LinkAssertion` builder; additive
-**`db/018_identity_linkage.sql`** (SCHEMA 16→17, no floor bump): two additive `identity.link/unlink.asserted` types
-through the **reused** `submit_event` door, `cairn_check_link_assertion` culture-neutral structural floor + HARD
-authored-twin, `patient_link` HLC-overlay edge table (latest-HLC-wins, out-of-order convergent), `person_member`
-golden-identity projection (`person_id` = min-UUID of the connected component via `cairn_recompute_component` — correct
-on merge **and** unmerge/split, fail-loud oversize guard), `person_chart` thin union VIEW. 15 DB-gated tests; suite +
-clippy green. **Principle 2 made real:** never merge/always link; unmerge is always clean. No ADR/spec bump (settled
-§5.1/§5.7/ADR-0014). Deferred (Minor): an accept-at-cap boundary test for the oversize guard.
-**The §5.1/§5.7 identity linkage core (piece C1) is now BUILT.**
+**Merged 2026-07-02 (9 PRs; full detail in git + ROADMAP slices 6–14).** A dense build+review day whose work is now
+all on `main`:
+- **Quarantine/legibility trilogy** — durable quarantine + re-offer floor + loud integrity on the **clinical** pull
+  plane (#108, `db/021_sync_quarantine.sql`; PR #110), the **node-event** pull plane (#111, `db/022_node_event_quarantine.sql`;
+  PR #113), and wiring the **ADR-0040** legibility/skew primitives into every signature door + a daemon `cairn_pgx ≥ 0.2.0`
+  startup floor (#109; PR #112). Each closes a silent skip-and-advance set-union exclusion (the A1 loss class); each
+  hardened against its own PR review.
+- **ADR-0040 signing-context domain separation** (#95, spec v0.40→v0.41): one envelope signature per event, domain-
+  separated by a registered signing context bound twice (COSE content-type + `external_aad`); fail-closed on pre-ADR-0040
+  blobs; `cairn_pgx` → 0.2.0. **The only spec/ADR bump of the day.**
+- **In-DB clinical apply door** `db/020_apply_remote_event.sql` (#91): a replicated clinical event now faces the same
+  in-DB floor as a locally-authored one (attestation stored + shipped on the wire; t_effective wire-pinned; clamp-and-flag
+  projection guards). **Contamination-cascade recall key** fixed (#99): `events_by_actor_epoch` resolves against the full
+  registry history + an `attribution` column (pinned/unattributed/pre-registration) — a superseded-epoch recall no longer
+  silently under-selects.
+- **Comprehensive adversarial review** (7 parallel agents over SQL floor / Rust / Python matcher / 39 ADRs;
+  `docs/code_reviews/2026-07-02-comprehensive-review.md`) → a batch of in-branch floor/daemon/matcher fixes + filed issues
+  **#91–#103** (design / large-refactor backlog).
+- **Identity C1** (`db/018_identity_linkage.sql`): the §5.1/§5.7 linkage core — additive link/unlink types through the
+  reused `submit_event` door, `patient_link` HLC-overlay edge table, `person_member` connected-component projection with
+  clean unmerge (principle 2). **Identity C2** (`db/019` + `cairn-node::apply_proposal`): a human-ACCEPTED proposal becomes
+  a human-ATTESTED link event (the accepting human is a responsibility-bearing contributor tripping the db/005 attestation
+  gate). Both additive, no floor change. **C2b (this session) is the auto-band sibling of C2** — see top.
 
 **Prior session (2026-07-01):** built the **§5.2 matcher B3 synthetic blocking-eval volume generator**
 (brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under `docs/superpowers/`) in `matcher/`. Pure,
@@ -566,12 +362,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   compound-key change, which needs the still-deferred A/B pass-toggle below. **Next (B3 measurement-driven):**
   **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold set) + **further compound
   keys** (`dob+first-initial`, `name+sex`) + locale comparator packs / hub-tier aggressive duplicate-sweep +
-  proposal retraction / full §7.5 matcher actor registration. **Identity: pieces C1** (§5.1/§5.7 linkage core —
-  `db/018`, `cairn-event::identity`, `patient_link`/`person_member`/`person_chart`) **and C2** (the
-  `match_proposal`→apply seam — `db/019`, `cairn-node::apply_proposal`; human-accepted proposal → human-attested link
-  event) **are now BUILT** (this session). **Next identity slices: C2b** — auto-apply of the `auto_candidate` band
-  (matcher-authored, un-attested, recallable link) — and **C3+** — the rest of the §5.7 algebra
-  (identify/repudiate/dispute/reattribute). Deferred: an **A/B pass-toggle**
+  proposal retraction / **richer §7.5 matcher-actor determinants** (served-model digest; C2b registered the matcher as
+  a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
+  **C2** (`match_proposal`→apply seam — `db/019`, `apply_proposal.rs`; human-accepted → human-attested link), **and
+  C2b** (auto-apply of the `auto_candidate` band — `matcher_actor.rs` + `auto_apply.rs`; matcher-authored, un-attested,
+  recallable link, apply-time veto re-check) **are now BUILT**. **Next identity slice: C3+** — the rest of the §5.7
+  algebra (identify/repudiate/dispute/reattribute). Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto
