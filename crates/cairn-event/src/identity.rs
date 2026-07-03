@@ -53,6 +53,67 @@ pub fn render_unlink_twin(a: &LinkAssertion) -> String {
     format!("unlink: {} ↔ {} ({})", a.subject_a, a.subject_b, a.provenance)
 }
 
+// ---------------------------------------------------------------------------
+// §5.7 dispute (piece C3). A dispute is the patient-initiated "I was never there"
+// front door (§5.5(b) identity theft): it flags a chart *under-review* and enters a
+// triage worklist, and a later resolution clears it. A dispute has its OWN identity
+// (`dispute_id`) because one chart can carry several concurrent, independently-
+// resolvable disputes; the in-DB projection (db/023) overlays the standing state
+// (open → resolved) by HLC per `dispute_id`, the same shape C1 uses per link edge.
+//
+// Both the open and the resolve carry `subject` so each assertion is self-describing:
+// offline-first sync can deliver a resolution BEFORE the open it closes, and the
+// overlay must still know which chart the dispute is about (see the db/023 design).
+// A dispute is ADDITIVE (it annotates trust; it never erases, moves, or blocks
+// anything), so it flows through the existing submit_event door like a link.
+// ---------------------------------------------------------------------------
+
+/// One §5.7 `identity.dispute.asserted` — opens a dispute against a chart.
+pub struct DisputeAssertion<'a> {
+    pub dispute_id: &'a str, // §5.7 — this dispute's own immortal id (string uuid)
+    pub subject: &'a str,    // the patient UUID whose chart is under dispute
+    pub reason: &'a str,     // §4.1 — required-present, value-open ("unknown" is honest, "" is not)
+}
+
+/// One §5.7 `identity.dispute.resolved` — closes a specific standing dispute.
+pub struct DisputeResolution<'a> {
+    pub dispute_id: &'a str, // the dispute being closed (matches an opened dispute_id)
+    pub subject: &'a str,    // carried on the resolve too, so out-of-order arrival still binds the chart
+    pub resolution: &'a str, // §4.1 — required-present, value-open (the adjudication outcome)
+}
+
+/// Build the `identity.dispute.asserted` payload. All three fields are mandatory —
+/// no omit-when-absent discipline is needed here (unlike link's optional confidence).
+pub fn dispute_assertion_body(d: &DisputeAssertion) -> Value {
+    json!({
+        "dispute_id": d.dispute_id,
+        "subject": d.subject,
+        "reason": d.reason,
+    })
+}
+
+/// Build the `identity.dispute.resolved` payload — same key discipline, but the
+/// descriptive field is `resolution` (the adjudication outcome) rather than `reason`.
+pub fn dispute_resolution_body(d: &DisputeResolution) -> Value {
+    json!({
+        "dispute_id": d.dispute_id,
+        "subject": d.subject,
+        "resolution": d.resolution,
+    })
+}
+
+/// Render the §4.5-style legibility twin for an opened dispute: profile-independent
+/// plaintext that stays legible without the schema (the identity events are legible-
+/// critical, so the db/023 floor HARD-requires a non-empty authored twin).
+pub fn render_dispute_twin(d: &DisputeAssertion) -> String {
+    format!("dispute opened: {} — {} (dispute {})", d.subject, d.reason, d.dispute_id)
+}
+
+/// Render the §4.5-style legibility twin for a resolved dispute.
+pub fn render_dispute_resolved_twin(d: &DisputeResolution) -> String {
+    format!("dispute resolved: {} — {} (dispute {})", d.subject, d.resolution, d.dispute_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +161,55 @@ mod tests {
         assert!(render_link_twin(&sample()).starts_with("link: "));
         assert!(render_unlink_twin(&sample()).starts_with("unlink: "));
         assert!(render_link_twin(&sample()).contains("matcher:cfg@hash"));
+    }
+
+    // --- §5.7 dispute builders (C3) ---
+
+    fn sample_dispute() -> DisputeAssertion<'static> {
+        DisputeAssertion {
+            dispute_id: "dddddddd-0000-0000-0000-000000000009",
+            subject: "aaaaaaaa-0000-0000-0000-000000000001",
+            reason: "patient states never attended in March",
+        }
+    }
+
+    fn sample_resolution() -> DisputeResolution<'static> {
+        DisputeResolution {
+            dispute_id: "dddddddd-0000-0000-0000-000000000009",
+            subject: "aaaaaaaa-0000-0000-0000-000000000001",
+            resolution: "dismissed — no supporting evidence",
+        }
+    }
+
+    #[test]
+    fn dispute_body_carries_id_subject_and_reason() {
+        let b = dispute_assertion_body(&sample_dispute());
+        assert_eq!(b["dispute_id"], "dddddddd-0000-0000-0000-000000000009");
+        assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(b["reason"], "patient states never attended in March");
+    }
+
+    #[test]
+    fn resolution_body_carries_id_subject_and_resolution() {
+        let b = dispute_resolution_body(&sample_resolution());
+        assert_eq!(b["dispute_id"], "dddddddd-0000-0000-0000-000000000009");
+        assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(b["resolution"], "dismissed — no supporting evidence");
+        // A resolution is not an open assertion: it must NOT carry a `reason` key.
+        assert!(b.get("reason").is_none());
+    }
+
+    #[test]
+    fn dispute_twins_distinguish_open_from_resolved_and_carry_subject_and_id() {
+        let opened = render_dispute_twin(&sample_dispute());
+        assert!(opened.starts_with("dispute opened: "));
+        assert!(opened.contains("aaaaaaaa-0000-0000-0000-000000000001")); // subject
+        assert!(opened.contains("dddddddd-0000-0000-0000-000000000009")); // dispute_id
+        assert!(opened.contains("never attended")); // reason
+
+        let resolved = render_dispute_resolved_twin(&sample_resolution());
+        assert!(resolved.starts_with("dispute resolved: "));
+        assert!(resolved.contains("dddddddd-0000-0000-0000-000000000009"));
+        assert!(resolved.contains("dismissed")); // resolution
     }
 }
