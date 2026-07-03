@@ -34,16 +34,27 @@ const PENDING_SCHEMA_VERSION: &str = "identity.pending.asserted/1";
 /// could not be identified. Distinct from a patient-stated or document-sourced name.
 pub const CALLSIGN_PROVENANCE: &str = "system:john-doe-registration";
 
+/// Number of trailing hex characters of the UUID used as the callsign's disambiguating
+/// suffix. Eight hex = 32 bits of entropy: two John Does registered at the same site on the
+/// same day collide on an identical callsign only if their UUID tails share all 32 bits
+/// (~1 in 4.3 billion per pair). A collision is not merely cosmetic — two live unidentified
+/// charts with an IDENTICAL worklist header is a wrong-chart hazard (paper-parity,
+/// principle 3: paper "Unknown male bay 3" folders are physically distinct), so the suffix
+/// is sized to make it negligible rather than treated as harmless. (Four hex / 16 bits
+/// collided ~1 in 65 536 — enough to flake the coexistence test and, worse, to occasionally
+/// print two identical bedside headers.)
+const SUFFIX_HEX_LEN: usize = 8;
+
 /// Derive the callsign's disambiguating suffix from the freshly-minted patient UUID: the
-/// last four hex characters of its simple form (lower-case, as the simple form already is —
-/// `callsign`'s sanitizer lower-cases every part anyway, so this returns the exact token
-/// that appears in the callsign). Partition-safe with ZERO coordination (the UUID is
-/// already globally unique) — see design call 3. This is what keeps two John Does
+/// last `SUFFIX_HEX_LEN` hex characters of its simple form (lower-case, as the simple form
+/// already is — `callsign`'s sanitizer lower-cases every part anyway, so this returns the
+/// exact token that appears in the callsign). Partition-safe with ZERO coordination (the
+/// UUID is already globally unique) — see design call 3. This is what keeps two John Does
 /// registered at the same site on the same day distinct without a per-day counter that a
 /// partition would race on.
 pub fn suffix_from_uuid(patient_id: Uuid) -> String {
     let simple = patient_id.simple().to_string(); // 32 lower-hex chars, no dashes
-    simple[simple.len() - 4..].to_string()
+    simple[simple.len() - SUFFIX_HEX_LEN..].to_string()
 }
 
 /// Assemble the callsign name `EventBody` (a `demographic.field.asserted` name whose
@@ -154,11 +165,12 @@ mod tests {
     }
 
     #[test]
-    fn suffix_is_the_last_four_uuid_hex_chars() {
-        let pid = Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap();
-        // simple form ends "...00ab" → last four "00ab" (lower-case, as it appears in the
-        // callsign — sanitize_part lower-cases every part, so no upper-casing here).
-        assert_eq!(suffix_from_uuid(pid), "00ab");
+    fn suffix_is_the_last_eight_uuid_hex_chars() {
+        let pid = Uuid::parse_str("00000000-0000-0000-0000-0000dead00ab").unwrap();
+        // simple form ends "...dead00ab" → last eight "dead00ab" (lower-case, as it appears
+        // in the callsign — sanitize_part lower-cases every part, so no upper-casing here).
+        // Eight hex = 32 bits: negligible same-site/same-day callsign-collision probability.
+        assert_eq!(suffix_from_uuid(pid), "dead00ab");
     }
 
     #[test]

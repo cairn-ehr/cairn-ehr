@@ -2,12 +2,20 @@
 """§5.4 — the matcher excludes placeholder (callsign) names from its feature space.
 
 A "John Doe" chart carries a system-generated callsign as a real, displayed name
-(use_key='callsign'). §5.4 requires that name be invisible to the matcher: two different
-unidentified patients registered at the same site on the same day must NEVER false-match
-on their shared callsign tokens. These DB-gated tests seed callsign-use names directly and
-assert they contribute ZERO blocking pairs and ZERO scoring features — while a real name on
-the same chart still blocks and scores normally (the exclusion is placeholder-only, not
-name-wide). Gated on CAIRN_TEST_PG.
+(use_key='callsign'). §5.4 requires that name be invisible to the matcher, so two different
+unidentified patients can never match via their callsigns. These DB-gated tests seed
+callsign-use names directly and assert they contribute ZERO blocking pairs and ZERO scoring
+features — while a real name on the same chart still blocks and scores normally (the
+exclusion is placeholder-only, not name-wide). Gated on CAIRN_TEST_PG.
+
+Tokenization note (why the blocking tests are shaped as they are): the blocking tokenizer
+splits a name on WHITESPACE (`regexp_split_to_table(..., '\\s+')`), and a callsign
+(`Unknown-ed-site1-2026-07-03-<suffix>`) is hyphen-joined with NO whitespace — so a whole
+callsign is a SINGLE blocking token, not the separate words "unknown"/"ed"/"site1". Two
+callsigns therefore only ever share a blocking token when the callsign STRINGS are identical
+(the rare same-suffix collision). To actually exercise the blocking exclusion (rather than
+pass vacuously on distinct-token charts) these tests force that shared-token condition: an
+identical callsign on two charts, and a real name equal to another chart's callsign token.
 """
 
 import uuid
@@ -27,13 +35,17 @@ def _pairs(conn, **kw):
     return pairs
 
 
-def test_two_johndoes_sharing_only_a_callsign_token_generate_no_pair(pg_conn):
-    # Both callsigns share the tokens "unknown", "ed", "site1", "2026-07-03" — a naive
-    # tokenizer would block them together. The placeholder exclusion must drop them entirely.
-    seed_patient(pg_conn, PA, callsign_names=[("Unknown-ed-site1-2026-07-03-00ab", 10)])
-    seed_patient(pg_conn, PB, callsign_names=[("Unknown-ed-site1-2026-07-03-77cd", 10)])
+def test_two_johndoes_with_an_identical_callsign_generate_no_pair(pg_conn):
+    # The blocking tokenizer splits on whitespace, so a whole callsign is ONE token. Two
+    # callsigns collide on a blocking token only when the STRINGS are identical (the rare
+    # same-suffix collision). Force that collision: without the placeholder exclusion this
+    # shared token would block the pair; with it, both callsign rows are dropped from
+    # name_tokens so no token — and no pair — is ever produced.
+    same = "Unknown-ed-site1-2026-07-03-00ab"
+    seed_patient(pg_conn, PA, callsign_names=[(same, 10)])
+    seed_patient(pg_conn, PB, callsign_names=[(same, 10)])
     assert canonical_pair(PA, PB) not in _pairs(pg_conn), (
-        "two John Does must never block-match on shared callsign tokens (§5.4)"
+        "two John Does must never block-match via their callsigns, even when identical (§5.4)"
     )
 
 
@@ -74,10 +86,13 @@ def test_a_real_name_on_a_johndoe_chart_still_blocks_and_scores(pg_conn):
     assert "unknown" not in tokens, "the callsign must not leak into the feature space"
 
 
-def test_a_callsign_token_shared_with_a_real_name_does_not_pair(pg_conn):
-    # Defense-in-depth: even if a real name on chart B happened to share a token with chart
-    # A's CALLSIGN, that must not pair — A's callsign is excluded, so there is no A-side
-    # token to match. (B's "site1" is a real, if odd, name token; A's is a callsign token.)
-    seed_patient(pg_conn, PA, callsign_names=[("Unknown-ed-site1-2026-07-03-00ab", 10)])
-    seed_patient(pg_conn, PB, names=[("Site1 Person", 20)])
+def test_a_real_name_equal_to_a_callsign_token_does_not_pair(pg_conn):
+    # Defense-in-depth: a callsign is a single whitespace-free token, so the only way a real
+    # name could collide with chart A's callsign is by being that exact one-token string.
+    # Force it: chart B's LEGAL name is the identical string. Without the exclusion this
+    # shared token would block the pair; with it, A's callsign is dropped so there is no
+    # A-side token to match, and no pair is produced.
+    callsign = "Unknown-ed-site1-2026-07-03-00ab"
+    seed_patient(pg_conn, PA, callsign_names=[(callsign, 10)])
+    seed_patient(pg_conn, PB, names=[(callsign, 20)])
     assert canonical_pair(PA, PB) not in _pairs(pg_conn)

@@ -87,11 +87,16 @@ this site today?" — a **global-coordination read that is not partition-safe**.
 Doe registration is *"local, partition-safe by construction."* Two offline nodes at the same site would
 both compute `-A` and mint a colliding callsign.
 
-Callsigns are excluded from matching and the UUID is the real identity, so a duplicate callsign string is
-**cosmetic, never a safety issue** — but "cosmetic collision that reads like a coincidence" is still worse
-than "obviously-distinct label." So the suffix is derived from the minted UUID (a short uppercase hex
-fragment): globally unique with **zero coordination**, partition-safe by construction. The readable
-sequential-suffix option is recorded as deferred (it needs a per-day count query and a partition story).
+Callsigns are excluded from *matching* and the UUID is the real identity, so a duplicate callsign string is
+never a false-merge issue — but it is **not merely cosmetic**: two live unidentified charts with an
+IDENTICAL worklist header is a wrong-chart hazard (paper-parity, principle 3 — paper "Unknown male bay 3"
+folders are physically distinct), so the collision must be made **negligible**, not tolerated. The suffix is
+derived from the minted UUID (the last **8 hex characters** of its simple form = 32 bits of entropy;
+`SUFFIX_HEX_LEN` in `cairn-node::john_doe`): globally unique with **zero coordination**, partition-safe by
+construction, and colliding only ~1 in 4.3 billion per same-site/same-day pair. (An earlier draft used 4 hex
+/ 16 bits — ~1 in 65 536, enough to flake the coexistence test and, worse, to occasionally print two
+identical bedside headers; widened during review.) The readable sequential-suffix option is recorded as
+deferred (it needs a per-day count query and a partition story).
 
 ### 4. Registration class is C4's pending marker — no new "unidentified" flag
 
@@ -129,6 +134,13 @@ it removes only the placeholder signal, never a real one.
   deferred behind the UUID-derived suffix (see design call 3).
 - **A human-tagged `placeholder` name use** beyond the system callsign — the matcher exclusion is written
   as a reserved *set* so this joins by adding one member, but no UI/authoring path is built for it here.
+- **A mechanical guard coupling the two placeholder-use constants** — `cairn-event::john_doe::CALLSIGN_USE`
+  (Rust, the emitter) and `matcher…pipeline.db.PLACEHOLDER_NAME_USES` (Python, the excluder) are a
+  hand-maintained mirror. Note the drift direction is **not recall-safe**: if a use Rust emits as a
+  placeholder is *missing* from the Python set, those callsign names UNDER-exclude, re-enter the feature
+  space, and two same-site/same-day John Does can block+score+auto-band into a **false merge** (the
+  dangerous direction, §5.2). So any addition on the Rust side MUST be mirrored in Python; a cross-language
+  test asserting set-equality is the intended guard (deferred, documented on both sides).
 
 ## Files
 

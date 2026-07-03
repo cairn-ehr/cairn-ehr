@@ -33,16 +33,20 @@ same site on the same day **never false-match on shared callsign tokens** ("unkn
 load-bearing calls:** the callsign is a **real, displayed name** in `patient_name` (db/012's unidentified-patient
 fallback makes it the header winner) — §5.4's "exclude from feature space" is therefore a **query-time exclusion in the
 advisory matcher**, the correct layer (§5.2/§5.13, principle 12), never a floor rule or a decision to withhold the name;
-the suffix is **UUID-derived** (last 4 hex), **partition-safe with zero coordination** (a readable per-site-per-day A/B/C
-counter would race under partition — §5.4 is local-by-construction), and a duplicate callsign string is cosmetic (the
-UUID is identity, the callsign is excluded from matching); registration-class = C4's pending marker (no new "unidentified"
-flag). The advisory exclusion is enough because it removes the pair from **blocking**, so a callsign pair is never even
-generated, never scored, never auto-banded (defense-in-depth for the C2b auto-link path). TDD: 8 pure callsign tests
+the suffix is **UUID-derived** (last **8 hex = 32 bits**, `SUFFIX_HEX_LEN`), **partition-safe with zero coordination** (a
+readable per-site-per-day A/B/C counter would race under partition — §5.4 is local-by-construction); a duplicate callsign
+string is never a false-merge issue (the UUID is identity, the callsign is excluded from matching) but is **not merely
+cosmetic** — two identical bedside/worklist headers are a wrong-chart hazard (principle 3), so 32 bits sizes the collision
+to ~1-in-4.3-billion-per-pair rather than tolerating it; registration-class = C4's pending marker (no new "unidentified"
+flag). The **load-bearing** exclusion is the **scoring** one (`load_candidate`): a callsign is a single whitespace-free
+token, so distinct callsigns never share a blocking token anyway — the blocking exclusion is cheap defense-in-depth for
+the rare identical-callsign collision on the C2b auto-link path, not what keeps two ordinary John Does apart. TDD: 8 pure callsign tests
 (`cairn-event`) + 4 pure builder + 3 DB-gated integration tests (`cairn-node/tests/john_doe.rs`: unconfirmed chart ·
 callsign is a placeholder-use display-winner · two John Does coexist distinct) + 4 DB-gated matcher tests
-(`test_john_doe_exclusion.py`: two callsigns → no pair · callsign excluded from scoring · a real name on the SAME chart
-still blocks/scores · a real token vs a callsign token does not pair); `conftest.seed_patient` gained a `callsign_names`
-param. Full `cargo test --workspace` **379 passed / 0 failed** + workspace clippy clean; matcher **207 passed** (DB) /
+(`test_john_doe_exclusion.py`: two IDENTICAL callsigns → no pair · callsign excluded from scoring · a real name on the
+SAME chart still blocks/scores · a real name equal to a callsign token does not pair — the blocking tests force the
+shared-token condition so they actually exercise the exclusion, not pass vacuously); `conftest.seed_patient` gained a
+`callsign_names` param. Full `cargo test --workspace` **379 passed / 0 failed** + workspace clippy clean; matcher **207 passed** (DB) /
 164 passed (pure); ruff clean — all on a **PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container this session
 (pgrx 0.18.1, `--features pg16`, `postgresql-server-dev-16` headers, local-TCP `trust`). **End-to-end CLI smoke:**
 `register-john-doe` on a provisioned node minted `Unknown-ed-bay3-2026-07-03-dc88`, chart *unconfirmed*, callsign stored
@@ -51,14 +55,31 @@ param. Full `cargo test --workspace` **379 passed / 0 failed** + workspace clipp
 `next_hlc` HLC-tick helper into a shared `db::next_hlc` (`auto_apply` + `john_doe` now both call it — house-rule #4);
 (b) dropped a dead `.to_ascii_uppercase()` in `suffix_from_uuid` (the sanitizer lower-cases it anyway — doc/output now
 agree); (c) made `sanitize_part` Unicode-aware (was ASCII-only, folding non-Latin labels to "unknown" — a cultural-
-capture smell; now preserves any script). **Deferred (recorded):** the **clinician-observed evidence assertions**
+capture smell; now preserves any script). **Review round 2** (PR #123 code review — 5 findings addressed): (1) widened
+the callsign suffix from **4 hex → 8 hex (16→32 bits)** — 4 hex collided ~1/65 536, a real coexistence-test flake AND a
+bedside wrong-chart hazard (identical worklist headers, principle 3), not "cosmetic"; (2) made `ensure_registration_actor`'s
+enrolment guard **kind-AGNOSTIC** (`WHERE signing_key_id=$1`, was `AND kind='device'`) — the narrow guard could add a
+2nd actor to a key already enrolled under another kind, and db/005 NULLs `actor_id` for EVERY event a dual-mapped key
+authors node-wide (silent, irreversible attribution loss); (3) rewrote the two **blocking** matcher tests to force the
+shared-token condition (identical callsign; a real name equal to a callsign token) — they were vacuous because a callsign
+is a single whitespace-free token, so distinct callsigns never share a blocking token (the load-bearing exclusion is the
+**scoring** one), and corrected the false "share the tokens unknown/ed/site1/date" rationale in `db.py` + the design doc;
+(4) corrected the **inverted drift note** — a Python placeholder-set *omission* UNDER-excludes → false-**merge** (dangerous
+direction), NOT "reduced recall"; (5) documented the eval `shares_blocking_key` placeholder-blind spot + filed **issue #124**
+(hoist `PLACEHOLDER_NAME_USES` into a pure shared module + a Rust↔Python set-equality guard; the pure-stdlib eval cannot
+import the psycopg-bound constant, and a 3rd hand-copy would worsen the very drift hazard). **All suites re-run green on
+a PG18.1 + cairn_pgx 0.2.0 rig (:5532):** `cargo test --workspace` all-pass (incl. the 3 DB-gated `john_doe.rs`) + workspace
+clippy clean; matcher **207 passed** (DB) / 167 (pure) + ruff clean — and the two rewritten blocking tests were proven
+non-vacuous (an identical-callsign pair blocks WITHOUT the exclusion, drops WITH it). **Deferred (recorded):** the
+**clinician-observed evidence assertions**
 (estimated age with basis → dob, observed sex → sex reuse existing fields; photo/marks/belongings/EMS context need a new
 field home — larger, separate slice); the **"prior history now available — N allergies, M meds" push-alert** on link
 (§5.12, no notification tier yet); the **search-before-create registration-class funnel** (§5.3/§5.8, UI/API tier); a
 **readable sequential callsign suffix** (`-A`/`-B`; needs a partition-safe per-day count); wiring `identify`→optional-link
 into one resolution flow; a **cross-language guard** for the `CALLSIGN_USE`↔`PLACEHOLDER_NAME_USES` constant (documented
-both sides, safe failure mode = reduced recall never a false merge, so noted not built). **§5.4 John-Doe slice A (callsign
-+ matcher exclusion) is now BUILT.**
+both sides; drift is **NOT** recall-safe — a Python set *missing* a use Rust emits UNDER-excludes → false-merge risk, the
+dangerous direction, so any Rust addition MUST be mirrored; a set-equality test is the intended guard, deferred not built).
+**§5.4 John-Doe slice A (callsign + matcher exclusion) is now BUILT.**
 
 **Prior session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
 (brainstorm→spec→plan→inline-TDD; spec+plan under

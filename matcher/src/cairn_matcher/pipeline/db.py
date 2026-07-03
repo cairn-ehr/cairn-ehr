@@ -18,14 +18,28 @@ from cairn_matcher.records import CandidateRecord
 # §5.4 placeholder-name exclusion. A "John Doe" chart carries a system-generated CALLSIGN
 # (`Unknown-ED-<site>-<date>-<suffix>`, cairn-event::john_doe) as a real, displayed name so
 # the header is never blank — but §5.4 requires the matcher EXCLUDE placeholder names from
-# its feature space: two different unidentified patients registered at the same site on the
-# same day must never false-match on their shared callsign tokens ("unknown", the site, the
-# date). The carrier is the name's `use` facet (db/012 folds it to `use_key`); `callsign` is
-# a system-set, culture-neutral reserved token. This is an ADVISORY exclusion (the matcher
-# owns its feature space, §5.2/§5.13) — the callsign stays a normal name in `patient_name`;
-# it is only withheld from BLOCKING and SCORING here. A reserved SET (not one literal) so a
-# future placeholder kind joins by adding one member — additive, never a rewrite. The
-# mirror of cairn-event::john_doe::CALLSIGN_USE.
+# its feature space so two unidentified patients can never match via their callsigns. The
+# carrier is the name's `use` facet (db/012 folds it to `use_key`); `callsign` is a
+# system-set, culture-neutral reserved token. This is an ADVISORY exclusion (the matcher owns
+# its feature space, §5.2/§5.13) — the callsign stays a normal name in `patient_name`; it is
+# only withheld from SCORING (load_candidate) and BLOCKING (the name_tokens CTE) here.
+#
+# Which of the two is load-bearing: the SCORING exclusion. The blocking tokenizer splits on
+# WHITESPACE and a callsign is hyphen-joined with none, so a whole callsign is a SINGLE
+# token; two distinct callsigns thus never share a blocking token to begin with. The blocking
+# exclusion earns its keep only in the rare IDENTICAL-callsign collision (same site/day/suffix
+# — see cairn-node SUFFIX_HEX_LEN) and as cheap defense-in-depth; it is NOT what stops two
+# ordinary John Does from grouping (they already don't). The scoring exclusion is what keeps
+# a callsign out of the scorer's name feature.
+#
+# A reserved SET (not one literal) so a future placeholder kind joins by adding one member —
+# additive, never a rewrite. This is the hand-maintained mirror of
+# cairn-event::john_doe::CALLSIGN_USE, with NO mechanical guard coupling the two (a deferred
+# item). Drift is NOT recall-safe in the dangerous direction: if a use Rust emits as a
+# placeholder is MISSING here, those callsign names UNDER-exclude — they re-enter the feature
+# space, and two same-site/same-day John Does can then block+score+auto-band into a FALSE
+# MERGE (§5.2's "false merge >> false split"). So an addition on the Rust side MUST be
+# mirrored here; the safe-failure framing ("only lost recall") does not hold for an omission.
 PLACEHOLDER_NAME_USES = frozenset({"callsign"})
 # The parameter form psycopg binds to a Postgres text[] for `use_key <> ALL(%s)`. Sorted so
 # the bound array is deterministic (readability/log stability); order is irrelevant to ALL.
@@ -144,9 +158,12 @@ WITH name_tokens AS (
     -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
     -- are different code points and a true duplicate is never even grouped. Mirrors the
     -- adapter's _normalize_token (NFC) on the Python comparison side.
-    -- Exclude placeholder-use names (callsigns) from BLOCKING (§5.4): a John Doe's
-    -- callsign tokens must never generate a candidate pair. The `name+year` pass reads
-    -- this same CTE, so it inherits the exclusion for free.
+    -- Exclude placeholder-use names (callsigns) from BLOCKING (§5.4). A callsign is a
+    -- single whitespace-free token, so this bites only when two callsign STRINGS are
+    -- identical (the rare same-suffix collision) — defense-in-depth, not what keeps two
+    -- ordinary John Does apart (distinct callsigns are already distinct tokens; the
+    -- load-bearing exclusion is the scoring one in load_candidate). The `name+year` pass
+    -- reads this same CTE, so it inherits the exclusion for free.
     SELECT DISTINCT patient_id, token
     FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
     WHERE token <> '' AND use_key <> ALL(%s)

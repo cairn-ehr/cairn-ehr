@@ -815,19 +815,27 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ensure the node's signing key is enrolled as a `device` registration actor, so it may
-/// author the additive §5.4 John-Doe registration events. Idempotent (mirrors
-/// `matcher_actor`'s `actor_current` guard): it enrolls only when this key is not already a
-/// live device actor. An owner ceremony — the runtime `cairn_agent` role deliberately
+/// Ensure the node's signing key is enrolled as an actor that may author the additive §5.4
+/// John-Doe registration events. Enrolls a `device` actor ONLY when this key is not already
+/// enrolled under ANY kind. An owner ceremony — the runtime `cairn_agent` role deliberately
 /// cannot enroll. A real clinical UI would attach the operating clerk's *human* actor
 /// instead; this device-key path is the headless-node/CLI convenience.
+///
+/// The existence check is deliberately kind-AGNOSTIC. `submit_event` resolves a signer to an
+/// actor purely by `signing_key_id` (kind matters only for attestation), and if one key maps
+/// to MORE than one `actor_current` row it sets `actor_id = NULL` for EVERY event that key
+/// authors node-wide (db/005 `array_length(v_actor_ids, 1) = 1`), silently and irreversibly
+/// degrading attribution. A kind-scoped `AND kind = 'device'` guard would happily add a
+/// second actor to a key already enrolled as (say) a matcher `agent` or a `human`, tripping
+/// exactly that dual-mapping. Keying on `signing_key_id` alone means a key already usable for
+/// authoring is left untouched — never split into two actors.
 async fn ensure_registration_actor(
     db: &tokio_postgres::Client,
     kid: &str,
 ) -> anyhow::Result<()> {
     let already: bool = db
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1 AND kind = 'device')",
+            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1)",
             &[&kid],
         )
         .await?

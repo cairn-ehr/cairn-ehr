@@ -21,6 +21,14 @@ def name_tokens(record: Mapping) -> set[str]:
     Mirrors the SQL 'name' blocking pass (lower(normalize(value, NFC)) split on
     whitespace) so this predicate agrees with what generate_candidate_pairs actually
     blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block.
+
+    KNOWN LIMITATION (issue-tracked): the real CTE now also excludes placeholder-use
+    (callsign) names (`use_key <> ALL(PLACEHOLDER_NAME_USES)`, §5.4), but this mirror does
+    NOT — so if a synthetic record ever carried a callsign-use name this predicate would
+    over-claim recoverability. It is safe TODAY only because the generator emits no `use`
+    field and never mints callsigns. The clean fix is to hoist PLACEHOLDER_NAME_USES into a
+    pure (psycopg-free) shared module both this eval and pipeline.db import, rather than add
+    a third hand-copied constant here (which would worsen the cross-language drift hazard).
     """
     tokens: set[str] = set()
     for n in record.get("names", ()):
