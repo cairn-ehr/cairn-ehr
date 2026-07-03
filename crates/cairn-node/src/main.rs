@@ -263,6 +263,13 @@ enum Cmd {
         /// The hex `digest` shown by `cairn-node quarantine`.
         digest: String,
     },
+
+    /// Auto-apply every pending `auto_candidate` match proposal (§5.2/§5.7 C2b) as a
+    /// matcher-authored, un-attested, recallable identity link. OWNER ceremony: point
+    /// `--conn` at a role that may run `enroll_actor` (the per-epoch matcher actor is
+    /// enrolled on first sight), NOT the unprivileged runtime role. Re-checks the db/016
+    /// veto per pair; a since-vetoed pair is kicked to human `review` instead of linked.
+    ApplyAutoCandidates,
 }
 
 #[tokio::main]
@@ -707,6 +714,42 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             println!("acked node_event {digest} ({n} row) — it no longer pins the floor or fails the pull");
+        }
+        Cmd::ApplyAutoCandidates => {
+            // Owner connection (needs enroll_actor for the per-epoch matcher actor).
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            // Fail fast (legibly) if the DB predates the db/018 identity floor.
+            let has_floor: bool = db
+                .query_one("SELECT to_regclass('public.patient_link') IS NOT NULL", &[])
+                .await?
+                .get(0);
+            if !has_floor {
+                anyhow::bail!(
+                    "this database predates db/018 (no patient_link) — run `cairn-node init` \
+                     to load the identity floor"
+                );
+            }
+            // The matcher keystore lives beside the node key; seal matcher keys under the
+            // same operational passphrase when one is set (else plaintext, like a
+            // plaintext node key). A matcher key is regenerable, so no recovery escrow.
+            let keystore_dir = cli
+                .key
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("matcher-keys");
+            let secret = std::env::var("CAIRN_KEY_PASSPHRASE").ok().filter(|s| !s.is_empty());
+            let node_origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
+            let s = cairn_node::auto_apply::apply_auto_candidates(
+                &mut db,
+                &keystore_dir,
+                secret.as_deref(),
+                &node_origin,
+            )
+            .await?;
+            println!(
+                "auto-apply: applied {}  vetoed->review {}  skipped {}",
+                s.applied, s.vetoed_to_review, s.skipped
+            );
         }
     }
     Ok(())
