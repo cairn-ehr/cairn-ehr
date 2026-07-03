@@ -172,7 +172,7 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
 /// `node_origin`. Authoring is single-threaded on a node, so a tick->sign->submit per event
 /// is safe. The single home for every in-node authoring path — auto_apply's C2b link and
 /// john_doe's §5.4 registration both call this, rather than each re-writing the round-trip.
-pub(crate) async fn next_hlc(
+pub async fn next_hlc(
     client: &Client,
     node_origin: &str,
 ) -> anyhow::Result<cairn_event::Hlc> {
