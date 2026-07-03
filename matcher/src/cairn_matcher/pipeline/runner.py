@@ -10,6 +10,7 @@ duplicate-sweep is the declared backstop for any signal missed at the noise floo
 import uuid
 
 from cairn_matcher.orchestrator import field_comparisons
+from cairn_matcher.pipeline.alias import known_alias_evidence
 from cairn_matcher.pipeline.banding import (
     DEFAULT_THRESHOLDS,
     Band,
@@ -58,7 +59,17 @@ def propose(
     comparisons = field_comparisons(rec_a, rec_b)
     match_score = score(comparisons, weights)
     vetoes = db.match_veto(conn, a, b)
-    band_value = band(match_score, vetoes, thresholds)
+
+    # §5.5(a) known-alias recognition: does the pair match (partly) on a name a chart has
+    # REPUDIATED as known-false? This is advisory evidence for the human reviewer — never a
+    # suppression and never an auto-link (banding forces REVIEW when present).
+    alias_evidence = known_alias_evidence(
+        str(a), rec_a.names.value if rec_a.names else None, db.load_aliases(conn, a),
+        str(b), rec_b.names.value if rec_b.names else None, db.load_aliases(conn, b),
+    )
+    band_value = band(
+        match_score, vetoes, thresholds, has_known_alias=bool(alias_evidence)
+    )
     if band_value is None:
         # Nothing to persist — but the load/veto SELECTs opened a read transaction. Close
         # it so a batch driver iterating many sub-threshold pairs does not pin the xmin
@@ -66,7 +77,7 @@ def propose(
         conn.rollback()
         return None
     low, high = canonical_pair(a, b)
-    payload = build_payload(match_score, vetoes, band_value, weights)
+    payload = build_payload(match_score, vetoes, band_value, weights, alias_evidence)
     db.upsert_proposal(conn, low, high, payload)
     # Commit boundary owned here: a batch caller wrapping propose() is not silently
     # committed mid-transaction by a helper function it doesn't control.

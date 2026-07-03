@@ -40,6 +40,19 @@ def load_candidate(conn, patient_id) -> CandidateRecord:
     )
 
 
+def load_aliases(conn, patient_id) -> frozenset[str]:
+    """Read one chart's repudiated known-alias name strings from patient_alias_pool (db/025).
+
+    The view is reason-free (ADR-0006 confidentiality split): only the name `value` is
+    exposed, never the forensic `reason`. The matcher recognises a returning fabricated
+    persona (§5.5(a)) by these values; how a value got there (the C5 suppressing event
+    floor) is not this module's concern — it only reads the projection.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM patient_alias_pool WHERE patient_id=%s", (patient_id,))
+        return frozenset(row[0] for row in cur.fetchall())
+
+
 def match_veto(conn, a, b) -> list[VetoFinding]:
     """Call the safety-critical in-DB hard-veto floor (db/016) and return its rows.
 
