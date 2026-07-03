@@ -3,15 +3,51 @@
 **Session date:** 2026-07-03 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
-generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator) + the
+generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator · **the matcher
+now consumes `patient_alias_pool` (known-alias evidence) — done this session**) + the
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
-known-alias pool — done this session** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE, and C5 adds
+known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE, and C5 added
 the first *suppressing* identity event); remaining B3 weight-learning / locale packs / A-B pass-toggle + identity
 **C5+** (`reattribute` — waits on a clinical-note surface — + the full §5.4 John-Doe registration subsystem) next.
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-07-03) — identity C5, `repudiate` + the known-alias pool** (brainstorm→spec→plan→inline-TDD;
+**This session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
+(brainstorm→spec→plan→inline-TDD; spec+plan under
+`docs/superpowers/{specs,plans}/2026-07-03-matcher-consume-alias-pool*`). Closes C5's deferred matcher wiring — the
+`patient_alias_pool` VIEW C5 built was inert. **Advisory Python only (`matcher/…/pipeline/{alias,db,runner,banding}.py`);
+NO `db/` floor, NO SCHEMA/ADR/spec bump.** **The load-bearing finding:** because C5 left db/012's `patient_name`
+retained set physically untouched, a struck name is **still a blocking token *and* still scored**, so the
+returning-fabricated-persona pair (chart A's struck alias vs a new chart B registered under it) **already** gets
+proposed — consuming the alias pool does **not** enable a missing match. Its genuine value is **explainability /
+paper-parity**: the proposal now carries a `known_alias` evidence entry restoring the registry's "known alias" flag to
+the worklist. **The deliberate clinical call — FLAG, never suppress:** the matcher **cannot** distinguish a returning
+fabricated persona from a real, different bearer of that false name (from the name alone they are identical), so
+suppression (scope option "stop matching the false name") would kill the very §5.5(a) recognition it exists to serve;
+only a Human can adjudicate (§5.7). Mechanism: new pure **`known_alias_evidence`** (`pipeline/alias.py`) recognises a
+repudiated alias corroborated by the *other* chart in **normalized space** (NFC + casefold token-bag, **reusing the
+adapter's `_name_bag`** so "same name" is byte-identical to the scorer — no second, drifting definition; match is
+normalized-exact, not fuzzy — fuzzy is deferred); **`band()` gains `has_known_alias` → always REVIEW** (never dropped
+below threshold, never auto-linked on a name a chart declared false — the §5.7 "Human" reservation, mirroring the
+existing shared-identifier veto-rescue; can only ever *surface*, never auto-reject); `build_payload` appends the
+entries; `runner.propose` reads the **reason-free** `patient_alias_pool` (ADR-0006 confidentiality split preserved —
+value only, never the forensic `reason`) for both charts and threads it through. TDD: 6 pure alias tests + 4 banding
+tests + 3 DB-gated e2e (`test_alias_pipeline.py`: `load_aliases` reads the view · returning-alias persists REVIEW with
+the `known_alias` entry · no-repudiation → no tag); `conftest` extended to apply **db/018–025** (was capped at 017) +
+truncate `name_repudiation`, with a `seed_repudiation` helper (the C5 event floor is proven in
+`identity_repudiate.rs`; this suite tests **consumption** only). Full matcher suite **199 passed / 0 skipped** with a
+**PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container this session (pgrx 0.18.1, `--features pg16`,
+`postgresql-server-dev-16` headers, local-TCP `trust`); pure `uv run pytest` **164 passed / 33 skipped**; ruff clean.
+**Deferred (recorded):** fuzzy/edit-distance alias recognition (this cut is normalized-exact; the scorer's fuzzy name
+comparison still runs on the retained-set names, so a near-miss alias is not lost, just not *tagged*); a dedicated
+`alias` blocking pass (**zero recall today** — the name-token pass already generates the identical pair; pure
+future-proofing, only earns its keep if a later slice stops keeping struck names in the scored retained set); any
+scoring-weight treatment of known-false names (declined by design — a genuine re-weighting needs B3 weight-learning
+data + a spec call, and risks suppressing true returning-persona recognition); consuming the alias pool in the C2b
+auto-apply path (correct by construction — a known-alias match forces REVIEW, so it never reaches auto-apply).
+**The matcher-consumes-`patient_alias_pool` wiring is now BUILT.**
+
+**Prior session (2026-07-03) — identity C5, `repudiate` + the known-alias pool** (brainstorm→spec→plan→inline-TDD;
 spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c5-repudiate-alias-pool*`). The **first
 *suppressing*** identity event — C1–C4 were all additive/annotative; `repudiate` strikes a known-false name from the
 display projection. The §5.5(a) **fabricated-persona** case: a patient presented under a deliberately false name; once
@@ -487,7 +523,8 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   build against demographics) + the full §5.4 John-Doe registration subsystem (callsign, clinician-observed evidence
   assertions, matcher re-run); reattribute composes one more *under-review* source into the `chart_trust` VIEW when it
   lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
-  a **chart-history VIEW** rendering struck names; **matcher wiring** consuming `patient_alias_pool`. Deferred: an **A/B pass-toggle**
+  a **chart-history VIEW** rendering struck names; ~~**matcher wiring** consuming `patient_alias_pool`~~ **(DONE this
+  session — known-alias evidence; flag-never-suppress; fuzzy recognition + a dedicated `alias` blocking pass deferred)**. Deferred: an **A/B pass-toggle**
   in `generate_candidate_pairs` (one command instead of git-revert for compound-key before/after — the piece that
   would make the volume generator's numbers a quantitative comparison); variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto

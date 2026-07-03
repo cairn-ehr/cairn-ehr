@@ -23,13 +23,19 @@ _SCHEMA_FILES = [
     "006_recall", "007_node_federation", "009_node_supersede_and_restore",
     "010_demographics", "011_demographics_fields", "012_demographics_names",
     "013_demographics_sex_gender", "014_demographics_address", "015_globalise_twin",
-    "016_match_veto", "017_match_proposal",
+    "016_match_veto", "017_match_proposal", "018_identity_linkage", "019_apply_proposal",
+    "020_apply_remote_event", "021_sync_quarantine", "022_node_event_quarantine",
+    "023_identity_dispute", "024_identity_identify", "025_identity_repudiate",
 ]
 
 _DB_DIR = Path(__file__).resolve().parents[2] / "db"
 
-# Projection tables a test seeds / the fixture truncates between tests.
-_PROJECTION_TABLES = ["match_proposal", "patient_identifier", "patient_demographic", "patient_name"]
+# Projection tables a test seeds / the fixture truncates between tests. name_repudiation
+# (db/025) backs the patient_alias_pool view the known-alias matcher reads.
+_PROJECTION_TABLES = [
+    "match_proposal", "patient_identifier", "patient_demographic", "patient_name",
+    "name_repudiation",
+]
 
 
 def _apply_schema(conn) -> None:
@@ -99,4 +105,20 @@ def seed_patient(conn, patient_id, *, dob=None, sex=None, names=(), identifiers=
                 "VALUES (%s,%s,%s,%s,%s,NULL,NULL,'seed',0,0,'seed') ON CONFLICT DO NOTHING",
                 (patient_id, system, match_key, value, match_key),
             )
+    conn.commit()
+
+
+def seed_repudiation(conn, subject, value, *, reason="test fabricated persona"):
+    """Insert a name_repudiation row directly, backing patient_alias_pool for a chart.
+
+    Bypasses the C5 suppressing-event floor (submit_event + human attestation) on purpose:
+    that floor is proven in crates/cairn-node/tests/identity_repudiate.rs. These matcher
+    tests exercise CONSUMPTION of the resulting projection, not how it is written.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO name_repudiation (subject, value, reason, hlc_wall, hlc_counter, origin) "
+            "VALUES (%s,%s,%s,0,0,'seed') ON CONFLICT DO NOTHING",
+            (subject, value, reason),
+        )
     conn.commit()

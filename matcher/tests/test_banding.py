@@ -112,3 +112,35 @@ def test_build_payload_serializes_evidence_and_vetoes():
     assert payload.evidence[0]["level"] == "EXACT"
     assert payload.veto_findings[0]["severity"] == "hard_veto"
     assert payload.matcher_version == matcher_version()
+
+
+# --- known-alias signal (§5.5(a) returning fabricated persona) --------------------------
+# A match on a name a chart has REPUDIATED as known-false is exactly the "recognised
+# returning persona" signal. The matcher cannot tell a returning persona from a real bearer
+# of that false name, so §5.7 reserves the call for a Human: always surface for REVIEW,
+# never auto-link, never silently drop.
+
+
+def test_known_alias_below_threshold_is_forced_to_review():
+    # Sub-threshold, no veto -> normally None; a known-alias match must not be dropped.
+    assert band(_score(1.0), [], has_known_alias=True) is Band.REVIEW
+
+
+def test_known_alias_high_score_is_capped_at_review_never_auto():
+    # A pair must never AUTO-link on the strength of a name one chart declared false.
+    assert band(_score(9.0), [], has_known_alias=True) is Band.REVIEW
+
+
+def test_known_alias_flag_default_off_preserves_existing_behavior():
+    # Regression: the flag defaults off; every existing band outcome is unchanged.
+    assert band(_score(9.0), []) is Band.AUTO_CANDIDATE
+    assert band(_score(1.0), []) is None
+
+
+def test_build_payload_appends_known_alias_evidence():
+    score = _score(1.0)
+    alias_ev = ({"kind": "known_alias", "value": "John Fakename", "alias_of": "abc"},)
+    payload = build_payload(score, [], Band.REVIEW, alias_evidence=alias_ev)
+    # Field evidence still present, with the known-alias entry appended after it.
+    assert payload.evidence[0]["field"] == "name"
+    assert payload.evidence[-1] == {"kind": "known_alias", "value": "John Fakename", "alias_of": "abc"}

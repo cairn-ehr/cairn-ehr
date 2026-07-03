@@ -69,6 +69,13 @@ def sweep(
     from cairn_matcher.pipeline import db
 
     pairs, skipped_raw = db.generate_candidate_pairs(conn, max_block_size=max_block_size)
+    # Pre-load the §5.5(a) known-aliases for the whole candidate-patient set in ONE query,
+    # still inside the generate read snapshot. This replaces two per-pair alias SELECTs in
+    # propose() (which would re-fetch a chart's aliases once per pair it appears in, and be
+    # two empty SELECTs per pair in the common no-repudiation case) with a single scoped,
+    # PK-indexed read; propose() then reads aliases from this map, not the DB.
+    candidate_patients = {pid for pair in pairs for pid in pair}
+    aliases = db.load_aliases_for(conn, candidate_patients)
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 
@@ -77,7 +84,9 @@ def sweep(
     errors: list[SweepError] = []
     for low, high in pairs:
         try:
-            result = propose(conn, low, high, thresholds=thresholds, weights=weights)
+            result = propose(
+                conn, low, high, thresholds=thresholds, weights=weights, aliases=aliases
+            )
         except Exception as exc:  # noqa: BLE001 — batch must survive one bad pair (house rule #5)
             # Clear the aborted transaction so the connection is usable for the next pair.
             conn.rollback()

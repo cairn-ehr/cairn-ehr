@@ -264,8 +264,28 @@ agent-attested repudiation refused** — the suppressing "Human" floor; four flo
 (3-agent adversarial pass, 0 hard bugs): `patient_alias_pool` made reason-free + base overlay not agent-granted (no
 cross-patient forensic-`reason` leak, ADR-0006); `reason` NOT NULL; HLC-blind + agent-attested-refused tests added.
 **Deferred:** a reversal / de-repudiation event (the overlay is HLC-versioned so it composes without a
-rewrite); a chart-history VIEW rendering struck names (data already present); matcher wiring that *consumes*
-`patient_alias_pool`; `reattribute` (needs a clinical-note surface that does not yet exist — premature).
+rewrite); a chart-history VIEW rendering struck names (data already present); ~~matcher wiring that *consumes*
+`patient_alias_pool`~~ **(done — slice 19, below)**; `reattribute` (needs a clinical-note surface that does not yet
+exist — premature).
+
+**Slice 19 — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)** (advisory Python;
+`matcher/src/cairn_matcher/pipeline/{alias,db,runner,banding}.py`; **no `db/` floor, no SCHEMA/ADR/spec bump**).
+Closes C5's deferred matcher wiring. **Key finding:** because C5 left db/012's `patient_name` retained set
+physically untouched, a struck name is still a blocking token *and* still scored, so the returning-persona pair
+**already** gets proposed — consuming the alias pool does **not** enable a missing match. Its genuine value is
+**explainability / paper-parity**: the proposal now carries a `known_alias` evidence entry restoring the registry's
+"known alias" flag to the worklist. New pure `known_alias_evidence` (`pipeline/alias.py`) recognises a repudiated
+alias corroborated by the other chart in **normalized space** (NFC + casefold token-bag, reusing the adapter's
+`_name_bag` so "same name" is byte-identical to the scorer — no drift); `band()` gains `has_known_alias` → always
+**REVIEW** (never dropped below threshold, never auto-linked on a name a chart declared false — §5.7 "Human");
+`build_payload` appends the entries; `runner.propose` reads the reason-free `patient_alias_pool` (ADR-0006
+confidentiality preserved) for both charts and threads it through. **Flag, never suppress** — the deliberate call:
+the matcher cannot distinguish a returning fabricated persona from a real, different bearer of that false name, so
+suppression would kill the very §5.5(a) recognition it exists to serve; only a human can adjudicate. 6 pure alias
+tests + 4 banding tests + 3 DB-gated e2e (`test_alias_pipeline.py`); conftest extended to apply db/018–025.
+**Deferred (recorded):** fuzzy/edit-distance alias recognition (this cut is normalized-exact); a dedicated `alias`
+blocking pass (zero recall today — the name-token pass already generates the identical pair; pure future-proofing);
+any scoring-weight treatment of known-false names (declined by design — needs B3 weight-learning + a spec call).
 
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
