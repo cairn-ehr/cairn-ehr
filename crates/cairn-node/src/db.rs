@@ -37,6 +37,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // and a separate table so a node-plane requeue is unambiguously routed
     // through apply_remote_node_event, never the clinical door.
     ("022_node_event_quarantine", include_str!("../../../db/022_node_event_quarantine.sql")),
+    // §5.7 identity `dispute` + the chart trust-state projection (C3): two additive
+    // dispute event types through the reused submit_event door, a chart_dispute standing
+    // overlay, and the chart_trust (confirmed / under-review) projection surfaced on
+    // person_chart — the projection-side contract the rest of the §5.7 algebra composes into.
+    ("023_identity_dispute", include_str!("../../../db/023_identity_dispute.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

@@ -191,14 +191,37 @@ recall precision) + end-to-end CLI smoke; full cairn-node suite + workspace clip
 scheduler (operator-invoked CLI only); matcher key sealed but no recovery escrow (regenerable); ADR-0028 role enum
 still not DB-enforced ([#96](https://github.com/cairn-ehr/cairn-ehr/issues/96)).
 
+**Slice 16 — §5.7 `dispute` + the chart trust-state projection (piece C3)** (`db/023_identity_dispute.sql` wired into
+`db.rs`; `crates/cairn-event/src/identity.rs` dispute builders): the patient-initiated "I was never there" front door
+(§5.5(b) identity theft) **and** the §5.7 projection-side contract — the chart **trust state** (*confirmed /
+under-review*) — the keystone that C1 explicitly deferred and that the rest of the algebra composes into. Two
+**additive** dispute event types (`identity.dispute.asserted` / `.resolved`) through the reused `submit_event` door
+(low-ceremony like the C1 link; a dispute annotates trust, never erases/moves/blocks — attestation only if a
+responsibility-bearing contributor is named); a culture-neutral `cairn_check_dispute_assertion` structural floor +
+HARD-required legibility twin; a `chart_dispute` standing overlay keyed by the dispute's own id (HLC-latest wins,
+converges out-of-order — the C1 `patient_link` shape, but a single-row fact so no BFS/oversize guard); a `chart_trust`
+effective-state **VIEW** shaped so `identify`/`reattribute`/the §5.2 coherence check ADD source branches later (never a
+rewrite); surfaced via a `person_chart_trust` view **composing on top of** C1's `person_chart` (reusing its
+`person_member` join). **No SCHEMA/ADR/spec bump; `db/018` untouched** (implements settled §5.7). A review finding
+steered the composition: extending `person_chart` in place would need `DROP+CREATE` (since `CREATE OR REPLACE VIEW`
+cannot shrink an already-extended view across the `connect_and_load_schema` reload), and a bare `DROP` would abort
+node boot once any dependent view sits on `person_chart` — so a separate composing view keeps `person_chart`
+droppable-free. 3 pure builder unit tests + 14
+DB-gated integration tests (accept, HLC overlay, out-of-order convergence, multi-dispute resolve, idempotent
+re-assert, dispute-before-chart safety signal, five floor rejections); full workspace suite + clippy green on PG18 /
+cairn_pgx 0.2.0. Deferred: the *unconfirmed* (identity-pending) state + registration classes / John Doe (C4/C5 with
+`identify`); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate` (alias pool); the §5.2 coherence
+feedback loop; notification/contamination cascade on dispute; person-level trust aggregation (read-surface tier).
+
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
 `generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert). **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
-are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above).
-Remaining: **C3+** — the rest of the §5.7 algebra (identify/repudiate/dispute/reattribute). **Next:**
-weight-learning, C3+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
+are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above) — and
+**C3** — `dispute` + the chart trust-state projection (slice 16, above). Remaining: **C4+** — the rest of the §5.7
+algebra (`identify`/`repudiate`/`reattribute`). **Next:**
+weight-learning, C4+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
 the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
