@@ -172,14 +172,32 @@ full cairn-node suite green, clippy `--tests` clean. **Additive, no ADR/spec cha
 contributor (needs §7.5 matcher-actor registration — lives in provenance string for now); a CLI subcommand +
 production human-key custody (ADR-0011).
 
+**Slice 15 — §5.2/§5.7 auto-apply of the `auto_candidate` band (piece C2b)** (`crates/cairn-node/src/matcher_actor.rs`
++ `auto_apply.rs`; `apply-auto-candidates` CLI): a matcher proposal banded `auto_candidate` (score ≥ auto AND zero
+vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted` event —
+**no human in the loop** — through the *same* `submit_event` door. **Rust-only, no `db/` migration, no floor change,
+no SCHEMA/ADR/spec bump** (the db/018 floor already made an identity link additive + `targets_other_author=FALSE`, so
+an un-attested matcher link needs no attestation). Realises the deferred **§7.5 matcher-actor** piece: each distinct
+`matcher_version` is its OWN `agent` actor with its OWN key (auto-enrolled, owner ceremony), pinned under `skill_epoch`
+so the db/006 `events_by_actor_epoch` recall selects a bad config's auto-links **precisely** (contamination cascade).
+Contributor role `suggested` (ADR-0028 contributory, no `responsibility`) ⇒ authorship present, accountability absent
+(principle 10). **Apply-time veto re-check** (the no-human-backstop safety add): a since-vetoed pair is kicked to human
+`review`, never auto-linked over. Status `pending → auto_applied` (distinct from C2's human `applied`) or `→ review`;
+idempotent (only `pending` picked up), respects a human `rejected`. 6 pure + 7 DB-gated tests (enroll-once/reuse,
+distinct-epoch actors, un-attested link + person projection, veto→review, human-rejected skipped, batch+idempotent,
+recall precision) + end-to-end CLI smoke; full cairn-node suite + workspace clippy green. Deferred: no background
+scheduler (operator-invoked CLI only); matcher key sealed but no recovery escrow (regenerable); ADR-0028 role enum
+still not DB-enforced ([#96](https://github.com/cairn-ehr/cairn-ehr/issues/96)).
+
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
 `generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert). **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
-are now BUILT** (slices 13–14, above). Remaining: **C2b** — auto-apply of the `auto_candidate` band (matcher-authored,
-un-attested, recallable link); **C3+** — the rest of the §5.7 algebra (identify/repudiate/dispute/reattribute). **Next:**
-weight-learning, C2b, or C3+; the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
+are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above).
+Remaining: **C3+** — the rest of the §5.7 algebra (identify/repudiate/dispute/reattribute). **Next:**
+weight-learning, C3+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
+the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)
