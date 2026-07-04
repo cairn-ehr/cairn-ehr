@@ -124,19 +124,32 @@ _DOB_PARTS = ("year", "month", "day")
 
 
 def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> AgreementLevel:
-    """Precision-aware DOB agreement that PARSES NO DATE STRINGS.
+    """Precision-aware, range-aware DOB agreement that PARSES NO DATE STRINGS.
 
-    Compares only the parts BOTH sides carry:
+    Point-vs-point (both sides carry only year/month/day, never a range): compares
+    only the parts BOTH sides carry —
       * every shared part equal AND same precision depth -> EXACT
       * every shared part equal BUT different depth (year-only vs full) -> PARTIAL
         (a consistent coarsening; principle 4 — imprecision is partial agreement)
       * any shared part differs -> DISAGREE
       * a side absent, or no part in common -> INSUFFICIENT_DATA (never a penalty)
+
+    Range-aware (either side is a §5.4 clinician-observed birth-year RANGE): delegates
+    to `_compare_year_intervals`, which is POSITIVE-ONLY — overlap -> PARTIAL, no
+    overlap -> INSUFFICIENT_DATA, and NEVER DISAGREE. See that helper's docstring.
     """
     if a is None or b is None:
         return AgreementLevel.INSUFFICIENT_DATA
     if not isinstance(a, DateValue) or not isinstance(b, DateValue):
         raise MatcherTypeError("compare_dob expects DateValue or None")
+
+    # §5.4 clinician-observed estimated ages arrive as birth-year RANGES. A soft estimate
+    # may only SUPPORT a match (interval overlap -> PARTIAL), never contradict one: it is
+    # positive-only, exactly like compare_identifier_sets. Never DISAGREE for a range — a
+    # visual age guess must not suppress a true returning-patient match (§5.4 recognition,
+    # principle 4). A point date participates as the degenerate interval [year, year].
+    if a.is_range or b.is_range:
+        return _compare_year_intervals(a, b)
 
     shared = [p for p in _DOB_PARTS if getattr(a, p) is not None and getattr(b, p) is not None]
     if not shared:
@@ -149,6 +162,28 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
     depth_a = sum(1 for p in _DOB_PARTS if getattr(a, p) is not None)
     depth_b = sum(1 for p in _DOB_PARTS if getattr(b, p) is not None)
     return AgreementLevel.EXACT if depth_a == depth_b else AgreementLevel.PARTIAL
+
+
+def _as_year_interval(d: DateValue) -> tuple[int, int] | None:
+    """A DateValue's inclusive birth-year interval: the range itself, or [year, year] for a
+    point date with a year, or None when there is no year to place on the axis."""
+    if d.is_range:
+        return (d.year_min, d.year_max)
+    if d.year is not None:
+        return (d.year, d.year)
+    return None
+
+
+def _compare_year_intervals(a: DateValue, b: DateValue) -> AgreementLevel:
+    """Positive-only birth-year overlap: PARTIAL if the intervals intersect, else
+    INSUFFICIENT_DATA. Never DISAGREE (a soft estimate cannot veto a match)."""
+    ia = _as_year_interval(a)
+    ib = _as_year_interval(b)
+    if ia is None or ib is None:
+        return AgreementLevel.INSUFFICIENT_DATA
+    if max(ia[0], ib[0]) <= min(ia[1], ib[1]):
+        return AgreementLevel.PARTIAL
+    return AgreementLevel.INSUFFICIENT_DATA
 
 
 def _name_token_bag(name: Name) -> list[str]:
