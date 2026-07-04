@@ -27,6 +27,12 @@ class MatcherTypeError(TypeError):
 class DateValue:
     """A canonical, already-parsed date. Precision is implied by which parts are present.
 
+    Two shapes, never mixed:
+      * a POINT date — some prefix of (year, month, day) present, the rest None;
+      * a birth-year RANGE — year_min..year_max present (inclusive), all point parts None.
+        A range is how a clinician-observed *estimated age* is carried (§5.4): honest
+        imprecision, never a false-precise midpoint (principle 4).
+
     The core never parses a locale date STRING into this — that is locale-specific and
     belongs to B2/locale packs. compare_dob operates only on the parts present here.
     """
@@ -34,6 +40,13 @@ class DateValue:
     year: int | None = None
     month: int | None = None
     day: int | None = None
+    year_min: int | None = None
+    year_max: int | None = None
+
+    @property
+    def is_range(self) -> bool:
+        """True iff this is a birth-year interval rather than a point date."""
+        return self.year_min is not None and self.year_max is not None
 
 
 @dataclass(frozen=True)
