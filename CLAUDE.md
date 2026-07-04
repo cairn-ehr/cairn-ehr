@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repository is
 
 Cairn is an **offline-first, vendor-independent electronic health record**. The **architecture spec is
-complete** (all open questions resolved, spec v0.36); viability was proven by **proof-of-concept spikes**
+complete** (all open questions resolved; the current spec version is stated in `docs/spec/index.md`,
+never restated here); viability was proven by **proof-of-concept spikes**
 (walking skeleton + WAN sync in `poc/walking-skeleton`, an advisory-actor write-contract spike, a first
 federating node `cairn-node` under `/crates`, Postgres-on-Android). As of 2026-06-27 the **first
 production clinical surface is now under construction** — the demographics §4.4 patient-identifier
@@ -32,7 +33,10 @@ beyond what `cairn-node` actually provides.
      history and the spec version is stated in `index.md`. Pre-ADR history (v0.1→v0.6 changelogs) is
      preserved in `docs/spec/decisions/0000-pre-adr-changelog-v0.1-v0.6.md`.
    - **HTML is generated, not hand-edited.** Source is Markdown; the site builds with
-     `uv run --with mkdocs-material --with mkdocs-callouts --with mkdocs-redirects -- mkdocs build` (config: `mkdocs.yml`).
+     `uv run --with-requirements docs/requirements.txt -- mkdocs build` (config: `mkdocs.yml`) —
+     always via the **pinned** `docs/requirements.txt` (same as CI), never ad-hoc `--with` installs:
+     unpinned docs tooling executes unaudited code at build time (see the security note in
+     `docs/requirements.txt`).
      Author callouts in GitHub/Obsidian syntax (`> [!NOTE]`) so they render on GitHub *and* as
      Material admonitions. Never commit the generated `site/` (gitignored).
 3. **`docs/HANDOVER.md`** — disposable working scaffolding, NOT a source of truth. It points at
