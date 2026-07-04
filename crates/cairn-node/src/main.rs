@@ -2,6 +2,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// The single prompt string + no-echo behaviour for the operational passphrase,
@@ -296,6 +297,29 @@ enum Cmd {
         /// Why the chart is identity-pending — §4.1 value-open.
         #[arg(long, default_value = "unidentified patient, no ID")]
         basis: String,
+    },
+
+    /// Record clinician-observed identity evidence on an existing chart (§5.4): an
+    /// estimated age (-> a year-range dob) and/or an observed sex (-> administrative-sex),
+    /// both provenance `clinician-observed`. Supply at least one of --age / --sex.
+    AssertObservedEvidence {
+        /// The patient UUID to record evidence on.
+        patient: Uuid,
+        /// Estimated age in years (apparent age).
+        #[arg(long)]
+        age: Option<u32>,
+        /// ± tolerance in years around the estimated age (default 5).
+        #[arg(long, default_value_t = 5)]
+        tol: u32,
+        /// How the age was estimated (required when --age is given).
+        #[arg(long)]
+        age_basis: Option<String>,
+        /// Observed (apparent) sex — an open string.
+        #[arg(long)]
+        sex: Option<String>,
+        /// How the sex was observed (optional).
+        #[arg(long)]
+        sex_basis: Option<String>,
     },
 }
 
@@ -810,6 +834,36 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("registered John Doe {pid}\ncallsign {call}");
+        }
+        Cmd::AssertObservedEvidence { patient, age, tol, age_basis, sex, sex_basis } => {
+            let sk = load_signing_key(&cli.key, true)?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // Observation year comes from the node's own DB clock (the DB is the clock).
+            let observed_year: i32 = db.query_one("SELECT extract(year FROM current_date)::int", &[])
+                .await?.get(0);
+            ensure_registration_actor(&db, &kid).await?;
+
+            // Clinical sanity bound on the human-entered estimate: a real apparent age and
+            // its tolerance are both well under a human lifespan. Rejecting absurd input here
+            // (honest reject, principle 4 — never fabricate a range) also keeps the downstream
+            // `u32 -> i32` age arithmetic in `birth_year_range_from_age` far from any overflow.
+            const MAX_OBSERVED_AGE_YEARS: u32 = 150;
+            let age_obs = match (age, age_basis) {
+                (Some(age_years), Some(_)) if age_years > MAX_OBSERVED_AGE_YEARS || tol > MAX_OBSERVED_AGE_YEARS =>
+                    anyhow::bail!("--age and --tol must each be <= {MAX_OBSERVED_AGE_YEARS} years (implausible estimate)"),
+                (Some(age_years), Some(basis)) =>
+                    Some(cairn_node::evidence::AgeObservation { age_years, tolerance_years: tol, basis }),
+                (Some(_), None) => anyhow::bail!("--age requires --age-basis (§5.4: estimated age WITH basis)"),
+                (None, _) => None,
+            };
+            let sex_obs = sex.map(|value| cairn_node::evidence::SexObservation { value, basis: sex_basis });
+            let ev = cairn_node::evidence::ObservedEvidence { age: age_obs, sex: sex_obs };
+
+            cairn_node::evidence::assert_observed_evidence(
+                &mut db, &sk, &kid, &id.node_id_hex, patient, &ev, observed_year).await?;
+            println!("recorded clinician-observed evidence on {patient}");
         }
     }
     Ok(())

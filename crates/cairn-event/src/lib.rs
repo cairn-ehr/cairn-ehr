@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
 pub mod demographics;
+pub mod evidence;
 pub mod identity;
 pub mod john_doe;
 

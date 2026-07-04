@@ -2,6 +2,7 @@ pub mod apply_proposal;
 pub mod auto_apply;
 pub mod backup;
 pub mod db;
+pub mod evidence;
 pub mod fsio;
 pub mod identity;
 pub mod john_doe;

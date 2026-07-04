@@ -37,14 +37,17 @@ def _normalize_token(token: str) -> str:
 
 
 def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
-    """Extract a DateValue from an ISO dob value at the projection's declared precision.
+    """Extract a DateValue from a dob value at the projection's declared precision.
 
-    Returns None (a safe, gradeable absence) when the value is missing, the precision is
-    missing or unknown, or the value is not ISO-shaped to at least the declared precision.
-    We never coerce a locale string or guess month/day order — that is a B3/locale-pack
-    concern; here, an unreadable value simply has no DOB to compare.
+    A 'year-range' precision (§5.4 clinician-observed estimated age) parses '<yyyy>/<yyyy>'
+    into an inclusive birth-year interval. All other precisions are point dates parsed from
+    an ISO value. Returns None (a safe, gradeable absence) for anything unreadable.
     """
-    if not value or precision not in _PRECISION_PARTS:
+    if not value:
+        return None
+    if precision == "year-range":
+        return _parse_year_range(value)
+    if precision not in _PRECISION_PARTS:
         return None
     parts = value.split("-")
     needed = _PRECISION_PARTS[precision]
@@ -71,6 +74,24 @@ def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
     if day is not None and not 1 <= day <= 31:
         return None
     return DateValue(year=year, month=month, day=day)
+
+
+def _parse_year_range(value: str) -> DateValue | None:
+    """Parse '<yyyy>/<yyyy>' -> a birth-year interval DateValue, else None (safe degrade).
+
+    Both sides must be full 4-digit years (mirroring the point-date 4-digit discipline) and
+    min <= max. A malformed range is simply absent — never a guessed or reversed interval.
+    """
+    parts = value.split("/")
+    if len(parts) != 2:
+        return None
+    lo, hi = parts
+    if len(lo) != 4 or not lo.isdigit() or len(hi) != 4 or not hi.isdigit():
+        return None
+    lo_i, hi_i = int(lo), int(hi)
+    if lo_i > hi_i:
+        return None
+    return DateValue(year_min=lo_i, year_max=hi_i)
 
 
 def _name_bag(display: object) -> Name:
