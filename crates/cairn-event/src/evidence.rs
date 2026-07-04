@@ -31,6 +31,11 @@ pub const CLINICIAN_OBSERVED_PROVENANCE: &str = "clinician-observed";
 /// inclusive birth-year range. `birth_year = observed_year - age`; the tolerance widens
 /// it symmetrically. Example: age 40 ± 5 observed in 2026 -> (1981, 1991). Returns
 /// (min_year, max_year) with min_year <= max_year for any non-negative inputs.
+///
+/// PRECONDITION: `age_years`/`tolerance_years` are plausible human values (a lifespan's
+/// worth, not billions). The caller (the CLI arm) bounds them; a value near `u32::MAX`
+/// would reinterpret negative on the `as i32` cast and overflow the subtraction. This is
+/// a pure helper, so it does not re-validate — keep the bound at the human input boundary.
 pub fn birth_year_range_from_age(age_years: u32, tolerance_years: u32, observed_year: i32) -> (i32, i32) {
     let mid = observed_year - age_years as i32;
     let tol = tolerance_years as i32;

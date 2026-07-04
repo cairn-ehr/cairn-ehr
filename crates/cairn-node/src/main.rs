@@ -845,7 +845,14 @@ async fn main() -> anyhow::Result<()> {
                 .await?.get(0);
             ensure_registration_actor(&db, &kid).await?;
 
+            // Clinical sanity bound on the human-entered estimate: a real apparent age and
+            // its tolerance are both well under a human lifespan. Rejecting absurd input here
+            // (honest reject, principle 4 — never fabricate a range) also keeps the downstream
+            // `u32 -> i32` age arithmetic in `birth_year_range_from_age` far from any overflow.
+            const MAX_OBSERVED_AGE_YEARS: u32 = 150;
             let age_obs = match (age, age_basis) {
+                (Some(age_years), Some(_)) if age_years > MAX_OBSERVED_AGE_YEARS || tol > MAX_OBSERVED_AGE_YEARS =>
+                    anyhow::bail!("--age and --tol must each be <= {MAX_OBSERVED_AGE_YEARS} years (implausible estimate)"),
                 (Some(age_years), Some(basis)) =>
                     Some(cairn_node::evidence::AgeObservation { age_years, tolerance_years: tol, basis }),
                 (Some(_), None) => anyhow::bail!("--age requires --age-basis (§5.4: estimated age WITH basis)"),
