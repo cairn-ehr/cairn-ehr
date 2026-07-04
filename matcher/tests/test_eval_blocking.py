@@ -6,6 +6,9 @@ Gated on CAIRN_TEST_PG via the shared pg_conn fixture (skipped cleanly without a
 from cairn_matcher.eval.blocking_eval import evaluate_blocking
 from cairn_matcher.eval.dataset import load_dataset
 from cairn_matcher.eval.loader import load_bundled_gold
+from tests.conftest import seed_patient
+
+RESIDENT = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 
 
 def test_gold_blocking_recall_is_total(pg_conn):
@@ -30,6 +33,39 @@ def test_oversized_block_is_skipped_and_estimated(pg_conn):
     m = evaluate_blocking(pg_conn, ds, max_block_size=2)
     assert any(pn == "dob" and sz == 3 for pn, _key, sz in m.skipped_blocks)
     assert m.dropped_pair_estimate == 3
+
+
+def test_resident_range_chart_does_not_crash_the_eval(pg_conn):
+    # The eval's reverse map knows only the SEEDED uuids, but generate_candidate_pairs
+    # scans the WHOLE connected DB -- and a resident year-range chart (a real John Doe,
+    # exactly what the slice-B front door writes) anchors a birth-window block that
+    # catches essentially every seeded record born inside it. Those resident<->seeded
+    # pairs are outside the labelled ground truth: they must be EXCLUDED from the
+    # metrics, not crash the run with a KeyError on the resident uuid.
+    seed_patient(pg_conn, RESIDENT, dob=("1900/2100", 30, "year-range"))
+    m = evaluate_blocking(pg_conn, load_bundled_gold())
+    # The labelled-dataset metrics are unchanged by the out-of-scope resident chart.
+    assert m.pair_completeness == 1.0
+    assert m.dropped_true_matches == ()
+
+
+def test_skipped_anchored_block_is_estimated_as_anchor_pairs(pg_conn):
+    # A resident range chart whose window catches all 3 seeded records: block size 4
+    # (anchor + 3) > cap=2 -> skipped. An anchored skip drops s-1=3 pairs (anchor x
+    # member only), NOT C(4,2)=6 -- together with the symmetric dob block's C(3,2)=3
+    # the estimate must be 6, not 9. (C(s,2) on anchored skips overstates quadratically:
+    # a size-500 hub block would report 124,750 phantom drops instead of 499.)
+    ds = load_dataset({"name": "big", "entities": [
+        {"entity_id": "e", "records": [
+            {"record_id": f"r{i}",
+             "dob": {"value": "2000-01-01", "precision": "day", "provenance_rank": 40}}
+            for i in range(3)
+        ]},
+    ]})
+    seed_patient(pg_conn, RESIDENT, dob=("1990/2010", 30, "year-range"))
+    m = evaluate_blocking(pg_conn, ds, max_block_size=2)
+    assert any(pn == "dob-range" and sz == 4 for pn, _key, sz in m.skipped_blocks)
+    assert m.dropped_pair_estimate == 6
 
 
 def test_blocking_eval_is_idempotent_and_leaves_no_rows(pg_conn):

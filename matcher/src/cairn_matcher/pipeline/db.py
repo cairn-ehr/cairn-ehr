@@ -11,9 +11,15 @@ import uuid
 
 from psycopg.rows import dict_row
 
-from cairn_matcher.pipeline.adapter import candidate_from_rows
+from cairn_matcher.pipeline.adapter import VALUE_SENTINELS_PARAM, candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
-from cairn_matcher.pipeline.blocking import pairs_from_anchor, resolve_enabled_passes
+from cairn_matcher.pipeline.blocking import (
+    ANCHORED_PASSES,
+    SYMMETRIC_PASSES,
+    pairs_from_anchor,
+    require_registered,
+    resolve_enabled_passes,
+)
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -178,16 +184,18 @@ SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
 FROM patient_identifier WHERE system <> 'unknown'
 GROUP BY system, match_key HAVING count(DISTINCT patient_id) >= 2
 UNION ALL
--- Known/deliberate overlap with the anchored 'dob-range' pass (_RANGE_GROUPS_SQL): two
--- charts whose dob VALUES happen to be the IDENTICAL range string (e.g. both "1981/1991")
--- group here by literal string equality, redundant with the anchored pass (which already
--- pairs any two overlapping ranges, identical or not). Harmless -- pair-set dedup in
--- generate_candidate_pairs makes the redundancy invisible to callers -- but it slightly
--- contaminates the A/B toggle (an 'off-range-passes' run can still surface such a pair via
--- this exact-match arm). Left as-is: revisit only if A/B purity between the symmetric and
--- anchored pass sets ever matters.
+-- The exact-'dob' arm is a POINT-dob pass: year-range values are excluded, mirroring the
+-- birth_year CTE above. Two reasons. (1) A/B purity: two charts carrying the IDENTICAL
+-- range string ("1981/1991" on both) would otherwise group here by literal string
+-- equality, so an 'off-range-passes' baseline run would still surface range pairs and
+-- understate the anchored passes' measured contribution on exactly the John-Doe
+-- population the measurement exists for. (2) Two identical MALFORMED range strings
+-- ("about-forty" twice, one buggy writer) would group on garbage. The anchored passes
+-- own ranges -- identical or not -- and pair strictly more than string equality did, so
+-- with all passes on this exclusion costs no recall.
 SELECT 'dob', value, array_agg(patient_id)
 FROM patient_demographic WHERE field = 'dob'
+  AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 GROUP BY value HAVING count(DISTINCT patient_id) >= 2
 UNION ALL
 SELECT 'name', token, array_agg(patient_id)
@@ -255,18 +263,30 @@ WITH birth_window AS (
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 ),
 blocking_sex AS (
-    -- Exclude the 'unknown' sentinel (principle 4: no-data-is-never-agreement), mirroring
-    -- adapter._VALUE_SENTINELS (the SAME sentinel set the Python scoring side treats as
-    -- absent-value) and this file's own 'identifier' pass (`system <> 'unknown'`). Without
-    -- this, two charts that BOTH merely recorded sex 'unknown' would share a blocking_sex
-    -- row and the 'dob-range+sex' rescue would key on mutual ignorance rather than a real
-    -- signal. If adapter._VALUE_SENTINELS ever grows beyond {'unknown'}, mirror the addition
-    -- here too -- an omission only adds noise pairs / withholds a rescue, it never suppresses
-    -- a true one, so drift is safe-direction but should still be kept in sync.
-    SELECT DISTINCT patient_id, lower(value) AS sex
-    FROM patient_demographic
-    WHERE field IN ('sex-at-birth', 'administrative-sex')
-      AND value IS NOT NULL AND lower(value) <> 'unknown'
+    -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
+    -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
+    -- treats as absent-value -- so the SQL exclusion can never drift from it (the
+    -- placeholder_uses parameter-binding pattern; a hand-mirrored literal here once
+    -- lagged the adapter's normalization). Without this, two charts that BOTH merely
+    -- recorded sex 'unknown' would share a blocking_sex row and the 'dob-range+sex'
+    -- rescue would key on mutual ignorance rather than a real signal.
+    --
+    -- The trim approximates the adapter's value.strip() for the whitespace a real feed
+    -- plausibly emits: space, tab, LF, CR, FF, VT, NBSP (btrim's DEFAULT trims spaces
+    -- ONLY -- it would let a tab-padded sentinel through as a tab-residue key). Python's
+    -- strip() also removes rarer Unicode spaces (em-space etc.); those are out of scope:
+    -- an exotically-padded sentinel keys on its residue, which at worst adds a noise
+    -- pair between two identically-mangled values, never suppresses a true one. lower()
+    -- stands in for casefold(); identical for the ASCII values this field carries. The
+    -- trimmed form is also the grouping key (padding on a REAL value must not hide a
+    -- genuine shared signal); an all-whitespace value trims to '' and is excluded.
+    SELECT DISTINCT patient_id, sex FROM (
+        SELECT patient_id,
+               btrim(lower(value), E' \\t\\n\\r\\f\\u000b\\u00a0') AS sex
+        FROM patient_demographic
+        WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
+    ) trimmed
+    WHERE sex <> '' AND sex <> ALL(%s)
 ),
 window_overlap AS (
     SELECT a.patient_id AS anchor, m.patient_id AS member
@@ -320,8 +340,11 @@ def generate_candidate_pairs(
 
     `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
     the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
-    happens on the returned rows' pass_name, so one run issues the same SQL regardless of
-    the subset and the toggle can never change what a pass WOULD have produced.
+    happens on the returned rows' pass_name — the SQL is never edited per-subset, so the
+    toggle can never change what a pass WOULD have produced. A whole STATEMENT is skipped
+    only when none of its passes is enabled (its arms are independent UNION ALL branches,
+    so skipping it provably cannot affect any enabled pass — and the A/B baseline run
+    with the range passes off must not pay for the un-indexable range overlap join).
 
     Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
     tuples from every enabled group with <= max_block_size members. `skipped_blocks`: the
@@ -336,30 +359,37 @@ def generate_candidate_pairs(
     enabled = resolve_enabled_passes(enabled_passes)
     pairs: set[tuple[str, str]] = set()
     skipped_blocks: list[tuple[str, str, int]] = []
+    # require_registered on every fetched row, against the emitting STATEMENT's declared
+    # set: an unregistered (or registered-but-misplaced) SQL arm would otherwise be
+    # silently filtered by the `enabled` check on every run (a pass that looks built but
+    # contributes zero pairs) — or silently skipped with the wrong statement.
     with conn.cursor() as cur:
-        # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
-        cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
-        for pass_name, key, members in cur.fetchall():
-            if pass_name not in enabled:
-                continue
-            size = len(members)
-            if size > max_block_size:
-                skipped_blocks.append((pass_name, key, size))
-            else:
-                pairs.update(_pairs_from_members(members))
-        # The anchored range passes: pairs are anchor x member ONLY. The cap counts the
-        # WHOLE block (members + the anchor itself) so "block size" means the same thing
-        # for both pair-generation shapes, and a skipped block is reported under the
-        # anchor's uuid (its natural key).
-        cur.execute(_RANGE_GROUPS_SQL)
-        for pass_name, anchor, members in cur.fetchall():
-            if pass_name not in enabled:
-                continue
-            size = len(members) + 1
-            if size > max_block_size:
-                skipped_blocks.append((pass_name, str(anchor), size))
-            else:
-                pairs.update(pairs_from_anchor(anchor, members))
+        if enabled & SYMMETRIC_PASSES:
+            # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
+            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
+            for pass_name, key, members in cur.fetchall():
+                if require_registered(pass_name, SYMMETRIC_PASSES) not in enabled:
+                    continue
+                size = len(members)
+                if size > max_block_size:
+                    skipped_blocks.append((pass_name, key, size))
+                else:
+                    pairs.update(_pairs_from_members(members))
+        if enabled & ANCHORED_PASSES:
+            # The anchored range passes: pairs are anchor x member ONLY. The cap counts
+            # the WHOLE block (members + the anchor itself) so "block size" means the
+            # same thing for both pair-generation shapes, and a skipped block is
+            # reported under the anchor's uuid (its natural key). The %s binds the
+            # uncertainty-sentinel exclusion in the blocking_sex CTE.
+            cur.execute(_RANGE_GROUPS_SQL, (VALUE_SENTINELS_PARAM,))
+            for pass_name, anchor, members in cur.fetchall():
+                if require_registered(pass_name, ANCHORED_PASSES) not in enabled:
+                    continue
+                size = len(members) + 1
+                if size > max_block_size:
+                    skipped_blocks.append((pass_name, str(anchor), size))
+                else:
+                    pairs.update(pairs_from_anchor(anchor, members))
     return sorted(pairs), skipped_blocks
 
 

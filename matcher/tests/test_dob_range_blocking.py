@@ -172,7 +172,7 @@ def test_sex_arm_toggles_independently(pg_conn):
 
 
 def test_unknown_sex_does_not_rescue_via_blocking_sex(pg_conn):
-    # Principle 4 (no-data-is-never-agreement), mirroring adapter._VALUE_SENTINELS and the
+    # Principle 4 (no-data-is-never-agreement), bound from adapter.VALUE_SENTINELS and the
     # identifier pass's `system <> 'unknown'`: two charts BOTH recording sex 'unknown' must
     # NOT share a blocking_sex row -- that would key the 'dob-range+sex' rescue on mutual
     # ignorance, not a real signal. cap=3 forces the plain 'dob-range' block (size 4) to be
@@ -185,6 +185,53 @@ def test_unknown_sex_does_not_rescue_via_blocking_sex(pg_conn):
     pairs, skipped = _gen(pg_conn, max_block_size=3)
     assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
     assert canonical_pair(PA, PB) not in pairs
+
+
+def test_padded_unknown_sex_does_not_rescue_via_blocking_sex(pg_conn):
+    # Same principle-4 guard as above, but the sentinel arrives whitespace-padded
+    # (' Unknown ', '\tUnknown\xa0' -- fixed-width feeds, sloppy CSV, NBSP from a copy-
+    # paste UI). The adapter treats these as absent (value.strip().casefold()), so
+    # blocking must too: the SQL trims the same characters before the sentinel compare,
+    # else two padded-'unknown' charts would share a blocking_sex row the scoring side
+    # considers no-data -- the rescue keying on mutual ignorance again. NOTE btrim's
+    # DEFAULT trims spaces only: both charts carry the SAME tab+NBSP padding, so a
+    # space-only trim would leave them SHARING the residue key and the rescue would
+    # fire -- this pins the explicit trim-set, not just any trim.
+    seed_patient(pg_conn, PA, dob=("1981/1991", 30, "year-range"),
+                 admin_sex=("\tUnknown\xa0", 30))
+    seed_patient(pg_conn, PB, dob=("1985-06-15", 20), sex=("\tUnknown\xa0", 40))
+    seed_patient(pg_conn, PC, dob=("1983-01-01", 20))
+    seed_patient(pg_conn, PD, dob=("1989-01-01", 20))
+    pairs, skipped = _gen(pg_conn, max_block_size=3)
+    assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
+    assert canonical_pair(PA, PB) not in pairs
+
+
+def test_padded_real_sex_value_still_rescues(pg_conn):
+    # The flip side of the trim: padding on a REAL value must not hide a genuine shared
+    # signal. ' Male ' and 'male' are the same observation; the trimmed key groups them.
+    seed_patient(pg_conn, PA, dob=("1981/1991", 30, "year-range"),
+                 admin_sex=(" Male ", 30))
+    seed_patient(pg_conn, PB, dob=("1985-06-15", 20), sex=("male", 40))
+    seed_patient(pg_conn, PC, dob=("1983-01-01", 20))
+    seed_patient(pg_conn, PD, dob=("1989-01-01", 20))
+    pairs, skipped = _gen(pg_conn, max_block_size=3)
+    assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
+    assert canonical_pair(PA, PB) in pairs
+
+
+def test_identical_range_strings_never_group_via_the_exact_dob_arm(pg_conn):
+    # A/B purity: two charts carrying the IDENTICAL range string used to group via the
+    # exact-'dob' arm by literal string equality -- so an 'off-range-passes' baseline run
+    # still surfaced range pairs, understating the range passes' measured contribution on
+    # exactly the population (John Does) the measurement exists for. The exact arm is a
+    # POINT-dob pass: year-range values are excluded from it; the anchored passes own
+    # ranges (identical or not -- sanity-checked last).
+    seed_patient(pg_conn, PA, dob=("1981/1991", 30, "year-range"))
+    seed_patient(pg_conn, PB, dob=("1981/1991", 30, "year-range"))
+    off = _pairs(pg_conn, enabled_passes={"identifier", "dob", "name", "name+year"})
+    assert canonical_pair(PA, PB) not in off
+    assert canonical_pair(PA, PB) in _pairs(pg_conn)  # dob-range still pairs them
 
 
 def test_name_year_never_keys_on_a_range_window_min(pg_conn):

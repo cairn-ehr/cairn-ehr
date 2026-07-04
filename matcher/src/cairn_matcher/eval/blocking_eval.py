@@ -20,6 +20,7 @@ from cairn_matcher.eval.dataset import (
     canonical_label_pair,
     truth_pairs,
 )
+from cairn_matcher.pipeline.blocking import dropped_pair_estimate
 
 # A fixed namespace so label -> uuid is stable across runs (reproducible eval seeding).
 _LABEL_NS = uuid.UUID("6f9b4c2e-1d3a-4e5f-8a7b-0c1d2e3f4a5b")
@@ -34,7 +35,9 @@ class BlockingMetrics:
     generated_pairs: int
     total_pairs: int
     skipped_blocks: tuple[tuple[str, str, int], ...]  # (pass_name, key, size) over cap
-    dropped_pair_estimate: int        # sum of C(size,2) over skipped blocks
+    dropped_pair_estimate: int        # pairs the skipped blocks would have contributed
+                                      # (C(s,2) symmetric / s-1 anchored — see
+                                      # blocking.dropped_pair_estimate)
     dropped_true_matches: tuple[tuple[str, str], ...]  # true matches blocking missed
 
 
@@ -111,8 +114,15 @@ def evaluate_blocking(conn, ds: LabelledDataset, *, max_block_size: int = 100) -
     uuid_pairs, skipped = generate_candidate_pairs(conn, max_block_size=max_block_size)
     conn.rollback()
 
+    # Blocking scans the WHOLE connected DB, not just the seed: on a live target a
+    # RESIDENT chart can join a block (e.g. a real John Doe's year-range window anchors
+    # every seeded record born inside it). Those resident<->seeded pairs are outside the
+    # labelled ground truth — reverse knows only seeded uuids — so they are excluded
+    # from the metrics rather than crashing the translation with a KeyError.
     generated = {
-        canonical_label_pair(reverse[low], reverse[high]) for low, high in uuid_pairs
+        canonical_label_pair(reverse[low], reverse[high])
+        for low, high in uuid_pairs
+        if low in reverse and high in reverse
     }
     truth = truth_pairs(ds)
     total = len(all_pairs(ds))
@@ -124,16 +134,10 @@ def evaluate_blocking(conn, ds: LabelledDataset, *, max_block_size: int = 100) -
         generated_pairs=len(generated),
         total_pairs=total,
         skipped_blocks=tuple(skipped),
-        # NOTE: C(s,2) is the drop count for the four SYMMETRIC passes only. The two
-        # ANCHORED range passes ('dob-range' / 'dob-range+sex', db._RANGE_GROUPS_SQL)
-        # generate anchor-x-member pairs only, so a skipped anchored block of size s
-        # actually drops s-1 pairs, not C(s,2) -- this estimate OVERSTATES anchored drops.
-        # Dormant today: the synthetic eval generator (eval/generator.py) emits no
-        # range-precision dobs, so no skipped block here is ever an anchored one yet (see
-        # design doc §10 "Deferred: Generator range-DOB emission"). Left unfixed
-        # deliberately -- no data exercises this arithmetic, so changing it untested would
-        # be worse than a documented, currently-inert estimate error. Revisit when the
-        # generator learns ranges: branch this sum by pass_name at that point.
-        dropped_pair_estimate=sum(s * (s - 1) // 2 for _pn, _key, s in skipped),
+        # Shape-aware: C(s,2) for symmetric blocks, s-1 for anchored ones (the pure
+        # helper branches on blocking.ANCHORED_PASSES). Not hypothetical even before
+        # the generator learns range dobs: a resident year-range chart on a live
+        # CAIRN_TEST_PG target can put an anchored block into `skipped` today.
+        dropped_pair_estimate=dropped_pair_estimate(skipped),
         dropped_true_matches=dropped_true,
     )

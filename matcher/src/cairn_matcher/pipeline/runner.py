@@ -7,7 +7,6 @@ meet. It computes a verdict for a single given pair; finding WHICH pairs to scor
 duplicate-sweep is the declared backstop for any signal missed at the noise floor.
 """
 
-import uuid
 from collections.abc import Mapping
 
 from cairn_matcher.orchestrator import field_comparisons
@@ -19,22 +18,13 @@ from cairn_matcher.pipeline.banding import (
     band,
     build_payload,
 )
+
+# canonical_pair moved to the pure blocking module (one definition of pair identity for
+# every pass shape); re-exported here because runner is its historical import path.
+from cairn_matcher.pipeline.blocking import canonical_pair
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights, score
 
-
-def canonical_pair(a, b) -> tuple[str, str]:
-    """Order a patient-id pair canonically by uuid VALUE, emitted as lowercase text.
-
-    The match_proposal CHECK (patient_low < patient_high) compares normalized `uuid`
-    values, not their text form. Text-sorting the canonical string happens to agree for
-    lowercase UUIDs but diverges for upper/mixed case — flipping the pair would violate
-    the CHECK or, worse, store propose(a,b) and propose(b,a) as two mirror rows. We
-    compare uuid.UUID objects (128-bit integer order = Postgres byte order) so any input
-    case yields one stable row identity. Accepts str or uuid.UUID; this is pure (no DB),
-    which is why it lives here rather than in db.py.
-    """
-    ua, ub = uuid.UUID(str(a)), uuid.UUID(str(b))
-    return (str(ua), str(ub)) if ua < ub else (str(ub), str(ua))
+__all__ = ["canonical_pair", "propose"]
 
 
 def propose(
