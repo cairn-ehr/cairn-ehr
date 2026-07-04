@@ -132,3 +132,7 @@ range passes are deliberately unmirrored until the generator learns to emit esti
   binary overlap is the honest v1).
 - A dedicated `alias` blocking pass (recorded at C5).
 - Hub-tier aggressive sweep consuming the range passes with a larger cap budget.
+- **Score-floor gap** ([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)): a pure-age
+  John Doe pair now BLOCKS (this slice) but scores below the `review` band threshold (3.0) because
+  `administrative-sex` is unscored — the rescue's own sex signal never reaches the scorer. Candidate
+  resolutions are enumerated in the issue.

@@ -178,6 +178,14 @@ SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
 FROM patient_identifier WHERE system <> 'unknown'
 GROUP BY system, match_key HAVING count(DISTINCT patient_id) >= 2
 UNION ALL
+-- Known/deliberate overlap with the anchored 'dob-range' pass (_RANGE_GROUPS_SQL): two
+-- charts whose dob VALUES happen to be the IDENTICAL range string (e.g. both "1981/1991")
+-- group here by literal string equality, redundant with the anchored pass (which already
+-- pairs any two overlapping ranges, identical or not). Harmless -- pair-set dedup in
+-- generate_candidate_pairs makes the redundancy invisible to callers -- but it slightly
+-- contaminates the A/B toggle (an 'off-range-passes' run can still surface such a pair via
+-- this exact-match arm). Left as-is: revisit only if A/B purity between the symmetric and
+-- anchored pass sets ever matters.
 SELECT 'dob', value, array_agg(patient_id)
 FROM patient_demographic WHERE field = 'dob'
 GROUP BY value HAVING count(DISTINCT patient_id) >= 2
@@ -217,15 +225,25 @@ GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
 # merely means the rescue does not fire -- the scorer never sees a suppression.
 _RANGE_GROUPS_SQL = """
 WITH birth_window AS (
+    -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee
+    -- WHERE-subexpression evaluation order, so a `split_part(...)::int` cast could be
+    -- evaluated BEFORE the `value ~ '^[0-9]{4}/[0-9]{4}$'` regex guard that exists to
+    -- filter it out -- and a non-numeric value ("about-forty") would then raise
+    -- "invalid input syntax for type integer" and crash the whole sweep on exactly the
+    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{4})/')`
+    -- returns NULL on non-match (never raises), so the cast of NULL is safe and the
+    -- comparison against NULL is not-true (row filtered) regardless of evaluation order.
+    -- The regex guard is kept too (cheap, and documents intent) but correctness must not
+    -- -- and no longer does -- depend on it being evaluated first.
     SELECT patient_id,
-           split_part(value, '/', 1)::int AS y_min,
-           split_part(value, '/', 2)::int AS y_max,
+           substring(value FROM '^([0-9]{4})/')::int AS y_min,
+           substring(value FROM '/([0-9]{4})$')::int AS y_max,
            TRUE AS is_range
     FROM patient_demographic
     WHERE field = 'dob'
       AND facets ->> 'precision' = 'year-range'
       AND value ~ '^[0-9]{4}/[0-9]{4}$'
-      AND split_part(value, '/', 1)::int <= split_part(value, '/', 2)::int
+      AND substring(value FROM '^([0-9]{4})/')::int <= substring(value FROM '/([0-9]{4})$')::int
     UNION ALL
     SELECT patient_id,
            substring(value FROM '[0-9]{4}')::int,
@@ -237,9 +255,18 @@ WITH birth_window AS (
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 ),
 blocking_sex AS (
+    -- Exclude the 'unknown' sentinel (principle 4: no-data-is-never-agreement), mirroring
+    -- adapter._VALUE_SENTINELS (the SAME sentinel set the Python scoring side treats as
+    -- absent-value) and this file's own 'identifier' pass (`system <> 'unknown'`). Without
+    -- this, two charts that BOTH merely recorded sex 'unknown' would share a blocking_sex
+    -- row and the 'dob-range+sex' rescue would key on mutual ignorance rather than a real
+    -- signal. If adapter._VALUE_SENTINELS ever grows beyond {'unknown'}, mirror the addition
+    -- here too -- an omission only adds noise pairs / withholds a rescue, it never suppresses
+    -- a true one, so drift is safe-direction but should still be kept in sync.
     SELECT DISTINCT patient_id, lower(value) AS sex
     FROM patient_demographic
-    WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
+    WHERE field IN ('sex-at-birth', 'administrative-sex')
+      AND value IS NOT NULL AND lower(value) <> 'unknown'
 ),
 window_overlap AS (
     SELECT a.patient_id AS anchor, m.patient_id AS member

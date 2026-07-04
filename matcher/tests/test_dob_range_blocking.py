@@ -122,7 +122,7 @@ def test_sex_rescues_pair_from_oversized_window_block(pg_conn):
     seed_patient(pg_conn, PC, dob=("1983-01-01", 20), sex=("female", 40))
     seed_patient(pg_conn, PD, dob=("1989-01-01", 20))          # no sex row at all
     pairs, skipped = _gen(pg_conn, max_block_size=3)
-    assert any(pn == "dob-range" and sz == 4 for pn, _key, sz in skipped)
+    assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
     assert canonical_pair(PA, PB) in pairs
     assert canonical_pair(PA, PC) not in pairs
     assert canonical_pair(PA, PD) not in pairs
@@ -140,7 +140,7 @@ def test_union_sex_groups_via_administrative_sex_only(pg_conn):
     seed_patient(pg_conn, PC, dob=("1983-01-01", 20), sex=("female", 40))
     seed_patient(pg_conn, PD, dob=("1989-01-01", 20))
     pairs, skipped = _gen(pg_conn, max_block_size=3)
-    assert any(pn == "dob-range" and sz == 4 for pn, _key, sz in skipped)
+    assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
     assert canonical_pair(PA, PB) in pairs
 
 
@@ -169,6 +169,22 @@ def test_sex_arm_toggles_independently(pg_conn):
     )
     assert canonical_pair(PA, PB) in on_pairs
     assert canonical_pair(PA, PB) not in off_pairs
+
+
+def test_unknown_sex_does_not_rescue_via_blocking_sex(pg_conn):
+    # Principle 4 (no-data-is-never-agreement), mirroring adapter._VALUE_SENTINELS and the
+    # identifier pass's `system <> 'unknown'`: two charts BOTH recording sex 'unknown' must
+    # NOT share a blocking_sex row -- that would key the 'dob-range+sex' rescue on mutual
+    # ignorance, not a real signal. cap=3 forces the plain 'dob-range' block (size 4) to be
+    # skipped, so the rescue arm is the only path -- and it must NOT fire on 'unknown'.
+    seed_patient(pg_conn, PA, dob=("1981/1991", 30, "year-range"),
+                 admin_sex=("unknown", 30))
+    seed_patient(pg_conn, PB, dob=("1985-06-15", 20), sex=("unknown", 40))
+    seed_patient(pg_conn, PC, dob=("1983-01-01", 20))
+    seed_patient(pg_conn, PD, dob=("1989-01-01", 20))
+    pairs, skipped = _gen(pg_conn, max_block_size=3)
+    assert any(pn == "dob-range" and key == PA and sz == 4 for pn, key, sz in skipped)
+    assert canonical_pair(PA, PB) not in pairs
 
 
 def test_name_year_never_keys_on_a_range_window_min(pg_conn):

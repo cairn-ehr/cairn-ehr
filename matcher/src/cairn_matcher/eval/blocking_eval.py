@@ -124,6 +124,16 @@ def evaluate_blocking(conn, ds: LabelledDataset, *, max_block_size: int = 100) -
         generated_pairs=len(generated),
         total_pairs=total,
         skipped_blocks=tuple(skipped),
+        # NOTE: C(s,2) is the drop count for the four SYMMETRIC passes only. The two
+        # ANCHORED range passes ('dob-range' / 'dob-range+sex', db._RANGE_GROUPS_SQL)
+        # generate anchor-x-member pairs only, so a skipped anchored block of size s
+        # actually drops s-1 pairs, not C(s,2) -- this estimate OVERSTATES anchored drops.
+        # Dormant today: the synthetic eval generator (eval/generator.py) emits no
+        # range-precision dobs, so no skipped block here is ever an anchored one yet (see
+        # design doc §10 "Deferred: Generator range-DOB emission"). Left unfixed
+        # deliberately -- no data exercises this arithmetic, so changing it untested would
+        # be worse than a documented, currently-inert estimate error. Revisit when the
+        # generator learns ranges: branch this sum by pass_name at that point.
         dropped_pair_estimate=sum(s * (s - 1) // 2 for _pn, _key, s in skipped),
         dropped_true_matches=dropped_true,
     )
