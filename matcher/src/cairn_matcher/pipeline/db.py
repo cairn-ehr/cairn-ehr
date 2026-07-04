@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 
 from cairn_matcher.pipeline.adapter import candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
+from cairn_matcher.pipeline.blocking import resolve_enabled_passes
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -206,25 +207,39 @@ def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
 
 
 def generate_candidate_pairs(
-    conn, *, max_block_size: int = 100
+    conn, *, max_block_size: int = 100, enabled_passes=None
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
-    """Generate canonical candidate pairs via four blocking passes (identifier / exact-DOB / name-token / name-token+birth-year), capping huge blocks.
+    """Generate canonical candidate pairs via the blocking passes, capping huge blocks.
+
+    Six passes (see blocking.ALL_PASSES): four SYMMETRIC group passes (identifier /
+    exact-DOB / name-token / name-token+birth-year, _GROUPS_SQL) and two ANCHORED
+    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — added in the
+    §5.4 range-blocking slice; Task 3 wires them).
+
+    `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
+    the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
+    happens on the returned rows' pass_name, so one run issues the same SQL regardless of
+    the subset and the toggle can never change what a pass WOULD have produced.
 
     Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
-    tuples from every group with <= max_block_size members. `skipped_blocks`: the
-    (pass_name, key, size) of each group EXCLUDED for exceeding the cap — a block shared
-    by hundreds of people is non-discriminating (a group of size k contributes C(k,2)
-    pairs), and the §5.13 hub duplicate-sweep is the declared backstop for what it drops.
+    tuples from every enabled group with <= max_block_size members. `skipped_blocks`: the
+    (pass_name, key, size) of each ENABLED group excluded for exceeding the cap — a block
+    shared by hundreds of people is non-discriminating (a group of size k contributes
+    C(k,2) pairs; an anchored block of size k contributes k-1), and the §5.13 hub
+    duplicate-sweep is the declared backstop for what it drops.
 
     Read-only — opens a read transaction the CALLER must close (sweep does conn.rollback
     before its write loop, so a long sweep does not pin the xmin horizon).
     """
+    enabled = resolve_enabled_passes(enabled_passes)
     pairs: set[tuple[str, str]] = set()
     skipped_blocks: list[tuple[str, str, int]] = []
     with conn.cursor() as cur:
         # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
         cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
         for pass_name, key, members in cur.fetchall():
+            if pass_name not in enabled:
+                continue
             size = len(members)
             if size > max_block_size:
                 skipped_blocks.append((pass_name, key, size))
