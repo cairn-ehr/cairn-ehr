@@ -287,6 +287,34 @@ tests + 4 banding tests + 3 DB-gated e2e (`test_alias_pipeline.py`); conftest ex
 blocking pass (zero recall today — the name-token pass already generates the identical pair; pure future-proofing);
 any scoring-weight treatment of known-false names (declined by design — needs B3 weight-learning + a spec call).
 
+**Slice 20 — §5.4 John-Doe registration front door (slices A + B)** (composes built primitives; **no new event type,
+no `db/` floor change, no SCHEMA/ADR/spec bump**). **A — callsign + matcher placeholder exclusion** (prior session,
+PR #123/#125): `cairn-event::john_doe::callsign` mints `Unknown-<class>-<site>-<date>-<suffix>` (UUID-derived suffix,
+partition-safe), `cairn-node::john_doe::register_john_doe` composes a `use_key='callsign'` name assertion + C4's
+`identity.pending.asserted` in one txn (chart renders *unconfirmed*), a `register-john-doe` CLI, and the advisory
+matcher excludes placeholder `use_key` from blocking + scoring (`use_key <> ALL(%s)`), with a cross-language
+`CALLSIGN_USE`↔placeholder-set drift guard (issue #124). **B — clinician-observed evidence (estimated-age range +
+observed sex), full loop** (this session): the demographic spine already carries it (db/011 dob field requires
+`facets.precision` + accepts `facets.basis`, `clinician-observed`=rank 30). Pure `cairn-event::evidence`
+(`birth_year_range_from_age` → a time-invariant birth-year *range*, never raw age nor a false-precise midpoint —
+principle 4; `estimated_dob_body` value `"<min>/<max>"`/precision `"year-range"`; `observed_sex_body` on
+`administrative-sex`, not the `sex-at-birth` birth fact a clinician can't know); `cairn-node::evidence::assert_observed_evidence`
++ an `assert-observed-evidence <patient-uuid>` CLI (authors on an EXISTING chart, one txn, provenance
+`clinician-observed`; `register-john-doe` unchanged; `db::next_hlc` promoted `pub`); advisory matcher made
+**range-aware + POSITIVE-ONLY** — `DateValue` interval, `parse_dob` reads `"year-range"`, `compare_dob` overlap→PARTIAL /
+no-overlap→INSUFFICIENT_DATA / **never DISAGREE** (a soft estimate supports but never suppresses a match). 8 pure
+`cairn-event` + 4 DB-gated `cairn-node` integration (`observed_evidence.rs`) + matcher pure (`DateValue`/`parse_dob`/
+`compare_dob` incl. inclusive touching-boundary + symmetry) + a DB-gated matcher e2e (`test_observed_age_pipeline.py`).
+Full workspace + matcher suites green (cargo 0 failed / clippy clean; matcher 226 passed / ruff clean, PG18 + cairn_pgx
+0.2.0); end-to-end CLI smoke on a provisioned node passed (`dob=1981/1991` year-range clinician-observed +
+`administrative-sex=male`, `chart_trust=unconfirmed`); opus whole-branch review READY-TO-MERGE. **Honest limit
+(recorded):** slice B's range is a *scoring* signal, **not a blocking key** (`"1981/1991"`→first-4-digit `1981` won't
+block a 1985-born candidate; a John Doe's only name is an excluded callsign) — the estimate helps once a pair is blocked
+by another key (belongings identifier, refined name, hub sweep). **Remaining §5.4:** photo/marks/belongings/EMS-context
+evidence (new field home + attachment tier), the "prior history now available" push-alert (§5.12, no notification tier),
+the search-before-create funnel (UI/API tier), a birth-year-*range* blocking pass, a readable sequential callsign suffix,
+a `--observed-year` override, `identify`→optional-link resolution flow.
+
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in

@@ -1,21 +1,60 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-03 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
+**Session date:** 2026-07-04 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first production clinical
 surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher (piece A in-DB veto
 floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b blocking / candidate-pair
-generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator · **the matcher
-now consumes `patient_alias_pool` (known-alias evidence) — done this session**) + the
+generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume generator · consumes
+`patient_alias_pool` known-alias evidence · **now range-aware, positive-only `compare_dob` for clinician-observed
+estimated ages — done this session**) + the
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
-known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE, and C5 added
-the first *suppressing* identity event) + the **§5.4 John-Doe registration front door — slice A: callsign minting +
-matcher placeholder exclusion — done this session**; remaining B3 weight-learning / locale packs / A-B pass-toggle +
-identity **C5+** (`reattribute` — waits on a clinical-note surface —) + the **rest of the §5.4 subsystem** (clinician-
-observed evidence assertions, the "prior history now available" push-alert, the search-before-create registration-class
-funnel) next. Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
-Postgres-on-Android).
+known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE) + the
+**§5.4 John-Doe registration front door — slice A: callsign minting + matcher placeholder exclusion · slice B:
+clinician-observed evidence (estimated-age range + observed sex) — done this session**; remaining B3 weight-learning /
+locale packs / A-B pass-toggle + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of
+the §5.4 subsystem** (photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the
+search-before-create funnel, a birth-year-*range* blocking pass) next. Viability proven by spikes (walking skeleton,
+advisory-actor contract, a first federating node, Postgres-on-Android).
 
-**This session (2026-07-03) — §5.4 John-Doe registration, slice A: callsign minting + matcher placeholder exclusion**
+**This session (2026-07-04) — §5.4 John-Doe slice B: clinician-observed evidence (estimated-age range + observed sex),
+full loop** (brainstorm→spec→plan→subagent-SDD, 7 TDD tasks; spec+plan under
+`docs/superpowers/{specs,plans}/2026-07-04-john-doe-clinician-observed-evidence*`). A clinician registering an
+unidentified patient records honest observed evidence, and the estimate becomes a positive matcher signal. **The
+load-bearing finding: the existing demographic spine already carries it** — db/011's `dob` field already requires
+`facets.precision` + accepts optional `facets.basis`, and `clinician-observed` is already provenance rank 30 (correctly
+displaceable by documents) — so **NO db/ floor change, NO schema/SCHEMA bump, NO new event type, NO ADR/spec edit.**
+Three layers: (1) **pure `cairn-event::evidence`** — `birth_year_range_from_age` (principle 4: store the *time-invariant
+birth-year window*, never raw age which drifts; an explicit **range**, never a false-precise midpoint) → `estimated_dob_body`
+(value `"<min>/<max>"` e.g. `"1981/1991"`, precision `"year-range"`, reusing `dob_assertion_body`/`render_dob_twin`) +
+`observed_sex_body` (on **`administrative-sex`**, apparent/phenotypic — NOT the `sex-at-birth` birth fact a clinician
+can't know, which also keeps it out of db/016's *verified*-sex veto); (2) **`cairn-node::evidence::assert_observed_evidence`**
++ a standalone `assert-observed-evidence <patient-uuid>` CLI (authors the dob + administrative-sex `demographic.field.asserted`
+events on an EXISTING chart in one transaction, provenance `clinician-observed`; evidence accrues over time — `register-john-doe`
+unchanged; promoted `db::next_hlc` to `pub`); (3) **advisory matcher range-awareness** — `DateValue` gains an optional
+birth-year interval, `parse_dob` reads `"year-range"` (`"<yyyy>/<yyyy>"`, malformed→None safe-degrade), and `compare_dob`
+is **range-aware + POSITIVE-ONLY** (interval overlap→PARTIAL, no-overlap→INSUFFICIENT_DATA, **never DISAGREE** — a soft
+visual estimate may *support* but never *suppress* a match, mirroring `compare_identifier_sets` + §5.4 recognition/principle 4).
+TDD: 6 pure `cairn-event` + 2 pure builder + 4 DB-gated `cairn-node` integration (`observed_evidence.rs`: range dob lands
+clinician-observed · document-verified dob displaces it · observed sex on administrative-sex with sex-at-birth untouched ·
+age+sex atomic) + `DateValue`/`parse_dob`/`compare_dob` pure tests (incl. inclusive touching-boundary + symmetry) + a
+DB-gated matcher e2e (`test_observed_age_pipeline.py`: candidate DOB inside the range→PARTIAL, outside→INSUFFICIENT_DATA,
+via the real `load_candidate`→`field_comparisons` path). Full `cargo test --workspace` 0 failed + workspace clippy clean;
+matcher 226 passed (pure + DB) + ruff clean, on the PG18 + cairn_pgx 0.2.0 rig (:5532). **End-to-end CLI smoke on a
+provisioned node PASSED:** `register-john-doe` → `assert-observed-evidence --age 40 --tol 5 --age-basis … --sex male …`
+→ `patient_demographic` shows `dob=1981/1991 (year-range, clinician-observed)` + `administrative-sex=male
+(clinician-observed)`, `chart_trust=unconfirmed`. **7-task subagent-SDD each reviewed clean; final whole-branch review
+(opus): READY TO MERGE** — all invariants hold, the `year-range`/`/`/`clinician-observed`/`administrative-sex` tokens are
+byte-identical across the Rust producer, the DB, and the Python consumer, positive-only compare provably cannot emit
+DISAGREE; all Minors deferred. **Honest scope limit (recorded):** a range does NOT generate a blocking key
+(`"1981/1991"`→first-4-digit `1981` only blocks a 1981-born candidate; a John Doe's only name is an excluded callsign),
+so pure-age evidence becomes a positive **scoring** signal once a pair is blocked by another key (a shared identifier off
+belongings, a refined name, the hub sweep) — not a blocking signal; a birth-year-range blocking pass is a clean future
+slice. **Deferred (recorded):** photo/marks/belongings/EMS-context evidence (new field home + attachment tier); the
+"prior history now available" push-alert (§5.12, no notification tier); the search-before-create funnel (UI/API tier);
+fuzzy age-range comparison; a `--observed-year` CLI override; the birth-year-range blocking pass. **§5.4 John-Doe slice B
+is now BUILT.**
+
+**Prior session (2026-07-03) — §5.4 John-Doe registration, slice A: callsign minting + matcher placeholder exclusion**
 (brainstorm→spec→plan→inline-TDD; spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-john-doe-callsign-registration*`).
 The §5.4 **registration front door** C4 explicitly deferred: what a clinician invokes when an unconscious/unknown patient
 arrives. C4 (db/024) had already built the *unconfirmed* trust state + `identity.pending.asserted`; this slice supplies
@@ -82,282 +121,11 @@ field home — larger, separate slice); the **"prior history now available — N
 into one resolution flow. (The cross-language `CALLSIGN_USE`↔placeholder-set guard, previously listed here, is now BUILT —
 see review-round-2 item (5) / issue #124.) **§5.4 John-Doe slice A (callsign + matcher exclusion) is now BUILT.**
 
-**Prior session (2026-07-03) — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)**
-(brainstorm→spec→plan→inline-TDD; spec+plan under
-`docs/superpowers/{specs,plans}/2026-07-03-matcher-consume-alias-pool*`). Closes C5's deferred matcher wiring — the
-`patient_alias_pool` VIEW C5 built was inert. **Advisory Python only (`matcher/…/pipeline/{alias,db,runner,banding}.py`);
-NO `db/` floor, NO SCHEMA/ADR/spec bump.** **The load-bearing finding:** because C5 left db/012's `patient_name`
-retained set physically untouched, a struck name is **still a blocking token *and* still scored**, so the
-returning-fabricated-persona pair (chart A's struck alias vs a new chart B registered under it) **already** gets
-proposed — consuming the alias pool does **not** enable a missing match. Its genuine value is **explainability /
-paper-parity**: the proposal now carries a `known_alias` evidence entry restoring the registry's "known alias" flag to
-the worklist. **The deliberate clinical call — FLAG, never suppress:** the matcher **cannot** distinguish a returning
-fabricated persona from a real, different bearer of that false name (from the name alone they are identical), so
-suppression (scope option "stop matching the false name") would kill the very §5.5(a) recognition it exists to serve;
-only a Human can adjudicate (§5.7). Mechanism: new pure **`known_alias_evidence`** (`pipeline/alias.py`) recognises a
-repudiated alias corroborated by the *other* chart in **normalized space** (NFC + casefold token-bag, **reusing the
-adapter's `_name_bag`** so "same name" is byte-identical to the scorer — no second, drifting definition; match is
-normalized-exact, not fuzzy — fuzzy is deferred); **`band()` gains `has_known_alias` → always REVIEW** (never dropped
-below threshold, never auto-linked on a name a chart declared false — the §5.7 "Human" reservation, mirroring the
-existing shared-identifier veto-rescue; can only ever *surface*, never auto-reject); `build_payload` appends the
-entries; `runner.propose` reads the **reason-free** `patient_alias_pool` (ADR-0006 confidentiality split preserved —
-value only, never the forensic `reason`) for both charts and threads it through. TDD: 6 pure alias tests + 4 banding
-tests + 3 DB-gated e2e (`test_alias_pipeline.py`: `load_aliases` reads the view · returning-alias persists REVIEW with
-the `known_alias` entry · no-repudiation → no tag); `conftest` extended to apply **db/018–025** (was capped at 017) +
-truncate `name_repudiation`, with a `seed_repudiation` helper (the C5 event floor is proven in
-`identity_repudiate.rs`; this suite tests **consumption** only). Full matcher suite **199 passed / 0 skipped** with a
-**PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container this session (pgrx 0.18.1, `--features pg16`,
-`postgresql-server-dev-16` headers, local-TCP `trust`); pure `uv run pytest` **164 passed / 33 skipped**; ruff clean.
-**Deferred (recorded):** fuzzy/edit-distance alias recognition (this cut is normalized-exact; the scorer's fuzzy name
-comparison still runs on the retained-set names, so a near-miss alias is not lost, just not *tagged*); a dedicated
-`alias` blocking pass (**zero recall today** — the name-token pass already generates the identical pair; pure
-future-proofing, only earns its keep if a later slice stops keeping struck names in the scored retained set); any
-scoring-weight treatment of known-false names (declined by design — a genuine re-weighting needs B3 weight-learning
-data + a spec call, and risks suppressing true returning-persona recognition); consuming the alias pool in the C2b
-auto-apply path (correct by construction — a known-alias match forces REVIEW, so it never reaches auto-apply).
-**The matcher-consumes-`patient_alias_pool` wiring is now BUILT.**
+**Prior sessions (2026-07-03) — the §5.7 identity algebra to C5 + the matcher's alias consumption (condensed; full detail in git + ROADMAP slices 15–19).** All merged on `main`, all additive (no floor/SCHEMA/ADR/spec bump except where noted): **C2b** auto-apply of the `auto_candidate` band (matcher-authored, un-attested, recallable link; apply-time veto re-check; per-`matcher_version` `agent` actor); **C3** `dispute` + the `chart_trust` projection (`db/023`; the *under-review* state); **C4** `identify` + the *unconfirmed* state (`db/024`; the §5.4 identity-pending front door; the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE via a severity-max `chart_trust`); **C5** `repudiate` + the known-alias pool (`db/025`; the first *suppressing* identity event — a value-grained `name_repudiation` overlay strikes a known-false name from `patient_name_current`, `mode='suppressing'` forces the human-attestation floor, `patient_alias_pool` surfaces struck names to the matcher); and the **matcher consuming `patient_alias_pool`** (advisory Python — a `known_alias` evidence entry on the proposal, flag-never-suppress, `band()` forces REVIEW; the confidentiality-split view is reason-free per ADR-0006). **Deferred (recorded):** `reattribute` (waits on a clinical-note surface); fuzzy alias recognition; a per-slice identity-floor helper refactor + a deterministic `content_address` tiebreaker on the HLC overlay ([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115)).
 
-**Prior session (2026-07-03) — identity C5, `repudiate` + the known-alias pool** (brainstorm→spec→plan→inline-TDD;
-spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c5-repudiate-alias-pool*`). The **first
-*suppressing*** identity event — C1–C4 were all additive/annotative; `repudiate` strikes a known-false name from the
-display projection. The §5.5(a) **fabricated-persona** case: a patient presented under a deliberately false name; once
-established false, the name leaves the header but **stays in the record** (fact of presentation preserved, principle 1)
-and enters a matcher-visible **known-alias pool** (aliases are reused). One event type **`identity.repudiate.asserted`**
-through the reused `submit_event` door, registered **`mode='suppressing'`** — so the db/005 attestation gate
-**structurally forces a valid human token** (§5.7's "Human" made unbypassable, *no floor special-case*: it reuses the
-exact gate that guards `salience.downgrade`). This is the deliberate design contrast with the additive C1/C3/C4 (whose
-"human vouches" bit only when a responsibility-bearing contributor was named). **Digital strike-through** (principle
-1+2): the assertion event and db/012's `patient_name` retained set are **left untouched**; a **value-grained**
-`name_repudiation` overlay (keyed by `(subject, value)` — a false name is false *however* labelled, and value-keying
-**avoids replicating db/012's `use`-fold** so there is nothing to drift; HLC-latest-wins so a future reversal composes)
-records the struck value, and `patient_name_current` is `CREATE-OR-REPLACE`d to **anti-join** it (column contract
-UNCHANGED ⇒ reload-idempotent). New **`patient_alias_pool`** VIEW surfaces struck names to the §5.2 matcher.
-`cairn_check_repudiation_assertion` culture-neutral structural floor (valid subject uuid, non-empty value + reason) +
-**HARD-required legibility twin**. **Documented design call:** striking a chart's *only* name → `patient_name_current`
-has **no** row for it — honest (the name is genuinely unknown-now; displaying the known-false one is a *precise
-untruth*, principle 4); "the header always shows something" is satisfied one layer up by the §5.4 callsign /
-*unconfirmed* rendering (C4), not by lying. **Honest limit:** the value match is **exact-string** on an opaque value
-(the only culture-neutral, deterministic, convergent choice — the suppression floor must be precise or it risks
-striking the wrong, possibly true, name); fuzzy recognition of a returning alias is the **advisory matcher's** job over
-`patient_alias_pool`, never the floor's. **`db/025_identity_repudiate.sql` (wired into `db.rs`) + a pure `cairn-event`
-builder; NO SCHEMA/ADR/spec bump, db/010–024 left UNTOUCHED** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the
-shared twin hook + `patient_name_current`). TDD: 2 pure builder unit tests + 10 DB-gated integration tests
-(`crates/cairn-node/tests/identity_repudiate.rs`: struck name leaves winner + surviving name takes over + alias-pool
-entry + retained-set evidence preserved · only-name → no winner (honest, never the lie) · idempotent re-assert +
-HLC-latest reason · **newer re-assertion does NOT un-strike** (the HLC-blind anti-join pinned) · **un-attested AND
-agent-attested repudiation refused** — the suppressing "Human" floor, both branches · four floor rejections [empty
-value, empty reason, bad subject, missing twin]). Full `cargo test --workspace` (**364 passed / 0 failed**, incl.
-C1/C3/C4 + demographics-names regression green) + workspace clippy clean on a **PG16 + cairn_pgx 0.2.0** rig stood up
-from scratch in-container this session (pgrx 0.18.1, `--features pg16`, `postgresql-server-dev-16` headers, local-TCP
-`trust` in pg_hba). **Review hardening** (3-agent adversarial pass; SQL-correctness agent found 0 hard bugs):
-(a) **confidentiality split** — `patient_alias_pool` is now **reason-free** and the base `name_repudiation` table is
-**not** granted to `cairn_agent`, so the free-text forensic `reason` can't leak cross-patient on the name-searchable
-matcher view (ADR-0006); (b) `reason` made `NOT NULL` (the floor already guarantees it); (c) the HLC-blind anti-join +
-the agent-attested-refused branch got explicit tests; (d) floor-rejection tests now also assert they reject at the
-**floor**, not the attestation gate; (e) the `origin`-tiebreak collation note folded into #115. **Deferred (recorded):** a **reversal / de-repudiation** event (the overlay is HLC-versioned so it
-composes with no rewrite — the append-only correction path is a separate §5.5 decision); a **chart-history VIEW**
-rendering struck names (the retained set + overlay already carry the data); **matcher wiring** that *consumes*
-`patient_alias_pool`; `reattribute` (§5.5 event-granular strike-through of *clinical documentation* — waits on a
-clinical-note surface that does not yet exist; premature) and the full §5.4 John-Doe registration subsystem.
-**Identity C5 is now BUILT — the first suppressing identity event, `repudiate` + the alias pool.**
+**Merged 2026-07-02 (9 PRs; full detail in git + ROADMAP slices 6–14).** A dense build+review day, all on `main`: the **quarantine/legibility trilogy** (durable pull-plane quarantine + re-offer floor on the clinical `db/021` and node-event `db/022` planes + ADR-0040 legibility/skew primitives wired into every signature door, `cairn_pgx`≥0.2.0 startup floor); **ADR-0040 signing-context domain separation** (spec v0.40→v0.41; the day's only spec bump); the **in-DB clinical apply door** `db/020_apply_remote_event.sql` (a replicated event faces the same floor as a local one) + the contamination-cascade recall-key fix (#99); a **7-agent adversarial review** (`docs/code_reviews/2026-07-02-*`) → in-branch fixes + filed issues #91–#103; and **identity C1** (`db/018` §5.1/§5.7 linkage core) + **C2** (`db/019` human-accepted→attested link).
 
-**Prior session (2026-07-03) — identity C4, `identify` + the *unconfirmed* trust state** (brainstorm→spec→plan→
-inline-TDD; spec+plan under `docs/superpowers/{specs,plans}/2026-07-03-identity-c4-identify-unconfirmed*`). The third
-and final state of the §5.7 chart trust-state contract C3 opened. Two **additive** event types through the reused
-`submit_event` door: **`identity.pending.asserted`** (the §5.4 John-Doe front door — marks a chart identity-pending →
-*unconfirmed*) and **`identity.identify.asserted`** (§5.7 "who, method": establishes identity → *confirmed*).
-**Keyed by the SUBJECT itself** — a per-chart lifecycle state, unlike a dispute's own id ⇒ **no subject-consistency
-guard** is possible or needed (the design contrast with C3). `cairn_check_identity_state_assertion` culture-neutral
-structural floor (`basis` for pending / `method` for identify — required non-empty = "method recorded" enforced
-structurally) + **HARD-required legibility twin**; `chart_identity_state` HLC-overlay table (latest-HLC wins, full
-pending⇄identified lifecycle incl. re-registration re-opening unconfirmed, out-of-order convergent, no BFS/oversize
-guard — cheaper than C1). **`chart_trust` reworked into a severity-max UNION** composing **under-review (open dispute,
-2) over unconfirmed (pending, 1)** — the §5.9 "highest standing assertion" discipline — column contract UNCHANGED so
-`CREATE OR REPLACE VIEW` stays reload-idempotent and C3's `person_chart_trust` is untouched (it surfaces `unconfirmed`
-for free). **Precedence** (documented safety call): under-review (attribution actively challenged — data present
-possibly wrong-patient) outranks unconfirmed (who-is-this unknown — absent history). **§5.7 "Human" adjudication**:
-`method` structurally required; the human-vouches requirement composes via the existing attestation gate when a
-responsibility-bearing contributor is named (workflow-tier policy, not a floor special-case — considered/rejected
-forcing it at the type level). **`db/024_identity_identify.sql` (wired into `db.rs`) + pure `cairn-event` builders;
-NO SCHEMA/ADR/spec bump, and `db/023` left UNTOUCHED** (implements settled §5.4/§5.7; CREATE-OR-REPLACEs the shared
-twin hook + `chart_trust`). TDD: 3 pure builder unit tests + 15 DB-gated integration tests
-(`crates/cairn-node/tests/identity_identify.rs`: accept · HLC overlay both directions · re-pending-reopens · idempotent
-re-assert · pending→unconfirmed on `chart_trust`+`person_chart_trust` · identify→confirmed · pending-before-chart
-safety signal · the **C3⊔C4 compose/precedence proof** [dispute outranks pending → resolve→unconfirmed → identify→
-confirmed] · five floor rejections). Full `cargo test --workspace` (0 fail incl. C1/C3 regression green) + workspace
-clippy clean on a **PG16 + cairn_pgx 0.2.0** rig stood up from scratch in-container (pgrx 0.18.1, `--features pg16`,
-`postgresql-server-dev-16` headers). **Deferred (recorded):** the full §5.4 John-Doe registration subsystem
-(system-generated callsign, clinician-observed evidence assertions — age/marks/belongings/EMS context, matcher re-run
-on new evidence); the "prior history now available" push alert on link (§5.12); registration-class partitioning of the
-search-before-create funnel (§5.3/§5.8); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate`
-(alias pool + suppressing semantics); the §5.2 coherence feedback loop; person-level trust aggregation (read-surface
-tier). **Identity C4 is now BUILT — the §5.7 trust-state contract (confirmed/unconfirmed/under-review) is COMPLETE.**
-
-**Prior session (2026-07-03) — issue: identity C3, `dispute` + the chart trust-state projection** (brainstorm→
-spec→plan→inline-TDD; spec+plan under `docs/superpowers/2026-07-03-identity-c3-dispute-trust-state*`). The §5.7
-patient-initiated **`dispute`** front door (§5.5(b) identity theft) **and** the §5.7 projection-side contract —
-the chart **trust state** (*confirmed / under-review*) — the keystone C1 explicitly deferred and that the rest of
-the algebra composes into. Two **additive** dispute event types (`identity.dispute.asserted` / `.resolved`) through
-the reused `submit_event` door (low-ceremony like the C1 link — a dispute *annotates* trust, never erases/moves/blocks,
-so no attestation unless a responsibility-bearing contributor is named); a culture-neutral
-`cairn_check_dispute_assertion` structural floor + **HARD-required legibility twin**; a `chart_dispute` standing
-overlay keyed by the dispute's own id (HLC-latest-wins, converges out-of-order — the C1 `patient_link` shape, but a
-single-row fact ⇒ no BFS/oversize guard); a `chart_trust` effective-state **VIEW** deliberately shaped so
-`identify`/`reattribute`/the §5.2 coherence check ADD source branches later (never a rewrite); surfaced as
-a composed `person_chart_trust` view. **`db/023_identity_dispute.sql` (wired into `db.rs`) + pure `cairn-event`
-builders; NO SCHEMA/ADR/spec bump, and `db/018` left UNTOUCHED** (implements settled §5.7). **Review-driven design
-choice** (correctness-agent finding): `person_chart_trust` is a SEPARATE view *composing on top of* C1's
-`person_chart` (reusing its `person_member` join) rather than extending `person_chart` in place — the first cut
-`DROP+CREATE`-d `person_chart` in both db/018 and db/023 (because `CREATE OR REPLACE VIEW` cannot shrink an
-already-extended view across the `connect_and_load_schema` reload), but a bare `DROP` would abort node boot the moment
-any dependent view sits on `person_chart` (the API/UI read surface). Composing sidesteps it: `person_chart` stays
-droppable-free, and `person_chart_trust` is the view future trust-source slices extend. TDD: 3 pure builder unit tests + 14
-DB-gated integration tests (`crates/cairn-node/tests/identity_dispute.rs`: accept · HLC overlay · out-of-order
-convergence · multi-dispute resolve-one-stays / resolve-all-confirmed · idempotent re-assert · dispute-before-chart
-safety signal · five floor rejections). Full `cargo test --workspace` (38 binaries, 0 fail) + workspace clippy green
-on a stood-up **PG16 + cairn_pgx 0.2.0** rig (this session built the rig from scratch in-container: pgrx 0.18.1,
-`--features pg16`). **Deferred (recorded):** the *unconfirmed* (identity-pending) state + registration classes / John
-Doe (C4/C5 with `identify`); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate` (alias pool);
-the §5.2 coherence feedback loop; notification/contamination cascade on dispute; person-level trust aggregation
-(read-surface tier); a future refactor to collapse the per-slice identity-floor duplication (twin-hook ladder /
-uuid-check / HLC-upsert) into shared helpers **+ a deterministic final tiebreaker (content_address) on the HLC
-overlay upsert** so a Byzantine same-`(wall,counter,origin)` collision can't diverge honest nodes
-([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115), filed from this review). **Identity C3 is now BUILT.**
-
-**Prior session (2026-07-03) — issue: identity C2b, auto-apply of the matcher's `auto_candidate` band** (brainstorm→
-spec→plan→inline-TDD; spec+plan under `docs/superpowers/`). A matcher proposal banded `auto_candidate` (score ≥ auto
-AND zero vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted`
-event — **no human in the loop** — through the *same* `submit_event` door. **Rust-only in `cairn-node`
-(`matcher_actor.rs` + `auto_apply.rs` + `apply-auto-candidates` CLI); NO `db/` migration, NO floor change, NO
-SCHEMA/ADR/spec bump** — the db/018 floor already made an identity link additive + `targets_other_author=FALSE`, so
-an un-attested matcher link needs no attestation. **Realises the deferred §7.5 matcher-actor:** each distinct
-`matcher_version` is its OWN `agent` actor with its OWN key (auto-enrolled on first sight, owner ceremony), pinned
-under **`skill_epoch`** (= matcher_version) so db/006 `events_by_actor_epoch` recall selects a bad config's auto-links
-**precisely** (contamination cascade). Contributor role **`suggested`** (ADR-0028 contributory, no `responsibility`)
-⇒ authorship present, accountability absent (principle 10). **Apply-time veto re-check** (the no-human-backstop safety
-add): a pair that acquired a veto since propose is kicked to human **`review`**, never auto-linked over. Status
-`pending → auto_applied` (distinct from C2's human `applied`) or `→ review`; idempotent (only `pending` picked up),
-respects a human `rejected`. Matcher key sealed under the op passphrase (no recovery escrow — regenerable). TDD: 6
-pure + 7 DB-gated tests (`crates/cairn-node/tests/auto_apply.rs`: enroll-once/reuse · distinct-epoch actors ·
-un-attested link + person projection · veto→review · human-rejected skipped · batch across epochs + idempotent ·
-recall precision) + end-to-end CLI smoke (applied 1 → 1 un-attested link + 2-member person + auto_applied; re-run
-applied 0). Full cairn-node suite + workspace clippy + `cargo test --workspace` green on the Mac PG18 / cairn_pgx
-0.2.0 rig. **Deferred:** no background scheduler (operator CLI only); ADR-0028 role enum still not DB-enforced
-([#96](https://github.com/cairn-ehr/cairn-ehr/issues/96)); richer §7.5 determinants (served-model digest). **Identity
-C2b is now BUILT.**
-
-**Merged 2026-07-02 (9 PRs; full detail in git + ROADMAP slices 6–14).** A dense build+review day whose work is now
-all on `main`:
-- **Quarantine/legibility trilogy** — durable quarantine + re-offer floor + loud integrity on the **clinical** pull
-  plane (#108, `db/021_sync_quarantine.sql`; PR #110), the **node-event** pull plane (#111, `db/022_node_event_quarantine.sql`;
-  PR #113), and wiring the **ADR-0040** legibility/skew primitives into every signature door + a daemon `cairn_pgx ≥ 0.2.0`
-  startup floor (#109; PR #112). Each closes a silent skip-and-advance set-union exclusion (the A1 loss class); each
-  hardened against its own PR review.
-- **ADR-0040 signing-context domain separation** (#95, spec v0.40→v0.41): one envelope signature per event, domain-
-  separated by a registered signing context bound twice (COSE content-type + `external_aad`); fail-closed on pre-ADR-0040
-  blobs; `cairn_pgx` → 0.2.0. **The only spec/ADR bump of the day.**
-- **In-DB clinical apply door** `db/020_apply_remote_event.sql` (#91): a replicated clinical event now faces the same
-  in-DB floor as a locally-authored one (attestation stored + shipped on the wire; t_effective wire-pinned; clamp-and-flag
-  projection guards). **Contamination-cascade recall key** fixed (#99): `events_by_actor_epoch` resolves against the full
-  registry history + an `attribution` column (pinned/unattributed/pre-registration) — a superseded-epoch recall no longer
-  silently under-selects.
-- **Comprehensive adversarial review** (7 parallel agents over SQL floor / Rust / Python matcher / 39 ADRs;
-  `docs/code_reviews/2026-07-02-comprehensive-review.md`) → a batch of in-branch floor/daemon/matcher fixes + filed issues
-  **#91–#103** (design / large-refactor backlog).
-- **Identity C1** (`db/018_identity_linkage.sql`): the §5.1/§5.7 linkage core — additive link/unlink types through the
-  reused `submit_event` door, `patient_link` HLC-overlay edge table, `person_member` connected-component projection with
-  clean unmerge (principle 2). **Identity C2** (`db/019` + `cairn-node::apply_proposal`): a human-ACCEPTED proposal becomes
-  a human-ATTESTED link event (the accepting human is a responsibility-bearing contributor tripping the db/005 attestation
-  gate). Both additive, no floor change. **C2b (this session) is the auto-band sibling of C2** — see top.
-
-**Prior session (2026-07-01):** built the **§5.2 matcher B3 synthetic blocking-eval volume generator**
-(brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under `docs/superpowers/`) in `matcher/`. Pure,
-stdlib-only **`eval/generator.py`** (no psycopg, 274 lines): `shares_blocking_key` mirrors the three base blocking
-passes; four pure corruption operators (`corrupt_dob_format`, `corrupt_dob_typo`, `corrupt_name`,
-`corrupt_identifier`); culture-plural curated name pools + `synth_seed`; `GenSpec` + `generate_dataset(spec)` builds
-seed+one-corrupted-clone entity clusters (cluster size fixed at 2 — one true pair per entity) with a `_repair` step
-that **guarantees** every seed↔clone pair stays recoverable by ≥1 base blocking key (appends the seed's primary name
-if corruptions destroyed all keys). Deterministic (seeded PRNG). **`eval/generate.py`** is the disk/CLI edge:
-`write_dataset` + `python -m cairn_matcher.eval.generate --entities N --seed S [--out path]`, byte-deterministic JSON
-(`sort_keys=True`), feeding the existing `python -m cairn_matcher.eval <file>` unchanged. **Advisory tooling — no
-`db/` floor, no SCHEMA bump, no spec/ADR change** (implements settled §5.2/§5.13/ADR-0014); no new dep. Tests: pure
-suite **147 passed / 29 skipped** (`uv run pytest`); DB suite **173 passed**. A **drift canary**
-(`test_eval_generator_sync.py`) pins `shares_blocking_key`'s mirrored assumptions to `pipeline/db.py`'s `_GROUPS_SQL`,
-so narrowing a base blocking pass trips the fast suite instead of silently voiding the recoverability guarantee
-(review-fix on PR #88). New DB-gated volume test: on a generated
-200-entity set at `max_block_size=10_000`, `pair_completeness==1.0`, 0 dropped true matches, `reduction_ratio≈0.919`
-(6,467/79,800 pairs) — the recoverability invariant confirmed end-to-end through the real blocking SQL. This is a
-regression/volume instrument, not a statistical accuracy claim: the generated set is recoverable **by construction**,
-not by resemblance to real-world data. **Deferred (recorded, not lost):** variable cluster size (>2 records/entity);
-a deliberately unrecoverable fraction (models the hub-sweep floor); hard negatives / scorer-precision curves; an
-A/B pass-toggle in `generate_candidate_pairs` for one-command before/after (today it's git-revert) — this last one
-is what would unblock a *quantitative* compound-key before/after using this generator; still deferred.
-**The §5.2 matcher B3 synthetic volume generator is now BUILT.**
-
-**Prior session (2026-07-01):** built the **§5.2 matcher B3 compound blocking key — name-token + birth-year**
-(brainstorm→spec→plan→subagent-SDD; spec+plan under `docs/superpowers/`). One **additive** `UNION ALL` branch in
-`pipeline/db.py`'s `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass): it partitions an over-broad single-name-token
-block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match pairs the cap would drop
-wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes); also rescues
-**precision-mismatched** DOBs (`"1990"` vs `"1990-05-12"` — same first 4-digit run groups them, exact-DOB never does).
-Birth-year is an **honest, culture-neutral degrade** (principle 4): the **first 4-consecutive-digit run**
-(`substring(value FROM '[0-9]{4}')`, guarded by `value ~ '[0-9]{4}'`) — no date parsing, no calendar; an ISO value and a
-day-first import (`"12/05/1990"`) of the same person both yield `1990` and group, while a DOB with no 4-digit run stays
-covered by the single-token pass. (Originally a leading-only `left(value,4)`/`^[0-9]{4}` guard; widened to the 4-digit-run
-form 2026-07-01 so cross-format imports group — advisory, so a mis-extracted year only ever feeds the scorer extra pairs it
-rejects, never a false link.) **Advisory — no `db/` floor, no SCHEMA bump, no spec/ADR change**
-(implements settled §5.2/§5.13/ADR-0014); no new dep; `db.py` 166 lines. Tests: 5 new DB-gated integration tests (rescue,
-honest-degrade, precision-mismatch, cross-format, cross-pass dedup); full matcher suite **151 with DB / 123 + 28 skipped** without.
-Harness sanity check on a clean DB: `pair_completeness=1.000`, `reduction_ratio=0.911`, 0 dropped true matches on `gold_v1`
-(additivity confirmed). Per-task opus/sonnet reviews clean (spec ✅). **Known limitation** (user-flagged): year extraction
-still degrades on 2-digit years and non-Gregorian calendars — revisit on richer/real data (safe degrade, not a false group).
-Discovered + filed **[issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84)** (pre-existing: integration tests
-commit-leak rows via `seed_patient`; `evaluate_blocking` `KeyError`-crashes on a dirty DB — out of this slice's scope).
-**The §5.2 compound-blocking-keys item is now BUILT.**
-
-**Prior session (2026-06-30):** built the **§5.2 matcher eval harness (piece B3 keystone)** — a labelled-dataset
-measurement substrate to unblock the measurement-driven B3 items (compound blocking keys, weight-learning), via
-**brainstorm→spec→plan→subagent-SDD** (8 TDD tasks + final review; spec+plan under `docs/superpowers/`). New
-pure-by-default **`matcher/src/cairn_matcher/eval/`** sub-package mirroring the `pipeline/` pure-core + optional-DB split:
-**`dataset.py`** (entity-cluster JSON format + loader; `record_to_candidate` *reuses the real `candidate_from_rows`
-adapter* — no drift; `truth_pairs`/`all_pairs` ground truth), **`metrics.py`** (confusion + precision/recall/F1 at
-strict+lenient operating points + auto-false-link-rate + missed-match-rate + score separation; zero-denominator → 0.0,
-never NaN), **`scorer_eval.py`** (`evaluate_scorer` runs the *real* `field_comparisons→score→band` path; `weights`/
-`thresholds`/`config` are params — the weight-learning lever; banding with no veto = documented pure-eval simplification),
-**`report.py`** (plain-text report incl. the honest "regression/tuning instrument, not a statistical accuracy claim"
-caveat), **`__main__.py`** (`python -m cairn_matcher.eval` — scorer always; blocking when `CAIRN_TEST_PG`, psycopg
-**lazy-imported** so the pure path never touches it), **`blocking_eval.py`** (DB-gated, `pipeline` extra: seeds `patient_*`
-label→uuid5, calls the *real* `generate_candidate_pairs`, `conn.rollback()` xmin-guard, computes pair-completeness /
-reduction-ratio / dropped-true-matches / Σ`C(size,2)` dropped-pair estimate), + a hand-authored **culture-plural gold
-fixture** (`eval/fixtures/gold_v1.json`: mononym / patronymic+diacritic / multi-token). **Advisory only — no `db/` floor
-file, no SCHEMA bump, no spec/ADR change** (implements settled §5.2/§5.13/ADR-0014). **No new dep** (pure core stdlib-only;
-blocking under existing `pipeline`/psycopg extra). Tests: **146 with DB** / **123 + 23 skipped** without (`uv run pytest`);
-purity probe confirms the pure surface (incl. `__main__`) imports no psycopg. Final **opus whole-branch review:
-READY-TO-MERGE, 0 Critical / 0 Important** (real-path reuse/no-drift, purity, advisory-only, metric math all verified;
-two cosmetic Minors applied in-branch). **Post-review fixes (in-branch, PR #83):** `blocking_eval.seed_dataset` no longer
-`conn.commit()`s — the seed now lives in the read txn that `evaluate_blocking`'s `rollback()` discards, so the DB-gated
-eval is **idempotent + leaves no synthetic patients** (a committed seed would re-hit `patient_demographic`'s
-`PK(patient_id, field)` on a second run, since `uuid5` labels are deterministic); the dataset loader now validates
-name/identifier inner keys → a located `DatasetError` instead of an opaque downstream `KeyError`. **Deferred (recorded, not lost):** the **synthetic corruption generator** (volume +
-recall curves, same format); the **compound-blocking-keys** + **weight-learning** slices themselves (this harness *measures*
-them); a **veto-aware / end-to-end scorer mode**. **The §5.2 matcher eval harness (B3 keystone) is now BUILT.**
-
-**Prior session (2026-06-30):** built the **§5.2 advisory matcher — piece B2b** (blocking / candidate-pair generation +
-batch sweep): read-only `db.generate_candidate_pairs(conn, *, max_block_size=100)` — a 3-pass blocking disjunction
-(shared identifier excl. `unknown` · exact-DOB · shared name token), group CTEs deduped to canonical `(low,high)` by uuid
-VALUE order, oversized-block guard → `skipped_blocks` (never a silent cap) — + `pipeline/sweep.py` (`sweep()` two-phase
-batch driver: generate→`rollback` xmin-guard, then loop `runner.propose()` per pair with skip-and-report errors). Advisory;
-no `db/` floor, no SCHEMA bump. 113 with DB / 93+20 skipped without. Opus review READY-TO-MERGE 0C/0I. Merged **[PR #81](https://github.com/cairn-ehr/cairn-ehr/pull/81)**. **B2b BUILT.**
-
-**Prior session (2026-06-29):** built the **§5.2 advisory matcher pipeline — piece B2** (veto-gated **pairwise**
-pipeline + advisory proposal worklist) in a new IO-bearing sub-package **`cairn_matcher/pipeline/`** beside B1's pure
-core: pure `adapter.py` (`patient_*` rows → `CandidateRecord`; ISO DOB, `sorted()` token-bag names, `match_key`
-identifiers, safe-degrade) + pure `banding.py` (`MatchScore`+veto → `auto_candidate` iff `≥T_auto` **and no veto**,
-else `review`, else `None`; any veto caps at `review`, never auto-link/auto-reject) + `db.py`/`runner.py` (the only
-psycopg modules; `propose` = load→score→veto→band→upsert→commit, commit owned by runner). New **`db/017_match_proposal.sql`**
-(SCHEMA 15→16): an **advisory** worklist table (human `status` preserved on re-run) — *not a safety gate*. **psycopg**
-optional (`pipeline` extra). 92 with DB / 87+5 skipped without. Opus review MERGE-READY 0C/0I. Non-blocking Minors →
-**[issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79)**. **B2 BUILT.**
+**Prior sessions (2026-06-29/30/07-01) — the §5.2 advisory matcher pipeline B2→B3 (condensed; full detail in git + ROADMAP slices 8–12).** Advisory Python, no `db/` floor except B2's `db/017_match_proposal.sql` worklist (SCHEMA 15→16); no ADR/spec bump. **B2** veto-gated pairwise pipeline + proposal worklist (`cairn_matcher/pipeline/`); **B2b** blocking / candidate-pair generation (3-pass disjunction, oversized-block guard) + a `sweep()` batch driver; **B3 eval harness** (`cairn_matcher/eval/` — scorer metrics + DB-gated blocking-recall measurement + culture-plural `gold_v1.json` + a `python -m cairn_matcher.eval` CLI, real-path reuse/no-drift); **B3 compound blocking key** (additive `name+birth-year` `UNION ALL` pass in `pipeline/db.py`; recall non-decreasing; honest culture-neutral year degrade via the first 4-digit run); **B3 synthetic volume generator** (`eval/generator.py` pure + `eval/generate.py` CLI — seed+corrupted-clone entity clusters recoverable by construction, drift-canary-pinned to the base blocking passes). **Deferred:** an A/B pass-toggle in `generate_candidate_pairs` (quantitative before/after); weight-learning; further compound keys; a veto-aware/e2e scorer mode; the matcher test-leak + harness `KeyError` ([#84](https://github.com/cairn-ehr/cairn-ehr/issues/84)).
 
 **Prior sessions (2026-06-28/29) — §5.2 matcher pieces A + B1 (condensed; full detail in ROADMAP slices 6–7 + git):**
 **piece A** = the **§4.4/§5.2 in-DB hard-veto floor** (`db/016_match_veto.sql`, SCHEMA 14→15; `cairn_match_veto` returns
@@ -591,14 +359,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   floor) **is now BUILT**. **Next identity slice: C5+** — `reattribute` (§5.5 event-granular strike-through of *clinical
   documentation* + tiered adjudication — **waits on a clinical-note surface** that does not yet exist; premature to
   build against demographics) + the rest of the §5.4 John-Doe registration subsystem. **§5.4 slice A (callsign minting +
-  matcher placeholder exclusion) is now BUILT this session** — `cairn-event::john_doe::callsign` + `cairn-node::john_doe::
-  register_john_doe` (composes a `use_key='callsign'` name assertion + C4's `identity.pending.asserted`) + a
-  `register-john-doe` CLI + the advisory matcher exclusion (`use_key <> ALL(%s)`) in `pipeline/db.py`; NO new event
-  type / migration / floor / SCHEMA bump. **Remaining §5.4:** clinician-observed evidence assertions (age/observed-sex
-  reuse existing demographic fields; photo/marks/belongings/EMS-context need a new field home — separate slice), the
+  matcher placeholder exclusion)** — `cairn-event::john_doe::callsign` + `cairn-node::john_doe::register_john_doe` + a
+  `register-john-doe` CLI + the advisory matcher exclusion (`use_key <> ALL(%s)`) — **and slice B (clinician-observed
+  evidence: estimated-age range + observed sex)** — `cairn-event::evidence` (`birth_year_range_from_age` +
+  `estimated_dob_body` value `"<min>/<max>"`/precision `"year-range"` + `observed_sex_body` on `administrative-sex`) +
+  `cairn-node::evidence::assert_observed_evidence` + an `assert-observed-evidence` CLI + range-aware **positive-only**
+  `compare_dob` in the matcher — **are now BUILT; NO new event type / migration / floor / SCHEMA / ADR / spec change.**
+  **Remaining §5.4:** photo/marks/belongings/EMS-context evidence (new field home + attachment tier — separate slice), the
   "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
   registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
-  count), and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
+  count), a **birth-year-*range* blocking pass** (slice B's range is a *scoring* signal, not a blocking key — see the
+  2026-07-04 session note), a `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
   source into the `chart_trust` VIEW when it lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; ~~**matcher wiring** consuming `patient_alias_pool`~~ **(DONE this
   session — known-alias evidence; flag-never-suppress; fuzzy recognition + a dedicated `alias` blocking pass deferred)**. Deferred: an **A/B pass-toggle**
