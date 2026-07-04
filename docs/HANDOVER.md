@@ -38,17 +38,27 @@ no-data-is-never-agreement; additive-only: a mismatch withholds the rescue, neve
 anchored block (members+1), skips reported under the anchor uuid, hub sweep the declared backstop; (3) the **A/B
 toggle** (`enabled_passes` on `generate_candidate_pairs`, one SQL round-trip regardless) + an **honesty fix** (the
 `birth_year` CTE now excludes `year-range` values — `"1981/1991"` no longer leaks `1981` into `name+year` as a fake
-birth year; principle 4). TDD: 9 pure + 14 DB-gated range tests + 3 toggle tests; suites **pure 194 / DB-gated 253 /
-ruff clean** (PG18.1+cairn_pgx :5532 rig). 5 implementation tasks subagent-SDD'd, each reviewed clean; **final
-whole-branch review (fable): 2 Important found+FIXED in a review-hardening commit** (the WHERE-clause
-evaluation-order crash hazard; the `unknown`-sex sentinel fabricating blocking agreement) → re-review **READY TO
-MERGE**. **Honest scope limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):** the
+birth year; principle 4). TDD: 9 pure + 14 DB-gated range tests + 3 toggle tests (PG18.1+cairn_pgx :5532 rig). 5
+implementation tasks subagent-SDD'd, each reviewed clean; **final whole-branch review (fable): 2 Important
+found+FIXED in a review-hardening commit** (the WHERE-clause evaluation-order crash hazard; the `unknown`-sex sentinel
+fabricating blocking agreement) → re-review **READY TO MERGE**. A **post-PR 8-angle `/review` + adversarial-verify
+wave (PR #131)** then confirmed 7 more findings, all FIXED in a second hardening wave: the eval harness `KeyError` on
+resident (non-seeded) charts — the crash arm of issue #84, now guarded (resident↔seeded pairs are excluded from the
+labelled metrics, never a crash); shape-aware `dropped_pair_estimate` (an anchored skip drops s−1 pairs, not C(s,2) —
+new pure `blocking.dropped_pair_estimate` branching on `ANCHORED_PASSES`); the `blocking_sex` sentinel exclusion now
+**param-BOUND from `adapter.VALUE_SENTINELS`** (public rename) with an explicit whitespace trim-set (btrim's default
+trims spaces ONLY — tab/NBSP-padded sentinels were slipping through); the exact-`dob` arm now **excludes `year-range`
+values** (A/B purity: an off-range-passes baseline no longer surfaces range pairs via string equality); statement-level
+toggle skip (an A/B baseline with the range passes off no longer pays the un-indexable overlap join); a SQL↔registry
+pass-name guard (`require_registered` against the emitting statement's declared shape set — an unregistered or
+misplaced arm raises instead of silently contributing zero pairs); and `canonical_pair` deduped into pure
+`blocking.py` (one definition of pair identity; runner re-exports). Suites now **pure 200 / DB-gated 264 / ruff
+clean**. **Honest scope limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):** the
 pure-age John Doe pair now *blocks* but still scores below `review=3.0` (dob PARTIAL ≈1.5 max is the only scoreable
 field; `administrative-sex` is unscored by `load_candidate`) — blocking recall improved, end-to-end §5.4 recall for the
 evidence-poorest chart waits on an administrative-sex scoring slice. **Deferred (recorded):** generator range-DOB
 emission + range-aware eval mirror (the quantitative recall number the toggle now enables); fuzzy near-window
-softening; hub-tier range sweep with a larger cap budget; eval `dropped_pair_estimate` still assumes C(k,2) for
-anchored skips (dormant, commented in place).
+softening; hub-tier range sweep with a larger cap budget.
 
 **Prior session (2026-07-04, first) — §5.4 John-Doe slice B: clinician-observed evidence (estimated-age range +
 observed sex), full loop** (brainstorm→spec→plan→subagent-SDD, 7 TDD tasks; spec+plan under
@@ -360,11 +370,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   source into the `chart_trust` VIEW when it lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; fuzzy alias recognition + a dedicated `alias` blocking pass.
   Deferred (range blocking): generator range-DOB emission + range-aware eval mirror; fuzzy near-window softening;
-  hub-tier range sweep; eval `dropped_pair_estimate` assumes C(k,2) for anchored skips (dormant, commented). Deferred
+  hub-tier range sweep. Deferred
   (earlier): variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto
-  (stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; the matcher test-leak + harness `KeyError`
-  ([issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84)); B2 follow-up Minors (Thresholds `review<auto` guard,
+  (stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; the matcher conftest test-leak
+  ([issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) — its harness-`KeyError` arm was FIXED in PR #131's
+  review wave; the committed-row leak remains); B2 follow-up Minors (Thresholds `review<auto` guard,
   `band` CHECK, `updated_at` trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
   Rust DB-gated tests + the matcher integration tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
   dbname=cairn_test"` (PG18+cairn_pgx); matcher integration: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline

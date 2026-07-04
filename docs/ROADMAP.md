@@ -329,9 +329,13 @@ so the trans case still groups; `unknown` sentinel excluded — no-data-is-never
 the plain window block exceeds the cap (skipped+reported, hub sweep the backstop). Plus the **A/B pass-toggle**
 (`enabled_passes` on `generate_candidate_pairs`; unknown pass name raises — a silent typo would fake a measurement) and
 an honesty fix (`birth_year` CTE excludes `year-range`, so `"1981/1991"` no longer leaks `1981` into `name+year` as a
-fake birth year). TDD: 9 pure (`test_blocking_passes.py`) + 14 DB-gated (`test_dob_range_blocking.py`) + 3 toggle tests;
-suites pure 194 / DB 253 / ruff clean. Fable whole-branch review → fix wave (order-proof guard, unknown-sentinel
-exclusion) → **READY TO MERGE**. **Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
+fake birth year). TDD: 9 pure (`test_blocking_passes.py`) + 14 DB-gated (`test_dob_range_blocking.py`) + 3 toggle tests.
+Fable whole-branch review → fix wave (order-proof guard, unknown-sentinel exclusion) → **READY TO MERGE**; a post-PR
+8-angle review→adversarial-verify wave (PR #131) then fixed 7 more: eval-harness `KeyError` guard vs resident charts
+(the #84 crash arm), shape-aware `dropped_pair_estimate` (s−1 for anchored skips, not C(s,2)), `blocking_sex` sentinel
+param-bound from `adapter.VALUE_SENTINELS` + explicit whitespace trim-set, exact-`dob` arm excludes `year-range` (A/B
+purity), statement-level toggle skip, SQL↔registry pass-name guard, `canonical_pair` deduped into pure `blocking.py`.
+Suites pure 200 / DB 264 / ruff clean. **Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
 the pure-age John Doe pair now *blocks* but still scores below `review=3.0` (dob PARTIAL alone; `administrative-sex` is
 unscored) — the next scoring slice inherits it explicitly. **Deferred:** generator range-DOB emission + range-aware
 eval mirror (the quantitative recall number the toggle now enables), fuzzy near-window softening, hub-tier range sweep.
