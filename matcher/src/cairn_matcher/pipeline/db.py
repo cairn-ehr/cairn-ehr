@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 
 from cairn_matcher.pipeline.adapter import candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
-from cairn_matcher.pipeline.blocking import resolve_enabled_passes
+from cairn_matcher.pipeline.blocking import pairs_from_anchor, resolve_enabled_passes
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -186,6 +186,70 @@ FROM name_tokens nt JOIN birth_year byr USING (patient_id)
 GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
+# The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate
+# statement from _GROUPS_SQL because the pair semantics differ: these rows are
+# (pass_name, anchor, members) and Python pairs ANCHOR x MEMBER only -- never member x
+# member (see pipeline/blocking.py for why all-pairing a birth-year window would
+# manufacture C(k,2) noise pairs).
+#
+# birth_window gives every chart an inclusive birth-year interval:
+#   * range rows: facets precision 'year-range', value '<yyyy>/<yyyy>' (slice B's
+#     estimated-age window). Guards mirror parse_dob's safe degrade -- a malformed or
+#     inverted value is EXCLUDED (never a false group, only a withheld rescue).
+#   * point rows: the existing first-4-digit-run rule -> [year, year]. year-range rows
+#     are excluded from this branch so a range can never double-enter as a false point
+#     [min, min].
+# The overlap join (m.y_min <= a.y_max AND a.y_min <= m.y_max) anchored on is_range
+# charts yields range<->point AND range<->range (two John Does, two sites -- the only
+# key that pair can ever share) from the same predicate.
+#
+# blocking_sex is the UNION of a chart's sex-at-birth and administrative-sex values:
+# recall-first (a trans patient whose administrative-sex matches the clinician's
+# observation still groups even though sex-at-birth differs). 'dob-range+sex' is the
+# additive RESCUE pass, mirroring name/name+year: in a big DB the plain window block
+# exceeds the cap and is skipped+reported; intersecting with a shared sex value roughly
+# halves it, so it fires within cap in more settings. Additive-only: a sex mismatch
+# merely means the rescue does not fire -- the scorer never sees a suppression.
+_RANGE_GROUPS_SQL = """
+WITH birth_window AS (
+    SELECT patient_id,
+           split_part(value, '/', 1)::int AS y_min,
+           split_part(value, '/', 2)::int AS y_max,
+           TRUE AS is_range
+    FROM patient_demographic
+    WHERE field = 'dob'
+      AND facets ->> 'precision' = 'year-range'
+      AND value ~ '^[0-9]{4}/[0-9]{4}$'
+      AND split_part(value, '/', 1)::int <= split_part(value, '/', 2)::int
+    UNION ALL
+    SELECT patient_id,
+           substring(value FROM '[0-9]{4}')::int,
+           substring(value FROM '[0-9]{4}')::int,
+           FALSE
+    FROM patient_demographic
+    WHERE field = 'dob'
+      AND value ~ '[0-9]{4}'
+      AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
+),
+blocking_sex AS (
+    SELECT DISTINCT patient_id, lower(value) AS sex
+    FROM patient_demographic
+    WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
+),
+window_overlap AS (
+    SELECT a.patient_id AS anchor, m.patient_id AS member
+    FROM birth_window a
+    JOIN birth_window m
+      ON m.patient_id <> a.patient_id
+     AND m.y_min <= a.y_max
+     AND a.y_min <= m.y_max
+    WHERE a.is_range
+)
+SELECT 'dob-range' AS pass_name, anchor, array_agg(DISTINCT member) AS members
+FROM window_overlap
+GROUP BY anchor
+"""
+
 
 def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
     """Every canonical within-group pair (uuid value order), as lowercase-uuid-text.
@@ -245,6 +309,19 @@ def generate_candidate_pairs(
                 skipped_blocks.append((pass_name, key, size))
             else:
                 pairs.update(_pairs_from_members(members))
+        # The anchored range passes: pairs are anchor x member ONLY. The cap counts the
+        # WHOLE block (members + the anchor itself) so "block size" means the same thing
+        # for both pair-generation shapes, and a skipped block is reported under the
+        # anchor's uuid (its natural key).
+        cur.execute(_RANGE_GROUPS_SQL)
+        for pass_name, anchor, members in cur.fetchall():
+            if pass_name not in enabled:
+                continue
+            size = len(members) + 1
+            if size > max_block_size:
+                skipped_blocks.append((pass_name, str(anchor), size))
+            else:
+                pairs.update(pairs_from_anchor(anchor, members))
     return sorted(pairs), skipped_blocks
 
 
