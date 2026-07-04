@@ -64,6 +64,13 @@ def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
     equal exact-DOB value, or a shared name token. The fourth pass 'name+year' is
     subsumed by the name-token check (it requires a shared token), so it is not tested
     separately: if name tokens intersect, the plain 'name' pass already groups them.
+
+    The two anchored range passes ('dob-range' / 'dob-range+sex') are DELIBERATELY
+    unmirrored: the generator emits no year-range dobs yet, and an unmirrored pass only
+    makes _repair conservative (it under-claims recoverability and repairs via a name
+    token anyway -- the safe direction; an OVER-claiming mirror would be the bug).
+    Mirror them when the generator learns to emit estimated-age records (deferred in the
+    2026-07-04 range-blocking design, section 10).
     """
     if _identifier_keys(a) & _identifier_keys(b):
         return True

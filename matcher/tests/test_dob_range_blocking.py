@@ -169,3 +169,21 @@ def test_sex_arm_toggles_independently(pg_conn):
     )
     assert canonical_pair(PA, PB) in on_pairs
     assert canonical_pair(PA, PB) not in off_pairs
+
+
+def test_name_year_never_keys_on_a_range_window_min(pg_conn):
+    # Honesty fix: "1981/1991" used to leak its first 4-digit run (1981) into the
+    # 'name+year' pass as if it were a birth year -- a false key (the window MIN is not
+    # a birth year; principle 4). Setup: PA (range dob) and PB (born 1981) share the
+    # name token "zed"; PC oversizes the single-token 'zed' block at cap=2, so ONLY
+    # 'name+year' could pair PA-PB among the name passes. The range passes are toggled
+    # OFF to isolate the assertion (they legitimately pair PA-PB via the window).
+    seed_patient(pg_conn, PA, dob=("1981/1991", 30, "year-range"), names=[("Zed", 20)])
+    seed_patient(pg_conn, PB, dob=("1981-05-05", 20), names=[("Zed", 20)])
+    seed_patient(pg_conn, PC, dob=("2000-01-01", 20), names=[("Zed", 20)])
+    pairs, skipped = _gen(
+        pg_conn, max_block_size=2,
+        enabled_passes={"identifier", "dob", "name", "name+year"},
+    )
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    assert canonical_pair(PA, PB) not in pairs

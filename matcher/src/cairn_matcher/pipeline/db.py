@@ -164,9 +164,14 @@ WITH name_tokens AS (
     WHERE token <> '' AND use_key <> ALL(%s)
 ),
 birth_year AS (
+    -- year-range values are EXCLUDED: "1981/1991" would otherwise leak its first
+    -- 4-digit run (1981) into name+year as if it were a birth year -- a false key
+    -- (the window min is not a birth year; principle 4). The anchored range passes
+    -- (_RANGE_GROUPS_SQL) own ranges.
     SELECT patient_id, substring(value FROM '[0-9]{4}') AS year
     FROM patient_demographic
     WHERE field = 'dob' AND value ~ '[0-9]{4}'
+      AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 )
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
@@ -283,8 +288,8 @@ def generate_candidate_pairs(
 
     Six passes (see blocking.ALL_PASSES): four SYMMETRIC group passes (identifier /
     exact-DOB / name-token / name-token+birth-year, _GROUPS_SQL) and two ANCHORED
-    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — added in the
-    §5.4 range-blocking slice; Task 3 wires them).
+    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — the
+    §5.4 range-blocking slice).
 
     `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
     the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
