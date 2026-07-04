@@ -31,6 +31,19 @@ def test_overlapping_ranges_are_partial():
 
 def test_disjoint_ranges_are_insufficient():
     assert compare_dob(_range(1981, 1991), _range(2000, 2005), CTX) == AgreementLevel.INSUFFICIENT_DATA
+    # order-independent for the disjoint case too (symmetry of the overlap test)
+    assert compare_dob(_range(2000, 2005), _range(1981, 1991), CTX) == AgreementLevel.INSUFFICIENT_DATA
+
+
+def test_touching_boundary_ranges_are_partial():
+    # Intervals that share exactly one endpoint STILL overlap: the overlap test is
+    # inclusive (max(lo) <= min(hi)). This pins the inclusive-boundary decision so an
+    # accidental switch to exclusive overlap (which would silently drop a real match
+    # for the returning John Doe) trips this test. Asserted both orders (symmetry).
+    assert compare_dob(_range(1981, 1991), _range(1991, 2000), CTX) == AgreementLevel.PARTIAL
+    assert compare_dob(_range(1991, 2000), _range(1981, 1991), CTX) == AgreementLevel.PARTIAL
+    # a point exactly on the range boundary is inside the (inclusive) range
+    assert compare_dob(_range(1981, 1991), _point(1991), CTX) == AgreementLevel.PARTIAL
 
 
 def test_range_vs_point_with_no_year_is_insufficient():
