@@ -248,6 +248,12 @@ window_overlap AS (
 SELECT 'dob-range' AS pass_name, anchor, array_agg(DISTINCT member) AS members
 FROM window_overlap
 GROUP BY anchor
+UNION ALL
+SELECT 'dob-range+sex', o.anchor, array_agg(DISTINCT o.member)
+FROM window_overlap o
+JOIN blocking_sex sa ON sa.patient_id = o.anchor
+JOIN blocking_sex sm ON sm.patient_id = o.member AND sm.sex = sa.sex
+GROUP BY o.anchor
 """
 
 
