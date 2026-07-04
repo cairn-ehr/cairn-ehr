@@ -15,8 +15,15 @@ sessions, providers, and the PoC GUI is still ahead, so this decision is deliber
 inline media (images, drawn annotations, audio, and later modalities) while every principle and prior
 ADR holds, and that any node decades ahead or behind can still read as plaintext. The format is a
 can't-retrofit commitment of the same class as the [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)
-attachment-reference shape: the first production `note.authored` event freezes it under a signature
-forever, so it must be settled before the surface is built.
+attachment-reference shape: the first production `clinical.note.asserted` event freezes it under a
+signature forever, so it must be settled before the surface is built.
+
+One piece of existing code is in scope: the walking skeleton registered a placeholder note type —
+`note.added`, `schema_version = note/1`, a plain-text body — in the fail-closed event-type registry
+(`db/005_submit.sql`), with chart projections (`db/002`, `db/008`) and emitters in `cairn-sync` and
+the node test fixtures. It was scaffolding to exercise the floor and sync plane; **no production
+fleet has ever admitted a `note.added` event.** This ADR retires it (Decision point 1) rather than
+silently coexisting with it.
 
 The forces:
 
@@ -57,7 +64,20 @@ The progress note is **one signed event whose body is a markdown narrative plus 
 intra-note structure is **never** inter-event structure. Canonical home:
 [data-model §3.19](../data-model.md#319-the-progress-note-narrative-format-one-signed-event-markdown-narrative-and-manifest-keyed-media-anchors).
 
-1. **One note = one signed event** (`event_type = note.authored`, `schema_version = note/1`).
+1. **One note = one signed event** (`event_type = clinical.note.asserted`,
+   `schema_version = clinical.note/1`). The name follows the production three-segment
+   `<domain>.<noun>.asserted` convention (`demographic.identifier.asserted`,
+   `identity.link.asserted`) — *asserted*, because a note is a claim like everything else — and
+   opens the **`clinical.*` namespace**: a mechanically checkable partition between clinical
+   content and administrative/infrastructure streams (`demographic.*`, `identity.*`, `node.*`)
+   that filtering, prioritisation, and safety-projection policy can key on. The partition is a
+   registrar convention, not floor-enforced semantics: an immutable registry cannot rename a
+   miscategorised type, only supersede it, so new types must be placed on the correct side when
+   registered. The walking-skeleton placeholder `note.added` / `note/1` (see Context) is
+   **retired by the build slice of this ADR**: the same migration that registers
+   `clinical.note.asserted` removes the `note.added` registry row and its projections, and the
+   `cairn-sync`/test emitters migrate off it — so neither the type nor the `note/1` tag ever
+   appears on a production wire, and the tag carries no ambiguity.
    Ordering is intrinsic to the body, arrival is atomic (a note can never half-arrive), and there is
    exactly one legibility twin, one signature, one attestation — the paper model, where the clinician
    signs the *entry*, not each sentence. The contributor set ([§3.9](../data-model.md#39-authorship-and-accountability))
@@ -70,8 +90,11 @@ intra-note structure is **never** inter-event structure. Canonical home:
    profile (point 5). `media` is an array of manifest entries, each carrying the
    [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md) day-one attachment-reference
    shape — self-describing content digest, media type, byte length, rendition set, seal indicator /
-   DEK-wrap reference, inline-vs-reference — plus a **note-local `id`** and a **mandatory non-empty
-   human `descriptor`**. Structured clinical actions (orders, prescriptions) are *never* embedded in
+   DEK-wrap reference, inline-vs-reference, and the clear-text descriptor metadata (modality /
+   human descriptor) that shape already includes — plus a **note-local `id`**. The note manifest
+   adds no second description field: it **tightens the existing ADR-0013/§3.14 human descriptor to
+   mandatory-non-empty** (the same string the safety projection and the degraded render already
+   read — one field, one truth). Structured clinical actions (orders, prescriptions) are *never* embedded in
    the note body: they are separate events rendered into the note *view* by the encounter fold
    ([ADR-0020](0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)); the note
    event is pure narrative.
@@ -81,12 +104,22 @@ intra-note structure is **never** inter-event structure. Canonical home:
    *"render this manifest entry here"* — not "this is an image". The manifest's `media_type` tells a
    renderer whether to place an image, an audio player, a waveform viewer, or an honest
    *"referenced — not yet retrieved"* card; adding a future modality is a new media type, **zero
-   format change**, and an older renderer degrades to the anchor's text. Anchors are keyed by
-   manifest `id`, never by inline digest — a 64-hex digest in prose degrades the raw legibility
-   principle 11 protects, and the digest already lives once in the manifest, covered by the same
-   event signature, so the indirection costs nothing in integrity. **A dangling anchor (no matching
-   manifest entry) is rejected at the validated submit floor** ([§9.6](../language-substrate.md#96-the-validated-submit-surface-the-write-path)) —
-   structurally impossible to sync. A manifest entry *without* an anchor is legal: an attachment
+   format change**, and an older renderer degrades to the anchor's text. **The anchor's text is the
+   manifest entry's `descriptor`, byte-identical** — the same honest description stated once in the
+   prose and once in the manifest, both under the same signature, so displayed text, twin, and
+   safety projection can never disagree; editors keep the two in sync mechanically. Anchors are
+   keyed by manifest `id`, never by inline digest — a 64-hex digest in prose degrades the raw
+   legibility principle 11 protects, and the digest already lives once in the manifest, covered by
+   the same event signature, so the indirection costs nothing in integrity. **Anchor↔manifest
+   integrity is floor-enforced** ([§9.6](../language-substrate.md#96-the-validated-submit-surface-the-write-path)):
+   a dangling anchor (no matching manifest entry), an empty anchor text, or an anchor text that
+   differs from its entry's descriptor is rejected — identically at the submit door and the
+   mirrored remote-apply door (the checks are deterministic functions of the signed bytes, so no
+   conformant profile-aware node ever admits one). Under
+   [§6.5](../sync.md#65-schema-evolution-two-planes-and-lossless-forwarding) version-skew custody an
+   older node forwards a newer-schema event byte-for-byte *without* being able to profile-check it, so a
+   renderer must still treat an unresolvable anchor as the honest degraded card, never assume
+   anchors always resolve. A manifest entry *without* an anchor is legal: an attachment
    clipped to the note but not placed inline (paper-clip parity).
 
 4. **The descriptor is the twin substrate.** Every manifest entry must carry an honest, non-empty
@@ -95,11 +128,15 @@ intra-note structure is **never** inter-event structure. Canonical home:
    is then a pure mechanical derivation ([ADR-0039](0039-globalise-authored-legibility-twin.md)
    pattern): the narrative verbatim, each anchor replaced by
    `[attachment: <descriptor> — <media_type>, <size>]`, and one such line appended per non-anchored
-   manifest entry. That twin is what a text-only node, a screen reader, full-text search, and the
+   manifest entry. The `<descriptor>` is read from the **manifest entry** (the anchor text is equal
+   by construction, point 3 — the manifest is named authoritative so the rule needs no tie-break).
+   That twin is what a text-only node, a screen reader, full-text search, and the
    RAG substrate see.
 
-5. **The markdown profile is pinned, versioned, austere, and additive-only.** Profile `note/1`:
-   paragraphs, `**bold**`, `*italic*`, headings, ordered/unordered lists, blockquote, and the anchor
+5. **The markdown profile is pinned, versioned, austere, and additive-only.** Profile
+   `clinical.note/1` (the profile is the narrative grammar of the event's `schema_version` — one
+   identifier, one version, no separate profile field): paragraphs, `**bold**`, `*italic*`,
+   headings, ordered/unordered lists, blockquote, and the anchor
    grammar. **Excluded forever:** raw HTML (an injection surface for renderers the steward can never
    audit, and a legibility-across-time hazard) and load-bearing external URLs (dead links fail
    offline-first and legibility across time; media reference content-addressed digests only).
@@ -131,7 +168,21 @@ intra-note structure is **never** inter-event structure. Canonical home:
 
 8. **A generic `refs` field carries inter-event relationships:** `refs: [{rel, event}]`, where `rel`
    is a small **closed enum** (initially `addendum-to`, `correction-of`, `transcript-of`) evolved
-   additively like the identity algebra's verb set. This resolves the audio dual role without a
+   additively like the identity algebra's verb set. **`refs` is floor-validated like the anchors:**
+   an unknown `rel` is rejected (fail closed, same as an unknown event type), and each `event` UUID
+   must reference an event that exists locally at submit — the same causality argument the skeleton's
+   suppressing-overlay target gate already relies on (an author references an event they *held*, so
+   under HLC causal order the target sorts earlier and has arrived wherever the referencing event
+   arrives; the check is mirrored at the remote-apply door). A dangling `correction-of` is therefore
+   exactly as impossible as a dangling media anchor — the same integrity class, one intra-event and
+   one intra-fleet. `refs` does **not** replace the suppressing machinery: the skeleton's
+   `payload.target_event_id` hook belongs to *suppressing* overlays (ADR-0010 classification, the
+   attestation/owner gates), which change how their target renders. **Every `refs` rel is additive
+   by definition** — it adds context and never hides or demotes the target (a `correction-of` marks
+   the original *corrected*, both remain fully visible, exactly the overlay discipline; cross-author
+   corrections are therefore legal additive claims, not gated suppressions). A future relationship
+   that *would* suppress must be a suppressing event type through that machinery, never a new `rel`.
+   This resolves the audio dual role without a
    special case: a recording that *is* content (verbal consent, treatment refusal, a psychotic
    episode, verbatim dictation) is a **manifest entry**; a scribe-generated narrative whose *source*
    was a recording carries `refs: [{rel: "transcript-of", event: <the event that recorded the
@@ -147,17 +198,21 @@ intra-note structure is **never** inter-event structure. Canonical home:
      encounter), never a manufactured context. Projection columns can follow whenever; the *body
      field* is the part that must be inside the signed bytes from day one.
    - **The event-anchor grammar is reserved:** `![<text>](cairn:event/<uuid>)` — the same anchor
-     grammar targeting an *event*, rendered as that event's twin at that position. Not valid in
-     `note/1` (nothing to point at yet); reserving it now means the
+     grammar targeting an *event*, rendered as that event's twin at that position. Its `<text>` is
+     free-form prose (there is no manifest descriptor to mirror; the target event carries its own
+     twin), unlike the media anchor's descriptor-bound text (point 3). Not valid in
+     `clinical.note/1` (nothing to point at yet); reserving it now means the
      [ADR-0020](0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
      type-through case (an order line sorting *between* two paragraphs of one narrative) lands later
      as a pure additive schema bump, never a format redesign.
 
 10. **Blast radius ([§9](../language-substrate.md)).** **Safety-critical** (in-DB/Rust): the
-    anchor↔manifest integrity check, markdown- and SVG-profile enforcement, descriptor
-    non-emptiness, twin fidelity, and the digest binding (inherited from
+    anchor↔manifest integrity check (existence, non-empty text, text = descriptor), markdown- and
+    SVG-profile enforcement, descriptor non-emptiness, the `refs` gate (closed `rel` enum +
+    target existence, point 8), twin fidelity, and the digest binding (inherited from
     [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)) — all at the validated submit
-    floor. **Fit-for-purpose:** every renderer, editor, audio player, and drawing surface. The
+    floor and mirrored at the remote-apply door. **Fit-for-purpose:** every renderer, editor,
+    audio player, and drawing surface. The
     austerity of point 5 is what keeps the floor validator small enough to be reviewer-legible.
 
 ## Consequences
@@ -179,7 +234,8 @@ intra-note structure is **never** inter-event structure. Canonical home:
   [ADR-0020](0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md) recorded), if
   clinicians genuinely need hand-authored constructs the profile excludes (rather than generated
   renderings of structured events), or if narrative bodies approach the 8 MB event admission cap
-  (they should not — media bytes never ride the event).
+  (they should not — beyond [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)'s tiny
+  inline blobs, media bytes never ride the event).
 - **Policy-neutral ([principle 9](../index.md#founding-principles-the-lens-for-every-decision)).**
   Which media types a deployment accepts, size and inline thresholds, whether clinical photography
   is sealed-by-default, and audio consent/retention rules are all policy. The format carries

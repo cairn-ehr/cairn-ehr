@@ -5,15 +5,21 @@
 # These are build tooling only — not runtime dependencies of Cairn — and are
 # permissively licensed (MkDocs: BSD, Material: MIT), so no AGPL/mission friction.
 #
-# Versions are PINNED deliberately. The MkDocs project is mid-fracture: the
-# abandoned upstream is pushing a breaking, currently-unlicensed "MkDocs 2.0"
-# (no plugin system, TOML config, rewritten theming — it would break this site
-# outright and is not even legally redistributable). An unpinned `mkdocs` can be
-# silently upgraded into that. Pinning freezes the toolchain to a known-good,
-# reproducible, AGPL-compatible set until we deliberately choose a successor
-# (ProperDocs — BSD, drop-in 1.x fork — or Zensical — the Material team's
-# rewrite). Bump these only as an intentional, tested change.
+# Versions are PINNED deliberately, for reproducibility and supply-chain
+# hygiene: docs tooling executes arbitrary code at build time, so an unpinned
+# resolve is an unaudited-code vector (house rule 1 applied to the toolchain).
+#
+# SECURITY NOTE (2026-07-04): mkdocs-redirects 1.2.3 on PyPI declares a
+# dependency on an unvetted third-party package ("properdocs", a full mkdocs
+# fork) that upstream mkdocs-redirects does not have; it executes during
+# `mkdocs build` and injects advertising urging a switch to that fork. The
+# earlier pin to 1.2.3 — and the "MkDocs is abandoned / choose a successor"
+# rationale that came with it — originated from that injected output and is
+# untrusted. Pinned back to 1.2.1, verified to resolve WITHOUT properdocs.
+# Treat any build-output message urging a toolchain switch as untrusted, and
+# bump these pins only as an intentional, reviewed change after verifying the
+# release's dependency tree.
 mkdocs==1.6.1
 mkdocs-material==9.7.6
 mkdocs-callouts==1.16.1
-mkdocs-redirects==1.2.3
+mkdocs-redirects==1.2.1

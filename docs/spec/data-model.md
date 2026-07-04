@@ -306,7 +306,11 @@ Federation requires **globally-unique, offline-mintable** identity (UUIDv7 and c
 ## 3.19 The progress-note narrative format: one signed event, markdown narrative, and manifest-keyed media anchors
 > See [ADR-0041](decisions/0041-progress-note-narrative-format.md). The first narrative clinical surface: [principle 11](index.md#founding-principles-the-lens-for-every-decision) (the raw body is human-readable) and [principle 12](index.md#founding-principles-the-lens-for-every-decision) (rendering belongs to the edges) applied to rich clinical text. Rides the [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment shape, the [§3.15](#315-the-active-write-model-thin-encounters-co-produced-legibility-and-the-delete-vs-erase-distinction) encounter fold, and the [§3.10](#310-session-identity-event-authorship-and-draft-durability) draft store. No new envelope field; no new founding principle.
 
-A progress note is **one signed event** (`note.authored`); **intra-note structure is never
+A progress note is **one signed event** (`clinical.note.asserted`, `schema_version =
+clinical.note/1` — three-segment like every production type, opening the `clinical.*` namespace
+that separates clinical content from administrative/infrastructure streams; the walking-skeleton
+placeholder `note.added`/`note/1` is retired by this slice's build migration and never reaches a
+production wire); **intra-note structure is never
 inter-event structure.** A linked list or container-per-event note would put intra-note ordering on
 the sync plane, where concurrent offline appends fork it into a tree (a merge with no
 clinically-reasoned policy) and partial delivery renders dishonestly — the dangerous-merge class the
@@ -319,27 +323,40 @@ incremental writing lives pre-commit in the durable draft store
 ([§3.10](#310-session-identity-event-authorship-and-draft-durability)), never as events.
 
 - **Body = `narrative` + `media` (+ `refs`, + nullable `encounter`).** `narrative` is a single
-  markdown string in a **pinned, versioned, austere profile** (`note/1`: paragraphs, bold, italic,
+  markdown string in a **pinned, versioned, austere profile** (`clinical.note/1` — the profile is
+  the narrative grammar of the `schema_version`, one identifier: paragraphs, bold, italic,
   headings, lists, blockquote, the anchor grammar; **raw HTML and load-bearing external URLs are
   excluded forever**; tables/footnotes/code blocks are excluded from v1 and addable additively —
   hand-written tables are usually a modeling smell: drug lists and similar constructs should be
   *generated* from structured events). `media` is a manifest of
   [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment references,
-  each with a note-local `id` and a **mandatory non-empty human `descriptor`**. Structured actions
+  each with a note-local `id`; the §3.14 shape's existing **human `descriptor` is tightened to
+  mandatory-non-empty** (one field — the same string the safety projection and degraded render
+  read; no second description field). Structured actions
   (orders, prescriptions) are separate events rendered into the note *view* by the encounter fold —
   the note event is pure narrative.
 - **One anchor grammar for every media kind:** `![<descriptor>](cairn:att/<id>)` means *"render this
   manifest entry here"* — the manifest's `media_type` decides *how* (image, audio player, waveform,
   or the honest *"referenced — not yet retrieved"* card). New modalities are new media types, zero
-  format change. Anchors are **manifest-keyed, never inline digests** (a 64-hex digest in prose
-  wrecks raw legibility; the digest lives once in the manifest under the same signature). A
-  **dangling anchor is rejected at the submit floor**; an un-anchored manifest entry is legal
+  format change. **The anchor's text is the manifest entry's descriptor, byte-identical** — display,
+  twin, and safety projection can never disagree. Anchors are **manifest-keyed, never inline
+  digests** (a 64-hex digest in prose
+  wrecks raw legibility; the digest lives once in the manifest under the same signature).
+  **Anchor↔manifest integrity is floor-enforced**: a dangling anchor, empty anchor text, or
+  anchor-text↔descriptor mismatch is rejected at the submit floor and identically at the mirrored
+  remote-apply door (deterministic over the signed bytes) — though under
+  [§6.5](sync.md#65-schema-evolution-two-planes-and-lossless-forwarding) version-skew custody a
+  renderer must still treat an unresolvable anchor as an honest degraded card. An un-anchored
+  manifest entry is legal
   (paper-clip parity). Reserved additively: the **event-anchor** `![<text>](cairn:event/<uuid>)`,
-  rendering a referenced event's twin at that position — the future home of the §3.15 type-through
+  rendering a referenced event's twin at that position (its `<text>` free-form — no manifest entry
+  to mirror) — the future home of the §3.15 type-through
   order-line-inside-narrative case.
 - **The descriptor is the twin substrate.** The [§3.13](#313-schema-evolution-event-format-and-the-legibility-twin)
   authored twin is mechanically derived: the narrative verbatim, each anchor replaced by
-  `[attachment: <descriptor> — <media_type>, <size>]` (plus one line per un-anchored entry). What a
+  `[attachment: <descriptor> — <media_type>, <size>]` (plus one line per un-anchored entry), the
+  `<descriptor>` read from the manifest (authoritative; the anchor text is equal by construction).
+  What a
   text-only node, full-text search, and the RAG substrate see. Never record media you cannot
   describe ([§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
 - **Figure-granular erasure falls out.** The note holds digest + descriptor; the bytes are a
@@ -350,8 +367,15 @@ incremental writing lives pre-commit in the durable draft store
   **static-profile SVG** attachments (no script, no external href, no CSS import; floor-enforced)
   with a **mandatory flattened-raster rendition** — the pinned *"what was signed"* appearance, immune
   to renderer drift. Template annotation = stroke-overlay SVG referencing the template blob's digest.
-- **`refs: [{rel, event}]`** is a small closed enum (`addendum-to`, `correction-of`,
-  `transcript-of`), evolved additively. Audio's dual role resolves here without a special case: a
+- **`refs: [{rel, event}]`** carries inter-event relationships; `rel` is a small closed enum
+  (`addendum-to`, `correction-of`, `transcript-of`), evolved additively. **Floor-validated like the
+  anchors:** unknown `rel` fails closed; each `event` must exist locally at submit (the author held
+  what they reference, so causal HLC order delivers the target first — mirrored at the apply door).
+  All rels are **additive** — they add context, never hide or demote the target (a `correction-of`
+  marks the original corrected; both stay visible; cross-author corrections are legal additive
+  claims). Suppression stays with the suppressing-overlay machinery and its
+  `target_event_id`/owner-gate path, never a new `rel`. Audio's dual role resolves here without a
+  special case: a
   recording that *is* content (verbal consent, treatment refusal, a psychotic episode, verbatim
   dictation) is a manifest entry; an AI-scribe narrative *derived from* a recording carries
   `transcript-of` to the recording's event, with roles in the
@@ -360,6 +384,8 @@ incremental writing lives pre-commit in the durable draft store
 > [!IMPORTANT]
 > Safety-critical ([§9.1](language-substrate.md#91-selection-rule-by-defect-blast-radius)), all at
 > the validated submit floor ([§9.6](language-substrate.md#96-the-validated-submit-surface-the-write-path)):
-> anchor↔manifest integrity, markdown- and SVG-profile enforcement, descriptor non-emptiness, twin
-> fidelity, and the inherited digest binding. Every renderer, editor, and player is fit-for-purpose.
+> anchor↔manifest integrity (existence, non-empty text, text = descriptor), markdown- and
+> SVG-profile enforcement, descriptor non-emptiness, the `refs` gate (closed enum + target
+> existence), twin fidelity, and the inherited digest binding — mirrored at the remote-apply door.
+> Every renderer, editor, and player is fit-for-purpose.
 > The profile's austerity is what keeps the floor validator reviewer-legible.

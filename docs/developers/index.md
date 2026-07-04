@@ -56,8 +56,9 @@ You don't have to read all of it before contributing. Read 1 and 2, skim 3–5, 
 
 ## Where the project actually is right now
 
-Cairn's **architecture is complete** (spec v0.40; every original open question is closed and recorded
-in the [ADR log](../spec/decisions/README.md)), viability was proven by
+Cairn's **architecture is complete** (every original open question is closed and recorded
+in the [ADR log](../spec/decisions/README.md); the current spec version is stated in
+[`spec/index.md`](../spec/index.md)), viability was proven by
 [proof-of-concept spikes](../spikes/README.md), and the **first production clinical surface is now
 under construction** — the patient **demographics** subsystem on the `cairn-node` crate, built
 slice by slice.
