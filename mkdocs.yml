@@ -144,6 +144,7 @@ nav:
       - ADR-0038 · Demographic address display — per-use recency-first: spec/decisions/0038-demographic-address-winner-per-use-recency.md
       - ADR-0039 · Globalise the authored legibility twin: spec/decisions/0039-globalise-authored-legibility-twin.md
       - ADR-0040 · Signing-context domain separation & one signature per event: spec/decisions/0040-signing-context-domain-separation.md
+      - ADR-0041 · The progress-note narrative format: spec/decisions/0041-progress-note-narrative-format.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

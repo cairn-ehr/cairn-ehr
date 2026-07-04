@@ -61,6 +61,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0038](0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows 0036) | Accepted (refines §4.3, 0032, follows 0036) | 2026-06-28 |
 | [0039](0039-globalise-authored-legibility-twin.md) | Globalise the authored legibility twin; honest-degradation floor for non-demographic types | Accepted (refines 0012, 0034) | 2026-06-28 |
 | [0040](0040-signing-context-domain-separation.md) | Signing-context domain separation (content-type + external_aad); one signature per event, co-signing by overlay | Accepted (refines 0015, 0007, 0030) | 2026-07-02 |
+| [0041](0041-progress-note-narrative-format.md) | The progress-note narrative format: one signed event, markdown narrative, manifest-keyed media anchors | Accepted (refines 0012, 0013, 0020, 0039) | 2026-07-04 |
 
 ## Template
 
