@@ -302,3 +302,64 @@ Federation requires **globally-unique, offline-mintable** identity (UUIDv7 and c
 - **Bind the pair once per entity, at its anchor row; references carry only the surrogate.** Carrying both the UUID and the surrogate is correct at the anchor row and on the already-signed `event_log` (where the UUIDs are mandatory anyway) and self-defeating on referencing rows (it re-imports the fan-out cost it removes). Downstream references carry only the `ref`; the UUID is recovered by a join to the anchor, only at egress.
 - **Scope by where the cost is, confirmed by measurement.** Strongest case: wide random `BYTEA` references; next: high-fan-out `patient_id`; leave `event_id` PKs as UUIDv7. Magnitude/scope is measured on [Spike 0001](../spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md) Bet B, exactly as [ADR-0001](decisions/0001-fat-postgres-thin-daemon.md)'s compute bet is.
 - **Surrogates are not durable identity** — not stable across a projection rebuild, never portable across nodes. Anything durable that must outlive a rebuild references the canonical ID, never the surrogate.
+
+## 3.19 The progress-note narrative format: one signed event, markdown narrative, and manifest-keyed media anchors
+> See [ADR-0041](decisions/0041-progress-note-narrative-format.md). The first narrative clinical surface: [principle 11](index.md#founding-principles-the-lens-for-every-decision) (the raw body is human-readable) and [principle 12](index.md#founding-principles-the-lens-for-every-decision) (rendering belongs to the edges) applied to rich clinical text. Rides the [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment shape, the [§3.15](#315-the-active-write-model-thin-encounters-co-produced-legibility-and-the-delete-vs-erase-distinction) encounter fold, and the [§3.10](#310-session-identity-event-authorship-and-draft-durability) draft store. No new envelope field; no new founding principle.
+
+A progress note is **one signed event** (`note.authored`); **intra-note structure is never
+inter-event structure.** A linked list or container-per-event note would put intra-note ordering on
+the sync plane, where concurrent offline appends fork it into a tree (a merge with no
+clinically-reasoned policy) and partial delivery renders dishonestly — the dangerous-merge class the
+architecture precludes. One event gives intrinsic ordering, atomic arrival, one twin, one signature,
+one attestation — the paper model: the clinician signs the *entry*. Everything a multi-event note
+would buy already exists: between-notes structure is the encounter fold
+([§3.15](#315-the-active-write-model-thin-encounters-co-produced-legibility-and-the-delete-vs-erase-distinction)),
+continuation/correction is overlay, concurrent authorship is two events folded by `t_effective`, and
+incremental writing lives pre-commit in the durable draft store
+([§3.10](#310-session-identity-event-authorship-and-draft-durability)), never as events.
+
+- **Body = `narrative` + `media` (+ `refs`, + nullable `encounter`).** `narrative` is a single
+  markdown string in a **pinned, versioned, austere profile** (`note/1`: paragraphs, bold, italic,
+  headings, lists, blockquote, the anchor grammar; **raw HTML and load-bearing external URLs are
+  excluded forever**; tables/footnotes/code blocks are excluded from v1 and addable additively —
+  hand-written tables are usually a modeling smell: drug lists and similar constructs should be
+  *generated* from structured events). `media` is a manifest of
+  [§3.14](#314-attachments-content-addressed-blobs-and-the-rendition-set) attachment references,
+  each with a note-local `id` and a **mandatory non-empty human `descriptor`**. Structured actions
+  (orders, prescriptions) are separate events rendered into the note *view* by the encounter fold —
+  the note event is pure narrative.
+- **One anchor grammar for every media kind:** `![<descriptor>](cairn:att/<id>)` means *"render this
+  manifest entry here"* — the manifest's `media_type` decides *how* (image, audio player, waveform,
+  or the honest *"referenced — not yet retrieved"* card). New modalities are new media types, zero
+  format change. Anchors are **manifest-keyed, never inline digests** (a 64-hex digest in prose
+  wrecks raw legibility; the digest lives once in the manifest under the same signature). A
+  **dangling anchor is rejected at the submit floor**; an un-anchored manifest entry is legal
+  (paper-clip parity). Reserved additively: the **event-anchor** `![<text>](cairn:event/<uuid>)`,
+  rendering a referenced event's twin at that position — the future home of the §3.15 type-through
+  order-line-inside-narrative case.
+- **The descriptor is the twin substrate.** The [§3.13](#313-schema-evolution-event-format-and-the-legibility-twin)
+  authored twin is mechanically derived: the narrative verbatim, each anchor replaced by
+  `[attachment: <descriptor> — <media_type>, <size>]` (plus one line per un-anchored entry). What a
+  text-only node, full-text search, and the RAG substrate see. Never record media you cannot
+  describe ([§3.7](#37-acknowledged-uncertainty-uncertainty-capable-value-types)).
+- **Figure-granular erasure falls out.** The note holds digest + descriptor; the bytes are a
+  separately-sealable blob. A per-blob DEK crypto-shred ([§3.8](#38-erasure-and-key-custody)) kills a
+  wound photo while the signed note stays **byte-identical and legible**; the anchor degrades to
+  `[attachment: … — shredded]` down `min(retrievable, parseable, cleared)`.
+- **Drawn graphics** (body charts, wound outlines — the everyday paper-parity case) are
+  **static-profile SVG** attachments (no script, no external href, no CSS import; floor-enforced)
+  with a **mandatory flattened-raster rendition** — the pinned *"what was signed"* appearance, immune
+  to renderer drift. Template annotation = stroke-overlay SVG referencing the template blob's digest.
+- **`refs: [{rel, event}]`** is a small closed enum (`addendum-to`, `correction-of`,
+  `transcript-of`), evolved additively. Audio's dual role resolves here without a special case: a
+  recording that *is* content (verbal consent, treatment refusal, a psychotic episode, verbatim
+  dictation) is a manifest entry; an AI-scribe narrative *derived from* a recording carries
+  `transcript-of` to the recording's event, with roles in the
+  [§3.9](#39-authorship-and-accountability) contributor set.
+
+> [!IMPORTANT]
+> Safety-critical ([§9.1](language-substrate.md#91-selection-rule-by-defect-blast-radius)), all at
+> the validated submit floor ([§9.6](language-substrate.md#96-the-validated-submit-surface-the-write-path)):
+> anchor↔manifest integrity, markdown- and SVG-profile enforcement, descriptor non-emptiness, twin
+> fidelity, and the inherited digest binding. Every renderer, editor, and player is fit-for-purpose.
+> The profile's austerity is what keeps the floor validator reviewer-legible.
