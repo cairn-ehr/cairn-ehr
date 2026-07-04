@@ -312,13 +312,35 @@ Full workspace + matcher suites green (cargo 0 failed / clippy clean; matcher 22
 block a 1985-born candidate; a John Doe's only name is an excluded callsign) — the estimate helps once a pair is blocked
 by another key (belongings identifier, refined name, hub sweep). **Remaining §5.4:** photo/marks/belongings/EMS-context
 evidence (new field home + attachment tier), the "prior history now available" push-alert (§5.12, no notification tier),
-the search-before-create funnel (UI/API tier), a birth-year-*range* blocking pass, a readable sequential callsign suffix,
-a `--observed-year` override, `identify`→optional-link resolution flow.
+the search-before-create funnel (UI/API tier), ~~a birth-year-*range* blocking pass~~ **(done — slice 21, below)**, a
+readable sequential callsign suffix, a `--observed-year` override, `identify`→optional-link resolution flow.
+
+**Slice 21 — §5.4 birth-year-range blocking pass + A/B pass-toggle** (this session; advisory Python only — **no `db/`
+floor change, no SCHEMA/ADR/spec bump**; design+plan under `docs/superpowers/{specs,plans}/2026-07-04-dob-range-blocking-pass*`).
+Closes slice 20's recorded honest limit: a `year-range` dob now generates blocking keys. Two **additive, ANCHORED**
+passes in `pipeline/db.py` (`_RANGE_GROUPS_SQL`): **`dob-range`** — a `birth_window` CTE gives every chart an inclusive
+birth-year interval (range rows via `facets.precision='year-range'` + NULL-safe `substring` year extraction,
+**evaluation-order-proof** — a malformed value can never crash the sweep; point rows via the first-4-digit run,
+year-range excluded so a range never double-enters as a false point); anchors = range charts; members = window-overlap
+(range↔point AND range↔range — two John Does at two sites, the only key that pair can share); pairs are **anchor×member
+ONLY** (all-pairing a window would manufacture C(k,2) noise — new pure `pipeline/blocking.py::pairs_from_anchor`);
+**`dob-range+sex`** — the same join ∩ a shared blocking-sex value (**UNION** of `sex-at-birth` + `administrative-sex`,
+so the trans case still groups; `unknown` sentinel excluded — no-data-is-never-agreement), the additive **rescue** when
+the plain window block exceeds the cap (skipped+reported, hub sweep the backstop). Plus the **A/B pass-toggle**
+(`enabled_passes` on `generate_candidate_pairs`; unknown pass name raises — a silent typo would fake a measurement) and
+an honesty fix (`birth_year` CTE excludes `year-range`, so `"1981/1991"` no longer leaks `1981` into `name+year` as a
+fake birth year). TDD: 9 pure (`test_blocking_passes.py`) + 14 DB-gated (`test_dob_range_blocking.py`) + 3 toggle tests;
+suites pure 194 / DB 253 / ruff clean. Fable whole-branch review → fix wave (order-proof guard, unknown-sentinel
+exclusion) → **READY TO MERGE**. **Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
+the pure-age John Doe pair now *blocks* but still scores below `review=3.0` (dob PARTIAL alone; `administrative-sex` is
+unscored) — the next scoring slice inherits it explicitly. **Deferred:** generator range-DOB emission + range-aware
+eval mirror (the quantitative recall number the toggle now enables), fuzzy near-window softening, hub-tier range sweep.
 
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
-aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; an A/B pass-toggle in
-`generate_candidate_pairs` for one-command compound-key before/after (today it's git-revert). **Identity: pieces C1
+aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
+`generate_candidate_pairs`~~ **(done — slice 21)**; scoring `administrative-sex` / the evidence-sparse score floor
+([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)). **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
 are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above),
 **C3** — `dispute` + the chart trust-state projection (slice 16, above) — and **C4** — `identify` + the *unconfirmed*
