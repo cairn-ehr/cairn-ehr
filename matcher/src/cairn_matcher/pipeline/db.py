@@ -11,8 +11,15 @@ import uuid
 
 from psycopg.rows import dict_row
 
-from cairn_matcher.pipeline.adapter import candidate_from_rows
+from cairn_matcher.pipeline.adapter import VALUE_SENTINELS_PARAM, candidate_from_rows
 from cairn_matcher.pipeline.banding import ProposalPayload, VetoFinding
+from cairn_matcher.pipeline.blocking import (
+    ANCHORED_PASSES,
+    SYMMETRIC_PASSES,
+    pairs_from_anchor,
+    require_registered,
+    resolve_enabled_passes,
+)
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -163,17 +170,32 @@ WITH name_tokens AS (
     WHERE token <> '' AND use_key <> ALL(%s)
 ),
 birth_year AS (
+    -- year-range values are EXCLUDED: "1981/1991" would otherwise leak its first
+    -- 4-digit run (1981) into name+year as if it were a birth year -- a false key
+    -- (the window min is not a birth year; principle 4). The anchored range passes
+    -- (_RANGE_GROUPS_SQL) own ranges.
     SELECT patient_id, substring(value FROM '[0-9]{4}') AS year
     FROM patient_demographic
     WHERE field = 'dob' AND value ~ '[0-9]{4}'
+      AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 )
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
 FROM patient_identifier WHERE system <> 'unknown'
 GROUP BY system, match_key HAVING count(DISTINCT patient_id) >= 2
 UNION ALL
+-- The exact-'dob' arm is a POINT-dob pass: year-range values are excluded, mirroring the
+-- birth_year CTE above. Two reasons. (1) A/B purity: two charts carrying the IDENTICAL
+-- range string ("1981/1991" on both) would otherwise group here by literal string
+-- equality, so an 'off-range-passes' baseline run would still surface range pairs and
+-- understate the anchored passes' measured contribution on exactly the John-Doe
+-- population the measurement exists for. (2) Two identical MALFORMED range strings
+-- ("about-forty" twice, one buggy writer) would group on garbage. The anchored passes
+-- own ranges -- identical or not -- and pair strictly more than string equality did, so
+-- with all passes on this exclusion costs no recall.
 SELECT 'dob', value, array_agg(patient_id)
 FROM patient_demographic WHERE field = 'dob'
+  AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 GROUP BY value HAVING count(DISTINCT patient_id) >= 2
 UNION ALL
 SELECT 'name', token, array_agg(patient_id)
@@ -183,6 +205,107 @@ UNION ALL
 SELECT 'name+year', nt.token || '|' || byr.year, array_agg(nt.patient_id)
 FROM name_tokens nt JOIN birth_year byr USING (patient_id)
 GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
+"""
+
+# The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate
+# statement from _GROUPS_SQL because the pair semantics differ: these rows are
+# (pass_name, anchor, members) and Python pairs ANCHOR x MEMBER only -- never member x
+# member (see pipeline/blocking.py for why all-pairing a birth-year window would
+# manufacture C(k,2) noise pairs).
+#
+# birth_window gives every chart an inclusive birth-year interval:
+#   * range rows: facets precision 'year-range', value '<yyyy>/<yyyy>' (slice B's
+#     estimated-age window). Guards mirror parse_dob's safe degrade -- a malformed or
+#     inverted value is EXCLUDED (never a false group, only a withheld rescue).
+#   * point rows: the existing first-4-digit-run rule -> [year, year]. year-range rows
+#     are excluded from this branch so a range can never double-enter as a false point
+#     [min, min].
+# The overlap join (m.y_min <= a.y_max AND a.y_min <= m.y_max) anchored on is_range
+# charts yields range<->point AND range<->range (two John Does, two sites -- the only
+# key that pair can ever share) from the same predicate.
+#
+# blocking_sex is the UNION of a chart's sex-at-birth and administrative-sex values:
+# recall-first (a trans patient whose administrative-sex matches the clinician's
+# observation still groups even though sex-at-birth differs). 'dob-range+sex' is the
+# additive RESCUE pass, mirroring name/name+year: in a big DB the plain window block
+# exceeds the cap and is skipped+reported; intersecting with a shared sex value roughly
+# halves it, so it fires within cap in more settings. Additive-only: a sex mismatch
+# merely means the rescue does not fire -- the scorer never sees a suppression.
+_RANGE_GROUPS_SQL = """
+WITH birth_window AS (
+    -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee
+    -- WHERE-subexpression evaluation order, so a `split_part(...)::int` cast could be
+    -- evaluated BEFORE the `value ~ '^[0-9]{4}/[0-9]{4}$'` regex guard that exists to
+    -- filter it out -- and a non-numeric value ("about-forty") would then raise
+    -- "invalid input syntax for type integer" and crash the whole sweep on exactly the
+    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{4})/')`
+    -- returns NULL on non-match (never raises), so the cast of NULL is safe and the
+    -- comparison against NULL is not-true (row filtered) regardless of evaluation order.
+    -- The regex guard is kept too (cheap, and documents intent) but correctness must not
+    -- -- and no longer does -- depend on it being evaluated first.
+    SELECT patient_id,
+           substring(value FROM '^([0-9]{4})/')::int AS y_min,
+           substring(value FROM '/([0-9]{4})$')::int AS y_max,
+           TRUE AS is_range
+    FROM patient_demographic
+    WHERE field = 'dob'
+      AND facets ->> 'precision' = 'year-range'
+      AND value ~ '^[0-9]{4}/[0-9]{4}$'
+      AND substring(value FROM '^([0-9]{4})/')::int <= substring(value FROM '/([0-9]{4})$')::int
+    UNION ALL
+    SELECT patient_id,
+           substring(value FROM '[0-9]{4}')::int,
+           substring(value FROM '[0-9]{4}')::int,
+           FALSE
+    FROM patient_demographic
+    WHERE field = 'dob'
+      AND value ~ '[0-9]{4}'
+      AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
+),
+blocking_sex AS (
+    -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
+    -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
+    -- treats as absent-value -- so the SQL exclusion can never drift from it (the
+    -- placeholder_uses parameter-binding pattern; a hand-mirrored literal here once
+    -- lagged the adapter's normalization). Without this, two charts that BOTH merely
+    -- recorded sex 'unknown' would share a blocking_sex row and the 'dob-range+sex'
+    -- rescue would key on mutual ignorance rather than a real signal.
+    --
+    -- The trim approximates the adapter's value.strip() for the whitespace a real feed
+    -- plausibly emits: space, tab, LF, CR, FF, VT, NBSP (btrim's DEFAULT trims spaces
+    -- ONLY -- it would let a tab-padded sentinel through as a tab-residue key). Python's
+    -- strip() also removes rarer Unicode spaces (em-space etc.); those are out of scope:
+    -- an exotically-padded sentinel keys on its residue, which at worst adds a noise
+    -- pair between two identically-mangled values, never suppresses a true one. lower()
+    -- stands in for casefold(); identical for the ASCII values this field carries. The
+    -- trimmed form is also the grouping key (padding on a REAL value must not hide a
+    -- genuine shared signal); an all-whitespace value trims to '' and is excluded.
+    SELECT DISTINCT patient_id, sex FROM (
+        SELECT patient_id,
+               btrim(lower(value), E' \\t\\n\\r\\f\\u000b\\u00a0') AS sex
+        FROM patient_demographic
+        WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
+    ) trimmed
+    WHERE sex <> '' AND sex <> ALL(%s)
+),
+window_overlap AS (
+    SELECT a.patient_id AS anchor, m.patient_id AS member
+    FROM birth_window a
+    JOIN birth_window m
+      ON m.patient_id <> a.patient_id
+     AND m.y_min <= a.y_max
+     AND a.y_min <= m.y_max
+    WHERE a.is_range
+)
+SELECT 'dob-range' AS pass_name, anchor, array_agg(DISTINCT member) AS members
+FROM window_overlap
+GROUP BY anchor
+UNION ALL
+SELECT 'dob-range+sex', o.anchor, array_agg(DISTINCT o.member)
+FROM window_overlap o
+JOIN blocking_sex sa ON sa.patient_id = o.anchor
+JOIN blocking_sex sm ON sm.patient_id = o.member AND sm.sex = sa.sex
+GROUP BY o.anchor
 """
 
 
@@ -206,30 +329,67 @@ def _pairs_from_members(members: list[str]) -> set[tuple[str, str]]:
 
 
 def generate_candidate_pairs(
-    conn, *, max_block_size: int = 100
+    conn, *, max_block_size: int = 100, enabled_passes=None
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
-    """Generate canonical candidate pairs via four blocking passes (identifier / exact-DOB / name-token / name-token+birth-year), capping huge blocks.
+    """Generate canonical candidate pairs via the blocking passes, capping huge blocks.
+
+    Six passes (see blocking.ALL_PASSES): four SYMMETRIC group passes (identifier /
+    exact-DOB / name-token / name-token+birth-year, _GROUPS_SQL) and two ANCHORED
+    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — the
+    §5.4 range-blocking slice).
+
+    `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
+    the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
+    happens on the returned rows' pass_name — the SQL is never edited per-subset, so the
+    toggle can never change what a pass WOULD have produced. A whole STATEMENT is skipped
+    only when none of its passes is enabled (its arms are independent UNION ALL branches,
+    so skipping it provably cannot affect any enabled pass — and the A/B baseline run
+    with the range passes off must not pay for the un-indexable range overlap join).
 
     Returns (pairs, skipped_blocks). `pairs`: unique canonical (low, high) lowercase-uuid
-    tuples from every group with <= max_block_size members. `skipped_blocks`: the
-    (pass_name, key, size) of each group EXCLUDED for exceeding the cap — a block shared
-    by hundreds of people is non-discriminating (a group of size k contributes C(k,2)
-    pairs), and the §5.13 hub duplicate-sweep is the declared backstop for what it drops.
+    tuples from every enabled group with <= max_block_size members. `skipped_blocks`: the
+    (pass_name, key, size) of each ENABLED group excluded for exceeding the cap — a block
+    shared by hundreds of people is non-discriminating (a group of size k contributes
+    C(k,2) pairs; an anchored block of size k contributes k-1), and the §5.13 hub
+    duplicate-sweep is the declared backstop for what it drops.
 
     Read-only — opens a read transaction the CALLER must close (sweep does conn.rollback
     before its write loop, so a long sweep does not pin the xmin horizon).
     """
+    enabled = resolve_enabled_passes(enabled_passes)
     pairs: set[tuple[str, str]] = set()
     skipped_blocks: list[tuple[str, str, int]] = []
+    # require_registered on every fetched row, against the emitting STATEMENT's declared
+    # set: an unregistered (or registered-but-misplaced) SQL arm would otherwise be
+    # silently filtered by the `enabled` check on every run (a pass that looks built but
+    # contributes zero pairs) — or silently skipped with the wrong statement.
     with conn.cursor() as cur:
-        # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
-        cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
-        for pass_name, key, members in cur.fetchall():
-            size = len(members)
-            if size > max_block_size:
-                skipped_blocks.append((pass_name, key, size))
-            else:
-                pairs.update(_pairs_from_members(members))
+        if enabled & SYMMETRIC_PASSES:
+            # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
+            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
+            for pass_name, key, members in cur.fetchall():
+                if require_registered(pass_name, SYMMETRIC_PASSES) not in enabled:
+                    continue
+                size = len(members)
+                if size > max_block_size:
+                    skipped_blocks.append((pass_name, key, size))
+                else:
+                    pairs.update(_pairs_from_members(members))
+        if enabled & ANCHORED_PASSES:
+            # The anchored range passes: pairs are anchor x member ONLY. The cap counts
+            # the WHOLE block (members + the anchor itself) so "block size" means the
+            # same thing for both pair-generation shapes, and a skipped block is
+            # reported under the anchor's uuid (its natural key). The %s binds the
+            # uncertainty-sentinel exclusion in the blocking_sex CTE.
+            cur.execute(_RANGE_GROUPS_SQL, (VALUE_SENTINELS_PARAM,))
+            for pass_name, anchor, members in cur.fetchall():
+                if require_registered(pass_name, ANCHORED_PASSES) not in enabled:
+                    continue
+                size = len(members) + 1
+                if size > max_block_size:
+                    skipped_blocks.append((pass_name, str(anchor), size))
+                else:
+                    pairs.update(pairs_from_anchor(anchor, members))
     return sorted(pairs), skipped_blocks
 
 

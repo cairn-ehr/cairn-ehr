@@ -20,7 +20,18 @@ _PRECISION_PARTS = {"year": 1, "month": 2, "day": 3}
 # first-class), but must NOT be compared as ordinary strings: "unknown" == "unknown"
 # would fabricate EXACT agreement, and "unknown" vs "male" a DISAGREE penalty — both
 # from acknowledged ignorance. Treated as field ABSENCE for matching.
-_VALUE_SENTINELS = {"unknown"}
+#
+# PUBLIC because pipeline/db.py binds VALUE_SENTINELS_PARAM into its blocking_sex CTE
+# (`btrim(lower(value)) <> ALL(%s)`) — the same one-source-of-truth pattern as
+# placeholder_uses.PLACEHOLDER_USES_PARAM, so the SQL exclusion can never drift from
+# this set. Members must be lowercase ASCII: the SQL side normalizes with
+# btrim(lower(...)), the Python side with strip().casefold(), and the two only agree
+# on ASCII values.
+VALUE_SENTINELS = frozenset({"unknown"})
+
+# The parameter form psycopg binds to a Postgres `text[]`. Sorted so the bound array is
+# deterministic; order is irrelevant to ALL().
+VALUE_SENTINELS_PARAM = sorted(VALUE_SENTINELS)
 
 
 def _normalize_token(token: str) -> str:
@@ -148,7 +159,7 @@ def single_field(row: Mapping | None) -> FieldValue | None:
     if row is None:
         return None
     value = row["value"]
-    if isinstance(value, str) and value.strip().casefold() in _VALUE_SENTINELS:
+    if isinstance(value, str) and value.strip().casefold() in VALUE_SENTINELS:
         return None
     return FieldValue(value=value, provenance_rank=int(row["provenance_rank"]))
 

@@ -171,3 +171,35 @@ def test_name_and_name_year_pair_is_emitted_once(pg_conn):
     seed_patient(pg_conn, PB, dob=("1975-08-08", 20), names=[("Patel", 20)])
     pairs = _pairs(pg_conn)
     assert pairs.count(canonical_pair(PA, PB)) == 1
+
+
+# ---------------------------------------------------------------------------
+# A/B pass-toggle (enabled_passes): measurement tooling for pass changes.
+# ---------------------------------------------------------------------------
+
+
+def test_toggle_disabling_dob_removes_only_that_pass(pg_conn):
+    # PA-PB share an exact DOB; PA-PC share an identifier. Disabling 'dob' must drop
+    # the DOB pair while the identifier pair still comes through -- the toggle selects
+    # passes, it does not short-circuit the run.
+    seed_patient(pg_conn, PA, dob=("1980-07-15", 20), identifiers=[("mrn:a", "7", "7")])
+    seed_patient(pg_conn, PB, dob=("1980-07-15", 20))
+    seed_patient(pg_conn, PC, identifiers=[("mrn:a", "7", "7")])
+    pairs = _pairs(pg_conn, enabled_passes={"identifier", "name", "name+year"})
+    assert canonical_pair(PA, PC) in pairs
+    assert canonical_pair(PA, PB) not in pairs
+
+
+def test_toggle_default_none_equals_all_passes(pg_conn):
+    # Regression pin: passing nothing and passing every pass name are the same run.
+    from cairn_matcher.pipeline.blocking import ALL_PASSES
+    seed_patient(pg_conn, PA, dob=("1980-07-15", 20), names=[("Alex Smith", 20)])
+    seed_patient(pg_conn, PB, dob=("1980-07-15", 20), names=[("Alex Jones", 20)])
+    assert _pairs(pg_conn) == _pairs(pg_conn, enabled_passes=set(ALL_PASSES))
+
+
+def test_toggle_unknown_pass_name_raises(pg_conn):
+    import pytest
+    from cairn_matcher.pipeline.db import generate_candidate_pairs
+    with pytest.raises(ValueError, match="no-such-pass"):
+        generate_candidate_pairs(pg_conn, enabled_passes={"no-such-pass"})

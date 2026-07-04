@@ -26,9 +26,12 @@ from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
 class SkippedBlock:
     """A blocking-value group excluded from pair generation for exceeding the cap."""
 
-    pass_name: str   # 'identifier' | 'dob' | 'name' | 'name+year'
-    key: str         # the human-readable blocking value (system:match_key, dob, token, or token|year)
-    size: int        # number of patients sharing it
+    pass_name: str   # 'identifier' | 'dob' | 'name' | 'name+year' | 'dob-range' | 'dob-range+sex'
+    key: str         # the human-readable blocking value (system:match_key, dob, token, token|year,
+                      # or -- for the two anchored range passes -- the anchor patient's uuid)
+    size: int        # number of patients sharing it (the whole block, INCLUDING the anchor for
+                      # the two anchored passes); a symmetric block of size k drops C(k,2) pairs,
+                      # an anchored block of size k drops k-1 (anchor x each withheld member)
 
 
 @dataclass(frozen=True)

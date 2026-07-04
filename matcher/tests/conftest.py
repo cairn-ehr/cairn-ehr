@@ -66,11 +66,15 @@ def pg_conn():
 
 
 def seed_patient(
-    conn, patient_id, *, dob=None, sex=None, names=(), identifiers=(), callsign_names=()
+    conn, patient_id, *, dob=None, sex=None, admin_sex=None, names=(), identifiers=(),
+    callsign_names=()
 ):
     """Insert projection rows for one patient directly (bypassing submit_event).
 
-    dob/sex: (value, provenance_rank[, precision]) tuples or None.
+    dob: (value, provenance_rank[, precision]) tuple or None.
+    sex/admin_sex: (value, provenance_rank) tuples or None — sex seeds
+    field='sex-at-birth'; admin_sex seeds field='administrative-sex' (the
+    apparent/phenotypic field a §5.4 clinician-observed sex lands on).
     names: iterable of (value, provenance_rank) — seeded under use_key='legal'.
     callsign_names: iterable of (value, provenance_rank) — seeded under use_key='callsign',
         the §5.4 placeholder use the matcher excludes from its feature space.
@@ -94,6 +98,14 @@ def seed_patient(
                 "INSERT INTO patient_demographic (patient_id, field, value, facets, "
                 "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
                 "VALUES (%s,'sex-at-birth',%s,NULL,'seed',%s,0,0,'seed')",
+                (patient_id, value, rank),
+            )
+        if admin_sex is not None:
+            value, rank = admin_sex
+            cur.execute(
+                "INSERT INTO patient_demographic (patient_id, field, value, facets, "
+                "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+                "VALUES (%s,'administrative-sex',%s,NULL,'seed',%s,0,0,'seed')",
                 (patient_id, value, rank),
             )
         for value, rank in names:
