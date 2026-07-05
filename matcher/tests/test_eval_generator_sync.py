@@ -39,8 +39,12 @@ _MIRRORED_PASSES = [
     # exact branch mirrors this exclusion, and without it two identical range strings
     # would be grouped by the SQL but not by the mirror (under-claim, safe) — while
     # DROPPING the guard from the mirror side would over-claim. Pin the SQL side.
+    # Fragment spans two lines (db.py 226-227) to pin DOB arm specifically; birth_year
+    # CTE has a similar pattern but different context.
     ("exact-dob arm excludes year-range rows (shares_blocking_key exact branch)",
-     _GROUPS_SQL, "IS DISTINCT FROM 'year-range'"),
+     _GROUPS_SQL,
+     "FROM patient_demographic WHERE field = 'dob'\n"
+     "  AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'"),
     # The anchored range mirror (_birth_window + the overlap branch). Any of these
     # fragments disappearing means the range passes changed shape under the mirror.
     ("range rows keyed on precision 'year-range' (_birth_window range branch)",
