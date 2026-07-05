@@ -46,8 +46,26 @@ def test_insufficient_data_contributes_zero():
     assert s.fields[0].weight_contribution == pytest.approx(0.0)
 
 
-def test_unknown_field_or_level_contributes_zero():
+def test_unknown_level_contributes_zero():
+    # A field IN the table but at a level the table doesn't price is legitimate zero
+    # evidence (e.g. identifier defines only EXACT — its comparator is positive-only).
+    comps = [FieldComparison("dob", AgreementLevel.PARTIAL, 70)]
+    assert score(comps, WEIGHTS).total == pytest.approx(0.0)
+
+
+def test_unknown_field_raises_instead_of_silently_zeroing():
+    # A field the table has NO entry for is a config mismatch (e.g. a stale weights
+    # table keyed 'sex-at-birth' after the rename to 'sex'): silently zeroing a
+    # verified DISAGREE would be a precise untruth, so score() must fail loudly.
     comps = [FieldComparison("unmapped", AgreementLevel.EXACT, 70)]
+    with pytest.raises(ValueError, match="unmapped"):
+        score(comps, WEIGHTS)
+
+
+def test_unknown_field_with_insufficient_data_does_not_raise():
+    # INSUFFICIENT_DATA never consults the table (it is zero by principle §3.7), so an
+    # unweighted field that carries no evidence must not fail the whole comparison.
+    comps = [FieldComparison("unmapped", AgreementLevel.INSUFFICIENT_DATA, 70)]
     assert score(comps, WEIGHTS).total == pytest.approx(0.0)
 
 
@@ -61,8 +79,15 @@ def test_per_field_contributions_sum_to_total():
 
 
 def test_default_weights_cover_the_default_fields():
-    for fld in ("dob", "sex-at-birth", "name", "identifier"):
+    for fld in ("dob", "sex", "name", "identifier"):
         assert fld in DEFAULT_WEIGHTS.per_field
+
+
+def test_default_weights_carry_sex_key_not_sex_at_birth():
+    # The weight/FieldSpec key renamed to "sex" (composite field); 'sex-at-birth'
+    # remains ONLY as the projection field name in SQL/seeding, never a weight key.
+    assert "sex" in DEFAULT_WEIGHTS.per_field
+    assert "sex-at-birth" not in DEFAULT_WEIGHTS.per_field
 
 
 def test_match_score_is_returned():

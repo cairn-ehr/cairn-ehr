@@ -79,6 +79,9 @@ def sweep(
     # PK-indexed read; propose() then reads aliases from this map, not the DB.
     candidate_patients = {pid for pair in pairs for pid in pair}
     aliases = db.load_aliases_for(conn, candidate_patients)
+    # Pre-load the §5.4 trust states for the candidate set in the same ONE-query style;
+    # propose() then reads trust from this map, not the DB (see the aliases preload above).
+    trust = db.load_trust_for(conn, candidate_patients)
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 
@@ -88,7 +91,8 @@ def sweep(
     for low, high in pairs:
         try:
             result = propose(
-                conn, low, high, thresholds=thresholds, weights=weights, aliases=aliases
+                conn, low, high, thresholds=thresholds, weights=weights,
+                aliases=aliases, trust=trust,
             )
         except Exception as exc:  # noqa: BLE001 — batch must survive one bad pair (house rule #5)
             # Clear the aborted transaction so the connection is usable for the next pair.

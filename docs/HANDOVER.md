@@ -1,22 +1,68 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-04 (second session) · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-05 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume
 generator · consumes `patient_alias_pool` known-alias evidence · range-aware, positive-only `compare_dob` for
-clinician-observed estimated ages · **anchored birth-year-range blocking passes (`dob-range` / `dob-range+sex`) + the
-A/B pass-toggle — done this session**) + the
+clinician-observed estimated ages · anchored birth-year-range blocking passes (`dob-range` / `dob-range+sex`) + the
+A/B pass-toggle · **composite `sex` scoring + the unconfirmed-chart REVIEW rule — done this session**) + the
 **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
 known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE) + the
 **§5.4 John-Doe registration front door — slice A: callsign minting + matcher placeholder exclusion · slice B:
-clinician-observed evidence (estimated-age range + observed sex) · slice C: the birth-year-range blocking pass**;
-remaining B3 weight-learning / locale packs / administrative-sex scoring ([#130](https://github.com/cairn-ehr/cairn-ehr/issues/130))
+clinician-observed evidence (estimated-age range + observed sex) · slice C: the birth-year-range blocking pass ·
+slice D: administrative-sex scoring + the unconfirmed-chart forcing rule (closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130))**;
+remaining B3 weight-learning / locale packs / generator range-DOB emission
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
 (photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the search-before-create funnel)
 next. Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**This session (2026-07-05) — §5.4 slice D: administrative-sex scoring + the unconfirmed-chart REVIEW rule (slice 22,
+closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130)), full loop** (brainstorm→spec→plan→subagent-SDD, 6 TDD
+tasks; spec+plan under `docs/superpowers/{specs,plans}/2026-07-05-admin-sex-scoring*`). **Advisory Python only — no
+`db/` floor, no SCHEMA bump, no ADR/spec edit.** The design-critical arithmetic: scoring administrative-sex alone leaves
+the headline pure-age Doe pair at ≈1.79 < `review=3.0` (dob PARTIAL 1.5 + sex EXACT 1.0, both × provenance-factor(30)≈0.714;
+honest F–S weights can't be inflated past an 11-year window + a two-valued field) — so the slice is TWO halves, both
+required. (1) **Composite `sex` field**: `records.SexValue` + pure `compare_sex` — both charts carry `sex-at-birth` →
+old EXACT/DISAGREE semantics (birth-fact clash stays negative evidence, aligned with db/016); else a **positive-only
+union fallback** over {`sex-at-birth`, `administrative-sex`} (intersect→EXACT, disjoint→INSUFFICIENT_DATA, **never
+DISAGREE** — observed evidence supports but never suppresses, mirroring blocking's union-sex; the trans true-match
+cannot be penalised); one field one contribution (no correlated F–S double-count — a separate admin-sex FieldSpec was
+rejected); weight key `sex-at-birth`→`"sex"` (**projection field names in SQL untouched** — the DB contract);
+`load_candidate` reads both facets in ONE query; side rank = sab's if present else admin's (documented second-order
+approximation, bounded by the [0.5,1.0] factor on weight 1.0). (2) **The scoped forcing rule** (`band(unconfirmed=)`,
+the known-alias-forcing precedent — §5.4's point is an *unconfirmed* chart needs human identification effort; the paper
+counterpart "male, about 40 — search the registry" returns a list, not silence): a pair with a `chart_trust='unconfirmed'`
+chart + **≥2 positive-LEVEL fields + zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes
+attached** (post-review amendment — the original no-vetoes gate rested on a false "near-vacuous" premise: an identifier
+veto needs NO verified values, so a vetoed-yet-corroborated Doe pair is reachable and suppressing it would be the
+ADR-0014 auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the
+blocking cap; every persisted proposal involving an unconfirmed chart carries
+`{"kind":"identity_pending","unconfirmed":[uuids]}` evidence (**`"kind"` = the one non-field-evidence discriminator**,
+the alias-marker convention; db/017 stores JSONB unparsed — no downstream shape breaks). Trust plumbing mirrors aliases:
+one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the same one-query loader — no
+singular duplicate); canonical lowercase-uuid keys for map + marker; conftest gains `seed_identity_pending` +
+`chart_identity_state` truncation. TDD: pure + DB-gated incl. **the #130 e2e**
+(`test_identity_pending_pipeline.py` — the pure-age Doe pair blocks→scores→**surfaces as REVIEW** with the marker; a
+no-pending control (shared `_seed_headline_pair` helper, so control and headline can't drift apart) proves the RULE,
+not sex scoring, surfaces it, hardened non-vacuous (`generated>=1`); a direct-`propose()` test covers the on-demand
+trust seam; the two-Does pair carries both uuids sorted). 6-task subagent-SDD each reviewed clean; final whole-branch
+review (fable) READY TO MERGE; then an **8-angle post-review fix wave** (findings fixed in-branch: veto-gate removal
+as above; `_corroborated_positive` made genuinely structural — counts agreement LEVELS, so a B3-learned 0.0 weight
+can't stand the rule down; `score()` now **raises on a weights table missing a compared field** instead of silently
+zeroing — the stale-table / key-rename hazard; marker key `"rule"`→`"kind"`; `load_trust` singular loader deleted;
+retraction gap filed as [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135) — forced-REVIEW rows persist after
+the Doe is identified, a db/017 no-DELETE deferral made steady-state by this rule). Suites **pure 227 / DB-gated 298
+(full) / ruff clean**. **Honest limits (recorded):** a pending+**disputed** Doe reads `'under-review'` (chart_trust is
+severity-max, db/024) and bypasses the forcing rule while the dispute is open — deliberate, not a bug; ranking within
+a Doe's surfaced candidate list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning
+unblocked); stale forced-REVIEW rows after identification are [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135).
+**Deferred (still):** generator range-DOB emission + range-aware eval mirror, **which must also mirror
+`administrative_sex`** (the eval `DatasetRecord` cannot yet represent the composite-sex fallback, so B3 weight-learning
+would otherwise train on a field set the shipped matcher no longer has); fuzzy near-window softening; hub-tier range
+sweep.
 
 **Parallel session (2026-07-05) — the blob self-verification in-DB floor (Phase 7 / ADR-0013), deliberately
 outside the demographics/matcher/identity territory** (a second session owned that front concurrently; this slice
@@ -46,85 +92,30 @@ metadata touch); both triggers use `CREATE OR REPLACE TRIGGER` (no ACCESS EXCLUS
 init replays); `cairn_blob_verify_error` diagnoses the address before hashing content and names wrong-prefix
 distinctly from wrong-length.
 
-**This session (2026-07-04, second) — §5.4 birth-year-range blocking pass + A/B pass-toggle, full loop**
-(brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under
-`docs/superpowers/{specs,plans}/2026-07-04-dob-range-blocking-pass*`). Closes slice B's recorded honest limit: a
-`year-range` dob now generates blocking keys, so a John Doe (whose only name is an excluded callsign) is blocked into
-candidate pairs by age evidence itself. **Advisory Python only — no `db/` floor, no SCHEMA bump, no ADR/spec edit.**
-The load-bearing call: the range passes are **ANCHORED, never symmetric** — anchors are the rare range-carrying charts,
-pairs are anchor×member ONLY (all-pairing a birth-year window would manufacture C(k,2) "born within 11 years of each
-other" noise pairs the exact-DOB pass deliberately never produces). Three pieces: (1) **pure `pipeline/blocking.py`**
-(psycopg-free): the six-pass registry, `resolve_enabled_passes` (unknown name RAISES — a silent typo would fake an A/B
-measurement), `pairs_from_anchor`; (2) **`_RANGE_GROUPS_SQL`** in `pipeline/db.py`: a `birth_window` CTE (range rows
-keyed on `facets.precision='year-range'`, years via **NULL-safe, evaluation-order-proof `substring` extraction** — a
-malformed value like `"about-forty"` can never crash the sweep under ANY planner qual order; point rows exclude
-year-range so a range never double-enters as a false point `[min,min]`) + window-overlap join anchored on range charts
-(range↔point AND range↔range — two John Does at two sites, the only key that pair can ever share; inclusive bounds
-mirror `compare_dob`) → pass **`dob-range`**, plus rescue pass **`dob-range+sex`** (∩ shared blocking-sex, the
-**UNION** of `sex-at-birth`+`administrative-sex` so the trans case still groups; `unknown` sentinel excluded —
-no-data-is-never-agreement; additive-only: a mismatch withholds the rescue, never suppresses); cap counts the whole
-anchored block (members+1), skips reported under the anchor uuid, hub sweep the declared backstop; (3) the **A/B
-toggle** (`enabled_passes` on `generate_candidate_pairs`, one SQL round-trip regardless) + an **honesty fix** (the
-`birth_year` CTE now excludes `year-range` values — `"1981/1991"` no longer leaks `1981` into `name+year` as a fake
-birth year; principle 4). TDD: 9 pure + 14 DB-gated range tests + 3 toggle tests (PG18.1+cairn_pgx :5532 rig). 5
-implementation tasks subagent-SDD'd, each reviewed clean; **final whole-branch review (fable): 2 Important
-found+FIXED in a review-hardening commit** (the WHERE-clause evaluation-order crash hazard; the `unknown`-sex sentinel
-fabricating blocking agreement) → re-review **READY TO MERGE**. A **post-PR 8-angle `/review` + adversarial-verify
-wave (PR #131)** then confirmed 7 more findings, all FIXED in a second hardening wave: the eval harness `KeyError` on
-resident (non-seeded) charts — the crash arm of issue #84, now guarded (resident↔seeded pairs are excluded from the
-labelled metrics, never a crash); shape-aware `dropped_pair_estimate` (an anchored skip drops s−1 pairs, not C(s,2) —
-new pure `blocking.dropped_pair_estimate` branching on `ANCHORED_PASSES`); the `blocking_sex` sentinel exclusion now
-**param-BOUND from `adapter.VALUE_SENTINELS`** (public rename) with an explicit whitespace trim-set (btrim's default
-trims spaces ONLY — tab/NBSP-padded sentinels were slipping through); the exact-`dob` arm now **excludes `year-range`
-values** (A/B purity: an off-range-passes baseline no longer surfaces range pairs via string equality); statement-level
-toggle skip (an A/B baseline with the range passes off no longer pays the un-indexable overlap join); a SQL↔registry
-pass-name guard (`require_registered` against the emitting statement's declared shape set — an unregistered or
-misplaced arm raises instead of silently contributing zero pairs); and `canonical_pair` deduped into pure
-`blocking.py` (one definition of pair identity; runner re-exports). Suites now **pure 200 / DB-gated 264 / ruff
-clean**. **Honest scope limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):** the
-pure-age John Doe pair now *blocks* but still scores below `review=3.0` (dob PARTIAL ≈1.5 max is the only scoreable
-field; `administrative-sex` is unscored by `load_candidate`) — blocking recall improved, end-to-end §5.4 recall for the
-evidence-poorest chart waits on an administrative-sex scoring slice. **Deferred (recorded):** generator range-DOB
-emission + range-aware eval mirror (the quantitative recall number the toggle now enables); fuzzy near-window
-softening; hub-tier range sweep with a larger cap budget.
+**Prior session (2026-07-04, second) — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle
+(condensed; full detail in git + ROADMAP slice 21 + PR #131).** A `year-range` dob now generates blocking keys —
+**ANCHORED, never symmetric** (anchor×member only; all-pairing a window would manufacture C(k,2) noise): pure
+`pipeline/blocking.py` (six-pass registry, `resolve_enabled_passes` raises on unknown names, `pairs_from_anchor`),
+`_RANGE_GROUPS_SQL` (`birth_window` CTE, NULL-safe evaluation-order-proof year extraction; `dob-range` +
+`dob-range+sex` rescue ∩ union blocking-sex with the `unknown` sentinel param-bound from `adapter.VALUE_SENTINELS`),
+the `enabled_passes` A/B toggle, and a `name+year` honesty fix (range values excluded). Fable review + a post-PR
+8-angle adversarial-verify wave (PR #131) fixed 9 findings total across two hardening commits (eval `KeyError` guard —
+the #84 crash arm; shape-aware `dropped_pair_estimate`; exact-`dob` range exclusion for A/B purity; statement-level
+toggle skip; SQL↔registry pass-name guard; `canonical_pair` deduped into `blocking.py`; whitespace trim-set). Suites
+were pure 200 / DB 264 / ruff clean. Its recorded honest limit (pure-age pair blocks but dies at the score floor,
+issue #130) is **CLOSED by this session's slice D** (see top).
 
-**Prior session (2026-07-04, first) — §5.4 John-Doe slice B: clinician-observed evidence (estimated-age range +
-observed sex), full loop** (brainstorm→spec→plan→subagent-SDD, 7 TDD tasks; spec+plan under
-`docs/superpowers/{specs,plans}/2026-07-04-john-doe-clinician-observed-evidence*`). A clinician registering an
-unidentified patient records honest observed evidence, and the estimate becomes a positive matcher signal. **The
-load-bearing finding: the existing demographic spine already carries it** — db/011's `dob` field already requires
-`facets.precision` + accepts optional `facets.basis`, and `clinician-observed` is already provenance rank 30 (correctly
-displaceable by documents) — so **NO db/ floor change, NO schema/SCHEMA bump, NO new event type, NO ADR/spec edit.**
-Three layers: (1) **pure `cairn-event::evidence`** — `birth_year_range_from_age` (principle 4: store the *time-invariant
-birth-year window*, never raw age which drifts; an explicit **range**, never a false-precise midpoint) → `estimated_dob_body`
-(value `"<min>/<max>"` e.g. `"1981/1991"`, precision `"year-range"`, reusing `dob_assertion_body`/`render_dob_twin`) +
-`observed_sex_body` (on **`administrative-sex`**, apparent/phenotypic — NOT the `sex-at-birth` birth fact a clinician
-can't know, which also keeps it out of db/016's *verified*-sex veto); (2) **`cairn-node::evidence::assert_observed_evidence`**
-+ a standalone `assert-observed-evidence <patient-uuid>` CLI (authors the dob + administrative-sex `demographic.field.asserted`
-events on an EXISTING chart in one transaction, provenance `clinician-observed`; evidence accrues over time — `register-john-doe`
-unchanged; promoted `db::next_hlc` to `pub`); (3) **advisory matcher range-awareness** — `DateValue` gains an optional
-birth-year interval, `parse_dob` reads `"year-range"` (`"<yyyy>/<yyyy>"`, malformed→None safe-degrade), and `compare_dob`
-is **range-aware + POSITIVE-ONLY** (interval overlap→PARTIAL, no-overlap→INSUFFICIENT_DATA, **never DISAGREE** — a soft
-visual estimate may *support* but never *suppress* a match, mirroring `compare_identifier_sets` + §5.4 recognition/principle 4).
-TDD: 6 pure `cairn-event` + 2 pure builder + 4 DB-gated `cairn-node` integration (`observed_evidence.rs`: range dob lands
-clinician-observed · document-verified dob displaces it · observed sex on administrative-sex with sex-at-birth untouched ·
-age+sex atomic) + `DateValue`/`parse_dob`/`compare_dob` pure tests (incl. inclusive touching-boundary + symmetry) + a
-DB-gated matcher e2e (`test_observed_age_pipeline.py`: candidate DOB inside the range→PARTIAL, outside→INSUFFICIENT_DATA,
-via the real `load_candidate`→`field_comparisons` path). Full `cargo test --workspace` 0 failed + workspace clippy clean;
-matcher 226 passed (pure + DB) + ruff clean, on the PG18 + cairn_pgx 0.2.0 rig (:5532). **End-to-end CLI smoke on a
-provisioned node PASSED:** `register-john-doe` → `assert-observed-evidence --age 40 --tol 5 --age-basis … --sex male …`
-→ `patient_demographic` shows `dob=1981/1991 (year-range, clinician-observed)` + `administrative-sex=male
-(clinician-observed)`, `chart_trust=unconfirmed`. **7-task subagent-SDD each reviewed clean; final whole-branch review
-(opus): READY TO MERGE** — all invariants hold, the `year-range`/`/`/`clinician-observed`/`administrative-sex` tokens are
-byte-identical across the Rust producer, the DB, and the Python consumer, positive-only compare provably cannot emit
-DISAGREE; all Minors deferred. **Honest scope limit (recorded):** a range does NOT generate a blocking key
-(`"1981/1991"`→first-4-digit `1981` only blocks a 1981-born candidate; a John Doe's only name is an excluded callsign),
-so pure-age evidence becomes a positive **scoring** signal once a pair is blocked by another key (a shared identifier off
-belongings, a refined name, the hub sweep) — not a blocking signal; a birth-year-range blocking pass is a clean future
-slice **(BUILT — second 2026-07-04 session, see top)**. **Deferred (recorded):** photo/marks/belongings/EMS-context evidence (new field home + attachment tier); the
-"prior history now available" push-alert (§5.12, no notification tier); the search-before-create funnel (UI/API tier);
-fuzzy age-range comparison; a `--observed-year` CLI override; the birth-year-range blocking pass. **§5.4 John-Doe slice B
-is now BUILT.**
+**Prior session (2026-07-04, first) — §5.4 slice B: clinician-observed evidence (estimated-age range + observed sex)
+(condensed; full detail in git + ROADMAP slice 20).** The demographic spine already carried it — **no floor/SCHEMA/event
+type/ADR/spec change**: pure `cairn-event::evidence` (`birth_year_range_from_age` — store the time-invariant birth-year
+window, never drifting raw age or a false-precise midpoint; `estimated_dob_body` value `"<min>/<max>"` precision
+`"year-range"`; `observed_sex_body` on **`administrative-sex`**, not the birth fact a clinician can't know — also keeps
+it out of db/016's verified-sex veto); `cairn-node::evidence::assert_observed_evidence` + CLI (one txn on an existing
+chart, provenance `clinician-observed` rank 30, document-displaceable); matcher `DateValue` interval + `parse_dob`
+`"year-range"` + **range-aware positive-only `compare_dob`** (overlap→PARTIAL, no-overlap→INSUFFICIENT_DATA, never
+DISAGREE). Cargo+clippy+matcher suites green; e2e CLI smoke on a provisioned node passed (`dob=1981/1991`,
+`administrative-sex=male`, `chart_trust=unconfirmed`); opus review READY TO MERGE. Its honest limit (range is not a
+blocking key) was closed by slice C the same day.
 
 **Prior session (2026-07-03) — §5.4 John-Doe slice A: callsign minting + matcher placeholder exclusion (condensed;
 full detail in git + ROADMAP slice 20 + PRs #123/#125).** Composes built primitives — no new event type, no `db/`
@@ -387,15 +378,16 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   `estimated_dob_body` value `"<min>/<max>"`/precision `"year-range"` + `observed_sex_body` on `administrative-sex`) +
   `cairn-node::evidence::assert_observed_evidence` + an `assert-observed-evidence` CLI + range-aware **positive-only**
   `compare_dob` in the matcher — **and slice C (the birth-year-range blocking pass: anchored `dob-range` +
-  `dob-range+sex` passes in `pipeline/db.py` + pure `pipeline/blocking.py`, this session — see top)** — **are now
+  `dob-range+sex` passes in `pipeline/db.py` + pure `pipeline/blocking.py`)** — **and slice D (administrative-sex
+  scoring via the composite `sex` field + the unconfirmed-chart REVIEW forcing rule + `chart_trust` plumbing, this
+  session — closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130), see top)** — **are now
   BUILT; NO new event type / migration / floor / SCHEMA / ADR / spec change.**
   **Remaining §5.4:** photo/marks/belongings/EMS-context evidence (new field home + attachment tier — separate slice), the
   "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
   registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
-  count), **administrative-sex scoring / the evidence-sparse score floor** ([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)
-  — the pure-age John Doe pair now blocks but dies below `review=3.0`; the natural next matcher slice), a
-  `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
-  source into the `chart_trust` VIEW when it lands. Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
+  count), a `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
+  source into the `chart_trust` VIEW when it lands (note: a pending+disputed Doe already reads `'under-review'` —
+  severity-max — so the slice-D forcing rule deliberately stands down while a dispute is open). Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; fuzzy alias recognition + a dedicated `alias` blocking pass.
   Deferred (range blocking): generator range-DOB emission + range-aware eval mirror; fuzzy near-window softening;
   hub-tier range sweep. Deferred

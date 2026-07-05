@@ -335,16 +335,54 @@ Fable whole-branch review → fix wave (order-proof guard, unknown-sentinel excl
 (the #84 crash arm), shape-aware `dropped_pair_estimate` (s−1 for anchored skips, not C(s,2)), `blocking_sex` sentinel
 param-bound from `adapter.VALUE_SENTINELS` + explicit whitespace trim-set, exact-`dob` arm excludes `year-range` (A/B
 purity), statement-level toggle skip, SQL↔registry pass-name guard, `canonical_pair` deduped into pure `blocking.py`.
-Suites pure 200 / DB 264 / ruff clean. **Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
-the pure-age John Doe pair now *blocks* but still scores below `review=3.0` (dob PARTIAL alone; `administrative-sex` is
-unscored) — the next scoring slice inherits it explicitly. **Deferred:** generator range-DOB emission + range-aware
-eval mirror (the quantitative recall number the toggle now enables), fuzzy near-window softening, hub-tier range sweep.
+Suites pure 200 / DB 264 / ruff clean. ~~**Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
+the pure-age John Doe pair now *blocks* but still scores below `review=3.0`~~ **(closed — slice 22, below)**.
+**Deferred:** generator range-DOB emission + range-aware
+eval mirror (the quantitative recall number the toggle now enables; must also mirror `administrative_sex` — slice 22's
+composite-sex fallback is unrepresentable in the eval `DatasetRecord` until it does), fuzzy near-window softening,
+hub-tier range sweep.
+
+**Slice 22 — §5.4 administrative-sex scoring + the unconfirmed-chart REVIEW rule** (2026-07-05; closes
+[issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130); advisory Python only — **no `db/` floor change, no
+SCHEMA/ADR/spec bump**; design+plan under `docs/superpowers/{specs,plans}/2026-07-05-admin-sex-scoring*`). The
+design-critical arithmetic: scoring administrative-sex alone leaves the headline pure-age Doe pair at ≈1.79 < `review=3.0`
+(honest F–S weights can't be inflated past an 11-year window + a two-valued field), so the slice has TWO halves. (1) **The
+composite `sex` field**: `records.SexValue` + pure `compare_sex` — both charts carry `sex-at-birth` → old EXACT/DISAGREE
+semantics (a birth-fact clash stays negative evidence, aligned with db/016); otherwise a **positive-only union fallback**
+over {`sex-at-birth`, `administrative-sex`} (intersect→EXACT, disjoint→INSUFFICIENT_DATA, **never DISAGREE** — observed
+evidence supports but never suppresses; mirrors blocking's union-sex); one field one contribution (no correlated
+double-count); weight key `sex-at-birth`→`"sex"` (projection field names untouched); `load_candidate` reads both facets
+in ONE query; side rank = sab's if present else admin's (documented second-order approximation). (2) **The scoped forcing
+rule** (`banding.band(unconfirmed=)`, the known-alias-forcing precedent): a pair with a `chart_trust='unconfirmed'` chart,
+**≥2 positive-LEVEL fields, zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes attached**
+(post-review amendment: the original no-vetoes gate rested on a false "near-vacuous" premise — an identifier veto needs
+no verified values, so a vetoed-yet-corroborated Doe pair is reachable, and suppressing it would be the ADR-0014
+auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the blocking cap;
+every persisted proposal involving an unconfirmed chart carries an `{"kind":"identity_pending","unconfirmed":[uuids]}`
+evidence marker (`"kind"` = the one non-field-evidence discriminator, the alias-marker convention; worklist grouping).
+Trust plumbing mirrors aliases: one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the
+same one-query loader), canonical lowercase-uuid keys for map + marker. TDD: pure + DB-gated incl. the #130 e2e
+(`test_identity_pending_pipeline.py` — the headline pair surfaces as REVIEW; a no-pending control (shared seed helper)
+proves the RULE, not sex scoring, surfaces it, hardened non-vacuous; a direct-`propose()` test covers the on-demand
+trust seam; the two-Does pair carries both uuids in the marker).
+6-task subagent-SDD each reviewed clean; **final whole-branch review (fable): 0 Critical/Important**, 2 test-only
+must-fixes fixed → re-review READY TO MERGE; then an **8-angle post-review fix wave** (veto-gate removal;
+`_corroborated_positive` counts agreement LEVELS so learned weights can't stand the rule down; `score()` raises on a
+weights table missing a compared field — the stale-table/key-rename hazard — instead of silently zeroing; marker key
+`"rule"`→`"kind"`; singular `load_trust` deleted; the stale-forced-REVIEW retraction gap filed as
+[#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)). Suites pure 227 / DB 298 (full) /
+ruff clean. **Honest limits (recorded):** a pending+disputed Doe reads `'under-review'` (severity-max view) and bypasses
+the forcing rule while the dispute is open — deliberate, per db/024 semantics; ranking within a Doe's surfaced candidate
+list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning unblocked); forced-REVIEW rows
+persist after the Doe is identified ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)); the eval mirror cannot
+yet represent `administrative_sex` (folded into the deferred range-aware eval-mirror work, slice 21 above — B3
+weight-learning needs it first).
 
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
-`generate_candidate_pairs`~~ **(done — slice 21)**; scoring `administrative-sex` / the evidence-sparse score floor
-([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)). **Identity: pieces C1
+`generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
+([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130))~~ **(done — slice 22)**. **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
 are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above),
 **C3** — `dispute` + the chart trust-state projection (slice 16, above) — and **C4** — `identify` + the *unconfirmed*

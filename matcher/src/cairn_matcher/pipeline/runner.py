@@ -8,6 +8,7 @@ duplicate-sweep is the declared backstop for any signal missed at the noise floo
 """
 
 from collections.abc import Mapping
+from uuid import UUID
 
 from cairn_matcher.orchestrator import field_comparisons
 from cairn_matcher.pipeline.alias import known_alias_evidence
@@ -35,6 +36,7 @@ def propose(
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
     aliases: Mapping[str, "frozenset[str]"] | None = None,
+    trust: Mapping[str, str] | None = None,
 ) -> Band | None:
     """Score the pair (a, b), gate on the in-DB veto, and persist a proposal if warranted.
 
@@ -46,6 +48,11 @@ def propose(
     caller (sweep) supplies so this function issues no per-pair alias SELECT — it reads
     both charts' aliases from the map instead. A direct single-pair call leaves it None
     and each chart's aliases are loaded on demand (`db.load_aliases`).
+
+    `trust` is the analogous preloaded batch map of {patient_id_text: trust_state} a BATCH
+    caller (sweep) supplies so this function issues no per-pair trust SELECT. A direct
+    single-pair call leaves it None and the pair's trust states are loaded on demand in
+    one query (`db.load_trust_for`) — the same seam as aliases.
     """
     # Imported lazily so `runner` (and its pure helper canonical_pair) is importable
     # without the optional `pipeline` extra; only an actual propose() call needs psycopg.
@@ -71,8 +78,23 @@ def propose(
         str(a), rec_a.names.value if rec_a.names else None, aliases_a,
         str(b), rec_b.names.value if rec_b.names else None, aliases_b,
     )
+    # §5.4 identity-pending trust: an *unconfirmed* chart (a standing John Doe) needs human
+    # identification effort, so banding may force its corroborated pairs to REVIEW (design
+    # 2026-07-05 §4). Trust states come from the caller's preloaded map when batching, else
+    # per-pair on-demand loads (same seam as aliases).
+    if trust is None:
+        trust = db.load_trust_for(conn, (a, b))
+    # The map keys AND the persisted marker use canonical lowercase uuid text, whatever
+    # id type/casing the caller passed (uuid.UUID round-trip = the canonical_pair rule).
+    key_a, key_b = (str(UUID(str(p))) for p in (a, b))
+    trust_a = trust.get(key_a)
+    trust_b = trust.get(key_b)
+    unconfirmed_ids = sorted(
+        k for k, t in ((key_a, trust_a), (key_b, trust_b)) if t == "unconfirmed"
+    )
     band_value = band(
-        match_score, vetoes, thresholds, has_known_alias=bool(alias_evidence)
+        match_score, vetoes, thresholds,
+        has_known_alias=bool(alias_evidence), unconfirmed=bool(unconfirmed_ids),
     )
     if band_value is None:
         # Nothing to persist — but the load/veto SELECTs opened a read transaction. Close
@@ -81,7 +103,18 @@ def propose(
         conn.rollback()
         return None
     low, high = canonical_pair(a, b)
-    payload = build_payload(match_score, vetoes, band_value, weights, alias_evidence)
+    # The marker is emitted on EVERY persisted proposal involving an unconfirmed chart —
+    # also above-threshold ones — so a hub worklist can group a Doe's whole candidate list.
+    # "kind" is the one discriminator key for every non-field evidence entry (the
+    # known_alias convention) — evidence JSONB is immutable, so a second key style
+    # would burden every future consumer forever.
+    trust_evidence = (
+        ({"kind": "identity_pending", "unconfirmed": unconfirmed_ids},)
+        if unconfirmed_ids else ()
+    )
+    payload = build_payload(
+        match_score, vetoes, band_value, weights, alias_evidence, trust_evidence
+    )
     db.upsert_proposal(conn, low, high, payload)
     # Commit boundary owned here: a batch caller wrapping propose() is not silently
     # committed mid-transaction by a helper function it doesn't control.

@@ -50,16 +50,23 @@ _PLACEHOLDER_USES_PARAM = PLACEHOLDER_USES_PARAM
 def load_candidate(conn, patient_id) -> CandidateRecord:
     """Read one patient's matching-relevant projection rows and shape a CandidateRecord.
 
-    Reads the winner rows (dob, sex-at-birth) and the retained sets (names, identifiers).
+    Reads the winner rows (dob, both sex facets) and the retained sets (names, identifiers).
     Pure shaping is delegated to adapter.candidate_from_rows.
     """
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT value, facets, provenance_rank FROM patient_demographic "
                     "WHERE patient_id=%s AND field='dob'", (patient_id,))
         dob_row = cur.fetchone()
-        cur.execute("SELECT value, provenance_rank FROM patient_demographic "
-                    "WHERE patient_id=%s AND field='sex-at-birth'", (patient_id,))
-        sex_row = cur.fetchone()
+        # One query for BOTH sex facets (§4.2 sex-at-birth: the birth fact; §5.4
+        # administrative-sex: the apparent/phenotypic facet a clinician-observed sex
+        # lands on). Split by field name here — 'sex-at-birth'/'administrative-sex'
+        # are the projection contract, NOT the scorer's weight key (that is "sex").
+        cur.execute("SELECT field, value, provenance_rank FROM patient_demographic "
+                    "WHERE patient_id=%s AND field IN ('sex-at-birth','administrative-sex')",
+                    (patient_id,))
+        sex_rows = cur.fetchall()
+        sex_row = next((r for r in sex_rows if r["field"] == "sex-at-birth"), None)
+        admin_sex_row = next((r for r in sex_rows if r["field"] == "administrative-sex"), None)
         # Exclude placeholder-use names (callsigns) from the scoring feature space (§5.4).
         cur.execute("SELECT value, provenance_rank FROM patient_name "
                     "WHERE patient_id=%s AND use_key <> ALL(%s)",
@@ -69,7 +76,8 @@ def load_candidate(conn, patient_id) -> CandidateRecord:
                     (patient_id,))
         identifier_rows = cur.fetchall()
     return candidate_from_rows(
-        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows
+        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows,
+        admin_sex_row=admin_sex_row
     )
 
 
@@ -119,6 +127,27 @@ def load_aliases_for(conn, patient_ids) -> dict[str, frozenset[str]]:
         for pid, value in cur.fetchall():
             out.setdefault(str(pid), set()).add(value)
     return {pid: frozenset(values) for pid, values in out.items()}
+
+
+def load_trust_for(conn, patient_ids) -> dict[str, str]:
+    """§5.7 trust states for a candidate set in ONE query (the load_aliases_for pattern).
+
+    The chart_trust view (db/024) carries rows ONLY for flagged charts (unconfirmed /
+    under-review), so an absent key IS the confirmed default — mirrored by
+    person_chart_trust's COALESCE. Keys are canonical lowercase uuid text. Scoped to the
+    given ids so this stays an index probe, never a scan of every flagged chart in the
+    fleet. The single-pair path is the same function over a two-element set — there is
+    deliberately no separate singular loader, so this contract lives in exactly one place.
+    """
+    ids = [str(p) for p in patient_ids]
+    if not ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT patient_id, trust_state FROM chart_trust WHERE patient_id = ANY(%s::uuid[])",
+            (ids,),
+        )
+        return {str(pid): state for pid, state in cur.fetchall()}
 
 
 def match_veto(conn, a, b) -> list[VetoFinding]:

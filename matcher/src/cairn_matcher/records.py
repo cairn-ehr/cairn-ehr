@@ -50,6 +50,21 @@ class DateValue:
 
 
 @dataclass(frozen=True)
+class SexValue:
+    """The composite value the `sex` comparator sees: both of one chart's sex facets.
+
+    sex_at_birth is the §4.2 birth fact (the db/016 veto's subject); administrative is
+    the apparent/phenotypic field a §5.4 clinician-observed sex lands on (slice B chose
+    it deliberately — a clinician cannot know the birth fact). Either may be None; a
+    chart with neither field never constructs a SexValue at all (the orchestrator's
+    extractor returns None instead, which grades INSUFFICIENT_DATA).
+    """
+
+    sex_at_birth: str | None = None
+    administrative: str | None = None
+
+
+@dataclass(frozen=True)
 class Name:
     """One asserted name as role-tagged token bags, e.g. {"given": ("alex",), ...}.
 
@@ -102,6 +117,7 @@ class CandidateRecord:
 
     dob: FieldValue | None = None
     sex_at_birth: FieldValue | None = None
+    administrative_sex: FieldValue | None = None  # §5.4 apparent/phenotypic sex facet
     names: FieldValue | None = None  # value is a frozenset[Name] (the history set)
     identifiers: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
