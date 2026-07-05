@@ -20,6 +20,16 @@ pytest.importorskip("psycopg", reason="pipeline extra (psycopg) absent — canno
 from cairn_matcher.pipeline.db import _GROUPS_SQL, _RANGE_GROUPS_SQL  # noqa: E402
 
 
+def _ws(text: str) -> str:
+    """Collapse ALL whitespace so the canary pins SQL *content*, not formatting.
+
+    A purely cosmetic reindent/re-wrap of db.py must not trip a tripwire whose failure
+    message asserts a semantic narrowing — false alarms teach maintainers to update
+    fragments reflexively, which is exactly how a real narrowing later slips through.
+    """
+    return " ".join(text.split())
+
+
 # Each entry: the recoverability assumption in shares_blocking_key -> the SQL fragment
 # that must survive for it to hold, in the statement that owns it. Narrowing/renaming
 # any of these breaks the "recoverable by construction" guarantee, so tripping this
@@ -39,12 +49,13 @@ _MIRRORED_PASSES = [
     # exact branch mirrors this exclusion, and without it two identical range strings
     # would be grouped by the SQL but not by the mirror (under-claim, safe) — while
     # DROPPING the guard from the mirror side would over-claim. Pin the SQL side.
-    # Fragment spans two lines (db.py 226-227) to pin DOB arm specifically; birth_year
-    # CTE has a similar pattern but different context.
+    # Two clauses to pin the exact-dob arm specifically: the birth_year CTE carries the
+    # same IS DISTINCT FROM guard, but with `AND value ~ '[0-9]{4}'` between these
+    # clauses, so this fragment can only match the exact-dob arm.
     ("exact-dob arm excludes year-range rows (shares_blocking_key exact branch)",
      _GROUPS_SQL,
-     "FROM patient_demographic WHERE field = 'dob'\n"
-     "  AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'"),
+     "FROM patient_demographic WHERE field = 'dob' "
+     "AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'"),
     # The anchored range mirror (_birth_window + the overlap branch). Any of these
     # fragments disappearing means the range passes changed shape under the mirror.
     ("range rows keyed on precision 'year-range' (_birth_window range branch)",
@@ -64,7 +75,7 @@ _MIRRORED_PASSES = [
 
 @pytest.mark.parametrize("assumption, sql_text, fragment", _MIRRORED_PASSES)
 def test_shares_blocking_key_mirrors_the_blocking_sql(assumption, sql_text, fragment):
-    assert fragment in sql_text, (
+    assert _ws(fragment) in _ws(sql_text), (
         f"the blocking SQL no longer contains the pass fragment that "
         f"shares_blocking_key mirrors: {assumption}. Update "
         f"generator.shares_blocking_key/_birth_window to match — otherwise the "

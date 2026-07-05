@@ -392,8 +392,9 @@ guard, so two identical `year-range` strings faked an exact key the SQL excludes
 4-digit run (tol 2–5 ⇒ the 5–11-year §5.4 widths, provenance 30), sex moved sab→`administrative_sex` (observed facet;
 random draw when the seed recorded none), knob `p_dob_estimate=0.15`, LAST in `_OPERATORS`; `_repair` now stands down
 on window-overlap pairs (pinned by identity: `repaired is clone`); (4) drift canary extended to `_RANGE_GROUPS_SQL`
-(3-tuple table; the exact-dob exclusion pinned by a dob-arm-unique two-line fragment after review found the one-line
-literal occurs twice in `_GROUPS_SQL`) + `seed_dataset` writes `administrative-sex` rows + two DB-gated proofs: the
+(3-tuple table; the exact-dob exclusion pinned by a dob-arm-unique two-clause fragment after review found the one-line
+literal occurs twice in `_GROUPS_SQL`; containment check whitespace-normalized so a cosmetic reindent of the SQL can't
+trip it) + `seed_dataset` writes `administrative-sex` rows + two DB-gated proofs: the
 `dob-range+sex` rescue sees seeded admin-sex under `enabled_passes` isolation, and an estimate-heavy volume set
 (`p_dob_estimate=0.9, p_name=0.9`, n=150, >100 range clones asserted non-vacuous) measures `pair_completeness == 1.0`
 — the end-to-end proof the mirror never over-claims what the SQL recovers. 5-task subagent-SDD, each reviewed;

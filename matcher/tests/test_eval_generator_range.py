@@ -145,6 +145,17 @@ def test_estimate_is_a_noop_without_a_four_digit_run():
     assert "dob" not in corrupt_dob_estimate(no_dob, random.Random(0))
 
 
+def test_estimate_is_a_noop_when_the_window_would_leave_yyyy_yyyy():
+    # A first-run year too close to the 4-digit boundaries cannot be widened into the
+    # '<yyyy>/<yyyy>' shape the SQL and _birth_window accept ("0001"-tol goes negative,
+    # "9999"+tol grows a fifth digit). Emitting "-001/0006" would be a malformed range
+    # both sides reject — so the operator must no-op, like any other unusable year
+    # (the documented safe degrade), never emit an unparseable window.
+    for boundary in ("0001-01-01", "9999-01-01"):
+        rec = _rec(dob={"value": boundary, "precision": "day"})
+        assert corrupt_dob_estimate(rec, random.Random(0))["dob"] == rec["dob"]
+
+
 def test_estimate_never_mutates_its_input():
     rec = _rec(dob={"value": "1985-05-12", "precision": "day"})
     rec["sex_at_birth"] = {"value": "male", "provenance_rank": 40}

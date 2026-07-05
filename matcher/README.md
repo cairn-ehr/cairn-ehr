@@ -85,9 +85,10 @@ instrument, not a statistical accuracy claim. Dataset format: see
 `gold_v1.json` is small by design; measuring blocking at volume needs a bigger labelled
 set without hand-authoring one. `eval/generator.py` (pure, stdlib-only — no psycopg) builds
 one at any size: a clean "seed" record per entity plus one corrupted "clone" (cluster size
-2), corrupted by one of four operators (DOB reformat, DOB typo, name edit, identifier
-mangle). Every seed↔clone pair is **recoverable by construction** — guaranteed to share at
-least one base blocking key, repaired if corruption destroys them all — so this measures
+2), corrupted by one of five operators (DOB reformat, DOB typo, name edit, identifier
+mangle, §5.4 estimated-age window). Every seed↔clone pair is **recoverable by
+construction** — guaranteed to share at least one blocking key (estimated-age pairs may
+need the anchored dob-range passes), repaired if corruption destroys them all — so this measures
 blocking recall/reduction at volume, not real-world matching accuracy. Deterministic given
 a seed. Generate, then feed straight into the eval CLI above:
 

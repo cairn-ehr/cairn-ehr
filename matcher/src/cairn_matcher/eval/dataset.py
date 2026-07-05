@@ -31,6 +31,8 @@ class DatasetRecord:
     except record_id; absence is a safe, gradeable absence (principle 4), not an error.
 
     dob: {"value": ISO str, "precision": "year"|"month"|"day", "provenance_rank": int}
+         — or a §5.4 estimated-age window: {"value": "<yyyy>/<yyyy>",
+         "precision": "year-range", "provenance_rank": int}
     sex_at_birth: {"value": str, "provenance_rank": int}
     administrative_sex: {"value": str, "provenance_rank": int} — the apparent/phenotypic
          facet a clinician-observed sex lands on (slice D's composite-sex fallback input)

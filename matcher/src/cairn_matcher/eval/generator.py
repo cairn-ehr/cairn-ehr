@@ -71,6 +71,25 @@ def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
 _YEAR_RANGE_RE = re.compile(r"([0-9]{4})/([0-9]{4})")
 _FIRST_YEAR_RE = re.compile(r"[0-9]{4}")
 
+# The §5.4 estimated-age precision label. ONE Python home for both the mirror sites
+# (_birth_window's range branch, shares_blocking_key's exact-branch exclusion) and the
+# emission site (corrupt_dob_estimate): a rename applied to the mirror but missed on the
+# emission side would make the generator silently emit a precision the range pass
+# ignores — degrading eval coverage without failing loudly.
+_YEAR_RANGE_PRECISION = "year-range"
+
+
+def _first_year(value: str) -> int | None:
+    """FIRST 4-digit run of a dob value as an int, or None if there is no run.
+
+    The Python home of the SQL's substring(value FROM '[0-9]{4}') extraction, shared by
+    _birth_window's point branch (the recoverability side) and corrupt_dob_estimate's
+    window emission (the corruption side) so the extraction rule can never drift between
+    them — the drift canary pins the SQL text, not agreement among Python call sites.
+    """
+    m = _FIRST_YEAR_RE.search(value)
+    return None if m is None else int(m.group(0))
+
 
 def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
     """(y_min, y_max, is_range) for one record's dob, or None — the birth_window CTE.
@@ -86,7 +105,7 @@ def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
     if not dob or not isinstance(dob.get("value"), str):
         return None
     value = dob["value"]
-    if dob.get("precision") == "year-range":
+    if dob.get("precision") == _YEAR_RANGE_PRECISION:
         m = _YEAR_RANGE_RE.fullmatch(value)
         if not m:
             return None
@@ -94,10 +113,9 @@ def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
         if lo > hi:
             return None
         return (lo, hi, True)
-    m = _FIRST_YEAR_RE.search(value)
-    if m is None:
+    year = _first_year(value)
+    if year is None:
         return None
-    year = int(m.group(0))
     return (year, year, False)
 
 
@@ -123,8 +141,8 @@ def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
     if (
         da
         and db_
-        and da.get("precision") != "year-range"
-        and db_.get("precision") != "year-range"
+        and da.get("precision") != _YEAR_RANGE_PRECISION
+        and db_.get("precision") != _YEAR_RANGE_PRECISION
         and da.get("value") is not None
         and da.get("value") == db_.get("value")
     ):
@@ -252,24 +270,26 @@ def corrupt_dob_estimate(record, rng):
     Runs LAST in _OPERATORS: an estimated-age record supersedes format/typo dob
     corruption wholesale; a typo'd year windows around the typo (honest corruption —
     the window may or may not still overlap the seed's). No-op without a 4-digit
-    run (safe degrade, like every operator).
+    run, or when the window would leave the '<yyyy>/<yyyy>' shape at either 4-digit
+    boundary (safe degrade, like every operator — never a malformed range).
     """
     out = _clone(record)
     dob = out.get("dob")
     if not dob or not isinstance(dob.get("value"), str):
         return out
-    m = _FIRST_YEAR_RE.search(dob["value"])
-    if m is None:
+    year = _first_year(dob["value"])
+    if year is None:
         return out
-    year = int(m.group(0))
     tol = rng.randint(2, 5)
+    if year - tol < 0 or year + tol > 9999:
+        return out  # window not expressible as '<yyyy>/<yyyy>' — no-op, not "-004/0006"
     out["dob"] = {
         "value": f"{year - tol:04d}/{year + tol:04d}",
-        "precision": "year-range",
+        "precision": _YEAR_RANGE_PRECISION,
         "provenance_rank": 30,
     }
     sab = out.pop("sex_at_birth", None)
-    observed = sab["value"] if sab else rng.choice(("male", "female"))
+    observed = sab["value"] if sab else rng.choice(_SEX_VALUES)
     out["administrative_sex"] = {"value": observed, "provenance_rank": 30}
     return out
 
@@ -282,6 +302,10 @@ _GIVEN = ("Alex", "Sam", "Mira", "Jon", "Ana", "Wei", "Omar", "Fatima", "Ivan", 
 _FAMILY = ("Nguyen", "Einarsson", "Garcia", "Okafor", "Kowalski", "Haddad", "Silva", "Ali")
 _PATRONYMIC = (("Jón", "Einarsson"), ("Ólafur", "Bjarnason"), ("Freyr", "Þórsson"))
 _ID_SYSTEMS = ("au-medicare", "national-id", "kennitala", "mrn-local")
+# Shared by synth_seed's sex_at_birth draw AND corrupt_dob_estimate's observed-sex
+# fallback: widening the seed pool (e.g. an intersex/unknown value, principle 4) must
+# widen the clones' distribution with it, never leave the fallback drawing a stale pair.
+_SEX_VALUES = ("male", "female")
 
 
 def _synth_name(rng):
@@ -318,7 +342,7 @@ def synth_seed(rng, index):
         rec["identifiers"] = [{"system": rng.choice(_ID_SYSTEMS),
                                "match_key": key, "value": key}]
     if rng.random() < 0.5:
-        rec["sex_at_birth"] = {"value": rng.choice(("male", "female")),
+        rec["sex_at_birth"] = {"value": rng.choice(_SEX_VALUES),
                                "provenance_rank": 40}
     return rec
 
@@ -353,9 +377,10 @@ _OPERATORS = (
 
 
 def _repair(seed, clone):
-    """Guarantee the seed<->clone pair stays blockable: if corruptions destroyed every base
-    key, append the seed's primary name (verbatim) to the clone's retained names, restoring a
-    shared name token. Every seed has >=1 name, so this always succeeds. Pure (returns new)."""
+    """Guarantee the seed<->clone pair stays blockable: if corruptions destroyed every
+    blocking key (symmetric AND anchored-range alike), append the seed's primary name
+    (verbatim) to the clone's retained names, restoring a shared name token. Every seed
+    has >=1 name, so this always succeeds. Pure (returns new)."""
     if shares_blocking_key(seed, clone):
         return clone
     out = _clone(clone)
@@ -391,7 +416,8 @@ def generate_dataset(spec):
         "name": f"synthetic_s{spec.seed}_n{spec.n_entities}",
         "description": (
             "Synthetic blocking-eval set: seed + one corrupted clone per entity. "
-            "Every true pair is recoverable by >=1 base blocking key (by construction); "
+            "Every true pair is recoverable by >=1 blocking key (by construction — "
+            "estimated-age pairs may need the anchored dob-range passes); "
             "a regression/tuning instrument, not a statistical accuracy claim."
         ),
         "entities": entities,
