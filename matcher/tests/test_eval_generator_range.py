@@ -7,7 +7,17 @@ generates would make _repair stand down and silently break the volume set's
 recoverable-by-construction guarantee. These tests pin the safe semantics.
 """
 
-from cairn_matcher.eval.generator import _birth_window, _repair, shares_blocking_key
+import random
+
+from cairn_matcher.eval.dataset import load_dataset
+from cairn_matcher.eval.generator import (
+    GenSpec,
+    _birth_window,
+    _repair,
+    corrupt_dob_estimate,
+    generate_dataset,
+    shares_blocking_key,
+)
 
 
 def _rec(dob=None, names=(), identifiers=()):
@@ -96,3 +106,54 @@ def test_repair_stands_down_when_the_window_carries_the_pair():
     repaired = _repair(seed, clone)
     assert repaired is clone  # _repair returns the clone UNTOUCHED when a key exists
     assert [n["value"] for n in repaired.get("names", [])] == ["Zed Q"]
+
+
+# --- corrupt_dob_estimate: the estimated-age operator ---------------------------
+
+
+def test_estimate_replaces_dob_with_a_window_containing_the_year():
+    rec = _rec(dob={"value": "1985-05-12", "precision": "day"})
+    out = corrupt_dob_estimate(rec, random.Random(0))
+    assert out["dob"]["precision"] == "year-range"
+    lo, hi = (int(p) for p in out["dob"]["value"].split("/"))
+    assert lo <= 1985 <= hi
+    assert out["dob"]["provenance_rank"] == 30  # clinician-observed (slice B)
+
+
+def test_estimate_moves_sex_to_the_observed_facet():
+    rec = _rec(dob={"value": "1985-05-12", "precision": "day"})
+    rec["sex_at_birth"] = {"value": "female", "provenance_rank": 40}
+    out = corrupt_dob_estimate(rec, random.Random(0))
+    assert "sex_at_birth" not in out
+    assert out["administrative_sex"] == {"value": "female", "provenance_rank": 30}
+
+
+def test_estimate_draws_a_sex_when_the_seed_has_none():
+    rec = _rec(dob={"value": "1985-05-12", "precision": "day"})
+    out = corrupt_dob_estimate(rec, random.Random(0))
+    assert out["administrative_sex"]["value"] in ("male", "female")
+
+
+def test_estimate_is_a_noop_without_a_four_digit_run():
+    rec = _rec(dob={"value": "12/05/90", "precision": "day"})
+    assert corrupt_dob_estimate(rec, random.Random(0))["dob"] == rec["dob"]
+    no_dob = _rec(names=("Alex",))
+    assert "dob" not in corrupt_dob_estimate(no_dob, random.Random(0))
+
+
+def test_estimate_never_mutates_its_input():
+    rec = _rec(dob={"value": "1985-05-12", "precision": "day"})
+    rec["sex_at_birth"] = {"value": "male", "provenance_rank": 40}
+    frozen = {"dob": dict(rec["dob"]), "sex_at_birth": dict(rec["sex_at_birth"])}
+    corrupt_dob_estimate(rec, random.Random(0))
+    assert rec["dob"] == frozen["dob"] and rec["sex_at_birth"] == frozen["sex_at_birth"]
+
+
+def test_estimate_heavy_dataset_round_trips_and_carries_the_new_fields():
+    ds_dict = generate_dataset(GenSpec(seed=3, n_entities=40, p_dob_estimate=1.0))
+    ds = load_dataset(ds_dict)  # round-trips the real loader (Task 1's plumbing)
+    clones = [r for e in ds.entities for r in e.records if r.record_id.endswith("-dup")]
+    ranged = [r for r in clones if (r.dob or {}).get("precision") == "year-range"]
+    assert ranged, "p_dob_estimate=1.0 must produce year-range clones"
+    assert all(r.administrative_sex is not None for r in ranged)
+    assert all(r.sex_at_birth is None for r in ranged)

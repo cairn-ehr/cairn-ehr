@@ -232,6 +232,41 @@ def corrupt_identifier(record, rng):
     return out
 
 
+def corrupt_dob_estimate(record, rng):
+    """Rewrite the clone as a §5.4 estimated-age registration of the same person.
+
+    The dob becomes an inclusive birth-year window CONTAINING the current value's
+    first 4-digit run (an honest interval, never a false-precise midpoint —
+    principle 4; tol 2..5 gives the 5–11-year widths slice B's evidence produces),
+    at provenance 30 (clinician-observed). Sex moves to the OBSERVED facet: a
+    clinician observes apparent sex but cannot know the birth fact (slice B), so
+    sex_at_birth is dropped and administrative_sex carries the seed's value when
+    present (a correct observation) or a random draw when the seed recorded none.
+    Runs LAST in _OPERATORS: an estimated-age record supersedes format/typo dob
+    corruption wholesale; a typo'd year windows around the typo (honest corruption —
+    the window may or may not still overlap the seed's). No-op without a 4-digit
+    run (safe degrade, like every operator).
+    """
+    out = _clone(record)
+    dob = out.get("dob")
+    if not dob or not isinstance(dob.get("value"), str):
+        return out
+    m = _FIRST_YEAR_RE.search(dob["value"])
+    if m is None:
+        return out
+    year = int(m.group(0))
+    tol = rng.randint(2, 5)
+    out["dob"] = {
+        "value": f"{year - tol:04d}/{year + tol:04d}",
+        "precision": "year-range",
+        "provenance_rank": 30,
+    }
+    sab = out.pop("sex_at_birth", None)
+    observed = sab["value"] if sab else rng.choice(("male", "female"))
+    out["administrative_sex"] = {"value": observed, "provenance_rank": 30}
+    return out
+
+
 # Curated, culture-plural pools. Deliberately small and hand-written (no faker: a dep
 # and Western bias would both violate the mission). Blocking keys on tokens/years, not
 # name rarity, so a small pool is sufficient and makes tokens recur (realistic collisions).
@@ -287,6 +322,10 @@ class GenSpec:
 
     Cluster size is fixed at 2 (seed + one clone) this slice, so each entity yields exactly
     one seed<->clone true pair and the recoverability invariant is exactly the all-pairs one.
+
+    Adding an operator changes RNG consumption, so a given seed's output differs
+    across versions of this module: "deterministic given a seed" is a
+    reproducibility contract within one version, not a cross-version stability one.
     """
     seed: int = 0
     n_entities: int = 100
@@ -294,6 +333,7 @@ class GenSpec:
     p_dob_typo: float = 0.2
     p_name: float = 0.5
     p_identifier: float = 0.5
+    p_dob_estimate: float = 0.15
 
 
 _OPERATORS = (
@@ -301,6 +341,7 @@ _OPERATORS = (
     ("p_dob_typo", corrupt_dob_typo),
     ("p_name", corrupt_name),
     ("p_identifier", corrupt_identifier),
+    ("p_dob_estimate", corrupt_dob_estimate),
 )
 
 
