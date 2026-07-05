@@ -112,7 +112,13 @@ def test_without_pending_state_the_same_pair_stays_below_threshold(pg_conn):
         names=[("Robert Menzies", 60)],
     )
 
-    sweep(pg_conn)
+    result = sweep(pg_conn)
+
+    # Guard against a vacuous pass: the pair must have been GENERATED and scored
+    # (below threshold), not silently never blocked at all — otherwise a blocking
+    # regression would masquerade as this test's expected outcome.
+    assert result.errors == []
+    assert result.generated >= 1
 
     low, high = canonical_pair(doe, prior)
     with pg_conn.cursor() as cur:

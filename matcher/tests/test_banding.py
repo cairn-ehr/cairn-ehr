@@ -175,9 +175,15 @@ def test_unconfirmed_rule_forces_review_on_corroborated_pair():
 
 
 def test_unconfirmed_rule_needs_two_positive_fields():
-    # A bare window overlap (one positive field) must NOT flood the worklist.
+    # A bare window overlap (ONE positive field) must NOT flood the worklist — and the
+    # production score shape always carries all four fields, three at 0.0
+    # (INSUFFICIENT_DATA), so this also pins _corroborated_positive's strict `> 0`:
+    # a regression to `>= 0` would count the zero-contribution fields and fire here.
     one_field = MatchScore(total=1.07, fields=(
         _evidence("dob", AgreementLevel.PARTIAL, 1.07),
+        _evidence("sex", AgreementLevel.INSUFFICIENT_DATA, 0.0),
+        _evidence("name", AgreementLevel.INSUFFICIENT_DATA, 0.0),
+        _evidence("identifier", AgreementLevel.INSUFFICIENT_DATA, 0.0),
     ))
     assert band(one_field, vetoes=(), unconfirmed=True) is None
 
