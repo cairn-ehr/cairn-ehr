@@ -92,14 +92,15 @@ class MatchScore:
 
 # Shipped default weights. Illustrative log2(m/u) magnitudes — B3 learns real ones from
 # local data. Stronger, rarer agreements (a shared identifier, an exact DOB) weigh most;
-# low-cardinality fields (sex-at-birth) weigh least; disagreements are negative.
+# low-cardinality fields (sex, the composite sex-at-birth/administrative-sex field) weigh
+# least; disagreements are negative.
 DEFAULT_WEIGHTS = Weights(per_field={
     "dob": FieldWeights({
         AgreementLevel.EXACT: 6.0,
         AgreementLevel.PARTIAL: 1.5,
         AgreementLevel.DISAGREE: -4.0,
     }),
-    "sex-at-birth": FieldWeights({
+    "sex": FieldWeights({
         AgreementLevel.EXACT: 1.0,
         AgreementLevel.DISAGREE: -2.0,
     }),

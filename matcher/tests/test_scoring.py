@@ -61,8 +61,15 @@ def test_per_field_contributions_sum_to_total():
 
 
 def test_default_weights_cover_the_default_fields():
-    for fld in ("dob", "sex-at-birth", "name", "identifier"):
+    for fld in ("dob", "sex", "name", "identifier"):
         assert fld in DEFAULT_WEIGHTS.per_field
+
+
+def test_default_weights_carry_sex_key_not_sex_at_birth():
+    # The weight/FieldSpec key renamed to "sex" (composite field); 'sex-at-birth'
+    # remains ONLY as the projection field name in SQL/seeding, never a weight key.
+    assert "sex" in DEFAULT_WEIGHTS.per_field
+    assert "sex-at-birth" not in DEFAULT_WEIGHTS.per_field
 
 
 def test_match_score_is_returned():

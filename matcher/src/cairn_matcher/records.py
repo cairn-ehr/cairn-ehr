@@ -117,6 +117,7 @@ class CandidateRecord:
 
     dob: FieldValue | None = None
     sex_at_birth: FieldValue | None = None
+    administrative_sex: FieldValue | None = None  # §5.4 apparent/phenotypic sex facet
     names: FieldValue | None = None  # value is a frozenset[Name] (the history set)
     identifiers: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
