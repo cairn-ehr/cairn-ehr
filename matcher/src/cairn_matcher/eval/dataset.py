@@ -32,6 +32,8 @@ class DatasetRecord:
 
     dob: {"value": ISO str, "precision": "year"|"month"|"day", "provenance_rank": int}
     sex_at_birth: {"value": str, "provenance_rank": int}
+    administrative_sex: {"value": str, "provenance_rank": int} — the apparent/phenotypic
+         facet a clinician-observed sex lands on (slice D's composite-sex fallback input)
     names: tuple of {"value": display str, "provenance_rank": int}
     identifiers: tuple of {"system": str, "match_key": str, "value": str}
     """
@@ -39,6 +41,7 @@ class DatasetRecord:
     record_id: str
     dob: Mapping | None = None
     sex_at_birth: Mapping | None = None
+    administrative_sex: Mapping | None = None
     names: tuple[Mapping, ...] = ()
     identifiers: tuple[Mapping, ...] = ()
 
@@ -94,6 +97,7 @@ def _record_from(obj: Mapping) -> DatasetRecord:
         record_id=record_id,
         dob=obj.get("dob"),
         sex_at_birth=obj.get("sex_at_birth"),
+        administrative_sex=obj.get("administrative_sex"),
         names=names,
         identifiers=identifiers,
     )
@@ -151,6 +155,12 @@ def record_to_candidate(rec: DatasetRecord) -> CandidateRecord:
             "value": rec.sex_at_birth.get("value"),
             "provenance_rank": rec.sex_at_birth.get("provenance_rank", 0),
         }
+    admin_sex_row = None
+    if rec.administrative_sex is not None:
+        admin_sex_row = {
+            "value": rec.administrative_sex.get("value"),
+            "provenance_rank": rec.administrative_sex.get("provenance_rank", 0),
+        }
     name_rows = [
         {"value": n["value"], "provenance_rank": n.get("provenance_rank", 0)} for n in rec.names
     ]
@@ -158,7 +168,8 @@ def record_to_candidate(rec: DatasetRecord) -> CandidateRecord:
         {"system": i["system"], "match_key": i["match_key"]} for i in rec.identifiers
     ]
     return candidate_from_rows(
-        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows
+        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows,
+        admin_sex_row=admin_sex_row,
     )
 
 
