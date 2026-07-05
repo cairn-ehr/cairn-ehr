@@ -327,6 +327,24 @@ BEGIN
         RAISE EXCEPTION 'apply_remote_node_event: unknown node event_type % (fail closed)', v_type;
     END IF;
 
+    -- Clock-drift ceiling (issue #102): refuse a verified event whose asserted HLC wall is
+    -- implausibly far in OUR future, so a broken/hostile peer cannot ratchet this node's
+    -- clock — nor trust_peer's `ORDER BY hlc_wall DESC` — forward without bound. See
+    -- cairn_max_hlc_drift_ms() (db/001) for the bound and its rationale. This is a REJECTION
+    -- (not the clinical door's clamp): the node plane STORES hlc_wall in node_event and
+    -- trust_peer orders on it, so a poison value that got admitted would win "latest peer
+    -- state" forever — it must never enter the table. A bare RAISE (P0001) lands in the pull
+    -- loop's self-healing deny-all class (cairn-node sync.rs): the event is skip-and-advanced
+    -- and re-offered on the next full sweep, so a modestly-future event (transient skew) is
+    -- admitted once local time catches up, while an absurd one is skipped forever, poisoning
+    -- nothing. Measured against clock_timestamp() (our own wall clock), never the
+    -- possibly-already-advanced hlc_state, so the bound cannot itself be ratcheted.
+    IF (b -> 'hlc' ->> 'wall')::bigint
+           > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+        RAISE EXCEPTION 'apply_remote_node_event: HLC wall % ms is more than % ms ahead of local time — clock-drift ceiling (issue #102)',
+            (b -> 'hlc' ->> 'wall')::bigint, cairn_max_hlc_drift_ms();
+    END IF;
+
     IF v_op = 'enroll' THEN
         -- The genesis must match an active, out-of-band-confirmed peer: its
         -- content-address is the node_id we trust, and its key is the pubkey we pinned.
