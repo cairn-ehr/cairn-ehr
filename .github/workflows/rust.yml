@@ -115,8 +115,12 @@ jobs:
           set -euxo pipefail
           export PGDATA="$RUNNER_TEMP/pgdata"
           initdb -D "$PGDATA" -U postgres --auth=trust
+          # unix_socket_directories defaults to /var/run/postgresql, which the
+          # unprivileged runner user cannot write (Permission denied on the socket lock
+          # file). Point it at the runner-owned data dir; the tests connect over TCP
+          # (127.0.0.1) regardless, so the socket path only needs to be writable.
           pg_ctl -D "$PGDATA" \
-            -o "-p ${PGPORT} -c listen_addresses=127.0.0.1" \
+            -o "-p ${PGPORT} -c listen_addresses=127.0.0.1 -c unix_socket_directories=$PGDATA" \
             -l "$PGDATA/server.log" start
           for _ in $(seq 1 30); do
             pg_isready -h 127.0.0.1 -p "${PGPORT}" -U postgres && break
