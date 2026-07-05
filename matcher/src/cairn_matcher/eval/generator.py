@@ -10,6 +10,7 @@ The disk/CLI edge lives in generate.py (the dataset.py <-> loader.py split).
 
 import copy
 import random
+import re
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -57,25 +58,97 @@ def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
     }
 
 
+# Mirrors of _RANGE_GROUPS_SQL's birth_window guards (pipeline/db.py): a range value
+# must be exactly '<yyyy>/<yyyy>' with min <= max; a point value contributes its FIRST
+# 4-digit run. Kept as module constants so the two branches below can't drift apart.
+#
+# No '^'/'$' anchors here: matched with .fullmatch() below instead. Python's re '$'
+# also matches immediately before a trailing '\n', but PostgreSQL's ARE '$' (as used
+# in db.py's `value ~ '^[0-9]{4}/[0-9]{4}$'`) matches only true end-of-string — so
+# anchoring with '$' and using .match() would let "1980/1990\n" through here while the
+# SQL excludes the row (an over-claim, the unsafe direction). .fullmatch() is the
+# faithful mirror of POSIX end-of-string.
+_YEAR_RANGE_RE = re.compile(r"([0-9]{4})/([0-9]{4})")
+_FIRST_YEAR_RE = re.compile(r"[0-9]{4}")
+
+# The §5.4 estimated-age precision label. ONE Python home for both the mirror sites
+# (_birth_window's range branch, shares_blocking_key's exact-branch exclusion) and the
+# emission site (corrupt_dob_estimate): a rename applied to the mirror but missed on the
+# emission side would make the generator silently emit a precision the range pass
+# ignores — degrading eval coverage without failing loudly.
+_YEAR_RANGE_PRECISION = "year-range"
+
+
+def _first_year(value: str) -> int | None:
+    """FIRST 4-digit run of a dob value as an int, or None if there is no run.
+
+    The Python home of the SQL's substring(value FROM '[0-9]{4}') extraction, shared by
+    _birth_window's point branch (the recoverability side) and corrupt_dob_estimate's
+    window emission (the corruption side) so the extraction rule can never drift between
+    them — the drift canary pins the SQL text, not agreement among Python call sites.
+    """
+    m = _FIRST_YEAR_RE.search(value)
+    return None if m is None else int(m.group(0))
+
+
+def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
+    """(y_min, y_max, is_range) for one record's dob, or None — the birth_window CTE.
+
+    Mirrors _RANGE_GROUPS_SQL exactly, in the safe direction: a malformed or inverted
+    year-range value yields NO window (the SQL excludes the row), never a guess; a
+    point value needs a 4-digit run (the SQL's `value ~ '[0-9]{4}'`) and contributes
+    its first run as a degenerate [y, y] window. A year-range row can never enter the
+    point branch (the SQL's IS DISTINCT FROM guard), so a range can't double-enter as
+    a false point [min, min].
+    """
+    dob = record.get("dob")
+    if not dob or not isinstance(dob.get("value"), str):
+        return None
+    value = dob["value"]
+    if dob.get("precision") == _YEAR_RANGE_PRECISION:
+        m = _YEAR_RANGE_RE.fullmatch(value)
+        if not m:
+            return None
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo > hi:
+            return None
+        return (lo, hi, True)
+    year = _first_year(value)
+    if year is None:
+        return None
+    return (year, year, False)
+
+
 def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
-    """True iff records a and b would co-occur in >=1 base blocking pass.
+    """True iff records a and b would co-occur in >=1 blocking pass.
 
-    The three BASE keys (pipeline/db.py _GROUPS_SQL): shared non-unknown identifier,
-    equal exact-DOB value, or a shared name token. The fourth pass 'name+year' is
-    subsumed by the name-token check (it requires a shared token), so it is not tested
-    separately: if name tokens intersect, the plain 'name' pass already groups them.
+    The symmetric keys (pipeline/db.py _GROUPS_SQL): shared non-unknown identifier,
+    equal exact-DOB value (excluding year-range rows, mirroring the SQL's
+    IS DISTINCT FROM 'year-range' — two identical range strings must NOT fake an
+    exact key the SQL never groups), or a shared name token. The 'name+year' pass is
+    subsumed by the name-token check (it requires a shared token).
 
-    The two anchored range passes ('dob-range' / 'dob-range+sex') are DELIBERATELY
-    unmirrored: the generator emits no year-range dobs yet, and an unmirrored pass only
-    makes _repair conservative (it under-claims recoverability and repairs via a name
-    token anyway -- the safe direction; an OVER-claiming mirror would be the bug).
-    Mirror them when the generator learns to emit estimated-age records (deferred in the
-    2026-07-04 range-blocking design, section 10).
+    The ANCHORED range passes (_RANGE_GROUPS_SQL): windows overlap AND at least one
+    side is a real year-range (window_overlap requires a.is_range — two point DOBs
+    merely sharing a year are never a range key). 'dob-range+sex' is a subset of
+    'dob-range''s pair set (same overlap join, intersected with a shared sex), so
+    recoverability needs only the plain overlap branch; like every branch here, the
+    block-size cap is deliberately not modelled (evaluate_blocking reports skips).
     """
     if _identifier_keys(a) & _identifier_keys(b):
         return True
     da, db_ = a.get("dob"), b.get("dob")
-    if da and db_ and da.get("value") is not None and da.get("value") == db_.get("value"):
+    if (
+        da
+        and db_
+        and da.get("precision") != _YEAR_RANGE_PRECISION
+        and db_.get("precision") != _YEAR_RANGE_PRECISION
+        and da.get("value") is not None
+        and da.get("value") == db_.get("value")
+    ):
+        return True
+    wa, wb = _birth_window(a), _birth_window(b)
+    if wa and wb and (wa[2] or wb[2]) and wb[0] <= wa[1] and wa[0] <= wb[1]:
         return True
     return bool(name_tokens(a) & name_tokens(b))
 
@@ -184,6 +257,43 @@ def corrupt_identifier(record, rng):
     return out
 
 
+def corrupt_dob_estimate(record, rng):
+    """Rewrite the clone as a §5.4 estimated-age registration of the same person.
+
+    The dob becomes an inclusive birth-year window CONTAINING the current value's
+    first 4-digit run (an honest interval, never a false-precise midpoint —
+    principle 4; tol 2..5 gives the 5–11-year widths slice B's evidence produces),
+    at provenance 30 (clinician-observed). Sex moves to the OBSERVED facet: a
+    clinician observes apparent sex but cannot know the birth fact (slice B), so
+    sex_at_birth is dropped and administrative_sex carries the seed's value when
+    present (a correct observation) or a random draw when the seed recorded none.
+    Runs LAST in _OPERATORS: an estimated-age record supersedes format/typo dob
+    corruption wholesale; a typo'd year windows around the typo (honest corruption —
+    the window may or may not still overlap the seed's). No-op without a 4-digit
+    run, or when the window would leave the '<yyyy>/<yyyy>' shape at either 4-digit
+    boundary (safe degrade, like every operator — never a malformed range).
+    """
+    out = _clone(record)
+    dob = out.get("dob")
+    if not dob or not isinstance(dob.get("value"), str):
+        return out
+    year = _first_year(dob["value"])
+    if year is None:
+        return out
+    tol = rng.randint(2, 5)
+    if year - tol < 0 or year + tol > 9999:
+        return out  # window not expressible as '<yyyy>/<yyyy>' — no-op, not "-004/0006"
+    out["dob"] = {
+        "value": f"{year - tol:04d}/{year + tol:04d}",
+        "precision": _YEAR_RANGE_PRECISION,
+        "provenance_rank": 30,
+    }
+    sab = out.pop("sex_at_birth", None)
+    observed = sab["value"] if sab else rng.choice(_SEX_VALUES)
+    out["administrative_sex"] = {"value": observed, "provenance_rank": 30}
+    return out
+
+
 # Curated, culture-plural pools. Deliberately small and hand-written (no faker: a dep
 # and Western bias would both violate the mission). Blocking keys on tokens/years, not
 # name rarity, so a small pool is sufficient and makes tokens recur (realistic collisions).
@@ -192,6 +302,10 @@ _GIVEN = ("Alex", "Sam", "Mira", "Jon", "Ana", "Wei", "Omar", "Fatima", "Ivan", 
 _FAMILY = ("Nguyen", "Einarsson", "Garcia", "Okafor", "Kowalski", "Haddad", "Silva", "Ali")
 _PATRONYMIC = (("Jón", "Einarsson"), ("Ólafur", "Bjarnason"), ("Freyr", "Þórsson"))
 _ID_SYSTEMS = ("au-medicare", "national-id", "kennitala", "mrn-local")
+# Shared by synth_seed's sex_at_birth draw AND corrupt_dob_estimate's observed-sex
+# fallback: widening the seed pool (e.g. an intersex/unknown value, principle 4) must
+# widen the clones' distribution with it, never leave the fallback drawing a stale pair.
+_SEX_VALUES = ("male", "female")
 
 
 def _synth_name(rng):
@@ -228,7 +342,7 @@ def synth_seed(rng, index):
         rec["identifiers"] = [{"system": rng.choice(_ID_SYSTEMS),
                                "match_key": key, "value": key}]
     if rng.random() < 0.5:
-        rec["sex_at_birth"] = {"value": rng.choice(("male", "female")),
+        rec["sex_at_birth"] = {"value": rng.choice(_SEX_VALUES),
                                "provenance_rank": 40}
     return rec
 
@@ -239,6 +353,10 @@ class GenSpec:
 
     Cluster size is fixed at 2 (seed + one clone) this slice, so each entity yields exactly
     one seed<->clone true pair and the recoverability invariant is exactly the all-pairs one.
+
+    Adding an operator changes RNG consumption, so a given seed's output differs
+    across versions of this module: "deterministic given a seed" is a
+    reproducibility contract within one version, not a cross-version stability one.
     """
     seed: int = 0
     n_entities: int = 100
@@ -246,6 +364,7 @@ class GenSpec:
     p_dob_typo: float = 0.2
     p_name: float = 0.5
     p_identifier: float = 0.5
+    p_dob_estimate: float = 0.15
 
 
 _OPERATORS = (
@@ -253,13 +372,15 @@ _OPERATORS = (
     ("p_dob_typo", corrupt_dob_typo),
     ("p_name", corrupt_name),
     ("p_identifier", corrupt_identifier),
+    ("p_dob_estimate", corrupt_dob_estimate),
 )
 
 
 def _repair(seed, clone):
-    """Guarantee the seed<->clone pair stays blockable: if corruptions destroyed every base
-    key, append the seed's primary name (verbatim) to the clone's retained names, restoring a
-    shared name token. Every seed has >=1 name, so this always succeeds. Pure (returns new)."""
+    """Guarantee the seed<->clone pair stays blockable: if corruptions destroyed every
+    blocking key (symmetric AND anchored-range alike), append the seed's primary name
+    (verbatim) to the clone's retained names, restoring a shared name token. Every seed
+    has >=1 name, so this always succeeds. Pure (returns new)."""
     if shares_blocking_key(seed, clone):
         return clone
     out = _clone(clone)
@@ -295,7 +416,8 @@ def generate_dataset(spec):
         "name": f"synthetic_s{spec.seed}_n{spec.n_entities}",
         "description": (
             "Synthetic blocking-eval set: seed + one corrupted clone per entity. "
-            "Every true pair is recoverable by >=1 base blocking key (by construction); "
+            "Every true pair is recoverable by >=1 blocking key (by construction — "
+            "estimated-age pairs may need the anchored dob-range passes); "
             "a regression/tuning instrument, not a statistical accuracy claim."
         ),
         "entities": entities,

@@ -3,8 +3,8 @@
 Gated on CAIRN_TEST_PG via the shared pg_conn fixture (skipped cleanly without a DB).
 """
 
-from cairn_matcher.eval.blocking_eval import evaluate_blocking
-from cairn_matcher.eval.dataset import load_dataset
+from cairn_matcher.eval.blocking_eval import evaluate_blocking, seed_dataset
+from cairn_matcher.eval.dataset import canonical_label_pair, load_dataset
 from cairn_matcher.eval.loader import load_bundled_gold
 from tests.conftest import seed_patient
 
@@ -79,3 +79,42 @@ def test_blocking_eval_is_idempotent_and_leaves_no_rows(pg_conn):
     with pg_conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM patient_demographic")
         assert cur.fetchone()[0] == 0
+
+
+def test_seeded_admin_sex_feeds_the_range_sex_rescue(pg_conn):
+    """A year-range Doe with only administrative-sex must group with a point-DOB
+    resident sharing that sex under the dob-range+sex pass ALONE — proving
+    seed_dataset's administrative-sex rows are visible to the blocking_sex CTE."""
+    from cairn_matcher.pipeline.db import generate_candidate_pairs
+
+    ds = load_dataset({
+        "entities": [
+            {"entity_id": "doe", "records": [
+                {"record_id": "doe-1",
+                 "dob": {"value": "1980/1990", "precision": "year-range",
+                         "provenance_rank": 30},
+                 "administrative_sex": {"value": "male", "provenance_rank": 30}},
+            ]},
+            {"entity_id": "resident", "records": [
+                {"record_id": "resident-1",
+                 "dob": {"value": "1985-05-12", "precision": "day",
+                         "provenance_rank": 40},
+                 "sex_at_birth": {"value": "male", "provenance_rank": 40},
+                 "names": [{"value": "Alex Nguyen", "provenance_rank": 30}]},
+            ]},
+        ],
+    })
+    reverse = seed_dataset(pg_conn, ds)
+    # Large cap: on a shared cairn_test DB, leaked resident charts (issue #84) can
+    # sit inside doe-1's window and balloon the anchored block past the default cap,
+    # which would skip the block and flake this test.
+    pairs, _skipped = generate_candidate_pairs(
+        pg_conn, max_block_size=10_000, enabled_passes={"dob-range+sex"}
+    )
+    pg_conn.rollback()
+    labels = {
+        canonical_label_pair(reverse[lo], reverse[hi])
+        for lo, hi in pairs
+        if lo in reverse and hi in reverse
+    }
+    assert canonical_label_pair("doe-1", "resident-1") in labels

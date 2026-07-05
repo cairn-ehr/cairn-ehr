@@ -1,96 +1,88 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-05 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-06 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume
 generator · consumes `patient_alias_pool` known-alias evidence · range-aware, positive-only `compare_dob` for
 clinician-observed estimated ages · anchored birth-year-range blocking passes (`dob-range` / `dob-range+sex`) + the
-A/B pass-toggle · **composite `sex` scoring + the unconfirmed-chart REVIEW rule — done this session**) + the
-**§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
+A/B pass-toggle · composite `sex` scoring + the unconfirmed-chart REVIEW rule · **the B3 eval mirror: generator
+range-DOB emission + administrative-sex representation — done this session, weight-learning now fully unblocked**) +
+the **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
 known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE) + the
-**§5.4 John-Doe registration front door — slice A: callsign minting + matcher placeholder exclusion · slice B:
-clinician-observed evidence (estimated-age range + observed sex) · slice C: the birth-year-range blocking pass ·
-slice D: administrative-sex scoring + the unconfirmed-chart forcing rule (closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130))**;
-remaining B3 weight-learning / locale packs / generator range-DOB emission
+**§5.4 John-Doe registration front door, slices A–D all BUILT** (callsign minting + matcher placeholder exclusion ·
+clinician-observed evidence · the birth-year-range blocking pass · administrative-sex scoring + the unconfirmed-chart
+forcing rule, [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130) closed);
+remaining **B3 weight-learning (next natural slice)** / locale packs
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
-(photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the search-before-create funnel)
-next. Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
+(photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the search-before-create funnel).
+Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-05) — §5.4 slice D: administrative-sex scoring + the unconfirmed-chart REVIEW rule (slice 22,
-closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130)), full loop** (brainstorm→spec→plan→subagent-SDD, 6 TDD
-tasks; spec+plan under `docs/superpowers/{specs,plans}/2026-07-05-admin-sex-scoring*`). **Advisory Python only — no
-`db/` floor, no SCHEMA bump, no ADR/spec edit.** The design-critical arithmetic: scoring administrative-sex alone leaves
-the headline pure-age Doe pair at ≈1.79 < `review=3.0` (dob PARTIAL 1.5 + sex EXACT 1.0, both × provenance-factor(30)≈0.714;
-honest F–S weights can't be inflated past an 11-year window + a two-valued field) — so the slice is TWO halves, both
-required. (1) **Composite `sex` field**: `records.SexValue` + pure `compare_sex` — both charts carry `sex-at-birth` →
-old EXACT/DISAGREE semantics (birth-fact clash stays negative evidence, aligned with db/016); else a **positive-only
-union fallback** over {`sex-at-birth`, `administrative-sex`} (intersect→EXACT, disjoint→INSUFFICIENT_DATA, **never
-DISAGREE** — observed evidence supports but never suppresses, mirroring blocking's union-sex; the trans true-match
-cannot be penalised); one field one contribution (no correlated F–S double-count — a separate admin-sex FieldSpec was
-rejected); weight key `sex-at-birth`→`"sex"` (**projection field names in SQL untouched** — the DB contract);
-`load_candidate` reads both facets in ONE query; side rank = sab's if present else admin's (documented second-order
-approximation, bounded by the [0.5,1.0] factor on weight 1.0). (2) **The scoped forcing rule** (`band(unconfirmed=)`,
-the known-alias-forcing precedent — §5.4's point is an *unconfirmed* chart needs human identification effort; the paper
-counterpart "male, about 40 — search the registry" returns a list, not silence): a pair with a `chart_trust='unconfirmed'`
-chart + **≥2 positive-LEVEL fields + zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes
-attached** (post-review amendment — the original no-vetoes gate rested on a false "near-vacuous" premise: an identifier
-veto needs NO verified values, so a vetoed-yet-corroborated Doe pair is reachable and suppressing it would be the
-ADR-0014 auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the
-blocking cap; every persisted proposal involving an unconfirmed chart carries
-`{"kind":"identity_pending","unconfirmed":[uuids]}` evidence (**`"kind"` = the one non-field-evidence discriminator**,
-the alias-marker convention; db/017 stores JSONB unparsed — no downstream shape breaks). Trust plumbing mirrors aliases:
-one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the same one-query loader — no
-singular duplicate); canonical lowercase-uuid keys for map + marker; conftest gains `seed_identity_pending` +
-`chart_identity_state` truncation. TDD: pure + DB-gated incl. **the #130 e2e**
-(`test_identity_pending_pipeline.py` — the pure-age Doe pair blocks→scores→**surfaces as REVIEW** with the marker; a
-no-pending control (shared `_seed_headline_pair` helper, so control and headline can't drift apart) proves the RULE,
-not sex scoring, surfaces it, hardened non-vacuous (`generated>=1`); a direct-`propose()` test covers the on-demand
-trust seam; the two-Does pair carries both uuids sorted). 6-task subagent-SDD each reviewed clean; final whole-branch
-review (fable) READY TO MERGE; then an **8-angle post-review fix wave** (findings fixed in-branch: veto-gate removal
-as above; `_corroborated_positive` made genuinely structural — counts agreement LEVELS, so a B3-learned 0.0 weight
-can't stand the rule down; `score()` now **raises on a weights table missing a compared field** instead of silently
-zeroing — the stale-table / key-rename hazard; marker key `"rule"`→`"kind"`; `load_trust` singular loader deleted;
-retraction gap filed as [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135) — forced-REVIEW rows persist after
-the Doe is identified, a db/017 no-DELETE deferral made steady-state by this rule). Suites **pure 227 / DB-gated 298
-(full) / ruff clean**. **Honest limits (recorded):** a pending+**disputed** Doe reads `'under-review'` (chart_trust is
-severity-max, db/024) and bypasses the forcing rule while the dispute is open — deliberate, not a bug; ranking within
-a Doe's surfaced candidate list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning
-unblocked); stale forced-REVIEW rows after identification are [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135).
-**Deferred (still):** generator range-DOB emission + range-aware eval mirror, **which must also mirror
-`administrative_sex`** (the eval `DatasetRecord` cannot yet represent the composite-sex fallback, so B3 weight-learning
-would otherwise train on a field set the shipped matcher no longer has); fuzzy near-window softening; hub-tier range
-sweep.
+**This session (2026-07-06) — B3 eval mirror: generator range-DOB emission + administrative-sex representation
+(matcher slice 23; full detail in ROADMAP slice 23 + git; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-05-eval-range-adminsex-mirror*`).** The slice-22 deferral, closed: the eval
+harness now carries the field set the shipped matcher scores (composite sex) and blocks on (anchored range passes), so
+**B3 weight-learning is unblocked** — sweeping `evaluate_scorer` weights no longer trains on a stale field set.
+Advisory Python, eval tier only — no production matcher/pipeline/floor/SCHEMA/ADR/spec change. Four additive parts:
+`DatasetRecord.administrative_sex` through the REAL adapter (`admin_sex_row=`) + `seed_dataset` `administrative-sex`
+rows; pure `_birth_window` + an anchored range-overlap branch in `shares_blocking_key` (overlap ∧ ≥1 side is_range;
++sex pass is a subset, needs no branch) **plus a live over-claim fix found in design** (the exact-DOB branch compared
+raw values — two identical `year-range` strings faked an exact key the SQL excludes); `corrupt_dob_estimate` operator
+(dob → window containing the first 4-digit run, tol 2–5; sex moves sab→admin at provenance 30; `p_dob_estimate=0.15`,
+last in `_OPERATORS`; `_repair` stands down on window pairs); drift canary → `_RANGE_GROUPS_SQL` fragments + two
+DB-gated proofs (seeded admin-sex feeds `dob-range+sex` under `enabled_passes` isolation; estimate-heavy volume set
+`pair_completeness == 1.0` — the mirror-never-over-claims proof). 5-task subagent-SDD; **final fable review caught 1
+real Critical: Python `$` matches before a trailing newline, POSIX `$` does not** — `"1980/1990\n"` got a window the
+SQL rejects (the exact over-claim class the slice closes); fixed via de-anchored `re.fullmatch` + the canary now pins
+both overlap-join bounds. Suites **pure 253 / DB-gated 326 (full) / ruff clean**. **Honest limits:** mirror ignores
+the block-size cap (proofs run under a large cap; skips reported honestly); a typo-shifted year windows around the
+typo (safe — `_repair` restores a name token); same-seed generator output differs across versions (reproducibility
+contract, not stability); gold_v1.json deliberately untouched.
 
-**Parallel session (2026-07-05) — the blob self-verification in-DB floor (Phase 7 / ADR-0013), deliberately
-outside the demographics/matcher/identity territory** (a second session owned that front concurrently; this slice
-touches none of db/010–025, `matcher/`, or the clinical `cairn-node` modules). Closes the honest gap `db/003`
-recorded since the walking skeleton: the blob tier's self-verifying property (bytes marked `present = TRUE`
-BLAKE3-hash to the `blob_address` naming them) was an L2 promise — `cairn-sync` verified before flipping
-`present`, but pgcrypto has no BLAKE3, so a raw-SQL client could store arbitrary bytes as any named blob — the
-exact "wrong-hash blob served as the named one" failure ADR-0013 point 11 names as the tier's safety-critical
-seam. Now: `cairn_pgx` **0.3.0** gains `cairn_blob_verify`/`cairn_blob_verify_error` (thin wrappers over the SAME
-`cairn_event::blob_address` L2 uses — one hashing implementation; fail-closed on malformed addresses; legible
-diagnostics mirroring the `cairn_verify` pair), and **`db/026_blob_verify_floor.sql`** enforces it as a TRIGGER
-floor on `blob_store` (INSERT arriving present; UPDATE flipping into present / swapping content / re-keying;
-metadata-only updates never re-pay the hash — a trigger, not a door+REVOKE, because the byte tier legitimately
-writes raw DML). `REQUIRED_PGX_FLOOR` 0.2.0→0.3.0 in `cairn-sync` (stale `.so` fails legibly at the gate). TDD:
-red-first 7 DB-gated hostile-client tests (`cairn-node/tests/blob_floor.rs`) + a fail-closed `cairn_pgx` pg_test;
-design + plan under `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor*`. **Honest limits (recorded):**
-`blob_chunk` and `outboard` are NOT in-DB verified (wrong chunks only ever assemble into a flip that FAILS;
-a wrong outboard is rejected by the fetching peer's bao decode against the signed root — availability, never
-integrity); a superuser can drop the trigger (same standing as every floor piece). No event-format / ADR / spec
-change (implements settled ADR-0013 point 11 + principle 12). **Post-review hardening (same session):** db/026 now
-opens with a `to_regprocedure` load-time gate (the guard is late-bound PL/pgSQL, so a stale `.so` would otherwise
-load cleanly and fail illegibly at the first present-flip — this gate covers every loader, including cairn-node,
-which has no connect-time version probe); `put-blob`/`gen-blob`/`blobd` now connect via `connect_checked_apply`
-(they are the commands whose writes fire the trigger); the UPDATE trigger is column-level (`UPDATE OF content,
-blob_address, present` — a statement-wide WHEN would detoast an untouched multi-GB content column on every
-metadata touch); both triggers use `CREATE OR REPLACE TRIGGER` (no ACCESS EXCLUSIVE, no trigger-less window on
-init replays); `cairn_blob_verify_error` diagnoses the address before hashing content and names wrong-prefix
-distinctly from wrong-length.
+**Parallel session (2026-07-05, PR [#133](https://github.com/cairn-ehr/cairn-ehr/pull/133)) — clock-drift admission
+ceiling on both remote-apply doors + the Rust CI gate (non-demographics slice; recorded here post-merge because that
+session deliberately left HANDOVER/ROADMAP untouched to avoid colliding with the concurrent demographics session).**
+Closes the [#102](https://github.com/cairn-ehr/cairn-ehr/issues/102) ratchet finding: one verified event with an
+absurd future `hlc.wall` from a trusted-but-broken peer would permanently ratchet the local clock (`GREATEST` is
+monotone) and poison node-plane `ORDER BY hlc_wall DESC`. New shared `cairn_max_hlc_drift_ms()` (`db/001`, 24h) bounds
+a remote event's asserted wall against our own `clock_timestamp()` (never the possibly-ratcheted `hlc_state`). The two
+doors differ BY their pull-loop refusal semantics: node plane (`db/007`) **REJECTs** (self-healing skip+re-offer);
+clinical plane (`db/020`) **ADMITs-but-CLAMPs** the `hlc_state` merge (a refusal would wedge `cairn-sync`'s frozen
+watermark — availability over consistency; the event's asserted wall is preserved verbatim in `event_log`, principle
+1). TDD: 5 DB-gated `hlc_drift.rs` tests. Same PR added `.github/workflows/rust.yml` — the CI Rust workspace +
+in-DB-floor test gate ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117); note #117 remains open pending it
+becoming a required check). **Honest limits (from the PR):** protects only against a REMOTE peer dragging the clock;
+a future-dated clinical event still orders "latest" in projections (pre-existing, [#97](https://github.com/cairn-ehr/cairn-ehr/issues/97)).
+
+**Prior session (2026-07-05) — §5.4 slice D: administrative-sex scoring + the unconfirmed-chart REVIEW rule
+(matcher slice 22, closed [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130); condensed — full detail in
+ROADMAP slice 22 + git + PR #134).** Advisory Python only. TWO halves, both required (admin-sex alone leaves the
+headline pure-age Doe pair at ≈1.79 < `review=3.0`): (1) the **composite `sex` field** (`records.SexValue` + pure
+`compare_sex` — both-sab → old EXACT/DISAGREE; else positive-only union fallback over {sab, administrative-sex},
+never DISAGREE; weight key → `"sex"`, one field one contribution); (2) the **scoped forcing rule**
+(`band(unconfirmed=)`): `chart_trust='unconfirmed'` + ≥2 positive-LEVEL fields + zero DISAGREE → REVIEW even below
+threshold, never AUTO, fires with vetoes attached (post-review amendment — suppressing a vetoed-yet-corroborated Doe
+pair would be the ADR-0014 auto-reject); proposals carry the `{"kind":"identity_pending","unconfirmed":[uuids]}`
+marker; batch `db.load_trust_for` plumbing. The #130 e2e (`test_identity_pending_pipeline.py`) + an 8-angle
+post-review fix wave (`score()` now raises on a weights table missing a compared field; `_corroborated_positive`
+counts LEVELS; retraction gap filed as [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)). **Honest limits:**
+a pending+disputed Doe reads `'under-review'` (severity-max, db/024) and bypasses the forcing rule while the dispute
+is open — deliberate; ranking within a Doe's candidate list is the worklist tier's job; ~~the eval mirror cannot yet
+represent the new fields~~ (closed by this session's slice 23, top).
+
+**Parallel session (2026-07-05, PR #132) — the blob self-verification in-DB floor (Phase 7 / ADR-0013 point 11;
+condensed — full detail in git + PR #132 + `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor*`).** Closes
+the `db/003` honest gap: self-verification was an L2 promise (pgcrypto has no BLAKE3), so a raw-SQL client could
+store arbitrary bytes as any named blob. Now `cairn_pgx` **0.3.0** ships `cairn_blob_verify`/`cairn_blob_verify_error`
+(thin wrappers over the SAME `cairn_event::blob_address` L2 uses) and **`db/026_blob_verify_floor.sql`** enforces a
+TRIGGER floor on `blob_store` (a trigger, not a door+REVOKE — the byte tier legitimately writes raw DML;
+metadata-only updates never re-pay the hash; column-level `UPDATE OF`, `CREATE OR REPLACE TRIGGER`, a
+`to_regprocedure` load-time gate against stale `.so`s); `REQUIRED_PGX_FLOOR` 0.2.0→0.3.0. TDD: 7 DB-gated
+hostile-client tests + a fail-closed pg_test. **Honest limits:** `blob_chunk`/`outboard` NOT in-DB verified (wrong
+chunks only assemble into a flip that FAILS; a wrong outboard is rejected by the fetching peer's bao decode —
+availability, never integrity); superuser can drop the trigger (same standing as every floor piece).
 
 **Prior session (2026-07-04, second) — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle
 (condensed; full detail in git + ROADMAP slice 21 + PR #131).** A `year-range` dob now generates blocking keys —
@@ -118,20 +110,13 @@ DISAGREE). Cargo+clippy+matcher suites green; e2e CLI smoke on a provisioned nod
 blocking key) was closed by slice C the same day.
 
 **Prior session (2026-07-03) — §5.4 John-Doe slice A: callsign minting + matcher placeholder exclusion (condensed;
-full detail in git + ROADMAP slice 20 + PRs #123/#125).** Composes built primitives — no new event type, no `db/`
-migration, no SCHEMA/ADR/spec bump. Three parts: pure `cairn-event::john_doe::callsign`
-(`Unknown-<class>-<site>-<date>-<suffix>`; Unicode-aware sanitizer — anti-cultural-capture; suffix UUID-derived **8 hex
-= 32 bits**, partition-safe with zero coordination, sized so two identical bedside headers — a principle-3 wrong-chart
-hazard — are ~1-in-4.3-billion-per-pair); `cairn-node::john_doe::register_john_doe` + CLI (callsign name assertion
-`facets.use="callsign"` + C4 `identity.pending.asserted` in ONE txn → chart renders *unconfirmed*); advisory matcher
-excludes placeholder `use_key` from blocking AND scoring (`use_key <> ALL(%s)`) — a query-time exclusion at the correct
-layer (principle 12), where the **scoring** exclusion is the load-bearing one (a callsign is a single whitespace-free
-token, so distinct callsigns never share a blocking token anyway). Review hardening across two rounds (PR #123):
-kind-AGNOSTIC actor-enrolment guard (a dual-mapped signing key would NULL `actor_id` node-wide — silent attribution
-loss); non-vacuous blocking tests (forced shared-token conditions); the placeholder-use set hoisted into pure
-`cairn_matcher.placeholder_uses` + a **cross-language Rust↔Python drift guard** (`test_placeholder_uses_sync.py`,
-issue #124 closed — an omission UNDER-excludes → false-MERGE, the dangerous direction). E2E CLI smoke passed; all
-suites green (PG18.1 rig :5532). **§5.4 slice A is BUILT.**
+full detail in git + ROADMAP slice 20 + PRs #123/#125).** No new event type / migration / SCHEMA / ADR / spec bump.
+Pure `cairn-event::john_doe::callsign` (`Unknown-<class>-<site>-<date>-<suffix>`, Unicode-aware sanitizer, 32-bit
+UUID-derived suffix — partition-safe, bedside-collision ~1-in-4.3-billion-per-pair); `register_john_doe` + CLI
+(callsign assertion + C4 `identity.pending.asserted` in ONE txn → *unconfirmed* chart); matcher excludes placeholder
+`use_key` from blocking AND scoring (the scoring exclusion is load-bearing). Review hardening: kind-AGNOSTIC
+actor-enrolment guard; the placeholder-use set hoisted into pure `cairn_matcher.placeholder_uses` + a cross-language
+Rust↔Python drift guard (#124 closed). **§5.4 slice A is BUILT.**
 
 **Prior sessions (2026-07-03) — the §5.7 identity algebra to C5 + the matcher's alias consumption (condensed; full detail in git + ROADMAP slices 15–19).** All merged on `main`, all additive (no floor/SCHEMA/ADR/spec bump except where noted): **C2b** auto-apply of the `auto_candidate` band (matcher-authored, un-attested, recallable link; apply-time veto re-check; per-`matcher_version` `agent` actor); **C3** `dispute` + the `chart_trust` projection (`db/023`; the *under-review* state); **C4** `identify` + the *unconfirmed* state (`db/024`; the §5.4 identity-pending front door; the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE via a severity-max `chart_trust`); **C5** `repudiate` + the known-alias pool (`db/025`; the first *suppressing* identity event — a value-grained `name_repudiation` overlay strikes a known-false name from `patient_name_current`, `mode='suppressing'` forces the human-attestation floor, `patient_alias_pool` surfaces struck names to the matcher); and the **matcher consuming `patient_alias_pool`** (advisory Python — a `known_alias` evidence entry on the proposal, flag-never-suppress, `band()` forces REVIEW; the confidentiality-split view is reason-free per ADR-0006). **Deferred (recorded):** `reattribute` (waits on a clinical-note surface); fuzzy alias recognition; a per-slice identity-floor helper refactor + a deterministic `content_address` tiebreaker on the HLC overlay ([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115)).
 
@@ -153,23 +138,14 @@ explainable `MatchScore`; 55 pure tests; final review caught + fixed one Critica
 name-pairing → now `max(greedy(a,b),greedy(b,a))`, symmetric). No new ADR, no spec bump (both implement settled
 §5.2/§5.13/§4.4; refine ADR-0014/0033).
 
-**Prior session (2026-06-28):** **globalised the §3.13/§4.5 author-materialised legibility twin to every event type**
-(ADR-0039; spec v0.39 → v0.40), via brainstorm→spec→plan→subagent-SDD (5 tasks, spec+plan under `docs/superpowers/`).
-The in-DB floor (`db/015_globalise_twin.sql`, SCHEMA 13→14) now PREFERS the authored twin for every type; non-demographic
-types **degrade honestly** to a flagged, payload-rendering derived skeleton when absent (older/non-conformant peer) —
-set-union convergence preserved; the two demographic types KEEP ADR-0034's HARD authored-twin requirement. Authored-vs-derived
-is **NOT stored** — it is derivable from the immutable signed body via `cairn_twin_is_authored(bytea)` + the
-`event_twin_provenance` view; **no new column, `submit_event` NOT re-declared** (only the `cairn_event_twin` hook changed).
-Improved `cairn_twin_skeleton` now renders the payload — **closes the `db/005:29` TODO**. `cairn-event` gained pure
-`resolve_twin` + `materialise_generic_twin` (the single rule both cairn-sync and the SQL floor follow); `cairn-sync` now
-carries the authored twin on apply and materialises it on authoring. Tests: cairn-event 3 unit (36/36 suite green); cairn-node
-4 integration (`twin_globalise` — authored verbatim+flag; twin-less degrade+flag+payload; twin-less demographic hard-reject
-triple-gated; + a whitespace-twin demographic hard-reject); demographics + attestation regress green; clippy clean. A
-**floor bug** surfaced by the whitespace hardening test was fixed in the same branch: PG `trim()` strips only ASCII space
-(not `\n`/`\t`), so the blank-test used `length(regexp_replace(x,'\s+','','g'))>0` in **both** the write gate (`v_authored`)
-and read predicate (`cairn_twin_is_authored`), realigning them with Rust `str::trim()`. Residual Unicode-whitespace
-asymmetry (PG `\s` ⊂ Rust `char::is_whitespace`; degrades safe) tracked as [issue #75](https://github.com/cairn-ehr/cairn-ehr/issues/75).
-**The "globalise the authored twin" deferral is now CLOSED.**
+**Prior session (2026-06-28) — globalised the §3.13/§4.5 author-materialised legibility twin to every event type
+(ADR-0039; spec v0.39 → v0.40; condensed — full detail in git + the ADR).** `db/015` (SCHEMA 13→14): floor PREFERS the
+authored twin for every type; non-demographic types degrade honestly to a flagged, payload-rendering derived skeleton
+(closes the `db/005:29` TODO); demographic types keep ADR-0034's HARD requirement; authored-vs-derived derivable, not
+stored (`cairn_twin_is_authored` + `event_twin_provenance`). Pure `resolve_twin`/`materialise_generic_twin` shared by
+cairn-sync + the SQL floor. Same-branch floor bug fix: PG `trim()` is ASCII-space-only → blank-tests use
+`regexp_replace(x,'\s+','','g')` in BOTH write gate and read predicate; residual Unicode-whitespace asymmetry is
+[issue #75](https://github.com/cairn-ehr/cairn-ehr/issues/75). **The "globalise the authored twin" deferral is CLOSED.**
 
 **Prior sessions (2026-06-27/28) — demographics slices 1–5, condensed (full detail in ROADMAP slices 1–5 + git):**
 **slice 1** = §4.4 patient-identifier assertion end-to-end (`db/010`, `EventBody.plaintext_twin`, `cairn_event_twin`
@@ -353,10 +329,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   **B3 compound blocking key** (`name+year` additive pass in `pipeline/db.py`), and the **B3 synthetic volume
   generator** (`eval/generator.py` pure + `eval/generate.py` CLI — seed+corrupted-clone entity clusters, recoverable
   by construction), and the **A/B pass-toggle** (`enabled_passes` on `generate_candidate_pairs`; unknown pass name
-  raises — this session) are now BUILT. A quantitative before/after across a pass change is now ONE command away —
-  the missing half is generator range-DOB emission (the eval set carries no `year-range` dobs yet, so the new range
-  passes are deliberately unmirrored in `shares_blocking_key`; safe direction). **Next (B3 measurement-driven):**
-  **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold set) + **further compound
+  raises) are now BUILT, **and the B3 eval mirror (slice 23, this session): generator range-DOB emission
+  (`corrupt_dob_estimate`, `p_dob_estimate`) + `DatasetRecord.administrative_sex` + the range-aware
+  `shares_blocking_key`/`_birth_window` mirror of the anchored passes** — a quantitative before/after across a pass
+  change is now genuinely ONE command away on data that carries the §5.4 fields. **Next (B3 measurement-driven):**
+  **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold + synthetic sets — now
+  training on the shipped field set) + **further compound
   keys** (`dob+first-initial`, `name+sex`) + locale comparator packs / hub-tier aggressive duplicate-sweep +
   proposal retraction / **richer §7.5 matcher-actor determinants** (served-model digest; C2b registered the matcher as
   a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
@@ -389,8 +367,8 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   source into the `chart_trust` VIEW when it lands (note: a pending+disputed Doe already reads `'under-review'` —
   severity-max — so the slice-D forcing rule deliberately stands down while a dispute is open). Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; fuzzy alias recognition + a dedicated `alias` blocking pass.
-  Deferred (range blocking): generator range-DOB emission + range-aware eval mirror; fuzzy near-window softening;
-  hub-tier range sweep. Deferred
+  Deferred (range blocking): ~~generator range-DOB emission + range-aware eval mirror~~ (done — slice 23); fuzzy
+  near-window softening; hub-tier range sweep. Deferred
   (earlier): variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto
   (stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; the matcher conftest test-leak
