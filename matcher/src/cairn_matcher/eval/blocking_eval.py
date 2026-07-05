@@ -81,6 +81,17 @@ def seed_dataset(conn, ds: LabelledDataset) -> dict[str, str]:
                     (pid, rec.sex_at_birth.get("value"),
                      rec.sex_at_birth.get("provenance_rank", 0)),
                 )
+            # administrative-sex feeds blocking_sex's UNION (db.py) alongside sex-at-birth,
+            # so a range-DOB Doe carrying only administrative-sex can still be rescued by
+            # the dob-range+sex pass -- no facets needed, blocking_sex reads value only.
+            if rec.administrative_sex is not None:
+                cur.execute(
+                    "INSERT INTO patient_demographic (patient_id, field, value, facets, "
+                    "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, "
+                    "asserted_origin) VALUES (%s,'administrative-sex',%s,NULL,'seed',%s,0,0,'seed')",
+                    (pid, rec.administrative_sex.get("value"),
+                     rec.administrative_sex.get("provenance_rank", 0)),
+                )
             for n in rec.names:
                 cur.execute(
                     "INSERT INTO patient_name (patient_id, use_key, value, use_raw, "
