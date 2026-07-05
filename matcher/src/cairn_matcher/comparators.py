@@ -12,7 +12,7 @@ hygiene, house rule #1).
 from collections.abc import Mapping
 
 from cairn_matcher.agreement import AgreementLevel, Context
-from cairn_matcher.records import DateValue, MatcherTypeError, Name
+from cairn_matcher.records import DateValue, MatcherTypeError, Name, SexValue
 
 
 def jaro_winkler(s1: str, s2: str, prefix_scale: float = 0.1) -> float:
@@ -100,6 +100,45 @@ def compare_exact(a: str | None, b: str | None, ctx: Context) -> AgreementLevel:
     if sa is None or sb is None:
         return AgreementLevel.INSUFFICIENT_DATA
     return AgreementLevel.EXACT if sa == sb else AgreementLevel.DISAGREE
+
+
+def compare_sex(a: "SexValue | None", b: "SexValue | None", ctx: Context) -> AgreementLevel:
+    """Composite sex agreement over sex-at-birth + administrative-sex (design 2026-07-05).
+
+    Two branches, in priority order:
+      1. BOTH charts carry sex-at-birth -> exact-compare those two values (trim-only, no
+         casefold — compare_exact's discipline). EXACT / DISAGREE: a birth-fact clash is
+         honest negative evidence, aligned with the db/016 veto's subject. Administrative
+         values never soften it (they are heavily correlated with the birth fact; scoring
+         them separately would double-count and break Fellegi–Sunter independence).
+      2. Otherwise the POSITIVE-ONLY union fallback (mirrors the blocking pass's
+         blocking_sex union): each side's set of present values; either empty ->
+         INSUFFICIENT_DATA; intersection -> EXACT; disjoint -> INSUFFICIENT_DATA — NEVER
+         DISAGREE. A clinician-observed apparent sex may *support* but never *suppress* a
+         match (slice B's rule; an androgynous patient misjudged at the bedside must not
+         penalise their true pair).
+    """
+    if a is None or b is None:
+        return AgreementLevel.INSUFFICIENT_DATA
+    if not isinstance(a, SexValue) or not isinstance(b, SexValue):
+        raise MatcherTypeError(
+            f"compare_sex expected SexValue or None, got {type(a)!r} / {type(b)!r}"
+        )
+    sab_a = _clean_sex(a.sex_at_birth, "compare_sex.a.sex_at_birth")
+    sab_b = _clean_sex(b.sex_at_birth, "compare_sex.b.sex_at_birth")
+    if sab_a is not None and sab_b is not None:
+        return AgreementLevel.EXACT if sab_a == sab_b else AgreementLevel.DISAGREE
+    set_a = {v for v in (sab_a, _clean_sex(a.administrative, "compare_sex.a.administrative")) if v}
+    set_b = {v for v in (sab_b, _clean_sex(b.administrative, "compare_sex.b.administrative")) if v}
+    if not set_a or not set_b:
+        return AgreementLevel.INSUFFICIENT_DATA
+    return AgreementLevel.EXACT if set_a & set_b else AgreementLevel.INSUFFICIENT_DATA
+
+
+def _clean_sex(value: object, field_name: str) -> str | None:
+    """Trim a sex facet; an all-whitespace value degrades to absence (None)."""
+    cleaned = _require_str_or_none(value, field_name)
+    return cleaned if cleaned else None
 
 
 def compare_edit_distance(a: str | None, b: str | None, ctx: Context) -> AgreementLevel:
