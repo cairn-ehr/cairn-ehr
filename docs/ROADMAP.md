@@ -403,7 +403,27 @@ scorer mode; variable cluster size / an unrecoverable fraction / hard negatives 
 
 ## Phase 7 — Attachments / byte tier
 
-- **Content-addressed lazy blobs** referenced by the signed event, never inlined; day-one attachment-reference shape ([ADR-0013](spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)).
+- **Content-addressed lazy blobs** referenced by the signed event, never inlined; day-one attachment-reference shape ([ADR-0013](spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)). *Already in place from the spike era: the day-one `AttachmentRef` shape in `cairn-event` + `event_log.attachments`, reference-eager learning in both doors (db/005 + db/020 → `blob_note_reference`), and the chunked/resumable/windowed byte tier (db/003 + `cairn-sync` blobd).*
+- **Blob self-verification in-DB floor** — ✓ done 2026-07-05 (`db/026_blob_verify_floor.sql` + `cairn_pgx` 0.3.0
+  `cairn_blob_verify`/`cairn_blob_verify_error`, thin wrappers over the same `cairn_event::blob_address` L2 uses —
+  one hashing implementation, never two): the BLAKE3-vs-address check `cairn-sync` performs before flipping
+  `present := TRUE` is restated **in-DB** as a trigger floor on `blob_store` (INSERT arriving present; column-level
+  UPDATE OF content/address/present that flips into present, swaps content under a present row, or re-keys it —
+  metadata-only updates neither re-pay the hash nor detoast the content for the WHEN comparison), closing the honest
+  gap db/003 recorded since the walking skeleton: a raw-SQL client could store arbitrary
+  bytes as any named blob (the exact "wrong-hash blob served as the named one" failure ADR-0013 point 11 designates
+  as this tier's safety-critical seam; principle 12 requires the floor below every client). Stale-`.so` legibility is
+  two-layered: db/026 itself refuses to load when `cairn_blob_verify` is absent (a `to_regprocedure` gate binding
+  every loader, cairn-node included — the guard is late-bound PL/pgSQL, so without this the load would succeed and
+  the illegible `undefined function` would surface only at the first present-flip), and `cairn-sync`'s
+  `REQUIRED_PGX_FLOOR` 0.2.0 → 0.3.0 connect gate (now also on `put-blob`/`gen-blob`/`blobd`, the commands whose
+  writes fire the trigger) catches `.so` skew after init. TDD: 7 DB-gated hostile-client tests
+  (`crates/cairn-node/tests/blob_floor.rs`) + a `cairn_pgx`
+  pg_test (fail-closed on tampered bytes / truncated / wrong-prefix / empty addresses). **Honest limits (recorded
+  in the design doc):** `blob_chunk` rows and `outboard` are NOT in-DB verified — wrong chunks can only assemble
+  into a whole-blob flip that FAILS the floor (space waste, never wrong bytes served), and a wrong outboard yields
+  slices the *fetching* peer's bao decode rejects against the signed address root (availability degradation, never
+  an integrity hole). No event-format change, no ADR/spec change (implements settled ADR-0013).
 - **Resource-isolated byte tier** — chunked/preemptible/separately-budgeted; can never starve clinical sync; opt-in byte replication; self-verifying swarm fetch.
 - **Rendition set** — the binary's legibility twin (retrievability axis); per-blob DEK crypto-shred inherits.
 

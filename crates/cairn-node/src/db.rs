@@ -57,6 +57,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // db/005 human-attestation gate (§5.7 "Human"). Leaves db/010–024 untouched
     // (CREATE-OR-REPLACEs the shared twin hook + patient_name_current, same column contract).
     ("025_identity_repudiate", include_str!("../../../db/025_identity_repudiate.sql")),
+    // The blob self-verification floor (ADR-0013 point 11): bytes that do not
+    // BLAKE3-hash to the blob_address naming them can never sit present = TRUE —
+    // in-DB via cairn_blob_verify (cairn_pgx >= 0.3.0), closing the honest gap
+    // db/003 recorded (the check was previously an L2 promise in cairn-sync).
+    ("026_blob_verify_floor", include_str!("../../../db/026_blob_verify_floor.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
