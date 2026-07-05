@@ -163,8 +163,9 @@ async fn metadata_only_update_on_present_row_allowed() {
     let addr = blob_address(&content);
     insert_present(&c, &addr, &content).await.unwrap();
 
-    // Touch only metadata: the guard's WHEN clause must not fire (no re-hash, no
-    // false rejection).
+    // Touch only metadata: the UPDATE trigger is column-level (UPDATE OF content,
+    // blob_address, present), so this statement must not fire it at all — no
+    // re-hash, no WHEN-clause detoast of the content column, no false rejection.
     c.execute(
         "UPDATE blob_store SET media_type = 'image/jpeg', fetched_at = clock_timestamp()
          WHERE blob_address = $1",

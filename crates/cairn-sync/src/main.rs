@@ -71,10 +71,14 @@ type R<T> = Result<T, Box<dyn Error>>;
 /// a total, silent write outage whose only symptom is a generic "signature
 /// verification failed". Gating on the loaded version turns that into a legible
 /// "rebuild the extension" at connect time instead (issue #109). Bumped to 0.3.0
-/// for the db/026 blob self-verification floor: its trigger calls
-/// `cairn_blob_verify`, which a 0.2.x `.so` lacks — without this gate the schema
-/// load would die mid-migration with an illegible `undefined function` instead of
-/// the actionable message below.
+/// for the db/026 blob self-verification floor: its trigger guard calls
+/// `cairn_blob_verify`, which a 0.2.x `.so` lacks. The guard is PL/pgSQL, so that
+/// call is LATE-BOUND — a stale `.so` does NOT fail the schema load; without a
+/// gate it surfaces as an illegible `undefined function` only at the first
+/// present-flip write. Two layers make it legible instead: db/026 itself refuses
+/// to load when `cairn_blob_verify` is absent (a `to_regprocedure` gate, binding
+/// every loader including cairn-node), and this connect-time floor catches the
+/// `.so`-swapped-after-init skew on the commands that write events or blobs.
 const REQUIRED_PGX_FLOOR: &str = "0.3.0";
 
 /// Parse an `"X.Y.Z"` version string into a comparable tuple. Returns `None` for
@@ -888,7 +892,14 @@ fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     let addr = blob_address(&bytes);
     let outboard = cairn_event::blob_outboard(&bytes);
     let len = bytes.len() as i64;
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    // Gated connect: this INSERT flips present, which fires the db/026
+    // cairn_blob_verify trigger — a stale `.so` must fail here legibly.
+    let mut client = connect_checked_apply(conn)?;
+    // One atomic, idempotent statement. Deliberate cost: flipping a
+    // reference-only row pays the trigger hash twice (BEFORE INSERT fires on the
+    // proposed row before conflict detection, then the DO UPDATE re-fires the
+    // UPDATE trigger) — accepted on this operator CLI path; the hot path
+    // (do_blobd's assembly flip) is a single UPDATE and pays once.
     client.execute(
         "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
          VALUES ($1,$2,$3,$4,$5,TRUE,clock_timestamp())
@@ -918,7 +929,9 @@ fn cmd_gen_blob(conn: &str, size_mb: usize, media: &str) -> R<()> {
     let addr = blob_address(&buf);
     let outboard = cairn_event::blob_outboard(&buf);
     let len = buf.len() as i64;
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    // Gated connect + same deliberate ON CONFLICT double-hash tradeoff as
+    // cmd_put_blob (see the comment there).
+    let mut client = connect_checked_apply(conn)?;
     client.execute(
         "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
          VALUES ($1,$2,$3,$4,$5,TRUE,clock_timestamp())
@@ -1425,11 +1438,15 @@ fn connect_checked(conn: &str) -> R<postgres::Client> {
     Ok(client)
 }
 
-/// `connect_checked` PLUS the loaded-`cairn_pgx` version floor — for the commands that
-/// APPLY events (`pull`/`run`/`requeue`), where a stale verify library is a silent write
-/// outage on every apply (issue #109). Deliberately NOT used by read-only `quarantine`:
-/// the version gate must not block an operator listing the pen during exactly that outage
-/// (issue #109 review — a pure SELECT over sync_quarantine needs no `cairn_pgx`).
+/// `connect_checked` PLUS the loaded-`cairn_pgx` version floor — for the commands whose
+/// writes NEED a current `cairn_pgx`: the ones that APPLY events (`pull`/`run`/`requeue`,
+/// where a stale verify library is a silent write outage on every apply — issue #109)
+/// and, since db/026, the ones that WRITE blobs (`put-blob`/`gen-blob`/`blobd`, whose
+/// present-flips fire the `cairn_blob_verify` trigger and would otherwise die with the
+/// illegible `undefined function` this gate exists to prevent). Deliberately NOT used by
+/// read-only `quarantine`: the version gate must not block an operator listing the pen
+/// during exactly that outage (issue #109 review — a pure SELECT over sync_quarantine
+/// needs no `cairn_pgx`).
 fn connect_checked_apply(conn: &str) -> R<postgres::Client> {
     let mut client = connect_checked(conn)?;
     assert_pgx_floor(&mut client)?;
@@ -1703,7 +1720,10 @@ fn cmd_blobd(
     budget_ms: u64,
     metrics: bool,
 ) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    // Gated connect: the assembly flip (present := TRUE) fires the db/026
+    // cairn_blob_verify trigger — a stale `.so` must fail here legibly, matching
+    // the process-level gate `run` already gives its in-loop blob thread.
+    let mut client = connect_checked_apply(conn)?;
     let m = do_blobd(&mut client, conn, peers, window, budget_ms)?;
     if metrics {
         println!("{m}");

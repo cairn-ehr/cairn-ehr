@@ -48,20 +48,34 @@ pgrx wrapper — never a second implementation in SQL):
    - `cairn_blob_present_guard()`: raises (with the legible error as DETAIL) unless
      `NEW.content` is non-NULL and `cairn_blob_verify(NEW.blob_address, NEW.content)`.
    - `BEFORE INSERT … WHEN (NEW.present)` and
-     `BEFORE UPDATE … WHEN (NEW.present AND (NOT OLD.present
-     OR NEW.content IS DISTINCT FROM OLD.content
+     `BEFORE UPDATE OF content, blob_address, present … WHEN (NEW.present AND
+     (NOT OLD.present OR NEW.content IS DISTINCT FROM OLD.content
      OR NEW.blob_address IS DISTINCT FROM OLD.blob_address))`.
      The UPDATE condition re-verifies on any transition into `present`, any content swap
-     under a present row, and any re-keying — while a metadata-only update (media_type,
-     fetched_at) never re-pays the hash.
+     under a present row, and any re-keying. *(Post-review: the UPDATE trigger is
+     column-level — `UPDATE OF` — so a metadata-only update (media_type, fetched_at,
+     outboard) neither re-pays the hash nor even evaluates the WHEN clause; a
+     statement-wide WHEN would detoast + memcmp an untouched multi-GB content column on
+     every metadata touch, measured at ~2 ms/MB. Accepted caveat: a future
+     alphabetically-earlier BEFORE trigger mutating NEW.content could slip past a
+     column-level trigger — blob_store has no other triggers, and creating one takes the
+     same table-owner standing as dropping the floor. Both triggers use `CREATE OR
+     REPLACE TRIGGER` (SHARE ROW EXCLUSIVE, no trigger-less window) instead of
+     `DROP IF EXISTS` + `CREATE` (ACCESS EXCLUSIVE) on init replays.)*
    - A trigger, not a `SECURITY DEFINER` door + REVOKE: `blob_store` legitimately receives
      raw DML from the byte tier (`do_blobd`, `put-blob`) and the reference-learning helper;
      a trigger binds every writer including those, with zero call-site churn.
    - `db/003`'s honest-gap comment is rewritten to point at the now-real floor.
 
-3. **Version floor**: `cairn-sync`'s `REQUIRED_PGX_FLOOR` moves `0.2.0 → 0.3.0` — a stale
-   `.so` would otherwise fail schema load with an illegible `undefined function` error
-   instead of the existing legible "rebuild + reinstall" message (issue #109 pattern).
+3. **Version floor**: `cairn-sync`'s `REQUIRED_PGX_FLOOR` moves `0.2.0 → 0.3.0` (issue
+   #109 pattern). *(Post-review correction: the guard is late-bound PL/pgSQL, so a stale
+   `.so` would NOT fail the schema load — it would load cleanly and surface an illegible
+   `undefined function` only at the first present-flip. The legibility is therefore
+   two-layered: db/026 opens with a `to_regprocedure('cairn_blob_verify(bytea, bytea)')`
+   load-time gate that refuses the load legibly for EVERY loader — cairn-node has no
+   connect-time version gate, and this covers it — and `connect_checked_apply` (the
+   `REQUIRED_PGX_FLOOR` probe) now also guards `put-blob`/`gen-blob`/`blobd`, the
+   commands whose writes fire the trigger, catching `.so` skew introduced after init.)*
 
 ## 3. What the floor deliberately does NOT cover (honest limits, recorded)
 

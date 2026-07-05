@@ -37,6 +37,23 @@
 
 BEGIN;
 
+-- Load-time dependency gate. The guard below is PL/pgSQL, so its call to
+-- cairn_blob_verify is LATE-BOUND: against a stale (pre-0.3.0) cairn_pgx this
+-- file would otherwise load CLEANLY and the failure would surface only at the
+-- first present-flip write, as an illegible `undefined function` from whatever
+-- writer happened to trip the trigger. Refuse the load itself, legibly, for
+-- EVERY loader (cairn-node, cairn-sync, raw psql) — the migration declares its
+-- own dependency rather than trusting each daemon's connect-time version gate.
+DO $$
+BEGIN
+    IF to_regprocedure('cairn_blob_verify(bytea, bytea)') IS NULL THEN
+        RAISE EXCEPTION 'db/026 requires cairn_pgx >= 0.3.0: cairn_blob_verify(bytea, bytea) is not installed'
+            USING HINT = 'The installed extension library is stale. Rebuild + reinstall it '
+                         || '(`cargo pgrx install` against this cluster''s PostgreSQL), then re-run init.';
+    END IF;
+END;
+$$;
+
 -- The guard: a row may only ever sit present = TRUE if its bytes hash to the
 -- address that names them. Raises with the legible cairn_blob_verify_error
 -- diagnostic as DETAIL so an operator sees WHY (wrong bytes vs. malformed
@@ -62,18 +79,29 @@ END;
 $$;
 
 -- Any INSERT arriving present must carry verified bytes.
-DROP TRIGGER IF EXISTS blob_present_verify_ins ON blob_store;
-CREATE TRIGGER blob_present_verify_ins
+-- CREATE OR REPLACE (PG14+; well under this project's PostgreSQL floor) rather
+-- than DROP IF EXISTS + CREATE: replacement takes only SHARE ROW EXCLUSIVE and
+-- never opens a trigger-less window, where the DROP would take ACCESS EXCLUSIVE
+-- on a write-hot byte-tier table every time init replays this file.
+CREATE OR REPLACE TRIGGER blob_present_verify_ins
     BEFORE INSERT ON blob_store
     FOR EACH ROW WHEN (NEW.present)
     EXECUTE FUNCTION cairn_blob_present_guard();
 
--- Any UPDATE that (a) flips a row into present, (b) swaps content under a present
--- row, or (c) re-keys a present row to a different address must re-verify. A
--- metadata-only update (media_type, fetched_at, outboard) never re-pays the hash.
-DROP TRIGGER IF EXISTS blob_present_verify_upd ON blob_store;
-CREATE TRIGGER blob_present_verify_upd
-    BEFORE UPDATE ON blob_store
+-- Any UPDATE that could change what sits present under an address must
+-- re-verify: (a) a flip into present, (b) a content swap under a present row,
+-- (c) a re-keying to a different address. Column-level (UPDATE OF): an UPDATE
+-- whose SET list touches none of these columns cannot change them, so a
+-- metadata-only update (media_type, fetched_at, outboard) neither re-pays the
+-- hash NOR evaluates the WHEN clause — that second part matters, because
+-- `NEW.content IS DISTINCT FROM OLD.content` on an untouched multi-GB TOASTed
+-- column would detoast and memcmp the full bytes on every metadata touch.
+-- Accepted caveat: a FUTURE alphabetically-earlier BEFORE trigger mutating
+-- NEW.content could slip past a column-level trigger; blob_store has no other
+-- triggers, and creating one takes the same table-owner standing as dropping
+-- this floor outright (the recorded superuser limit above).
+CREATE OR REPLACE TRIGGER blob_present_verify_upd
+    BEFORE UPDATE OF content, blob_address, present ON blob_store
     FOR EACH ROW WHEN (NEW.present AND (NOT OLD.present
                        OR NEW.content IS DISTINCT FROM OLD.content
                        OR NEW.blob_address IS DISTINCT FROM OLD.blob_address))

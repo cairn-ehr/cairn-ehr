@@ -76,15 +76,28 @@ fn cairn_blob_verify(addr: &[u8], content: &[u8]) -> bool {
 /// exists so the db/026 guard can surface WHY as exception DETAIL.
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_blob_verify_error(addr: &[u8], content: &[u8]) -> Option<String> {
-    let actual = cairn_event::blob_address(content);
-    if actual == addr {
-        return None;
-    }
-    if cairn_event::blake3_root_from_address(addr).is_err() {
+    // Diagnose the address FIRST: both checks below are constant-time over a
+    // 34-byte input, while hashing `content` is a full pass over possibly
+    // multi-GB bytes — never pay the hash to reject an address that is
+    // malformed for free. Two distinct messages so the operator sees the actual
+    // cause: a wrong LENGTH and a wrong PREFIX (e.g. a sha2-256 EVENT address
+    // passed as a blob address — right length, wrong hash family) are different
+    // mistakes.
+    if addr.len() != 34 {
         return Some(format!(
             "blob address is not a BLAKE3 multihash (expected 0x1e 0x20 + 32 bytes, got {} bytes)",
             addr.len()
         ));
+    }
+    if cairn_event::blake3_root_from_address(addr).is_err() {
+        return Some(format!(
+            "blob address is not a BLAKE3 multihash (wrong multihash prefix 0x{}, expected 0x1e20)",
+            hex::encode(&addr[..2])
+        ));
+    }
+    let actual = cairn_event::blob_address(content);
+    if actual == addr {
+        return None;
     }
     Some(format!(
         "content ({} bytes) hashes to {}, but the address names {}",
@@ -208,6 +221,15 @@ mod tests {
         assert!(!crate::cairn_blob_verify(&[], content));
         let err = crate::cairn_blob_verify_error(&[], content).expect("malformed is diagnosed");
         assert!(err.contains("not a BLAKE3 multihash"), "malformed address is named: {err}");
+        assert!(err.contains("got 0 bytes"), "wrong length is named as a length problem: {err}");
+
+        // Right length, wrong hash family: diagnosed as a PREFIX problem, never
+        // as the length (which is fine) — a sha2-256 event address is 34 bytes
+        // like a blob address, and misnaming the cause would send the operator
+        // down the wrong path.
+        let err =
+            crate::cairn_blob_verify_error(&sha_addr, content).expect("wrong prefix is diagnosed");
+        assert!(err.contains("wrong multihash prefix 0x1220"), "prefix is the named cause: {err}");
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,

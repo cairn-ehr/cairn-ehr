@@ -20,8 +20,13 @@ TDD throughout: each task writes its failing test first.
 - Implement db/026: `cairn_blob_present_guard()` PL/pgSQL trigger function (RAISE with
   `cairn_blob_verify_error` as DETAIL; content-NULL raises its own legible message) + the
   INSERT and UPDATE triggers with the WHEN conditions from the design §2.2 (idempotent:
-  `DROP TRIGGER IF EXISTS` + `CREATE`, `CREATE OR REPLACE` for the function — the schema
-  array re-runs on every connect).
+  `CREATE OR REPLACE` for function and triggers — the schema array replays on every
+  `init`/`restore` and every DB-gated test run). *(Post-review: `CREATE OR REPLACE
+  TRIGGER` instead of `DROP IF EXISTS` + `CREATE` — no ACCESS EXCLUSIVE lock, no
+  trigger-less window; the UPDATE trigger is column-level, `UPDATE OF content,
+  blob_address, present`, so metadata-only updates never detoast the content for the
+  WHEN comparison; and db/026 opens with a `to_regprocedure` load-time gate so a stale
+  `.so` refuses the load legibly for every loader.)*
 - Register in `crates/cairn-node/src/db.rs` SCHEMA (after 025) and
   `crates/cairn-sync/src/main.rs` SCHEMA (after 021).
 - Rewrite db/003's lines-27–32 honest-gap comment to point at the db/026 floor.
@@ -29,8 +34,12 @@ TDD throughout: each task writes its failing test first.
 ## Task 3 — version floor + suite sweep
 
 - `REQUIRED_PGX_FLOOR` `0.2.0 → 0.3.0` in cairn-sync (+ comment: db/026 references
-  `cairn_blob_verify`; a stale .so must fail legibly at the gate, not with
-  `undefined function` mid-schema-load). Check for tests pinning the constant.
+  `cairn_blob_verify`; a stale .so must fail legibly). Check for tests pinning the
+  constant. *(Post-review correction: the guard is late-bound PL/pgSQL, so a stale `.so`
+  would NOT have died mid-schema-load — it would have loaded cleanly and failed
+  illegibly at the first present-flip. Hence the db/026 load-time `to_regprocedure`
+  gate, plus `connect_checked_apply` on `put-blob`/`gen-blob`/`blobd` — the commands
+  whose writes actually fire the trigger.)*
 - Full `cargo test --workspace` (DB-gated on the PG16 + cairn_pgx rig) + clippy + fmt.
 - ROADMAP slice entry + HANDOVER note (kept small — a parallel session owns the
   demographics sections).

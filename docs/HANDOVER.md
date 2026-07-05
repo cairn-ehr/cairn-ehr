@@ -36,7 +36,15 @@ design + plan under `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor
 `blob_chunk` and `outboard` are NOT in-DB verified (wrong chunks only ever assemble into a flip that FAILS;
 a wrong outboard is rejected by the fetching peer's bao decode against the signed root — availability, never
 integrity); a superuser can drop the trigger (same standing as every floor piece). No event-format / ADR / spec
-change (implements settled ADR-0013 point 11 + principle 12).
+change (implements settled ADR-0013 point 11 + principle 12). **Post-review hardening (same session):** db/026 now
+opens with a `to_regprocedure` load-time gate (the guard is late-bound PL/pgSQL, so a stale `.so` would otherwise
+load cleanly and fail illegibly at the first present-flip — this gate covers every loader, including cairn-node,
+which has no connect-time version probe); `put-blob`/`gen-blob`/`blobd` now connect via `connect_checked_apply`
+(they are the commands whose writes fire the trigger); the UPDATE trigger is column-level (`UPDATE OF content,
+blob_address, present` — a statement-wide WHEN would detoast an untouched multi-GB content column on every
+metadata touch); both triggers use `CREATE OR REPLACE TRIGGER` (no ACCESS EXCLUSIVE, no trigger-less window on
+init replays); `cairn_blob_verify_error` diagnoses the address before hashing content and names wrong-prefix
+distinctly from wrong-length.
 
 **This session (2026-07-04, second) — §5.4 birth-year-range blocking pass + A/B pass-toggle, full loop**
 (brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under
