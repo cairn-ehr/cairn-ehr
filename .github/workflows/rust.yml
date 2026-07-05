@@ -1,0 +1,149 @@
+name: rust
+
+# The automated regression gate for the Rust workspace AND the in-DB safety floor
+# (issue #117). Before this, the only CI was the docs build + CodeQL, so the §9
+# safety-critical surface — the validated `submit_event`/`apply_remote_*` doors, the
+# identity algebra, HLC ordering, the demographic/match projections — had NO automated
+# gate: the DB-gated integration suites ran only on a hand-built local rig. This job
+# stands that rig up in CI: a real PostgreSQL with the `cairn_pgx` (pgrx) extension
+# installed, then `cargo clippy` + `cargo test --workspace` with `CAIRN_TEST_PG` set so
+# the DB-gated tests actually execute (they self-skip when it is unset).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref; a new push cancels the superseded run (the DB rig is expensive).
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: clippy + cargo test (PG16 + cairn_pgx floor)
+    # Pinned (not ubuntu-latest): the apt PostgreSQL major and the clang/llvm major
+    # this job depends on are properties of the image, so pin the image that was
+    # validated rather than let a silent bump surprise the floor gate.
+    runs-on: ubuntu-24.04
+    env:
+      # PostgreSQL major. Ubuntu 24.04 ships 16 in its default repos, and cairn_pgx
+      # builds against it via its `pg16` feature. The spec targets >= 18; bumping this
+      # gate to 18 means adding the PGDG apt repo (apt.postgresql.org) for
+      # postgresql-18 + postgresql-server-dev-18 — a clean follow-up, tracked in #117.
+      PG_MAJOR: "16"
+      # MUST match the pgrx pin in extensions/cairn_pgx/Cargo.toml (`pgrx = "=0.18.1"`).
+      # A drift here builds an extension ABI-mismatched with the crate under test.
+      PGRX_VERSION: "0.18.1"
+      # A throwaway port, away from any PostgreSQL the runner image pre-starts on 5432.
+      PGPORT: "54329"
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # ---- system prerequisites: PostgreSQL + its server headers + libclang --------
+      # postgresql-server-dev-N supplies pg_config and the server headers pgrx's
+      # bindgen step needs; clang/libclang-dev supply the libclang bindgen links against
+      # (without it the pgrx-pg-sys build fails with "bindgen failed"). `apt-get update`
+      # first: the image's package index can lag the current point release, 404-ing a
+      # pinned-version fetch otherwise.
+      - name: Install PostgreSQL ${{ env.PG_MAJOR }} + build prerequisites
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            "postgresql-${PG_MAJOR}" "postgresql-server-dev-${PG_MAJOR}" \
+            clang libclang-dev build-essential
+          # Pin the exact pg_config for this major (avoid the multi-version dispatcher
+          # at /usr/bin/pg_config picking a different cluster).
+          echo "PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config" >> "$GITHUB_ENV"
+          echo "/usr/lib/postgresql/${PG_MAJOR}/bin" >> "$GITHUB_PATH"
+          # Point bindgen at libclang explicitly (robust to the llvm major on the image).
+          echo "LIBCLANG_PATH=$(ls -d /usr/lib/llvm-*/lib | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Add clippy component
+        run: rustup component add clippy
+
+      # ---- caches: the extension compile dominates wall time (issue #117 note) ------
+      - name: Cache cargo registry + build (workspace and extension)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The extension is a SEPARATE cargo workspace (root Cargo.toml excludes it),
+          # with its own Cargo.lock and target dir — cache both trees.
+          workspaces: |
+            . -> target
+            extensions/cairn_pgx -> target
+
+      - name: Cache the cargo-pgrx binary
+        id: pgrx-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-pgrx (${{ env.PGRX_VERSION }})
+        if: steps.pgrx-bin.outputs.cache-hit != 'true'
+        run: cargo install cargo-pgrx --version "=${PGRX_VERSION}" --locked
+
+      # `init` registers the system pg_config with pgrx; cheap, so it always runs (even
+      # on a cache hit for the binary). It writes ~/.pgrx/config.toml.
+      - name: Initialize pgrx against the system PostgreSQL
+        run: cargo pgrx init "--pg${PG_MAJOR}" "$PG_CONFIG"
+
+      # `cargo pgrx install` copies the built .so + control + SQL into pg_config's
+      # pkglibdir / sharedir, which are root-owned. Make just those two dirs writable so
+      # the install runs as the (unprivileged) runner user — building the crate under
+      # sudo would write root-owned artifacts into the cargo cache.
+      - name: Build + install cairn_pgx into the system PostgreSQL
+        run: |
+          set -euxo pipefail
+          sudo chmod a+w "$("$PG_CONFIG" --pkglibdir)" "$("$PG_CONFIG" --sharedir)/extension"
+          cd extensions/cairn_pgx
+          cargo pgrx install \
+            --no-default-features --features "pg${PG_MAJOR}" \
+            --pg-config "$PG_CONFIG"
+
+      # A throwaway cluster owned by the runner user, on a private port, with the
+      # extension created in the test database. trust auth is fine — it is bound to
+      # 127.0.0.1 on an ephemeral CI VM.
+      - name: Start PostgreSQL and create the test database
+        run: |
+          set -euxo pipefail
+          export PGDATA="$RUNNER_TEMP/pgdata"
+          initdb -D "$PGDATA" -U postgres --auth=trust
+          # unix_socket_directories defaults to /var/run/postgresql, which the
+          # unprivileged runner user cannot write (Permission denied on the socket lock
+          # file). Point it at the runner-owned data dir; the tests connect over TCP
+          # (127.0.0.1) regardless, so the socket path only needs to be writable.
+          pg_ctl -D "$PGDATA" \
+            -o "-p ${PGPORT} -c listen_addresses=127.0.0.1 -c unix_socket_directories=$PGDATA" \
+            -l "$PGDATA/server.log" start
+          for _ in $(seq 1 30); do
+            pg_isready -h 127.0.0.1 -p "${PGPORT}" -U postgres && break
+            sleep 1
+          done
+          createdb -h 127.0.0.1 -p "${PGPORT}" -U postgres cairn_test
+          psql -h 127.0.0.1 -p "${PGPORT}" -U postgres -d cairn_test \
+            -c "CREATE EXTENSION cairn_pgx;"
+          psql -h 127.0.0.1 -p "${PGPORT}" -U postgres -d cairn_test \
+            -tAc "SELECT 'cairn_pgx ' || extversion FROM pg_extension WHERE extname='cairn_pgx';"
+
+      # Warnings are errors: the house style keeps the safety surface clippy-clean.
+      - name: clippy (workspace, tests)
+        run: cargo clippy --workspace --tests -- -D warnings
+
+      # The DB-gated integration suites self-serialize cluster-wide via a Postgres
+      # advisory lock (db::test_serial_guard), so the default parallel run is reliable.
+      - name: cargo test (workspace, in-DB floor)
+        env:
+          CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
+        run: cargo test --workspace
+
+      # If anything above failed, the server log is the first thing a human wants.
+      - name: PostgreSQL log (on failure)
+        if: failure()
+        run: cat "$RUNNER_TEMP/pgdata/server.log" || true

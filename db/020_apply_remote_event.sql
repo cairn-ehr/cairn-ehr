@@ -70,6 +70,7 @@ DECLARE
     v_actor_ids     BYTEA[];
     v_actor_id      BYTEA;
     v_rows          INTEGER;
+    v_merge_wall    BIGINT;
     c               JSONB;
 BEGIN
     -- 0. Size ceiling (A7a): an oversized event would wedge the 8 MiB-capped wire and
@@ -233,13 +234,28 @@ BEGIN
                                     (c ->> 'byte_len')::bigint);
     END LOOP;
 
-    -- HLC merge: the local clock never falls behind an event we accepted (the A3
-    -- invariant, mirrored from apply_remote_node_event so the daemon does zero raw DML).
+    -- HLC merge with a clock-drift clamp (issue #102): the local clock never falls behind an
+    -- event we accepted (the A3 invariant), BUT a remote wall implausibly far in our future is
+    -- clamped to now + cairn_max_hlc_drift_ms() (db/001) before it advances hlc_state, so a
+    -- broken or hostile peer cannot ratchet the clinical clock without bound. This door CLAMPS
+    -- where the node door (db/007) REJECTS, and the difference is forced by the pull loops:
+    -- cairn-sync FREEZES its watermark on ANY refusal of a verifiable event (main.rs), so
+    -- rejecting a future-dated clinical event would let one insane peer event WEDGE clinical
+    -- replication — an availability regression worse than the ratchet (availability over
+    -- consistency). The event itself is admitted UNCHANGED above, its original asserted wall
+    -- preserved verbatim in event_log (principle 1: never rewrite the claim); only the
+    -- local-clock side-effect is bounded here. (An admitted future wall still orders "latest"
+    -- in projections exactly as it does today — a pre-existing, orthogonal concern, not
+    -- worsened by this clamp; see issue #97.) The A3 invariant is intentionally relaxed for a
+    -- Byzantine future-claim: Cairn contains dishonest events with signatures + recall, not by
+    -- dragging every honest node's clock to the lie.
+    v_merge_wall := LEAST((b -> 'hlc' ->> 'wall')::bigint,
+                          (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms());
     UPDATE hlc_state SET
-        hlc_wall    = GREATEST(hlc_wall, (b -> 'hlc' ->> 'wall')::bigint),
+        hlc_wall    = GREATEST(hlc_wall, v_merge_wall),
         hlc_counter = CASE
-            WHEN (b -> 'hlc' ->> 'wall')::bigint > hlc_wall THEN (b -> 'hlc' ->> 'counter')::int
-            WHEN (b -> 'hlc' ->> 'wall')::bigint = hlc_wall THEN GREATEST(hlc_counter, (b -> 'hlc' ->> 'counter')::int)
+            WHEN v_merge_wall > hlc_wall THEN (b -> 'hlc' ->> 'counter')::int
+            WHEN v_merge_wall = hlc_wall THEN GREATEST(hlc_counter, (b -> 'hlc' ->> 'counter')::int)
             ELSE hlc_counter END
         WHERE id;
 

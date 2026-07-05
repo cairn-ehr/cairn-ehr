@@ -33,6 +33,27 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE OR REPLACE FUNCTION cairn_max_event_bytes()
 RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT 8000000 $$;
 
+-- The clock-drift admission ceiling (issue #102), in milliseconds. The largest amount
+-- a REMOTE event's asserted HLC wall may sit ahead of THIS node's own wall clock and
+-- still be trusted to advance the local clock. Both remote-apply doors merge the local
+-- HLC forward with GREATEST(local_wall, remote_wall) (the A3 invariant — the clock never
+-- falls behind an accepted event); without a ceiling, ONE verified event from a
+-- trusted-but-broken or hostile peer carrying an absurd future wall (e.g. 2^62 ms ≈ 146
+-- million years) permanently ratchets this node's clock — and, on the node plane, poisons
+-- trust_peer's `ORDER BY hlc_wall DESC` — into the far future, with no self-healing path
+-- (GREATEST is monotone; real time never catches up). 24h is deliberately generous: it
+-- admits any plausible honest clock skew (an unsynced peer, a timezone-as-UTC bug, an
+-- offline node whose RTC drifted) — consonant with ADR-0027, where a low-confidence clock
+-- is BRACKETED, never treated as falsification — while still defeating the ratchet: an
+-- attacker can push the local clock at most ~24h past real time, and that excess decays as
+-- real time advances, rather than persisting for geological spans. Measured against
+-- clock_timestamp() (the node's own wall clock), NOT the possibly-already-advanced
+-- hlc_state, so the bound is absolute rather than itself ratchetable. Applies ONLY to the
+-- remote-apply doors: a node's own authored events are its own clock's truth
+-- (node_hlc_tick is already bounded by the local clock_timestamp).
+CREATE OR REPLACE FUNCTION cairn_max_hlc_drift_ms()
+RETURNS bigint LANGUAGE sql IMMUTABLE AS $$ SELECT 86400000 $$;  -- 24 * 60 * 60 * 1000
+
 -- ---------------------------------------------------------------------------
 -- The append-only, signed clinical event log (governing principle #1).
 -- ---------------------------------------------------------------------------

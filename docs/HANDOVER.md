@@ -64,6 +64,34 @@ unblocked); stale forced-REVIEW rows after identification are [#135](https://git
 would otherwise train on a field set the shipped matcher no longer has); fuzzy near-window softening; hub-tier range
 sweep.
 
+**Parallel session (2026-07-05) — the blob self-verification in-DB floor (Phase 7 / ADR-0013), deliberately
+outside the demographics/matcher/identity territory** (a second session owned that front concurrently; this slice
+touches none of db/010–025, `matcher/`, or the clinical `cairn-node` modules). Closes the honest gap `db/003`
+recorded since the walking skeleton: the blob tier's self-verifying property (bytes marked `present = TRUE`
+BLAKE3-hash to the `blob_address` naming them) was an L2 promise — `cairn-sync` verified before flipping
+`present`, but pgcrypto has no BLAKE3, so a raw-SQL client could store arbitrary bytes as any named blob — the
+exact "wrong-hash blob served as the named one" failure ADR-0013 point 11 names as the tier's safety-critical
+seam. Now: `cairn_pgx` **0.3.0** gains `cairn_blob_verify`/`cairn_blob_verify_error` (thin wrappers over the SAME
+`cairn_event::blob_address` L2 uses — one hashing implementation; fail-closed on malformed addresses; legible
+diagnostics mirroring the `cairn_verify` pair), and **`db/026_blob_verify_floor.sql`** enforces it as a TRIGGER
+floor on `blob_store` (INSERT arriving present; UPDATE flipping into present / swapping content / re-keying;
+metadata-only updates never re-pay the hash — a trigger, not a door+REVOKE, because the byte tier legitimately
+writes raw DML). `REQUIRED_PGX_FLOOR` 0.2.0→0.3.0 in `cairn-sync` (stale `.so` fails legibly at the gate). TDD:
+red-first 7 DB-gated hostile-client tests (`cairn-node/tests/blob_floor.rs`) + a fail-closed `cairn_pgx` pg_test;
+design + plan under `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor*`. **Honest limits (recorded):**
+`blob_chunk` and `outboard` are NOT in-DB verified (wrong chunks only ever assemble into a flip that FAILS;
+a wrong outboard is rejected by the fetching peer's bao decode against the signed root — availability, never
+integrity); a superuser can drop the trigger (same standing as every floor piece). No event-format / ADR / spec
+change (implements settled ADR-0013 point 11 + principle 12). **Post-review hardening (same session):** db/026 now
+opens with a `to_regprocedure` load-time gate (the guard is late-bound PL/pgSQL, so a stale `.so` would otherwise
+load cleanly and fail illegibly at the first present-flip — this gate covers every loader, including cairn-node,
+which has no connect-time version probe); `put-blob`/`gen-blob`/`blobd` now connect via `connect_checked_apply`
+(they are the commands whose writes fire the trigger); the UPDATE trigger is column-level (`UPDATE OF content,
+blob_address, present` — a statement-wide WHEN would detoast an untouched multi-GB content column on every
+metadata touch); both triggers use `CREATE OR REPLACE TRIGGER` (no ACCESS EXCLUSIVE, no trigger-less window on
+init replays); `cairn_blob_verify_error` diagnoses the address before hashing content and names wrong-prefix
+distinctly from wrong-length.
+
 **Prior session (2026-07-04, second) — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle
 (condensed; full detail in git + ROADMAP slice 21 + PR #131).** A `year-range` dob now generates blocking keys —
 **ANCHORED, never symmetric** (anchor×member only; all-pairing a window would manufacture C(k,2) noise): pure
