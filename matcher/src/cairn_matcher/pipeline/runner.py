@@ -35,6 +35,7 @@ def propose(
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
     aliases: Mapping[str, "frozenset[str]"] | None = None,
+    trust: Mapping[str, "str"] | None = None,
 ) -> Band | None:
     """Score the pair (a, b), gate on the in-DB veto, and persist a proposal if warranted.
 
@@ -46,6 +47,11 @@ def propose(
     caller (sweep) supplies so this function issues no per-pair alias SELECT — it reads
     both charts' aliases from the map instead. A direct single-pair call leaves it None
     and each chart's aliases are loaded on demand (`db.load_aliases`).
+
+    `trust` is the analogous preloaded batch map of {patient_id_text: trust_state} a BATCH
+    caller (sweep) supplies so this function issues no per-pair trust SELECT. A direct
+    single-pair call leaves it None and each chart's trust state is loaded on demand
+    (`db.load_trust`) — the same seam as aliases.
     """
     # Imported lazily so `runner` (and its pure helper canonical_pair) is importable
     # without the optional `pipeline` extra; only an actual propose() call needs psycopg.
@@ -71,8 +77,22 @@ def propose(
         str(a), rec_a.names.value if rec_a.names else None, aliases_a,
         str(b), rec_b.names.value if rec_b.names else None, aliases_b,
     )
+    # §5.4 identity-pending trust: an *unconfirmed* chart (a standing John Doe) needs human
+    # identification effort, so banding may force its corroborated pairs to REVIEW (design
+    # 2026-07-05 §4). Trust states come from the caller's preloaded map when batching, else
+    # per-pair on-demand loads (same seam as aliases).
+    if trust is None:
+        trust_a = db.load_trust(conn, a)
+        trust_b = db.load_trust(conn, b)
+    else:
+        trust_a = trust.get(str(a))
+        trust_b = trust.get(str(b))
+    unconfirmed_ids = sorted(
+        str(p) for p, t in ((a, trust_a), (b, trust_b)) if t == "unconfirmed"
+    )
     band_value = band(
-        match_score, vetoes, thresholds, has_known_alias=bool(alias_evidence)
+        match_score, vetoes, thresholds,
+        has_known_alias=bool(alias_evidence), unconfirmed=bool(unconfirmed_ids),
     )
     if band_value is None:
         # Nothing to persist — but the load/veto SELECTs opened a read transaction. Close
@@ -81,7 +101,15 @@ def propose(
         conn.rollback()
         return None
     low, high = canonical_pair(a, b)
-    payload = build_payload(match_score, vetoes, band_value, weights, alias_evidence)
+    # The marker is emitted on EVERY persisted proposal involving an unconfirmed chart —
+    # also above-threshold ones — so a hub worklist can group a Doe's whole candidate list.
+    trust_evidence = (
+        ({"rule": "identity_pending", "unconfirmed": unconfirmed_ids},)
+        if unconfirmed_ids else ()
+    )
+    payload = build_payload(
+        match_score, vetoes, band_value, weights, alias_evidence, trust_evidence
+    )
     db.upsert_proposal(conn, low, high, payload)
     # Commit boundary owned here: a batch caller wrapping propose() is not silently
     # committed mid-transaction by a helper function it doesn't control.

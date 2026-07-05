@@ -129,6 +129,37 @@ def load_aliases_for(conn, patient_ids) -> dict[str, frozenset[str]]:
     return {pid: frozenset(values) for pid, values in out.items()}
 
 
+def load_trust(conn, patient_id) -> str | None:
+    """One chart's §5.7 trust state from the chart_trust view; None = confirmed.
+
+    The view (db/024) carries rows ONLY for flagged charts (unconfirmed / under-review),
+    so an absent row IS the confirmed default — mirrored by person_chart_trust's COALESCE.
+    Single-pair path only; a batch driver uses load_trust_for (one query for the set).
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT trust_state FROM chart_trust WHERE patient_id=%s", (patient_id,))
+        row = cur.fetchone()
+        return None if row is None else row[0]
+
+
+def load_trust_for(conn, patient_ids) -> dict[str, str]:
+    """Trust states for a whole candidate set in ONE query (the load_aliases_for pattern).
+
+    Absent key = confirmed. Keys are canonical lowercase uuid text, matching str(patient_id)
+    at the call site. Scoped to the given ids so this stays an index probe, never a scan of
+    every flagged chart in the fleet.
+    """
+    ids = [str(p) for p in patient_ids]
+    if not ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT patient_id, trust_state FROM chart_trust WHERE patient_id = ANY(%s::uuid[])",
+            (ids,),
+        )
+        return {str(pid): state for pid, state in cur.fetchall()}
+
+
 def match_veto(conn, a, b) -> list[VetoFinding]:
     """Call the safety-critical in-DB hard-veto floor (db/016) and return its rows.
 

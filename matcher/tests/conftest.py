@@ -34,7 +34,7 @@ _DB_DIR = Path(__file__).resolve().parents[2] / "db"
 # (db/025) backs the patient_alias_pool view the known-alias matcher reads.
 _PROJECTION_TABLES = [
     "match_proposal", "patient_identifier", "patient_demographic", "patient_name",
-    "name_repudiation",
+    "name_repudiation", "chart_identity_state",
 ]
 
 
@@ -144,5 +144,22 @@ def seed_repudiation(conn, subject, value, *, reason="test fabricated persona"):
             "INSERT INTO name_repudiation (subject, value, reason, hlc_wall, hlc_counter, origin) "
             "VALUES (%s,%s,%s,0,0,'seed') ON CONFLICT DO NOTHING",
             (subject, value, reason),
+        )
+    conn.commit()
+
+
+def seed_identity_pending(conn, subject, *, basis="unidentified at registration"):
+    """Mark a chart identity-pending directly (chart_identity_state), bypassing the C4 floor.
+
+    The floor (submit_event + authored twin + the identity-state assertion gate) is proven
+    in crates/cairn-node/tests; these matcher tests exercise CONSUMPTION of the chart_trust
+    projection, not how it is written — the same rationale as seed_repudiation above.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chart_identity_state (subject, state, detail, hlc_wall, hlc_counter, origin) "
+            "VALUES (%s,'pending',%s,0,0,'seed') "
+            "ON CONFLICT (subject) DO UPDATE SET state='pending', detail=EXCLUDED.detail",
+            (subject, basis),
         )
     conn.commit()
