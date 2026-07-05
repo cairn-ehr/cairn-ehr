@@ -50,16 +50,23 @@ _PLACEHOLDER_USES_PARAM = PLACEHOLDER_USES_PARAM
 def load_candidate(conn, patient_id) -> CandidateRecord:
     """Read one patient's matching-relevant projection rows and shape a CandidateRecord.
 
-    Reads the winner rows (dob, sex-at-birth) and the retained sets (names, identifiers).
+    Reads the winner rows (dob, both sex facets) and the retained sets (names, identifiers).
     Pure shaping is delegated to adapter.candidate_from_rows.
     """
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT value, facets, provenance_rank FROM patient_demographic "
                     "WHERE patient_id=%s AND field='dob'", (patient_id,))
         dob_row = cur.fetchone()
-        cur.execute("SELECT value, provenance_rank FROM patient_demographic "
-                    "WHERE patient_id=%s AND field='sex-at-birth'", (patient_id,))
-        sex_row = cur.fetchone()
+        # One query for BOTH sex facets (§4.2 sex-at-birth: the birth fact; §5.4
+        # administrative-sex: the apparent/phenotypic facet a clinician-observed sex
+        # lands on). Split by field name here — 'sex-at-birth'/'administrative-sex'
+        # are the projection contract, NOT the scorer's weight key (that is "sex").
+        cur.execute("SELECT field, value, provenance_rank FROM patient_demographic "
+                    "WHERE patient_id=%s AND field IN ('sex-at-birth','administrative-sex')",
+                    (patient_id,))
+        sex_rows = cur.fetchall()
+        sex_row = next((r for r in sex_rows if r["field"] == "sex-at-birth"), None)
+        admin_sex_row = next((r for r in sex_rows if r["field"] == "administrative-sex"), None)
         # Exclude placeholder-use names (callsigns) from the scoring feature space (§5.4).
         cur.execute("SELECT value, provenance_rank FROM patient_name "
                     "WHERE patient_id=%s AND use_key <> ALL(%s)",
@@ -69,7 +76,8 @@ def load_candidate(conn, patient_id) -> CandidateRecord:
                     (patient_id,))
         identifier_rows = cur.fetchall()
     return candidate_from_rows(
-        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows
+        dob_row=dob_row, sex_row=sex_row, name_rows=name_rows, identifier_rows=identifier_rows,
+        admin_sex_row=admin_sex_row
     )
 
 

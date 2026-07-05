@@ -116,3 +116,27 @@ def test_value_sentinels_hold_the_lowercase_ascii_invariant():
     for sentinel in VALUE_SENTINELS:
         assert sentinel == sentinel.strip().casefold()
         assert sentinel.isascii()
+
+
+def test_admin_sex_row_shapes_into_administrative_sex():
+    rec = candidate_from_rows(
+        dob_row=None, sex_row=None, name_rows=(), identifier_rows=(),
+        admin_sex_row={"value": "male", "provenance_rank": 30},
+    )
+    assert rec.administrative_sex == FieldValue("male", provenance_rank=30)
+    assert rec.sex_at_birth is None
+
+
+def test_admin_sex_unknown_sentinel_degrades_to_absence():
+    # `unknown` is a legitimate recorded value but ZERO matching evidence (principle 4)
+    # — same single_field discipline as sex-at-birth.
+    rec = candidate_from_rows(
+        dob_row=None, sex_row=None, name_rows=(), identifier_rows=(),
+        admin_sex_row={"value": "unknown", "provenance_rank": 30},
+    )
+    assert rec.administrative_sex is None
+
+
+def test_admin_sex_defaults_to_none():
+    rec = candidate_from_rows(dob_row=None, sex_row=None, name_rows=(), identifier_rows=())
+    assert rec.administrative_sex is None

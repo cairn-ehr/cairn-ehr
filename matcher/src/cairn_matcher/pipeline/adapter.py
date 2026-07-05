@@ -170,11 +170,15 @@ def candidate_from_rows(
     sex_row: Mapping | None,
     name_rows: Sequence[Mapping],
     identifier_rows: Sequence[Mapping],
+    admin_sex_row: Mapping | None = None,
 ) -> CandidateRecord:
     """Assemble a CandidateRecord from one patient's projection rows.
 
     dob is special: its value is parsed via parse_dob at the row's declared precision; an
     unparseable value drops the whole dob field to None (safe degrade), never a guess.
+    sex_at_birth and administrative_sex ride the same single_field discipline: uncertainty
+    sentinels (`unknown`) degrade to None (principle 4; acknowledged uncertainty is never
+    matching evidence).
     """
     dob = None
     if dob_row is not None:
@@ -185,6 +189,7 @@ def candidate_from_rows(
     return CandidateRecord(
         dob=dob,
         sex_at_birth=single_field(sex_row),
+        administrative_sex=single_field(admin_sex_row),
         names=build_names(name_rows),
         identifiers=build_identifiers(identifier_rows),
     )
