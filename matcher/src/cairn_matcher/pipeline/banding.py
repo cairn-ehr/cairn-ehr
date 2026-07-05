@@ -63,12 +63,28 @@ def _has_shared_identifier(score: MatchScore) -> bool:
     )
 
 
+def _corroborated_positive(score: MatchScore) -> bool:
+    """≥2 fields contributing positive weight, and NO disagreeing field.
+
+    The structural flood-control gate of the §5.4 unconfirmed-chart rule (design
+    2026-07-05 §4): age-window overlap + shared sex (or overlap + a shared identifier
+    off belongings) qualifies; a bare 11-year window overlap — which a sizeable DB
+    satisfies for a double-digit share of charts — does not. Structural (a field count)
+    rather than a score floor so it does not drift as provenance factors or weights
+    change. The paper counterpart searches the registry on age AND sex, never age alone.
+    """
+    positives = sum(1 for e in score.fields if e.weight_contribution > 0)
+    disagrees = any(e.level is AgreementLevel.DISAGREE for e in score.fields)
+    return positives >= 2 and not disagrees
+
+
 def band(
     score: MatchScore,
     vetoes: Sequence[VetoFinding],
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     *,
     has_known_alias: bool = False,
+    unconfirmed: bool = False,
 ) -> Band | None:
     """Classify a scored pair into AUTO_CANDIDATE / REVIEW / None (no proposal).
 
@@ -100,11 +116,22 @@ def band(
     a scoped rule: that would silently drop returning-persona pairs. Worklist VOLUME is
     managed downstream instead — every such proposal carries a `known_alias` evidence entry
     (build_payload), so a hub worklist can filter/prioritise them without any suppression here.
+
+    Exception (§5.4 unconfirmed-chart forcing): when an unconfirmed chart (still-to-be-
+    identified) has corroborated matching evidence (≥2 positive fields, no disagreeing
+    fields; the structural flood-control gate), the band is REVIEW — unconfirmed NEEDS human
+    identification effort, so corroborated candidates must reach the worklist. Never
+    AUTO_CANDIDATE (a human must make the link). The no-veto gate is near-vacuous for an
+    unconfirmed Doe since a veto requires verified values, and the veto+identifier case is
+    already owned by the rescue. `'under-review'` is a dispute state and deliberately does
+    NOT trigger this.
     """
     if has_known_alias:
         return Band.REVIEW
     if score.total < thresholds.review:
         if vetoes and _has_shared_identifier(score):
+            return Band.REVIEW
+        if unconfirmed and not vetoes and _corroborated_positive(score):
             return Band.REVIEW
         return None
     if score.total >= thresholds.auto and not vetoes:
@@ -145,6 +172,7 @@ def build_payload(
     band_value: Band,
     weights: Weights = DEFAULT_WEIGHTS,
     alias_evidence: Sequence[dict] = (),
+    trust_evidence: Sequence[dict] = (),
 ) -> ProposalPayload:
     """Shape a self-explaining proposal payload: the band, the score, and WHY (evidence
     breakdown + veto findings), plus the matcher version that produced it.
@@ -152,6 +180,10 @@ def build_payload(
     `alias_evidence` (the §5.5(a) `known_alias` entries, if any) is appended after the
     field breakdown so a reviewer sees that the match involves a repudiated known alias —
     the paper-registry "known alias" flag, restored to the worklist.
+
+    `trust_evidence` (the `identity_pending` marker and other trust/identity attestations,
+    if any) is appended after the alias entries so a hub worklist can group an unconfirmed
+    chart's candidate list — pure surfacing, never suppression.
     """
     evidence = tuple(
         {
@@ -161,7 +193,7 @@ def build_payload(
             "weight_contribution": e.weight_contribution,
         }
         for e in score.fields
-    ) + tuple(alias_evidence)
+    ) + tuple(alias_evidence) + tuple(trust_evidence)
     findings = tuple(
         {"veto_kind": v.veto_kind, "severity": v.severity, "subject": v.subject, "detail": v.detail}
         for v in vetoes

@@ -144,3 +144,76 @@ def test_build_payload_appends_known_alias_evidence():
     # Field evidence still present, with the known-alias entry appended after it.
     assert payload.evidence[0]["field"] == "name"
     assert payload.evidence[-1] == {"kind": "known_alias", "value": "John Fakename", "alias_of": "abc"}
+
+
+# --- unconfirmed-chart forcing rule (§5.4) -----------------------------------------------
+# An unconfirmed (still-to-be-identified) chart matched only by age window + sex/belongings
+# (or age + identifier, but that case is handled by the veto rescue) — thin but
+# uncontradicted evidence — must not be silently dropped. Every corroborated candidate
+# must reach the worklist. The rule is structural (field count) not a score floor, to
+# resist drift as weights change.
+
+
+def _evidence(field, level, contribution, rank=30):
+    """Helper: construct one field evidence entry for a focused score."""
+    return FieldEvidence(field, level, rank, contribution)
+
+
+def _headline_score():
+    """The §5.4 pure-age pair: dob PARTIAL + sex EXACT, everything else absent — ≈1.79,
+    below review=3.0."""
+    return MatchScore(total=1.79, fields=(
+        _evidence("dob", AgreementLevel.PARTIAL, 1.07),
+        _evidence("sex", AgreementLevel.EXACT, 0.71),
+        _evidence("name", AgreementLevel.INSUFFICIENT_DATA, 0.0),
+        _evidence("identifier", AgreementLevel.INSUFFICIENT_DATA, 0.0),
+    ))
+
+
+def test_unconfirmed_rule_forces_review_on_corroborated_pair():
+    assert band(_headline_score(), vetoes=(), unconfirmed=True) is Band.REVIEW
+
+
+def test_unconfirmed_rule_needs_two_positive_fields():
+    # A bare window overlap (one positive field) must NOT flood the worklist.
+    one_field = MatchScore(total=1.07, fields=(
+        _evidence("dob", AgreementLevel.PARTIAL, 1.07),
+    ))
+    assert band(one_field, vetoes=(), unconfirmed=True) is None
+
+
+def test_unconfirmed_rule_blocked_by_any_disagree():
+    # Disagreeing evidence -> the normal scoring path decides; forcing is only for
+    # thin-but-uncontradicted evidence.
+    contradicted = MatchScore(total=0.4, fields=(
+        _evidence("dob", AgreementLevel.PARTIAL, 1.07),
+        _evidence("sex", AgreementLevel.EXACT, 0.71),
+        _evidence("name", AgreementLevel.DISAGREE, -1.4),
+    ))
+    assert band(contradicted, vetoes=(), unconfirmed=True) is None
+
+
+def test_unconfirmed_rule_blocked_by_a_veto():
+    veto = VetoFinding("dob_clash", "hard_veto", "dob", "verified clash")
+    assert band(_headline_score(), vetoes=(veto,), unconfirmed=True) is None
+
+
+def test_unconfirmed_rule_inert_when_flag_false():
+    assert band(_headline_score(), vetoes=(), unconfirmed=False) is None
+
+
+def test_unconfirmed_rule_never_upgrades_to_auto():
+    # Above-auto scores follow the NORMAL path; the forcing rule only ever acts below
+    # review and only ever yields REVIEW.
+    big = MatchScore(total=9.0, fields=(
+        _evidence("identifier", AgreementLevel.EXACT, 8.0),
+        _evidence("dob", AgreementLevel.PARTIAL, 1.0),
+    ))
+    assert band(big, vetoes=(), unconfirmed=True) is Band.AUTO_CANDIDATE  # unchanged path
+
+
+def test_build_payload_appends_trust_evidence_after_alias_evidence():
+    score = _headline_score()
+    marker = {"rule": "identity_pending", "unconfirmed": ["11111111-1111-1111-1111-111111111111"]}
+    payload = build_payload(score, (), Band.REVIEW, trust_evidence=(marker,))
+    assert payload.evidence[-1] == marker
