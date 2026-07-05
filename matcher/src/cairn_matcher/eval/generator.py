@@ -61,11 +61,18 @@ def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
 # Mirrors of _RANGE_GROUPS_SQL's birth_window guards (pipeline/db.py): a range value
 # must be exactly '<yyyy>/<yyyy>' with min <= max; a point value contributes its FIRST
 # 4-digit run. Kept as module constants so the two branches below can't drift apart.
-_YEAR_RANGE_RE = re.compile(r"^([0-9]{4})/([0-9]{4})$")
+#
+# No '^'/'$' anchors here: matched with .fullmatch() below instead. Python's re '$'
+# also matches immediately before a trailing '\n', but PostgreSQL's ARE '$' (as used
+# in db.py's `value ~ '^[0-9]{4}/[0-9]{4}$'`) matches only true end-of-string — so
+# anchoring with '$' and using .match() would let "1980/1990\n" through here while the
+# SQL excludes the row (an over-claim, the unsafe direction). .fullmatch() is the
+# faithful mirror of POSIX end-of-string.
+_YEAR_RANGE_RE = re.compile(r"([0-9]{4})/([0-9]{4})")
 _FIRST_YEAR_RE = re.compile(r"[0-9]{4}")
 
 
-def _birth_window(record: Mapping):
+def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
     """(y_min, y_max, is_range) for one record's dob, or None — the birth_window CTE.
 
     Mirrors _RANGE_GROUPS_SQL exactly, in the safe direction: a malformed or inverted
@@ -80,7 +87,7 @@ def _birth_window(record: Mapping):
         return None
     value = dob["value"]
     if dob.get("precision") == "year-range":
-        m = _YEAR_RANGE_RE.match(value)
+        m = _YEAR_RANGE_RE.fullmatch(value)
         if not m:
             return None
         lo, hi = int(m.group(1)), int(m.group(2))

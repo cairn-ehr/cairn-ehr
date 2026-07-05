@@ -53,6 +53,8 @@ _MIRRORED_PASSES = [
      _RANGE_GROUPS_SQL, "substring(value FROM '^([0-9]{4})/')"),
     ("window overlap join (shares_blocking_key range branch)",
      _RANGE_GROUPS_SQL, "AND m.y_min <= a.y_max"),
+    ("window overlap join, other bound (shares_blocking_key range branch)",
+     _RANGE_GROUPS_SQL, "AND a.y_min <= m.y_max"),
     ("anchored on range charts only (point-point never keys)",
      _RANGE_GROUPS_SQL, "WHERE a.is_range"),
     ("blocking_sex unions both sex facets (dob-range+sex subset claim)",

@@ -42,7 +42,11 @@ def test_window_parses_a_wellformed_year_range():
 
 def test_window_excludes_malformed_and_inverted_ranges():
     # Mirrors the SQL regex + min<=max guards: excluded, never a guessed window.
-    for bad in ("about-forty", "1980/199", "1990/1980", "1980-1990", "1980/1990/2000"):
+    # "1980/1990\n" pins the fullmatch fix: Python re '$' matches before a trailing
+    # '\n' but POSIX ARE '$' (the SQL side) does not, so a trailing newline must
+    # still exclude the row here, never yield a guessed window (over-claim).
+    for bad in ("about-forty", "1980/199", "1990/1980", "1980-1990", "1980/1990/2000",
+                "1980/1990\n"):
         assert _birth_window(_rec(dob={"value": bad, "precision": "year-range"})) is None
 
 
