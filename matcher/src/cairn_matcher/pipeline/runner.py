@@ -35,7 +35,7 @@ def propose(
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
     aliases: Mapping[str, "frozenset[str]"] | None = None,
-    trust: Mapping[str, "str"] | None = None,
+    trust: Mapping[str, str] | None = None,
 ) -> Band | None:
     """Score the pair (a, b), gate on the in-DB veto, and persist a proposal if warranted.
 
