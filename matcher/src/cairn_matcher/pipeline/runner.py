@@ -8,6 +8,7 @@ duplicate-sweep is the declared backstop for any signal missed at the noise floo
 """
 
 from collections.abc import Mapping
+from uuid import UUID
 
 from cairn_matcher.orchestrator import field_comparisons
 from cairn_matcher.pipeline.alias import known_alias_evidence
@@ -50,8 +51,8 @@ def propose(
 
     `trust` is the analogous preloaded batch map of {patient_id_text: trust_state} a BATCH
     caller (sweep) supplies so this function issues no per-pair trust SELECT. A direct
-    single-pair call leaves it None and each chart's trust state is loaded on demand
-    (`db.load_trust`) — the same seam as aliases.
+    single-pair call leaves it None and the pair's trust states are loaded on demand in
+    one query (`db.load_trust_for`) — the same seam as aliases.
     """
     # Imported lazily so `runner` (and its pure helper canonical_pair) is importable
     # without the optional `pipeline` extra; only an actual propose() call needs psycopg.
@@ -82,13 +83,14 @@ def propose(
     # 2026-07-05 §4). Trust states come from the caller's preloaded map when batching, else
     # per-pair on-demand loads (same seam as aliases).
     if trust is None:
-        trust_a = db.load_trust(conn, a)
-        trust_b = db.load_trust(conn, b)
-    else:
-        trust_a = trust.get(str(a))
-        trust_b = trust.get(str(b))
+        trust = db.load_trust_for(conn, (a, b))
+    # The map keys AND the persisted marker use canonical lowercase uuid text, whatever
+    # id type/casing the caller passed (uuid.UUID round-trip = the canonical_pair rule).
+    key_a, key_b = (str(UUID(str(p))) for p in (a, b))
+    trust_a = trust.get(key_a)
+    trust_b = trust.get(key_b)
     unconfirmed_ids = sorted(
-        str(p) for p, t in ((a, trust_a), (b, trust_b)) if t == "unconfirmed"
+        k for k, t in ((key_a, trust_a), (key_b, trust_b)) if t == "unconfirmed"
     )
     band_value = band(
         match_score, vetoes, thresholds,
@@ -103,8 +105,11 @@ def propose(
     low, high = canonical_pair(a, b)
     # The marker is emitted on EVERY persisted proposal involving an unconfirmed chart —
     # also above-threshold ones — so a hub worklist can group a Doe's whole candidate list.
+    # "kind" is the one discriminator key for every non-field evidence entry (the
+    # known_alias convention) — evidence JSONB is immutable, so a second key style
+    # would burden every future consumer forever.
     trust_evidence = (
-        ({"rule": "identity_pending", "unconfirmed": unconfirmed_ids},)
+        ({"kind": "identity_pending", "unconfirmed": unconfirmed_ids},)
         if unconfirmed_ids else ()
     )
     payload = build_payload(

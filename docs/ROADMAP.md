@@ -338,7 +338,9 @@ purity), statement-level toggle skip, SQL↔registry pass-name guard, `canonical
 Suites pure 200 / DB 264 / ruff clean. ~~**Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
 the pure-age John Doe pair now *blocks* but still scores below `review=3.0`~~ **(closed — slice 22, below)**.
 **Deferred:** generator range-DOB emission + range-aware
-eval mirror (the quantitative recall number the toggle now enables), fuzzy near-window softening, hub-tier range sweep.
+eval mirror (the quantitative recall number the toggle now enables; must also mirror `administrative_sex` — slice 22's
+composite-sex fallback is unrepresentable in the eval `DatasetRecord` until it does), fuzzy near-window softening,
+hub-tier range sweep.
 
 **Slice 22 — §5.4 administrative-sex scoring + the unconfirmed-chart REVIEW rule** (2026-07-05; closes
 [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130); advisory Python only — **no `db/` floor change, no
@@ -352,18 +354,29 @@ evidence supports but never suppresses; mirrors blocking's union-sex); one field
 double-count); weight key `sex-at-birth`→`"sex"` (projection field names untouched); `load_candidate` reads both facets
 in ONE query; side rank = sab's if present else admin's (documented second-order approximation). (2) **The scoped forcing
 rule** (`banding.band(unconfirmed=)`, the known-alias-forcing precedent): a pair with a `chart_trust='unconfirmed'` chart,
-**≥2 positive-contribution fields, zero DISAGREE, no vetoes** → REVIEW even below threshold — never AUTO; `'under-review'`
-(a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the blocking cap; every persisted proposal
-involving an unconfirmed chart carries an `{"rule":"identity_pending","unconfirmed":[uuids]}` evidence marker (worklist
-grouping, alias-marker pattern). Trust plumbing mirrors aliases: `db.load_trust`/`load_trust_for` batch preload in
-`sweep`, per-pair fallback in `propose`. TDD: 10 `compare_sex` + 3 orchestrator + 3 adapter + 7 banding pure; 3 trust +
-3 e2e DB-gated (`test_identity_pending_pipeline.py` — the headline pair surfaces as REVIEW; a no-pending control proves
-the RULE, not sex scoring, surfaces it, hardened non-vacuous; the two-Does pair carries both uuids in the marker).
+**≥2 positive-LEVEL fields, zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes attached**
+(post-review amendment: the original no-vetoes gate rested on a false "near-vacuous" premise — an identifier veto needs
+no verified values, so a vetoed-yet-corroborated Doe pair is reachable, and suppressing it would be the ADR-0014
+auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the blocking cap;
+every persisted proposal involving an unconfirmed chart carries an `{"kind":"identity_pending","unconfirmed":[uuids]}`
+evidence marker (`"kind"` = the one non-field-evidence discriminator, the alias-marker convention; worklist grouping).
+Trust plumbing mirrors aliases: one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the
+same one-query loader), canonical lowercase-uuid keys for map + marker. TDD: pure + DB-gated incl. the #130 e2e
+(`test_identity_pending_pipeline.py` — the headline pair surfaces as REVIEW; a no-pending control (shared seed helper)
+proves the RULE, not sex scoring, surfaces it, hardened non-vacuous; a direct-`propose()` test covers the on-demand
+trust seam; the two-Does pair carries both uuids in the marker).
 6-task subagent-SDD each reviewed clean; **final whole-branch review (fable): 0 Critical/Important**, 2 test-only
-must-fixes (non-vacuous control, strict `>0` gate pin) fixed → re-review **READY TO MERGE**. Suites pure 224 / DB 294 /
+must-fixes fixed → re-review READY TO MERGE; then an **8-angle post-review fix wave** (veto-gate removal;
+`_corroborated_positive` counts agreement LEVELS so learned weights can't stand the rule down; `score()` raises on a
+weights table missing a compared field — the stale-table/key-rename hazard — instead of silently zeroing; marker key
+`"rule"`→`"kind"`; singular `load_trust` deleted; the stale-forced-REVIEW retraction gap filed as
+[#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)). Suites pure 227 / DB 298 (full) /
 ruff clean. **Honest limits (recorded):** a pending+disputed Doe reads `'under-review'` (severity-max view) and bypasses
 the forcing rule while the dispute is open — deliberate, per db/024 semantics; ranking within a Doe's surfaced candidate
-list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning unblocked).
+list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning unblocked); forced-REVIEW rows
+persist after the Doe is identified ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)); the eval mirror cannot
+yet represent `administrative_sex` (folded into the deferred range-aware eval-mirror work, slice 21 above — B3
+weight-learning needs it first).
 
 **Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier

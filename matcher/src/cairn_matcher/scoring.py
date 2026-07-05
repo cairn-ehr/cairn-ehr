@@ -116,14 +116,27 @@ DEFAULT_WEIGHTS = Weights(per_field={
 
 
 def score(comparisons: list[FieldComparison], weights: Weights = DEFAULT_WEIGHTS) -> MatchScore:
-    """Combine per-field agreements into a match score with a per-field breakdown."""
+    """Combine per-field agreements into a match score with a per-field breakdown.
+
+    Raises ValueError when real evidence arrives for a field the weights table has no
+    entry for: that is a config mismatch (e.g. a stale persisted table keyed with a
+    pre-rename field name), and silently scoring a verified DISAGREE as 0.0 would be a
+    precise untruth. A level missing WITHIN a field's entry still scores 0.0 — that is
+    the deliberate way to price only some levels (identifier defines only EXACT).
+    """
     evidence: list[FieldEvidence] = []
     for comp in comparisons:
         if comp.level is AgreementLevel.INSUFFICIENT_DATA:
             contribution = 0.0
         else:
             field_weights = weights.per_field.get(comp.field)
-            base = field_weights.weight_for(comp.level) if field_weights else 0.0
+            if field_weights is None:
+                raise ValueError(
+                    f"weights table has no entry for field {comp.field!r} "
+                    f"(has: {sorted(weights.per_field)}) — stale table from an older "
+                    "field set? Refusing to silently zero real evidence."
+                )
+            base = field_weights.weight_for(comp.level)
             contribution = base * provenance_factor(comp.provenance_rank)
         evidence.append(
             FieldEvidence(comp.field, comp.level, comp.provenance_rank, contribution)

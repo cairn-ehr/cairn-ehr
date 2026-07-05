@@ -35,22 +35,34 @@ rejected); weight key `sex-at-birth`→`"sex"` (**projection field names in SQL 
 approximation, bounded by the [0.5,1.0] factor on weight 1.0). (2) **The scoped forcing rule** (`band(unconfirmed=)`,
 the known-alias-forcing precedent — §5.4's point is an *unconfirmed* chart needs human identification effort; the paper
 counterpart "male, about 40 — search the registry" returns a list, not silence): a pair with a `chart_trust='unconfirmed'`
-chart + **≥2 positive-contribution fields + zero DISAGREE + no vetoes** → REVIEW even below threshold — never AUTO;
-`'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the blocking cap; every
-persisted proposal involving an unconfirmed chart carries `{"rule":"identity_pending","unconfirmed":[uuids]}` evidence
-(worklist grouping, alias-marker pattern; db/017 stores JSONB unparsed — no downstream shape breaks). Trust plumbing
-mirrors aliases: `db.load_trust`/`load_trust_for` batch preload in `sweep`, per-pair fallback in `propose`;
-conftest gains `seed_identity_pending` + `chart_identity_state` truncation. TDD: 23 pure + 6 DB-gated
-(`test_identity_pending_pipeline.py` — **the #130 e2e**: the pure-age Doe pair blocks→scores→**surfaces as REVIEW**
-with the marker; a no-pending control proves the RULE, not sex scoring, surfaces it, hardened non-vacuous
-(`generated>=1`); the two-Does pair carries both uuids sorted). 6-task subagent-SDD each reviewed clean; **final
-whole-branch review (fable): 0 Critical/Important**, 2 test-only must-fixes (non-vacuous control; strict-`>0` gate pin
-against a `>=0` regression) fixed in one commit → re-review **READY TO MERGE**. Suites **pure 224 / DB-gated 294 /
-ruff clean**. **Honest limits (recorded):** a pending+**disputed** Doe reads `'under-review'` (chart_trust is
+chart + **≥2 positive-LEVEL fields + zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes
+attached** (post-review amendment — the original no-vetoes gate rested on a false "near-vacuous" premise: an identifier
+veto needs NO verified values, so a vetoed-yet-corroborated Doe pair is reachable and suppressing it would be the
+ADR-0014 auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the
+blocking cap; every persisted proposal involving an unconfirmed chart carries
+`{"kind":"identity_pending","unconfirmed":[uuids]}` evidence (**`"kind"` = the one non-field-evidence discriminator**,
+the alias-marker convention; db/017 stores JSONB unparsed — no downstream shape breaks). Trust plumbing mirrors aliases:
+one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the same one-query loader — no
+singular duplicate); canonical lowercase-uuid keys for map + marker; conftest gains `seed_identity_pending` +
+`chart_identity_state` truncation. TDD: pure + DB-gated incl. **the #130 e2e**
+(`test_identity_pending_pipeline.py` — the pure-age Doe pair blocks→scores→**surfaces as REVIEW** with the marker; a
+no-pending control (shared `_seed_headline_pair` helper, so control and headline can't drift apart) proves the RULE,
+not sex scoring, surfaces it, hardened non-vacuous (`generated>=1`); a direct-`propose()` test covers the on-demand
+trust seam; the two-Does pair carries both uuids sorted). 6-task subagent-SDD each reviewed clean; final whole-branch
+review (fable) READY TO MERGE; then an **8-angle post-review fix wave** (findings fixed in-branch: veto-gate removal
+as above; `_corroborated_positive` made genuinely structural — counts agreement LEVELS, so a B3-learned 0.0 weight
+can't stand the rule down; `score()` now **raises on a weights table missing a compared field** instead of silently
+zeroing — the stale-table / key-rename hazard; marker key `"rule"`→`"kind"`; `load_trust` singular loader deleted;
+retraction gap filed as [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135) — forced-REVIEW rows persist after
+the Doe is identified, a db/017 no-DELETE deferral made steady-state by this rule). Suites **pure 227 / DB-gated 298
+(full) / ruff clean**. **Honest limits (recorded):** a pending+**disputed** Doe reads `'under-review'` (chart_trust is
 severity-max, db/024) and bypasses the forcing rule while the dispute is open — deliberate, not a bug; ranking within
 a Doe's surfaced candidate list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning
-unblocked). **Deferred (still):** generator range-DOB emission + range-aware eval mirror; fuzzy near-window softening;
-hub-tier range sweep.
+unblocked); stale forced-REVIEW rows after identification are [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135).
+**Deferred (still):** generator range-DOB emission + range-aware eval mirror, **which must also mirror
+`administrative_sex`** (the eval `DatasetRecord` cannot yet represent the composite-sex fallback, so B3 weight-learning
+would otherwise train on a field set the shipped matcher no longer has); fuzzy near-window softening; hub-tier range
+sweep.
 
 **Prior session (2026-07-04, second) — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle
 (condensed; full detail in git + ROADMAP slice 21 + PR #131).** A `year-range` dob now generates blocking keys —

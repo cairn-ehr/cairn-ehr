@@ -13,8 +13,32 @@ def _uid() -> str:
     return str(uuid.uuid4())
 
 
+def _seed_headline_pair(conn) -> tuple[str, str]:
+    """Seed THE #130 headline pair and return (doe, prior).
+
+    A callsign-only John Doe with clinician-observed evidence (estimated-age range +
+    observed administrative-sex, both rank 30) vs their prior chart. The headline test,
+    its no-pending control, and the direct-propose test all seed EXACTLY this shape —
+    one helper so the control keeps controlling for the right thing.
+    """
+    doe, prior = _uid(), _uid()
+    seed_patient(
+        conn, doe,
+        dob=("1981/1991", 30, "year-range"),
+        admin_sex=("male", 30),
+        callsign_names=[("Unknown-ED-XX-20260705-abcd1234", 30)],
+    )
+    seed_patient(
+        conn, prior,
+        dob=("1985-03-12", 60, "day"),
+        sex=("male", 60),
+        names=[("Robert Menzies", 60)],
+    )
+    return doe, prior
+
+
 def test_load_trust_for_reads_pending_as_unconfirmed(pg_conn):
-    from cairn_matcher.pipeline.db import load_trust, load_trust_for
+    from cairn_matcher.pipeline.db import load_trust_for
 
     doe, ordinary = _uid(), _uid()
     seed_patient(pg_conn, doe, dob=("1981/1991", 30, "year-range"))
@@ -24,8 +48,9 @@ def test_load_trust_for_reads_pending_as_unconfirmed(pg_conn):
     trust = load_trust_for(pg_conn, [doe, ordinary])
     assert trust.get(doe) == "unconfirmed"
     assert ordinary not in trust  # absent row = confirmed default
-    assert load_trust(pg_conn, doe) == "unconfirmed"
-    assert load_trust(pg_conn, ordinary) is None
+    # The single-pair path is the same function over a smaller set — no separate loader.
+    assert load_trust_for(pg_conn, [doe]) == {doe: "unconfirmed"}
+    assert load_trust_for(pg_conn, [ordinary]) == {}
 
 
 def test_load_trust_for_empty_set_is_empty(pg_conn):
@@ -57,19 +82,7 @@ def test_pure_age_john_doe_pair_surfaces_as_review_end_to_end(pg_conn):
     from cairn_matcher.pipeline.runner import canonical_pair
     from cairn_matcher.pipeline.sweep import sweep
 
-    doe, prior = _uid(), _uid()
-    seed_patient(
-        pg_conn, doe,
-        dob=("1981/1991", 30, "year-range"),
-        admin_sex=("male", 30),
-        callsign_names=[("Unknown-ED-XX-20260705-abcd1234", 30)],
-    )
-    seed_patient(
-        pg_conn, prior,
-        dob=("1985-03-12", 60, "day"),
-        sex=("male", 60),
-        names=[("Robert Menzies", 60)],
-    )
+    doe, prior = _seed_headline_pair(pg_conn)
     seed_identity_pending(pg_conn, doe)
 
     result = sweep(pg_conn)
@@ -87,8 +100,22 @@ def test_pure_age_john_doe_pair_surfaces_as_review_end_to_end(pg_conn):
     band_value, evidence = row
     assert band_value == "review"
     entries = evidence if isinstance(evidence, list) else json.loads(evidence)
-    marker = next(e for e in entries if e.get("rule") == "identity_pending")
+    marker = next(e for e in entries if e.get("kind") == "identity_pending")
     assert marker["unconfirmed"] == [str(uuid.UUID(doe))]
+
+
+def test_direct_propose_loads_trust_on_demand_and_forces_review(pg_conn):
+    # The single-pair seam: a direct propose() call supplies NO preloaded trust= map, so
+    # the trust state must be loaded on demand inside propose(). A regression that stops
+    # loading trust here would silently drop the Doe's corroborated candidate — exactly
+    # the #130 failure mode — while every sweep()-path test stayed green.
+    from cairn_matcher.pipeline.banding import Band
+    from cairn_matcher.pipeline.runner import propose
+
+    doe, prior = _seed_headline_pair(pg_conn)
+    seed_identity_pending(pg_conn, doe)
+
+    assert propose(pg_conn, doe, prior) is Band.REVIEW
 
 
 def test_without_pending_state_the_same_pair_stays_below_threshold(pg_conn):
@@ -98,19 +125,7 @@ def test_without_pending_state_the_same_pair_stays_below_threshold(pg_conn):
     from cairn_matcher.pipeline.runner import canonical_pair
     from cairn_matcher.pipeline.sweep import sweep
 
-    doe, prior = _uid(), _uid()
-    seed_patient(
-        pg_conn, doe,
-        dob=("1981/1991", 30, "year-range"),
-        admin_sex=("male", 30),
-        callsign_names=[("Unknown-ED-XX-20260705-abcd1234", 30)],
-    )
-    seed_patient(
-        pg_conn, prior,
-        dob=("1985-03-12", 60, "day"),
-        sex=("male", 60),
-        names=[("Robert Menzies", 60)],
-    )
+    doe, prior = _seed_headline_pair(pg_conn)
 
     result = sweep(pg_conn)
 
@@ -168,5 +183,5 @@ def test_two_john_does_marker_carries_both_uuids(pg_conn):
     band_value, evidence = row
     assert band_value == "review"
     entries = evidence if isinstance(evidence, list) else json.loads(evidence)
-    marker = next(e for e in entries if e.get("rule") == "identity_pending")
+    marker = next(e for e in entries if e.get("kind") == "identity_pending")
     assert marker["unconfirmed"] == sorted([doe_a, doe_b])

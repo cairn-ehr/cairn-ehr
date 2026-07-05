@@ -68,7 +68,9 @@ signal or turns observed evidence into a suppressor.
   `field IN ('sex-at-birth','administrative-sex')` (still one query; rows split by field in Python).
 - New `db.load_trust_for(conn, patient_ids) -> dict[str, str]`: batch read of the `chart_trust`
   view for the sweep's whole candidate set (mirrors `load_aliases_for`; the view has rows only for
-  flagged charts, so an absent key means *confirmed*). Plus single-pair `load_trust(conn, pid)`.
+  flagged charts, so an absent key means *confirmed*). *(Post-review amendment: the planned
+  single-pair `load_trust(conn, pid)` was dropped — the per-pair fallback in `propose()` calls the
+  same batch loader over the two-element pair, so the view contract lives in one function.)*
   `cairn_agent` already holds SELECT on the view (db/024).
 
 ## 4. Banding — the scoped forcing rule
@@ -77,32 +79,39 @@ signal or turns observed evidence into a suppressor.
 `score < review` branch beside the shared-identifier rescue:
 
 > If the pair involves at least one chart whose `chart_trust` state is `'unconfirmed'`, and the
-> score carries **≥ 2 fields with positive contribution**, **zero DISAGREE-level fields**, and
-> **no veto findings** → `REVIEW`. Never `AUTO_CANDIDATE` — §5.7 reserves linking an
-> identity-pending chart's candidates for a human.
+> score carries **≥ 2 fields at a positive agreement level** and **zero DISAGREE-level fields**
+> → `REVIEW`. Never `AUTO_CANDIDATE` — the below-review forcing only ever yields REVIEW (§5.7
+> reserves the *identify* step for a human; an above-threshold link follows the normal
+> auto-above-threshold path).
 
-Gates, and why each:
+Gates, and why each *(amended by the post-review fix wave on PR #134 — the veto gate was removed
+and the positive-field count made level-based; the bullets below describe the shipped rule)*:
 
 - **≥ 2 positive fields** — structural flood control. Age-window overlap + shared sex (or overlap +
   shared identifier off belongings) surfaces; a bare 11-year window overlap — which any sizeable DB
-  satisfies for ~a double-digit percentage of charts — does not. Structural (field count) rather
-  than a tunable score floor, so it does not drift as provenance factors or weights change. The
+  satisfies for ~a double-digit percentage of charts — does not. Structural (**agreement levels**,
+  never weight contributions) so it genuinely does not drift as provenance factors or weights
+  change — a B3-learned 0.0 weight on a positive level cannot stand the rule down. The
   paper counterpart searches on age AND sex, not age alone. Per-Doe volume stays bounded by the
   blocking cap (an anchored block contributes at most `cap − 1` pairs).
 - **Zero DISAGREE fields** — disagreeing evidence means the normal scoring path should decide;
   forcing is only for pairs whose evidence is thin but uncontradicted.
-- **No veto findings** — near-vacuous for a real Doe (a db/016 veto needs verified values on BOTH
-  sides; a Doe's evidence is clinician-observed), and the veto+shared-identifier contamination case
-  is already owned by the existing rescue. Keeping the gate documents that this rule never carries
-  a flagged pair.
+- **Fires with veto findings present** (post-review amendment; the design originally gated on
+  "no vetoes" with a near-vacuous rationale that was factually wrong: `cairn_identifier_veto`
+  (db/016) needs NO verified values — disjoint same-system identifiers fire it, e.g. off a Doe's
+  belongings — and the identifier comparator is positive-only, so a vetoed-yet-corroborated Doe
+  pair is reachable). ADR-0014 §6: a veto forces a human decision, never an auto-reject; the pair
+  surfaces as REVIEW with the veto findings attached. A verified birth-fact clash still routes
+  through the normal path via the zero-DISAGREE gate.
 - **`'under-review'` does NOT trigger it** — that is a dispute state (C3), not identity-pending;
   a disputed chart's pairs go through normal scoring.
 - Priority order in `band()`: known-alias forcing (unchanged, first) → then within the
   below-review branch: shared-identifier rescue, then this rule.
 
 The proposal carries an evidence entry appended after the field breakdown (the alias-marker
-pattern): `{"rule": "identity_pending", "unconfirmed": [<chart uuid>, …]}` — so a hub worklist can
-group/filter a Doe's candidate list without any suppression here.
+pattern): `{"kind": "identity_pending", "unconfirmed": [<chart uuid>, …]}` — `"kind"` is the one
+discriminator key for every non-field evidence entry (the `known_alias` convention) — so a hub
+worklist can group/filter a Doe's candidate list without any suppression here.
 
 `runner.propose()` gains an optional preloaded `trust` map (batch callers supply it; single-pair
 calls load on demand — the `aliases` pattern) and passes the flag to `band()`; `sweep` pre-loads

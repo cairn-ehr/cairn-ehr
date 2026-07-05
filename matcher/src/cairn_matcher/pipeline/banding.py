@@ -64,16 +64,18 @@ def _has_shared_identifier(score: MatchScore) -> bool:
 
 
 def _corroborated_positive(score: MatchScore) -> bool:
-    """≥2 fields contributing positive weight, and NO disagreeing field.
+    """≥2 fields at a positive agreement level (PARTIAL or stronger), NO disagreeing field.
 
     The structural flood-control gate of the §5.4 unconfirmed-chart rule (design
     2026-07-05 §4): age-window overlap + shared sex (or overlap + a shared identifier
     off belongings) qualifies; a bare 11-year window overlap — which a sizeable DB
-    satisfies for a double-digit share of charts — does not. Structural (a field count)
-    rather than a score floor so it does not drift as provenance factors or weights
-    change. The paper counterpart searches the registry on age AND sex, never age alone.
+    satisfies for a double-digit share of charts — does not. Structural (agreement
+    LEVELS, never weight contributions) so it genuinely does not drift as provenance
+    factors or weights change — a B3-learned 0.0 weight on a positive level must not
+    stand the rule down. The paper counterpart searches the registry on age AND sex,
+    never age alone.
     """
-    positives = sum(1 for e in score.fields if e.weight_contribution > 0)
+    positives = sum(1 for e in score.fields if e.level >= AgreementLevel.PARTIAL)
     disagrees = any(e.level is AgreementLevel.DISAGREE for e in score.fields)
     return positives >= 2 and not disagrees
 
@@ -121,9 +123,14 @@ def band(
     identified) has corroborated matching evidence (≥2 positive fields, no disagreeing
     fields; the structural flood-control gate), the band is REVIEW — unconfirmed NEEDS human
     identification effort, so corroborated candidates must reach the worklist. Never
-    AUTO_CANDIDATE (a human must make the link). The no-veto gate is near-vacuous for an
-    unconfirmed Doe since a veto requires verified values, and the veto+identifier case is
-    already owned by the rescue. `'under-review'` is a dispute state and deliberately does
+    AUTO_CANDIDATE (the below-review forcing only ever yields REVIEW; above-threshold
+    scores follow the normal path). Fires WITH vetoes present too: a veto forces a human
+    decision, never an auto-reject (ADR-0014 §6), and an identifier veto needs no verified
+    values (db/016 fires on disjoint same-system identifiers — e.g. off a Doe's
+    belongings) while the identifier comparator is positive-only, so a vetoed-yet-
+    corroborated Doe pair is reachable and must surface, veto findings attached, not be
+    silently suppressed. A verified birth-fact clash still routes through the normal path
+    via the no-DISAGREE gate. `'under-review'` is a dispute state and deliberately does
     NOT trigger this.
     """
     if has_known_alias:
@@ -131,7 +138,7 @@ def band(
     if score.total < thresholds.review:
         if vetoes and _has_shared_identifier(score):
             return Band.REVIEW
-        if unconfirmed and not vetoes and _corroborated_positive(score):
+        if unconfirmed and _corroborated_positive(score):
             return Band.REVIEW
         return None
     if score.total >= thresholds.auto and not vetoes:

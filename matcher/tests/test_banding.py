@@ -176,9 +176,8 @@ def test_unconfirmed_rule_forces_review_on_corroborated_pair():
 
 def test_unconfirmed_rule_needs_two_positive_fields():
     # A bare window overlap (ONE positive field) must NOT flood the worklist — and the
-    # production score shape always carries all four fields, three at 0.0
-    # (INSUFFICIENT_DATA), so this also pins _corroborated_positive's strict `> 0`:
-    # a regression to `>= 0` would count the zero-contribution fields and fire here.
+    # production score shape always carries all four fields, three at INSUFFICIENT_DATA,
+    # so this also pins that absent fields never count toward corroboration.
     one_field = MatchScore(total=1.07, fields=(
         _evidence("dob", AgreementLevel.PARTIAL, 1.07),
         _evidence("sex", AgreementLevel.INSUFFICIENT_DATA, 0.0),
@@ -199,9 +198,26 @@ def test_unconfirmed_rule_blocked_by_any_disagree():
     assert band(contradicted, vetoes=(), unconfirmed=True) is None
 
 
-def test_unconfirmed_rule_blocked_by_a_veto():
-    veto = VetoFinding("dob_clash", "hard_veto", "dob", "verified clash")
-    assert band(_headline_score(), vetoes=(veto,), unconfirmed=True) is None
+def test_unconfirmed_rule_fires_even_with_a_veto_never_auto_reject():
+    # ADR-0014 §6: a veto forces a HUMAN decision, never an auto-reject. An identifier
+    # veto needs NO verified values (db/016: disjoint same-system identifiers — e.g. off
+    # a Doe's belongings) and the identifier comparator is positive-only (never DISAGREE),
+    # so a corroborated Doe pair CAN carry a veto with zero disagreeing fields. Letting
+    # the veto suppress the pair would silently drop the very candidate the unconfirmed
+    # chart needs a human to look at. The veto still caps the band at REVIEW elsewhere.
+    veto = VetoFinding("identifier", "hard_veto", "mrn", "disjoint same-system ids")
+    assert band(_headline_score(), vetoes=(veto,), unconfirmed=True) is Band.REVIEW
+
+
+def test_unconfirmed_rule_counts_structurally_not_by_weight():
+    # The corroboration gate is STRUCTURAL (agreement levels), deliberately independent
+    # of the weights table: a B3-learned 0.0 weight on a positive level must not stand
+    # the forcing rule down (the docstring's no-drift claim, made real).
+    zero_weighted = MatchScore(total=1.07, fields=(
+        _evidence("dob", AgreementLevel.PARTIAL, 1.07),
+        _evidence("sex", AgreementLevel.EXACT, 0.0),  # learned weight 0.0 -> 0 contribution
+    ))
+    assert band(zero_weighted, vetoes=(), unconfirmed=True) is Band.REVIEW
 
 
 def test_unconfirmed_rule_inert_when_flag_false():
@@ -220,6 +236,6 @@ def test_unconfirmed_rule_never_upgrades_to_auto():
 
 def test_build_payload_appends_trust_evidence_after_alias_evidence():
     score = _headline_score()
-    marker = {"rule": "identity_pending", "unconfirmed": ["11111111-1111-1111-1111-111111111111"]}
+    marker = {"kind": "identity_pending", "unconfirmed": ["11111111-1111-1111-1111-111111111111"]}
     payload = build_payload(score, (), Band.REVIEW, trust_evidence=(marker,))
     assert payload.evidence[-1] == marker
