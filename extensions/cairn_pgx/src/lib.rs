@@ -57,6 +57,43 @@ fn cairn_actor_id(pinned: JsonB) -> Vec<u8> {
     cairn_event::canonical_json_address(&pinned.0)
 }
 
+/// True iff `content` BLAKE3-hashes to the multihash blob address `addr` — the
+/// byte tier's self-verifying property (§3.14/ADR-0013), restated IN-DB so that
+/// `present := TRUE` with wrong bytes is impossible even for a caller with raw SQL
+/// access (the db/026 trigger floor; previously an L2 promise recorded as an
+/// honest gap in db/003). Thin wrapper over `cairn_event::blob_address` — the
+/// same implementation cairn-sync verifies with, so there is ONE hashing rule,
+/// never two. A malformed address (wrong length / wrong multihash prefix) is
+/// simply FALSE: fail closed, never an error path a hostile caller can steer.
+#[pg_extern(immutable, parallel_safe)]
+fn cairn_blob_verify(addr: &[u8], content: &[u8]) -> bool {
+    cairn_event::blob_address(content) == addr
+}
+
+/// Diagnostic companion to `cairn_blob_verify`, mirroring `cairn_verify_error`:
+/// NULL when the pair verifies, else a legible reason distinguishing a malformed
+/// address from a genuine content mismatch. The floor gates on the boolean; this
+/// exists so the db/026 guard can surface WHY as exception DETAIL.
+#[pg_extern(immutable, parallel_safe)]
+fn cairn_blob_verify_error(addr: &[u8], content: &[u8]) -> Option<String> {
+    let actual = cairn_event::blob_address(content);
+    if actual == addr {
+        return None;
+    }
+    if cairn_event::blake3_root_from_address(addr).is_err() {
+        return Some(format!(
+            "blob address is not a BLAKE3 multihash (expected 0x1e 0x20 + 32 bytes, got {} bytes)",
+            addr.len()
+        ));
+    }
+    Some(format!(
+        "content ({} bytes) hashes to {}, but the address names {}",
+        content.len(),
+        hex::encode(&actual[2..]),
+        hex::encode(&addr[2..])
+    ))
+}
+
 /// True iff `token` is a valid attestation by `attester_key` bound to `content_address`.
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_attestation_ok(token: &[u8], content_address: &[u8], attester_key: &[u8]) -> bool {
@@ -143,6 +180,34 @@ mod tests {
         assert!(crate::cairn_verify_error(&signed.signed_bytes).is_none());
         assert!(crate::cairn_verify_error(b"not an event").is_some());
         assert_eq!(crate::cairn_pgx_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    // The blob floor primitive: matching bytes verify; one flipped byte, a
+    // truncated address, a wrong-prefix (sha2-256) address, and an empty address
+    // all fail CLOSED — false, never a panic. The error text is legible and NULL
+    // on success (the db/026 guard surfaces it as exception DETAIL).
+    #[pg_test]
+    fn blob_verify_accepts_matching_rejects_tampered_and_malformed() {
+        let content = b"DICOM bytes here";
+        let addr = cairn_event::blob_address(content);
+        assert!(crate::cairn_blob_verify(&addr, content));
+        assert!(crate::cairn_blob_verify_error(&addr, content).is_none());
+
+        // One flipped content byte: refused, with both hashes named.
+        let mut bad = content.to_vec();
+        bad[3] ^= 0x01;
+        assert!(!crate::cairn_blob_verify(&addr, &bad));
+        let err = crate::cairn_blob_verify_error(&addr, &bad).expect("mismatch is diagnosed");
+        assert!(err.contains("hashes to"), "mismatch names both hashes: {err}");
+
+        // Malformed addresses fail closed: truncated, wrong multihash prefix
+        // (an event's sha2-256 address), and empty.
+        assert!(!crate::cairn_blob_verify(&addr[..33], content));
+        let sha_addr = cairn_event::event_address(content);
+        assert!(!crate::cairn_blob_verify(&sha_addr, content));
+        assert!(!crate::cairn_blob_verify(&[], content));
+        let err = crate::cairn_blob_verify_error(&[], content).expect("malformed is diagnosed");
+        assert!(err.contains("not a BLAKE3 multihash"), "malformed address is named: {err}");
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,

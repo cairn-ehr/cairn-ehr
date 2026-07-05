@@ -18,6 +18,26 @@ remaining B3 weight-learning / locale packs / administrative-sex scoring ([#130]
 next. Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
+**Parallel session (2026-07-05) — the blob self-verification in-DB floor (Phase 7 / ADR-0013), deliberately
+outside the demographics/matcher/identity territory** (a second session owned that front concurrently; this slice
+touches none of db/010–025, `matcher/`, or the clinical `cairn-node` modules). Closes the honest gap `db/003`
+recorded since the walking skeleton: the blob tier's self-verifying property (bytes marked `present = TRUE`
+BLAKE3-hash to the `blob_address` naming them) was an L2 promise — `cairn-sync` verified before flipping
+`present`, but pgcrypto has no BLAKE3, so a raw-SQL client could store arbitrary bytes as any named blob — the
+exact "wrong-hash blob served as the named one" failure ADR-0013 point 11 names as the tier's safety-critical
+seam. Now: `cairn_pgx` **0.3.0** gains `cairn_blob_verify`/`cairn_blob_verify_error` (thin wrappers over the SAME
+`cairn_event::blob_address` L2 uses — one hashing implementation; fail-closed on malformed addresses; legible
+diagnostics mirroring the `cairn_verify` pair), and **`db/026_blob_verify_floor.sql`** enforces it as a TRIGGER
+floor on `blob_store` (INSERT arriving present; UPDATE flipping into present / swapping content / re-keying;
+metadata-only updates never re-pay the hash — a trigger, not a door+REVOKE, because the byte tier legitimately
+writes raw DML). `REQUIRED_PGX_FLOOR` 0.2.0→0.3.0 in `cairn-sync` (stale `.so` fails legibly at the gate). TDD:
+red-first 7 DB-gated hostile-client tests (`cairn-node/tests/blob_floor.rs`) + a fail-closed `cairn_pgx` pg_test;
+design + plan under `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor*`. **Honest limits (recorded):**
+`blob_chunk` and `outboard` are NOT in-DB verified (wrong chunks only ever assemble into a flip that FAILS;
+a wrong outboard is rejected by the fetching peer's bao decode against the signed root — availability, never
+integrity); a superuser can drop the trigger (same standing as every floor piece). No event-format / ADR / spec
+change (implements settled ADR-0013 point 11 + principle 12).
+
 **This session (2026-07-04, second) — §5.4 birth-year-range blocking pass + A/B pass-toggle, full loop**
 (brainstorm→spec→plan→subagent-SDD, 6 TDD tasks; spec+plan under
 `docs/superpowers/{specs,plans}/2026-07-04-dob-range-blocking-pass*`). Closes slice B's recorded honest limit: a

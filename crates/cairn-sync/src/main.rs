@@ -44,6 +44,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // pins the fetch floor so its slot keeps being re-offered — never silent,
     // never lost.
     ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
+    // The blob self-verification floor (ADR-0013 point 11): the whole-blob
+    // BLAKE3-vs-address check this daemon performs before flipping present is
+    // restated in-DB (cairn_blob_verify, cairn_pgx >= 0.3.0) so a bypassing
+    // raw-SQL writer cannot mark wrong bytes present either.
+    ("026_blob_verify_floor", include_str!("../../../db/026_blob_verify_floor.sql")),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -65,8 +70,12 @@ type R<T> = Result<T, Box<dyn Error>>;
 /// (uncontextualized) bytes and would reject every event this daemon now signs —
 /// a total, silent write outage whose only symptom is a generic "signature
 /// verification failed". Gating on the loaded version turns that into a legible
-/// "rebuild the extension" at connect time instead (issue #109).
-const REQUIRED_PGX_FLOOR: &str = "0.2.0";
+/// "rebuild the extension" at connect time instead (issue #109). Bumped to 0.3.0
+/// for the db/026 blob self-verification floor: its trigger calls
+/// `cairn_blob_verify`, which a 0.2.x `.so` lacks — without this gate the schema
+/// load would die mid-migration with an illegible `undefined function` instead of
+/// the actionable message below.
+const REQUIRED_PGX_FLOOR: &str = "0.3.0";
 
 /// Parse an `"X.Y.Z"` version string into a comparable tuple. Returns `None` for
 /// anything that is not exactly three dot-separated non-negative integers — a
@@ -98,7 +107,8 @@ fn pgx_version_ok(loaded: &str, floor: &str) -> bool {
 fn pgx_floor_message(loaded: &str) -> String {
     format!(
         "cairn_pgx {loaded} is loaded, but this cairn-sync requires >= {REQUIRED_PGX_FLOOR} \
-         (the ADR-0040 signing-context wire format). The installed extension library is stale — \
+         (the ADR-0040 signing-context wire format + the db/026 blob verify floor). The installed \
+         extension library is stale — \
          rebuild + reinstall it: `cargo pgrx install` against this cluster's PostgreSQL, then retry."
     )
 }
@@ -120,8 +130,8 @@ fn assert_pgx_floor(client: &mut postgres::Client) -> R<()> {
             return Err(format!(
                 "cairn_pgx_version() is not callable, so the loaded cairn_pgx cannot be \
                  confirmed at the >= {REQUIRED_PGX_FLOOR} floor this cairn-sync requires \
-                 (the ADR-0040 signing-context wire format). Most likely the installed \
-                 extension library is stale/pre-0.2.0 — rebuild + reinstall it \
+                 (the ADR-0040 signing-context wire format + the db/026 blob verify floor). \
+                 Most likely the installed extension library is stale/pre-0.2.0 — rebuild + reinstall it \
                  (`cargo pgrx install` against this cluster's PostgreSQL); if it is current, \
                  check that cairn_pgx's schema is on this connection role's search_path."
             )
