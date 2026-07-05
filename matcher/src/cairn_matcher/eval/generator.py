@@ -10,6 +10,7 @@ The disk/CLI edge lives in generate.py (the dataset.py <-> loader.py split).
 
 import copy
 import random
+import re
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -57,25 +58,72 @@ def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
     }
 
 
+# Mirrors of _RANGE_GROUPS_SQL's birth_window guards (pipeline/db.py): a range value
+# must be exactly '<yyyy>/<yyyy>' with min <= max; a point value contributes its FIRST
+# 4-digit run. Kept as module constants so the two branches below can't drift apart.
+_YEAR_RANGE_RE = re.compile(r"^([0-9]{4})/([0-9]{4})$")
+_FIRST_YEAR_RE = re.compile(r"[0-9]{4}")
+
+
+def _birth_window(record: Mapping):
+    """(y_min, y_max, is_range) for one record's dob, or None — the birth_window CTE.
+
+    Mirrors _RANGE_GROUPS_SQL exactly, in the safe direction: a malformed or inverted
+    year-range value yields NO window (the SQL excludes the row), never a guess; a
+    point value needs a 4-digit run (the SQL's `value ~ '[0-9]{4}'`) and contributes
+    its first run as a degenerate [y, y] window. A year-range row can never enter the
+    point branch (the SQL's IS DISTINCT FROM guard), so a range can't double-enter as
+    a false point [min, min].
+    """
+    dob = record.get("dob")
+    if not dob or not isinstance(dob.get("value"), str):
+        return None
+    value = dob["value"]
+    if dob.get("precision") == "year-range":
+        m = _YEAR_RANGE_RE.match(value)
+        if not m:
+            return None
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo > hi:
+            return None
+        return (lo, hi, True)
+    m = _FIRST_YEAR_RE.search(value)
+    if m is None:
+        return None
+    year = int(m.group(0))
+    return (year, year, False)
+
+
 def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
-    """True iff records a and b would co-occur in >=1 base blocking pass.
+    """True iff records a and b would co-occur in >=1 blocking pass.
 
-    The three BASE keys (pipeline/db.py _GROUPS_SQL): shared non-unknown identifier,
-    equal exact-DOB value, or a shared name token. The fourth pass 'name+year' is
-    subsumed by the name-token check (it requires a shared token), so it is not tested
-    separately: if name tokens intersect, the plain 'name' pass already groups them.
+    The symmetric keys (pipeline/db.py _GROUPS_SQL): shared non-unknown identifier,
+    equal exact-DOB value (excluding year-range rows, mirroring the SQL's
+    IS DISTINCT FROM 'year-range' — two identical range strings must NOT fake an
+    exact key the SQL never groups), or a shared name token. The 'name+year' pass is
+    subsumed by the name-token check (it requires a shared token).
 
-    The two anchored range passes ('dob-range' / 'dob-range+sex') are DELIBERATELY
-    unmirrored: the generator emits no year-range dobs yet, and an unmirrored pass only
-    makes _repair conservative (it under-claims recoverability and repairs via a name
-    token anyway -- the safe direction; an OVER-claiming mirror would be the bug).
-    Mirror them when the generator learns to emit estimated-age records (deferred in the
-    2026-07-04 range-blocking design, section 10).
+    The ANCHORED range passes (_RANGE_GROUPS_SQL): windows overlap AND at least one
+    side is a real year-range (window_overlap requires a.is_range — two point DOBs
+    merely sharing a year are never a range key). 'dob-range+sex' is a subset of
+    'dob-range''s pair set (same overlap join, intersected with a shared sex), so
+    recoverability needs only the plain overlap branch; like every branch here, the
+    block-size cap is deliberately not modelled (evaluate_blocking reports skips).
     """
     if _identifier_keys(a) & _identifier_keys(b):
         return True
     da, db_ = a.get("dob"), b.get("dob")
-    if da and db_ and da.get("value") is not None and da.get("value") == db_.get("value"):
+    if (
+        da
+        and db_
+        and da.get("precision") != "year-range"
+        and db_.get("precision") != "year-range"
+        and da.get("value") is not None
+        and da.get("value") == db_.get("value")
+    ):
+        return True
+    wa, wb = _birth_window(a), _birth_window(b)
+    if wa and wb and (wa[2] or wb[2]) and wb[0] <= wa[1] and wa[0] <= wb[1]:
         return True
     return bool(name_tokens(a) & name_tokens(b))
 
