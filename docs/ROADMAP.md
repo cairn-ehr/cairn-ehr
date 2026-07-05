@@ -27,7 +27,7 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
 
 ## Phase 1 — Event core to production (the wire contract)
 
-- **HLC ordering + incremental sync watermark** — ✓ done at `cairn-node` level ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42): real local HLC, per-peer `seq` cursor via advance-only door, full-sweep correctness floor. Promote the same discipline into the production `cairn-event`/`cairn-sync` core.
+- **HLC ordering + incremental sync watermark** — ✓ done at `cairn-node` level ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), PR #42): real local HLC, per-peer `seq` cursor via advance-only door, full-sweep correctness floor. Promote the same discipline into the production `cairn-event`/`cairn-sync` core. **Clock-drift admission ceiling** ✓ done (PR #133, closes the [#102](https://github.com/cairn-ehr/cairn-ehr/issues/102) ratchet finding): shared `cairn_max_hlc_drift_ms()` (24h) bounds a remote event's asserted wall against our own `clock_timestamp()` on BOTH remote-apply doors — node plane REJECTs (self-healing skip+re-offer), clinical plane ADMITs-but-CLAMPs the `hlc_state` merge (a refusal would wedge `cairn-sync`'s frozen watermark; the event's asserted wall is preserved verbatim, principle 1). Same PR added the CI **Rust workspace + in-DB floor test gate** (`.github/workflows/rust.yml`, [#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)).
 - **Legibility twin** — mandatory signed mechanically-derived plaintext twin on every event; promote from skeletal ([ADR-0012](spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md), [§3.13](spec/data-model.md)). **Author-materialised twin globalised to every event type** ✓ done ([ADR-0039](spec/decisions/0039-globalise-authored-legibility-twin.md), SCHEMA 13→14, `db/015`): floor prefers authored twin; non-demographic types degrade honestly to a flagged, payload-rendering derived skeleton when absent; demographic types keep ADR-0034's hard requirement; authored-vs-derived is a derivable read-time projection, no stored flag.
 - **Canonical identifiers + node-local surrogate keys** ([ADR-0031](spec/decisions/0031-canonical-identifiers-and-node-local-surrogate-keys.md)).
 - **Additive-only schema evolution** discipline baked into the event format ([ADR-0012](spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md)).
@@ -337,10 +337,10 @@ param-bound from `adapter.VALUE_SENTINELS` + explicit whitespace trim-set, exact
 purity), statement-level toggle skip, SQL↔registry pass-name guard, `canonical_pair` deduped into pure `blocking.py`.
 Suites pure 200 / DB 264 / ruff clean. ~~**Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
 the pure-age John Doe pair now *blocks* but still scores below `review=3.0`~~ **(closed — slice 22, below)**.
-**Deferred:** generator range-DOB emission + range-aware
+**Deferred:** ~~generator range-DOB emission + range-aware
 eval mirror (the quantitative recall number the toggle now enables; must also mirror `administrative_sex` — slice 22's
-composite-sex fallback is unrepresentable in the eval `DatasetRecord` until it does), fuzzy near-window softening,
-hub-tier range sweep.
+composite-sex fallback is unrepresentable in the eval `DatasetRecord` until it does)~~ **(done — slice 23, below)**;
+fuzzy near-window softening; hub-tier range sweep.
 
 **Slice 22 — §5.4 administrative-sex scoring + the unconfirmed-chart REVIEW rule** (2026-07-05; closes
 [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130); advisory Python only — **no `db/` floor change, no
@@ -374,11 +374,39 @@ weights table missing a compared field — the stale-table/key-rename hazard —
 ruff clean. **Honest limits (recorded):** a pending+disputed Doe reads `'under-review'` (severity-max view) and bypasses
 the forcing rule while the dispute is open — deliberate, per db/024 semantics; ranking within a Doe's surfaced candidate
 list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning unblocked); forced-REVIEW rows
-persist after the Doe is identified ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)); the eval mirror cannot
+persist after the Doe is identified ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)); ~~the eval mirror cannot
 yet represent `administrative_sex` (folded into the deferred range-aware eval-mirror work, slice 21 above — B3
-weight-learning needs it first).
+weight-learning needs it first)~~ **(closed — slice 23, below)**.
 
-**Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness) + further compound keys
+**Slice 23 — B3 eval mirror: generator range-DOB emission + administrative-sex representation** (2026-07-05/06;
+advisory Python only, eval-harness tier — **no production matcher/pipeline/floor change, no SCHEMA/ADR/spec bump**;
+design+plan under `docs/superpowers/{specs,plans}/2026-07-05-eval-range-adminsex-mirror*`). Unblocks B3
+weight-learning: the harness now carries the field set the shipped matcher scores and blocks on. Four additive parts:
+(1) `DatasetRecord.administrative_sex` plumbed through the REAL adapter (`candidate_from_rows(admin_sex_row=)`) so the
+pure scorer eval exercises slice 22's composite-sex fallback (pinned by an sab-vs-admin `field_comparisons` EXACT
+test); (2) pure `_birth_window` mirror of `_RANGE_GROUPS_SQL`'s birth_window CTE + an anchored range-overlap branch in
+`shares_blocking_key` (overlap ∧ ≥1 side is_range; `dob-range+sex` needs no separate branch — same overlap join,
+subset), plus a fix for a live over-claim found in design: the exact-DOB branch compared raw values with no precision
+guard, so two identical `year-range` strings faked an exact key the SQL excludes (`IS DISTINCT FROM 'year-range'`);
+(3) `corrupt_dob_estimate` generator operator — dob → inclusive birth-year window CONTAINING the current value's first
+4-digit run (tol 2–5 ⇒ the 5–11-year §5.4 widths, provenance 30), sex moved sab→`administrative_sex` (observed facet;
+random draw when the seed recorded none), knob `p_dob_estimate=0.15`, LAST in `_OPERATORS`; `_repair` now stands down
+on window-overlap pairs (pinned by identity: `repaired is clone`); (4) drift canary extended to `_RANGE_GROUPS_SQL`
+(3-tuple table; the exact-dob exclusion pinned by a dob-arm-unique two-line fragment after review found the one-line
+literal occurs twice in `_GROUPS_SQL`) + `seed_dataset` writes `administrative-sex` rows + two DB-gated proofs: the
+`dob-range+sex` rescue sees seeded admin-sex under `enabled_passes` isolation, and an estimate-heavy volume set
+(`p_dob_estimate=0.9, p_name=0.9`, n=150, >100 range clones asserted non-vacuous) measures `pair_completeness == 1.0`
+— the end-to-end proof the mirror never over-claims what the SQL recovers. 5-task subagent-SDD, each reviewed;
+**final whole-branch review (fable) found 1 Critical**: Python's `$` matches before a trailing newline, POSIX's does
+not, so `"1980/1990\n"` got a window the SQL rejects — the exact over-claim class the slice exists to close; fixed by
+de-anchored `re.fullmatch` (+ the canary now pins BOTH overlap-join bounds); re-review READY TO MERGE. Suites pure
+253 / DB-gated 326 (full) / ruff clean. **Honest limits (recorded):** the mirror still ignores the block-size cap
+(volume proofs run under a large cap; `evaluate_blocking` reports skips honestly); a `p_dob_typo`-shifted year windows
+around the typo (honestly unrecoverable by the range key alone; `_repair` restores a name token — safe direction);
+same-seed generator output differs from pre-slice output (reproducibility within a version, not cross-version
+stability); gold_v1.json deliberately untouched (synthetic data carries the new fields).
+
+**Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness, **now fully unblocked by slice 23** — the eval field set matches the shipped matcher's) + further compound keys
 (`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
 `generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
