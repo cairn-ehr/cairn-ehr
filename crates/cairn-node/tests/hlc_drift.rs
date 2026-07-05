@@ -90,6 +90,14 @@ fn b_genesis(wall: i64) -> (Vec<u8>, String, String) {
 /// would pass the admission trust check — isolating the drift guard as the only variable.
 async fn provision_a_trusting_b(c: &Client, b_node_id: &str, b_pubkey: &str) -> (cairn_event::SigningKey, String) {
     c.batch_execute("TRUNCATE node_event, local_node").await.ok();
+    // Reset the SHARED hlc_state singleton so the GREATEST merge these tests assert on is
+    // deterministic. `provision` below ticks it back up to `now` (safely below the
+    // within-ceiling future wall we admit), but a prior test can leave it ARBITRARILY high
+    // — the clinical clamp test deliberately parks it at now+ceiling — and GREATEST would
+    // then keep that stale high value instead of merging our admitted event forward. (This
+    // non-hermeticity passes single-threaded locally but fails under the parallel workspace
+    // run's ordering — caught by the CI gate, exactly what it is for.)
+    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0").await.ok();
     let tmp = tempfile::tempdir().unwrap();
     let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(c, &sk_a, &kid_a, "A", "127.0.0.1:7900").await.unwrap();
