@@ -117,7 +117,9 @@ def format_lift(report: LiftReport, *, dataset_name: str = "") -> str:
             format_scorer(report.before),
             "--- AFTER (learned) ---",
             format_scorer(report.after),
-            "NOTE: PoC — advisory, not shipped weights; synthetic data reflects the "
-            "generator's corruption model. See design 2026-07-06 §8 for honest limits.",
+            (
+                "NOTE: PoC — advisory, not shipped weights; synthetic data reflects the "
+                + "generator's corruption model. See design 2026-07-06 §8 for honest limits."
+            ),
         ]
     )
