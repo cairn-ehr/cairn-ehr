@@ -31,10 +31,16 @@ def _weights_to_json(weights: Weights) -> dict:
     }
 
 
-def _weights_from_json(obj: Mapping) -> Weights:
-    """Inverse of _weights_to_json; rejects any unknown agreement-level name."""
+def _weights_from_json(weights_obj: Mapping) -> Weights:
+    """Inverse of _weights_to_json; rejects any malformed shape or unknown agreement-level name."""
+    if not isinstance(weights_obj, Mapping):
+        raise ModelIOError(f"weights must be a mapping, got {type(weights_obj).__name__}")
     per_field: dict[str, FieldWeights] = {}
-    for field, levels in obj.items():
+    for field, levels in weights_obj.items():
+        if not isinstance(levels, Mapping):
+            raise ModelIOError(
+                f"weights[{field!r}] must be a mapping, got {type(levels).__name__}"
+            )
         table: dict[AgreementLevel, float] = {}
         for name, w in levels.items():
             try:
@@ -43,7 +49,12 @@ def _weights_from_json(obj: Mapping) -> Weights:
                 raise ModelIOError(
                     f"unknown agreement level {name!r} for field {field!r}"
                 ) from exc
-            table[level] = float(w)
+            try:
+                table[level] = float(w)
+            except (TypeError, ValueError) as exc:
+                raise ModelIOError(
+                    f"non-numeric weight {w!r} for field {field!r}, level {name!r}"
+                ) from exc
         per_field[field] = FieldWeights(table)
     return Weights(per_field=per_field)
 

@@ -49,3 +49,29 @@ def test_unknown_agreement_level_rejected():
 def test_missing_top_level_key_rejected():
     with pytest.raises(ModelIOError):
         model_from_json({"weights": {}})
+
+
+def test_non_numeric_weight_value_rejected():
+    bad = {
+        "weights": {"dob": {"EXACT": "nope"}},
+        "thresholds": {"review": 1.0, "auto": 2.0},
+        "metadata": {
+            "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
+            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+        },
+    }
+    with pytest.raises(ModelIOError):
+        model_from_json(bad)
+
+
+def test_non_mapping_weights_rejected():
+    bad = {
+        "weights": "garbage",
+        "thresholds": {"review": 1.0, "auto": 2.0},
+        "metadata": {
+            "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
+            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+        },
+    }
+    with pytest.raises(ModelIOError):
+        model_from_json(bad)
