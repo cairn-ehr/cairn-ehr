@@ -21,6 +21,7 @@ from cairn_matcher.eval.dataset import (
     truth_pairs,
 )
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, field_comparisons
+from cairn_matcher.pipeline.banding import Thresholds
 from cairn_matcher.records import FieldComparison
 from cairn_matcher.scoring import FieldWeights, Weights
 
@@ -93,3 +94,52 @@ def estimate_weights(labelled: Sequence[LabelledPair], *, alpha: float = 0.5) ->
             weights[level] = math.log2(m / u)
         per_field[f] = FieldWeights(weights)
     return Weights(per_field=per_field)
+
+
+def derive_thresholds(
+    scored: Sequence[tuple[bool, float]],
+    *,
+    recall_target: float = 0.99,
+    margin: float = 0.5,
+) -> tuple[Thresholds, bool]:
+    """Pick (review, auto) safety-first from labelled scores. Returns (thresholds, collided).
+
+    Both thresholds anchor to the BEST-SCORING non-match (the strongest impostor the data
+    contains) — that anchoring is what makes the placement safety-first and keeps the
+    band() invariant review <= auto true by construction:
+
+      * auto = max(non-match score) + margin -> ZERO false auto-links: no non-match reaches
+        auto (an auto-link is an un-attested, if recallable, link; false-auto is the
+        matcher's stated dangerous rate).
+      * review = max(non-match score) -> surface any pair that OUT-SCORES the best impostor,
+        never below it (a review below the top non-match would flood the worklist with
+        impostor-grade pairs — the opposite of safety-first). Strictly below auto whenever
+        margin > 0, so review <= auto always holds — no inversion, no clamp, however well or
+        poorly the classes separate. (No non-matches at all -> fall back to the match range:
+        review = min(match), auto = max(match) + margin.)
+
+    recall_target (default 0.99) is a DIAGNOSTIC, not a lever on review. With review fixed at
+    the safe placement, 'collided' is True when that placement fails to surface
+    recall_target of the true matches (achieved_recall < recall_target) — i.e. some true
+    matches are entangled BELOW the best impostor, so safety-first placement and the recall
+    floor genuinely conflict on this data. The learner flags, never compromises: it will not
+    drag review into the impostor range to chase recall.
+    """
+    if not 0.0 < recall_target <= 1.0:
+        raise ValueError(f"recall_target must be in (0, 1], got {recall_target}")
+    match_scores = [s for is_m, s in scored if is_m]
+    nonmatch_scores = [s for is_m, s in scored if not is_m]
+    if not match_scores:
+        raise ValueError("derive_thresholds needs at least one true-match pair")
+
+    if nonmatch_scores:
+        review = max(nonmatch_scores)
+    else:
+        review = min(match_scores)
+    auto = review + margin
+
+    surfaced = sum(1 for s in match_scores if s >= review)
+    achieved_recall = surfaced / len(match_scores)
+    collided = achieved_recall < recall_target
+
+    return Thresholds(review=review, auto=auto), collided
