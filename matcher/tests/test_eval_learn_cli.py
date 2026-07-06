@@ -23,3 +23,9 @@ def test_cli_reports_a_bad_dataset_path_gracefully(capsys):
     rc = main(["/no/such/dataset.json"])
     assert rc == 2
     assert "error" in capsys.readouterr().err.lower()
+
+
+def test_cli_rejects_a_bad_knob_gracefully(capsys):
+    rc = main(["--margin", "0"])
+    assert rc == 2
+    assert "error" in capsys.readouterr().err.lower()

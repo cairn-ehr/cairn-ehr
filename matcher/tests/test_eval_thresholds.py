@@ -62,3 +62,11 @@ def test_no_match_pair_raises():
 def test_recall_target_out_of_range_raises():
     with pytest.raises(ValueError):
         derive_thresholds([(True, 1.0)], recall_target=1.5)
+
+
+def test_non_positive_margin_raises():
+    # margin<=0 collapses/inverts the review<auto safety gap -> reject loudly.
+    with pytest.raises(ValueError):
+        derive_thresholds([(True, 5.0), (False, 4.0)], margin=0.0)
+    with pytest.raises(ValueError):
+        derive_thresholds([(True, 5.0), (False, 4.0)], margin=-1.0)

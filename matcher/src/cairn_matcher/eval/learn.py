@@ -25,7 +25,8 @@ from cairn_matcher.eval.model_io import write_model
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run the k-fold lift, print it, optionally write a full-data model.
 
-    Returns a process exit code: 0 on success, 2 if the dataset could not be loaded.
+    Returns a process exit code: 0 on success, 2 if the dataset could not be loaded or
+    a knob (folds/alpha/margin/recall-target) is invalid.
     """
     parser = argparse.ArgumentParser(prog="cairn_matcher.eval.learn", description=__doc__)
     parser.add_argument(
@@ -48,18 +49,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: could not load dataset: {exc}", file=sys.stderr)
         return 2
 
-    report = kfold_lift(
-        ds, folds=args.folds, alpha=args.alpha,
-        recall_target=args.recall_target, margin=args.margin,
-    )
-    print(format_lift(report, dataset_name=ds.name))
-
-    if args.out:
-        model = learn_model(
-            ds, alpha=args.alpha, recall_target=args.recall_target, margin=args.margin,
+    try:
+        report = kfold_lift(
+            ds, folds=args.folds, alpha=args.alpha,
+            recall_target=args.recall_target, margin=args.margin,
         )
-        write_model(model, args.out)
-        print(f"\nwrote full-dataset learned model to {args.out}")
+        print(format_lift(report, dataset_name=ds.name))
+
+        if args.out:
+            model = learn_model(
+                ds, alpha=args.alpha, recall_target=args.recall_target, margin=args.margin,
+            )
+            write_model(model, args.out)
+            print(f"\nwrote full-dataset learned model to {args.out}")
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 

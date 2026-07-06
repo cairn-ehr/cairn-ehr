@@ -119,6 +119,9 @@ def derive_thresholds(
         poorly the classes separate. (No non-matches at all -> fall back to the match range:
         review = min(match), auto = max(match) + margin.)
 
+    margin must be > 0: a non-positive margin collapses (margin == 0) or inverts
+    (margin < 0) the review < auto safety gap, which can produce a false auto-link.
+
     recall_target (default 0.99) is a DIAGNOSTIC, not a lever on review. With review fixed at
     the safe placement, 'collided' is True when that placement fails to surface
     recall_target of the true matches (achieved_recall < recall_target) — i.e. some true
@@ -128,6 +131,11 @@ def derive_thresholds(
     """
     if not 0.0 < recall_target <= 1.0:
         raise ValueError(f"recall_target must be in (0, 1], got {recall_target}")
+    if margin <= 0.0:
+        raise ValueError(
+            f"margin must be > 0 (a non-positive margin collapses or inverts the "
+            f"review<auto safety gap and can produce a false auto-link), got {margin}"
+        )
     match_scores = [s for is_m, s in scored if is_m]
     nonmatch_scores = [s for is_m, s in scored if not is_m]
     if not match_scores:
