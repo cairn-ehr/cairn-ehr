@@ -255,7 +255,7 @@ git commit -m "feat(matcher): supervised F-S weight estimator (estimate_weights 
 
 **Interfaces:**
 - Consumes: `pipeline/banding.Thresholds`.
-- Produces: `derive_thresholds(scored: Sequence[tuple[bool, float]], *, recall_target: float = 0.99, margin: float = 0.5) -> tuple[Thresholds, bool]` — returns `(thresholds, collided)` where `collided` is `review >= auto`.
+- Produces: `derive_thresholds(scored: Sequence[tuple[bool, float]], *, recall_target: float = 0.99, margin: float = 0.5) -> tuple[Thresholds, bool]` — returns `(thresholds, collided)` where `collided` is the recall-conflict diagnostic (`achieved_recall < recall_target` at the safe `review = max(non-match)` placement), NOT a `review`/`auto` ordering (those satisfy `review <= auto` by construction).
 
 - [ ] **Step 1: Write the failing test**
 
