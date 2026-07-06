@@ -245,7 +245,8 @@ _BLOCKING_SEX_CTE = """blocking_sex AS (
 
 _GROUPS_SQL = f"""
 WITH {_NAME_TOKENS_CTE},
-{_BIRTH_YEAR_CTE}
+{_BIRTH_YEAR_CTE},
+{_BLOCKING_SEX_CTE}
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
 FROM patient_identifier WHERE system <> 'unknown'
@@ -272,6 +273,29 @@ UNION ALL
 SELECT 'name+year', nt.token || '|' || byr.year, array_agg(nt.patient_id)
 FROM name_tokens nt JOIN birth_year byr USING (patient_id)
 GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- dob+first-initial: birth-year + the first CHARACTER of each name token. substring(token
+-- FROM 1 FOR 1) is character-wise in PostgreSQL (first code point after NFC, not first
+-- byte). A first-initial RELAXATION of 'name': it groups charts that share a birth-year and
+-- a first initial but NO full name token (a misspelling/transposition/diacritic variant), so
+-- it rescues true matches the token passes miss. Point-year only (birth_year excludes
+-- year-range) -- the anchored dob-range passes own ranges. An empty first initial is
+-- impossible: name_tokens excludes '' tokens.
+SELECT 'dob+first-initial', substring(nt.token FROM 1 FOR 1) || '|' || byr.year,
+       array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN birth_year byr USING (patient_id)
+GROUP BY substring(nt.token FROM 1 FOR 1), byr.year
+HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- name+sex: name token + normalized sex (blocking_sex: the sentinel-excluded UNION of
+-- sex-at-birth and administrative-sex). A SUBSET of the 'name' block when uncapped (it adds
+-- no pairs there); its value is the CAPPED case -- it splits an oversized unisex-token
+-- 'name' block the cap drops wholesale into per-sex sub-blocks that fit. Recall-first union:
+-- a trans patient whose administrative-sex matches an observation still groups though
+-- sex-at-birth differs. DISTINCT because a chart can carry the same sex on both facets.
+SELECT 'name+sex', nt.token || '|' || bs.sex, array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN blocking_sex bs USING (patient_id)
+GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
 # The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate
@@ -375,10 +399,10 @@ def generate_candidate_pairs(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
     """Generate canonical candidate pairs via the blocking passes, capping huge blocks.
 
-    Six passes (see blocking.ALL_PASSES): four SYMMETRIC group passes (identifier /
-    exact-DOB / name-token / name-token+birth-year, _GROUPS_SQL) and two ANCHORED
-    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — the
-    §5.4 range-blocking slice).
+    Eight passes (see blocking.ALL_PASSES): six SYMMETRIC group passes (identifier /
+    exact-DOB / name-token / name-token+birth-year / dob+first-initial / name+sex,
+    _GROUPS_SQL) and two ANCHORED birth-year-range passes (dob-range / dob-range+sex,
+    _RANGE_GROUPS_SQL — the §5.4 range-blocking slice).
 
     `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
     the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
@@ -407,8 +431,9 @@ def generate_candidate_pairs(
     # contributes zero pairs) — or silently skipped with the wrong statement.
     with conn.cursor() as cur:
         if enabled & SYMMETRIC_PASSES:
-            # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
-            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
+            # Two binds now: _PLACEHOLDER_USES_PARAM for name_tokens (first, appears first),
+            # VALUE_SENTINELS_PARAM for blocking_sex (second) -- the name+sex arm's sex source.
+            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM))
             for pass_name, key, members in cur.fetchall():
                 if require_registered(pass_name, SYMMETRIC_PASSES) not in enabled:
                     continue
