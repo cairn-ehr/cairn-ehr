@@ -75,3 +75,33 @@ def test_non_mapping_weights_rejected():
     }
     with pytest.raises(ModelIOError):
         model_from_json(bad)
+
+
+def test_non_numeric_threshold_value_rejected():
+    # A non-numeric threshold must raise ModelIOError like the weights path does — not leak a
+    # bare float() ValueError with an opaque "could not convert string to float" message.
+    bad = {
+        "weights": {"dob": {"EXACT": 1.0}},
+        "thresholds": {"review": "nope", "auto": 2.0},
+        "metadata": {
+            "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
+            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+        },
+    }
+    with pytest.raises(ModelIOError):
+        model_from_json(bad)
+
+
+def test_inverted_thresholds_rejected():
+    # review must never exceed auto (the band() invariant). A hand-edited/corrupted file that
+    # inverts them collapses the REVIEW band, so reject it loudly rather than reconstruct it.
+    bad = {
+        "weights": {"dob": {"EXACT": 1.0}},
+        "thresholds": {"review": 9.0, "auto": 2.0},
+        "metadata": {
+            "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
+            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+        },
+    }
+    with pytest.raises(ModelIOError):
+        model_from_json(bad)
