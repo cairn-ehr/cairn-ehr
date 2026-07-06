@@ -12,6 +12,7 @@ mechanism, not the shipped defaults. Production weights come from real local adj
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from cairn_matcher.agreement import AgreementLevel
 from cairn_matcher.eval.dataset import (
@@ -23,7 +24,7 @@ from cairn_matcher.eval.dataset import (
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, field_comparisons
 from cairn_matcher.pipeline.banding import Thresholds
 from cairn_matcher.records import FieldComparison
-from cairn_matcher.scoring import FieldWeights, Weights
+from cairn_matcher.scoring import FieldWeights, Weights, score
 
 LabelledPair = tuple[bool, list[FieldComparison]]
 
@@ -143,3 +144,60 @@ def derive_thresholds(
     collided = achieved_recall < recall_target
 
     return Thresholds(review=review, auto=auto), collided
+
+
+@dataclass(frozen=True)
+class LearnMetadata:
+    """Provenance of a learned model: the knobs + training-set size + collision flag."""
+
+    alpha: float
+    recall_target: float
+    margin: float
+    train_pairs: int
+    train_matches: int
+    review_auto_collided: bool
+
+
+@dataclass(frozen=True)
+class LearnedModel:
+    """A learned (weights, thresholds) pair plus the metadata that produced it.
+
+    weights/thresholds are the exact production types (scoring.Weights,
+    banding.Thresholds), so a caller can drop them straight into score()/band().
+    """
+
+    weights: Weights
+    thresholds: Thresholds
+    metadata: LearnMetadata
+
+
+def learn_model(
+    ds: LabelledDataset,
+    *,
+    config: ComparatorConfig = DEFAULT_CONFIG,
+    alpha: float = 0.5,
+    recall_target: float = 0.99,
+    margin: float = 0.5,
+) -> LearnedModel:
+    """Estimate weights, then derive the thresholds that go with them, from one dataset.
+
+    Coupled by design: learned weights rescale the total score, so the shipped
+    (review, auto) defaults are meaningless afterward — thresholds are re-derived on the
+    SAME training pairs, scored with the freshly-learned weights (provenance applied via
+    the real score()).
+    """
+    labelled = labelled_comparisons(ds, config)
+    weights = estimate_weights(labelled, alpha=alpha)
+    scored = [(is_m, score(comps, weights).total) for is_m, comps in labelled]
+    thresholds, collided = derive_thresholds(
+        scored, recall_target=recall_target, margin=margin
+    )
+    metadata = LearnMetadata(
+        alpha=alpha,
+        recall_target=recall_target,
+        margin=margin,
+        train_pairs=len(labelled),
+        train_matches=sum(1 for is_m, _ in labelled if is_m),
+        review_auto_collided=collided,
+    )
+    return LearnedModel(weights=weights, thresholds=thresholds, metadata=metadata)
