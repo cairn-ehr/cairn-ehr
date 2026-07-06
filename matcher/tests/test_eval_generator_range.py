@@ -172,3 +172,54 @@ def test_estimate_heavy_dataset_round_trips_and_carries_the_new_fields():
     assert ranged, "p_dob_estimate=1.0 must produce year-range clones"
     assert all(r.administrative_sex is not None for r in ranged)
     assert all(r.sex_at_birth is None for r in ranged)
+
+
+# --- _first_initials / dob+first-initial: Task 4's new mirror -------------------
+
+from cairn_matcher.eval.generator import _first_initials  # noqa: E402
+
+
+def test_first_initials_are_first_char_of_each_token():
+    rec = _rec(names=("Jon Smith", "Al"))
+    # tokens {jon, smith, al} -> initials {j, s, a}
+    assert _first_initials(rec) == {"j", "s", "a"}
+
+
+def test_first_initials_empty_for_nameless_record():
+    assert _first_initials(_rec()) == set()
+
+
+def test_shares_key_via_first_initial_and_point_year_without_shared_token():
+    # No shared token (jon vs john), no shared exact dob, but same point-year 1990 and same
+    # first initial 'j' -> dob+first-initial recovers them. This is the ONLY reason these two
+    # share a key, so it isolates the new clause.
+    a = _rec(dob={"value": "1990-01-01", "precision": "day"}, names=("Jon",))
+    b = _rec(dob={"value": "1990-12-31", "precision": "day"}, names=("John",))
+    assert shares_blocking_key(a, b) is True
+
+
+def test_no_shared_key_when_first_initial_differs():
+    a = _rec(dob={"value": "1990-01-01", "precision": "day"}, names=("Jon",))
+    b = _rec(dob={"value": "1990-12-31", "precision": "day"}, names=("Alan",))
+    assert shares_blocking_key(a, b) is False
+
+
+def test_no_shared_key_when_initial_matches_but_year_differs():
+    a = _rec(dob={"value": "1990-01-01", "precision": "day"}, names=("Jon",))
+    b = _rec(dob={"value": "1971-12-31", "precision": "day"}, names=("John",))
+    assert shares_blocking_key(a, b) is False
+
+
+def test_first_initial_clause_excludes_year_range_dob():
+    # A year-range dob has no POINT year (mirrors the SQL birth_year exclusion), so the
+    # first-initial clause cannot fire off it. These share nothing else.
+    #
+    # The range 1994/1998 is deliberately DISJOINT from b's point year 1990 (unlike the
+    # brief's original 1988/1992, which -- unnoticed in the brief -- would overlap 1990 and
+    # so already be caught by the pre-existing anchored dob-range branch, making the test
+    # pass for the wrong reason and failing to isolate the new clause at all). Disjoint
+    # ranges rule out the range-overlap branch, so this test genuinely exercises only the
+    # dob+first-initial clause's year-range exclusion.
+    a = _rec(dob={"value": "1994/1998", "precision": "year-range"}, names=("Jon",))
+    b = _rec(dob={"value": "1990-12-31", "precision": "day"}, names=("John",))
+    assert shares_blocking_key(a, b) is False

@@ -49,6 +49,17 @@ def name_tokens(record: Mapping) -> set[str]:
     return tokens
 
 
+def _first_initials(record: Mapping) -> set[str]:
+    """First character of each of the record's name tokens -- the dob+first-initial mirror.
+
+    Mirrors the SQL pass's `substring(token FROM 1 FOR 1)` over the same name_tokens (NFC,
+    lower, placeholder-excluded). PostgreSQL substring is character-wise, so this takes the
+    first code point of each already-NFC-lowercased token. Empty tokens are impossible
+    (name_tokens drops them), so every returned initial is a real character.
+    """
+    return {token[0] for token in name_tokens(record)}
+
+
 def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
     """(system, match_key) pairs excluding the 'unknown' sentinel — the identifier pass."""
     return {
@@ -134,6 +145,12 @@ def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
     'dob-range''s pair set (same overlap join, intersected with a shared sex), so
     recoverability needs only the plain overlap branch; like every branch here, the
     block-size cap is deliberately not modelled (evaluate_blocking reports skips).
+
+    The 'dob+first-initial' pass (Task 3's SQL addition): a shared first initial AND a
+    shared POINT birth-year, even with no shared full name token. 'name+sex' needs NO
+    clause here — it is a subset of the shared-name-token check below in the uncapped
+    model this mirror represents (exactly as 'name+year' is already subsumed above);
+    its capped-only rescue is tested directly against the DB.
     """
     if _identifier_keys(a) & _identifier_keys(b):
         return True
@@ -149,6 +166,19 @@ def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
         return True
     wa, wb = _birth_window(a), _birth_window(b)
     if wa and wb and (wa[2] or wb[2]) and wb[0] <= wa[1] and wa[0] <= wb[1]:
+        return True
+    # dob+first-initial: a shared first initial AND a shared POINT birth-year, even with no
+    # shared full name token. Reuses wa/wb (_birth_window, computed above); the point branch
+    # is is_range False with y_min == y_max, so `not wa[2]` selects a point year and wa[0]
+    # is that year. A year-range dob — which has no point year — thus never satisfies this,
+    # faithful to the SQL's birth_year CTE (year-range excluded). name+sex needs NO clause
+    # here: it is a subset of the shared-name-token check below in the uncapped model this
+    # mirror represents (exactly as name+year is subsumed), and its capped-only rescue is
+    # tested directly against the DB.
+    if (
+        wa and wb and not wa[2] and not wb[2] and wa[0] == wb[0]
+        and (_first_initials(a) & _first_initials(b))
+    ):
         return True
     return bool(name_tokens(a) & name_tokens(b))
 
