@@ -92,20 +92,32 @@ This keeps the learned weight consistent with how scoring consumes it. (Learning
 
 Learned weights rescale the total score, so the shipped `(3.0, 8.0)` are meaningless afterward. The
 learner **re-derives both thresholds in the same pass** by scoring the training partition with the
-learned weights (provenance applied, via the real `score()`), then:
+learned weights (provenance applied, via the real `score()`). Both are anchored to the **best-scoring
+non-match** (the strongest impostor the data contains), which is what makes the placement safety-first:
 
 - **`auto` = `max(non-match score) + margin`** → **zero false auto-links** on the training partition by
-  construction (an auto-link is an un-attested, if recallable, link — false-auto must stay ~0, the
-  matcher's stated dangerous rate). Class overlap (a non-match outscoring some matches) pushes `auto` up,
-  moving those true matches from AUTO down to REVIEW — the *safe* direction. Reported honestly; the
-  degenerate "nothing auto-links" case is surfaced, not hidden.
-- **`review` = the score meeting a recall floor** (default `recall_target = 0.99`): the highest cut-off
-  such that ≥ target fraction of true matches score ≥ it, i.e. surface ≥99% of true matches to a human.
-- **Invariant `review < auto`** (required by `band()`): enforced. If the recall floor would push `review`
-  ≥ `auto`, that is flagged in the model metadata rather than silently clamped — the honest signal that
-  the two objectives collided on this data.
+  construction: no non-match reaches `auto` (an auto-link is an un-attested, if recallable, link —
+  false-auto must stay ~0, the matcher's stated dangerous rate).
+- **`review` = `max(non-match score)`** → surface to a human any pair that **out-scores the best
+  impostor**, and never below it (a review threshold below the top non-match would flood the worklist
+  with impostor-grade pairs — the opposite of safety-first). This sits **strictly below `auto`** whenever
+  `margin > 0`, so the `band()` invariant `review ≤ auto` holds *by construction* — no clamping, no
+  inversion, regardless of how well or poorly the classes separate. (When there are no non-matches at
+  all, `review`/`auto` fall back to the match-score range: `review = min(match)`, `auto = max(match) + margin`.)
+- **`recall_target` (default 0.99) is a diagnostic, not a lever on `review`.** With `review` fixed at the
+  safe placement above, the learner checks whether that placement still surfaces ≥ `recall_target` of true
+  matches (`achieved_recall = fraction of matches scoring ≥ review`). If it does **not** — because some
+  true matches are entangled *below* the best impostor — the model flags `review_auto_collided = True`:
+  the honest signal that on this data safety-first placement and the recall floor **genuinely conflict**
+  (you cannot surface those matches without also surfacing impostor-grade noise). The learner **flags,
+  never compromises** — it will not drag `review` into the impostor range to chase recall.
 
-**Output:** the existing `banding.Thresholds`, directly usable by `band()`.
+Why not "review = the recall-floor cut" directly? Because on cleanly-separated data (matches far above
+non-matches — the *ideal*) the recall cut lands *above* `auto`, inverting the band order and firing a
+"collision" on the best possible data. Anchoring `review` to the top non-match instead keeps `review <
+auto` in every case and turns the recall check into a meaningful conflict diagnostic.
+
+**Output:** the existing `banding.Thresholds`, directly usable by `band()`, plus the boolean collision flag.
 
 ### 3.4 Composition — `learn_model`
 

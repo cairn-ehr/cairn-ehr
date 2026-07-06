@@ -278,27 +278,44 @@ def test_auto_is_above_every_nonmatch_score():
     assert all(s < thresholds.auto for is_m, s in scored if not is_m)
 
 
-def test_review_meets_the_recall_floor():
-    # 100 matches from 1.0..100.0; recall_target 0.99 allows at most 1 below review.
+def test_review_is_the_top_nonmatch_and_surfaces_matches_above_it():
+    # review anchors to the best impostor; every match above it is surfaced.
     scored = [(True, float(i)) for i in range(1, 101)] + [(False, 0.0)]
-    thresholds, _ = derive_thresholds(scored, recall_target=0.99, margin=0.5)
+    thresholds, collided = derive_thresholds(scored, recall_target=0.99, margin=0.5)
+    assert thresholds.review == 0.0
     surfaced = sum(1 for is_m, s in scored if is_m and s >= thresholds.review)
-    assert surfaced >= 99
+    assert surfaced == 100
+    assert not collided
 
 
-def test_class_overlap_pushes_auto_up_and_flags_nothing_special():
-    # A non-match outscores some matches -> auto climbs above those matches (safe direction).
+def test_separated_classes_keep_review_below_auto_and_do_not_collide():
+    # The ideal case: matches far above non-matches. review must stay < auto (band invariant),
+    # collided must be False — this is the regression guard for the review>auto inversion bug.
+    scored = [(True, 20.0), (True, 18.0), (False, 5.0), (False, 4.0)]
+    thresholds, collided = derive_thresholds(scored, recall_target=0.99, margin=0.5)
+    assert thresholds.review == 5.0
+    assert thresholds.auto == 5.5
+    assert thresholds.review < thresholds.auto
+    assert not collided
+
+
+def test_impostor_outscoring_matches_flags_a_collision():
+    # A non-match out-scores every true match -> safety-first placement cannot surface them
+    # without also surfacing the impostor -> collided True, but auto stays above the impostor.
     scored = [(True, 5.0), (True, 2.0), (False, 6.0)]
-    thresholds, _ = derive_thresholds(scored, margin=0.0)
-    assert thresholds.auto == 6.0  # above the 5.0 match -> that match falls to REVIEW
+    thresholds, collided = derive_thresholds(scored, recall_target=0.99, margin=0.5)
+    assert thresholds.review == 6.0
+    assert thresholds.auto == 6.5  # auto still above the top non-match: zero false-auto
+    assert thresholds.review < thresholds.auto
+    assert collided  # no true match reaches review=6.0 -> recall floor unmet
 
 
-def test_review_ge_auto_sets_the_collision_flag():
-    # Recall floor forces review high while zero-false-auto forces auto low -> collide.
+def test_recall_shortfall_sets_the_collision_flag():
+    # recall_target 1.0 with matches entangled below the impostor -> collided.
     scored = [(True, 1.0), (True, 2.0), (False, 10.0)]
-    thresholds, collided = derive_thresholds(scored, recall_target=1.0, margin=0.0)
-    assert collided is (thresholds.review >= thresholds.auto)
+    thresholds, collided = derive_thresholds(scored, recall_target=1.0, margin=0.5)
     assert collided
+    assert thresholds.review < thresholds.auto
 
 
 def test_no_match_pair_raises():
@@ -329,41 +346,51 @@ def derive_thresholds(
 ) -> tuple[Thresholds, bool]:
     """Pick (review, auto) safety-first from labelled scores. Returns (thresholds, collided).
 
-    auto = max(non-match score) + margin -> ZERO false auto-links on this set by
-    construction (an auto-link is an un-attested, if recallable, link; false-auto is the
-    matcher's stated dangerous rate). Class overlap pushes auto up, moving the overlapped
-    matches from AUTO to REVIEW — the safe direction.
+    Both thresholds anchor to the BEST-SCORING non-match (the strongest impostor the data
+    contains) — that anchoring is what makes the placement safety-first and keeps the
+    band() invariant review <= auto true by construction:
 
-    review = the highest cut-off that still surfaces >= recall_target of true matches to a
-    human (default 0.99). k = floor(n_matches * (1 - recall_target)) matches are allowed to
-    fall below review; review is the k-th smallest match score.
+      * auto = max(non-match score) + margin -> ZERO false auto-links: no non-match reaches
+        auto (an auto-link is an un-attested, if recallable, link; false-auto is the
+        matcher's stated dangerous rate).
+      * review = max(non-match score) -> surface any pair that OUT-SCORES the best impostor,
+        never below it (a review below the top non-match would flood the worklist with
+        impostor-grade pairs — the opposite of safety-first). Strictly below auto whenever
+        margin > 0, so review <= auto always holds — no inversion, no clamp, however well or
+        poorly the classes separate. (No non-matches at all -> fall back to the match range:
+        review = min(match), auto = max(match) + margin.)
 
-    'collided' is True when review >= auto (the recall floor and the zero-false-auto goal
-    disagreed on this data) — surfaced in the return, not silently clamped. band() still
-    functions with review >= auto (its REVIEW-by-threshold window just empties); the caller
-    records the flag rather than hiding the conflict.
+    recall_target (default 0.99) is a DIAGNOSTIC, not a lever on review. With review fixed at
+    the safe placement, 'collided' is True when that placement fails to surface
+    recall_target of the true matches (achieved_recall < recall_target) — i.e. some true
+    matches are entangled BELOW the best impostor, so safety-first placement and the recall
+    floor genuinely conflict on this data. The learner flags, never compromises: it will not
+    drag review into the impostor range to chase recall.
     """
     if not 0.0 < recall_target <= 1.0:
         raise ValueError(f"recall_target must be in (0, 1], got {recall_target}")
-    match_scores = sorted(s for is_m, s in scored if is_m)
+    match_scores = [s for is_m, s in scored if is_m]
     nonmatch_scores = [s for is_m, s in scored if not is_m]
     if not match_scores:
         raise ValueError("derive_thresholds needs at least one true-match pair")
 
-    auto_base = max(nonmatch_scores) if nonmatch_scores else match_scores[-1]
-    auto = auto_base + margin
+    if nonmatch_scores:
+        review = max(nonmatch_scores)
+    else:
+        review = min(match_scores)
+    auto = review + margin
 
-    n = len(match_scores)
-    k = min(int(n * (1.0 - recall_target)), n - 1)  # at most (1-target) matches below review
-    review = match_scores[k]
+    surfaced = sum(1 for s in match_scores if s >= review)
+    achieved_recall = surfaced / len(match_scores)
+    collided = achieved_recall < recall_target
 
-    return Thresholds(review=review, auto=auto), review >= auto
+    return Thresholds(review=review, auto=auto), collided
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd matcher && uv run pytest tests/test_eval_thresholds.py -v`
-Expected: PASS (6 passed).
+Expected: PASS (7 passed).
 
 - [ ] **Step 5: Commit**
 
