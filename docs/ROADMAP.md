@@ -407,8 +407,32 @@ around the typo (honestly unrecoverable by the range key alone; `_repair` restor
 same-seed generator output differs from pre-slice output (reproducibility within a version, not cross-version
 stability); gold_v1.json deliberately untouched (synthetic data carries the new fields).
 
-**Remaining matcher pieces:** **B3** — weight-learning (measurable via the harness, **now fully unblocked by slice 23** — the eval field set matches the shipped matcher's) + further compound keys
-(`dob+first-initial`, `name+sex`) + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
+**Slice 24 — B3 weight-learning: supervised Fellegi–Sunter estimation** (2026-07-07; advisory Python, eval tier only —
+**no production matcher/pipeline/floor change, no SCHEMA/event/ADR/spec bump**; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-06-b3-weight-learning*`). The learner the shipped
+`DEFAULT_WEIGHTS`/`DEFAULT_THRESHOLDS` comments always pointed at. Closed-form supervised F-S: count agreement levels
+across labelled pairs → `m/u` (additive-Laplace-smoothed; INSUFFICIENT_DATA excluded → 0, principle 4;
+provenance-blind — the `provenance_factor` stays an orthogonal score-time multiplier) → `weight = log2(m/u)`, the same
+math as `scoring.score` run backwards from ground truth. Four new pure modules under `matcher/src/cairn_matcher/eval/`:
+`learner.py` (`estimate_weights`, `derive_thresholds`, `learn_model`, `LearnedModel`/`LearnMetadata`), `crossval.py`
+(deterministic entity-cluster k-fold — split on WHOLE clusters so no match pair straddles train/test — + held-out
+before/after lift, skips folds whose training partition has no match pairs), `model_io.py` (`LearnedModel`↔JSON,
+`ModelIOError` on malformed input), `learn.py` (the `python -m cairn_matcher.eval.learn` CLI); + a behavior-preserving
+`scorer_outcomes` extract in `scorer_eval.py`. **Thresholds are safety-first, anchored to the best impostor:**
+`auto = max(non-match)+margin` (zero false auto-links by construction; `margin` guarded `>0` — a non-positive margin
+collapses/inverts the gap), `review = max(non-match)` (surface above the top impostor, never below → `review<auto`
+always), and `recall_target` is an honest **conflict diagnostic** (`collided` = the safe placement can't meet the
+recall floor), never a lever that drags `review` into impostor range. 6-task subagent-SDD; the Task-2 implementer
+caught a real plan bug (the original recall-cut `review` inverted on cleanly-separated data) → corrected before
+coding; **final whole-branch review (opus) found 1 Important** (`margin<=0` false-auto hole) → guarded; re-review READY
+TO MERGE. Suites pure 288 passed / 73 skipped / ruff clean. **Honest limits (design §8):** ships the *mechanism*, NOT
+new shipped weights — the gold demo actually scores *worse* than the hand-tuned defaults (tiny set, noisy k-fold,
+in-sample overlap; `collided=True`), so a **large hand-crafted gold-set re-run** is the deferred authoritative
+follow-up; synthetic-learned weights reflect the generator's corruption model; veto-blind (end-to-end the veto only
+lowers a band — safe); no pipeline consumer loads a learned model yet (advisory desk artifact).
+
+**Remaining matcher pieces:** **B3** — further compound keys
+(`dob+first-initial`, `name+sex`) + a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
 `generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
 ([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130))~~ **(done — slice 22)**. **Identity: pieces C1
@@ -419,8 +443,8 @@ trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/u
 `repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
 **C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
 a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Next:**
-weight-learning, C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.);
-the A/B pass-toggle (would unblock quantitative compound-key before/after) + veto-aware
+further compound keys (`dob+first-initial`, `name+sex`), a large hand-crafted gold set to re-run the slice-24 learner,
+C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.); a veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)

@@ -1,45 +1,53 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-06 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-07 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key · B3 synthetic volume
-generator · consumes `patient_alias_pool` known-alias evidence · range-aware, positive-only `compare_dob` for
-clinician-observed estimated ages · anchored birth-year-range blocking passes (`dob-range` / `dob-range+sex`) + the
-A/B pass-toggle · composite `sex` scoring + the unconfirmed-chart REVIEW rule · **the B3 eval mirror: generator
-range-DOB emission + administrative-sex representation — done this session, weight-learning now fully unblocked**) +
+generator · B3 eval mirror (range-DOB + administrative-sex) · **B3 weight-learning: supervised Fellegi–Sunter
+estimation — done this session** · consumes `patient_alias_pool` known-alias evidence · range-aware, positive-only
+`compare_dob` for clinician-observed estimated ages · anchored birth-year-range blocking passes (`dob-range` /
+`dob-range+sex`) + the A/B pass-toggle · composite `sex` scoring + the unconfirmed-chart REVIEW rule) +
 the **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
 known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE) + the
 **§5.4 John-Doe registration front door, slices A–D all BUILT** (callsign minting + matcher placeholder exclusion ·
 clinician-observed evidence · the birth-year-range blocking pass · administrative-sex scoring + the unconfirmed-chart
 forcing rule, [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130) closed);
-remaining **B3 weight-learning (next natural slice)** / locale packs
+remaining **B3 measurement-driven follow-ons** (further compound blocking keys `dob+first-initial`/`name+sex`;
+learn against a large hand-crafted gold set; locale comparator packs; hub-tier aggressive duplicate sweep)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
 (photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-06) — B3 eval mirror: generator range-DOB emission + administrative-sex representation
-(matcher slice 23; full detail in ROADMAP slice 23 + git; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-05-eval-range-adminsex-mirror*`).** The slice-22 deferral, closed: the eval
-harness now carries the field set the shipped matcher scores (composite sex) and blocks on (anchored range passes), so
-**B3 weight-learning is unblocked** — sweeping `evaluate_scorer` weights no longer trains on a stale field set.
-Advisory Python, eval tier only — no production matcher/pipeline/floor/SCHEMA/ADR/spec change. Four additive parts:
-`DatasetRecord.administrative_sex` through the REAL adapter (`admin_sex_row=`) + `seed_dataset` `administrative-sex`
-rows; pure `_birth_window` + an anchored range-overlap branch in `shares_blocking_key` (overlap ∧ ≥1 side is_range;
-+sex pass is a subset, needs no branch) **plus a live over-claim fix found in design** (the exact-DOB branch compared
-raw values — two identical `year-range` strings faked an exact key the SQL excludes); `corrupt_dob_estimate` operator
-(dob → window containing the first 4-digit run, tol 2–5; sex moves sab→admin at provenance 30; `p_dob_estimate=0.15`,
-last in `_OPERATORS`; `_repair` stands down on window pairs); drift canary → `_RANGE_GROUPS_SQL` fragments + two
-DB-gated proofs (seeded admin-sex feeds `dob-range+sex` under `enabled_passes` isolation; estimate-heavy volume set
-`pair_completeness == 1.0` — the mirror-never-over-claims proof). 5-task subagent-SDD; **final fable review caught 1
-real Critical: Python `$` matches before a trailing newline, POSIX `$` does not** — `"1980/1990\n"` got a window the
-SQL rejects (the exact over-claim class the slice closes); fixed via de-anchored `re.fullmatch` + the canary now pins
-both overlap-join bounds. Suites **pure 253 / DB-gated 326 (full) / ruff clean**. **Honest limits:** mirror ignores
-the block-size cap (proofs run under a large cap; skips reported honestly); a typo-shifted year windows around the
-typo (safe — `_repair` restores a name token); same-seed generator output differs across versions (reproducibility
-contract, not stability); gold_v1.json deliberately untouched.
+**This session (2026-07-07) — B3 weight-learning: supervised Fellegi–Sunter estimation (matcher slice 24; full
+detail in ROADMAP slice 24 + git; design+plan under `docs/superpowers/{specs,plans}/2026-07-06-b3-weight-learning*`).**
+Advisory Python, eval tier only — **no production matcher/pipeline/floor/SCHEMA/event/ADR/spec change.** The learner
+the shipped `DEFAULT_WEIGHTS`/`DEFAULT_THRESHOLDS` comments always pointed at ("B3 learns these"). Closed-form
+supervised F-S: count agreement levels across labelled pairs → `m/u` (Laplace-smoothed, INSUFFICIENT_DATA excluded,
+provenance-blind) → `weight = log2(m/u)`, the same math as `scoring.score` run backwards from ground truth. Four new
+pure modules under `matcher/src/cairn_matcher/eval/`: `learner.py` (`estimate_weights`, `derive_thresholds`,
+`learn_model`, `LearnedModel`), `crossval.py` (entity-cluster k-fold held-out lift, skips folds with no training
+matches), `model_io.py` (`LearnedModel`↔JSON, `ModelIOError`), `learn.py` (CLI); + a behavior-preserving
+`scorer_outcomes` extract in `scorer_eval.py`. **Thresholds are safety-first** — `auto = max(non-match)+margin`
+(zero false auto-links by construction), `review = max(non-match)` (surface above the best impostor, never below,
+so `review<auto` always holds — margin now guarded `>0`), and `recall_target` is an honest **conflict diagnostic**
+(`collided` = the safe placement can't meet the recall floor), never a lever that drags `review` into impostor
+range. **Held-out measurement splits on whole entity clusters** (no truth leak) and reports before/after only on the
+disjoint fold. 6-task subagent-SDD; the Task-2 implementer caught a real plan bug (the original recall-cut `review`
+inverted on separated data) → corrected before coding; final opus review caught the `margin<=0` false-auto hole →
+guarded. Suites **pure 288 passed / 73 skipped / ruff clean**. **Honest limits (design §8):** ships the *mechanism*,
+NOT new shipped weights (gold demo actually does *worse* than hand-tuned defaults — tiny, noisy, in-sample overlap;
+a large hand-crafted gold-set re-run is the deferred follow-up); synthetic-learned weights reflect the generator's
+corruption model; veto-blind (end-to-end veto only lowers a band — safe); provenance an orthogonal multiplier.
+
+**Prior session (2026-07-06) — B3 eval mirror: generator range-DOB emission + administrative-sex representation
+(matcher slice 23; condensed — full detail in ROADMAP slice 23 + git + PR #136).** Advisory eval tier only. Closed
+the slice-22 deferral that blocked weight-learning: `DatasetRecord.administrative_sex` through the real adapter +
+range-aware `_birth_window`/`shares_blocking_key` mirror of the anchored passes + `corrupt_dob_estimate` generator
+operator + a live exact-DOB over-claim fix; final fable review caught the Python-`$`-vs-POSIX-`$` trailing-newline
+over-claim (fixed via de-anchored `re.fullmatch`). gold_v1.json untouched.
 
 **Parallel session (2026-07-05, PR [#133](https://github.com/cairn-ehr/cairn-ehr/pull/133)) — clock-drift admission
 ceiling on both remote-apply doors + the Rust CI gate (non-demographics slice; recorded here post-merge because that
@@ -329,15 +337,15 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   **B3 compound blocking key** (`name+year` additive pass in `pipeline/db.py`), and the **B3 synthetic volume
   generator** (`eval/generator.py` pure + `eval/generate.py` CLI — seed+corrupted-clone entity clusters, recoverable
   by construction), and the **A/B pass-toggle** (`enabled_passes` on `generate_candidate_pairs`; unknown pass name
-  raises) are now BUILT, **and the B3 eval mirror (slice 23, this session): generator range-DOB emission
-  (`corrupt_dob_estimate`, `p_dob_estimate`) + `DatasetRecord.administrative_sex` + the range-aware
-  `shares_blocking_key`/`_birth_window` mirror of the anchored passes** — a quantitative before/after across a pass
-  change is now genuinely ONE command away on data that carries the §5.4 fields. **Next (B3 measurement-driven):**
-  **weight-learning** (sweep `evaluate_scorer`'s `weights`/`thresholds` against the gold + synthetic sets — now
-  training on the shipped field set) + **further compound
-  keys** (`dob+first-initial`, `name+sex`) + locale comparator packs / hub-tier aggressive duplicate-sweep +
-  proposal retraction / **richer §7.5 matcher-actor determinants** (served-model digest; C2b registered the matcher as
-  a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
+  raises), the **B3 eval mirror** (slice 23: generator range-DOB emission + `DatasetRecord.administrative_sex` +
+  range-aware `shares_blocking_key`/`_birth_window`), **and B3 weight-learning (slice 24, this session): the
+  supervised Fellegi–Sunter learner** (`eval/learner.py` `estimate_weights`/`derive_thresholds`/`learn_model` +
+  `eval/crossval.py` entity-cluster held-out lift + `eval/model_io.py` + the `python -m cairn_matcher.eval.learn`
+  CLI) are now BUILT. **Next (B3 measurement-driven):** **further compound
+  keys** (`dob+first-initial`, `name+sex`) + a **large hand-crafted gold set** to re-run the learner for
+  authoritative magnitudes (this session's learner is a PoC on small/synthetic data) + locale comparator packs /
+  hub-tier aggressive duplicate-sweep + proposal retraction / **richer §7.5 matcher-actor determinants**
+  (served-model digest; C2b registered the matcher as a per-epoch `agent` actor keyed on `matcher_version`). **Identity: pieces C1** (§5.1/§5.7 linkage core — `db/018`),
   **C2** (`match_proposal`→apply seam — `db/019`, `apply_proposal.rs`; human-accepted → human-attested link), **and
   C2b** (auto-apply of the `auto_candidate` band — `matcher_actor.rs` + `auto_apply.rs`; matcher-authored, un-attested,
   recallable link, apply-time veto re-check), **C3** (`dispute` + the chart trust-state projection — `db/023`;

@@ -25,17 +25,18 @@ from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, Thresholds, band
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights, score
 
 
-def evaluate_scorer(
+def scorer_outcomes(
     ds: LabelledDataset,
     *,
     weights: Weights = DEFAULT_WEIGHTS,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     config: ComparatorConfig = DEFAULT_CONFIG,
-) -> ScorerMetrics:
-    """Score every record pair, band it, and aggregate against ground truth.
+) -> list[PairOutcome]:
+    """Score+band every record pair against ground truth -> a per-pair outcome list.
 
-    Candidates are built once per record (not once per pair) so the O(N^2) loop does only
-    the comparison work, not repeated adapter work.
+    Extracted from evaluate_scorer so k-fold measurement (crossval.py) can POOL the raw
+    outcomes across held-out folds before computing metrics once, instead of averaging
+    per-fold metric bundles. Candidates are built once per record (not per pair).
     """
     candidates = {r.record_id: record_to_candidate(r) for r in ds.all_records()}
     truth = truth_pairs(ds)
@@ -51,4 +52,17 @@ def evaluate_scorer(
                 band=band(match_score, (), thresholds),
             )
         )
-    return scorer_metrics(outcomes)
+    return outcomes
+
+
+def evaluate_scorer(
+    ds: LabelledDataset,
+    *,
+    weights: Weights = DEFAULT_WEIGHTS,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    config: ComparatorConfig = DEFAULT_CONFIG,
+) -> ScorerMetrics:
+    """Score every record pair, band it, and aggregate against ground truth."""
+    return scorer_metrics(
+        scorer_outcomes(ds, weights=weights, thresholds=thresholds, config=config)
+    )
