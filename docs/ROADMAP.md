@@ -53,86 +53,7 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
 ## Phase 4 — Identity & demographics subsystem
 
 - **Identity event algebra** — closed link/unlink/reattribute/repudiate/identify/dispute set; immortal UUIDs; never merge/erase ([§5.7](spec/identity.md), principle 2).
-- **Demographics assertion stream** — per-field projection policy ([§4](spec/demographics.md)). **Address model specified** ([ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md), [§4.3](spec/demographics.md)): culture-neutral three-facet value (display legibility twin + optional geolocation + culture-tagged structured parts via a content-addressed locale profile reusing ADR-0014). **Patient-identifier representation specified** ([ADR-0033](spec/decisions/0033-patient-identifier-representation.md), [§4.4](spec/demographics.md)): namespace/profile split (stable veto key + versioned validator) + a normalized form materialised so the hard veto survives a profile-less node; advisory validation; professional **licensure/registration** IDs fixed in the §7.5 actor registry (billing/relational provider numbers split out to §4.6, below). **Demographic legibility twin specified** ([ADR-0034](spec/decisions/0034-demographic-legibility-twin.md), [§4.5](spec/demographics.md)): every demographic assertion carries the §3.13 principle-11 twin, materialised profile-independently, with `display`/`value` reconciled as its value-core and a forward guarantee for future field shapes. **Provider-number relational model specified** ([ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md), [§4.6](spec/demographics.md)): abstract entity (open `kind`) + reified relationships carrying their own identifier sets + subject-kind partitioning `{patient, entity, relationship}` as structural non-conflation. **All demographics gaps now closed.** **Demographics IMPLEMENTATION underway** (first production clinical surface, on `cairn-node`). **Slice 1 — §4.4 patient identifiers** (`db/010_demographics.sql`): culture-neutral structural floor + authored §4.5 twin carried through the reused `submit_event` + set-union `patient_identifier` projection; pure `cairn-event::demographics` builders + `EventBody.plaintext_twin`. **Slice 2 — §4.2 DOB + sex-at-birth** (`db/011_demographics_fields.sql`): the *provenance-precedence* mechanic — generic `demographic.field.asserted` event + `cairn_provenance_rank` ladder (incl. new `fact-proven` top tier; unrecognized→0) + winner-by-`(rank,HLC,origin)` `patient_demographic` projection ("verified value locks"); **floor stays open / projection gated** (unknown field stored + legible but not projected — federation-forward per ADR-0012); §4.1 ladder prose extended. **Slice 3 — §4.2 names** (`patient_name` retained-set projection + `patient_name_current` display-winner VIEW): recency-first within the legal-use tier (HLC wins; provenance/origin break ties); falls back to most-recent any-`use` when no legal name exists; all names retained as evidence; deliberately diverges from DOB's provenance-lock ([ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)). **Slice 4 — §4.2 administrative-sex + gender-identity** (`db/013_demographics_sex_gender.sql`): per-field winner policy via an IMMUTABLE `cairn_demographic_field_policy(field)` classifier; administrative-sex provenance-first (document-anchored; recency breaks equal-provenance ties); gender-identity recency-first (patient's current stated identity always wins regardless of provenance — the inverse of DOB's ordering; provenance still feeds the §5.2 matcher). Karyotype resolved ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) as a distinct field — no karyotype code yet; spec/ADR only. Additive: no new event type, no floor change, no `patient_demographic` schema change; db/013 supersedes db/011's trigger. **Slice 5 — §4.3 address** (`db/014_demographics_address.sql`): retained-set `patient_address` + per-use `patient_address_current` recency-first VIEW (one current address per `use`); additive floor branch; per-use recency-first winner — addresses are volatile, a fresh patient-stated move must displace a stale document-verified address ([ADR-0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md)). **Slice 6 — §4.4/§5.2 in-DB hard-veto floor (piece A)** (`db/016_match_veto.sql`, SCHEMA 14→15):
-`cairn_match_veto(patient_a, patient_b) RETURNS TABLE(veto_kind, severity, subject, detail)` + scalar
-`cairn_has_hard_veto`. Implements the closed hard-veto set (§5.13): same-system identifier mismatch ·
-verified-DOB clash · verified-sex-at-birth clash. Two verdict levels: `hard_veto` (trustworthy clash —
-`normalized` present & disjoint, or both verified + same-precision + differ) vs `degrade_hold` (profile-less
-node — holds for human, never auto-demotes). Precision-gated DOB, no date parsing (culture-neutral floor);
-set-based per-system identifier comparison (sharing any value = positive evidence); `system: unknown` never
-vetoes. Pure SQL helpers over existing projections; no event-format change, no `submit_event` change, no new
-table. 12 integration tests, all green. Deceased-status veto deferred (no projection yet; stub in db/016).
-**Slice 7 — §5.2/§5.13 advisory matcher scoring core (piece B1)** (`matcher/`, `cairn-matcher` — the first **Python**
-component; AGPL-3.0, zero runtime deps, **pure functions only**, fit-for-purpose §9 tier): the comparator API contract
-(`agreement.py`; ordinal `AgreementLevel`, `PHONETIC`/`NICKNAME` reserved but never emitted by core — anti-cultural-capture)
-+ in-house Jaro–Winkler + 4 culture-neutral comparators (`compare_exact`/`compare_edit_distance`/precision-aware
-`compare_dob` (parses no date strings)/history-set `compare_name_set`) + positive-only `compare_identifier_sets` (never
-DISAGREE — mismatch stays db/016's job) + the field→comparator registry seam (`orchestrator.py`) + the **Fellegi–Sunter**
-combiner (`scoring.py`; `provenance_factor` scaling, `INSUFFICIENT_DATA`→0) producing an explainable `MatchScore`. The three
-principle-bearing invariants hold end-to-end (no-data-never-disagreement §3.7; provenance-aware §4.2; name-history-set). 55
-pure tests (`uv run pytest`); brainstorm→spec→plan→subagent-SDD; final opus review caught + fixed one Critical (score
-symmetry under greedy name-pairing). No new ADR, no spec bump.
-**Slice 8 — §5.2 advisory matcher pipeline (piece B2)** (`cairn_matcher/pipeline/`, new `db/017_match_proposal.sql`,
-SCHEMA 15→16): the veto-gated **pairwise** pipeline. Pure `adapter.py` (`patient_*` projection rows → B1 `CandidateRecord`;
-precision-gated **ISO** DOB extraction — parses no locale date strings, non-ISO→`None`; untagged `sorted()` token-bag names;
-identifier sets on `match_key`) + pure `banding.py` (`MatchScore` + db/016 veto findings → `auto_candidate` iff `≥ T_auto`
-**and no veto**, else `review`, else `None` — any veto caps at `review`, never auto-link/auto-reject; below `T_review`
-persists nothing; `matcher_version` = pkg+weights digest, ADR-0014) + `db.py`/`runner.py` (the only psycopg modules —
-`propose` = load→score→call in-DB `cairn_match_veto`→band→[if not None] upsert→commit, one txn, commit owned by the
-runner). `db/017` is an **advisory** worklist (PK `(low,high)`, `CHECK(low<high)`, JSONB veto/evidence, human `status`
-preserved on re-run) — *not a safety gate*. **psycopg** optional (`pipeline` extra; LGPL→AGPL-ok), B1's pure core
-unchanged. 92 tests with DB (5 gated integration) / 87 + 5 skipped without; opus whole-branch review MERGE-READY (0
-Critical/0 Important; one Important — commit moved to runner — fixed in-branch).
-**Slice 9 — §5.2 advisory matcher blocking + batch sweep (piece B2b)** (`cairn_matcher/pipeline/`, **no `db/` file, no
-SCHEMA bump** — advisory): B2 scored a *given* pair; B2b decides **which** pairs to score across the whole patient set
-(no O(n²)). Pure read-only `db.generate_candidate_pairs(conn, *, max_block_size=100)` — a **3-pass blocking disjunction**
-(shared identifier excl. `unknown` · exact DOB · shared name token), group-based CTEs, deduped to one **canonical**
-`(low,high)` per pair by **uuid VALUE** order, self-pairs structurally excluded; an **oversized-block guard** skips +
-**reports** (`skipped_blocks`) any group `> max_block_size` (never a silent cap; *C(k,2)* reasoning; hub sweep is the
-backstop). New `pipeline/sweep.py` — `SkippedBlock`/`SweepError`/`SweepResult` frozen dataclasses + `sweep()`: phase 1
-generate→`rollback` (close read snapshot, xmin guard), phase 2 loop the existing `runner.propose()` per pair (one txn each,
-idempotent, human `status` preserved) with **skip-and-report** errors (never aborts the batch). Recall-oriented blocking;
-the pure scorer stays the source of truth. No new dep. 113 tests with DB (9 candidate-gen + 5 sweep, incl. a real-monkeypatch
-failing-pair) / 93 + 20 skipped without; opus whole-branch review READY-TO-MERGE (0 Critical/0 Important).
-**Slice 10 — §5.2 matcher eval harness (piece B3 keystone)** (`cairn_matcher/eval/`, **no `db/` file, no SCHEMA bump**
-— advisory measurement substrate): unblocks the measurement-driven B3 items (compound blocking keys, weight-learning).
-A new pure-by-default sub-package mirroring `pipeline/`'s pure-core + optional-DB split: `dataset.py` (entity-cluster
-JSON format + loader; `record_to_candidate` **reuses the real `candidate_from_rows`** — no drift; `truth_pairs`/`all_pairs`
-ground truth), `metrics.py` (confusion + precision/recall/F1 at strict+lenient operating points + auto-false-link-rate +
-missed-match-rate + score separation; zero-denominator→0.0, never NaN), `scorer_eval.py` (`evaluate_scorer` runs the
-**real** `field_comparisons→score→band`; `weights`/`thresholds`/`config` are params — the weight-learning lever),
-`report.py` (+ honest "regression/tuning instrument, not a statistical accuracy claim" caveat), `__main__.py`
-(`python -m cairn_matcher.eval`; psycopg lazy so the pure path never imports it), `blocking_eval.py` (DB-gated, `pipeline`
-extra: seeds `patient_*` label→uuid5, calls the **real** `generate_candidate_pairs`, `rollback` xmin-guard → pair-completeness
-/ reduction-ratio / dropped-true-matches / Σ`C(size,2)` estimate) + a culture-plural `gold_v1.json` fixture. No new dep
-(pure core stdlib-only). 146 with DB / 123 + 23 skipped without; opus whole-branch review READY-TO-MERGE (0 Critical/0
-Important) + post-review fixes in PR #83 (ephemeral/idempotent blocking seed — no `conn.commit()`; dataset loader
-validates name/identifier keys).
-**Slice 11 — §5.2 compound blocking key (name-token + birth-year)** (`pipeline/db.py`, **no `db/` file, no SCHEMA bump**
-— advisory): one **additive** `UNION ALL` branch in `_GROUPS_SQL` (a `birth_year` CTE + a `name+year` pass) partitions an
-over-broad single-name-token block by birth-year so the sub-blocks survive the oversized-block cap, recovering true-match
-pairs the cap drops wholesale. Additive ⇒ **recall non-decreasing** (pairs deduped by canonical uuid pair across passes);
-also rescues precision-mismatched DOBs (first 4-digit run groups `"1990"`/`"1990-05-12"`, exact-DOB does not). Honest,
-culture-neutral degrade (principle 4): birth-year is the **first 4-consecutive-digit run** (`substring(value FROM
-'[0-9]{4}')`) — no date parsing, so an ISO value and a day-first import (`"12/05/1990"`) of the same person both group;
-a DOB with no 4-digit run stays covered by the single-token pass. 5 new DB-gated tests (rescue / honest-degrade /
-precision-mismatch / cross-format / cross-pass dedup); 151 with DB / 123 + 28 skipped without; clean per-task reviews.
-Known limitation (user-flagged): year extraction still degrades on 2-digit years and non-Gregorian calendars, to revisit
-on real data (advisory — a wrong year only feeds the scorer extra pairs, never a false link). Discovered + filed
-[issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (pre-existing test-leak + harness `KeyError`).
-**Slice 12 — §5.2 matcher eval synthetic volume generator (piece B3)** (`cairn_matcher/eval/generator.py` +
-`eval/generate.py`, **no `db/` file, no SCHEMA bump** — advisory tooling): unblocks measuring blocking at volume without
-hand-authoring a large gold set. Pure, stdlib-only `generator.py` (no psycopg): `shares_blocking_key` mirrors the three
-base blocking passes; four pure corruption operators (DOB reformat, DOB typo, name edit, identifier mangle); culture-plural
-curated name pools; `GenSpec` + `generate_dataset` build seed+one-corrupted-clone entity clusters (cluster size fixed at 2)
-with a `_repair` step that **guarantees** every seed↔clone pair stays recoverable by >=1 base blocking key — a regression/
-volume instrument, not a statistical accuracy claim (recoverable by construction, not by real-world resemblance). `generate.py`
-is the disk/CLI edge (`python -m cairn_matcher.eval.generate --entities N --seed S --out path`), byte-deterministic JSON,
-feeding the existing `python -m cairn_matcher.eval` CLI unchanged. No new dep. A drift canary
-(`test_eval_generator_sync.py`) pins `shares_blocking_key` to `_GROUPS_SQL` so narrowing a base pass fails the fast
-suite. 147 + 29 skipped without DB (pure suite; DB suite 173). DB-gated volume test on a generated 200-entity set at `max_block_size=10_000`:
-`pair_completeness==1.0`, 0 dropped true matches, `reduction_ratio≈0.919` (6,467/79,800 pairs) — confirms the recoverability
-invariant end-to-end through the real blocking SQL.
+- **Demographics assertion stream** — per-field projection policy ([§4](spec/demographics.md)). **Address model specified** ([ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md), [§4.3](spec/demographics.md)): culture-neutral three-facet value (display legibility twin + optional geolocation + culture-tagged structured parts via a content-addressed locale profile reusing ADR-0014). **Patient-identifier representation specified** ([ADR-0033](spec/decisions/0033-patient-identifier-representation.md), [§4.4](spec/demographics.md)): namespace/profile split (stable veto key + versioned validator) + a normalized form materialised so the hard veto survives a profile-less node; advisory validation; professional **licensure/registration** IDs fixed in the §7.5 actor registry (billing/relational provider numbers split out to §4.6, below). **Demographic legibility twin specified** ([ADR-0034](spec/decisions/0034-demographic-legibility-twin.md), [§4.5](spec/demographics.md)): every demographic assertion carries the §3.13 principle-11 twin, materialised profile-independently, with `display`/`value` reconciled as its value-core and a forward guarantee for future field shapes. **Provider-number relational model specified** ([ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md), [§4.6](spec/demographics.md)): abstract entity (open `kind`) + reified relationships carrying their own identifier sets + subject-kind partitioning `{patient, entity, relationship}` as structural non-conflation. **All demographics gaps now closed.** **Demographics IMPLEMENTATION underway** (first production clinical surface, on `cairn-node`). **Slice 1 — §4.4 patient identifiers** (`db/010_demographics.sql`): culture-neutral structural floor + authored §4.5 twin carried through the reused `submit_event` + set-union `patient_identifier` projection; pure `cairn-event::demographics` builders + `EventBody.plaintext_twin`. **Slice 2 — §4.2 DOB + sex-at-birth** (`db/011_demographics_fields.sql`): the *provenance-precedence* mechanic — generic `demographic.field.asserted` event + `cairn_provenance_rank` ladder (incl. new `fact-proven` top tier; unrecognized→0) + winner-by-`(rank,HLC,origin)` `patient_demographic` projection ("verified value locks"); **floor stays open / projection gated** (unknown field stored + legible but not projected — federation-forward per ADR-0012); §4.1 ladder prose extended. **Slice 3 — §4.2 names** (`patient_name` retained-set projection + `patient_name_current` display-winner VIEW): recency-first within the legal-use tier (HLC wins; provenance/origin break ties); falls back to most-recent any-`use` when no legal name exists; all names retained as evidence; deliberately diverges from DOB's provenance-lock ([ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)). **Slice 4 — §4.2 administrative-sex + gender-identity** (`db/013_demographics_sex_gender.sql`): per-field winner policy via an IMMUTABLE `cairn_demographic_field_policy(field)` classifier; administrative-sex provenance-first (document-anchored; recency breaks equal-provenance ties); gender-identity recency-first (patient's current stated identity always wins regardless of provenance — the inverse of DOB's ordering; provenance still feeds the §5.2 matcher). Karyotype resolved ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) as a distinct field — no karyotype code yet; spec/ADR only. Additive: no new event type, no floor change, no `patient_demographic` schema change; db/013 supersedes db/011's trigger. **Slice 5 — §4.3 address** (`db/014_demographics_address.sql`): retained-set `patient_address` + per-use `patient_address_current` recency-first VIEW (one current address per `use`); additive floor branch; per-use recency-first winner — addresses are volatile, a fresh patient-stated move must displace a stale document-verified address ([ADR-0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md)). **Slices 6–12 — §5.2 matcher pieces A/B1/B2/B2b/B3 harness + compound key + generator** (2026-06-28→07-01; condensed, full detail in git). Advisory Python `matcher/` (`cairn-matcher`, AGPL-3.0, zero runtime deps, pure functions — fit-for-purpose §9 tier); no ADR/spec bump throughout (implements settled §5.2/§5.13/§4.1). **Slice 6 — piece A** (`db/016_match_veto.sql`, SCHEMA 14→15): the in-DB hard-veto floor — `cairn_match_veto`/`cairn_has_hard_veto` implement the closed hard-veto set (same-system identifier mismatch · verified-DOB clash · verified-sex-at-birth clash); `hard_veto`/`degrade_hold` verdicts, precision-gated DOB (no date parsing), `system:unknown` never vetoes; 12 tests; deceased-status veto deferred (stub). **Slice 7 — piece B1**: the scoring core — comparator contract (`PHONETIC`/`NICKNAME` reserved, never emitted — anti-cultural-capture) + in-house Jaro–Winkler + 4 culture-neutral comparators + positive-only `compare_identifier_sets` + Fellegi–Sunter combiner (`MatchScore`); 55 pure tests; final review fixed one Critical (score symmetry, greedy name-pairing `max(a,b / b,a)`). **Slice 8 — piece B2** (`db/017_match_proposal.sql`, SCHEMA 15→16): the veto-gated pairwise pipeline — ISO-only DOB extraction, token-bag names, `auto_candidate`/`review`/`None` banding (any veto caps at review, never auto-link/auto-reject); `db/017` an advisory worklist, not a safety gate; 92 tests with DB. **Slice 9 — piece B2b** (no `db/` file): blocking/candidate-pair generation — 3-pass disjunction (shared identifier · exact DOB · shared name token), canonical-pair dedup, oversized-block guard skips+reports (never silently caps) + `sweep()` batch driver; 113 tests with DB. **Slice 10 — B3 harness** (`cairn_matcher/eval/`, no `db/` file): scorer metrics (precision/recall/F1, zero-denominator→0.0) + DB-gated blocking-recall measurement (pair-completeness/reduction-ratio/dropped-true-matches) + culture-plural `gold_v1.json` + CLI; 146 with DB. **Slice 11 — B3 compound key** (`pipeline/db.py`): additive `name+year` `UNION ALL` pass (birth-year CTE, first-4-digit-run culture-neutral degrade) partitions oversized name-token blocks — recall non-decreasing; 151 with DB; filed [issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (test-leak + harness `KeyError`, the `KeyError` arm later fixed in slice 21). **Slice 12 — B3 generator** (`eval/generator.py` + `generate.py`, pure/stdlib): seed+corrupted-clone entity clusters recoverable by construction (a `_repair` step guarantees ≥1 shared blocking key), drift-canary-pinned to `_GROUPS_SQL`; 200-entity volume test: `pair_completeness == 1.0`, `reduction_ratio≈0.919`. All pieces' whole-branch reviews READY-TO-MERGE/MERGE-READY (0 Critical outstanding per slice; findings fixed in-branch or in PR #83's post-review wave).
 **Slice 13 — §5.1/§5.7 identity linkage core (piece C1)** (`crates/cairn-event/src/identity.rs`,
 `db/018_identity_linkage.sql` wired into `cairn-node`'s `db.rs` SCHEMA array, length 16→17): the first slice of the
 closed §5.7 identity-event algebra. Pure Rust `LinkAssertion` builder (`link_assertion_body`/`unlink_assertion_body`
@@ -431,8 +352,32 @@ in-sample overlap; `collided=True`), so a **large hand-crafted gold-set re-run**
 follow-up; synthetic-learned weights reflect the generator's corruption model; veto-blind (end-to-end the veto only
 lowers a band — safe); no pipeline consumer loads a learned model yet (advisory desk artifact).
 
-**Remaining matcher pieces:** **B3** — further compound keys
-(`dob+first-initial`, `name+sex`) + a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
+**Slice 25 — B3 compound blocking keys: `dob+first-initial` + `name+sex`** (2026-07-07; advisory Python, eval/matcher
+tier only — **no production floor/SCHEMA/event/migration/ADR/spec bump**; same footprint as slices 21–23;
+design+plan under `docs/superpowers/{specs,plans}/2026-07-07-compound-blocking-keys*`). Two ADDITIVE SYMMETRIC
+compound blocking passes, registry `ALL_PASSES` 6→8 (both in derived `SYMMETRIC_PASSES`). **`dob+first-initial`**
+(key `initial|birth-year`: birth-year — point, first-4-digit-run, year-range excluded — + first character of each
+name token) is GENUINELY NEW recall: a first-initial relaxation of the name requirement, rescuing
+transpose/diacritic/misspelling name variants sharing a birth-year but no full name token. **`name+sex`** (key
+`token|sex`: name token + normalized sex, the sentinel-excluded union of sex-at-birth + administrative-sex from the
+shared `blocking_sex` CTE) is a SUBSET of the `name` block when uncapped — its value is the oversized-name-block
+rescue (splits a common unisex-token block the cap drops wholesale into per-sex sub-blocks), and the only name
+rescue that fires for the §5.4 John-Doe population (range/absent DOB blocks `name+year`; observed sex still fires).
+Implementation (Approach A) extracted the shared `name_tokens`/`birth_year`/`blocking_sex` CTEs into composable
+SQL-fragment constants (`_NAME_TOKENS_CTE`/`_BIRTH_YEAR_CTE`/`_BLOCKING_SEX_CTE` — one shared definition, no drift
+of the sentinel-bound sex normalization) so both new statements reuse them; `_GROUPS_SQL` gained two arms binding
+`(_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM)`; the eval mirror gained `_first_initials` + one
+`shares_blocking_key` clause (`name+sex` subsumed by the existing name-token check). 4-task subagent-SDD, all
+reviewed clean (0 blocking findings — the DISTINCT-count self-satisfying-HAVING guard, bind order, and year-range
+exclusion independently re-verified). Suites pure 297 passed / 78 skipped / ruff clean; DB-gated 375 passed / 0
+skipped. **Honest limits:** `name+sex`'s recall gain is INVISIBLE to the uncapped blocking-recall metric (adds no
+pairs uncapped) — proven instead by a targeted DB test building an over-cap unisex-name block and asserting the
+per-sex rescue; first-initial = code-point 1 after NFC (grapheme edge cases collapse to base letter — acceptable,
+advisory/recall-only); `dob+first-initial` blocks can be ~1/26 of a birth cohort — bounded by the same cap + skip +
+hub-sweep backstop; lift measured on SYNTHETIC data only, real-world magnitudes await the large hand-crafted gold
+set (deferred slice-24 follow-on).
+
+**Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
 `generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
 ([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130))~~ **(done — slice 22)**. **Identity: pieces C1
@@ -443,7 +388,7 @@ trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/u
 `repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
 **C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
 a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Next:**
-further compound keys (`dob+first-initial`, `name+sex`), a large hand-crafted gold set to re-run the slice-24 learner,
+a large hand-crafted gold set to re-run the slice-24 learner,
 C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.); a veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
