@@ -182,8 +182,14 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
 # exact-DOB pass never groups. This is advisory: a mis-extracted year only ever feeds the
 # Python scorer a few extra pairs (which it rejects), never an auto-link, so erring toward
 # more grouping is safe. Real-world extraction adequacy is to be revisited on richer data.
-_GROUPS_SQL = """
-WITH name_tokens AS (
+# Shared blocking CTE fragments. Both statements (_GROUPS_SQL, _RANGE_GROUPS_SQL) need
+# overlapping CTEs, so each CTE body lives ONCE here and the statements compose from these
+# constants. This is not premature abstraction: blocking_sex is a load-bearing, sentinel-bound
+# normalization, and the module was bitten once by a hand-mirrored sex literal lagging the
+# adapter (see the comment inside _BLOCKING_SEX_CTE). Each constant is a CTE BODY only
+# ("name AS ( ... )"); the composing statement supplies the leading WITH and comma joins.
+
+_NAME_TOKENS_CTE = """name_tokens AS (
     -- normalize(value, NFC) so a name recorded decomposed (NFD) on one feed and
     -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
     -- are different code points and a true duplicate is never even grouped. Mirrors the
@@ -192,22 +198,55 @@ WITH name_tokens AS (
     -- single whitespace-free token, so this bites only when two callsign STRINGS are
     -- identical (the rare same-suffix collision) — defense-in-depth, not what keeps two
     -- ordinary John Does apart (distinct callsigns are already distinct tokens; the
-    -- load-bearing exclusion is the scoring one in load_candidate). The `name+year` pass
-    -- reads this same CTE, so it inherits the exclusion for free.
+    -- load-bearing exclusion is the scoring one in load_candidate). The name+year and
+    -- dob+first-initial passes read this same CTE, so they inherit the exclusion for free.
     SELECT DISTINCT patient_id, token
     FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
     WHERE token <> '' AND use_key <> ALL(%s)
-),
-birth_year AS (
+)"""
+
+_BIRTH_YEAR_CTE = """birth_year AS (
     -- year-range values are EXCLUDED: "1981/1991" would otherwise leak its first
-    -- 4-digit run (1981) into name+year as if it were a birth year -- a false key
-    -- (the window min is not a birth year; principle 4). The anchored range passes
-    -- (_RANGE_GROUPS_SQL) own ranges.
+    -- 4-digit run (1981) into name+year / dob+first-initial as if it were a birth year --
+    -- a false key (the window min is not a birth year; principle 4). The anchored range
+    -- passes (_RANGE_GROUPS_SQL) own ranges.
     SELECT patient_id, substring(value FROM '[0-9]{4}') AS year
     FROM patient_demographic
     WHERE field = 'dob' AND value ~ '[0-9]{4}'
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
-)
+)"""
+
+_BLOCKING_SEX_CTE = """blocking_sex AS (
+    -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
+    -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
+    -- treats as absent-value -- so the SQL exclusion can never drift from it (the
+    -- placeholder_uses parameter-binding pattern; a hand-mirrored literal here once
+    -- lagged the adapter's normalization). Without this, two charts that BOTH merely
+    -- recorded sex 'unknown' would share a blocking_sex row and the sex-keyed rescues
+    -- (dob-range+sex, name+sex) would key on mutual ignorance rather than a real signal.
+    --
+    -- The trim approximates the adapter's value.strip() for the whitespace a real feed
+    -- plausibly emits: space, tab, LF, CR, FF, VT, NBSP (btrim's DEFAULT trims spaces
+    -- ONLY -- it would let a tab-padded sentinel through as a tab-residue key). Python's
+    -- strip() also removes rarer Unicode spaces (em-space etc.); those are out of scope:
+    -- an exotically-padded sentinel keys on its residue, which at worst adds a noise
+    -- pair between two identically-mangled values, never suppresses a true one. lower()
+    -- stands in for casefold(); identical for the ASCII values this field carries. The
+    -- trimmed form is also the grouping key (padding on a REAL value must not hide a
+    -- genuine shared signal); an all-whitespace value trims to '' and is excluded.
+    SELECT DISTINCT patient_id, sex FROM (
+        SELECT patient_id,
+               btrim(lower(value), E' \\t\\n\\r\\f\\u000b\\u00a0') AS sex
+        FROM patient_demographic
+        WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
+    ) trimmed
+    WHERE sex <> '' AND sex <> ALL(%s)
+)"""
+
+_GROUPS_SQL = f"""
+WITH {_NAME_TOKENS_CTE},
+{_BIRTH_YEAR_CTE},
+{_BLOCKING_SEX_CTE}
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
 FROM patient_identifier WHERE system <> 'unknown'
@@ -234,6 +273,29 @@ UNION ALL
 SELECT 'name+year', nt.token || '|' || byr.year, array_agg(nt.patient_id)
 FROM name_tokens nt JOIN birth_year byr USING (patient_id)
 GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- dob+first-initial: birth-year + the first CHARACTER of each name token. substring(token
+-- FROM 1 FOR 1) is character-wise in PostgreSQL (first code point after NFC, not first
+-- byte). A first-initial RELAXATION of 'name': it groups charts that share a birth-year and
+-- a first initial but NO full name token (a misspelling/transposition/diacritic variant), so
+-- it rescues true matches the token passes miss. Point-year only (birth_year excludes
+-- year-range) -- the anchored dob-range passes own ranges. An empty first initial is
+-- impossible: name_tokens excludes '' tokens.
+SELECT 'dob+first-initial', substring(nt.token FROM 1 FOR 1) || '|' || byr.year,
+       array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN birth_year byr USING (patient_id)
+GROUP BY substring(nt.token FROM 1 FOR 1), byr.year
+HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- name+sex: name token + normalized sex (blocking_sex: the sentinel-excluded UNION of
+-- sex-at-birth and administrative-sex). A SUBSET of the 'name' block when uncapped (it adds
+-- no pairs there); its value is the CAPPED case -- it splits an oversized unisex-token
+-- 'name' block the cap drops wholesale into per-sex sub-blocks that fit. Recall-first union:
+-- a trans patient whose administrative-sex matches an observation still groups though
+-- sex-at-birth differs. DISTINCT because a chart can carry the same sex on both facets.
+SELECT 'name+sex', nt.token || '|' || bs.sex, array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN blocking_sex bs USING (patient_id)
+GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
 # The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate
@@ -260,63 +322,38 @@ GROUP BY nt.token, byr.year HAVING count(DISTINCT nt.patient_id) >= 2
 # exceeds the cap and is skipped+reported; intersecting with a shared sex value roughly
 # halves it, so it fires within cap in more settings. Additive-only: a sex mismatch
 # merely means the rescue does not fire -- the scorer never sees a suppression.
-_RANGE_GROUPS_SQL = """
+_RANGE_GROUPS_SQL = f"""
 WITH birth_window AS (
     -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee
     -- WHERE-subexpression evaluation order, so a `split_part(...)::int` cast could be
-    -- evaluated BEFORE the `value ~ '^[0-9]{4}/[0-9]{4}$'` regex guard that exists to
+    -- evaluated BEFORE the `value ~ '^[0-9]{{4}}/[0-9]{{4}}$'` regex guard that exists to
     -- filter it out -- and a non-numeric value ("about-forty") would then raise
     -- "invalid input syntax for type integer" and crash the whole sweep on exactly the
-    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{4})/')`
+    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{{4}})/')`
     -- returns NULL on non-match (never raises), so the cast of NULL is safe and the
     -- comparison against NULL is not-true (row filtered) regardless of evaluation order.
     -- The regex guard is kept too (cheap, and documents intent) but correctness must not
     -- -- and no longer does -- depend on it being evaluated first.
     SELECT patient_id,
-           substring(value FROM '^([0-9]{4})/')::int AS y_min,
-           substring(value FROM '/([0-9]{4})$')::int AS y_max,
+           substring(value FROM '^([0-9]{{4}})/')::int AS y_min,
+           substring(value FROM '/([0-9]{{4}})$')::int AS y_max,
            TRUE AS is_range
     FROM patient_demographic
     WHERE field = 'dob'
       AND facets ->> 'precision' = 'year-range'
-      AND value ~ '^[0-9]{4}/[0-9]{4}$'
-      AND substring(value FROM '^([0-9]{4})/')::int <= substring(value FROM '/([0-9]{4})$')::int
+      AND value ~ '^[0-9]{{4}}/[0-9]{{4}}$'
+      AND substring(value FROM '^([0-9]{{4}})/')::int <= substring(value FROM '/([0-9]{{4}})$')::int
     UNION ALL
     SELECT patient_id,
-           substring(value FROM '[0-9]{4}')::int,
-           substring(value FROM '[0-9]{4}')::int,
+           substring(value FROM '[0-9]{{4}}')::int,
+           substring(value FROM '[0-9]{{4}}')::int,
            FALSE
     FROM patient_demographic
     WHERE field = 'dob'
-      AND value ~ '[0-9]{4}'
+      AND value ~ '[0-9]{{4}}'
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 ),
-blocking_sex AS (
-    -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
-    -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
-    -- treats as absent-value -- so the SQL exclusion can never drift from it (the
-    -- placeholder_uses parameter-binding pattern; a hand-mirrored literal here once
-    -- lagged the adapter's normalization). Without this, two charts that BOTH merely
-    -- recorded sex 'unknown' would share a blocking_sex row and the 'dob-range+sex'
-    -- rescue would key on mutual ignorance rather than a real signal.
-    --
-    -- The trim approximates the adapter's value.strip() for the whitespace a real feed
-    -- plausibly emits: space, tab, LF, CR, FF, VT, NBSP (btrim's DEFAULT trims spaces
-    -- ONLY -- it would let a tab-padded sentinel through as a tab-residue key). Python's
-    -- strip() also removes rarer Unicode spaces (em-space etc.); those are out of scope:
-    -- an exotically-padded sentinel keys on its residue, which at worst adds a noise
-    -- pair between two identically-mangled values, never suppresses a true one. lower()
-    -- stands in for casefold(); identical for the ASCII values this field carries. The
-    -- trimmed form is also the grouping key (padding on a REAL value must not hide a
-    -- genuine shared signal); an all-whitespace value trims to '' and is excluded.
-    SELECT DISTINCT patient_id, sex FROM (
-        SELECT patient_id,
-               btrim(lower(value), E' \\t\\n\\r\\f\\u000b\\u00a0') AS sex
-        FROM patient_demographic
-        WHERE field IN ('sex-at-birth', 'administrative-sex') AND value IS NOT NULL
-    ) trimmed
-    WHERE sex <> '' AND sex <> ALL(%s)
-),
+{_BLOCKING_SEX_CTE},
 window_overlap AS (
     SELECT a.patient_id AS anchor, m.patient_id AS member
     FROM birth_window a
@@ -362,10 +399,10 @@ def generate_candidate_pairs(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
     """Generate canonical candidate pairs via the blocking passes, capping huge blocks.
 
-    Six passes (see blocking.ALL_PASSES): four SYMMETRIC group passes (identifier /
-    exact-DOB / name-token / name-token+birth-year, _GROUPS_SQL) and two ANCHORED
-    birth-year-range passes (dob-range / dob-range+sex, _RANGE_GROUPS_SQL — the
-    §5.4 range-blocking slice).
+    Eight passes (see blocking.ALL_PASSES): six SYMMETRIC group passes (identifier /
+    exact-DOB / name-token / name-token+birth-year / dob+first-initial / name+sex,
+    _GROUPS_SQL) and two ANCHORED birth-year-range passes (dob-range / dob-range+sex,
+    _RANGE_GROUPS_SQL — the §5.4 range-blocking slice).
 
     `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only
     the named ones (unknown names raise — see blocking.resolve_enabled_passes). Filtering
@@ -394,8 +431,9 @@ def generate_candidate_pairs(
     # contributes zero pairs) — or silently skipped with the wrong statement.
     with conn.cursor() as cur:
         if enabled & SYMMETRIC_PASSES:
-            # The single %s binds the placeholder-use exclusion in the name_tokens CTE.
-            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM,))
+            # Two binds now: _PLACEHOLDER_USES_PARAM for name_tokens (first, appears first),
+            # VALUE_SENTINELS_PARAM for blocking_sex (second) -- the name+sex arm's sex source.
+            cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM))
             for pass_name, key, members in cur.fetchall():
                 if require_registered(pass_name, SYMMETRIC_PASSES) not in enabled:
                     continue

@@ -45,6 +45,14 @@ _MIRRORED_PASSES = [
     # (generator._is_placeholder_name) depends on.
     ("placeholder-use exclusion in name_tokens (§5.4)",
      _GROUPS_SQL, "use_key <> ALL(%s)"),
+    # §5.4 slice 25: the dob+first-initial arm. shares_blocking_key's first-initial
+    # clause (shared first initial + shared POINT year) claims these pairs recoverable,
+    # so the SQL arm that extracts the initial must survive. `substring(nt.token FROM 1
+    # FOR 1)` appears only in this arm's SELECT+GROUP BY, so it pins it specifically.
+    # (name+sex needs NO pin: the mirror has no clause for it — it is subsumed by the
+    # already-pinned name-token fragment.)
+    ("dob+first-initial arm: birth-year + first initial (shares_blocking_key first-initial clause)",
+     _GROUPS_SQL, "substring(nt.token FROM 1 FOR 1)"),
     # The exact-'dob' arm must keep EXCLUDING year-range rows: shares_blocking_key's
     # exact branch mirrors this exclusion, and without it two identical range strings
     # would be grouped by the SQL but not by the mirror (under-claim, safe) — while

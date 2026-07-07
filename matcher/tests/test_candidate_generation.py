@@ -203,3 +203,75 @@ def test_toggle_unknown_pass_name_raises(pg_conn):
     from cairn_matcher.pipeline.db import generate_candidate_pairs
     with pytest.raises(ValueError, match="no-such-pass"):
         generate_candidate_pairs(pg_conn, enabled_passes={"no-such-pass"})
+
+
+def test_dob_first_initial_rescues_pair_with_no_shared_name_token(pg_conn):
+    # PA "Jon" and PB "John" share NO full name token (distinct tokens) and NO exact DOB,
+    # but share birth-year 1990 and first initial 'j'. Only dob+first-initial can group
+    # them. A different-year decoy (PC, also 'j') keeps this honest: PC shares the initial
+    # but not the year, so it must NOT pair with PA/PB via this pass.
+    seed_patient(pg_conn, PA, dob=("1990-01-01", 20), names=[("Jon", 20)])
+    seed_patient(pg_conn, PB, dob=("1990-12-31", 20), names=[("John", 20)])
+    seed_patient(pg_conn, PC, dob=("1970-01-01", 20), names=[("Jane", 20)])
+    # Without the new pass (name/name+year/dob need a shared token or exact dob): no pair.
+    without = _pairs(pg_conn, enabled_passes={"dob", "name", "name+year"})
+    assert canonical_pair(PA, PB) not in without
+    # With it: PA-PB rescued; the different-year PC is not pulled in.
+    with_pass = _pairs(pg_conn, enabled_passes={"dob", "name", "name+year", "dob+first-initial"})
+    assert canonical_pair(PA, PB) in with_pass
+    assert canonical_pair(PA, PC) not in with_pass
+    assert canonical_pair(PB, PC) not in with_pass
+
+
+def test_dob_first_initial_excludes_year_range_dob(pg_conn):
+    # A §5.4 estimated-age chart (year-range precision) must NOT contribute a birth-YEAR to
+    # this point-year pass -- the anchored dob-range passes own ranges. PA (range 1988/1992)
+    # and PB (point 1990) share initial 'k' and overlapping years, but dob+first-initial is
+    # a POINT-year pass: PA has no point year, so this pass does not pair them.
+    seed_patient(pg_conn, PA, dob=("1988/1992", 20, "year-range"), names=[("Kim", 20)])
+    seed_patient(pg_conn, PB, dob=("1990-05-05", 20), names=[("Kayla", 20)])
+    pairs = _pairs(pg_conn, enabled_passes={"dob+first-initial"})
+    assert canonical_pair(PA, PB) not in pairs
+
+
+def test_name_sex_rescues_oversized_unisex_name_block(pg_conn):
+    # A heavily unisex token "sasha" is shared by three charts -> the single-token 'name'
+    # block is size 3 and, at cap=2, is skipped wholesale (every pair in it dropped). PA and
+    # PB share administrative-sex 'female'; PC is 'male'. Only name+sex can rescue PA-PB by
+    # splitting the block on sex. (This is the capped-only benefit the uncapped aggregate
+    # blocking-recall metric cannot show -- hence a direct test.)
+    seed_patient(pg_conn, PA, admin_sex=("female", 20), names=[("Sasha", 20)])
+    seed_patient(pg_conn, PB, admin_sex=("female", 20), names=[("Sasha", 20)])
+    seed_patient(pg_conn, PC, admin_sex=("male", 20), names=[("Sasha", 20)])
+    pairs, skipped = _gen(pg_conn, max_block_size=2)
+    # The oversized single-token 'name' block is still reported skipped...
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    # ...but the same-sex sub-block (sasha|female) survives and yields PA-PB.
+    assert canonical_pair(PA, PB) in pairs
+    # The opposite-sex PC is alone in its sub-block -> no pair with it via name+sex.
+    assert canonical_pair(PA, PC) not in pairs
+    assert canonical_pair(PB, PC) not in pairs
+
+
+def test_name_sex_uses_union_of_both_sex_facets(pg_conn):
+    # blocking_sex is the UNION of sex-at-birth and administrative-sex (recall-first): a
+    # chart recording only sex-at-birth and one recording only administrative-sex still
+    # share a sex value. PA (sex-at-birth 'female') and PB (administrative-sex 'female')
+    # share token "ari"; a male decoy PC oversizes the 'name' block at cap=2.
+    seed_patient(pg_conn, PA, sex=("female", 20), names=[("Ari", 20)])
+    seed_patient(pg_conn, PB, admin_sex=("female", 20), names=[("Ari", 20)])
+    seed_patient(pg_conn, PC, admin_sex=("male", 20), names=[("Ari", 20)])
+    pairs, skipped = _gen(pg_conn, max_block_size=2)
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    assert canonical_pair(PA, PB) in pairs
+
+
+def test_name_sex_ignores_unknown_sentinel_sex(pg_conn):
+    # principle 4: two charts that BOTH merely recorded sex 'unknown' must NOT be grouped by
+    # mutual ignorance. "unknown" is in adapter.VALUE_SENTINELS, so the sasha|unknown
+    # sub-block never forms; with the single-token 'name' block skipped at cap=2, no pair.
+    seed_patient(pg_conn, PA, admin_sex=("unknown", 20), names=[("Sasha", 20)])
+    seed_patient(pg_conn, PB, admin_sex=("unknown", 20), names=[("Sasha", 20)])
+    seed_patient(pg_conn, PC, admin_sex=("male", 20), names=[("Sasha", 20)])
+    pairs, _skipped = _gen(pg_conn, max_block_size=2)
+    assert canonical_pair(PA, PB) not in pairs
