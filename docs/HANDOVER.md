@@ -410,10 +410,16 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   storage ran on a **USB-2-limited dock** (power-offload workaround after a Pi 5 brown-out saga — see the §9.2
   *deployment-BOM finding*: PSU + storage-attachment path are part of the validated BOM), and on **PG 16**
   because **`cairn_pgx` is pgrx-0.12.9 / `pg16`-pinned and won't build on PG 18** (§9.3). Bonus: `cairn_pgx`
-  builds+loads on Pi arm64 (in-DB Rust surface confirmed on ARM). **Open follow-ups:** ~~(a) port `cairn_pgx` to a
-  PG-18-capable pgrx~~ **done 2026-06-25 ([PR #56](https://github.com/cairn-ehr/cairn-ehr/pull/56): pgrx 0.12.9 → 0.18.1,
-  default feature `pg16`→`pg18`)**; (b) clean re-run on **PG 18 + USB-3 SSD + official 27 W PSU** for authoritative
-  precision numbers; (c) fold the B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
+  builds+loads on Pi arm64 (in-DB Rust surface confirmed on ARM). **Follow-ups:** ~~(a) port `cairn_pgx` to a
+  PG-18-capable pgrx~~ **done 2026-06-25 (PR #56: pgrx 0.12.9 → 0.18.1)**; ~~(b) clean re-run on PG 18 + fast
+  storage + official PSU~~ **DONE 2026-07-07 → PASS, both caveats resolved
+  ([§9.5](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#95-clean-re-run-pg-18-nvme-2026-07-07-pass-both-caveats-resolved))**:
+  same 8 GB board, now on **PostgreSQL 18.4 + a PCIe NVMe HAT** (better than the USB-3 SSD the follow-up asked
+  for). Headline: B1 p95 **3.99 ms @ 2,004,000 events** (13× under budget), *faster than* the old USB-2 number
+  **at 10× the log size**, flat ×2.50 over a ×37 growth jump; B2 p95 4.5 ms/374-note chart (222×); B5 FK-index
+  shrink ×1.40 @ 2 M rows (G1–G6 pass); crypto reproduced within noise; measured **~1,515 B/event** on disk.
+  Artifacts `poc/walking-skeleton/results/betb-pi5-nvme-pg18-*`. **Remaining:** (c) fold the (now un-caveated)
+  B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
 - **easyGP session** — port the [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)
   deferred items with live easyGP schema access: the `rx!`/`tx!` type-through parser + state machine; the
   formulation/drug data source + renal/hepatic/pregnancy/paediatric **forced-manual** rule table; the
