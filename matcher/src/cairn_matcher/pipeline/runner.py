@@ -97,10 +97,18 @@ def propose(
         has_known_alias=bool(alias_evidence), unconfirmed=bool(unconfirmed_ids),
     )
     if band_value is None:
-        # Nothing to persist — but the load/veto SELECTs opened a read transaction. Close
-        # it so a batch driver iterating many sub-threshold pairs does not pin the xmin
-        # horizon (hold back vacuum) by leaving one snapshot open across the whole run.
-        conn.rollback()
+        # Nothing new to persist — but a PENDING proposal from an earlier sweep may survive
+        # for this pair (e.g. the §5.4 forcing rule surfaced it while a chart was
+        # 'unconfirmed', and it has since been identified — issue #135). Retract that stale
+        # row so a worklist stops grouping a resolved chart under a nonexistent Doe. When
+        # nothing was retracted (the common sub-threshold case), rollback() closes the
+        # read snapshot so a batch driver does not pin the xmin horizon across the whole
+        # run; when a row WAS retracted, commit() makes the withdrawal durable instead.
+        low, high = canonical_pair(a, b)
+        if db.retract_pending_proposal(conn, low, high):
+            conn.commit()
+        else:
+            conn.rollback()
         return None
     low, high = canonical_pair(a, b)
     # The marker is emitted on EVERY persisted proposal involving an unconfirmed chart —

@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS match_proposal (
     evidence           JSONB   NOT NULL,   -- per-field MatchScore breakdown (explainability)
     matcher_version    TEXT    NOT NULL,   -- cairn_matcher version + config digest (ADR-0014)
     -- The disposition axis: 'pending' -> human 'accepted'/'rejected'/'applied' (C2) or
-    -- matcher 'auto_applied'/'review' (C2b). No CHECK — deliberately open (advisory table).
+    -- matcher 'auto_applied'/'review' (C2b) or matcher 'retracted' (the pair dropped below
+    -- the review floor after being surfaced — e.g. a §5.4 forced-REVIEW Doe was identified,
+    -- issue #135; matcher-owned and reversible: a genuine re-proposal reverts it to
+    -- 'pending'). No CHECK — deliberately open (advisory table).
     status             TEXT    NOT NULL DEFAULT 'pending',  -- disposition (see band note above)
     created_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
@@ -39,5 +42,7 @@ CREATE TABLE IF NOT EXISTS match_proposal (
 );
 
 -- Advisory writer. cairn_agent is the NOLOGIN role (db/004) the matcher's login role is
--- granted into. No DELETE: retraction is a B3/sweep concern, deliberately not enabled here.
+-- granted into. Retraction is a status UPDATE ('pending' -> 'retracted'), never a DELETE:
+-- the advisory row's history is preserved (append-only-friendly), so UPDATE suffices and
+-- no DELETE is granted.
 GRANT SELECT, INSERT, UPDATE ON match_proposal TO cairn_agent;
