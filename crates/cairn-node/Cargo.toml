@@ -37,3 +37,6 @@ x509-parser = "0.16"
 [dev-dependencies]
 # integration tests connect to a local Postgres via $CAIRN_TEST_PG
 tempfile = "3"
+# ADR-0042 rendition shape: tests construct an inline Rendition directly (serde_bytes::ByteBuf).
+# MIT OR Apache-2.0; already vetted for the workspace (Task 1).
+serde_bytes = "0.11"

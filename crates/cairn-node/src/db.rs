@@ -62,6 +62,11 @@ const SCHEMA: &[(&str, &str)] = &[
     // in-DB via cairn_blob_verify (cairn_pgx >= 0.3.0), closing the honest gap
     // db/003 recorded (the check was previously an L2 promise in cairn-sync).
     ("026_blob_verify_floor", include_str!("../../../db/026_blob_verify_floor.sql")),
+    // ADR-0042: the attachment reference nests under a rendition set; both submit (db/005)
+    // and remote-apply (db/020) doors now learn a blob reference per rendition through this
+    // one shared helper (PL/pgSQL is late-bound, so the doors above may reference it before
+    // this migration defines it — all migrations load before any submit).
+    ("027_attachment_rendition_references", include_str!("../../../db/027_attachment_rendition_references.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

@@ -71,7 +71,6 @@ DECLARE
     v_actor_id      BYTEA;
     v_rows          INTEGER;
     v_merge_wall    BIGINT;
-    c               JSONB;
 BEGIN
     -- 0. Size ceiling (A7a): an oversized event would wedge the 8 MiB-capped wire and
     --    backup paths at its seq forever; refuse before any crypto work.
@@ -228,11 +227,10 @@ BEGIN
         END IF;
     END IF;
 
-    -- Learn any attachment references (reference-eager, byte-lazy; ADR-0013).
-    FOR c IN SELECT * FROM jsonb_array_elements(COALESCE(b -> 'attachments','[]'::jsonb)) LOOP
-        PERFORM blob_note_reference(decode(c ->> 'digest_hex','hex'), c ->> 'media_type',
-                                    (c ->> 'byte_len')::bigint);
-    END LOOP;
+    -- Learn any attachment references, per rendition (reference-eager, byte-lazy; ADR-0013,
+    -- rendition set per ADR-0042). Shared with the submit door via cairn_learn_attachment_refs
+    -- (db/027) so the two doors never drift.
+    PERFORM cairn_learn_attachment_refs(b);
 
     -- HLC merge with a clock-drift clamp (issue #102): the local clock never falls behind an
     -- event we accepted (the A3 invariant), BUT a remote wall implausibly far in our future is
