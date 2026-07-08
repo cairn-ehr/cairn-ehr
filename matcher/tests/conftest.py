@@ -88,8 +88,8 @@ def managed_pg_conn(dsn):
         # test asserts the exit guarantee on a healthy connection.
         try:
             _truncate_projections(conn)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"managed_pg_conn cleanup warning: failed to truncate projections: {e}")
         finally:
             conn.close()
 
