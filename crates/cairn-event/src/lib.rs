@@ -34,6 +34,7 @@ pub mod attachment;
 pub mod demographics;
 pub mod evidence;
 pub mod identity;
+pub mod identity_evidence;
 pub mod john_doe;
 
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
