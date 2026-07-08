@@ -391,11 +391,15 @@ payload, so `attachments` stays empty (zero-attachment content-address preserved
 additions (`MARK`/`BELONGINGS`/`EMS_CONTEXT_EVIDENCE_KIND` + `TEXT_EVIDENCE_KINDS` closed set + `parse_text_evidence_kind`
 typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` + `render_text_evidence_twin`); new
 `cairn-node::identity_evidence` author path (`validate_description` honest-content floor **in the library**; pure
-`build_text_evidence_body`; one-statement `assert_text_evidence` — no blob tier); `assert-identity-evidence` CLI.
+`build_text_evidence_body`; one-statement `assert_text_evidence` — no blob tier).
 Provenance fixed `clinician-observed` (relayed/hearsay in `basis`); `description` required-non-empty (floor refuses an
 empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e read-back + bad-kind/empty-description rejects
-+ CLI smoke green; `clippy --workspace --tests -D warnings` clean. **Honest limits:** free-text description only (no
-structured item list — additive-friendly); no projection/worklist/matcher signal (log-retrievable + twin-legible).
++ CLI smoke green; `clippy --workspace --tests -D warnings` clean. **Review follow-up (PR #142):** the slice-26 photo
+command and this slice's text command were **folded into one** `assert-identity-evidence --kind photo|mark|belongings|
+ems-context …` (photo takes `--file`/`--media-type`/`--descriptor`, text kinds take `--description`); the
+mutually-exclusive flag rule is a new **pure, unit-tested** `route_identity_evidence` gate and the standalone
+`assert-photo-evidence` subcommand was removed. **Honest limits:** free-text description only (no structured item list —
+additive-friendly); no projection/worklist/matcher signal (log-retrievable + twin-legible).
 **Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
 funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix.
 

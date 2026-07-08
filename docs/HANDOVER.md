@@ -36,11 +36,17 @@ Pure `cairn-event::identity_evidence` additions (`MARK`/`BELONGINGS`/`EMS_CONTEX
 closed set + `parse_text_evidence_kind` typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` +
 `render_text_evidence_twin`); a new `cairn-node::identity_evidence` author path (`validate_description` honest-content
 floor **in the library** so a future UI backend inherits it; pure `build_text_evidence_body`; one-statement
-`assert_text_evidence` — no blob tier); an `assert-identity-evidence <patient> --kind --description [--basis]` CLI.
+`assert_text_evidence` — no blob tier).
 **Decisions:** provenance fixed `clinician-observed` for all three kinds (relayed/hearsay lives in `basis`;
 ems-context example "reported by paramedic"); `description` required-non-empty (the *floor* refuses an empty claim —
 whether a UI silently defaults it is soft policy above our line, principle 12). TDD 4 tasks; e2e read-back +
 bad-kind/empty-description rejects (DB-gated); CLI smoke on a provisioned node all four behaviors confirmed.
+**Review follow-up (this session, post-review of PR #142):** the two evidence commands were **folded into one**
+`assert-identity-evidence <patient> --kind photo|mark|belongings|ems-context …` — `--kind photo` takes
+`--file`/`--media-type`/`--descriptor`, the text kinds take `--description`; the mutually-exclusive "`--file` iff
+`--kind photo`" rule is a new **pure, unit-tested** `cairn-node::identity_evidence::route_identity_evidence` gate
+(the separate `assert-photo-evidence` subcommand was removed). Also aligned `assert_text_evidence` to
+discriminator-first validation (kind then description) to match the gate.
 **Suites:** cairn-event + full cairn-node workspace green; `clippy --workspace --tests -D warnings` clean (the exact CI
 gate). **Honest limits:** free-text `description` only (no structured belongings item list — YAGNI, additive-friendly);
 no projection/worklist/matcher signal (evidence is log-retrievable + twin-legible, same as photo). Note: repo is *not*

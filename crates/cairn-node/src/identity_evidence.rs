@@ -1,16 +1,68 @@
-//! §5.4 TEXT identity-evidence author path (marks / belongings / EMS-context). The non-photo
-//! sibling of `photo_evidence.rs`: the observation is free text in the payload, so there is no
-//! blob and no attachment — the whole author path is ONE `submit_event` call. Splits into pure
-//! helpers (unit-tested here) and an async orchestrator (e2e-tested in
-//! tests/identity_evidence_text.rs).
+//! §5.4 identity-evidence author path. Two disjoint evidence shapes share one CLI command:
+//! a content-addressed photograph (the bytes ride `EventBody.attachments` — authored by
+//! `photo_evidence.rs`) and a free-text observation (marks / belongings / EMS-context, whose
+//! observation IS the payload text — authored here in ONE `submit_event` call, no blob). This
+//! module owns the shared `route_identity_evidence` gate that decides which shape a `--kind`
+//! selects, plus the TEXT path's pure helpers (unit-tested here) and its async orchestrator
+//! (e2e-tested in tests/identity_evidence_text.rs).
 
 use cairn_event::identity_evidence::{
-    parse_text_evidence_kind, render_text_evidence_twin, text_evidence_body,
+    parse_text_evidence_kind, render_text_evidence_twin, text_evidence_body, PHOTO_EVIDENCE_KIND,
     IDENTITY_EVIDENCE_EVENT_TYPE, IDENTITY_EVIDENCE_SCHEMA_VERSION,
 };
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use std::path::PathBuf;
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+/// The validated shape of an `assert-identity-evidence` invocation: a `--kind` resolved to
+/// exactly the flags that kind needs. §5.4 identity evidence comes in two disjoint shapes —
+/// a content-addressed photograph (bytes) or a free-text observation (mark/belongings/
+/// ems-context) — and one CLI command carries both. Resolving the flag combination in ONE pure,
+/// tested place keeps the "--file iff --kind photo" rule off the CLI match arm and lets a future
+/// UI backend reuse the same gate instead of re-deriving it.
+pub enum EvidenceRoute {
+    /// `--kind photo`: a content-addressed image at `file` (`media_type`), described by `descriptor`.
+    Photo { file: PathBuf, media_type: String, descriptor: String, basis: Option<String> },
+    /// A text kind (mark/belongings/ems-context) with a free-text `description`; `kind` is the
+    /// canonical `&'static str` (already run through `parse_text_evidence_kind`).
+    Text { kind: &'static str, description: String, basis: Option<String> },
+}
+
+/// PURE: resolve a raw `assert-identity-evidence` invocation into the one evidence shape its
+/// `--kind` selects, rejecting any mismatched flag combination BEFORE any DB or file I/O. Photo
+/// and text carry disjoint flags, so this is the single gate that stops them crossing:
+/// `--kind photo` needs `--file`/`--media-type`/`--descriptor` and forbids `--description`; a
+/// text kind needs `--description` and forbids the photo flags; anything else is an unknown kind.
+/// (Content checks — non-empty descriptor/description — stay in the library floors downstream,
+/// the single source of truth for principle 4; this gate is only about flag *presence*/pairing.)
+pub fn route_identity_evidence(
+    kind: &str,
+    file: Option<PathBuf>,
+    media_type: Option<String>,
+    descriptor: Option<String>,
+    description: Option<String>,
+    basis: Option<String>,
+) -> anyhow::Result<EvidenceRoute> {
+    if kind == PHOTO_EVIDENCE_KIND {
+        if description.is_some() {
+            anyhow::bail!("--description is for text kinds; --kind photo describes the image with --descriptor");
+        }
+        let file = file.ok_or_else(|| anyhow::anyhow!("--kind photo requires --file"))?;
+        let media_type = media_type.ok_or_else(|| anyhow::anyhow!("--kind photo requires --media-type"))?;
+        let descriptor = descriptor.ok_or_else(|| anyhow::anyhow!("--kind photo requires --descriptor"))?;
+        return Ok(EvidenceRoute::Photo { file, media_type, descriptor, basis });
+    }
+    if let Some(canonical) = parse_text_evidence_kind(kind) {
+        if file.is_some() || media_type.is_some() || descriptor.is_some() {
+            anyhow::bail!("--file/--media-type/--descriptor are for --kind photo; a text kind uses --description");
+        }
+        let description =
+            description.ok_or_else(|| anyhow::anyhow!("--kind {kind} requires --description"))?;
+        return Ok(EvidenceRoute::Text { kind: canonical, description, basis });
+    }
+    anyhow::bail!("unknown --kind {kind:?}; expected photo|mark|belongings|ems-context")
+}
 
 /// PURE: enforce the honest-content requirement (§5.4 / principle 4) — an evidence assertion
 /// must say what was observed, so an empty or whitespace-only description is refused. This lives
@@ -54,11 +106,11 @@ pub fn build_text_evidence_body(
     }
 }
 
-/// Author a TEXT identity-evidence event on an existing chart. Validates the description and the
-/// kind FIRST so a bad call never reaches the DB (single source of truth for both checks). No
-/// blob tier and a single statement, so no explicit transaction is needed — `submit_event` is
-/// itself atomic. Ticks the HLC once (self-committing, like `john_doe.rs`/`photo_evidence.rs`).
-/// Returns the new event id.
+/// Author a TEXT identity-evidence event on an existing chart. Validates the kind then the
+/// description FIRST so a bad call never reaches the DB (single source of truth for both checks;
+/// same discriminator-first order as `route_identity_evidence`). No blob tier and a single
+/// statement, so no explicit transaction is needed — `submit_event` is itself atomic. Ticks the
+/// HLC once (self-committing, like `john_doe.rs`/`photo_evidence.rs`). Returns the new event id.
 #[allow(clippy::too_many_arguments)] // signer + node context + the kind/description/basis inputs
 pub async fn assert_text_evidence(
     client: &Client,
@@ -70,9 +122,9 @@ pub async fn assert_text_evidence(
     description: &str,
     basis: Option<&str>,
 ) -> anyhow::Result<Uuid> {
-    validate_description(description)?;
     let canonical_kind = parse_text_evidence_kind(kind)
         .ok_or_else(|| anyhow::anyhow!("unknown identity-evidence kind {kind:?}; expected one of mark|belongings|ems-context"))?;
+    validate_description(description)?;
 
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
@@ -86,8 +138,60 @@ pub async fn assert_text_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cairn_event::identity_evidence::MARK_EVIDENCE_KIND;
 
     fn hlc() -> Hlc { Hlc { wall: 7, counter: 0, node_origin: "n".into() } }
+
+    #[test]
+    fn route_photo_requires_its_flags_and_rejects_the_text_flag() {
+        // Happy path: all photo flags present, no --description → Photo route carrying them.
+        let r = route_identity_evidence(
+            "photo", Some(PathBuf::from("f.jpg")), Some("image/jpeg".into()),
+            Some("frontal face".into()), None, Some("on arrival".into())).unwrap();
+        match r {
+            EvidenceRoute::Photo { file, media_type, descriptor, basis } => {
+                assert_eq!(file, PathBuf::from("f.jpg"));
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(descriptor, "frontal face");
+                assert_eq!(basis.as_deref(), Some("on arrival"));
+            }
+            _ => panic!("expected a photo route"),
+        }
+        // Each required photo flag missing → refused (no partial photo authored).
+        assert!(route_identity_evidence("photo", None, Some("image/jpeg".into()), Some("d".into()), None, None).is_err(), "missing --file");
+        assert!(route_identity_evidence("photo", Some(PathBuf::from("f")), None, Some("d".into()), None, None).is_err(), "missing --media-type");
+        assert!(route_identity_evidence("photo", Some(PathBuf::from("f")), Some("image/jpeg".into()), None, None, None).is_err(), "missing --descriptor");
+        // --description on a photo is a crossed-shape error.
+        assert!(route_identity_evidence("photo", Some(PathBuf::from("f")), Some("image/jpeg".into()), Some("d".into()), Some("oops".into()), None).is_err());
+    }
+
+    #[test]
+    fn route_text_kind_requires_description_and_rejects_photo_flags() {
+        // Happy path: only --description → Text route with the canonical kind.
+        let r = route_identity_evidence("mark", None, None, None, Some("scar on left forearm".into()), None).unwrap();
+        match r {
+            EvidenceRoute::Text { kind, description, .. } => {
+                assert_eq!(kind, MARK_EVIDENCE_KIND, "canonical kind");
+                assert_eq!(description, "scar on left forearm");
+            }
+            _ => panic!("expected a text route"),
+        }
+        // The other two text kinds also route as Text.
+        assert!(matches!(route_identity_evidence("belongings", None, None, None, Some("wallet".into()), None).unwrap(), EvidenceRoute::Text { .. }));
+        assert!(matches!(route_identity_evidence("ems-context", None, None, None, Some("bus stop".into()), None).unwrap(), EvidenceRoute::Text { .. }));
+        // Missing --description → refused.
+        assert!(route_identity_evidence("mark", None, None, None, None, None).is_err(), "missing --description");
+        // Any photo flag on a text kind → crossed-shape error.
+        assert!(route_identity_evidence("mark", Some(PathBuf::from("f")), None, None, Some("d".into()), None).is_err(), "--file on text kind");
+        assert!(route_identity_evidence("mark", None, Some("image/jpeg".into()), None, Some("d".into()), None).is_err(), "--media-type on text kind");
+        assert!(route_identity_evidence("mark", None, None, Some("desc".into()), Some("d".into()), None).is_err(), "--descriptor on text kind");
+    }
+
+    #[test]
+    fn route_rejects_unknown_and_miscased_kinds() {
+        assert!(route_identity_evidence("scar", None, None, None, Some("d".into()), None).is_err(), "unknown kind");
+        assert!(route_identity_evidence("Photo", Some(PathBuf::from("f")), Some("image/jpeg".into()), Some("d".into()), None, None).is_err(), "case-sensitive");
+    }
 
     #[test]
     fn validate_description_refuses_empty_and_whitespace_only() {
