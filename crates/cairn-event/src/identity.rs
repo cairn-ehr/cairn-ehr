@@ -50,7 +50,10 @@ pub fn render_link_twin(a: &LinkAssertion) -> String {
 
 /// Render the §4.5-style legibility twin for an unlink.
 pub fn render_unlink_twin(a: &LinkAssertion) -> String {
-    format!("unlink: {} ↔ {} ({})", a.subject_a, a.subject_b, a.provenance)
+    format!(
+        "unlink: {} ↔ {} ({})",
+        a.subject_a, a.subject_b, a.provenance
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +81,7 @@ pub struct DisputeAssertion<'a> {
 /// One §5.7 `identity.dispute.resolved` — closes a specific standing dispute.
 pub struct DisputeResolution<'a> {
     pub dispute_id: &'a str, // the dispute being closed (matches an opened dispute_id)
-    pub subject: &'a str,    // carried on the resolve too, so out-of-order arrival still binds the chart
+    pub subject: &'a str, // carried on the resolve too, so out-of-order arrival still binds the chart
     pub resolution: &'a str, // §4.1 — required-present, value-open (the adjudication outcome)
 }
 
@@ -106,12 +109,18 @@ pub fn dispute_resolution_body(d: &DisputeResolution) -> Value {
 /// plaintext that stays legible without the schema (the identity events are legible-
 /// critical, so the db/023 floor HARD-requires a non-empty authored twin).
 pub fn render_dispute_twin(d: &DisputeAssertion) -> String {
-    format!("dispute opened: {} — {} (dispute {})", d.subject, d.reason, d.dispute_id)
+    format!(
+        "dispute opened: {} — {} (dispute {})",
+        d.subject, d.reason, d.dispute_id
+    )
 }
 
 /// Render the §4.5-style legibility twin for a resolved dispute.
 pub fn render_dispute_resolved_twin(d: &DisputeResolution) -> String {
-    format!("dispute resolved: {} — {} (dispute {})", d.subject, d.resolution, d.dispute_id)
+    format!(
+        "dispute resolved: {} — {} (dispute {})",
+        d.subject, d.resolution, d.dispute_id
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -142,13 +151,13 @@ pub fn render_dispute_resolved_twin(d: &DisputeResolution) -> String {
 /// One §5.7 `identity.pending.asserted` — marks a chart identity-pending (unconfirmed).
 pub struct PendingAssertion<'a> {
     pub subject: &'a str, // the patient UUID registered identity-pending (string uuid)
-    pub basis: &'a str,   // §4.1 — required-present, value-open ("unconscious ED arrival, no ID", "unknown")
+    pub basis: &'a str, // §4.1 — required-present, value-open ("unconscious ED arrival, no ID", "unknown")
 }
 
 /// One §5.7 `identity.identify.asserted` — establishes identity → confirmed.
 pub struct IdentifyAssertion<'a> {
     pub subject: &'a str, // the patient UUID now identified
-    pub method: &'a str,  // §5.7 "method recorded" — required-present, value-open ("driver's licence", ...)
+    pub method: &'a str, // §5.7 "method recorded" — required-present, value-open ("driver's licence", ...)
 }
 
 /// Build the `identity.pending.asserted` payload. Both fields are mandatory — no
@@ -206,8 +215,8 @@ pub fn render_identify_twin(a: &IdentifyAssertion) -> String {
 /// One §5.5(a)/§5.7 `identity.repudiate.asserted` — marks a name value known-false.
 pub struct RepudiationAssertion<'a> {
     pub subject: &'a str, // the patient UUID whose chart carried the known-false name
-    pub value: &'a str,   // the exact known-false name string (opaque; struck from display, kept as alias)
-    pub reason: &'a str,  // §4.1 — required-present, value-open ("confessed fabricated persona", "unknown")
+    pub value: &'a str, // the exact known-false name string (opaque; struck from display, kept as alias)
+    pub reason: &'a str, // §4.1 — required-present, value-open ("confessed fabricated persona", "unknown")
 }
 
 /// Build the `identity.repudiate.asserted` payload. All three fields are mandatory —
@@ -223,7 +232,10 @@ pub fn repudiation_assertion_body(a: &RepudiationAssertion) -> Value {
 /// Render the §4.5-style legibility twin for a repudiation: profile-independent plaintext
 /// (the db/025 floor HARD-requires a non-empty authored twin, like every identity event).
 pub fn render_repudiate_twin(a: &RepudiationAssertion) -> String {
-    format!("name repudiated: {} — \"{}\" ({})", a.subject, a.value, a.reason)
+    format!(
+        "name repudiated: {} — \"{}\" ({})",
+        a.subject, a.value, a.reason
+    )
 }
 
 #[cfg(test)]
@@ -258,14 +270,20 @@ mod tests {
 
     #[test]
     fn confidence_present_when_given() {
-        let a = LinkAssertion { confidence: Some("0.91"), ..sample() };
+        let a = LinkAssertion {
+            confidence: Some("0.91"),
+            ..sample()
+        };
         let b = link_assertion_body(&a);
         assert_eq!(b["confidence"], "0.91");
     }
 
     #[test]
     fn link_and_unlink_bodies_are_identical() {
-        assert_eq!(link_assertion_body(&sample()), unlink_assertion_body(&sample()));
+        assert_eq!(
+            link_assertion_body(&sample()),
+            unlink_assertion_body(&sample())
+        );
     }
 
     #[test]
@@ -387,7 +405,10 @@ mod tests {
         let b = repudiation_assertion_body(&sample_repudiation());
         assert_eq!(b["subject"], "aaaaaaaa-0000-0000-0000-000000000001");
         assert_eq!(b["value"], "John Smith");
-        assert_eq!(b["reason"], "confessed fabricated persona at intake interview");
+        assert_eq!(
+            b["reason"],
+            "confessed fabricated persona at intake interview"
+        );
         // A repudiation carries no name `use` and no target event id — it is value-grained
         // (see the db/025 design); those keys must be absent.
         assert!(b.get("use").is_none());

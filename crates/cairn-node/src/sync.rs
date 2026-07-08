@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
+use cairn_event::{event_address, verify_self_described, SigningKey};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -30,7 +31,6 @@ use tokio_postgres::Client;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use cairn_event::{event_address, verify_self_described, SigningKey};
 
 use crate::db;
 use crate::transport::{self, TrustStore};
@@ -176,7 +176,8 @@ pub async fn refresh_trust_set(db: &Client, set: &TrustSet) -> anyhow::Result<()
         .await
         .context("snapshotting active peer pubkeys for the trust set")?;
     let fresh: HashSet<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
-    *set.write().map_err(|_| anyhow::anyhow!("trust set lock poisoned"))? = fresh;
+    *set.write()
+        .map_err(|_| anyhow::anyhow!("trust set lock poisoned"))? = fresh;
     Ok(())
 }
 
@@ -215,10 +216,21 @@ pub async fn bind_serve(
     sk: &SigningKey,
     trust: TrustStore,
 ) -> anyhow::Result<(SocketAddr, ServeConfig)> {
-    let listener = TcpListener::bind(listen).await.context("binding serve listener")?;
-    let addr = listener.local_addr().context("reading bound serve address")?;
+    let listener = TcpListener::bind(listen)
+        .await
+        .context("binding serve listener")?;
+    let addr = listener
+        .local_addr()
+        .context("reading bound serve address")?;
     let tls = transport::server_config(sk, trust)?;
-    Ok((addr, ServeConfig { listener, tls, db_conn: db_conn.to_string() }))
+    Ok((
+        addr,
+        ServeConfig {
+            listener,
+            tls,
+            db_conn: db_conn.to_string(),
+        },
+    ))
 }
 
 /// Accept pinned-mTLS sessions forever, serving each in its own task. An unpinned
@@ -279,7 +291,9 @@ async fn serve_conn(acceptor: TlsAcceptor, tcp: TcpStream, db_conn: &str) -> any
     };
     let req: Request = serde_json::from_slice(&req_bytes).context("decoding request frame")?;
 
-    let db = db::connect(db_conn).await.context("serve: connecting to DB")?;
+    let db = db::connect(db_conn)
+        .await
+        .context("serve: connecting to DB")?;
     match req {
         Request::NodeEventsAfterSeq { after_seq } => {
             stream_node_events(&mut tls, &db, after_seq).await?;
@@ -354,14 +368,23 @@ pub async fn client_config(
     trust: TrustStore,
 ) -> anyhow::Result<PullConfig> {
     let tls = transport::client_config(sk, trust)?;
-    Ok(PullConfig { tls, db_conn: db_conn.to_string() })
+    Ok(PullConfig {
+        tls,
+        db_conn: db_conn.to_string(),
+    })
 }
 
 /// Connect to `peer` over pinned mTLS, request node events after this node's cursor for
 /// `peer` (or the full set when `full_sweep`), and apply each via the in-DB gate. Opens
 /// its own short-lived DB connection; `run` uses [`pull_into`] with its cycle connection.
-pub async fn pull_once(peer: SocketAddr, cfg: PullConfig, full_sweep: bool) -> anyhow::Result<PullStats> {
-    let db = db::connect(&cfg.db_conn).await.context("pull: connecting to DB")?;
+pub async fn pull_once(
+    peer: SocketAddr,
+    cfg: PullConfig,
+    full_sweep: bool,
+) -> anyhow::Result<PullStats> {
+    let db = db::connect(&cfg.db_conn)
+        .await
+        .context("pull: connecting to DB")?;
     pull_into(peer, cfg.tls, &db, full_sweep).await
 }
 
@@ -577,9 +600,12 @@ pub async fn pull_into(
         .context("mTLS handshake (server pin)")?;
 
     let req = Request::NodeEventsAfterSeq { after_seq };
-    with_io_timeout("request write", write_frame(&mut tls, &serde_json::to_vec(&req)?))
-        .await
-        .context("sending request")?;
+    with_io_timeout(
+        "request write",
+        write_frame(&mut tls, &serde_json::to_vec(&req)?),
+    )
+    .await
+    .context("sending request")?;
 
     let mut stats = PullStats::default();
     // Highest seq we have HANDLED (applied, penned, or skip-and-swept). A frozen event
@@ -597,7 +623,10 @@ pub async fn pull_into(
         }
         let seq = i64::from_be_bytes(frame[..8].try_into().expect("8 bytes"));
         let signed = &frame[8..];
-        match db.execute("SELECT apply_remote_node_event($1)", &[&signed]).await {
+        match db
+            .execute("SELECT apply_remote_node_event($1)", &[&signed])
+            .await
+        {
             Ok(_) => {
                 stats.admitted += 1;
                 // Auto-release (issue #111): a re-offered event that now applies is no longer
@@ -644,7 +673,9 @@ pub async fn pull_into(
                         Err(qe) => {
                             // A pen WRITE error is transient infrastructure trouble; freeze
                             // conservatively rather than advancing past an un-penned refusal.
-                            eprintln!("pull: could not pen node_event at seq {seq}: {qe} — freezing");
+                            eprintln!(
+                                "pull: could not pen node_event at seq {seq}: {qe} — freezing"
+                            );
                             break;
                         }
                     }
@@ -685,9 +716,12 @@ pub async fn pull_into(
     // advance-only door. A mid-stream *transport* error returned above without reaching here,
     // so the cursor never moves past an event we did not durably handle.
     if max_seq > after_seq || full_sweep {
-        db.execute("SELECT checkpoint_sync_cursor($1,$2)", &[&peer_key, &max_seq])
-            .await
-            .context("checkpointing sync cursor")?;
+        db.execute(
+            "SELECT checkpoint_sync_cursor($1,$2)",
+            &[&peer_key, &max_seq],
+        )
+        .await
+        .context("checkpointing sync cursor")?;
     }
     // The LOUD signal: this peer's unacked pen rows AFTER the cycle. `run` logs a distinct
     // integrity line every cycle while this is non-zero — until the cause is fixed (the
@@ -726,7 +760,9 @@ pub async fn run(
     // this froze the serve-side set for the process lifetime — PR #28 review,
     // finding 1.)
     let trust_set: TrustSet = Arc::new(RwLock::new(HashSet::new()));
-    let boot_db = db::connect(db_conn).await.context("run: connecting boot DB")?;
+    let boot_db = db::connect(db_conn)
+        .await
+        .context("run: connecting boot DB")?;
     refresh_trust_set(&boot_db, &trust_set)
         .await
         .context("run: initial trust snapshot")?;
@@ -742,8 +778,7 @@ pub async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
     let mut cycle: u64 = 0;
     // Snapshot of the trust set as of the previous cycle, to detect peering changes.
-    let mut prev_trust: HashSet<String> =
-        trust_set.read().map(|s| s.clone()).unwrap_or_default();
+    let mut prev_trust: HashSet<String> = trust_set.read().map(|s| s.clone()).unwrap_or_default();
     loop {
         ticker.tick().await;
         cycle += 1;
@@ -773,8 +808,7 @@ pub async fn run(
         }
         // Full sweep on cadence OR whenever the active peer set changed this cycle (so a
         // freshly-peered node's backlog is pulled at once, not after FULL_SWEEP_EVERY).
-        let now_trust: HashSet<String> =
-            trust_set.read().map(|s| s.clone()).unwrap_or_default();
+        let now_trust: HashSet<String> = trust_set.read().map(|s| s.clone()).unwrap_or_default();
         let trust_changed = now_trust != prev_trust;
         prev_trust = now_trust;
         // `% == 0` (not `is_multiple_of`, stabilized only in Rust 1.87) keeps this

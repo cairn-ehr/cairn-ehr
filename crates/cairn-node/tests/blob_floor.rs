@@ -18,12 +18,16 @@ fn cs() -> Option<String> {
 /// The server-side message of a refused statement (tokio_postgres's Display is
 /// just "db error"), falling back to the client-side rendering.
 fn db_msg(e: &tokio_postgres::Error) -> String {
-    e.as_db_error().map(|d| d.message().to_string()).unwrap_or_else(|| e.to_string())
+    e.as_db_error()
+        .map(|d| d.message().to_string())
+        .unwrap_or_else(|| e.to_string())
 }
 
 /// Clean the blob tier tables so each test starts from an empty store.
 async fn setup(c: &Client) {
-    c.batch_execute("TRUNCATE blob_store, blob_chunk").await.unwrap();
+    c.batch_execute("TRUNCATE blob_store, blob_chunk")
+        .await
+        .unwrap();
 }
 
 /// Raw INSERT of a fully-present blob row, exactly as a bypassing client would
@@ -47,7 +51,10 @@ async fn insert_present(
 
 #[tokio::test]
 async fn wrong_bytes_cannot_be_marked_present() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -77,7 +84,10 @@ async fn wrong_bytes_cannot_be_marked_present() {
 
 #[tokio::test]
 async fn verified_bytes_insert_present_ok() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -88,7 +98,10 @@ async fn verified_bytes_insert_present_ok() {
         .await
         .expect("verified bytes are accepted");
     let present: bool = c
-        .query_one("SELECT present FROM blob_store WHERE blob_address = $1", &[&addr])
+        .query_one(
+            "SELECT present FROM blob_store WHERE blob_address = $1",
+            &[&addr],
+        )
         .await
         .unwrap()
         .get(0);
@@ -97,7 +110,10 @@ async fn verified_bytes_insert_present_ok() {
 
 #[tokio::test]
 async fn content_swap_under_present_row_refused() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -109,7 +125,11 @@ async fn content_swap_under_present_row_refused() {
     // Swap the bytes under the already-present row, keeping byte_len consistent so
     // only the hash floor can catch it.
     let swapped = b"tampered  bytes  here!!".to_vec();
-    assert_eq!(swapped.len(), content.len(), "test premise: length CHECK stays satisfied");
+    assert_eq!(
+        swapped.len(),
+        content.len(),
+        "test premise: length CHECK stays satisfied"
+    );
     let len = swapped.len() as i64;
     let err = c
         .execute(
@@ -122,7 +142,10 @@ async fn content_swap_under_present_row_refused() {
 
     // The original bytes survived.
     let stored: Vec<u8> = c
-        .query_one("SELECT content FROM blob_store WHERE blob_address = $1", &[&addr])
+        .query_one(
+            "SELECT content FROM blob_store WHERE blob_address = $1",
+            &[&addr],
+        )
         .await
         .unwrap()
         .get(0);
@@ -131,7 +154,10 @@ async fn content_swap_under_present_row_refused() {
 
 #[tokio::test]
 async fn rekeying_present_row_refused() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -154,7 +180,10 @@ async fn rekeying_present_row_refused() {
 
 #[tokio::test]
 async fn metadata_only_update_on_present_row_allowed() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -177,7 +206,10 @@ async fn metadata_only_update_on_present_row_allowed() {
 
 #[tokio::test]
 async fn present_without_content_refused() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -190,12 +222,18 @@ async fn present_without_content_refused() {
             &[&addr],
         )
         .await;
-    assert!(res.is_err(), "present = TRUE without content bytes must be refused");
+    assert!(
+        res.is_err(),
+        "present = TRUE without content bytes must be refused"
+    );
 }
 
 #[tokio::test]
 async fn reference_then_verified_flip_is_the_honest_path() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     setup(&c).await;
@@ -239,7 +277,10 @@ async fn reference_then_verified_flip_is_the_honest_path() {
     .await
     .expect("verified bytes flip a reference row to present");
     let present: bool = c
-        .query_one("SELECT present FROM blob_store WHERE blob_address = $1", &[&addr])
+        .query_one(
+            "SELECT present FROM blob_store WHERE blob_address = $1",
+            &[&addr],
+        )
         .await
         .unwrap()
         .get(0);

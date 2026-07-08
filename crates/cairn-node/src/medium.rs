@@ -172,7 +172,11 @@ pub fn build_self_attestation(
         patient_id: crate::identity::NIL_PATIENT.into(),
         event_type: SELF_ATTEST_TYPE.into(),
         schema_version: "node/1".into(),
-        hlc: Hlc { wall: 0, counter: 0, node_origin: self_node_id_hex.into() },
+        hlc: Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: self_node_id_hex.into(),
+        },
         t_effective: None,
         signer_key_id: key_id.into(),
         contributors: serde_json::json!([{"actor_id": key_id, "role": "device"}]),
@@ -184,7 +188,9 @@ pub fn build_self_attestation(
         plaintext_twin: None,
     };
     // A signing failure here is a programming error (bad key), not a runtime condition.
-    sign(&body, sk).expect("self-attestation signing").signed_bytes
+    sign(&body, sk)
+        .expect("self-attestation signing")
+        .signed_bytes
 }
 
 /// Verify a signed self-attestation against the medium it sits on. Returns `Some(self_id_hex)`
@@ -205,7 +211,11 @@ pub fn verify_self_attestation(attestation: &[u8], events: &[Vec<u8>]) -> Option
     if body.event_type != SELF_ATTEST_TYPE {
         return None;
     }
-    let self_id = body.payload.get("self_node_id_hex")?.as_str()?.to_ascii_lowercase();
+    let self_id = body
+        .payload
+        .get("self_node_id_hex")?
+        .as_str()?
+        .to_ascii_lowercase();
     // MEDIUM bind: the attestation must commit to exactly this medium's event set.
     if body.payload.get("event_set_commitment")?.as_str()? != event_set_commitment(events) {
         return None;
@@ -529,8 +539,12 @@ mod tests {
         let attacker = sk();
         // Attacker signs an attestation naming A's node-id with the attacker's OWN key, bound
         // to A's medium (so the commitment passes and the SIGNER bind is what fails).
-        let forged =
-            build_self_attestation(&attacker, &kid(&attacker), &node_id(&g_a), std::slice::from_ref(&g_a));
+        let forged = build_self_attestation(
+            &attacker,
+            &kid(&attacker),
+            &node_id(&g_a),
+            std::slice::from_ref(&g_a),
+        );
         assert_eq!(
             verify_self_attestation(&forged, &[g_a]),
             None,

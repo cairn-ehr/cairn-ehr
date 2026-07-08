@@ -3,52 +3,106 @@ use tokio_postgres::{Client, NoTls};
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 const SCHEMA: &[(&str, &str)] = &[
-    ("001_envelope",      include_str!("../../../db/001_envelope.sql")),
-    ("002_projection",    include_str!("../../../db/002_projection.sql")),
-    ("003_blobs",         include_str!("../../../db/003_blobs.sql")),
-    ("004_actors",        include_str!("../../../db/004_actors.sql")),
-    ("005_submit",        include_str!("../../../db/005_submit.sql")),
-    ("006_recall",        include_str!("../../../db/006_recall.sql")),
-    ("007_node_federation", include_str!("../../../db/007_node_federation.sql")),
+    ("001_envelope", include_str!("../../../db/001_envelope.sql")),
+    (
+        "002_projection",
+        include_str!("../../../db/002_projection.sql"),
+    ),
+    ("003_blobs", include_str!("../../../db/003_blobs.sql")),
+    ("004_actors", include_str!("../../../db/004_actors.sql")),
+    ("005_submit", include_str!("../../../db/005_submit.sql")),
+    ("006_recall", include_str!("../../../db/006_recall.sql")),
+    (
+        "007_node_federation",
+        include_str!("../../../db/007_node_federation.sql"),
+    ),
     // NOTE: db/008_surrogate_projection.sql is INTENTIONALLY not loaded here. It is a
     // spike artefact (the ADR-0031 dense-bigint surrogate-key measurement, exercised on
     // Bet B), not part of the node's runtime schema — hence the 007 -> 009 jump. Leave
     // the gap; do not "fix" it by inserting 008. (Confirmed spike-only; see issue #67.)
-    ("009_node_supersede_and_restore", include_str!("../../../db/009_node_supersede_and_restore.sql")),
-    ("010_demographics",  include_str!("../../../db/010_demographics.sql")),
-    ("011_demographics_fields", include_str!("../../../db/011_demographics_fields.sql")),
-    ("012_demographics_names",  include_str!("../../../db/012_demographics_names.sql")),
-    ("013_demographics_sex_gender", include_str!("../../../db/013_demographics_sex_gender.sql")),
-    ("014_demographics_address", include_str!("../../../db/014_demographics_address.sql")),
-    ("015_globalise_twin", include_str!("../../../db/015_globalise_twin.sql")),
-    ("016_match_veto",    include_str!("../../../db/016_match_veto.sql")),
-    ("017_match_proposal", include_str!("../../../db/017_match_proposal.sql")),
-    ("018_identity_linkage", include_str!("../../../db/018_identity_linkage.sql")),
-    ("019_apply_proposal", include_str!("../../../db/019_apply_proposal.sql")),
-    ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
+    (
+        "009_node_supersede_and_restore",
+        include_str!("../../../db/009_node_supersede_and_restore.sql"),
+    ),
+    (
+        "010_demographics",
+        include_str!("../../../db/010_demographics.sql"),
+    ),
+    (
+        "011_demographics_fields",
+        include_str!("../../../db/011_demographics_fields.sql"),
+    ),
+    (
+        "012_demographics_names",
+        include_str!("../../../db/012_demographics_names.sql"),
+    ),
+    (
+        "013_demographics_sex_gender",
+        include_str!("../../../db/013_demographics_sex_gender.sql"),
+    ),
+    (
+        "014_demographics_address",
+        include_str!("../../../db/014_demographics_address.sql"),
+    ),
+    (
+        "015_globalise_twin",
+        include_str!("../../../db/015_globalise_twin.sql"),
+    ),
+    (
+        "016_match_veto",
+        include_str!("../../../db/016_match_veto.sql"),
+    ),
+    (
+        "017_match_proposal",
+        include_str!("../../../db/017_match_proposal.sql"),
+    ),
+    (
+        "018_identity_linkage",
+        include_str!("../../../db/018_identity_linkage.sql"),
+    ),
+    (
+        "019_apply_proposal",
+        include_str!("../../../db/019_apply_proposal.sql"),
+    ),
+    (
+        "020_apply_remote_event",
+        include_str!("../../../db/020_apply_remote_event.sql"),
+    ),
     // Durable quarantine + re-offer floor for unverifiable pulled CLINICAL
     // events (issue #108): node-local operational state beside sync_state,
     // granted to cairn_node so the cairn-sync runtime can quarantine/requeue
     // without owner privileges.
-    ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
+    (
+        "021_sync_quarantine",
+        include_str!("../../../db/021_sync_quarantine.sql"),
+    ),
     // The node-plane sibling (issue #111): the same durable-trace + re-offer
     // floor for a node_event the pull loop (sync.rs) refuses as UNVERIFIABLE.
     // Keyed off the seq-ordered node plane (derived floor = MIN(refused_seq)),
     // and a separate table so a node-plane requeue is unambiguously routed
     // through apply_remote_node_event, never the clinical door.
-    ("022_node_event_quarantine", include_str!("../../../db/022_node_event_quarantine.sql")),
+    (
+        "022_node_event_quarantine",
+        include_str!("../../../db/022_node_event_quarantine.sql"),
+    ),
     // §5.7 identity `dispute` + the chart trust-state projection (C3): two additive
     // dispute event types through the reused submit_event door, a chart_dispute standing
     // overlay, and the chart_trust (confirmed / under-review) projection surfaced on
     // person_chart — the projection-side contract the rest of the §5.7 algebra composes into.
-    ("023_identity_dispute", include_str!("../../../db/023_identity_dispute.sql")),
+    (
+        "023_identity_dispute",
+        include_str!("../../../db/023_identity_dispute.sql"),
+    ),
     // §5.4/§5.7 identity-pending + `identify` + the *unconfirmed* trust state (C4): two
     // additive event types through the reused submit_event door, a chart_identity_state
     // standing overlay keyed by subject, and the reworked chart_trust projection that
     // composes under-review (dispute) ⊔ unconfirmed (pending) by highest severity —
     // completing the §5.7 confirmed/unconfirmed/under-review contract C3 opened. Leaves
     // db/023 untouched (CREATE-OR-REPLACEs the shared twin hook + chart_trust view).
-    ("024_identity_identify", include_str!("../../../db/024_identity_identify.sql")),
+    (
+        "024_identity_identify",
+        include_str!("../../../db/024_identity_identify.sql"),
+    ),
     // §5.5(a)/§5.7 `repudiate` + the known-alias pool (C5): the FIRST *suppressing* identity
     // event. A fabricated-persona name marked known-false is struck from the display winner
     // (patient_name_current anti-joins a new name_repudiation overlay) and surfaced to the
@@ -56,23 +110,37 @@ const SCHEMA: &[(&str, &str)] = &[
     // the assertion event and db/012's retained set untouched. suppressing-mode forces the
     // db/005 human-attestation gate (§5.7 "Human"). Leaves db/010–024 untouched
     // (CREATE-OR-REPLACEs the shared twin hook + patient_name_current, same column contract).
-    ("025_identity_repudiate", include_str!("../../../db/025_identity_repudiate.sql")),
+    (
+        "025_identity_repudiate",
+        include_str!("../../../db/025_identity_repudiate.sql"),
+    ),
     // The blob self-verification floor (ADR-0013 point 11): bytes that do not
     // BLAKE3-hash to the blob_address naming them can never sit present = TRUE —
     // in-DB via cairn_blob_verify (cairn_pgx >= 0.3.0), closing the honest gap
     // db/003 recorded (the check was previously an L2 promise in cairn-sync).
-    ("026_blob_verify_floor", include_str!("../../../db/026_blob_verify_floor.sql")),
+    (
+        "026_blob_verify_floor",
+        include_str!("../../../db/026_blob_verify_floor.sql"),
+    ),
     // ADR-0042: the attachment reference nests under a rendition set; both submit (db/005)
     // and remote-apply (db/020) doors now learn a blob reference per rendition through this
     // one shared helper (PL/pgSQL is late-bound, so the doors above may reference it before
     // this migration defines it — all migrations load before any submit).
-    ("027_attachment_rendition_references", include_str!("../../../db/027_attachment_rendition_references.sql")),
-    ("028_identity_evidence", include_str!("../../../db/028_identity_evidence.sql")),
+    (
+        "027_attachment_rendition_references",
+        include_str!("../../../db/027_attachment_rendition_references.sql"),
+    ),
+    (
+        "028_identity_evidence",
+        include_str!("../../../db/028_identity_evidence.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     let (client, connection) = tokio_postgres::connect(conn, NoTls).await?;
-    tokio::spawn(async move { let _ = connection.await; });
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
     Ok(client)
 }
 
@@ -87,7 +155,9 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
 pub fn is_safe_role_ident(role: &str) -> bool {
     !role.is_empty()
         && role.len() <= 63
-        && role.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && role
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
         && role.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
 }
 
@@ -125,7 +195,10 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
     // load). Without it the GRANT below fails with an opaque catalog error; check
     // first so the operator gets an actionable message ("load the schema / run init").
     let cairn_node_exists: bool = client
-        .query_one("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_node')", &[])
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_node')",
+            &[],
+        )
         .await?
         .get(0);
     if !cairn_node_exists {
@@ -154,7 +227,10 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
 pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
     for (name, sql) in SCHEMA.iter() {
-        client.batch_execute(sql).await.map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
+        client
+            .batch_execute(sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
     Ok(client)
 }
@@ -183,12 +259,15 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
 /// `node_origin`. Authoring is single-threaded on a node, so a tick->sign->submit per event
 /// is safe. The single home for every in-node authoring path — auto_apply's C2b link and
 /// john_doe's §5.4 registration both call this, rather than each re-writing the round-trip.
-pub async fn next_hlc(
-    client: &Client,
-    node_origin: &str,
-) -> anyhow::Result<cairn_event::Hlc> {
-    let row = client.query_one("SELECT wall, counter FROM node_hlc_tick()", &[]).await?;
-    Ok(cairn_event::Hlc { wall: row.get(0), counter: row.get(1), node_origin: node_origin.into() })
+pub async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<cairn_event::Hlc> {
+    let row = client
+        .query_one("SELECT wall, counter FROM node_hlc_tick()", &[])
+        .await?;
+    Ok(cairn_event::Hlc {
+        wall: row.get(0),
+        counter: row.get(1),
+        node_origin: node_origin.into(),
+    })
 }
 
 /// Test-support: a serialization guard for the DB-gated integration tests. They

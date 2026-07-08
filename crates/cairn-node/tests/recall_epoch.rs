@@ -36,9 +36,8 @@ async fn reset(c: &Client) {
 
 /// Enroll `kid` as an agent pinned to `epoch`; returns the minted actor_id.
 async fn enroll_epoch(c: &Client, kid: &str, epoch: &str) -> Vec<u8> {
-    let pinned = format!(
-        "{{\"model\":\"triage-stub\",\"version\":\"1\",\"skill_epoch\":\"{epoch}\"}}"
-    );
+    let pinned =
+        format!("{{\"model\":\"triage-stub\",\"version\":\"1\",\"skill_epoch\":\"{epoch}\"}}");
     c.query_one(
         &format!("SELECT enroll_actor('agent', '{pinned}', $1)"),
         &[&kid],
@@ -65,7 +64,11 @@ fn note(patient: Uuid, kid: &str, wall: i64) -> EventBody {
         patient_id: patient.to_string(),
         event_type: "note.added".into(),
         schema_version: "advisory/1".into(),
-        hlc: Hlc { wall, counter: 0, node_origin: "agent".into() },
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "agent".into(),
+        },
         t_effective: None,
         signer_key_id: kid.into(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "triaged"}]),
@@ -103,7 +106,10 @@ async fn epoch_events(c: &Client, kid: &str, epoch: &str) -> Vec<(String, String
 /// to exclude it — the registry-lag guard, see db/006.)
 #[tokio::test]
 async fn superseded_epoch_events_remain_selectable() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
@@ -144,7 +150,10 @@ async fn superseded_epoch_events_remain_selectable() {
 
     // A (key, epoch) pair never registered selects nothing.
     let z = epoch_events(&c, &kid, "epoch-z").await;
-    assert!(z.is_empty(), "an unregistered epoch must select nothing, got {z:?}");
+    assert!(
+        z.is_empty(),
+        "an unregistered epoch must select nothing, got {z:?}"
+    );
 }
 
 /// Ambiguous attribution (one key concurrently current for two actors) degrades
@@ -152,7 +161,10 @@ async fn superseded_epoch_events_remain_selectable() {
 /// recall sets, flagged 'unattributed' — never silently missing from either.
 #[tokio::test]
 async fn ambiguous_attribution_over_selects_never_buries() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
@@ -167,8 +179,11 @@ async fn ambiguous_attribution_over_selects_never_buries() {
     submit(&c, &e1, &sk).await;
 
     let expected = vec![(e1.event_id.clone(), "unattributed".to_string())];
-    assert_eq!(epoch_events(&c, &kid, "epoch-a").await, expected,
-        "ambiguous events must appear in every registered epoch's recall set");
+    assert_eq!(
+        epoch_events(&c, &kid, "epoch-a").await,
+        expected,
+        "ambiguous events must appear in every registered epoch's recall set"
+    );
     assert_eq!(epoch_events(&c, &kid, "epoch-b").await, expected);
 }
 
@@ -176,7 +191,10 @@ async fn ambiguous_attribution_over_selects_never_buries() {
 /// (one floor, two doors — issue #91 discipline applied to the recall key).
 #[tokio::test]
 async fn apply_remote_event_stamps_attribution_too() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
@@ -210,7 +228,10 @@ async fn apply_remote_event_stamps_attribution_too() {
 /// recall sets, flagged 'unattributed'.
 #[tokio::test]
 async fn late_arriving_remote_event_is_never_misattributed() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
@@ -233,8 +254,11 @@ async fn late_arriving_remote_event_is_never_misattributed() {
     // Both epochs must see it, honestly unattributed — a recall of epoch A (where it
     // truly belongs) must not miss it, and epoch B over-selects rather than claims.
     let expected = vec![(e1.event_id.clone(), "unattributed".to_string())];
-    assert_eq!(epoch_events(&c, &kid, "epoch-a").await, expected,
-        "a late-arriving old-epoch event must never vanish from the old epoch's recall set");
+    assert_eq!(
+        epoch_events(&c, &kid, "epoch-a").await,
+        expected,
+        "a late-arriving old-epoch event must never vanish from the old epoch's recall set"
+    );
     assert_eq!(epoch_events(&c, &kid, "epoch-b").await, expected);
 }
 
@@ -250,7 +274,10 @@ async fn late_arriving_remote_event_is_never_misattributed() {
 /// unambiguous" (principle 4).
 #[tokio::test]
 async fn registry_lag_never_buries_a_late_registered_epoch() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
@@ -289,14 +316,20 @@ async fn registry_lag_never_buries_a_late_registered_epoch() {
 /// "succeed" while recalling nothing.
 #[tokio::test]
 async fn recall_of_unknown_target_fails_loud() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     reset(&c).await;
 
     let bogus = Uuid::now_v7().to_string();
     let r = c
-        .execute("SELECT recall_event($1::text::uuid, 'fat-fingered target')", &[&bogus])
+        .execute(
+            "SELECT recall_event($1::text::uuid, 'fat-fingered target')",
+            &[&bogus],
+        )
         .await;
     assert!(r.is_err(), "recalling a nonexistent event must be refused");
 
@@ -305,9 +338,12 @@ async fn recall_of_unknown_target_fails_loud() {
     enroll_epoch(&c, &kid, "epoch-a").await;
     let e1 = note(Uuid::now_v7(), &kid, 1);
     submit(&c, &e1, &sk).await;
-    c.execute("SELECT recall_event($1::text::uuid, 'skill-epoch contamination')", &[&e1.event_id])
-        .await
-        .unwrap();
+    c.execute(
+        "SELECT recall_event($1::text::uuid, 'skill-epoch contamination')",
+        &[&e1.event_id],
+    )
+    .await
+    .unwrap();
     let n: i64 = c
         .query_one(
             "SELECT count(*) FROM recall_overlay WHERE target_event_id = $1::text::uuid",

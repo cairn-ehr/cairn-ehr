@@ -1,4 +1,6 @@
-use cairn_event::{event_address, short_fingerprint, sign, EventBody, Hlc, PairingBundle, SigningKey};
+use cairn_event::{
+    event_address, short_fingerprint, sign, EventBody, Hlc, PairingBundle, SigningKey,
+};
 use std::path::Path;
 use tokio_postgres::Client;
 
@@ -11,14 +13,24 @@ pub struct Identity {
     pub address: String,
 }
 
-fn node_event_body(event_type: &str, signer_key_id: &str, node_origin: &str,
-                   wall: i64, counter: i32, payload: serde_json::Value) -> EventBody {
+fn node_event_body(
+    event_type: &str,
+    signer_key_id: &str,
+    node_origin: &str,
+    wall: i64,
+    counter: i32,
+    payload: serde_json::Value,
+) -> EventBody {
     EventBody {
         event_id: uuid::Uuid::now_v7().to_string(),
         patient_id: NIL_PATIENT.into(),
         event_type: event_type.into(),
         schema_version: "node/1".into(),
-        hlc: Hlc { wall, counter, node_origin: node_origin.into() },
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: node_origin.into(),
+        },
         t_effective: None,
         signer_key_id: signer_key_id.into(),
         contributors: serde_json::json!([{"actor_id": signer_key_id, "role": "device"}]),
@@ -43,19 +55,33 @@ fn node_event_body(event_type: &str, signer_key_id: &str, node_origin: &str,
 /// but do NOT parallelize authoring without making tick+submit one transaction first,
 /// or the HLC↔seq correspondence silently breaks.
 async fn next_hlc(db: &Client) -> anyhow::Result<(i64, i32)> {
-    let row = db.query_one("SELECT wall, counter FROM node_hlc_tick()", &[]).await?;
+    let row = db
+        .query_one("SELECT wall, counter FROM node_hlc_tick()", &[])
+        .await?;
     Ok((row.get("wall"), row.get("counter")))
 }
 
 /// Author the genesis node.enrolled, submit it, return node_id (hex of its content-address).
-pub async fn provision(db: &Client, sk: &SigningKey, key_id: &str, display_name: &str, address: &str)
-    -> anyhow::Result<String> {
+pub async fn provision(
+    db: &Client,
+    sk: &SigningKey,
+    key_id: &str,
+    display_name: &str,
+    address: &str,
+) -> anyhow::Result<String> {
     let (wall, counter) = next_hlc(db).await?;
-    let body = node_event_body("node.enrolled", key_id, display_name, wall, counter,
-        serde_json::json!({"display_name": display_name, "address": address}));
+    let body = node_event_body(
+        "node.enrolled",
+        key_id,
+        display_name,
+        wall,
+        counter,
+        serde_json::json!({"display_name": display_name, "address": address}),
+    );
     let signed = sign(&body, sk)?;
     let signed_bytes = signed.signed_bytes.clone();
-    db.execute("SELECT submit_node_event($1)", &[&signed_bytes]).await?;
+    db.execute("SELECT submit_node_event($1)", &[&signed_bytes])
+        .await?;
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
@@ -110,15 +136,23 @@ pub async fn author_peer(
     role: Option<&str>,
 ) -> anyhow::Result<String> {
     let (wall, counter) = next_hlc(db).await?;
-    let body = node_event_body("peer.added", key_id, node_origin, wall, counter, serde_json::json!({
-        "peer_node_id_hex": peer.node_id_hex,
-        "peer_pubkey":      peer.pubkey_hex,
-        "fingerprint":      peer.fingerprint,
-        "role":             role,
-    }));
+    let body = node_event_body(
+        "peer.added",
+        key_id,
+        node_origin,
+        wall,
+        counter,
+        serde_json::json!({
+            "peer_node_id_hex": peer.node_id_hex,
+            "peer_pubkey":      peer.pubkey_hex,
+            "fingerprint":      peer.fingerprint,
+            "role":             role,
+        }),
+    );
     let signed = sign(&body, sk)?;
     let bytes = signed.signed_bytes.clone();
-    db.execute("SELECT submit_node_event($1)", &[&bytes]).await?;
+    db.execute("SELECT submit_node_event($1)", &[&bytes])
+        .await?;
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
@@ -133,12 +167,20 @@ pub async fn author_unpeer(
     peer_node_id_hex: &str,
 ) -> anyhow::Result<String> {
     let (wall, counter) = next_hlc(db).await?;
-    let body = node_event_body("peer.revoked", key_id, node_origin, wall, counter, serde_json::json!({
-        "peer_node_id_hex": peer_node_id_hex,
-    }));
+    let body = node_event_body(
+        "peer.revoked",
+        key_id,
+        node_origin,
+        wall,
+        counter,
+        serde_json::json!({
+            "peer_node_id_hex": peer_node_id_hex,
+        }),
+    );
     let signed = sign(&body, sk)?;
     let bytes = signed.signed_bytes.clone();
-    db.execute("SELECT submit_node_event($1)", &[&bytes]).await?;
+    db.execute("SELECT submit_node_event($1)", &[&bytes])
+        .await?;
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
@@ -157,11 +199,18 @@ pub async fn author_supersede(
     old_node_id_hex: &str,
 ) -> anyhow::Result<String> {
     let (wall, counter) = next_hlc(db).await?;
-    let body = node_event_body("node.superseded", key_id, node_origin, wall, counter,
-        serde_json::json!({ "superseded_node_id_hex": old_node_id_hex }));
+    let body = node_event_body(
+        "node.superseded",
+        key_id,
+        node_origin,
+        wall,
+        counter,
+        serde_json::json!({ "superseded_node_id_hex": old_node_id_hex }),
+    );
     let signed = sign(&body, sk)?;
     let bytes = signed.signed_bytes.clone();
-    db.execute("SELECT submit_node_event($1)", &[&bytes]).await?;
+    db.execute("SELECT submit_node_event($1)", &[&bytes])
+        .await?;
     Ok(hex::encode(event_address(&signed.signed_bytes)))
 }
 
@@ -230,19 +279,21 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     let id = load_local_opt(db).await?;
 
     // Count peers by status from trust_peer.
-    let rows = db.query(
-        "SELECT status, count(*) AS cnt FROM trust_peer GROUP BY status",
-        &[],
-    ).await?;
+    let rows = db
+        .query(
+            "SELECT status, count(*) AS cnt FROM trust_peer GROUP BY status",
+            &[],
+        )
+        .await?;
     let mut peers_active: i64 = 0;
     let mut peers_revoked: i64 = 0;
     for row in &rows {
         let s: String = row.get("status");
         let cnt: i64 = row.get("cnt");
         match s.as_str() {
-            "active"  => peers_active  = cnt,
+            "active" => peers_active = cnt,
             "revoked" => peers_revoked = cnt,
-            _         => {}
+            _ => {}
         }
     }
 
@@ -258,8 +309,14 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     const STUB: &str = "STUBBED (ADR-0026): no recovery escrow; key loss = node loss";
     let (key_at_rest, dr_escrow, recovery_escrow) = match kstate {
         KeyAtRest::Sealed { dual_recipient } => (
-            format!("SEALED (argon2id + xchacha20poly1305{})",
-                    if dual_recipient { "; dual-recipient" } else { "" }),
+            format!(
+                "SEALED (argon2id + xchacha20poly1305{})",
+                if dual_recipient {
+                    "; dual-recipient"
+                } else {
+                    ""
+                }
+            ),
             if dual_recipient {
                 "recovery code set (off-node escrow; ADR-0026 slice A)".to_string()
             } else {
@@ -267,10 +324,17 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
             },
             dual_recipient,
         ),
-        KeyAtRest::Plaintext =>
-            ("PLAINTEXT (0600; run `cairn-node seal-key`)".to_string(), STUB.to_string(), false),
+        KeyAtRest::Plaintext => (
+            "PLAINTEXT (0600; run `cairn-node seal-key`)".to_string(),
+            STUB.to_string(),
+            false,
+        ),
         KeyAtRest::Missing => ("MISSING".to_string(), STUB.to_string(), false),
-        KeyAtRest::Corrupt => ("CORRUPT (unparseable key file)".to_string(), STUB.to_string(), false),
+        KeyAtRest::Corrupt => (
+            "CORRUPT (unparseable key file)".to_string(),
+            STUB.to_string(),
+            false,
+        ),
     };
 
     // In-DB floor self-check: is the submit/admission gate actually unbypassable for
@@ -314,8 +378,9 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     // the key; the export is the `<medium>.localstate` sibling of the LAST backup medium
     // (its path is recorded in the backup-health sidecar we already read above).
     let lsk_present = crate::localstate::parse_sidecar(
-        &std::fs::read(crate::localstate::lsk_sidecar_path_for(key_path)).unwrap_or_default()
-    ).is_ok();
+        &std::fs::read(crate::localstate::lsk_sidecar_path_for(key_path)).unwrap_or_default(),
+    )
+    .is_ok();
     let export_present = health.as_ref().is_some_and(|h| {
         let medium = std::path::Path::new(&h.medium_path);
         crate::localstate::localstate_path_for(medium).exists()
@@ -325,7 +390,9 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     Ok(Status {
         // When un-provisioned, surface a legible sentinel rather than a blank
         // node_id, and flag `initialized=false` so callers can prompt for `init`.
-        node_id_hex: id.as_ref().map(|i| i.node_id_hex.clone())
+        node_id_hex: id
+            .as_ref()
+            .map(|i| i.node_id_hex.clone())
             .unwrap_or_else(|| "(uninitialized — run `cairn-node init`)".into()),
         initialized: id.is_some(),
         peers_active,
@@ -344,15 +411,20 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
 
 /// Query the `trust_peer` view and return the current peer set.
 pub async fn list_peers(db: &Client) -> anyhow::Result<Vec<PeerRow>> {
-    let rows = db.query(
-        "SELECT encode(peer_node_id,'hex') AS pid, COALESCE(fingerprint,'') AS fp, role, status
+    let rows = db
+        .query(
+            "SELECT encode(peer_node_id,'hex') AS pid, COALESCE(fingerprint,'') AS fp, role, status
          FROM trust_peer ORDER BY pid",
-        &[],
-    ).await?;
-    Ok(rows.iter().map(|r| PeerRow {
-        peer_node_id_hex: r.get("pid"),
-        fingerprint:      r.get("fp"),
-        role:             r.get("role"),
-        status:           r.get("status"),
-    }).collect())
+            &[],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| PeerRow {
+            peer_node_id_hex: r.get("pid"),
+            fingerprint: r.get("fp"),
+            role: r.get("role"),
+            status: r.get("status"),
+        })
+        .collect())
 }

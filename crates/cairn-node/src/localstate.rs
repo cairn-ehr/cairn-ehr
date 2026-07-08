@@ -408,10 +408,16 @@ mod tests {
         let bytes = encode_map(vec![
             ("version", ciborium::value::Value::Integer(1.into())),
             // A field from the future carrying real content this build cannot represent.
-            ("episode_wrapped_deks_v2", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+            (
+                "episode_wrapped_deks_v2",
+                ciborium::value::Value::Bytes(vec![1, 2, 3]),
+            ),
         ]);
         let err = from_cbor(&bytes).expect_err("an unknown field must be refused, not dropped");
-        assert!(matches!(err, LocalStateError::Decode(_)), "unknown field -> Decode error");
+        assert!(
+            matches!(err, LocalStateError::Decode(_)),
+            "unknown field -> Decode error"
+        );
     }
 
     #[test]
@@ -422,7 +428,10 @@ mod tests {
             "version",
             ciborium::value::Value::Integer(((SUPPORTED_LOCAL_STATE_VERSION + 1) as i32).into()),
         )]);
-        assert!(from_cbor(&bytes).is_err(), "a too-new version must be refused");
+        assert!(
+            from_cbor(&bytes).is_err(),
+            "a too-new version must be refused"
+        );
     }
 
     const OP: &str = "op-pass";

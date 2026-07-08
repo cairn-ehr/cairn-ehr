@@ -17,9 +17,15 @@
 use cairn_node::{db, identity, keystore, sync};
 use std::net::SocketAddr;
 
-fn cs_a() -> Option<String> { std::env::var("CAIRN_TEST_PG").ok() }
-fn cs_b() -> Option<String> { std::env::var("CAIRN_TEST_PG2").ok() }
-fn cs_c() -> Option<String> { std::env::var("CAIRN_TEST_PG3").ok() }
+fn cs_a() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG").ok()
+}
+fn cs_b() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG2").ok()
+}
+fn cs_c() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG3").ok()
+}
 
 // Both DB-gated tests in this file share node A's (`CAIRN_TEST_PG`) database (and
 // B's/C's) and each begins by TRUNCATEing, so they must not interleave with each
@@ -36,7 +42,11 @@ fn bundle_for(node_id_hex: &str, pubkey_hex: &str, address: &str) -> cairn_event
         address: address.into(),
         fingerprint: cairn_event::short_fingerprint(pubkey_hex).unwrap(),
         nonce: "n".into(),
-        hlc: cairn_event::Hlc { wall: 0, counter: 0, node_origin: node_id_hex.into() },
+        hlc: cairn_event::Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: node_id_hex.into(),
+        },
     }
 }
 
@@ -57,8 +67,12 @@ async fn b_pulls_and_admits_a_genesis_over_mtls() {
     let tmp = tempfile::tempdir().unwrap();
     let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
-    identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7800").await.unwrap();
-    identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7801").await.unwrap();
+    identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7800")
+        .await
+        .unwrap();
+    identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7801")
+        .await
+        .unwrap();
 
     let id_a = identity::load_local(&a).await.unwrap();
     let id_b = identity::load_local(&b).await.unwrap();
@@ -66,11 +80,27 @@ async fn b_pulls_and_admits_a_genesis_over_mtls() {
     // --- mutual peering (mTLS is mutual) ---
     // A authors peer.added(B); B authors peer.added(A).
     let bundle_b = bundle_for(&id_b.node_id_hex, &id_b.pubkey_hex, &id_b.address);
-    identity::author_peer(&a, &sk_a, &kid_a, &id_a.node_id_hex, &bundle_b, Some("peer"))
-        .await.unwrap();
+    identity::author_peer(
+        &a,
+        &sk_a,
+        &kid_a,
+        &id_a.node_id_hex,
+        &bundle_b,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
     let bundle_a = bundle_for(&id_a.node_id_hex, &id_a.pubkey_hex, &id_a.address);
-    identity::author_peer(&b, &sk_b, &kid_b, &id_b.node_id_hex, &bundle_a, Some("peer"))
-        .await.unwrap();
+    identity::author_peer(
+        &b,
+        &sk_b,
+        &kid_b,
+        &id_b.node_id_hex,
+        &bundle_a,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
 
     // --- build TrustStores from each DB's active peer set (snapshot) ---
     let trust_a = sync::trust_store_from_db(&a).await.unwrap();
@@ -81,21 +111,30 @@ async fn b_pulls_and_admits_a_genesis_over_mtls() {
 
     // --- stand up A's serve task on an ephemeral port ---
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let (addr, serve_cfg) =
-        sync::bind_serve(listen, &base_a, &sk_a, trust_a.clone()).await.unwrap();
+    let (addr, serve_cfg) = sync::bind_serve(listen, &base_a, &sk_a, trust_a.clone())
+        .await
+        .unwrap();
     let serve = tokio::spawn(sync::serve(serve_cfg));
 
     // --- B pulls from A over mTLS ---
     let client_cfg = sync::client_config(&base_b, &sk_b, trust_b).await.unwrap();
     let stats = sync::pull_once(addr, client_cfg, false).await.unwrap();
     eprintln!("pull stats: {stats:?}");
-    assert!(stats.received >= 1, "B must receive at least A's genesis frame");
+    assert!(
+        stats.received >= 1,
+        "B must receive at least A's genesis frame"
+    );
 
     // B now holds 2 enroll rows: its own genesis + A's, admitted over mTLS.
     let n: i64 = b
         .query_one("SELECT count(*) FROM node_event WHERE op='enroll'", &[])
-        .await.unwrap().get(0);
-    assert_eq!(n, 2, "B must hold its own + A's genesis enroll after the pull");
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 2,
+        "B must hold its own + A's genesis enroll after the pull"
+    );
 
     serve.abort();
 }
@@ -103,7 +142,9 @@ async fn b_pulls_and_admits_a_genesis_over_mtls() {
 /// Count node_event rows by `op` (enroll / peer / revoke) on one node's DB.
 async fn count_op(db: &tokio_postgres::Client, op: &str) -> i64 {
     db.query_one("SELECT count(*) FROM node_event WHERE op=$1", &[&op])
-        .await.unwrap().get(0)
+        .await
+        .unwrap()
+        .get(0)
 }
 
 /// THE SLICE ACCEPTANCE GATE.
@@ -141,9 +182,15 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     let (sk_b, kid_b) = keystore::generate_plaintext(&tmp.path().join("b.key")).unwrap();
     let (sk_c, kid_c) = keystore::generate_plaintext(&tmp.path().join("c.key")).unwrap();
-    identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7810").await.unwrap();
-    identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7811").await.unwrap();
-    identity::provision(&c, &sk_c, &kid_c, "C", "127.0.0.1:7812").await.unwrap();
+    identity::provision(&a, &sk_a, &kid_a, "A", "127.0.0.1:7810")
+        .await
+        .unwrap();
+    identity::provision(&b, &sk_b, &kid_b, "B", "127.0.0.1:7811")
+        .await
+        .unwrap();
+    identity::provision(&c, &sk_c, &kid_c, "C", "127.0.0.1:7812")
+        .await
+        .unwrap();
 
     let id_a = identity::load_local(&a).await.unwrap();
     let id_b = identity::load_local(&b).await.unwrap();
@@ -151,11 +198,27 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     // --- 2. MUTUAL peering between A and B (mTLS is mutual; fingerprints are
     //        confirmed in-test by passing the real bundle, bypassing the prompt). ---
     let bundle_b = bundle_for(&id_b.node_id_hex, &id_b.pubkey_hex, &id_b.address);
-    identity::author_peer(&a, &sk_a, &kid_a, &id_a.node_id_hex, &bundle_b, Some("peer"))
-        .await.unwrap();
+    identity::author_peer(
+        &a,
+        &sk_a,
+        &kid_a,
+        &id_a.node_id_hex,
+        &bundle_b,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
     let bundle_a = bundle_for(&id_a.node_id_hex, &id_a.pubkey_hex, &id_a.address);
-    identity::author_peer(&b, &sk_b, &kid_b, &id_b.node_id_hex, &bundle_a, Some("peer"))
-        .await.unwrap();
+    identity::author_peer(
+        &b,
+        &sk_b,
+        &kid_b,
+        &id_b.node_id_hex,
+        &bundle_a,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
 
     // C is provisioned but NOBODY peered with C, and C peers with nobody.
 
@@ -169,12 +232,15 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
 
     // --- stand up serve tasks for A, B, C on ephemeral ports ---
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let (addr_a, serve_cfg_a) =
-        sync::bind_serve(listen, &base_a, &sk_a, trust_a.clone()).await.unwrap();
-    let (addr_b, serve_cfg_b) =
-        sync::bind_serve(listen, &base_b, &sk_b, trust_b.clone()).await.unwrap();
-    let (addr_c, serve_cfg_c) =
-        sync::bind_serve(listen, &base_c, &sk_c, trust_c.clone()).await.unwrap();
+    let (addr_a, serve_cfg_a) = sync::bind_serve(listen, &base_a, &sk_a, trust_a.clone())
+        .await
+        .unwrap();
+    let (addr_b, serve_cfg_b) = sync::bind_serve(listen, &base_b, &sk_b, trust_b.clone())
+        .await
+        .unwrap();
+    let (addr_c, serve_cfg_c) = sync::bind_serve(listen, &base_c, &sk_c, trust_c.clone())
+        .await
+        .unwrap();
     let serve_a = tokio::spawn(sync::serve(serve_cfg_a));
     let serve_b = tokio::spawn(sync::serve(serve_cfg_b));
     let serve_c = tokio::spawn(sync::serve(serve_cfg_c));
@@ -186,38 +252,66 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     // incremental re-pull returns received=0 (cursor suppresses re-shipping).
     //
     // A pulls from B.
-    let cfg = sync::client_config(&base_a, &sk_a, trust_a.clone()).await.unwrap();
+    let cfg = sync::client_config(&base_a, &sk_a, trust_a.clone())
+        .await
+        .unwrap();
     let s_ab = sync::pull_once(addr_b, cfg, false).await.unwrap();
     eprintln!("A<-B pull: {s_ab:?}");
     // B pulls from A.
-    let cfg = sync::client_config(&base_b, &sk_b, trust_b.clone()).await.unwrap();
+    let cfg = sync::client_config(&base_b, &sk_b, trust_b.clone())
+        .await
+        .unwrap();
     let s_ba = sync::pull_once(addr_a, cfg, false).await.unwrap();
     eprintln!("B<-A pull: {s_ba:?}");
 
     // Convergence: BOTH DBs hold 2 enroll + 2 peer rows (set-union). Assert on each
     // RECEIVING node after TRUNCATE, so admitted rows can only have crossed the wire.
-    assert_eq!(count_op(&a, "enroll").await, 2, "A must hold both genesis enrolls");
-    assert_eq!(count_op(&a, "peer").await,   2, "A must hold both peer.added events");
-    assert_eq!(count_op(&b, "enroll").await, 2, "B must hold both genesis enrolls");
-    assert_eq!(count_op(&b, "peer").await,   2, "B must hold both peer.added events");
+    assert_eq!(
+        count_op(&a, "enroll").await,
+        2,
+        "A must hold both genesis enrolls"
+    );
+    assert_eq!(
+        count_op(&a, "peer").await,
+        2,
+        "A must hold both peer.added events"
+    );
+    assert_eq!(
+        count_op(&b, "enroll").await,
+        2,
+        "B must hold both genesis enrolls"
+    );
+    assert_eq!(
+        count_op(&b, "peer").await,
+        2,
+        "B must hold both peer.added events"
+    );
 
     // list_peers on each shows the other as `active`.
     let peers_a = identity::list_peers(&a).await.unwrap();
     let peers_b = identity::list_peers(&b).await.unwrap();
     assert!(
-        peers_a.iter().any(|p| p.peer_node_id_hex == id_b.node_id_hex && p.status == "active"),
+        peers_a
+            .iter()
+            .any(|p| p.peer_node_id_hex == id_b.node_id_hex && p.status == "active"),
         "A's trust_peer must show B active"
     );
     assert!(
-        peers_b.iter().any(|p| p.peer_node_id_hex == id_a.node_id_hex && p.status == "active"),
+        peers_b
+            .iter()
+            .any(|p| p.peer_node_id_hex == id_a.node_id_hex && p.status == "active"),
         "B's trust_peer must show A active"
     );
 
     // Incremental re-pull after convergence ships nothing new (cursor is current).
-    let cfg_b2 = sync::client_config(&base_b, &sk_b,
-        sync::trust_store_from_db(&b).await.unwrap()).await.unwrap();
+    let cfg_b2 = sync::client_config(&base_b, &sk_b, sync::trust_store_from_db(&b).await.unwrap())
+        .await
+        .unwrap();
     let again = sync::pull_once(addr_a, cfg_b2, false).await.unwrap();
-    assert_eq!(again.received, 0, "post-convergence incremental pull ships nothing");
+    assert_eq!(
+        again.received, 0,
+        "post-convergence incremental pull ships nothing"
+    );
 
     // --- 4. THE STRANGER: B pulls from C (nobody peered with C). ---
     // mTLS must fail (C's server pins its empty trust set; B's client doesn't trust
@@ -225,9 +319,11 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     // counts are UNCHANGED from step 3. Snapshot first, then wrap the expected
     // failure so the test asserts post-state rather than aborting.
     let b_enroll_before = count_op(&b, "enroll").await;
-    let b_peer_before   = count_op(&b, "peer").await;
+    let b_peer_before = count_op(&b, "peer").await;
 
-    let cfg = sync::client_config(&base_b, &sk_b, trust_b.clone()).await.unwrap();
+    let cfg = sync::client_config(&base_b, &sk_b, trust_b.clone())
+        .await
+        .unwrap();
     match sync::pull_once(addr_c, cfg, false).await {
         Ok(s) => {
             eprintln!("B<-C pull (stranger) unexpectedly returned Ok: {s:?}");
@@ -237,14 +333,26 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
         }
         Err(e) => eprintln!("B<-C pull (stranger) rejected at mTLS as expected: {e}"),
     }
-    assert_eq!(count_op(&b, "enroll").await, b_enroll_before, "stranger C must not add enroll rows to B");
-    assert_eq!(count_op(&b, "peer").await,   b_peer_before,   "stranger C must not add peer rows to B");
+    assert_eq!(
+        count_op(&b, "enroll").await,
+        b_enroll_before,
+        "stranger C must not add enroll rows to B"
+    );
+    assert_eq!(
+        count_op(&b, "peer").await,
+        b_peer_before,
+        "stranger C must not add peer rows to B"
+    );
 
     // --- 5. UNPEER: A revokes B, then a FRESH B-signed peer event must be denied. ---
-    identity::author_unpeer(&a, &sk_a, &kid_a, &id_a.node_id_hex, &id_b.node_id_hex).await.unwrap();
+    identity::author_unpeer(&a, &sk_a, &kid_a, &id_a.node_id_hex, &id_b.node_id_hex)
+        .await
+        .unwrap();
     let peers_a = identity::list_peers(&a).await.unwrap();
     assert!(
-        peers_a.iter().any(|p| p.peer_node_id_hex == id_b.node_id_hex && p.status == "revoked"),
+        peers_a
+            .iter()
+            .any(|p| p.peer_node_id_hex == id_b.node_id_hex && p.status == "revoked"),
         "A's trust_peer must show B revoked after author_unpeer"
     );
 
@@ -257,8 +365,16 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
         &"ee".repeat(32),
         "127.0.0.1:7899",
     );
-    identity::author_peer(&b, &sk_b, &kid_b, &id_b.node_id_hex, &bundle_d, Some("peer"))
-        .await.unwrap();
+    identity::author_peer(
+        &b,
+        &sk_b,
+        &kid_b,
+        &id_b.node_id_hex,
+        &bundle_d,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
 
     // A re-pulls from B. The handshake still succeeds (B never unpeered A, so B's
     // server still pins A; A's client still pins B's server cert — TLS pinning is a
@@ -266,7 +382,9 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     // admission gate, which is exactly what we want to prove: trust is enforced in
     // the DB, not only at the transport.
     let a_peer_before = count_op(&a, "peer").await;
-    let cfg = sync::client_config(&base_a, &sk_a, trust_a.clone()).await.unwrap();
+    let cfg = sync::client_config(&base_a, &sk_a, trust_a.clone())
+        .await
+        .unwrap();
     let s_unpeer = sync::pull_once(addr_b, cfg, false).await.unwrap();
     eprintln!("A<-B post-unpeer pull: {s_unpeer:?}");
     assert!(
@@ -276,7 +394,8 @@ async fn two_nodes_converge_then_unpeer_and_a_stranger_is_rejected() {
     );
     // No new peer row landed for that event: A's peer count is unchanged.
     assert_eq!(
-        count_op(&a, "peer").await, a_peer_before,
+        count_op(&a, "peer").await,
+        a_peer_before,
         "no new peer row may land on A from an un-trusted (unpeered) author"
     );
 

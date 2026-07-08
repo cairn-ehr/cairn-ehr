@@ -15,40 +15,55 @@
 //! This daemon carries NO merge logic (ADR-0001/§9.4): convergence is set-union +
 //! the in-DB projection trigger. It only ships bytes, verifies, and applies.
 
+use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use cairn_event::{blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation, verify_self_described, AttestationBody, EventBody, Hlc, SigningKey, CTX_EVENT};
+use cairn_event::{
+    blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
+    verify_self_described, AttestationBody, EventBody, Hlc, SigningKey, CTX_EVENT,
+};
 use serde::{Deserialize, Serialize};
 
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 const SCHEMA: &[(&str, &str)] = &[
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
-    ("002_projection", include_str!("../../../db/002_projection.sql")),
+    (
+        "002_projection",
+        include_str!("../../../db/002_projection.sql"),
+    ),
     ("003_blobs", include_str!("../../../db/003_blobs.sql")),
     ("004_actors", include_str!("../../../db/004_actors.sql")),
     ("005_submit", include_str!("../../../db/005_submit.sql")),
     ("006_recall", include_str!("../../../db/006_recall.sql")),
     // The clinical-plane sync apply door (issue #91): replicated events enter
     // event_log only through the in-DB floor, never a daemon-side raw INSERT.
-    ("020_apply_remote_event", include_str!("../../../db/020_apply_remote_event.sql")),
+    (
+        "020_apply_remote_event",
+        include_str!("../../../db/020_apply_remote_event.sql"),
+    ),
     // Durable quarantine + re-offer floor for unverifiable pulled events
     // (issue #108): a refused event leaves a durable, re-processable trace and
     // pins the fetch floor so its slot keeps being re-offered — never silent,
     // never lost.
-    ("021_sync_quarantine", include_str!("../../../db/021_sync_quarantine.sql")),
+    (
+        "021_sync_quarantine",
+        include_str!("../../../db/021_sync_quarantine.sql"),
+    ),
     // The blob self-verification floor (ADR-0013 point 11): the whole-blob
     // BLAKE3-vs-address check this daemon performs before flipping present is
     // restated in-DB (cairn_blob_verify, cairn_pgx >= 0.3.0) so a bypassing
     // raw-SQL writer cannot mark wrong bytes present either.
-    ("026_blob_verify_floor", include_str!("../../../db/026_blob_verify_floor.sql")),
+    (
+        "026_blob_verify_floor",
+        include_str!("../../../db/026_blob_verify_floor.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -339,7 +354,9 @@ fn t_effective_has_explicit_offset(t: &str) -> bool {
     }
     // Search for the offset sign only AFTER the date part (index 11 on): the date's
     // own '-' separators must not read as an offset.
-    let Some(time) = t.get(11..) else { return false };
+    let Some(time) = t.get(11..) else {
+        return false;
+    };
     match time.rfind(['+', '-']) {
         Some(p) => {
             let off = &time[p + 1..];
@@ -625,7 +642,10 @@ fn cmd_write(
         payload,
         t_effective,
     )?;
-    println!("wrote {} {} for patient {}", event_type, body.event_id, patient_id);
+    println!(
+        "wrote {} {} for patient {}",
+        event_type, body.event_id, patient_id
+    );
     Ok(())
 }
 
@@ -779,14 +799,32 @@ fn cmd_bench_insert(conn: &str, node: &str, key_path: &str, count: usize) -> R<(
         .query_one("SELECT count(*) FROM event_log", &[])?
         .get(0);
     let pid = uuid::Uuid::now_v7().to_string();
-    emit_event(&mut client, node, &sk, &kid, "patient.created", &pid, "patient/1",
-        serde_json::json!({"name":"Bench Patient","dob":"1980-01-01","sex":"U"}), None)?;
+    emit_event(
+        &mut client,
+        node,
+        &sk,
+        &kid,
+        "patient.created",
+        &pid,
+        "patient/1",
+        serde_json::json!({"name":"Bench Patient","dob":"1980-01-01","sex":"U"}),
+        None,
+    )?;
 
     let mut lat = Vec::with_capacity(count);
     for n in 0..count {
         let t = Instant::now();
-        emit_event(&mut client, node, &sk, &kid, "note.added", &pid, "note/1",
-            serde_json::json!({"text": format!("b1 maintenance sample {n}")}), None)?;
+        emit_event(
+            &mut client,
+            node,
+            &sk,
+            &kid,
+            "note.added",
+            &pid,
+            "note/1",
+            serde_json::json!({"text": format!("b1 maintenance sample {n}")}),
+            None,
+        )?;
         lat.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -866,8 +904,8 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     for _ in 0..dek_iters {
         std::hint::black_box(body_kek.encrypt(nonce, body.as_ref()).unwrap());
     }
-    let body_seal_mbps = (dek_iters as f64 * body.len() as f64 / (1 << 20) as f64)
-        / t.elapsed().as_secs_f64();
+    let body_seal_mbps =
+        (dek_iters as f64 * body.len() as f64 / (1 << 20) as f64) / t.elapsed().as_secs_f64();
 
     println!(
         "{}",
@@ -908,7 +946,12 @@ fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
                 byte_len=EXCLUDED.byte_len, fetched_at=clock_timestamp()",
         &[&addr, &media, &len, &bytes, &outboard],
     )?;
-    println!("stored blob {} ({} bytes, {})", hex::encode(&addr), len, media);
+    println!(
+        "stored blob {} ({} bytes, {})",
+        hex::encode(&addr),
+        len,
+        media
+    );
     Ok(())
 }
 
@@ -1052,11 +1095,11 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         &[&peer_name],
     )?;
     let (wall, counter): (i64, i32) = (wm.get(0), wm.get(1));
-    let floor: Option<(i64, i32)> =
-        match (wm.get::<_, Option<i64>>(2), wm.get::<_, Option<i32>>(3)) {
-            (Some(w), Some(c)) => Some((w, c)),
-            _ => None,
-        };
+    let floor: Option<(i64, i32)> = match (wm.get::<_, Option<i64>>(2), wm.get::<_, Option<i32>>(3))
+    {
+        (Some(w), Some(c)) => Some((w, c)),
+        _ => None,
+    };
 
     // Fetch from min(watermark, floor). The re-offer floor (db/021) pins the
     // fetch point at the contiguous-applied position below the oldest
@@ -1073,7 +1116,13 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     };
 
     let started = Instant::now();
-    let raw = request(peer, &Request::EventsAfter { wall: fetch_w, counter: fetch_c })?;
+    let raw = request(
+        peer,
+        &Request::EventsAfter {
+            wall: fetch_w,
+            counter: fetch_c,
+        },
+    )?;
     let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
@@ -1143,18 +1192,25 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         // the verbatim wire text is quarantined and its slot held on the floor —
         // never a whole-pull abort that would wedge the link on one bad entry
         // (the #110 review's hex-decode finding).
-        let decoded: Result<WireEntry, String> =
-            hex::decode(hexed)
-                .map_err(|e| format!("event entry is not valid hex: {e}"))
-                .and_then(|signed| {
-                    let att = resp.attestations.get(i).and_then(|o| o.as_deref())
-                        .map(hex::decode).transpose()
-                        .map_err(|e| format!("attestation entry is not valid hex: {e}"))?;
-                    let akey = resp.attester_keys.get(i).and_then(|o| o.as_deref())
-                        .map(hex::decode).transpose()
-                        .map_err(|e| format!("attester-key entry is not valid hex: {e}"))?;
-                    Ok((signed, att, akey))
-                });
+        let decoded: Result<WireEntry, String> = hex::decode(hexed)
+            .map_err(|e| format!("event entry is not valid hex: {e}"))
+            .and_then(|signed| {
+                let att = resp
+                    .attestations
+                    .get(i)
+                    .and_then(|o| o.as_deref())
+                    .map(hex::decode)
+                    .transpose()
+                    .map_err(|e| format!("attestation entry is not valid hex: {e}"))?;
+                let akey = resp
+                    .attester_keys
+                    .get(i)
+                    .and_then(|o| o.as_deref())
+                    .map(hex::decode)
+                    .transpose()
+                    .map_err(|e| format!("attester-key entry is not valid hex: {e}"))?;
+                Ok((signed, att, akey))
+            });
 
         // (bytes to pen, attestation pair, reason) for a refused entry; None if
         // the entry applied or verifies (freeze case).
@@ -1207,7 +1263,12 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
 
         if let Some(((bytes, att, akey), reason)) = refused {
             match quarantine_event(
-                client, peer_name, &bytes, att.as_deref(), akey.as_deref(), &reason,
+                client,
+                peer_name,
+                &bytes,
+                att.as_deref(),
+                akey.as_deref(),
+                &reason,
             ) {
                 Ok(true) => {
                     // A human licensed this exact exclusion (`acked`): no floor
@@ -1299,9 +1360,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         let diagnosis = if all {
             let declared = match &resp.signing_context {
                 Some(ctx) => format!("declares signing context '{ctx}'"),
-                None => {
-                    "declares no signing context (a pre-ADR-0040 build would not)".to_string()
-                }
+                None => "declares no signing context (a pre-ADR-0040 build would not)".to_string(),
             };
             format!(
                 " ALL {} shipped events are unverifiable and the peer {declared} — it \
@@ -1348,7 +1407,10 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
     // OOM the recovery path (#110 review: the pen is unbounded-ish by design —
     // quota-capped — and requeue is exactly when it is fullest).
     let digests: Vec<Vec<u8>> = client
-        .query("SELECT content_digest FROM sync_quarantine ORDER BY first_seen", &[])?
+        .query(
+            "SELECT content_digest FROM sync_quarantine ORDER BY first_seen",
+            &[],
+        )?
         .iter()
         .map(|r| r.get(0))
         .collect();
@@ -1374,7 +1436,10 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                     &[&digest],
                 )?;
                 released += 1;
-                eprintln!("requeue: released {} through the apply door", hex_prefix(digest));
+                eprintln!(
+                    "requeue: released {} through the apply door",
+                    hex_prefix(digest)
+                );
             }
             Err(e) => {
                 // Still refused: keep the row and record the door's CURRENT
@@ -1430,10 +1495,12 @@ fn connect_checked(conn: &str) -> R<postgres::Client> {
         )?
         .get(0);
     if !ok {
-        return Err("this database predates the sync-quarantine schema (db/021) this binary \
+        return Err(
+            "this database predates the sync-quarantine schema (db/021) this binary \
              requires — run `cairn-sync init --conn <same URI>` (idempotent) to apply \
              the migrations, then retry"
-            .into());
+                .into(),
+        );
     }
     Ok(client)
 }
@@ -1575,11 +1642,16 @@ fn do_blobd(
 
         // Resume: which indexes are already persisted?
         let have: HashSet<i32> = client
-            .query("SELECT chunk_index FROM blob_chunk WHERE blob_address=$1", &[&addr])?
+            .query(
+                "SELECT chunk_index FROM blob_chunk WHERE blob_address=$1",
+                &[&addr],
+            )?
             .iter()
             .map(|r| r.get::<_, i32>(0))
             .collect();
-        let todo: VecDeque<usize> = (0..n_chunks).filter(|i| !have.contains(&(*i as i32))).collect();
+        let todo: VecDeque<usize> = (0..n_chunks)
+            .filter(|i| !have.contains(&(*i as i32)))
+            .collect();
 
         if !todo.is_empty() {
             let queue = Arc::new(Mutex::new(todo));
@@ -1624,7 +1696,11 @@ fn do_blobd(
                             std::thread::sleep(Duration::from_millis(budget_ms)); // preemptible budget
                             let raw = match try_request(
                                 peer,
-                                &Request::BlobSlice { addr_hex: addr_hex.clone(), offset, len },
+                                &Request::BlobSlice {
+                                    addr_hex: addr_hex.clone(),
+                                    offset,
+                                    len,
+                                },
                             ) {
                                 Ok(r) => r,
                                 Err(_) => continue, // link drop / dead peer -> next source
@@ -1670,7 +1746,10 @@ fn do_blobd(
 
         // Assemble if every index is now present.
         let have_now: i64 = client
-            .query_one("SELECT count(*) FROM blob_chunk WHERE blob_address=$1", &[&addr])?
+            .query_one(
+                "SELECT count(*) FROM blob_chunk WHERE blob_address=$1",
+                &[&addr],
+            )?
             .get(0);
         if have_now as usize == n_chunks && n_chunks > 0 {
             let rows = client.query(
@@ -1694,7 +1773,11 @@ fn do_blobd(
                 tx.execute("DELETE FROM blob_chunk WHERE blob_address=$1", &[&addr])?;
                 tx.commit()?;
                 completed += 1;
-                eprintln!("fetched blob {} ({} bytes, verified)", &addr_hex[..16], buf.len());
+                eprintln!(
+                    "fetched blob {} ({} bytes, verified)",
+                    &addr_hex[..16],
+                    buf.len()
+                );
             } else {
                 // Per-slice verify should make this unreachable; purge and retry if not.
                 client.execute("DELETE FROM blob_chunk WHERE blob_address=$1", &[&addr])?;
@@ -1713,13 +1796,7 @@ fn do_blobd(
     }))
 }
 
-fn cmd_blobd(
-    conn: &str,
-    peers: &[String],
-    window: usize,
-    budget_ms: u64,
-    metrics: bool,
-) -> R<()> {
+fn cmd_blobd(conn: &str, peers: &[String], window: usize, budget_ms: u64, metrics: bool) -> R<()> {
     // Gated connect: the assembly flip (present := TRUE) fires the db/026
     // cairn_blob_verify trigger — a stale `.so` must fail here legibly, matching
     // the process-level gate `run` already gives its in-loop blob thread.
@@ -1738,7 +1815,14 @@ fn cmd_blobd(
 
 fn cmd_serve(conn: String, listen: &str, corrupt: bool) -> R<()> {
     let listener = TcpListener::bind(listen)?;
-    eprintln!("serving on {listen}{}", if corrupt { " (CORRUPT: test fault injection)" } else { "" });
+    eprintln!(
+        "serving on {listen}{}",
+        if corrupt {
+            " (CORRUPT: test fault injection)"
+        } else {
+            ""
+        }
+    );
     for stream in listener.incoming() {
         let stream = stream?;
         let conn = conn.clone();
@@ -1778,7 +1862,10 @@ fn cmd_run(
             }
         });
     }
-    let mut log = OpenOptions::new().create(true).append(true).open(log_path)?;
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
     let mut client = connect_checked_apply(conn)?;
     eprintln!("run: serving on {listen}, pulling {peer_name} ({peer}) every {interval_ms}ms -> {log_path}");
 
@@ -1791,20 +1878,27 @@ fn cmd_run(
     let blobs_fetched = Arc::new(AtomicU64::new(0));
     {
         let conn = conn.to_string();
-        let peers = if blob_peers.is_empty() { vec![peer.to_string()] } else { blob_peers.clone() };
+        let peers = if blob_peers.is_empty() {
+            vec![peer.to_string()]
+        } else {
+            blob_peers.clone()
+        };
         let counter = Arc::clone(&blobs_fetched);
-        std::thread::spawn(move || match postgres::Client::connect(&conn, postgres::NoTls) {
-            Ok(mut bclient) => loop {
-                match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
-                    Ok(m) => {
-                        counter.fetch_add(m["blobs_completed"].as_u64().unwrap_or(0), Ordering::Relaxed)
-                    }
-                    Err(_) => 0, // peer unreachable: the next pass retries, never fatal
-                };
-                std::thread::sleep(Duration::from_millis(interval_ms));
+        std::thread::spawn(
+            move || match postgres::Client::connect(&conn, postgres::NoTls) {
+                Ok(mut bclient) => loop {
+                    match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
+                        Ok(m) => counter.fetch_add(
+                            m["blobs_completed"].as_u64().unwrap_or(0),
+                            Ordering::Relaxed,
+                        ),
+                        Err(_) => 0, // peer unreachable: the next pass retries, never fatal
+                    };
+                    std::thread::sleep(Duration::from_millis(interval_ms));
+                },
+                Err(e) => eprintln!("blob thread could not connect: {e}"),
             },
-            Err(e) => eprintln!("blob thread could not connect: {e}"),
-        });
+        );
     }
 
     let start = Instant::now();
@@ -2010,9 +2104,15 @@ fn main() -> R<()> {
             &need(conn),
             &need(flag(&args, "--node")),
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
-            flag(&args, "--patients").and_then(|s| s.parse().ok()).unwrap_or(10),
-            flag(&args, "--count").and_then(|s| s.parse().ok()).unwrap_or(100),
-            flag(&args, "--rate").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+            flag(&args, "--patients")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+            flag(&args, "--count")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100),
+            flag(&args, "--rate")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
         )?,
         "put-blob" => cmd_put_blob(
             &need(conn),
@@ -2024,13 +2124,21 @@ fn main() -> R<()> {
             &need(conn),
             &need(flag(&args, "--node")),
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
-            flag(&args, "--count").and_then(|s| s.parse().ok()).unwrap_or(200),
+            flag(&args, "--count")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(200),
         )?,
         "chart" => cmd_chart(&need(conn), &need(flag(&args, "--patient")))?,
         "bench" => cmd_bench(
-            flag(&args, "--hash-mb").and_then(|s| s.parse().ok()).unwrap_or(256),
-            flag(&args, "--sig-iters").and_then(|s| s.parse().ok()).unwrap_or(20000),
-            flag(&args, "--dek-iters").and_then(|s| s.parse().ok()).unwrap_or(100000),
+            flag(&args, "--hash-mb")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(256),
+            flag(&args, "--sig-iters")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20000),
+            flag(&args, "--dek-iters")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100000),
         )?,
         "pull" => cmd_pull(
             &need(conn),
@@ -2042,7 +2150,9 @@ fn main() -> R<()> {
         "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
         "gen-blob" => cmd_gen_blob(
             &need(conn),
-            flag(&args, "--size-mb").and_then(|s| s.parse().ok()).unwrap_or(8),
+            flag(&args, "--size-mb")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8),
             &flag(&args, "--media").unwrap_or_else(|| "application/dicom".into()),
         )?,
         "blobd" => {
@@ -2054,8 +2164,12 @@ fn main() -> R<()> {
             cmd_blobd(
                 &need(conn),
                 &peers,
-                flag(&args, "--window").and_then(|s| s.parse().ok()).unwrap_or(4),
-                flag(&args, "--budget-ms").and_then(|s| s.parse().ok()).unwrap_or(20),
+                flag(&args, "--window")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(4),
+                flag(&args, "--budget-ms")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(20),
                 args.iter().any(|a| a == "--metrics"),
             )?
         }
@@ -2070,21 +2184,27 @@ fn main() -> R<()> {
             &need(flag(&args, "--peer")),
             &need(flag(&args, "--peer-name")),
             flags(&args, "--blob-peer"),
-            flag(&args, "--window").and_then(|s| s.parse().ok()).unwrap_or(4),
-            flag(&args, "--interval-ms").and_then(|s| s.parse().ok()).unwrap_or(2000),
-            flag(&args, "--budget-ms").and_then(|s| s.parse().ok()).unwrap_or(20),
+            flag(&args, "--window")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4),
+            flag(&args, "--interval-ms")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2000),
+            flag(&args, "--budget-ms")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20),
             &flag(&args, "--log").unwrap_or_else(|| "cairn-run.jsonl".into()),
-            flag(&args, "--duration-s").and_then(|s| s.parse().ok()).unwrap_or(0),
+            flag(&args, "--duration-s")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
         )?,
-        "sign-stdin" => cmd_sign_stdin(
-            &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
-        )?,
-        "attest-stdin" => cmd_attest_stdin(
-            &flag(&args, "--key").unwrap_or_else(|| "human.key".into()),
-        )?,
-        "key-id" => cmd_key_id(
-            &flag(&args, "--key").unwrap_or_else(|| "agent.key".into()),
-        )?,
+        "sign-stdin" => {
+            cmd_sign_stdin(&flag(&args, "--key").unwrap_or_else(|| "agent.key".into()))?
+        }
+        "attest-stdin" => {
+            cmd_attest_stdin(&flag(&args, "--key").unwrap_or_else(|| "human.key".into()))?
+        }
+        "key-id" => cmd_key_id(&flag(&args, "--key").unwrap_or_else(|| "agent.key".into()))?,
         _ => usage(),
     }
     Ok(())
@@ -2114,8 +2234,14 @@ mod tests {
         assert!(pgx_version_ok("0.2.1", "0.2.0"), "patch above floor is OK");
         assert!(pgx_version_ok("0.3.0", "0.2.0"), "minor above floor is OK");
         assert!(pgx_version_ok("1.0.0", "0.2.0"), "major above floor is OK");
-        assert!(!pgx_version_ok("0.1.9", "0.2.0"), "the pre-ADR-0040 line is refused");
-        assert!(!pgx_version_ok("0.1.0", "0.2.0"), "an older library is refused");
+        assert!(
+            !pgx_version_ok("0.1.9", "0.2.0"),
+            "the pre-ADR-0040 line is refused"
+        );
+        assert!(
+            !pgx_version_ok("0.1.0", "0.2.0"),
+            "an older library is refused"
+        );
         // Unparseable EITHER side → refused, never silently accepted.
         assert!(!pgx_version_ok("nonsense", "0.2.0"));
         assert!(!pgx_version_ok("0.2.0", "nonsense"));
@@ -2137,15 +2263,22 @@ mod tests {
         let ca = event_address(b"some signed event bytes");
         let input = format!(
             r#"{{"content_address_hex":"{}","attester_key_id":"{}","role":"attested"}}"#,
-            hex::encode(&ca), kid
+            hex::encode(&ca),
+            kid
         );
 
         let token_hex = attestation_token_hex(&input, &sk).unwrap();
         let token = hex::decode(&token_hex).unwrap();
 
-        assert!(verify_attestation(&token, &ca, &vk), "token verifies for right key + address");
+        assert!(
+            verify_attestation(&token, &ca, &vk),
+            "token verifies for right key + address"
+        );
         let other = event_address(b"a different event");
-        assert!(!verify_attestation(&token, &other, &vk), "token is bound to its content-address");
+        assert!(
+            !verify_attestation(&token, &other, &vk),
+            "token is bound to its content-address"
+        );
     }
 
     #[test]
@@ -2218,8 +2351,10 @@ mod quarantine_tests {
     /// suite touches. The returned client HOLDS the lock until dropped.
     fn locked_client(base: &str) -> postgres::Client {
         let mut c = postgres::Client::connect(base, postgres::NoTls).unwrap();
-        c.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64]).unwrap();
-        c.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;").unwrap();
+        c.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+        c.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")
+            .unwrap();
         for (_name, sql) in SCHEMA {
             c.batch_execute(sql).unwrap();
         }
@@ -2249,7 +2384,11 @@ mod quarantine_tests {
             patient_id: uuid::Uuid::now_v7().to_string(),
             event_type: "note.added".into(),
             schema_version: "note/1".into(),
-            hlc: Hlc { wall, counter: 0, node_origin: "peer-src".into() },
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: "peer-src".into(),
+            },
             t_effective: None,
             signer_key_id: kid.into(),
             contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
@@ -2267,7 +2406,9 @@ mod quarantine_tests {
         let addr = listener.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
             for _ in 0..times {
-                let Ok((mut s, _)) = listener.accept() else { break };
+                let Ok((mut s, _)) = listener.accept() else {
+                    break;
+                };
                 let _ = read_frame(&mut s);
                 let _ = write_frame(&mut s, &raw);
             }
@@ -2299,13 +2440,20 @@ mod quarantine_tests {
         )
         .unwrap()
         .iter()
-        .map(|r| QRow { peer: r.get(0), reason: r.get(1), seen_count: r.get(2) })
+        .map(|r| QRow {
+            peer: r.get(0),
+            reason: r.get(1),
+            seen_count: r.get(2),
+        })
         .collect()
     }
 
     fn watermark(c: &mut postgres::Client, peer: &str) -> (i64, i32) {
         let row = c
-            .query_one("SELECT hlc_wall, hlc_counter FROM sync_state WHERE peer=$1", &[&peer])
+            .query_one(
+                "SELECT hlc_wall, hlc_counter FROM sync_state WHERE peer=$1",
+                &[&peer],
+            )
             .unwrap();
         (row.get(0), row.get(1))
     }
@@ -2348,7 +2496,10 @@ mod quarantine_tests {
     /// floor.
     #[test]
     fn pull_pens_unverifiable_pins_floor_and_recovers_when_peer_repaired() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2360,21 +2511,32 @@ mod quarantine_tests {
         // Cycle 1: loud integrity failure, but with full progress preserved.
         let addr = serve_canned(raw.clone(), 2);
         let (msg, m) = pull_integrity_err(&mut c, &addr, "peer-a");
-        assert!(msg.contains("re-offer floor"), "error explains the floor, got: {msg}");
-        assert_eq!(m["applied_new"], 2, "both valid events applied despite the loud failure");
+        assert!(
+            msg.contains("re-offer floor"),
+            "error explains the floor, got: {msg}"
+        );
+        assert_eq!(
+            m["applied_new"], 2,
+            "both valid events applied despite the loud failure"
+        );
         assert_eq!(m["skipped_unverifiable"], 1);
         assert_eq!(m["watermark_frozen"], false, "penned, not frozen");
         assert_eq!(m["floor_active"], true);
 
-        let events: i64 =
-            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        let events: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .unwrap()
+            .get(0);
         assert_eq!(events, 2);
 
         // The durable trace: verbatim bytes + peer + a legible reason.
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 1, "exactly the garbage event is quarantined");
         assert_eq!(rows[0].peer, "peer-a");
-        assert!(!rows[0].reason.trim().is_empty(), "reason must be legible, got empty");
+        assert!(
+            !rows[0].reason.trim().is_empty(),
+            "reason must be legible, got empty"
+        );
         assert_eq!(rows[0].seen_count, 1);
         let held: Vec<u8> = c
             .query_one("SELECT signed_bytes FROM sync_quarantine", &[])
@@ -2405,11 +2567,22 @@ mod quarantine_tests {
         let raw = response_json(&[&e1, &repaired, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
         let m = do_pull(&mut c, &addr, "peer-a").unwrap();
-        assert_eq!(m["applied_new"], 1, "the repaired event is admitted automatically");
+        assert_eq!(
+            m["applied_new"], 1,
+            "the repaired event is admitted automatically"
+        );
         assert_eq!(m["skipped_unverifiable"], 0);
         assert_eq!(m["floor_active"], false);
-        assert_eq!(floor(&mut c, "peer-a"), None, "clean cycle clears the floor");
-        assert_eq!(quarantine_rows(&mut c).len(), 1, "the trace survives as history");
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            None,
+            "clean cycle clears the floor"
+        );
+        assert_eq!(
+            quarantine_rows(&mut c).len(),
+            1,
+            "the trace survives as history"
+        );
     }
 
     /// A human `acked` row is a recorded license to exclude: the same garbage
@@ -2417,7 +2590,10 @@ mod quarantine_tests {
     /// pull — the skip has become an attributable operator decision (db/021).
     #[test]
     fn acked_row_releases_floor_and_pull_succeeds() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2431,12 +2607,16 @@ mod quarantine_tests {
         assert!(floor(&mut c, "peer-a").is_some());
 
         // Operator inspects and licenses the exclusion.
-        c.execute("UPDATE sync_quarantine SET acked = TRUE", &[]).unwrap();
+        c.execute("UPDATE sync_quarantine SET acked = TRUE", &[])
+            .unwrap();
 
         // Same wire content again: quiet success, floor released.
         let m = do_pull(&mut c, &addr, "peer-a").unwrap();
         assert_eq!(m["skipped_unverifiable"], 0);
-        assert_eq!(m["skipped_acked"], 1, "the acked skip is still counted, honestly");
+        assert_eq!(
+            m["skipped_acked"], 1,
+            "the acked skip is still counted, honestly"
+        );
         assert_eq!(floor(&mut c, "peer-a"), None);
     }
 
@@ -2446,7 +2626,10 @@ mod quarantine_tests {
     /// durably. The watermark must not move.
     #[test]
     fn pull_fails_loud_when_every_event_is_unverifiable() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
 
         let g1 = b"legacy or corrupt blob one".to_vec();
@@ -2477,7 +2660,10 @@ mod quarantine_tests {
         assert!(do_pull(&mut c, &addr, "peer-legacy").is_err());
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r.seen_count == 2), "re-offers bump, never duplicate");
+        assert!(
+            rows.iter().all(|r| r.seen_count == 2),
+            "re-offers bump, never duplicate"
+        );
     }
 
     /// The silent-livelock case the old `skipped == len` heuristic missed (#110
@@ -2486,7 +2672,10 @@ mod quarantine_tests {
     /// batch mixed — the pull must STILL fail loudly (any unacked refusal is loud).
     #[test]
     fn pull_fails_loud_on_synced_link_with_unverifiable_tail() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2514,7 +2703,10 @@ mod quarantine_tests {
     /// any other unverifiable frame (verbatim wire text), valid events still apply.
     #[test]
     fn pull_pens_non_hex_entry_instead_of_wedging() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2532,12 +2724,20 @@ mod quarantine_tests {
 
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].reason.contains("not valid hex"), "legible reason: {}", rows[0].reason);
+        assert!(
+            rows[0].reason.contains("not valid hex"),
+            "legible reason: {}",
+            rows[0].reason
+        );
         let held: Vec<u8> = c
             .query_one("SELECT signed_bytes FROM sync_quarantine", &[])
             .unwrap()
             .get(0);
-        assert_eq!(held, b"zz-not-hex-at-all".to_vec(), "verbatim wire text preserved");
+        assert_eq!(
+            held,
+            b"zz-not-hex-at-all".to_vec(),
+            "verbatim wire text preserved"
+        );
     }
 
     /// At the per-peer quota the pen refuses to grow (#110 review finding 2 —
@@ -2545,7 +2745,10 @@ mod quarantine_tests {
     /// freezes instead (delayed, never lost) and the failure is loud and legible.
     #[test]
     fn pen_quota_freezes_watermark_instead_of_growing() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
 
         // Fill the pen to the row quota with synthetic traces from this peer.
@@ -2562,10 +2765,16 @@ mod quarantine_tests {
         let addr = serve_canned(raw, 1);
         let (err, m) = pull_integrity_err(&mut c, &addr, "peer-flood");
         assert!(err.contains("quota"), "error names the quota, got: {err}");
-        assert_eq!(m["watermark_frozen"], true, "over quota = freeze, never skip");
+        assert_eq!(
+            m["watermark_frozen"], true,
+            "over quota = freeze, never skip"
+        );
 
         let count: i64 = c
-            .query_one("SELECT count(*) FROM sync_quarantine WHERE peer='peer-flood'", &[])
+            .query_one(
+                "SELECT count(*) FROM sync_quarantine WHERE peer='peer-flood'",
+                &[],
+            )
             .unwrap()
             .get(0);
         assert_eq!(count, MAX_QUARANTINE_ROWS_PER_PEER, "the pen did not grow");
@@ -2576,7 +2785,10 @@ mod quarantine_tests {
     /// event's own size, so one huge frame cannot blow past the cap).
     #[test]
     fn pen_byte_quota_refuses_overshooting_frame() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
 
         // One filler row 1 KiB under the byte budget for this peer.
@@ -2595,7 +2807,10 @@ mod quarantine_tests {
         assert!(err.contains("quota"), "error names the quota, got: {err}");
         assert_eq!(m["watermark_frozen"], true);
         let rows: i64 = c
-            .query_one("SELECT count(*) FROM sync_quarantine WHERE peer='peer-fat'", &[])
+            .query_one(
+                "SELECT count(*) FROM sync_quarantine WHERE peer='peer-fat'",
+                &[],
+            )
             .unwrap()
             .get(0);
         assert_eq!(rows, 1, "the overshooting frame was not penned");
@@ -2608,7 +2823,10 @@ mod quarantine_tests {
     /// overwriting would clear the floor and permanently release the slot.
     #[test]
     fn floor_survives_pen_failure_on_reoffer_cycle() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2651,7 +2869,10 @@ mod quarantine_tests {
     /// (the peer still holds the events; they apply after the skew is fixed).
     #[test]
     fn pull_refuses_declared_context_mismatch_deterministically() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2661,16 +2882,23 @@ mod quarantine_tests {
         let addr = serve_canned(raw, 1);
         let (err, m) = pull_integrity_err(&mut c, &addr, "peer-skew");
         assert!(
-            err.contains("application/cairn-event+cbor;v=999")
-                && err.contains(CTX_EVENT.as_str()),
+            err.contains("application/cairn-event+cbor;v=999") && err.contains(CTX_EVENT.as_str()),
             "error must name BOTH contexts so the operator sees the skew, got: {err}"
         );
-        assert!(m.is_null(), "refused before any per-event work — no metrics");
+        assert!(
+            m.is_null(),
+            "refused before any per-event work — no metrics"
+        );
 
-        let events: i64 =
-            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        let events: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .unwrap()
+            .get(0);
         assert_eq!(events, 0, "nothing applied from a batch refused for skew");
-        assert!(quarantine_rows(&mut c).is_empty(), "skew-refused batch is not quarantined");
+        assert!(
+            quarantine_rows(&mut c).is_empty(),
+            "skew-refused batch is not quarantined"
+        );
         assert_eq!(watermark(&mut c, "peer-skew"), (0, 0));
     }
 
@@ -2682,7 +2910,10 @@ mod quarantine_tests {
     /// ORIGINAL verify-time reason untouched (#110 review finding 5).
     #[test]
     fn requeue_releases_quarantined_events_once_cause_is_fixed() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
 
@@ -2691,7 +2922,10 @@ mod quarantine_tests {
         // one genuinely corrupt blob that can never be released.
         let good = peer_note(&sk, &kid, WALL_2026 + 5_000);
         let junk = b"permanently corrupt".to_vec();
-        for (bytes, why) in [(&good, "simulated version-skew rejection"), (&junk, "corrupt")] {
+        for (bytes, why) in [
+            (&good, "simulated version-skew rejection"),
+            (&junk, "corrupt"),
+        ] {
             c.execute(
                 "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, reason)
                  VALUES ($1, $2, 'peer-a', $3)",
@@ -2702,11 +2936,16 @@ mod quarantine_tests {
 
         let m = do_requeue(&mut c).unwrap();
         assert_eq!(m["examined"], 2);
-        assert_eq!(m["released"], 1, "the now-valid event goes through the apply door");
+        assert_eq!(
+            m["released"], 1,
+            "the now-valid event goes through the apply door"
+        );
         assert_eq!(m["still_quarantined"], 1);
 
-        let events: i64 =
-            c.query_one("SELECT count(*) FROM event_log", &[]).unwrap().get(0);
+        let events: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .unwrap()
+            .get(0);
         assert_eq!(events, 1, "released event landed in event_log via the door");
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 1, "released row is cleared, corrupt row stays");
@@ -2721,7 +2960,10 @@ mod quarantine_tests {
         assert_eq!(listing.len(), 1);
         assert_eq!(listing[0]["reason"], "corrupt");
         assert!(
-            listing[0]["last_requeue_error"].as_str().unwrap().contains("verification"),
+            listing[0]["last_requeue_error"]
+                .as_str()
+                .unwrap()
+                .contains("verification"),
             "door refusal recorded in last_requeue_error: {}",
             listing[0]["last_requeue_error"]
         );
@@ -2733,7 +2975,10 @@ mod quarantine_tests {
     /// refused frame (#110 review finding 4).
     #[test]
     fn connect_checked_fails_legibly_on_pre_quarantine_schema() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
 
         c.batch_execute("DROP TABLE sync_quarantine").unwrap();
@@ -2748,8 +2993,12 @@ mod quarantine_tests {
         );
 
         // Restore for whatever suite runs next under the shared lock.
-        c.batch_execute(include_str!("../../../db/021_sync_quarantine.sql")).unwrap();
-        assert!(connect_checked(&base).is_ok(), "schema restored, probe passes");
+        c.batch_execute(include_str!("../../../db/021_sync_quarantine.sql"))
+            .unwrap();
+        assert!(
+            connect_checked(&base).is_ok(),
+            "schema restored, probe passes"
+        );
     }
 
     /// The loaded cairn_pgx on the test rig satisfies the ADR-0040 wire-format floor —
@@ -2758,7 +3007,10 @@ mod quarantine_tests {
     /// the missing-`cairn_pgx_version()` translation are covered in `mod tests`.
     #[test]
     fn assert_pgx_floor_passes_on_the_current_rig() {
-        let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
     }

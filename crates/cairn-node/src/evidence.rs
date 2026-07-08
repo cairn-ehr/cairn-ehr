@@ -45,7 +45,13 @@ pub struct ObservedEvidence {
 /// Assemble the estimated-age `dob` `EventBody`. Pure: `event_id`/`hlc`/the resolved
 /// year range are supplied so the body is fully testable.
 pub fn build_estimated_dob_event(
-    event_id: Uuid, patient_id: Uuid, min_year: i32, max_year: i32, basis: &str, kid: &str, hlc: Hlc,
+    event_id: Uuid,
+    patient_id: Uuid,
+    min_year: i32,
+    max_year: i32,
+    basis: &str,
+    kid: &str,
+    hlc: Hlc,
 ) -> EventBody {
     let value = format_year_range(min_year, max_year);
     EventBody {
@@ -59,13 +65,22 @@ pub fn build_estimated_dob_event(
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload: estimated_dob_body(min_year, max_year, basis, CLINICIAN_OBSERVED_PROVENANCE),
         attachments: vec![],
-        plaintext_twin: Some(render_dob_twin(&value, YEAR_RANGE_PRECISION, CLINICIAN_OBSERVED_PROVENANCE)),
+        plaintext_twin: Some(render_dob_twin(
+            &value,
+            YEAR_RANGE_PRECISION,
+            CLINICIAN_OBSERVED_PROVENANCE,
+        )),
     }
 }
 
 /// Assemble the observed-sex `administrative-sex` `EventBody`. Pure.
 pub fn build_observed_sex_event(
-    event_id: Uuid, patient_id: Uuid, value: &str, basis: Option<&str>, kid: &str, hlc: Hlc,
+    event_id: Uuid,
+    patient_id: Uuid,
+    value: &str,
+    basis: Option<&str>,
+    kid: &str,
+    hlc: Hlc,
 ) -> EventBody {
     EventBody {
         event_id: event_id.to_string(),
@@ -78,7 +93,10 @@ pub fn build_observed_sex_event(
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload: observed_sex_body(value, basis, CLINICIAN_OBSERVED_PROVENANCE),
         attachments: vec![],
-        plaintext_twin: Some(render_administrative_sex_twin(value, CLINICIAN_OBSERVED_PROVENANCE)),
+        plaintext_twin: Some(render_administrative_sex_twin(
+            value,
+            CLINICIAN_OBSERVED_PROVENANCE,
+        )),
     }
 }
 
@@ -103,15 +121,29 @@ pub async fn assert_observed_evidence(
     if let Some(a) = &ev.age {
         let (lo, hi) = birth_year_range_from_age(a.age_years, a.tolerance_years, observed_year);
         let h = crate::db::next_hlc(client, node_origin).await?;
-        signed.push(sign(&build_estimated_dob_event(Uuid::now_v7(), patient_id, lo, hi, &a.basis, kid, h), sk)?);
+        signed.push(sign(
+            &build_estimated_dob_event(Uuid::now_v7(), patient_id, lo, hi, &a.basis, kid, h),
+            sk,
+        )?);
     }
     if let Some(s) = &ev.sex {
         let h = crate::db::next_hlc(client, node_origin).await?;
-        signed.push(sign(&build_observed_sex_event(Uuid::now_v7(), patient_id, &s.value, s.basis.as_deref(), kid, h), sk)?);
+        signed.push(sign(
+            &build_observed_sex_event(
+                Uuid::now_v7(),
+                patient_id,
+                &s.value,
+                s.basis.as_deref(),
+                kid,
+                h,
+            ),
+            sk,
+        )?);
     }
     let tx = client.transaction().await?;
     for s in &signed {
-        tx.execute("SELECT submit_event($1)", &[&s.signed_bytes]).await?;
+        tx.execute("SELECT submit_event($1)", &[&s.signed_bytes])
+            .await?;
     }
     tx.commit().await?;
     Ok(())
@@ -121,14 +153,31 @@ pub async fn assert_observed_evidence(
 mod tests {
     use super::*;
 
-    fn pid() -> Uuid { Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap() }
-    fn eid() -> Uuid { Uuid::parse_str("22222222-0000-0000-0000-000000000000").unwrap() }
-    fn hlc() -> Hlc { Hlc { wall: 5, counter: 0, node_origin: "n".into() } }
+    fn pid() -> Uuid {
+        Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap()
+    }
+    fn eid() -> Uuid {
+        Uuid::parse_str("22222222-0000-0000-0000-000000000000").unwrap()
+    }
+    fn hlc() -> Hlc {
+        Hlc {
+            wall: 5,
+            counter: 0,
+            node_origin: "n".into(),
+        }
+    }
 
     #[test]
     fn estimated_dob_event_is_a_clinician_observed_year_range_dob_with_twin() {
-        let body = build_estimated_dob_event(eid(), pid(), 1981, 1991,
-            "apparent age ~40±5: dentition", "kid", hlc());
+        let body = build_estimated_dob_event(
+            eid(),
+            pid(),
+            1981,
+            1991,
+            "apparent age ~40±5: dentition",
+            "kid",
+            hlc(),
+        );
         assert_eq!(body.event_type, "demographic.field.asserted");
         assert_eq!(body.patient_id, pid().to_string());
         assert_eq!(body.payload["field"], "dob");
@@ -136,13 +185,23 @@ mod tests {
         assert_eq!(body.payload["facets"]["precision"], "year-range");
         assert_eq!(body.payload["provenance"], "clinician-observed");
         assert_eq!(body.contributors[0]["role"], "recorded");
-        assert!(body.contributors[0].get("responsibility").is_none(), "additive: no attestation");
+        assert!(
+            body.contributors[0].get("responsibility").is_none(),
+            "additive: no attestation"
+        );
         assert!(!body.plaintext_twin.as_deref().unwrap().trim().is_empty());
     }
 
     #[test]
     fn observed_sex_event_is_clinician_observed_administrative_sex() {
-        let body = build_observed_sex_event(eid(), pid(), "male", Some("external genitalia"), "kid", hlc());
+        let body = build_observed_sex_event(
+            eid(),
+            pid(),
+            "male",
+            Some("external genitalia"),
+            "kid",
+            hlc(),
+        );
         assert_eq!(body.payload["field"], "administrative-sex");
         assert_eq!(body.payload["value"], "male");
         assert_eq!(body.payload["facets"]["basis"], "external genitalia");

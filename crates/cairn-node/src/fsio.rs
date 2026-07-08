@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 /// Same-directory matters: `rename` is only atomic within one filesystem, so a temp in
 /// `/tmp` (possibly a different mount) would defeat the whole point.
 pub fn tmp_sibling(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
     name.push(".tmp");
     path.with_file_name(name)
 }
@@ -126,7 +129,11 @@ mod tests {
         let p = Path::new("/var/lib/cairn/node.key");
         let t = tmp_sibling(p);
         assert_eq!(t, Path::new("/var/lib/cairn/node.key.tmp"));
-        assert_eq!(t.parent(), p.parent(), "temp must be a sibling of the target");
+        assert_eq!(
+            t.parent(),
+            p.parent(),
+            "temp must be a sibling of the target"
+        );
     }
 
     #[test]
@@ -135,7 +142,10 @@ mod tests {
         let p = dir.path().join("medium.bin");
         atomic_write(&p, b"hello", None).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"hello");
-        assert!(!tmp_sibling(&p).exists(), "atomic write must not leave a .tmp sibling");
+        assert!(
+            !tmp_sibling(&p).exists(),
+            "atomic write must not leave a .tmp sibling"
+        );
     }
 
     #[test]
@@ -158,7 +168,10 @@ mod tests {
         std::fs::write(tmp_sibling(&p), b"garbage from a half-finished write").unwrap();
         atomic_write(&p, b"clean", None).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"clean");
-        assert!(!tmp_sibling(&p).exists(), "stale temp must be gone after a successful write");
+        assert!(
+            !tmp_sibling(&p).exists(),
+            "stale temp must be gone after a successful write"
+        );
     }
 
     #[cfg(unix)]
@@ -176,7 +189,10 @@ mod tests {
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
         atomic_write(&p, b"secret bytes", Some(0o600)).unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "a stale wide-perm temp must not leak its mode into the target");
+        assert_eq!(
+            mode, 0o600,
+            "a stale wide-perm temp must not leak its mode into the target"
+        );
     }
 
     #[cfg(unix)]
@@ -193,6 +209,10 @@ mod tests {
         // the file is readable by its owner (a trivially-true sanity check that the write
         // path didn't error) and that Some(0o600) vs None take different code paths.
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o600;
-        assert_eq!(mode & 0o400, 0o400, "owner must at least be able to read its own file");
+        assert_eq!(
+            mode & 0o400,
+            0o400,
+            "owner must at least be able to read its own file"
+        );
     }
 }

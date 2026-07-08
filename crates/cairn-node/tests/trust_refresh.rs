@@ -36,7 +36,9 @@ async fn revoking_a_peer_in_the_live_set_rejects_the_next_handshake() {
 
     // The SAME server config must now reject B's client cert.
     assert!(
-        test_handshake(server.clone(), client.clone()).await.is_err(),
+        test_handshake(server.clone(), client.clone())
+            .await
+            .is_err(),
         "a revoked peer must be rejected by the already-built serve config (no restart)"
     );
 

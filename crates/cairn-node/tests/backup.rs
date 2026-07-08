@@ -19,7 +19,9 @@ async fn provisioned_node(base: &str, keydir: &std::path::Path) -> tokio_postgre
     let a = db::connect_and_load_schema(base).await.unwrap();
     db::reset_node_federation_tables(&a).await.ok();
     let (sk, kid) = keystore::generate_plaintext(&keydir.join("node.key")).unwrap();
-    identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7912").await.unwrap();
+    identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7912")
+        .await
+        .unwrap();
 
     // A second event so the medium holds more than the genesis (exercises framing of
     // multiple events). Author a peer.added against a self-referential bundle.
@@ -30,7 +32,11 @@ async fn provisioned_node(base: &str, keydir: &std::path::Path) -> tokio_postgre
         address: "127.0.0.1:7913".into(),
         fingerprint: cairn_event::short_fingerprint(&id.pubkey_hex).unwrap(),
         nonce: "n".into(),
-        hlc: cairn_event::Hlc { wall: 0, counter: 0, node_origin: id.node_id_hex.clone() },
+        hlc: cairn_event::Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: id.node_id_hex.clone(),
+        },
     };
     identity::author_peer(&a, &sk, &kid, &id.node_id_hex, &bundle, Some("peer"))
         .await
@@ -62,14 +68,23 @@ async fn backup_exports_a_self_verifying_medium_and_records_health() {
     // (still parses to the exact event set; the signed path is exercised below + in restore).
     let medium = dir.path().join("cairn.medium");
     let health_path = backup::health_path_for(&dir.path().join("node.key"));
-    let report = backup::backup_to(&a, &medium, &health_path, 1_000, None).await.unwrap();
+    let report = backup::backup_to(&a, &medium, &health_path, 1_000, None)
+        .await
+        .unwrap();
     assert_eq!(report.event_count, 2);
-    assert_eq!(report.marker, backup::WrittenMarker::Unsigned, "no key → unsigned marker");
+    assert_eq!(
+        report.marker,
+        backup::WrittenMarker::Unsigned,
+        "no key → unsigned marker"
+    );
 
     // The medium on disk parses and every event verifies (self-verifying by construction).
     let bytes = std::fs::read(&medium).unwrap();
     let parsed = backup::parse_medium(&bytes).unwrap();
-    assert_eq!(parsed, events, "medium holds exactly the node's event set, in order");
+    assert_eq!(
+        parsed, events,
+        "medium holds exactly the node's event set, in order"
+    );
     assert!(
         backup::verify_medium_bytes(&bytes).unwrap().all_intact(),
         "the freshly written medium must fully self-verify"
@@ -100,7 +115,9 @@ async fn backup_with_key_writes_a_signed_marker_that_resolves_self() {
     let a = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&a).await.ok();
     let (sk, kid) = keystore::generate_plaintext(&dir.path().join("node.key")).unwrap();
-    identity::provision(&a, &sk, &kid, "Clinic-A", "127.0.0.1:7960").await.unwrap();
+    identity::provision(&a, &sk, &kid, "Clinic-A", "127.0.0.1:7960")
+        .await
+        .unwrap();
     let self_id = identity::load_local(&a).await.unwrap().node_id_hex;
 
     let medium = dir.path().join("cairn.medium");
@@ -108,14 +125,24 @@ async fn backup_with_key_writes_a_signed_marker_that_resolves_self() {
     let report = backup::backup_to(&a, &medium, &health_path, 1_000, Some((&sk, &kid)))
         .await
         .unwrap();
-    assert_eq!(report.marker, backup::WrittenMarker::Signed, "key present → signed marker");
+    assert_eq!(
+        report.marker,
+        backup::WrittenMarker::Signed,
+        "key present → signed marker"
+    );
 
     // Re-read the on-disk medium and resolve self through the signed marker.
     let bytes = std::fs::read(&medium).unwrap();
     let container = cairn_node::medium::parse_container(&bytes).unwrap();
-    assert!(matches!(container.self_marker, Some(cairn_node::medium::SelfMarker::Signed(_))));
+    assert!(matches!(
+        container.self_marker,
+        Some(cairn_node::medium::SelfMarker::Signed(_))
+    ));
     let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
-    assert_eq!(dead.node_id_hex, self_id, "signed marker resolves to this node");
+    assert_eq!(
+        dead.node_id_hex, self_id,
+        "signed marker resolves to this node"
+    );
     assert_eq!(dead.provenance, cairn_node::restore::Provenance::Signed);
 }
 
@@ -133,7 +160,9 @@ async fn a_bitrotted_medium_fails_self_verification() {
 
     let medium = dir.path().join("cairn.medium");
     let health_path = backup::health_path_for(&dir.path().join("node.key"));
-    backup::backup_to(&a, &medium, &health_path, 1_000, None).await.unwrap();
+    backup::backup_to(&a, &medium, &health_path, 1_000, None)
+        .await
+        .unwrap();
 
     // Corrupt a byte inside the FIRST event's body (parse -> flip -> re-serialize), so the
     // container still parses structurally but that event's signature no longer checks.
@@ -144,6 +173,13 @@ async fn a_bitrotted_medium_fails_self_verification() {
     parsed[0][mid] ^= 0xff;
     let corrupted = cairn_node::medium::serialize_container(None, &parsed);
     let report = backup::verify_medium_bytes(&corrupted).unwrap();
-    assert!(!report.all_intact(), "a corrupted medium must fail verification");
-    assert_eq!(report.first_bad, Some(0), "verification must point at the corrupt event");
+    assert!(
+        !report.all_intact(),
+        "a corrupted medium must fail verification"
+    );
+    assert_eq!(
+        report.first_bad,
+        Some(0),
+        "verification must point at the corrupt event"
+    );
 }

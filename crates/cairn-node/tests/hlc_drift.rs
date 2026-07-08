@@ -53,11 +53,21 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 
 #[tokio::test]
 async fn config_fn_reports_24h() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let ms: i64 = c.query_one("SELECT cairn_max_hlc_drift_ms()", &[]).await.unwrap().get(0);
-    assert_eq!(ms, DRIFT_MS, "the DB ceiling must match the constant this suite reasons with");
+    let ms: i64 = c
+        .query_one("SELECT cairn_max_hlc_drift_ms()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        ms, DRIFT_MS,
+        "the DB ceiling must match the constant this suite reasons with"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +83,11 @@ fn b_genesis(wall: i64) -> (Vec<u8>, String, String) {
         patient_id: identity::NIL_PATIENT.into(),
         event_type: "node.enrolled".into(),
         schema_version: "node/1".into(),
-        hlc: Hlc { wall, counter: 0, node_origin: "B".into() },
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "B".into(),
+        },
         t_effective: None,
         signer_key_id: kid_b.clone(),
         contributors: serde_json::json!([{"actor_id": kid_b, "role": "device"}]),
@@ -88,8 +102,14 @@ fn b_genesis(wall: i64) -> (Vec<u8>, String, String) {
 
 /// Provision A and record an active peer(B) with B's real node_id + pubkey, so B's genesis
 /// would pass the admission trust check — isolating the drift guard as the only variable.
-async fn provision_a_trusting_b(c: &Client, b_node_id: &str, b_pubkey: &str) -> (cairn_event::SigningKey, String) {
-    c.batch_execute("TRUNCATE node_event, local_node").await.ok();
+async fn provision_a_trusting_b(
+    c: &Client,
+    b_node_id: &str,
+    b_pubkey: &str,
+) -> (cairn_event::SigningKey, String) {
+    c.batch_execute("TRUNCATE node_event, local_node")
+        .await
+        .ok();
     // Reset the SHARED hlc_state singleton so the GREATEST merge these tests assert on is
     // deterministic. `provision` below ticks it back up to `now` (safely below the
     // within-ceiling future wall we admit), but a prior test can leave it ARBITRARILY high
@@ -97,24 +117,37 @@ async fn provision_a_trusting_b(c: &Client, b_node_id: &str, b_pubkey: &str) -> 
     // then keep that stale high value instead of merging our admitted event forward. (This
     // non-hermeticity passes single-threaded locally but fails under the parallel workspace
     // run's ordering — caught by the CI gate, exactly what it is for.)
-    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0").await.ok();
+    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+        .await
+        .ok();
     let tmp = tempfile::tempdir().unwrap();
     let (sk_a, kid_a) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
-    identity::provision(c, &sk_a, &kid_a, "A", "127.0.0.1:7900").await.unwrap();
+    identity::provision(c, &sk_a, &kid_a, "A", "127.0.0.1:7900")
+        .await
+        .unwrap();
     let bundle = PairingBundle {
         node_id_hex: b_node_id.into(),
         pubkey_hex: b_pubkey.into(),
         address: "127.0.0.1:7901".into(),
         fingerprint: cairn_event::short_fingerprint(b_pubkey).unwrap(),
         nonce: "n".into(),
-        hlc: Hlc { wall: 0, counter: 0, node_origin: b_node_id.into() },
+        hlc: Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: b_node_id.into(),
+        },
     };
-    identity::author_peer(c, &sk_a, &kid_a, "A", &bundle, Some("peer")).await.unwrap();
+    identity::author_peer(c, &sk_a, &kid_a, "A", &bundle, Some("peer"))
+        .await
+        .unwrap();
     (sk_a, kid_a)
 }
 
 async fn hlc_state(c: &Client) -> (i64, i32) {
-    let r = c.query_one("SELECT hlc_wall, hlc_counter FROM hlc_state WHERE id", &[]).await.unwrap();
+    let r = c
+        .query_one("SELECT hlc_wall, hlc_counter FROM hlc_state WHERE id", &[])
+        .await
+        .unwrap();
     (r.get(0), r.get(1))
 }
 
@@ -122,7 +155,10 @@ async fn hlc_state(c: &Client) -> (i64, i32) {
 /// refused (drift, not trust — B is trusted), and the local clock is NOT ratcheted.
 #[tokio::test]
 async fn node_plane_rejects_insane_future_and_does_not_ratchet_the_clock() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
@@ -144,7 +180,11 @@ async fn node_plane_rejects_insane_future_and_does_not_ratchet_the_clock() {
 
     // The rejection RAISEd before the merge, and the whole statement rolled back — the
     // clock is exactly where it was, and the poison value never entered node_event.
-    assert_eq!(hlc_state(&c).await, before, "a drift-refused event must not advance hlc_state");
+    assert_eq!(
+        hlc_state(&c).await,
+        before,
+        "a drift-refused event must not advance hlc_state"
+    );
     let admitted: i64 = c
         .query_one("SELECT count(*) FROM node_event WHERE op = 'enroll' AND subject_node_id = decode($1,'hex')", &[&b_node_id])
         .await
@@ -157,7 +197,10 @@ async fn node_plane_rejects_insane_future_and_does_not_ratchet_the_clock() {
 /// advance the local clock — the guard must not over-reject honest clock skew.
 #[tokio::test]
 async fn node_plane_admits_within_ceiling_and_merges_forward() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
@@ -175,9 +218,16 @@ async fn node_plane_admits_within_ceiling_and_merges_forward() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(stored, sane_future, "the admitted genesis keeps its asserted wall");
+    assert_eq!(
+        stored, sane_future,
+        "the admitted genesis keeps its asserted wall"
+    );
     // The clock merged forward to the admitted (future-but-sane) wall.
-    assert_eq!(hlc_state(&c).await.0, sane_future, "the local clock must merge forward to an admitted event");
+    assert_eq!(
+        hlc_state(&c).await.0,
+        sane_future,
+        "the local clock must merge forward to an admitted event"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +242,9 @@ async fn clinical_setup(c: &Client) -> (cairn_event::SigningKey, String) {
     )
     .await
     .unwrap();
-    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0").await.unwrap();
+    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+        .await
+        .unwrap();
     let (sk, kid) = generate_key().unwrap();
     c.execute(
         "SELECT enroll_actor('agent', '{\"model\":\"sync-peer-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
@@ -209,7 +261,11 @@ fn note(kid: &str, patient: Uuid, wall: i64) -> EventBody {
         patient_id: patient.to_string(),
         event_type: "note.added".into(),
         schema_version: "note/1".into(),
-        hlc: Hlc { wall, counter: 0, node_origin: "peer".into() },
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
         t_effective: None,
         signer_key_id: kid.into(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
@@ -224,7 +280,10 @@ fn note(kid: &str, patient: Uuid, wall: i64) -> EventBody {
 /// now + ceiling rather than ratcheted to the absurd value.
 #[tokio::test]
 async fn clinical_plane_admits_but_clamps_the_clock() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = clinical_setup(&c).await;
@@ -241,15 +300,24 @@ async fn clinical_plane_admits_but_clamps_the_clock() {
 
     // The event's own asserted wall is preserved verbatim (never rewrite the claim).
     let stored: i64 = c
-        .query_one("SELECT hlc_wall FROM event_log WHERE event_id = $1::text::uuid", &[&e.event_id])
+        .query_one(
+            "SELECT hlc_wall FROM event_log WHERE event_id = $1::text::uuid",
+            &[&e.event_id],
+        )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(stored, insane, "event_log must preserve the event's original asserted wall");
+    assert_eq!(
+        stored, insane,
+        "event_log must preserve the event's original asserted wall"
+    );
 
     // But the local clock was CLAMPED to ~now + ceiling, not ratcheted to the absurd value.
     let (clock, _) = hlc_state(&c).await;
-    assert!(clock < insane, "the clock must NOT ratchet to the insane wall (got {clock})");
+    assert!(
+        clock < insane,
+        "the clock must NOT ratchet to the insane wall (got {clock})"
+    );
     let ceiling = now_ms() + DRIFT_MS;
     assert!(
         clock <= ceiling + 60_000 && clock >= ceiling - 60_000,
@@ -261,7 +329,10 @@ async fn clinical_plane_admits_but_clamps_the_clock() {
 /// touch honest, modestly-future events.
 #[tokio::test]
 async fn clinical_plane_within_ceiling_is_not_clamped() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = clinical_setup(&c).await;
@@ -270,8 +341,13 @@ async fn clinical_plane_within_ceiling_is_not_clamped() {
     let sane_future = now_ms() + 3_600_000; // 1h ahead, inside the ceiling
     let e = note(&kid, patient, sane_future);
     let signed = sign(&e, &sk).unwrap().signed_bytes;
-    c.execute("SELECT apply_remote_event($1)", &[&signed]).await.unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
+        .await
+        .unwrap();
 
     let (clock, _) = hlc_state(&c).await;
-    assert_eq!(clock, sane_future, "an in-ceiling event must merge the clock forward unclamped");
+    assert_eq!(
+        clock, sane_future,
+        "an in-ceiling event must merge the clock forward unclamped"
+    );
 }

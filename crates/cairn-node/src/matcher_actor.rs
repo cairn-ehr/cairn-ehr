@@ -109,7 +109,10 @@ pub async fn resolve_matcher_actor(
         // call in tests/apply_proposal.rs).
         let pinned = matcher_pinned(matcher_version).to_string();
         client
-            .execute("SELECT enroll_actor('agent', $1::text::jsonb, $2)", &[&pinned, &kid])
+            .execute(
+                "SELECT enroll_actor('agent', $1::text::jsonb, $2)",
+                &[&pinned, &kid],
+            )
             .await?;
     }
 
@@ -142,9 +145,15 @@ mod tests {
         assert!(!f.contains('/') && !f.contains(".."));
         // Hex-encoded body: only [0-9a-f]; the single '.' is the extension.
         assert_eq!(f, format!("matcher_{}.key", hex::encode("0.3.0+abc123")));
-        assert_ne!(matcher_key_filename("0.3.0+aaa"), matcher_key_filename("0.3.0+bbb"));
+        assert_ne!(
+            matcher_key_filename("0.3.0+aaa"),
+            matcher_key_filename("0.3.0+bbb")
+        );
         // The collision the old sanitize-to-underscore scheme allowed is now impossible:
         // two versions differing only in punctuation map to DIFFERENT files.
-        assert_ne!(matcher_key_filename("0.3.0+abc"), matcher_key_filename("0_3_0+abc"));
+        assert_ne!(
+            matcher_key_filename("0.3.0+abc"),
+            matcher_key_filename("0_3_0+abc")
+        );
     }
 }

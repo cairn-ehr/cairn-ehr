@@ -80,7 +80,11 @@ pub fn build_callsign_name_body(
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload: name_assertion_body(callsign, Some(CALLSIGN_USE), CALLSIGN_PROVENANCE),
         attachments: vec![],
-        plaintext_twin: Some(render_name_twin(callsign, Some(CALLSIGN_USE), CALLSIGN_PROVENANCE)),
+        plaintext_twin: Some(render_name_twin(
+            callsign,
+            Some(CALLSIGN_USE),
+            CALLSIGN_PROVENANCE,
+        )),
     }
 }
 
@@ -95,7 +99,10 @@ pub fn build_pending_body(
     hlc: Hlc,
 ) -> EventBody {
     let pid = patient_id.to_string();
-    let a = PendingAssertion { subject: &pid, basis };
+    let a = PendingAssertion {
+        subject: &pid,
+        basis,
+    };
     EventBody {
         event_id: event_id.to_string(),
         patient_id: pid.clone(), // an identity-state assertion is "about" its subject's chart
@@ -147,8 +154,10 @@ pub async fn register_john_doe(
     let pending_signed = sign(&pending_body, sk)?;
 
     let tx = client.transaction().await?;
-    tx.execute("SELECT submit_event($1)", &[&name_signed.signed_bytes]).await?;
-    tx.execute("SELECT submit_event($1)", &[&pending_signed.signed_bytes]).await?;
+    tx.execute("SELECT submit_event($1)", &[&name_signed.signed_bytes])
+        .await?;
+    tx.execute("SELECT submit_event($1)", &[&pending_signed.signed_bytes])
+        .await?;
     tx.commit().await?;
 
     Ok((patient_id, call))
@@ -177,8 +186,15 @@ mod tests {
     fn callsign_name_body_is_a_placeholder_name_with_authored_twin() {
         let (eid, pid) = ids();
         let body = build_callsign_name_body(
-            eid, pid, "Unknown-ed-s-2026-07-03-00ab", "kid",
-            Hlc { wall: 5, counter: 0, node_origin: "n".into() },
+            eid,
+            pid,
+            "Unknown-ed-s-2026-07-03-00ab",
+            "kid",
+            Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         );
         assert_eq!(body.event_type, "demographic.field.asserted");
         assert_eq!(body.patient_id, pid.to_string());
@@ -188,7 +204,10 @@ mod tests {
         assert_eq!(body.payload["facets"]["use"], CALLSIGN_USE);
         assert_eq!(body.payload["provenance"], CALLSIGN_PROVENANCE);
         let twin = body.plaintext_twin.as_deref().unwrap();
-        assert!(!twin.trim().is_empty(), "the demographic floor HARD-requires a non-empty twin");
+        assert!(
+            !twin.trim().is_empty(),
+            "the demographic floor HARD-requires a non-empty twin"
+        );
         assert!(twin.contains("Unknown-ed-s-2026-07-03-00ab"));
     }
 
@@ -196,28 +215,45 @@ mod tests {
     fn pending_body_marks_the_same_chart_identity_pending() {
         let (eid, pid) = ids();
         let body = build_pending_body(
-            eid, pid, "unconscious ED arrival, no ID", "kid",
-            Hlc { wall: 6, counter: 0, node_origin: "n".into() },
+            eid,
+            pid,
+            "unconscious ED arrival, no ID",
+            "kid",
+            Hlc {
+                wall: 6,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         );
         assert_eq!(body.event_type, "identity.pending.asserted");
         assert_eq!(body.patient_id, pid.to_string());
         assert_eq!(body.payload["subject"], pid.to_string());
         assert_eq!(body.payload["basis"], "unconscious ED arrival, no ID");
-        assert!(body.payload.get("method").is_none(), "a pending marker carries no method");
+        assert!(
+            body.payload.get("method").is_none(),
+            "a pending marker carries no method"
+        );
         assert!(!body.plaintext_twin.as_deref().unwrap().trim().is_empty());
     }
 
     #[test]
     fn both_events_are_recorded_role_no_responsibility_so_no_attestation() {
         let (eid, pid) = ids();
-        let hlc = Hlc { wall: 5, counter: 0, node_origin: "n".into() };
+        let hlc = Hlc {
+            wall: 5,
+            counter: 0,
+            node_origin: "n".into(),
+        };
         for body in [
             build_callsign_name_body(eid, pid, "Unknown-x", "kid", hlc.clone()),
             build_pending_body(eid, pid, "unconscious", "kid", hlc.clone()),
         ] {
             let c = &body.contributors[0];
             assert_eq!(c["role"], "recorded");
-            assert!(c.get("responsibility").is_none(), "additive events demand no attestation");
+            assert!(
+                c.get("responsibility").is_none(),
+                "additive events demand no attestation"
+            );
         }
     }
 }

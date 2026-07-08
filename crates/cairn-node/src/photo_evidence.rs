@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 /// A locally-prepared blob ready to INSERT present=TRUE plus the Rendition that references it.
 pub struct LocalBlob {
-    pub addr: Vec<u8>,      // multihash BLAKE3 content address (blob_store PK)
-    pub outboard: Vec<u8>,  // bao verified-streaming tree (serves slices; stored with content)
+    pub addr: Vec<u8>,     // multihash BLAKE3 content address (blob_store PK)
+    pub outboard: Vec<u8>, // bao verified-streaming tree (serves slices; stored with content)
     pub rendition: Rendition,
 }
 
@@ -38,7 +38,9 @@ pub fn prepare_local_blob(bytes: &[u8], media_type: &str) -> LocalBlob {
 /// against this function included — inherits the guarantee, not just the one CLI subcommand.
 pub fn validate_photo_descriptor(descriptor: &str) -> anyhow::Result<()> {
     if descriptor.trim().is_empty() {
-        anyhow::bail!("photo descriptor must be non-empty (§5.4/principle 4: say what the photo shows)");
+        anyhow::bail!(
+            "photo descriptor must be non-empty (§5.4/principle 4: say what the photo shows)"
+        );
     }
     Ok(())
 }
@@ -119,7 +121,8 @@ pub async fn assert_photo_evidence(
         &[&lb.addr, &media_type, &byte_len, &bytes, &lb.outboard],
     ).await?;
     // Author the event (its floor learns the reference — ON CONFLICT no-op against the row above).
-    tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await?;
+    tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await?;
     tx.commit().await?;
 
     Ok(event_id)
@@ -129,15 +132,30 @@ pub async fn assert_photo_evidence(
 mod tests {
     use super::*;
 
-    fn hlc() -> Hlc { Hlc { wall: 7, counter: 0, node_origin: "n".into() } }
+    fn hlc() -> Hlc {
+        Hlc {
+            wall: 7,
+            counter: 0,
+            node_origin: "n".into(),
+        }
+    }
 
     #[test]
     fn descriptor_validation_refuses_empty_and_whitespace_only() {
         // The honest-descriptor floor is enforced in the library, so a caller bypassing the
         // CLI (e.g. a UI backend) still cannot author a §5.4 photo with no description.
-        assert!(validate_photo_descriptor("").is_err(), "empty descriptor refused");
-        assert!(validate_photo_descriptor("   \t\n").is_err(), "whitespace-only refused");
-        assert!(validate_photo_descriptor("frontal face photograph").is_ok(), "real descriptor accepted");
+        assert!(
+            validate_photo_descriptor("").is_err(),
+            "empty descriptor refused"
+        );
+        assert!(
+            validate_photo_descriptor("   \t\n").is_err(),
+            "whitespace-only refused"
+        );
+        assert!(
+            validate_photo_descriptor("frontal face photograph").is_ok(),
+            "real descriptor accepted"
+        );
     }
 
     #[test]
@@ -145,7 +163,10 @@ mod tests {
         let lb = prepare_local_blob(b"jpegbytes", "image/jpeg");
         assert_eq!(lb.addr, blob_address(b"jpegbytes"));
         assert_eq!(lb.rendition.role, "original");
-        assert_eq!(lb.rendition.digest_hex, hex::encode(blob_address(b"jpegbytes")));
+        assert_eq!(
+            lb.rendition.digest_hex,
+            hex::encode(blob_address(b"jpegbytes"))
+        );
         assert_eq!(lb.rendition.byte_len, 9);
         assert!(!lb.outboard.is_empty());
     }
@@ -158,19 +179,27 @@ mod tests {
             "frontal face photograph",
             prepare_local_blob(b"x", "image/jpeg").rendition,
         );
-        let body = build_photo_evidence_body(eid, pid, "kid", hlc(), Some("on arrival"), att.clone());
+        let body =
+            build_photo_evidence_body(eid, pid, "kid", hlc(), Some("on arrival"), att.clone());
 
         assert_eq!(body.event_type, IDENTITY_EVIDENCE_EVENT_TYPE);
         assert_eq!(body.schema_version, IDENTITY_EVIDENCE_SCHEMA_VERSION);
         assert_eq!(body.patient_id, pid.to_string());
         assert_eq!(body.payload["kind"], PHOTO_EVIDENCE_KIND);
         assert_eq!(body.payload["basis"], "on arrival");
-        assert_eq!(body.attachments, vec![att.clone()], "photo rides top-level attachments");
+        assert_eq!(
+            body.attachments,
+            vec![att.clone()],
+            "photo rides top-level attachments"
+        );
         // additive event → recorded role, no attestation demanded
         assert_eq!(body.contributors[0]["role"], "recorded");
         // authored twin, legible, no pixel bytes
         let twin = body.plaintext_twin.as_deref().unwrap();
         assert!(twin.contains("frontal face photograph"));
-        assert_eq!(twin, &render_identity_evidence_twin("photo", Some("on arrival"), &att));
+        assert_eq!(
+            twin,
+            &render_identity_evidence_twin("photo", Some("on arrival"), &att)
+        );
     }
 }
