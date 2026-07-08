@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# The sync daemon application, not a crates.io library: never published. Also lets the internal
+# `cairn-event` path dependency omit a version without tripping the cargo-deny wildcard gate.
+publish = false
 
 [dependencies]
 cairn-event = { path = "../cairn-event" }

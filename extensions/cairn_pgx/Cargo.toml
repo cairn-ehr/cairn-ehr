@@ -3,6 +3,10 @@ name = "cairn_pgx"
 version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-only"
+# A pgrx extension installed via cargo-pgrx into PostgreSQL, not a crates.io library: never
+# published. Also lets the internal `cairn-event` path dependency omit a version without
+# tripping the cargo-deny wildcard gate (allowed only for an unpublished crate).
+publish = false
 
 # This crate is deliberately OUTSIDE the repo workspace (the root Cargo.toml excludes it:
 # pgrx pins its own dependency graph). The empty [workspace] table makes that standalone
