@@ -17,7 +17,10 @@ def test_year_only_vs_full_is_partial():
 
 
 def test_shared_part_differs_is_disagree():
-    assert compare_dob(DateValue(1980, 3, 15), DateValue(1980, 3, 16), CTX) is AgreementLevel.DISAGREE
+    assert (
+        compare_dob(DateValue(1980, 3, 15), DateValue(1980, 3, 16), CTX)
+        is AgreementLevel.DISAGREE
+    )
     assert compare_dob(DateValue(1980), DateValue(1981, 3, 15), CTX) is AgreementLevel.DISAGREE
 
 
@@ -27,7 +30,10 @@ def test_missing_side_is_insufficient_data():
 
 def test_no_overlapping_parts_is_insufficient_data():
     # One has only a year, the other only a day-of-month: nothing comparable in common.
-    assert compare_dob(DateValue(year=1980), DateValue(day=15), CTX) is AgreementLevel.INSUFFICIENT_DATA
+    assert (
+        compare_dob(DateValue(year=1980), DateValue(day=15), CTX)
+        is AgreementLevel.INSUFFICIENT_DATA
+    )
 
 
 def test_is_symmetric():

@@ -24,4 +24,7 @@ def test_no_shared_system_is_insufficient():
 
 
 def test_empty_is_insufficient():
-    assert compare_identifier_sets({}, {"x": frozenset({"1"})}, CTX) is AgreementLevel.INSUFFICIENT_DATA
+    assert (
+        compare_identifier_sets({}, {"x": frozenset({"1"})}, CTX)
+        is AgreementLevel.INSUFFICIENT_DATA
+    )

@@ -108,8 +108,10 @@ def test_sweep_tags_a_returning_known_alias_pair(pg_conn):
     assert result.review >= 1
     low, high = canonical_pair(PA, PB)
     with pg_conn.cursor() as cur:
-        cur.execute("SELECT band, evidence FROM match_proposal WHERE patient_low=%s AND patient_high=%s",
-                    (low, high))
+        cur.execute(
+            "SELECT band, evidence FROM match_proposal WHERE patient_low=%s AND patient_high=%s",
+            (low, high),
+        )
         band_value, evidence = cur.fetchone()
     assert band_value == "review"
     assert any(e.get("kind") == "known_alias" and e["alias_of"] == PA for e in evidence)

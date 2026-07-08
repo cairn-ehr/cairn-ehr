@@ -30,9 +30,15 @@ def test_overlapping_ranges_are_partial():
 
 
 def test_disjoint_ranges_are_insufficient():
-    assert compare_dob(_range(1981, 1991), _range(2000, 2005), CTX) == AgreementLevel.INSUFFICIENT_DATA
+    assert (
+        compare_dob(_range(1981, 1991), _range(2000, 2005), CTX)
+        == AgreementLevel.INSUFFICIENT_DATA
+    )
     # order-independent for the disjoint case too (symmetry of the overlap test)
-    assert compare_dob(_range(2000, 2005), _range(1981, 1991), CTX) == AgreementLevel.INSUFFICIENT_DATA
+    assert (
+        compare_dob(_range(2000, 2005), _range(1981, 1991), CTX)
+        == AgreementLevel.INSUFFICIENT_DATA
+    )
 
 
 def test_touching_boundary_ranges_are_partial():

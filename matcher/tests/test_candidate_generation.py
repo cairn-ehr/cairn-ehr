@@ -200,6 +200,7 @@ def test_toggle_default_none_equals_all_passes(pg_conn):
 
 def test_toggle_unknown_pass_name_raises(pg_conn):
     import pytest
+
     from cairn_matcher.pipeline.db import generate_candidate_pairs
     with pytest.raises(ValueError, match="no-such-pass"):
         generate_candidate_pairs(pg_conn, enabled_passes={"no-such-pass"})

@@ -3,6 +3,7 @@
 import random
 
 import pytest
+
 import cairn_matcher as cm
 from cairn_matcher.orchestrator import field_comparisons
 from cairn_matcher.records import CandidateRecord, DateValue, FieldValue, Name

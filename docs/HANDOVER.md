@@ -26,6 +26,34 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
+**This session (2026-07-08, fifth) — closed the three CI gaps opened by the tooling catch-up ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)/[#146](https://github.com/cairn-ehr/cairn-ehr/issues/146)/[#117](https://github.com/cairn-ehr/cairn-ehr/issues/117); PR [#149](https://github.com/cairn-ehr/cairn-ehr/pull/149)).**
+No product/floor/spec/ADR/SCHEMA change — CI + test-fixtures + docs only. (1) **#145 — the matcher DB-gated suite now
+runs in CI.** Its integration tests self-skip without `CAIRN_TEST_PG`, so they ran nowhere (the "298 passed" was the
+*pure* suite only; the DB-touching path had zero automated coverage). Rather than stand up — and rebuild the expensive
+`cairn_pgx` extension for — a second rig in `matcher.yml`, the `rust.yml` floor `test` job now also runs
+`uv run --extra pipeline pytest` against the PG18+`cairn_pgx` cluster it already builds (the matcher conftest applies
+the `db/*.sql` schema itself, so it needs only that cluster). Verified locally against PG18.1 + `cairn_pgx` 0.3.0:
+**376 passed** (~79 DB-gated tests actually executing). (2) **#146 — CodeQL test-fixture crypto false positives fixed at
+the source.** Path-exclusion is unreliable for compiled Rust (and one fixture is a `#[cfg(test)]` block *inside*
+`src/seal.rs`), so the deterministic test seed / KDF-salt / pairing-nonce are now **computed at runtime**
+(`std::array::from_fn`, `format!`) instead of hard-coded literals — no literal reaches a crypto sink, so
+`rust/hard-coded-cryptographic-value` stops firing while staying live for *production* code. New **CLAUDE.md house
+rule 6** codifies it (never hard-code crypto material in tests). seal.rs 16/16 + `clippy --workspace --tests -D warnings`
+clean; the DB-gated `pairing.rs` test green on PG18. (3) **#117 — required-check set documented.** New *Continuous
+integration* section in `CONTRIBUTING.md` tables the five required checks (`build`, `rustfmt`, `cargo-deny`,
+`ruff + pytest`, `clippy + cargo test (cairn_pgx floor)`) with what each gates + the two traps: keep the floor check
+**PG-version-independent** (a rename orphans branch protection — the #144 lesson) and update branch protection in
+lockstep with any required-job rename. Also corrected CONTRIBUTING's stale "no code yet" claim. #117's remaining scope
+was audit/document only — the gate itself has existed since PR #133/#143/#147. **Plus doc-currency at session start:**
+HANDOVER/ROADMAP now reflect #144/#147 **merged** and the required-checks admin swap **done** (both were mid-flight
+in the fourth-session block). **Honest limit:** the matcher DB suite re-runs the pure tests too (no marker to select
+only DB-gated ones — cheap, and running the full suite against the DB is *more* coverage, not less).
+**Two follow-ups folded into #149 on request:** (a) the **stricter ruff ruleset** — `select` now adds `I`
+(import-sorting), `UP` (pyupgrade), `B` (bugbear), `E5` (line-length) at **`line-length = 100`** (Rust-parity); imports
+auto-sorted, one `zip()` made `strict=False`-explicit, 22 >100-col lines hand-wrapped; ruff + the full 376-test suite
+(pure + DB) green (closes the last PR #143 deferral). (b) this **HANDOVER prune** — the 07-04→07-07 per-slice blocks
+collapsed into one index (538→450 lines, back under the 500 target); nothing lost that isn't in ROADMAP + git.
+
 **This session (2026-07-08, second) — §5.4 marks/belongings/EMS-context text identity evidence (matcher/identity
 tier; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`).** Three
 text-shaped `kind` values — `mark`, `belongings`, `ems-context` — on the **existing** `identity.evidence.asserted`
@@ -60,38 +88,21 @@ CI gates on it** (this supersedes the prior "hand-formatted, CI does not gate on
 + a `deny` job; caught `RUSTSEC-2026-0190` → `anyhow 1.0.102`→`1.0.103`; `publish = false` on the three application
 crates. cargo-deny **pinned to 0.19.9** (post-review fix: `cargo install --locked` pins only its deps, not itself).
 (3) **matcher** — `matcher.yml` (`ruff check` + pure `pytest`, DB tests self-skip) + explicit ruff rule set in
-`pyproject.toml`. **Deferred (tracked):** required status checks ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)),
-~~Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144))~~ (**DONE this session**, below),
-DB-gated tests run nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)), stricter ruff ruleset (separate PR).
+`pyproject.toml`. **Deferred follow-ons — now mostly closed:** ~~required status checks / audit ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117))~~,
+~~Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144), PR #147)~~,
+~~DB-gated tests run nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145))~~, ~~CodeQL test-fixture crypto false positives ([#146](https://github.com/cairn-ehr/cairn-ehr/issues/146))~~ — all closed by the fourth+fifth sessions (above); still open: stricter ruff ruleset (separate PR).
 
-**This session (2026-07-08, fourth) — Rust toolchain pinning + honest MSRV + PG16→18 CI bump ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144); PR TBD).**
-Closes the fmt-drift fragility PR #143's review flagged: the `fmt`/`deny`/`test` jobs ran on the runner's *unpinned* stable
-toolchain, so a future stable rustfmt whose defaults shift would fail `cargo fmt --check` on untouched code and block
-unrelated PRs. Four coupled changes, all **locally verified green** except the CI-only PG18 step (watched on the PR run):
-(1) **`rust-toolchain.toml`** at repo root pins `channel = "1.96.0"` + `profile = "minimal"` + `components = [rustfmt, clippy]`
-— rustup searches upward so it governs BOTH cargo trees (the workspace AND the excluded `cairn_pgx` extension); the single
-source of truth for channel + components, so the redundant `rustup component add {rustfmt,clippy}` steps in `rust.yml` were
-dropped (replaced by an explicit `rustup show` install-trigger that fails fast). (2) **`[workspace.lints]`** (`rust.warnings = "deny"`
-+ `clippy.all = "deny"`) + per-crate `[lints] workspace = true` — mirrors the CI clippy gate so a plain local `cargo build`/`clippy`
-denies the same set CI does (no "green locally, red in CI" gap); safe to *deny* now that the toolchain is pinned (the lint set
-can't grow silently). Positive-control-verified: an unused var is now a hard build error. (3) **Honest MSRV** — `rust-version`
-`1.74` → `1.96` (the old value was unverified and false: the modern dep graph — ed25519-dalek 2, bao 0.13, the postgres stack —
-does not build on 1.74) + `cairn-node` now inherits `rust-version.workspace` like its siblings. **No separate MSRV gate** (it
-would be a false claim on an un-bisected number; the pinned-toolchain build already proves 1.96). (4) **CI PG16→18** — the `test`
-job now adds the PGDG apt repo (`signed-by=` keyring) and installs `postgresql-18`/`-server-dev-18` (Ubuntu 24.04 ships only 16);
-the extension already defaults to `pg18`, so testing 16 while we ship 18 let a PG18-only regression land green. DB-gated floor
-suite **run locally against PG18.1 + `cairn_pgx` 0.3.0: 431 passed / 0 failed** to de-risk the bump. **No Rust source touched** (Cargo manifests +
-toolchain + CI YAML only). **Deferred:** `[workspace.lints]` for the `cairn_pgx` tree (pgrx macro-generated code trips
-lints — left at defaults), a true bisected MSRV floor if we ever publish `cairn-event`.
-**Rename-orphan fix + a fact correction (#117):** `main` **already has required status checks** (`build`, `rustfmt`,
-`cargo-deny`, `ruff + pytest`, and the floor test job) — so the old "#117 = make checks required" framing was wrong;
-they were configured at some point. Renaming the floor job `(PG16 …)`→`(PG18 …)` **orphaned** the required `(PG16 …)`
-check (matched by exact name → never reports → every PR `MERGEBLOCKED`). Fixed by making the job name
-**PG-version-independent**: `clippy + cargo test (cairn_pgx floor)` (a comment warns against re-adding the PG major).
-**Manual admin step still pending (user-run, blocked in auto mode):** update `main`'s required-status-checks list to
-swap `clippy + cargo test (PG16 + cairn_pgx floor)` → `clippy + cargo test (cairn_pgx floor)` — until then #147 stays
-`MERGEBLOCKED` on the orphaned name. #117's real remaining scope is now just *auditing/documenting* the existing
-required set, not creating it.
+**Prior session (2026-07-08, fourth) — Rust toolchain pinning + honest MSRV + PG16→18 CI bump ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144); PR #147, MERGED; full detail in git).**
+No Rust source — Cargo manifests + toolchain + CI YAML only. `rust-toolchain.toml` pins `channel = "1.96.0"` +
+rustfmt/clippy for BOTH cargo trees (stops fmt-gate drift once the runner's stable moves); `[workspace.lints]`
+(`rust.warnings`/`clippy.all` = deny) + per-crate `workspace = true` mirrors the CI clippy gate locally; honest
+`rust-version` `1.74`→`1.96` (the old value did not build the modern dep graph; no separate MSRV gate — the
+pinned-toolchain build already proves 1.96); the `test` job installs PG18 via the PGDG apt repo (Ubuntu 24.04 ships
+only 16) matching the shipped `pg18` default (DB-gated floor **431/0** locally to de-risk). The required floor job was
+renamed **PG-version-independent** (`clippy + cargo test (cairn_pgx floor)`) because the `(PG16 …)`→`(PG18 …)` rename
+had orphaned the required check (exact-name match → never reports → `MERGEBLOCKED`); the branch-protection swap is
+**done** and #147 merged. **Deferred:** `[workspace.lints]` for the `cairn_pgx` tree (pgrx macro code trips lints), a
+bisected MSRV floor if `cairn-event` is ever published.
 
 **Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
@@ -120,108 +131,20 @@ remote-apply call site of `cairn_learn_attachment_refs` (both doors directly cov
 for the §6.6 byte-tier slice. Residual accepted: DO-UPDATE overwrites caller-supplied `media_type` on an already-present
 row (benign). Env: `cairn_pgx` upgraded to **0.3.0** on the Mac :5532 cluster this session (was 0.2.0 — db/026 requires ≥0.3.0).
 
-**Prior session (2026-07-07) — B3 compound blocking keys `dob+first-initial` + `name+sex` (matcher slice 25;
-condensed — full detail in ROADMAP slice 25 + git + PR #138).** Advisory eval/matcher tier only, no floor/spec
-change: two additive symmetric compound passes (registry 6→8) — `dob+first-initial` (a first-initial relaxation of
-the name requirement, genuinely new recall) + `name+sex` (the oversized-unisex-name-block per-sex rescue; the only
-name rescue that fires for the John-Doe population). Shared CTE fragments extracted to avoid sex-normalization drift.
-Suites pure 297 / DB 375 green. Honest limit: lift measured on synthetic data only.
-
-**Prior session (2026-07-07) — B3 weight-learning: supervised Fellegi–Sunter estimation (matcher slice 24; full
-detail in ROADMAP slice 24 + git; design+plan under `docs/superpowers/{specs,plans}/2026-07-06-b3-weight-learning*`).**
-Advisory Python, eval tier only — **no production matcher/pipeline/floor/SCHEMA/event/ADR/spec change.** The learner
-the shipped `DEFAULT_WEIGHTS`/`DEFAULT_THRESHOLDS` comments always pointed at ("B3 learns these"). Closed-form
-supervised F-S: count agreement levels across labelled pairs → `m/u` (Laplace-smoothed, INSUFFICIENT_DATA excluded,
-provenance-blind) → `weight = log2(m/u)`, the same math as `scoring.score` run backwards from ground truth. Four new
-pure modules under `matcher/src/cairn_matcher/eval/`: `learner.py` (`estimate_weights`, `derive_thresholds`,
-`learn_model`, `LearnedModel`), `crossval.py` (entity-cluster k-fold held-out lift, skips folds with no training
-matches), `model_io.py` (`LearnedModel`↔JSON, `ModelIOError`), `learn.py` (CLI); + a behavior-preserving
-`scorer_outcomes` extract in `scorer_eval.py`. **Thresholds are safety-first** — `auto = max(non-match)+margin`
-(zero false auto-links by construction), `review = max(non-match)` (surface above the best impostor, never below,
-so `review<auto` always holds — margin now guarded `>0`), and `recall_target` is an honest **conflict diagnostic**
-(`collided` = the safe placement can't meet the recall floor), never a lever that drags `review` into impostor
-range. **Held-out measurement splits on whole entity clusters** (no truth leak) and reports before/after only on the
-disjoint fold. 6-task subagent-SDD; the Task-2 implementer caught a real plan bug (the original recall-cut `review`
-inverted on separated data) → corrected before coding; final opus review caught the `margin<=0` false-auto hole →
-guarded. Suites **pure 288 passed / 73 skipped / ruff clean**. **Honest limits (design §8):** ships the *mechanism*,
-NOT new shipped weights (gold demo actually does *worse* than hand-tuned defaults — tiny, noisy, in-sample overlap;
-a large hand-crafted gold-set re-run is the deferred follow-up); synthetic-learned weights reflect the generator's
-corruption model; veto-blind (end-to-end veto only lowers a band — safe); provenance an orthogonal multiplier.
-
-**Prior session (2026-07-06) — B3 eval mirror: generator range-DOB emission + administrative-sex representation
-(matcher slice 23; condensed — full detail in ROADMAP slice 23 + git + PR #136).** Advisory eval tier only. Closed
-the slice-22 deferral that blocked weight-learning: `DatasetRecord.administrative_sex` through the real adapter +
-range-aware `_birth_window`/`shares_blocking_key` mirror of the anchored passes + `corrupt_dob_estimate` generator
-operator + a live exact-DOB over-claim fix; final fable review caught the Python-`$`-vs-POSIX-`$` trailing-newline
-over-claim (fixed via de-anchored `re.fullmatch`). gold_v1.json untouched.
-
-**Parallel session (2026-07-05, PR [#133](https://github.com/cairn-ehr/cairn-ehr/pull/133)) — clock-drift admission
-ceiling on both remote-apply doors + the Rust CI gate (non-demographics slice; recorded here post-merge because that
-session deliberately left HANDOVER/ROADMAP untouched to avoid colliding with the concurrent demographics session).**
-Closes the [#102](https://github.com/cairn-ehr/cairn-ehr/issues/102) ratchet finding: one verified event with an
-absurd future `hlc.wall` from a trusted-but-broken peer would permanently ratchet the local clock (`GREATEST` is
-monotone) and poison node-plane `ORDER BY hlc_wall DESC`. New shared `cairn_max_hlc_drift_ms()` (`db/001`, 24h) bounds
-a remote event's asserted wall against our own `clock_timestamp()` (never the possibly-ratcheted `hlc_state`). The two
-doors differ BY their pull-loop refusal semantics: node plane (`db/007`) **REJECTs** (self-healing skip+re-offer);
-clinical plane (`db/020`) **ADMITs-but-CLAMPs** the `hlc_state` merge (a refusal would wedge `cairn-sync`'s frozen
-watermark — availability over consistency; the event's asserted wall is preserved verbatim in `event_log`, principle
-1). TDD: 5 DB-gated `hlc_drift.rs` tests. Same PR added `.github/workflows/rust.yml` — the CI Rust workspace +
-in-DB-floor test gate ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117); note #117 remains open pending it
-becoming a required check). **Honest limits (from the PR):** protects only against a REMOTE peer dragging the clock;
-a future-dated clinical event still orders "latest" in projections (pre-existing, [#97](https://github.com/cairn-ehr/cairn-ehr/issues/97)).
-
-**Prior session (2026-07-05) — §5.4 slice D: administrative-sex scoring + the unconfirmed-chart REVIEW rule
-(matcher slice 22, closed [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130); condensed — full detail in
-ROADMAP slice 22 + git + PR #134).** Advisory Python only. TWO halves, both required (admin-sex alone leaves the
-headline pure-age Doe pair at ≈1.79 < `review=3.0`): (1) the **composite `sex` field** (`records.SexValue` + pure
-`compare_sex` — both-sab → old EXACT/DISAGREE; else positive-only union fallback over {sab, administrative-sex},
-never DISAGREE; weight key → `"sex"`, one field one contribution); (2) the **scoped forcing rule**
-(`band(unconfirmed=)`): `chart_trust='unconfirmed'` + ≥2 positive-LEVEL fields + zero DISAGREE → REVIEW even below
-threshold, never AUTO, fires with vetoes attached (post-review amendment — suppressing a vetoed-yet-corroborated Doe
-pair would be the ADR-0014 auto-reject); proposals carry the `{"kind":"identity_pending","unconfirmed":[uuids]}`
-marker; batch `db.load_trust_for` plumbing. The #130 e2e (`test_identity_pending_pipeline.py`) + an 8-angle
-post-review fix wave (`score()` now raises on a weights table missing a compared field; `_corroborated_positive`
-counts LEVELS; retraction gap filed as [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)). **Honest limits:**
-a pending+disputed Doe reads `'under-review'` (severity-max, db/024) and bypasses the forcing rule while the dispute
-is open — deliberate; ranking within a Doe's candidate list is the worklist tier's job; ~~the eval mirror cannot yet
-represent the new fields~~ (closed by this session's slice 23, top).
-
-**Parallel session (2026-07-05, PR #132) — the blob self-verification in-DB floor (Phase 7 / ADR-0013 point 11;
-condensed — full detail in git + PR #132 + `docs/superpowers/{specs,plans}/2026-07-05-blob-verify-floor*`).** Closes
-the `db/003` honest gap: self-verification was an L2 promise (pgcrypto has no BLAKE3), so a raw-SQL client could
-store arbitrary bytes as any named blob. Now `cairn_pgx` **0.3.0** ships `cairn_blob_verify`/`cairn_blob_verify_error`
-(thin wrappers over the SAME `cairn_event::blob_address` L2 uses) and **`db/026_blob_verify_floor.sql`** enforces a
-TRIGGER floor on `blob_store` (a trigger, not a door+REVOKE — the byte tier legitimately writes raw DML;
-metadata-only updates never re-pay the hash; column-level `UPDATE OF`, `CREATE OR REPLACE TRIGGER`, a
-`to_regprocedure` load-time gate against stale `.so`s); `REQUIRED_PGX_FLOOR` 0.2.0→0.3.0. TDD: 7 DB-gated
-hostile-client tests + a fail-closed pg_test. **Honest limits:** `blob_chunk`/`outboard` NOT in-DB verified (wrong
-chunks only assemble into a flip that FAILS; a wrong outboard is rejected by the fetching peer's bao decode —
-availability, never integrity); superuser can drop the trigger (same standing as every floor piece).
-
-**Prior session (2026-07-04, second) — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle
-(condensed; full detail in git + ROADMAP slice 21 + PR #131).** A `year-range` dob now generates blocking keys —
-**ANCHORED, never symmetric** (anchor×member only; all-pairing a window would manufacture C(k,2) noise): pure
-`pipeline/blocking.py` (six-pass registry, `resolve_enabled_passes` raises on unknown names, `pairs_from_anchor`),
-`_RANGE_GROUPS_SQL` (`birth_window` CTE, NULL-safe evaluation-order-proof year extraction; `dob-range` +
-`dob-range+sex` rescue ∩ union blocking-sex with the `unknown` sentinel param-bound from `adapter.VALUE_SENTINELS`),
-the `enabled_passes` A/B toggle, and a `name+year` honesty fix (range values excluded). Fable review + a post-PR
-8-angle adversarial-verify wave (PR #131) fixed 9 findings total across two hardening commits (eval `KeyError` guard —
-the #84 crash arm; shape-aware `dropped_pair_estimate`; exact-`dob` range exclusion for A/B purity; statement-level
-toggle skip; SQL↔registry pass-name guard; `canonical_pair` deduped into `blocking.py`; whitespace trim-set). Suites
-were pure 200 / DB 264 / ruff clean. Its recorded honest limit (pure-age pair blocks but dies at the score floor,
-issue #130) is **CLOSED by this session's slice D** (see top).
-
-**Prior session (2026-07-04, first) — §5.4 slice B: clinician-observed evidence (estimated-age range + observed sex)
-(condensed; full detail in git + ROADMAP slice 20).** The demographic spine already carried it — **no floor/SCHEMA/event
-type/ADR/spec change**: pure `cairn-event::evidence` (`birth_year_range_from_age` — store the time-invariant birth-year
-window, never drifting raw age or a false-precise midpoint; `estimated_dob_body` value `"<min>/<max>"` precision
-`"year-range"`; `observed_sex_body` on **`administrative-sex`**, not the birth fact a clinician can't know — also keeps
-it out of db/016's verified-sex veto); `cairn-node::evidence::assert_observed_evidence` + CLI (one txn on an existing
-chart, provenance `clinician-observed` rank 30, document-displaceable); matcher `DateValue` interval + `parse_dob`
-`"year-range"` + **range-aware positive-only `compare_dob`** (overlap→PARTIAL, no-overlap→INSUFFICIENT_DATA, never
-DISAGREE). Cargo+clippy+matcher suites green; e2e CLI smoke on a provisioned node passed (`dob=1981/1991`,
-`administrative-sex=male`, `chart_trust=unconfirmed`); opus review READY TO MERGE. Its honest limit (range is not a
-blocking key) was closed by slice C the same day.
+**Earlier 2026-07 slices (condensed — full detail in ROADMAP slices 20–25 + git + the linked PRs).** All merged on
+`main`, all advisory-tier / additive unless noted:
+- **07-07** — B3 compound blocking keys `dob+first-initial` + `name+sex` (slice 25, PR #138; registry 6→8, shared CTE
+  fragments); B3 weight-learning: a supervised Fellegi–Sunter learner + entity-cluster held-out lift (slice 24) —
+  ships the *mechanism*, not new shipped weights; safety-first thresholds (`auto = max(non-match)+margin`).
+- **07-06** — B3 eval mirror: generator range-DOB emission + `DatasetRecord.administrative_sex` + range-aware
+  `shares_blocking_key` (slice 23, PR #136) — unblocked weight-learning.
+- **07-05** — §5.4 slice D: composite `sex` scoring + the unconfirmed-chart REVIEW forcing rule (slice 22, PR #134,
+  closes #130); the **blob self-verification in-DB floor** (`db/026`, `cairn_pgx` 0.3.0, PR #132 — hostile-client
+  proof); **clock-drift admission ceiling** on both remote-apply doors + the first `rust.yml` CI gate (PR #133,
+  closes the #102 ratchet).
+- **07-04** — §5.4 slice C: anchored birth-year-range blocking passes + A/B pass-toggle (slice 21, PR #131); §5.4
+  slice B: clinician-observed evidence (estimated-age range + observed sex) + range-aware positive-only `compare_dob`
+  (slice 20).
 
 **Prior session (2026-07-03) — §5.4 John-Doe slice A: callsign minting + matcher placeholder exclusion (condensed;
 full detail in git + ROADMAP slice 20 + PRs #123/#125).** No new event type / migration / SCHEMA / ADR / spec bump.

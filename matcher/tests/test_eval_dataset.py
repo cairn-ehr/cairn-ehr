@@ -15,7 +15,10 @@ _MINIMAL = {
     "name": "tiny",
     "entities": [
         {"entity_id": "e1", "records": [
-            {"record_id": "r1", "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70}},
+            {
+                "record_id": "r1",
+                "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
+            },
             {"record_id": "r2", "names": [{"value": "Alex Nguyen", "provenance_rank": 30}]},
         ]},
         {"entity_id": "e2", "records": [{"record_id": "r3"}]},
@@ -31,7 +34,11 @@ def test_load_dataset_builds_typed_tree():
     assert isinstance(ds.entities[0], EntityCluster)
     assert isinstance(ds.entities[0].records[0], DatasetRecord)
     assert ds.entities[0].records[0].record_id == "r1"
-    assert ds.entities[0].records[0].dob == {"value": "1990-05-12", "precision": "day", "provenance_rank": 70}
+    assert ds.entities[0].records[0].dob == {
+        "value": "1990-05-12",
+        "precision": "day",
+        "provenance_rank": 70,
+    }
 
 
 def test_all_records_flattens_in_order():

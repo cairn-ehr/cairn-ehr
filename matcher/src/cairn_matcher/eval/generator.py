@@ -262,7 +262,9 @@ def corrupt_name(record, rng):
         chars = list(value)
         chars[i], chars[i + 1] = chars[i + 1], chars[i]
         value = "".join(chars)
-    else:  # drop a token when the name has >1 token; a single-token (mononym) name is left unchanged this round
+    else:
+        # drop a token when the name has >1 token; a single-token (mononym) name is
+        # left unchanged this round
         tokens = value.split()
         if len(tokens) > 1:
             del tokens[rng.randrange(len(tokens))]

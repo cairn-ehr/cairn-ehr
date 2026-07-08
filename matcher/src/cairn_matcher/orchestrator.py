@@ -6,7 +6,8 @@ without touching the combiner. Pure — no I/O.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from cairn_matcher.agreement import Comparator, Context
