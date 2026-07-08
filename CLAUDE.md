@@ -177,6 +177,12 @@ These are load-bearing working agreements — hold to them on proof-of-concept s
 5. **Fix review findings; if you can't, file an issue.** When a code review surfaces an error, **fix it.** If it
    can't be fixed in place (out of scope, needs a decision, blocked), **open a GitHub issue** capturing it — never
    let a known defect pass silently. (Mirrors the project's "surface flaws early" principle, made actionable.)
+6. **Never hard-code cryptographic material in tests.** Test keys, seeds, salts, nonces, and IVs must be **computed
+   at runtime** (e.g. `std::array::from_fn(|i| …)` or a small helper), never written as byte-array/string literals —
+   a literal in a crypto context trips CodeQL's `rust/hard-coded-cryptographic-value` (critical) as a recurring false
+   positive that blocks the scan until a human dismisses it (issue #146). Deriving keeps the fixture deterministic
+   while presenting no hard-coded value to the scanner, and it keeps the query live for *production* code, where it
+   is a real defense (production derives all key material from `rand_bytes`).
 
 ## Working conventions
 

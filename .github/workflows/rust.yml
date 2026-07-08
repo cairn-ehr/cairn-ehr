@@ -8,6 +8,13 @@ name: rust
 # stands that rig up in CI: a real PostgreSQL with the `cairn_pgx` (pgrx) extension
 # installed, then `cargo clippy` + `cargo test --workspace` with `CAIRN_TEST_PG` set so
 # the DB-gated tests actually execute (they self-skip when it is unset).
+#
+# The same job also runs the advisory Python matcher's DB-gated integration suite
+# (issue #145): its tests self-skip without CAIRN_TEST_PG, so they too ran nowhere in CI.
+# They need the identical PG + cairn_pgx rig, and the extension compile dominates wall
+# time — so we run them here against the cluster this job already built rather than stand
+# up (and rebuild the extension for) a second rig in matcher.yml. The matcher conftest
+# applies the db/*.sql schema itself, so it needs only the cluster + extension.
 
 on:
   push:
@@ -214,6 +221,22 @@ jobs:
         env:
           CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
         run: cargo test --workspace
+
+      # ---- matcher DB-gated integration suite (#145) --------------------------------
+      # Runs AFTER the Rust floor tests, against the same cluster + extension. uv is the
+      # project's mandated Python tool (never venv/pip); the `pipeline` extra pulls psycopg
+      # so the gated tests can connect. With CAIRN_TEST_PG set, none of them self-skip — the
+      # full matcher suite (pure + DB-gated) runs, which is exactly how it is run locally.
+      - name: Install uv (for the matcher DB suite)
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: matcher/uv.lock
+      - name: pytest (matcher DB-gated integration suite)
+        working-directory: matcher
+        env:
+          CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
+        run: uv run --extra pipeline pytest -q
 
       # If anything above failed, the server log is the first thing a human wants.
       - name: PostgreSQL log (on failure)

@@ -3,8 +3,9 @@ name: matcher
 # CI gate for the advisory Python matcher (matcher/). Before this the entire advisory tier had
 # NO automated gate — ruff + pytest ran only when a developer remembered, so it could rot
 # silently while the Rust side stayed green. Fast (no database): runs ruff lint + the pure
-# pytest suite. The DB-gated integration tests self-skip when CAIRN_TEST_PG is unset (they need
-# the same PG + cairn_pgx rig as the Rust floor tests — wiring that into this job is a follow-up).
+# pytest suite. The DB-gated integration tests self-skip here (no CAIRN_TEST_PG); they run in
+# the `rust` workflow's floor job instead (issue #145), against the PG + cairn_pgx cluster that
+# job already stands up — so we don't build the expensive extension a second time here.
 
 on:
   push:
