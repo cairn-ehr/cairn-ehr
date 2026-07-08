@@ -11,6 +11,7 @@ self-sufficient given a PG+cairn_pgx cluster.
 """
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -46,23 +47,60 @@ def _apply_schema(conn) -> None:
     conn.commit()
 
 
+def _truncate_projections(conn) -> None:
+    """TRUNCATE + commit every projection table, on its own clean transaction.
+
+    Rolls back first so it runs even if the caller left an aborted transaction behind
+    (a failed test), then commits so the empty state is durable for the NEXT connection —
+    which is the whole point: an external consumer (e.g. the eval harness) must never
+    inherit committed rows. Best-effort by design (see managed_pg_conn): teardown must
+    never mask the test's own failure with a cleanup error.
+    """
+    conn.rollback()
+    with conn.cursor() as cur:
+        cur.execute(f"TRUNCATE {', '.join(_PROJECTION_TABLES)}")
+    conn.commit()
+
+
+@contextmanager
+def managed_pg_conn(dsn):
+    """Yield a schema-applied connection with projection tables empty on entry AND exit.
+
+    The lifecycle every DB-gated matcher test shares, factored out so the exit contract is
+    directly testable (issue #84 pt1): because seed helpers COMMIT, a rollback-only
+    teardown could not undo the last test's writes and they leaked into the database. Here
+    the projection tables are truncated on entry (clean start) and again on exit (clean
+    exit), so no committed row survives regardless of what the test did.
+    """
+    import psycopg
+
+    conn = psycopg.connect(dsn, autocommit=False)
+    try:
+        _apply_schema(conn)
+        _truncate_projections(conn)
+        yield conn
+    finally:
+        # Best-effort exit truncation: swallow any cleanup error so it can never REPLACE the
+        # test's own exception as the surfaced failure. A generator context manager
+        # re-raises whatever its finally raises, so an un-caught truncation error (e.g. the
+        # test crashed the connection) would mask the real assertion failure. Safe to
+        # swallow — the NEXT connection truncates on entry regardless, and the lifecycle
+        # test asserts the exit guarantee on a healthy connection.
+        try:
+            _truncate_projections(conn)
+        except Exception as e:
+            print(f"managed_pg_conn cleanup warning: failed to truncate projections: {e}")
+        finally:
+            conn.close()
+
+
 @pytest.fixture
 def pg_conn():
     """A connection with schema applied and projection tables truncated; skip if no DB."""
     if not CAIRN_TEST_PG:
         pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
-    import psycopg
-
-    conn = psycopg.connect(CAIRN_TEST_PG, autocommit=False)
-    try:
-        _apply_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute(f"TRUNCATE {', '.join(_PROJECTION_TABLES)}")
-        conn.commit()
+    with managed_pg_conn(CAIRN_TEST_PG) as conn:
         yield conn
-    finally:
-        conn.rollback()
-        conn.close()
 
 
 def seed_patient(
