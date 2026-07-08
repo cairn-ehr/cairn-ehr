@@ -61,8 +61,28 @@ CI gates on it** (this supersedes the prior "hand-formatted, CI does not gate on
 crates. cargo-deny **pinned to 0.19.9** (post-review fix: `cargo install --locked` pins only its deps, not itself).
 (3) **matcher** — `matcher.yml` (`ruff check` + pure `pytest`, DB tests self-skip) + explicit ruff rule set in
 `pyproject.toml`. **Deferred (tracked):** required status checks ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)),
-Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144)), DB-gated tests run
-nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)), stricter ruff ruleset (separate PR).
+~~Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144))~~ (**DONE this session**, below),
+DB-gated tests run nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)), stricter ruff ruleset (separate PR).
+
+**This session (2026-07-08, fourth) — Rust toolchain pinning + honest MSRV + PG16→18 CI bump ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144); PR TBD).**
+Closes the fmt-drift fragility PR #143's review flagged: the `fmt`/`deny`/`test` jobs ran on the runner's *unpinned* stable
+toolchain, so a future stable rustfmt whose defaults shift would fail `cargo fmt --check` on untouched code and block
+unrelated PRs. Four coupled changes, all **locally verified green** except the CI-only PG18 step (watched on the PR run):
+(1) **`rust-toolchain.toml`** at repo root pins `channel = "1.96.0"` + `profile = "minimal"` + `components = [rustfmt, clippy]`
+— rustup searches upward so it governs BOTH cargo trees (the workspace AND the excluded `cairn_pgx` extension); the single
+source of truth for channel + components, so the redundant `rustup component add {rustfmt,clippy}` steps in `rust.yml` were
+dropped (replaced by an explicit `rustup show` install-trigger that fails fast). (2) **`[workspace.lints]`** (`rust.warnings = "deny"`
++ `clippy.all = "deny"`) + per-crate `[lints] workspace = true` — mirrors the CI clippy gate so a plain local `cargo build`/`clippy`
+denies the same set CI does (no "green locally, red in CI" gap); safe to *deny* now that the toolchain is pinned (the lint set
+can't grow silently). Positive-control-verified: an unused var is now a hard build error. (3) **Honest MSRV** — `rust-version`
+`1.74` → `1.96` (the old value was unverified and false: the modern dep graph — ed25519-dalek 2, bao 0.13, the postgres stack —
+does not build on 1.74) + `cairn-node` now inherits `rust-version.workspace` like its siblings. **No separate MSRV gate** (it
+would be a false claim on an un-bisected number; the pinned-toolchain build already proves 1.96). (4) **CI PG16→18** — the `test`
+job now adds the PGDG apt repo (`signed-by=` keyring) and installs `postgresql-18`/`-server-dev-18` (Ubuntu 24.04 ships only 16);
+the extension already defaults to `pg18`, so testing 16 while we ship 18 let a PG18-only regression land green. DB-gated floor
+suite **run locally against PG18.1 + `cairn_pgx` 0.3.0: 431 passed / 0 failed** to de-risk the bump. **No Rust source touched** (Cargo manifests +
+toolchain + CI YAML only). **Deferred:** required status checks (#117), `[workspace.lints]` for the `cairn_pgx` tree (pgrx
+macro-generated code trips lints — left at defaults), a true bisected MSRV floor if we ever publish `cairn-event`.
 
 **Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**

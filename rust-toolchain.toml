@@ -1,0 +1,32 @@
+# Pin the Rust toolchain for the whole repository (issue #144).
+#
+# WHY THIS EXISTS
+# The CI `fmt` gate (`cargo fmt --check`) runs against whatever stable rustfmt the
+# runner happens to ship. rustfmt's *default* formatting shifts between stable
+# releases, so an unpinned toolchain will one day reformat code nobody touched and
+# fail `--check` on unrelated PRs, blocking them until someone reformats the tree.
+# The same drift exposes clippy (new lints become `-D warnings` errors) and the
+# build. Pinning one exact toolchain here makes formatting, lints, and builds
+# reproducible for every contributor AND every CI job from a single source of truth.
+#
+# SCOPE
+# rustup searches upward from the current directory for this file, so it governs
+# BOTH cargo trees: the workspace (`/crates`) and the deliberately-excluded
+# `cairn_pgx` extension under `extensions/` — a build run from either directory
+# resolves this same pin. There is intentionally no second toolchain file.
+#
+# HOW TO BUMP
+# Change `channel` to the new exact version in ONE place, run `cargo fmt --all`
+# (+ the extension tree) to absorb any rustfmt-default changes, fix any new clippy
+# lints, and commit together. Keep `rust-version` in Cargo.toml in step (it declares
+# the same floor for tooling that reads package metadata).
+
+[toolchain]
+# Exact version (not "stable"): the whole point is to stop silent drift. This is the
+# version the project is developed and validated against as of 2026-07 (matches the
+# `rust-version` in the workspace Cargo.toml).
+channel = "1.96.0"
+# minimal profile keeps the install lean; the two components CI (and local dev) need
+# on top of it are named explicitly so a fresh checkout is immediately fmt/clippy-ready.
+profile = "minimal"
+components = ["rustfmt", "clippy"]

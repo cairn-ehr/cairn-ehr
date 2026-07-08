@@ -31,8 +31,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Add rustfmt component
-        run: rustup component add rustfmt
+      # The repo pins its toolchain in rust-toolchain.toml (#144): an exact channel plus the
+      # rustfmt/clippy components. rustup installs that toolchain on first use; `rustup show`
+      # forces it now so a toolchain problem surfaces here rather than mid-format. This is why
+      # the old `rustup component add rustfmt` step is gone — the toolchain file is the single
+      # source of truth for BOTH the channel and the components (the whole point of pinning:
+      # the fmt gate can no longer drift when the runner's default stable moves).
+      - name: Install the pinned toolchain (+ rustfmt/clippy)
+        run: rustup show
       - name: rustfmt (workspace)
         run: cargo fmt --all --check
       - name: rustfmt (cairn_pgx extension)
@@ -65,17 +71,18 @@ jobs:
         run: cargo deny --manifest-path extensions/cairn_pgx/Cargo.toml check --config deny.toml
 
   test:
-    name: clippy + cargo test (PG16 + cairn_pgx floor)
+    name: clippy + cargo test (PG18 + cairn_pgx floor)
     # Pinned (not ubuntu-latest): the apt PostgreSQL major and the clang/llvm major
     # this job depends on are properties of the image, so pin the image that was
     # validated rather than let a silent bump surprise the floor gate.
     runs-on: ubuntu-24.04
     env:
-      # PostgreSQL major. Ubuntu 24.04 ships 16 in its default repos, and cairn_pgx
-      # builds against it via its `pg16` feature. The spec targets >= 18; bumping this
-      # gate to 18 means adding the PGDG apt repo (apt.postgresql.org) for
-      # postgresql-18 + postgresql-server-dev-18 — a clean follow-up, tracked in #117.
-      PG_MAJOR: "16"
+      # PostgreSQL major. The spec targets >= 18 and cairn_pgx defaults to its `pg18`
+      # feature (pgrx 0.18.1), so the gate must exercise 18 — testing 16 while we ship 18
+      # would let a PG18-only regression land green (#144). Ubuntu 24.04 does not ship 18
+      # in its default repos, so the job adds the PGDG apt repo (apt.postgresql.org) in a
+      # step below before installing postgresql-18 + postgresql-server-dev-18.
+      PG_MAJOR: "18"
       # MUST match the pgrx pin in extensions/cairn_pgx/Cargo.toml (`pgrx = "=0.18.1"`).
       # A drift here builds an extension ABI-mismatched with the crate under test.
       PGRX_VERSION: "0.18.1"
@@ -86,12 +93,27 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # ---- PGDG apt repository: PostgreSQL 18 is not in Ubuntu 24.04's default repos ----
+      # apt.postgresql.org (the official PostgreSQL Global Development Group repo) carries
+      # every current major for the runner's Ubuntu codename (noble). We add its signing key
+      # to a dedicated keyring and register the repo with `signed-by=` (the modern, per-repo
+      # trust model — never the deprecated apt-key global keyring). The install step's own
+      # `apt-get update` then refreshes the index with PG18 available.
+      - name: Add the PGDG apt repository
+        run: |
+          set -euxo pipefail
+          sudo install -d /etc/apt/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/pgdg.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+
       # ---- system prerequisites: PostgreSQL + its server headers + libclang --------
       # postgresql-server-dev-N supplies pg_config and the server headers pgrx's
       # bindgen step needs; clang/libclang-dev supply the libclang bindgen links against
       # (without it the pgrx-pg-sys build fails with "bindgen failed"). `apt-get update`
-      # first: the image's package index can lag the current point release, 404-ing a
-      # pinned-version fetch otherwise.
+      # first (now with PGDG registered): the index can lag the current point release,
+      # 404-ing a pinned-version fetch otherwise.
       - name: Install PostgreSQL ${{ env.PG_MAJOR }} + build prerequisites
         run: |
           set -euxo pipefail
@@ -106,8 +128,12 @@ jobs:
           # Point bindgen at libclang explicitly (robust to the llvm major on the image).
           echo "LIBCLANG_PATH=$(ls -d /usr/lib/llvm-*/lib | tail -1)" >> "$GITHUB_ENV"
 
-      - name: Add clippy component
-        run: rustup component add clippy
+      # Install the pinned toolchain (rust-toolchain.toml, #144) and its clippy/rustfmt
+      # components explicitly, before the expensive extension build, so a toolchain problem
+      # fails fast. Replaces the old `rustup component add clippy` — the toolchain file is now
+      # the single source of truth for the channel and components.
+      - name: Install the pinned toolchain (+ clippy)
+        run: rustup show
 
       # ---- caches: the extension compile dominates wall time (issue #117 note) ------
       - name: Cache cargo registry + build (workspace and extension)
