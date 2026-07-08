@@ -23,6 +23,43 @@ permissions:
   contents: read
 
 jobs:
+  # Formatting gate — fast, no Postgres. Enforces rustfmt defaults across BOTH cargo trees
+  # (the workspace and the separate cairn_pgx extension). poc/ frozen spikes are not members
+  # of either, so they are deliberately left untouched.
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Add rustfmt component
+        run: rustup component add rustfmt
+      - name: rustfmt (workspace)
+        run: cargo fmt --all --check
+      - name: rustfmt (cairn_pgx extension)
+        run: cargo fmt --check --manifest-path extensions/cairn_pgx/Cargo.toml
+
+  # Supply-chain gate — fast, no Postgres. Enforces the AGPL-compatible license allow-list,
+  # RUSTSEC advisories, wildcard/source bans (deny.toml). Runs on BOTH trees; the extension
+  # tree shares the root deny.toml. cargo-deny is cached like cargo-pgrx below.
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache the cargo-deny binary
+        id: deny-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-0.19-${{ runner.os }}
+      - name: Install cargo-deny
+        if: steps.deny-bin.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --locked
+      - name: cargo-deny (workspace)
+        run: cargo deny check
+      - name: cargo-deny (cairn_pgx extension)
+        run: cargo deny --manifest-path extensions/cairn_pgx/Cargo.toml check --config deny.toml
+
   test:
     name: clippy + cargo test (PG16 + cairn_pgx floor)
     # Pinned (not ubuntu-latest): the apt PostgreSQL major and the clang/llvm major
