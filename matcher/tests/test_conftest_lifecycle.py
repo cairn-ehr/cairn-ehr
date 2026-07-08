@@ -69,8 +69,17 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
     """
     fake = _FakeConn()
 
-    # Stub the DB touchpoints so no real cluster is needed: connect yields the fake,
-    # schema application is a no-op, and truncation succeeds on entry but blows up on exit.
+    # Stub the DB touchpoints so no real cluster (and no psycopg install) is needed: a fake
+    # `psycopg` module whose connect() yields the fake connection, schema application a
+    # no-op, and truncation that succeeds on entry but blows up on exit. Injecting psycopg
+    # via sys.modules (rather than monkeypatching the real one) keeps this test runnable in
+    # the pure `uv run pytest` suite, where psycopg is not installed (pipeline extra only).
+    import sys
+    import types
+
+    monkeypatch.setitem(
+        sys.modules, "psycopg", types.SimpleNamespace(connect=lambda *a, **k: fake)
+    )
     monkeypatch.setattr(conftest, "_apply_schema", lambda conn: None)
     calls = {"n": 0}
 
@@ -80,10 +89,6 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
             raise RuntimeError("cleanup blew up")
 
     monkeypatch.setattr(conftest, "_truncate_projections", _flaky_truncate)
-
-    import psycopg
-
-    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: fake)
 
     class _Sentinel(Exception):
         pass
