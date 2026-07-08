@@ -11,6 +11,7 @@ pub mod localstate;
 pub mod matcher_actor;
 pub mod medium;
 pub mod pairing;
+pub mod photo_evidence;
 pub mod restore;
 pub mod seal;
 pub mod sync;

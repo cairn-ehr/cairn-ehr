@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-07 · **Spec/ADRs:** v0.41 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-08 · **Spec/ADRs:** v0.43 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -17,36 +17,47 @@ clinician-observed evidence · the birth-year-range blocking pass · administrat
 forcing rule, [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130) closed);
 remaining **B3 measurement-driven follow-ons** (learn against a large hand-crafted gold set; locale comparator packs;
 hub-tier aggressive duplicate sweep)
++ the **§5.4 photo evidence slice** (the first content-addressed **attachment** on a clinical surface; ADR-0042 froze
+the §3.14 day-one attachment-reference shape — **done this session**)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
-(photo/marks/belongings/EMS evidence, the "prior history now available" push-alert, the search-before-create funnel).
+(marks/belongings/EMS evidence [future `identity.evidence.asserted` kinds], the "prior history now available"
+push-alert, the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-07) — B3 compound blocking keys: `dob+first-initial` + `name+sex` (matcher slice 25; full
-detail in ROADMAP slice 25 + git; design+plan under `docs/superpowers/{specs,plans}/2026-07-07-compound-blocking-keys*`).**
-Advisory eval/matcher tier only — **no production floor/SCHEMA/event/migration/ADR/spec change** (same footprint as
-slices 21–23). Two ADDITIVE SYMMETRIC compound blocking passes; registry `ALL_PASSES` 6→8 (both in derived
-`SYMMETRIC_PASSES`). **`dob+first-initial`** (key `initial|birth-year`: birth-year — point, first-4-digit-run,
-year-range excluded — + first character of each name token) is GENUINELY NEW recall: a first-initial RELAXATION of
-the name requirement, rescuing transpose/diacritic/misspelling name variants that share a birth-year but no full
-name token. **`name+sex`** (key `token|sex`: name token + normalized sex, the sentinel-excluded union of
-sex-at-birth + administrative-sex from the shared `blocking_sex` CTE) is a SUBSET of the `name` block when uncapped
-— its value is the oversized-name-block rescue (splits a common unisex-token block the cap drops wholesale into
-per-sex sub-blocks), and the only name rescue that fires for the §5.4 John-Doe population (range/absent DOB blocks
-`name+year`; observed sex still fires). Implementation (Approach A) extracted the shared
-`name_tokens`/`birth_year`/`blocking_sex` CTEs into composable SQL-fragment constants (`_NAME_TOKENS_CTE`/
-`_BIRTH_YEAR_CTE`/`_BLOCKING_SEX_CTE` — one shared definition, no drift of the sentinel-bound sex normalization) so
-both new statements reuse them; `_GROUPS_SQL` gained two arms binding `(_PLACEHOLDER_USES_PARAM,
-VALUE_SENTINELS_PARAM)`; the eval mirror gained `_first_initials` + one `shares_blocking_key` clause (`name+sex`
-subsumed by the existing name-token check). 4-task subagent-SDD, all reviewed clean (0 blocking findings — the
-DISTINCT-count self-satisfying-HAVING guard, bind order, and year-range exclusion independently re-verified). Suites
-**pure 297 passed / 78 skipped / ruff clean; DB-gated 375 passed / 0 skipped**. **Honest limits:** `name+sex`'s
-recall gain is INVISIBLE to the uncapped blocking-recall metric (adds no pairs uncapped) — proven instead by a
-targeted DB test building an over-cap unisex-name block and asserting the per-sex rescue; first-initial =
-code-point 1 after NFC (grapheme edge cases collapse to base letter — acceptable, advisory/recall-only);
-`dob+first-initial` blocks can be ~1/26 of a birth cohort — bounded by the same cap + skip + hub-sweep backstop;
-lift measured on SYNTHETIC data only, real-world magnitudes await the large hand-crafted gold set (deferred
-slice-24 follow-on).
+**This session (2026-07-08) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
+v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
+The FIRST content-addressed **attachment** on a clinical surface, which forced finalizing the ONE can't-retrofit
+piece of ADR-0013. **Two phases, 9-task subagent-SDD, final whole-branch review "ready to merge" (0 Critical/
+Important).** (1) **The shape** — replaced the walking-skeleton `AttachmentRef` stub with
+`Attachment{descriptor, renditions:[Rendition{role,alg,digest_hex,media_type,byte_len,inline?,seal?}]}` +
+`SealRef{alg,dek_wrap}` in `cairn-event/src/attachment.rs` (all five §3.14 reserves: content digest, descriptor
+metadata, **rendition set** [structurally can't-retrofit], **seal indicator** + **inline-vs-reference** [reserved,
+None]); field order frozen by **ADR-0042** (refines 0013, reconciles with **ADR-0041**'s note `payload.media`
+manifest — one shared primitive, two carriers: `EventBody.attachments` for non-narrative events vs the note payload).
+Empty-vec byte-identity proven, so every past zero-attachment event keeps its content-address. (2) **The floor** —
+`db/027` `cairn_learn_attachment_refs` walks `attachments[*].renditions[*]` (skips inline); db/005 **and** db/020
+call the one shared helper (no drift). (3) **Photo author path** — new non-demographic `identity.evidence.asserted`
+(payload `{kind:"photo",provenance:"clinician-observed",basis?}`, photo in `EventBody.attachments`, twin from
+descriptor **never pixels**; `db/028` registers the type — fail-closed floor); `cairn-node/photo_evidence.rs`
+(pure `prepare_local_blob` + atomic `assert_photo_evidence` storing the blob present through the db/026 verify
+trigger + authoring the event in ONE txn, `ON CONFLICT DO UPDATE` to fill a pre-existing reference-only placeholder)
++ an `assert-photo-evidence` CLI. Suites **workspace 418 passed / 0 failed; clippy clean**. **Honest limits:** ships
+**plaintext** (seal reserved), a **single `original` rendition** (no preview — needs an image lib), **bytes stay
+local** (cross-node byte fetch deferred), and the frozen POC harness diverges from the new shape. **Review fixes
+applied post-build:** the honest-descriptor rule now lives in the library (`photo_evidence::validate_photo_descriptor`,
+not only the CLI, so a future UI backend inherits it); a **direct db/020 apply-door attachment test** now exercises the
+remote-apply call site of `cairn_learn_attachment_refs` (both doors directly covered); the local-blob **size-guard** gap
+(no ceiling on `blob_store.content`, whole file read into memory) is lodged as **[#141](https://github.com/cairn-ehr/cairn-ehr/issues/141)**
+for the §6.6 byte-tier slice. Residual accepted: DO-UPDATE overwrites caller-supplied `media_type` on an already-present
+row (benign). Env: `cairn_pgx` upgraded to **0.3.0** on the Mac :5532 cluster this session (was 0.2.0 — db/026 requires ≥0.3.0).
+
+**Prior session (2026-07-07) — B3 compound blocking keys `dob+first-initial` + `name+sex` (matcher slice 25;
+condensed — full detail in ROADMAP slice 25 + git + PR #138).** Advisory eval/matcher tier only, no floor/spec
+change: two additive symmetric compound passes (registry 6→8) — `dob+first-initial` (a first-initial relaxation of
+the name requirement, genuinely new recall) + `name+sex` (the oversized-unisex-name-block per-sex rescue; the only
+name rescue that fires for the John-Doe population). Shared CTE fragments extracted to avoid sex-normalization drift.
+Suites pure 297 / DB 375 green. Honest limit: lift measured on synthetic data only.
 
 **Prior session (2026-07-07) — B3 weight-learning: supervised Fellegi–Sunter estimation (matcher slice 24; full
 detail in ROADMAP slice 24 + git; design+plan under `docs/superpowers/{specs,plans}/2026-07-06-b3-weight-learning*`).**
@@ -203,62 +214,12 @@ mTLS pinned to the trust set, set-union `node_event` sync, honest `status`); `db
 new crypto). Genesis-stable `node_id` = content-address of the genesis enrollment event. Two-node E2E green on
 local PG16 + `cairn_pgx`.
 
-**Honest gaps / follow-ons declared in the node (candidate "harden the node" work):**
-- ~~`status` **crashes if run before `init`**~~ **closed 2026-06-23** — `load_local_opt` (`query_opt`) +
-  an `initialized` flag; `status` degrades honestly with a "run `cairn-node init`" hint
-  (`tests/status.rs::status_before_init_degrades_gracefully`).
-- **In-DB floor caveat** — ~~runtime should connect as a login role granted `cairn_node` (NOLOGIN)~~
-  **closed 2026-06-23**: `db::provision_runtime_role` (charset-guarded against DDL injection) + a
-  `provision-runtime-role` CLI subcommand create that role, and `tests/floor_enforced.rs` now **proves the
-  ENFORCED path** — over a `cairn_node`-granted login role a raw `INSERT` into `node_event` is denied
-  (SQLSTATE 42501), `status` reports `db_floor ENFORCED`, yet `submit_node_event` still works.
-- ~~**Key-at-rest plaintext-0600**; **DR/recovery escrow a named stub** (`dr_escrow: STUBBED`)~~ **closed
-  2026-06-24** (ADR-0026 **slice A**, [PR #44](https://github.com/cairn-ehr/cairn-ehr/pull/44)): the signing key is now **sealed at rest** — a random DEK seals the
-  seed (XChaCha20-Poly1305), DEK **dual-wrapped** under Argon2id KEKs from an operational passphrase
-  **and** a one-time **recovery code** (paper escrow, shown once at `init`). New pure `seal.rs`
-  (seal/unseal/CBOR + base32 recovery code); `keystore` gained `generate_sealed`/`generate_plaintext`/
-  `seal_existing` + auto-detect `load` + `key_at_rest_state`; CLI seals by default (`--insecure-plaintext`
-  escape hatch) and added `seal-key` migration; daemon unseals via `CAIRN_KEY_PASSPHRASE`. `status` now
-  reports `key_at_rest SEALED` + `dr_escrow recovery code set` + `recovery_escrow`. **Honest ceiling
-  (documented, not engineered away): lose both the passphrase AND the recovery code → node loss.**
-- ~~Genesis **HLC 0/0 placeholder**; **full-pull, no incremental watermark**~~ **closed 2026-06-23**
-  ([issue #38](https://github.com/cairn-ehr/cairn-ehr/issues/38), **merged [PR #42](https://github.com/cairn-ehr/cairn-ehr/pull/42)**):
-  incremental pull keyed on a monotonic local-insertion `node_event.seq` (a node always inserts newly-learned
-  events with a fresh high `seq`, so the watermark is **structurally** skip-proof — decoupling it from the HLC,
-  which dissolved the stated coupling), per-peer `sync_cursor` written only through an advance-only
-  `checkpoint_sync_cursor` `SECURITY DEFINER` door (the runtime role keeps **zero raw DML**), with an explicit
-  periodic + trust-change-triggered **full-sweep** as the correctness floor for the residual commit-order /
-  rejected-then-trusted / address-remap hazards. The `0/0` HLC is now a real local clock (`hlc_state` +
-  `node_hlc_tick()` + merge-forward on apply, mirroring `cairn-sync`). Acceptance test
-  `sync_watermark::out_of_order_skip_is_reconciled_by_full_sweep` proves a jammed-cursor skip is reconciled by
-  the sweep; the seq prefix is transport-only (signed core byte-identical, principle 12). Full node suite green
-  on PG16 + `cairn_pgx`, clippy clean.
-- ~~**backup-as-cold-peer** + backup-health (slice B)~~ **export half closed this session**: `backup`/`verify-backup`
-  CLI + `last_backup` status line; signed-event medium, self-verifying via the existing signature invariant (tamper
-  → non-zero exit); fail-safe node-local health sidecar; **verify-before-write** (the image self-verifies *before* the
-  atomic rename, so a bad set never overwrites the previous good medium) plus a read-after-write tripwire gate the
-  health update so it never over-claims. New `backup.rs` (pure medium format + verify + health) + shared `fsio`
-  atomic-write.
-- ~~**Restore (apply) + new-identity `supersede`** (slice C, [#50](https://github.com/cairn-ehr/cairn-ehr/issues/50))~~
-  **closed**: `cairn-node restore` + self-trusting `restore_node_event` door (empty-genesis fenced), `supersede`(dead→new),
-  fresh-key mint, `status` `supersedes` line. `db/009` + a `supersede` branch in `submit_node_event` (db/007). Residual
-  footgun ~~[#53](https://github.com/cairn-ehr/cairn-ehr/issues/53) (a federated medium's `--superseded-node` could name a
-  peer)~~ **closed this session** via the container-level self-marker (`medium.rs`, `CAIRNB2`; signed+medium-bound or
-  unsigned) — see top.
-- ~~**Sealed local-state export** (slice D, ADR-0026 point 3)~~ **closed this session**: `localstate.rs` (LSK dual-wrap,
-  `CAIRNL1`/`CAIRNX1` containers, additive `LocalState` with empty slots, DB seams); `.lsk` at provisioning;
-  `establish-local-state-key`; `backup` writes / `restore` consumes the export; `status` `local_state` line. **All ADR-0026
-  slices (A–D) now done.** Remaining escrow *rungs* (Shamir M-of-N, QR, TPM/keyring) are optional upward options, not blockers.
-- ~~atomic key-file write ([issue #45](https://github.com/cairn-ehr/cairn-ehr/issues/45)); passphrase
-  `zeroize`-on-drop ([issue #46](https://github.com/cairn-ehr/cairn-ehr/issues/46))~~ **closed 2026-06-25**:
-  `write_key_file` is now atomic (temp sibling → fsync → `rename` → **parent-dir fsync**, 0600 forced
-  explicitly), so an interrupted `init`/`seal-key` can never leave a half-written key that boots `Corrupt`,
-  the rename itself survives a power loss (not just the bytes), and a stale wide-perm `<key>.tmp` can no longer
-  leak its mode onto the key; the operational passphrase and recovery code are held as `Zeroizing<String>`
-  from `resolve_passphrase`/prompt through to the Argon2 call, wiped on drop (`zeroize` was already a transitive
-  dep — no new crate). TDD: red-first tests for the new `tmp_sibling` helper, no-temp-litter, stale-temp clobber,
-  0600 perms, stale-wide-perm-temp non-leak, and the `Zeroizing` return type. (PR #49 review: + dir fsync,
-  explicit 0600, non-unix fsync.)
+**Honest gaps / follow-ons declared in the node — ALL CLOSED** (full detail in git + ROADMAP Phase 5/6):
+status-before-init crash; runtime-login-role / floor-ENFORCED proof; key-at-rest seal + dual-wrap recovery escrow
+(ADR-0026 slice A); incremental sync watermark + genesis HLC (#38/#42); all four ADR-0026 durability slices A–D
+(cold-peer backup+health, restore + `supersede`, sealed local-state export); atomic key-file write (#45) + passphrase
+`zeroize`-on-drop (#46). Only optional escrow *rungs* (Shamir M-of-N / QR / TPM) remain — upward options, not blockers.
+The `localstate` DB read/apply **seams** are where the future clinical tier plugs DEKs/drafts/config.
 - Test rig: DB-gated tests need local PG + `cairn_pgx` (`cargo pgrx install` against PG16); they self-serialize
   cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so plain `cargo test --workspace` is reliable.
 
@@ -358,7 +319,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   scoring via the composite `sex` field + the unconfirmed-chart REVIEW forcing rule + `chart_trust` plumbing, this
   session — closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130), see top)** — **are now
   BUILT; NO new event type / migration / floor / SCHEMA / ADR / spec change.**
-  **Remaining §5.4:** photo/marks/belongings/EMS-context evidence (new field home + attachment tier — separate slice), the
+  **Remaining §5.4:** ~~photo evidence~~ (DONE this session — `identity.evidence.asserted` + the ADR-0042 attachment
+  tier); marks/belongings/EMS-context evidence (future `identity.evidence.asserted` `kind` values — same event type,
+  zero wire change; marks/belongings are text, photo-shaped are attachments), the
   "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
   registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
   count), a `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
@@ -491,6 +454,8 @@ ADR before reopening any of these.
 | [0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md) | Demographic address display: per-use recency-first (volatile field; follows ADR-0036) | §4.3 (refines 0032, follows 0036) |
 | [0039](spec/decisions/0039-globalise-authored-legibility-twin.md) | Globalise the author-materialised legibility twin to every event type; honest-degradation fallback for non-demographic types | §3.13/§4.5 (refines 0012/0034) |
 | [0040](spec/decisions/0040-signing-context-domain-separation.md) | Signing-context domain separation (content-type + `external_aad`); one signature per event, co-signing by overlay | §3.5 (refines 0015/0007/0030) |
+| [0041](spec/decisions/0041-progress-note-narrative-format.md) | Progress-note format: one signed event, markdown narrative + manifest-keyed media anchors | §3.19 (refines 0012/0013/0020/0039) |
+| [0042](spec/decisions/0042-concrete-attachment-reference-shape.md) | Concrete attachment-reference shape (Attachment/Rendition/SealRef; frozen field order) | §3.14 (refines 0013, reconciles 0041) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

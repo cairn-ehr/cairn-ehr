@@ -353,29 +353,34 @@ follow-up; synthetic-learned weights reflect the generator's corruption model; v
 lowers a band — safe); no pipeline consumer loads a learned model yet (advisory desk artifact).
 
 **Slice 25 — B3 compound blocking keys: `dob+first-initial` + `name+sex`** (2026-07-07; advisory Python, eval/matcher
-tier only — **no production floor/SCHEMA/event/migration/ADR/spec bump**; same footprint as slices 21–23;
-design+plan under `docs/superpowers/{specs,plans}/2026-07-07-compound-blocking-keys*`). Two ADDITIVE SYMMETRIC
-compound blocking passes, registry `ALL_PASSES` 6→8 (both in derived `SYMMETRIC_PASSES`). **`dob+first-initial`**
-(key `initial|birth-year`: birth-year — point, first-4-digit-run, year-range excluded — + first character of each
-name token) is GENUINELY NEW recall: a first-initial relaxation of the name requirement, rescuing
-transpose/diacritic/misspelling name variants sharing a birth-year but no full name token. **`name+sex`** (key
-`token|sex`: name token + normalized sex, the sentinel-excluded union of sex-at-birth + administrative-sex from the
-shared `blocking_sex` CTE) is a SUBSET of the `name` block when uncapped — its value is the oversized-name-block
-rescue (splits a common unisex-token block the cap drops wholesale into per-sex sub-blocks), and the only name
-rescue that fires for the §5.4 John-Doe population (range/absent DOB blocks `name+year`; observed sex still fires).
-Implementation (Approach A) extracted the shared `name_tokens`/`birth_year`/`blocking_sex` CTEs into composable
-SQL-fragment constants (`_NAME_TOKENS_CTE`/`_BIRTH_YEAR_CTE`/`_BLOCKING_SEX_CTE` — one shared definition, no drift
-of the sentinel-bound sex normalization) so both new statements reuse them; `_GROUPS_SQL` gained two arms binding
-`(_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM)`; the eval mirror gained `_first_initials` + one
-`shares_blocking_key` clause (`name+sex` subsumed by the existing name-token check). 4-task subagent-SDD, all
-reviewed clean (0 blocking findings — the DISTINCT-count self-satisfying-HAVING guard, bind order, and year-range
-exclusion independently re-verified). Suites pure 297 passed / 78 skipped / ruff clean; DB-gated 375 passed / 0
-skipped. **Honest limits:** `name+sex`'s recall gain is INVISIBLE to the uncapped blocking-recall metric (adds no
-pairs uncapped) — proven instead by a targeted DB test building an over-cap unisex-name block and asserting the
-per-sex rescue; first-initial = code-point 1 after NFC (grapheme edge cases collapse to base letter — acceptable,
-advisory/recall-only); `dob+first-initial` blocks can be ~1/26 of a birth cohort — bounded by the same cap + skip +
-hub-sweep backstop; lift measured on SYNTHETIC data only, real-world magnitudes await the large hand-crafted gold
-set (deferred slice-24 follow-on).
+tier only, no floor/spec bump; condensed — full detail in git + PR #138). Two additive symmetric compound passes
+(registry 6→8): `dob+first-initial` (birth-year + first char of each name token — a first-initial relaxation of the
+name requirement, genuinely new recall for transpose/diacritic/misspelling variants) + `name+sex` (name token +
+normalized sex — the oversized-unisex-name-block per-sex rescue; the only name rescue that fires for the John-Doe
+population). Shared CTE fragments extracted to avoid sex-normalization drift. Suites pure 297 / DB 375 green. Honest
+limit: `name+sex` gain invisible to the uncapped metric (proven by a targeted over-cap DB test); lift on SYNTHETIC
+data only, real magnitudes await the large hand-crafted gold set (deferred slice-24 follow-on).
+
+**Slice 26 — §5.4 photo evidence + the day-one §3.14 attachment-reference shape** (2026-07-08; **ADR-0042**, spec
+v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).
+The FIRST content-addressed **attachment** on a clinical surface — forced finalizing the ONE can't-retrofit piece of
+ADR-0013 (also lands the Phase-7 attachment-reference shape). 9-task subagent-SDD, final whole-branch review "ready to
+merge" (0 Critical/Important); workspace 418 passed / 0 failed, clippy clean. **(1) Shape:** `AttachmentRef` stub →
+`Attachment{descriptor, renditions:[Rendition{role,alg,digest_hex,media_type,byte_len,inline?,seal?}]}` +
+`SealRef{alg,dek_wrap}` (`cairn-event/src/attachment.rs`) — all five §3.14 reserves; rendition set nested
+(structurally can't-retrofit), seal + inline reserved-None; field order frozen by ADR-0042 (reconciles ADR-0041's
+note `payload.media` — one shared primitive, two carriers). `EventBody.attachments: Vec<Attachment>`, empty-vec
+byte-identity proven. **(2) Floor:** `db/027` `cairn_learn_attachment_refs` walks `attachments[*].renditions[*]`
+(skips inline); db/005 + db/020 call the one shared helper (no drift). **(3) Author path:** non-demographic
+`identity.evidence.asserted` (`db/028` registers it — fail-closed floor; twin from descriptor never pixels);
+`cairn-node/photo_evidence.rs` (pure `prepare_local_blob` + atomic `assert_photo_evidence` — blob stored present
+through the db/026 verify trigger + event authored in ONE txn, `ON CONFLICT DO UPDATE` fills a placeholder) + an
+`assert-photo-evidence` CLI. **Honest limits:** plaintext (seal reserved), single `original` rendition (no preview),
+bytes local (cross-node fetch deferred), POC harness diverges. **Review fixes applied:** honest-descriptor rule
+moved into the library (`validate_photo_descriptor`, not only the CLI); a direct db/020 apply-door attachment test
+added (both doors now directly cover `cairn_learn_attachment_refs`); local-blob size-guard gap lodged as
+[#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) (§6.6 byte-tier slice). Residual (benign): DO-UPDATE
+overwrites caller `media_type` on an already-present row.
 
 **Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
@@ -439,7 +444,7 @@ scorer mode; variable cluster size / an unrecoverable fraction / hard negatives 
 
 ## Phase 7 — Attachments / byte tier
 
-- **Content-addressed lazy blobs** referenced by the signed event, never inlined; day-one attachment-reference shape ([ADR-0013](spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)). *Already in place from the spike era: the day-one `AttachmentRef` shape in `cairn-event` + `event_log.attachments`, reference-eager learning in both doors (db/005 + db/020 → `blob_note_reference`), and the chunked/resumable/windowed byte tier (db/003 + `cairn-sync` blobd).*
+- **Content-addressed lazy blobs** referenced by the signed event, never inlined; day-one attachment-reference shape ([ADR-0013](spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)). **The concrete shape is FINALIZED** ([ADR-0042](spec/decisions/0042-concrete-attachment-reference-shape.md), 2026-07-08, slice 26): `Attachment{descriptor, renditions:[Rendition{…, inline?, seal?}]}` + `SealRef` in `cairn-event/src/attachment.rs` (all five §3.14 reserves; field order frozen), `EventBody.attachments: Vec<Attachment>`, and reference-eager per-rendition learning in both doors via the shared `cairn_learn_attachment_refs` helper (db/027; db/005 + db/020). Byte tier (db/003 + `cairn-sync` blobd) is chunked/resumable/windowed. First real consumer: §5.4 photo evidence (slice 26). *Deferred: cross-node byte fetch wired into `cairn-node`; per-blob DEK sealing; preview/extracted-text renditions.*
 - **Blob self-verification in-DB floor** — ✓ done 2026-07-05 (`db/026_blob_verify_floor.sql` + `cairn_pgx` 0.3.0
   `cairn_blob_verify`/`cairn_blob_verify_error`, thin wrappers over the same `cairn_event::blob_address` L2 uses —
   one hashing implementation, never two): the BLAKE3-vs-address check `cairn-sync` performs before flipping

@@ -19,4 +19,5 @@ bao = "0.13"               # BLAKE3 verified streaming: per-slice content verifi
 uuid = { version = "1", features = ["v7"] }
 getrandom = "0.4"          # key generation entropy (0.4 matches uuid/rand; dedupes once #11's RustCrypto stack lands)
 hex = "0.4"
+serde_bytes = "0.11"       # CBOR byte-string encoding for reserved inline blob bytes
 thiserror = "1"

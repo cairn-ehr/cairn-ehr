@@ -28,10 +28,13 @@ use serde::{Deserialize, Serialize};
 // Re-exported so downstream crates (cairn-sync) need not depend on ed25519-dalek
 // directly — the keypair type travels with this crate's signing API.
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
+pub use attachment::{Attachment, Rendition, SealRef};
 
+pub mod attachment;
 pub mod demographics;
 pub mod evidence;
 pub mod identity;
+pub mod identity_evidence;
 pub mod john_doe;
 
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
@@ -217,17 +220,6 @@ pub struct Hlc {
     pub node_origin: String,
 }
 
-/// A §3.14 attachment reference: eager (it rides in the signed event) while the
-/// bytes are lazy (the §6.6 byte tier). `digest_hex` is the BLAKE3 multihash.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AttachmentRef {
-    pub alg: String, // "blake3"
-    pub digest_hex: String,
-    pub media_type: String,
-    pub descriptor: String,
-    pub byte_len: i64,
-}
-
 /// The canonical event body — the thing that is CBOR-encoded and signed. Field
 /// order here IS the canonical encoding order (structural move 1): one writer,
 /// one serialization; verifiers byte-compare and never re-encode.
@@ -243,7 +235,7 @@ pub struct EventBody {
     pub contributors: serde_json::Value, // §3.9 contributor set (skeleton: a single author)
     pub payload: serde_json::Value,      // clinical/demographic content; becomes the DB `body`
     #[serde(default)]
-    pub attachments: Vec<AttachmentRef>,
+    pub attachments: Vec<Attachment>,
     /// The §4.5 materialised legibility twin, authored into the signed body. Absent
     /// (None) for legacy event types whose twin submit_event still derives; present
     /// for demographic assertions, where the in-DB floor (db/010) requires it.
@@ -927,12 +919,12 @@ mod tests {
             event_id: &'a str, patient_id: &'a str, event_type: &'a str,
             schema_version: &'a str, hlc: &'a Hlc, t_effective: Option<String>,
             signer_key_id: &'a str, contributors: &'a serde_json::Value,
-            payload: &'a serde_json::Value, attachments: &'a Vec<AttachmentRef>,
+            payload: &'a serde_json::Value, attachments: &'a Vec<Attachment>,
         }
         let hlc = Hlc { wall: 1, counter: 0, node_origin: "n".into() };
         let contributors = serde_json::json!([{"actor_id": "k", "role": "triaged"}]);
         let payload = serde_json::json!({"text": "hi"});
-        let attachments: Vec<AttachmentRef> = vec![];
+        let attachments: Vec<Attachment> = vec![];
         let legacy = LegacyBody {
             event_id: "e", patient_id: "p", event_type: "note.added",
             schema_version: "advisory/1", hlc: &hlc, t_effective: None,
@@ -963,12 +955,12 @@ mod tests {
             event_id: &'a str, patient_id: &'a str, event_type: &'a str,
             schema_version: &'a str, hlc: &'a Hlc, t_effective: Option<String>,
             signer_key_id: &'a str, contributors: &'a serde_json::Value,
-            payload: &'a serde_json::Value, attachments: &'a Vec<AttachmentRef>,
+            payload: &'a serde_json::Value, attachments: &'a Vec<Attachment>,
         }
         let hlc = Hlc { wall: 1, counter: 0, node_origin: "n".into() };
         let contributors = serde_json::json!([]);
         let payload = serde_json::json!({});
-        let attachments: Vec<AttachmentRef> = vec![];
+        let attachments: Vec<Attachment> = vec![];
         let legacy = LegacyBody {
             event_id: "e", patient_id: "p", event_type: "note.added",
             schema_version: "advisory/1", hlc: &hlc, t_effective: None,
@@ -980,6 +972,27 @@ mod tests {
         let decoded: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
         assert_eq!(decoded.plaintext_twin, None,
                    "a missing plaintext_twin key must decode to None (serde default)");
+    }
+
+    // Task 2: EventBody.attachments now holds real Attachment values (Task 1's shape),
+    // not the walking-skeleton AttachmentRef stub. Proves a non-empty attachments Vec
+    // round-trips through the canonical CBOR encoding unchanged.
+    #[test]
+    fn event_with_one_attachment_round_trips_through_canonical_cbor() {
+        let r = crate::attachment::Rendition::reference("original", b"jpegbytes", "image/jpeg");
+        let att = crate::attachment::Attachment::single("id photo", r);
+        let body = EventBody {
+            event_id: "e".into(), patient_id: "p".into(),
+            event_type: "identity.evidence.asserted".into(),
+            schema_version: "identity.evidence.asserted/1".into(),
+            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+            t_effective: None, signer_key_id: "k".into(),
+            contributors: serde_json::json!([]), payload: serde_json::json!({"kind":"photo"}),
+            attachments: vec![att.clone()], plaintext_twin: Some("t".into()),
+        };
+        let bytes = canonical_cbor(&body).unwrap();
+        let back: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
+        assert_eq!(back.attachments, vec![att]);
     }
 
     #[test]

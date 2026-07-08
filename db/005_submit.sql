@@ -68,7 +68,6 @@ DECLARE
     v_att_key      BYTEA;
     v_actor_ids    BYTEA[];
     v_actor_id     BYTEA;
-    c              JSONB;
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
     --    so an event too large to replicate or back up can never be admitted (it would
@@ -213,11 +212,10 @@ BEGIN
         END IF;
     END IF;
 
-    -- Learn any attachment references (reference-eager, byte-lazy).
-    FOR c IN SELECT * FROM jsonb_array_elements(COALESCE(b -> 'attachments','[]'::jsonb)) LOOP
-        PERFORM blob_note_reference(decode(c ->> 'digest_hex','hex'), c ->> 'media_type',
-                                    (c ->> 'byte_len')::bigint);
-    END LOOP;
+    -- Learn any attachment references, per rendition (reference-eager, byte-lazy).
+    -- Shared with the remote-apply door via cairn_learn_attachment_refs (db/027) so the
+    -- two doors never drift.
+    PERFORM cairn_learn_attachment_refs(b);
 
     RETURN v_event_id;
 END;
