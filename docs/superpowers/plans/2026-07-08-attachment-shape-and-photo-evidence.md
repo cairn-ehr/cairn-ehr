@@ -971,11 +971,22 @@ pub async fn assert_photo_evidence(
 
     let tx = client.transaction().await?;
     // Store the bytes present=TRUE — verified in-DB by the db/026 trigger before it commits.
+    // ON CONFLICT DO UPDATE (not DO NOTHING): a reference-only placeholder row (present=FALSE,
+    // content NULL) may already sit at this content address — e.g. a remote-synced event
+    // referenced the same photo before we held its bytes, or blob_note_reference created it.
+    // DO NOTHING would leave that placeholder unfilled while the event still commits, so the
+    // chart would reference a blob whose bytes were silently discarded (the exact invariant
+    // this atomic txn exists to hold). DO UPDATE flips it present with our verified bytes;
+    // content-addressing guarantees identical bytes for a matching address, so this is safe
+    // even if the row was already present=TRUE. Mirrors cairn-sync's cmd_put_blob.
     tx.execute(
         "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
          VALUES ($1, $2, $3, $4, $5, TRUE, clock_timestamp())
-         ON CONFLICT (blob_address) DO NOTHING",
-        &[&lb.addr, &media_type, &byte_len, &bytes.to_vec(), &lb.outboard],
+         ON CONFLICT (blob_address) DO UPDATE
+             SET content = EXCLUDED.content, outboard = EXCLUDED.outboard, present = TRUE,
+                 media_type = EXCLUDED.media_type, byte_len = EXCLUDED.byte_len,
+                 fetched_at = EXCLUDED.fetched_at",
+        &[&lb.addr, &media_type, &byte_len, &bytes, &lb.outboard],
     ).await?;
     // Author the event (its floor learns the reference — ON CONFLICT no-op against the row above).
     tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await?;
@@ -1157,6 +1168,45 @@ async fn photo_evidence_stores_a_verified_blob_and_references_it() {
     assert!(twin.contains("frontal face photograph of unidentified patient"), "twin: {twin}");
     assert!(twin.contains("image/jpeg"));
     assert!(!twin.contains("JFIF-pretend"), "twin is descriptor-derived, never pixels");
+}
+
+#[tokio::test]
+async fn photo_evidence_fills_a_preexisting_reference_only_placeholder() {
+    // Regression for the ON CONFLICT DO NOTHING bug: a present=FALSE placeholder row may
+    // already sit at the photo's content address (e.g. a remote-synced event referenced the
+    // same photo before this node held its bytes). assert_photo_evidence must FLIP it to
+    // present=TRUE with the real bytes (DO UPDATE), never silently discard them and commit
+    // an event referencing an empty blob.
+    let Some(base) = cs() else { eprintln!("skip: no CAIRN_TEST_PG"); return; };
+    let _guard = db::test_serial_guard(&base).await.unwrap();  // conn string; hold until drop
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+    let id = cairn_node::identity::load_local(&c).await.unwrap();
+    let (patient, _callsign) = cairn_node::john_doe::register_john_doe(
+        &mut c, &sk, &kid, &id.node_id_hex, "ED", "site1", "2026-07-08",
+        "unconscious ED arrival, no ID").await.unwrap();
+
+    // Pre-seat a reference-only placeholder (present=FALSE, content NULL) at the address.
+    let photo = b"\xff\xd8\xff\xe0JFIF-second-photo-bytes";
+    let addr = blob_address(photo);
+    c.execute("SELECT blob_note_reference($1, 'image/jpeg', $2)",
+              &[&addr, &(photo.len() as i64)]).await.unwrap();
+    let before: bool = c.query_one(
+        "SELECT present FROM blob_store WHERE blob_address = $1", &[&addr]).await.unwrap().get(0);
+    assert!(!before, "placeholder starts present=FALSE");
+
+    // Now author the photo evidence with the real bytes.
+    cairn_node::photo_evidence::assert_photo_evidence(
+        &mut c, &sk, &kid, &id.node_id_hex, patient, photo, "image/jpeg",
+        "second identification photograph", None).await.unwrap();
+
+    let row = c.query_one(
+        "SELECT present, cairn_blob_verify(blob_address, content) FROM blob_store WHERE blob_address = $1",
+        &[&addr]).await.unwrap();
+    let present: bool = row.get(0);
+    let verifies: bool = row.get(1);
+    assert!(present, "the placeholder must be flipped present with the real bytes, not left empty");
+    assert!(verifies, "the filled bytes re-hash to the address");
 }
 ```
 
