@@ -836,7 +836,7 @@ Create `crates/cairn-node/src/photo_evidence.rs`:
 //!   * `assert_photo_evidence` — store the bytes present (through the db/026 verify floor) and
 //!     author the event in ONE transaction, so bytes + reference land atomically.
 
-use cairn_event::attachment::{render_attachment_twin, Attachment, Rendition, RENDITION_ROLE_ORIGINAL};
+use cairn_event::attachment::{Attachment, Rendition, RENDITION_ROLE_ORIGINAL};
 use cairn_event::identity_evidence::{
     photo_evidence_body, render_identity_evidence_twin, IDENTITY_EVIDENCE_EVENT_TYPE,
     IDENTITY_EVIDENCE_SCHEMA_VERSION, PHOTO_EVIDENCE_KIND,
@@ -961,7 +961,6 @@ pub async fn assert_photo_evidence(
 ) -> anyhow::Result<Uuid> {
     let lb = prepare_local_blob(bytes, media_type);
     let attachment = Attachment::single(descriptor, lb.rendition.clone());
-    let _ = render_attachment_twin(&attachment); // (twin is built inside the body; kept legible)
 
     // Tick the HLC once (self-committing, like john_doe.rs) before the transaction.
     let hlc = crate::db::next_hlc(client, node_origin).await?;
