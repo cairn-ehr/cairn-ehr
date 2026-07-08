@@ -80,8 +80,16 @@ def managed_pg_conn(dsn):
         _truncate_projections(conn)
         yield conn
     finally:
+        # Best-effort exit truncation: swallow any cleanup error so it can never REPLACE the
+        # test's own exception as the surfaced failure. A generator context manager
+        # re-raises whatever its finally raises, so an un-caught truncation error (e.g. the
+        # test crashed the connection) would mask the real assertion failure. Safe to
+        # swallow — the NEXT connection truncates on entry regardless, and the lifecycle
+        # test asserts the exit guarantee on a healthy connection.
         try:
             _truncate_projections(conn)
+        except Exception:
+            pass
         finally:
             conn.close()
 

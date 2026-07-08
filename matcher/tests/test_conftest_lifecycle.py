@@ -15,6 +15,7 @@ import os
 
 import pytest
 
+from tests import conftest
 from tests.conftest import _PROJECTION_TABLES, managed_pg_conn, seed_patient
 
 CAIRN_TEST_PG = os.environ.get("CAIRN_TEST_PG")
@@ -45,3 +46,52 @@ def test_managed_pg_conn_truncates_committed_rows_on_exit():
     # A fresh connection (not the managed one) must see zero rows in every projection
     # table: the managed connection truncated them on exit.
     assert _row_counts(CAIRN_TEST_PG) == dict.fromkeys(_PROJECTION_TABLES, 0)
+
+
+class _FakeConn:
+    """Minimal stand-in for a psycopg connection: records that close() ran."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
+    """A cleanup error on exit must NEVER replace the body's own exception (issue #84 pt1).
+
+    A generator context manager re-raises whatever its finally block raises, so an
+    un-swallowed exit truncation error (e.g. the test crashed the connection) would surface
+    INSTEAD of the real assertion failure. This drives that exact race — DB-independent, so
+    it also guards the contract in the pure `uv run pytest` run — and asserts the body's
+    sentinel propagates while the connection is still closed.
+    """
+    fake = _FakeConn()
+
+    # Stub the DB touchpoints so no real cluster is needed: connect yields the fake,
+    # schema application is a no-op, and truncation succeeds on entry but blows up on exit.
+    monkeypatch.setattr(conftest, "_apply_schema", lambda conn: None)
+    calls = {"n": 0}
+
+    def _flaky_truncate(conn):
+        calls["n"] += 1
+        if calls["n"] >= 2:  # entry succeeds; the exit (teardown) call raises
+            raise RuntimeError("cleanup blew up")
+
+    monkeypatch.setattr(conftest, "_truncate_projections", _flaky_truncate)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: fake)
+
+    class _Sentinel(Exception):
+        pass
+
+    # The body raises _Sentinel; the exit truncation raises RuntimeError. The caller must
+    # see _Sentinel (the real failure), not the swallowed cleanup RuntimeError.
+    with pytest.raises(_Sentinel):
+        with managed_pg_conn("dummy-dsn"):
+            raise _Sentinel
+
+    assert fake.closed, "the connection must still be closed even when exit truncation fails"
