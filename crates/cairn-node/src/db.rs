@@ -67,6 +67,7 @@ const SCHEMA: &[(&str, &str)] = &[
     // one shared helper (PL/pgSQL is late-bound, so the doors above may reference it before
     // this migration defines it — all migrations load before any submit).
     ("027_attachment_rendition_references", include_str!("../../../db/027_attachment_rendition_references.sql")),
+    ("028_identity_evidence", include_str!("../../../db/028_identity_evidence.sql")),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
