@@ -1,6 +1,12 @@
 //! §3.14/ADR-0042 floor coverage: the submit door learns a lazy blob reference for every
 //! BY-REFERENCE rendition of an event's attachments (reference-eager, byte-lazy), skipping
 //! inline renditions. Real Postgres, gated on $CAIRN_TEST_PG.
+//!
+//! Coverage note: these tests drive the SUBMIT door (db/005). The remote-apply door (db/020)
+//! learns references through the SAME `cairn_learn_attachment_refs(b)` helper, so its rendition
+//! walk cannot behaviourally diverge from the submit door's — the shared-helper guarantee. Only
+//! db/020's one-line call site (that it passes the right `b`) is not directly exercised here;
+//! a future edit to that call site specifically would not be caught by this file.
 
 use cairn_event::attachment::{Attachment, Rendition};
 use cairn_event::{blob_address, generate_key, sign, EventBody};
