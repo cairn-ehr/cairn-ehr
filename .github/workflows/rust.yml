@@ -71,7 +71,12 @@ jobs:
         run: cargo deny --manifest-path extensions/cairn_pgx/Cargo.toml check --config deny.toml
 
   test:
-    name: clippy + cargo test (PG18 + cairn_pgx floor)
+    # This job's name is a REQUIRED status check in main's branch protection, and GitHub
+    # matches required checks by exact name. Keep it PG-version-INDEPENDENT: encoding the
+    # PG major here (the old "(PG16 …)") means every version bump renames the check and
+    # orphans the required one, silently blocking every PR on a check that never reports
+    # (exactly what happened bumping 16->18, #144). The PG major lives in env below, not here.
+    name: clippy + cargo test (cairn_pgx floor)
     # Pinned (not ubuntu-latest): the apt PostgreSQL major and the clang/llvm major
     # this job depends on are properties of the image, so pin the image that was
     # validated rather than let a silent bump surprise the floor gate.
