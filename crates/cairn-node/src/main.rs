@@ -342,6 +342,24 @@ enum Cmd {
         #[arg(long)]
         basis: Option<String>,
     },
+
+    /// Record clinician-observed TEXT identity evidence on an existing chart (§5.4): a
+    /// distinguishing mark, personal belongings, or the EMS pickup context. Non-attachment —
+    /// the observation is free text. OWNER ceremony: enrolls the node key as a registration
+    /// actor on first use (a real UI attaches the operating clerk's *human* actor).
+    AssertIdentityEvidence {
+        /// The patient UUID to record evidence on.
+        patient: Uuid,
+        /// The evidence kind: mark | belongings | ems-context (closed set; typo-rejected).
+        #[arg(long)]
+        kind: String,
+        /// Honest description of what was observed (required, non-empty — principle 4).
+        #[arg(long)]
+        description: String,
+        /// How/why it was observed; for ems-context, note the relayed source here (optional).
+        #[arg(long)]
+        basis: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -902,6 +920,22 @@ async fn main() -> anyhow::Result<()> {
                 &mut db, &sk, &kid, &id.node_id_hex, patient, &bytes, &media_type,
                 &descriptor, basis.as_deref()).await?;
             println!("attached photo evidence {event_id} to {patient}");
+        }
+        Cmd::AssertIdentityEvidence { patient, kind, description, basis } => {
+            // Fast-fail on a bad kind or empty description before any DB work — the library
+            // re-checks both (single source of truth: parse_text_evidence_kind + validate_description).
+            cairn_event::identity_evidence::parse_text_evidence_kind(&kind)
+                .ok_or_else(|| anyhow::anyhow!("unknown --kind {kind:?}; expected mark|belongings|ems-context"))?;
+            cairn_node::identity_evidence::validate_description(&description)?;
+            let sk = load_signing_key(&cli.key, true)?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &kid).await?;
+
+            let event_id = cairn_node::identity_evidence::assert_text_evidence(
+                &db, &sk, &kid, &id.node_id_hex, patient, &kind, &description, basis.as_deref()).await?;
+            println!("recorded {kind} identity evidence {event_id} on {patient}");
         }
     }
     Ok(())
