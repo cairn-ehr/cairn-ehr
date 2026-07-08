@@ -376,8 +376,11 @@ byte-identity proven. **(2) Floor:** `db/027` `cairn_learn_attachment_refs` walk
 `cairn-node/photo_evidence.rs` (pure `prepare_local_blob` + atomic `assert_photo_evidence` — blob stored present
 through the db/026 verify trigger + event authored in ONE txn, `ON CONFLICT DO UPDATE` fills a placeholder) + an
 `assert-photo-evidence` CLI. **Honest limits:** plaintext (seal reserved), single `original` rendition (no preview),
-bytes local (cross-node fetch deferred), POC harness diverges. Follow-ups (Minor): direct db/020 apply-door
-attachment test; DO-UPDATE overwrites caller `media_type` on an already-present row (benign).
+bytes local (cross-node fetch deferred), POC harness diverges. **Review fixes applied:** honest-descriptor rule
+moved into the library (`validate_photo_descriptor`, not only the CLI); a direct db/020 apply-door attachment test
+added (both doors now directly cover `cairn_learn_attachment_refs`); local-blob size-guard gap lodged as
+[#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) (§6.6 byte-tier slice). Residual (benign): DO-UPDATE
+overwrites caller `media_type` on an already-present row.
 
 **Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in

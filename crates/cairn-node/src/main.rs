@@ -887,9 +887,9 @@ async fn main() -> anyhow::Result<()> {
             println!("recorded clinician-observed evidence on {patient}");
         }
         Cmd::AssertPhotoEvidence { patient, file, media_type, descriptor, basis } => {
-            if descriptor.trim().is_empty() {
-                anyhow::bail!("--descriptor must be non-empty (§5.4/principle 4: say what the photo shows)");
-            }
+            // Fast-fail on an empty descriptor before reading the file — same rule the library
+            // re-checks (single source of truth: photo_evidence::validate_photo_descriptor).
+            cairn_node::photo_evidence::validate_photo_descriptor(&descriptor)?;
             let bytes = std::fs::read(&file)
                 .map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
             let sk = load_signing_key(&cli.key, true)?;

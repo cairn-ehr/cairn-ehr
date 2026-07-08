@@ -44,10 +44,13 @@ descriptor **never pixels**; `db/028` registers the type — fail-closed floor);
 trigger + authoring the event in ONE txn, `ON CONFLICT DO UPDATE` to fill a pre-existing reference-only placeholder)
 + an `assert-photo-evidence` CLI. Suites **workspace 418 passed / 0 failed; clippy clean**. **Honest limits:** ships
 **plaintext** (seal reserved), a **single `original` rendition** (no preview — needs an image lib), **bytes stay
-local** (cross-node byte fetch deferred), and the frozen POC harness diverges from the new shape. Follow-ups (Minor,
-from the final review): a direct db/020 apply-door attachment test; DO-UPDATE overwrites caller-supplied `media_type`
-on an already-present row (benign here). Env: `cairn_pgx` upgraded to **0.3.0** on the Mac :5532 cluster this session
-(was 0.2.0 — db/026 requires ≥0.3.0).
+local** (cross-node byte fetch deferred), and the frozen POC harness diverges from the new shape. **Review fixes
+applied post-build:** the honest-descriptor rule now lives in the library (`photo_evidence::validate_photo_descriptor`,
+not only the CLI, so a future UI backend inherits it); a **direct db/020 apply-door attachment test** now exercises the
+remote-apply call site of `cairn_learn_attachment_refs` (both doors directly covered); the local-blob **size-guard** gap
+(no ceiling on `blob_store.content`, whole file read into memory) is lodged as **[#141](https://github.com/cairn-ehr/cairn-ehr/issues/141)**
+for the §6.6 byte-tier slice. Residual accepted: DO-UPDATE overwrites caller-supplied `media_type` on an already-present
+row (benign). Env: `cairn_pgx` upgraded to **0.3.0** on the Mac :5532 cluster this session (was 0.2.0 — db/026 requires ≥0.3.0).
 
 **Prior session (2026-07-07) — B3 compound blocking keys `dob+first-initial` + `name+sex` (matcher slice 25;
 condensed — full detail in ROADMAP slice 25 + git + PR #138).** Advisory eval/matcher tier only, no floor/spec

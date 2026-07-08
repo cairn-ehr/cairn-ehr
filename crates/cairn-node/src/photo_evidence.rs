@@ -32,6 +32,17 @@ pub fn prepare_local_blob(bytes: &[u8], media_type: &str) -> LocalBlob {
     }
 }
 
+/// PURE: enforce the honest-descriptor requirement (§5.4 / principle 4) — a photo attachment
+/// must say what it shows, so an empty or whitespace-only descriptor is refused. This lives in
+/// the library (not only the CLI edge) so EVERY caller — a future UI backend authoring directly
+/// against this function included — inherits the guarantee, not just the one CLI subcommand.
+pub fn validate_photo_descriptor(descriptor: &str) -> anyhow::Result<()> {
+    if descriptor.trim().is_empty() {
+        anyhow::bail!("photo descriptor must be non-empty (§5.4/principle 4: say what the photo shows)");
+    }
+    Ok(())
+}
+
 /// PURE: assemble the signed `EventBody` for a photo identity-evidence event. The photo
 /// (`attachment`) rides the top-level `EventBody.attachments` (ADR-0042); the payload carries
 /// the clinical framing (kind/provenance/basis); the twin is authored from the descriptor.
@@ -78,6 +89,8 @@ pub async fn assert_photo_evidence(
     descriptor: &str,
     basis: Option<&str>,
 ) -> anyhow::Result<Uuid> {
+    // Honest-descriptor floor for every caller (not only the CLI): refuse before any DB work.
+    validate_photo_descriptor(descriptor)?;
     let lb = prepare_local_blob(bytes, media_type);
     let attachment = Attachment::single(descriptor, lb.rendition.clone());
 
@@ -117,6 +130,15 @@ mod tests {
     use super::*;
 
     fn hlc() -> Hlc { Hlc { wall: 7, counter: 0, node_origin: "n".into() } }
+
+    #[test]
+    fn descriptor_validation_refuses_empty_and_whitespace_only() {
+        // The honest-descriptor floor is enforced in the library, so a caller bypassing the
+        // CLI (e.g. a UI backend) still cannot author a §5.4 photo with no description.
+        assert!(validate_photo_descriptor("").is_err(), "empty descriptor refused");
+        assert!(validate_photo_descriptor("   \t\n").is_err(), "whitespace-only refused");
+        assert!(validate_photo_descriptor("frontal face photograph").is_ok(), "real descriptor accepted");
+    }
 
     #[test]
     fn prepare_local_blob_addresses_and_renders_the_original_rendition() {
