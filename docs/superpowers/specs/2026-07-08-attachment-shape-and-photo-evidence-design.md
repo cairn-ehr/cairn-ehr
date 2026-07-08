@@ -179,20 +179,25 @@ plaintext_twin:  authored, rendered from descriptor + attachment twin (NOT pixel
 **Local blob author path (`cairn-node`, new `photo_evidence.rs`):**
 
 ```rust
-/// Store bytes as a present, self-verified local blob and return its "original" Rendition.
-/// Computes blob_address + blob_outboard (both already in cairn-event), INSERTs present=TRUE
-/// through the db/026 verify trigger (the first non-hostile writer through that floor).
-async fn store_local_blob(client, bytes: &[u8], media_type: &str) -> anyhow::Result<Rendition>
+/// PURE: compute the content address, bao outboard, and the "original" Rendition for bytes.
+/// No DB — so it is unit-testable; the orchestrator does the INSERT inside the txn.
+pub struct LocalBlob { pub addr: Vec<u8>, pub outboard: Vec<u8>, pub rendition: Rendition }
+fn prepare_local_blob(bytes: &[u8], media_type: &str) -> LocalBlob
 
-/// Read a photo file → store_local_blob → author the identity.evidence event carrying the
+/// Take photo bytes → prepare_local_blob → INSERT present=TRUE (through the db/026 verify
+/// trigger — the first non-hostile writer) → author the identity.evidence event carrying the
 /// Attachment → sign → submit_event, ALL in one transaction (bytes + reference land atomically).
 async fn assert_photo_evidence(
-    client, sk, kid, node_origin, patient_id, file_path, descriptor, basis,
+    client, sk, kid, node_origin, patient_id, bytes: &[u8], media_type, descriptor, basis,
 ) -> anyhow::Result<Uuid>   // the evidence event_id
 ```
 
+- Pure/impure split (house rule 1): `prepare_local_blob` is a pure function (address + outboard +
+  rendition), unit-tested; the orchestrator owns the DB. The CLI edge reads the file → passes bytes.
 - One transaction: the `blob_store` INSERT (present) and the `submit_event` land atomically — a chart
-  never references a blob whose bytes failed to store, and vice versa.
+  never references a blob whose bytes failed to store, and vice versa. (The floor's own
+  `blob_note_reference` for our rendition is a harmless `ON CONFLICT DO NOTHING` no-op — the present row
+  already exists.)
 - HLC ticked once for the single evidence event (same tick-then-submit shape as `john_doe.rs`).
 
 **CLI subcommand:**
@@ -231,6 +236,14 @@ The CLI edge owns file I/O and the clock; the media type is caller-supplied (no 
   can't-retrofit-vs-additive reasoning), a §3.14 concrete-shape note in `docs/spec/data-model.md`, and the
   spec-version bump in `index.md` (**0.42 → 0.43**).
 
+**Phase 1b — the floor learns the rendition set (`db/`; safety-critical SQL).**
+- `db/027_attachment_rendition_references.sql`: `cairn_learn_attachment_refs(b)` (walks
+  `attachments[*].renditions[*]`, skips inline); register it in `db.rs`'s `SCHEMA` array.
+- Edit `db/005` + `db/020` learn-loops → `PERFORM cairn_learn_attachment_refs(b);`.
+- DB-gated test (`tests/attachment_refs.rs`): submitting an event whose attachment carries a by-reference
+  rendition registers a `blob_store` reference row (`present = FALSE`, correct address/media_type/byte_len);
+  an inline rendition registers none; a two-rendition attachment registers two.
+
 **Phase 2 — the photo author path (`cairn-event` body + `cairn-node` + CLI).**
 - Pure `photo_evidence_body` + `render_identity_evidence_twin` unit tests.
 - DB-gated e2e (`CAIRN_TEST_PG`, PG18 + cairn_pgx ≥ 0.3.0): `assert_photo_evidence` on a provisioned
@@ -248,10 +261,52 @@ The CLI edge owns file I/O and the clock; the media type is caller-supplied (no 
 | `cairn-event/src/attachment.rs` (new) | `Attachment`/`Rendition`/`SealRef` + constructors + twin | wire core |
 | `cairn-event/src/lib.rs` | `attachments: Vec<Attachment>`; re-export | wire core |
 | `cairn-event` evidence body | `photo_evidence_body` + evidence twin | wire core |
-| `cairn-node/src/photo_evidence.rs` (new) | `store_local_blob` + `assert_photo_evidence` | node glue |
+| `cairn-node/src/photo_evidence.rs` (new) | `prepare_local_blob` (pure) + `assert_photo_evidence` (orchestrator) | node glue |
 | `cairn-node` CLI | `assert-photo-evidence` subcommand | node glue |
+| `db/027_attachment_rendition_references.sql` (new) | `cairn_learn_attachment_refs(b)` — walks the rendition set | **floor** |
+| `db/005_submit.sql` + `db/020_apply_remote_event.sql` | inline learn-loop → `cairn_learn_attachment_refs(b)` call | **floor** |
 | `docs/spec/decisions/0042-*.md` (new) | concrete attachment-reference shape (refines 0013; reconciles 0041) | ADR |
 | `docs/spec/data-model.md` §3.14 + `index.md` | concrete-shape note + version bump (0.42 → 0.43) | spec |
 
-**No db/ migration, no floor change, no matcher change, no SCHEMA bump.** The only new event type is
-additive; the only genuinely immutable commitment is the frozen reference-shape field order (ADR-0042).
+### The floor change (revised — this is NOT reserve-only)
+
+The submit floor **already** walks `attachments[*]` and learns a lazy blob reference per element by
+reading `digest_hex`/`media_type`/`byte_len` **off each attachment** (`db/005:217`, mirrored at the
+remote-apply door `db/020:232`). The new shape moves those fields onto the **rendition**, so the loop
+must walk `attachments[*].renditions[*]` instead — otherwise `c ->> 'digest_hex'` goes NULL and
+`blob_note_reference(NULL,…)` violates the `blob_address` PK. This is **safety-critical in-DB SQL** and
+gets its own TDD task:
+
+```sql
+-- db/027: learn a lazy blob reference for every BY-REFERENCE rendition of every attachment
+-- (reference-eager, byte-lazy). Skips inline renditions (bytes ride the event — no lazy blob).
+CREATE OR REPLACE FUNCTION cairn_learn_attachment_refs(b jsonb) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE a jsonb; r jsonb;
+BEGIN
+  FOR a IN SELECT jsonb_array_elements(COALESCE(b -> 'attachments','[]'::jsonb)) LOOP
+    FOR r IN SELECT jsonb_array_elements(COALESCE(a -> 'renditions','[]'::jsonb)) LOOP
+      IF r ? 'inline' THEN CONTINUE; END IF;   -- inlined bytes ride the event; no lazy blob
+      PERFORM blob_note_reference(decode(r ->> 'digest_hex','hex'),
+                                  r ->> 'media_type', (r ->> 'byte_len')::bigint);
+    END LOOP;
+  END LOOP;
+END;
+$$;
+```
+
+`db/005` and `db/020` each replace their inline learn-loop with `PERFORM cairn_learn_attachment_refs(b);`
+(one shared implementation, no drift across the two doors — the same single-source discipline db/015 used
+for the twin hook). PL/pgSQL late-binding lets the doors reference the helper before db/027 loads; all
+migrations load before any submit. Editing the two doors in place is safe: migrations are re-applied
+idempotently on every `connect_and_load_schema` (`CREATE OR REPLACE`), and there are **no deployed nodes
+with data** (pre-production). The `advisory.added` non-empty-attachments check stays inline in db/005 —
+shape-agnostic, unaffected.
+
+**Honest limit — the frozen POC harness diverges.** `poc/walking-skeleton/harness/{spike_0002,agent_standin}.py`
+author `advisory.added` with the *flat* pre-ADR-0042 attachment shape. `poc/` is frozen historical spikes
+(not in the workspace build/CI), so nothing breaks; but after this slice their flat attachments no longer
+register a blob reference through the new loop. Recorded, not fixed (frozen spikes).
+
+**No matcher change, no SCHEMA bump, no cairn_pgx bump.** The only new event type is additive; the only
+genuinely immutable commitment is the frozen reference-shape field order (ADR-0042).
