@@ -322,23 +322,38 @@ enum Cmd {
         sex_basis: Option<String>,
     },
 
-    /// Attach a clinician-observed photograph as §5.4 identity evidence to an existing chart.
-    /// The photo becomes a content-addressed blob stored locally (present + self-verified) and
-    /// referenced by an `identity.evidence.asserted` event. OWNER ceremony: enrolls the node key
-    /// as a registration actor on first use (a real UI attaches the operating clerk's actor).
-    AssertPhotoEvidence {
-        /// The patient UUID to attach the photo to.
+    /// Record clinician-observed §5.4 identity evidence on an existing chart. One command for
+    /// every evidence kind:
+    ///   * `--kind photo` — a content-addressed photograph; requires `--file`, `--media-type`,
+    ///     and `--descriptor`. The photo becomes a locally-stored (present + self-verified) blob
+    ///     referenced by an `identity.evidence.asserted` event.
+    ///   * `--kind mark|belongings|ems-context` — a free-text observation; requires
+    ///     `--description`. Non-attachment: the observation is the text in the payload.
+    ///
+    /// The photo and text flags are mutually exclusive (photo flags iff `--kind photo`). OWNER
+    /// ceremony: enrolls the node key as a registration actor on first use (a real UI attaches
+    /// the operating clerk's *human* actor).
+    AssertIdentityEvidence {
+        /// The patient UUID to record evidence on.
         patient: Uuid,
-        /// Path to the image file on disk.
+        /// The evidence kind: photo | mark | belongings | ems-context (closed set; typo-rejected).
         #[arg(long)]
-        file: std::path::PathBuf,
-        /// The MIME media type of the file (e.g. image/jpeg). Caller-supplied — no sniffing.
+        kind: String,
+        /// Free-text observation for a text kind (mark/belongings/ems-context): required for
+        /// those, rejected for `--kind photo`. Non-empty (principle 4).
+        #[arg(long)]
+        description: Option<String>,
+        /// Path to the image file on disk; required for `--kind photo`, rejected otherwise.
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// MIME media type of `--file` (e.g. image/jpeg). Caller-supplied — no sniffing. Photo only.
         #[arg(long = "media-type")]
-        media_type: String,
-        /// Honest human description of the photo (required, non-empty — principle 4).
+        media_type: Option<String>,
+        /// Honest human description of the photo; required for `--kind photo`, rejected otherwise.
+        /// Non-empty (principle 4).
         #[arg(long)]
-        descriptor: String,
-        /// How/why the photo was taken (optional).
+        descriptor: Option<String>,
+        /// How/why it was observed; for ems-context, note the relayed source here (optional).
         #[arg(long)]
         basis: Option<String>,
     },
@@ -886,22 +901,37 @@ async fn main() -> anyhow::Result<()> {
                 &mut db, &sk, &kid, &id.node_id_hex, patient, &ev, observed_year).await?;
             println!("recorded clinician-observed evidence on {patient}");
         }
-        Cmd::AssertPhotoEvidence { patient, file, media_type, descriptor, basis } => {
-            // Fast-fail on an empty descriptor before reading the file — same rule the library
-            // re-checks (single source of truth: photo_evidence::validate_photo_descriptor).
-            cairn_node::photo_evidence::validate_photo_descriptor(&descriptor)?;
-            let bytes = std::fs::read(&file)
-                .map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
+        Cmd::AssertIdentityEvidence { patient, kind, description, file, media_type, descriptor, basis } => {
+            use cairn_node::identity_evidence::EvidenceRoute;
+            // Resolve the flag combination to ONE evidence shape (pure, tested) before any
+            // keystore/DB/file I/O — the single "--file iff --kind photo" gate. The libraries
+            // then re-check content (non-empty descriptor/description) as the principle-4 floor.
+            let route = cairn_node::identity_evidence::route_identity_evidence(
+                &kind, file, media_type, descriptor, description, basis)?;
             let sk = load_signing_key(&cli.key, true)?;
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &kid).await?;
 
-            let event_id = cairn_node::photo_evidence::assert_photo_evidence(
-                &mut db, &sk, &kid, &id.node_id_hex, patient, &bytes, &media_type,
-                &descriptor, basis.as_deref()).await?;
-            println!("attached photo evidence {event_id} to {patient}");
+            match route {
+                EvidenceRoute::Photo { file, media_type, descriptor, basis } => {
+                    // Fast-fail on an empty descriptor before reading the file — same rule the
+                    // library re-checks (single source of truth: validate_photo_descriptor).
+                    cairn_node::photo_evidence::validate_photo_descriptor(&descriptor)?;
+                    let bytes = std::fs::read(&file)
+                        .map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
+                    let event_id = cairn_node::photo_evidence::assert_photo_evidence(
+                        &mut db, &sk, &kid, &id.node_id_hex, patient, &bytes, &media_type,
+                        &descriptor, basis.as_deref()).await?;
+                    println!("attached photo evidence {event_id} to {patient}");
+                }
+                EvidenceRoute::Text { kind, description, basis } => {
+                    let event_id = cairn_node::identity_evidence::assert_text_evidence(
+                        &db, &sk, &kid, &id.node_id_hex, patient, kind, &description, basis.as_deref()).await?;
+                    println!("recorded {kind} identity evidence {event_id} on {patient}");
+                }
+            }
         }
     }
     Ok(())

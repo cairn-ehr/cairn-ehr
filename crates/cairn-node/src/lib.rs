@@ -5,6 +5,7 @@ pub mod db;
 pub mod evidence;
 pub mod fsio;
 pub mod identity;
+pub mod identity_evidence;
 pub mod john_doe;
 pub mod keystore;
 pub mod localstate;

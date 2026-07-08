@@ -18,14 +18,41 @@ forcing rule, [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130) closed);
 remaining **B3 measurement-driven follow-ons** (learn against a large hand-crafted gold set; locale comparator packs;
 hub-tier aggressive duplicate sweep)
 + the **§5.4 photo evidence slice** (the first content-addressed **attachment** on a clinical surface; ADR-0042 froze
-the §3.14 day-one attachment-reference shape — **done this session**)
+the §3.14 day-one attachment-reference shape)
++ the **§5.4 marks/belongings/EMS-context text-evidence slice** (three text `kind` values on the same
+`identity.evidence.asserted` event type — **done this session**)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
-(marks/belongings/EMS evidence [future `identity.evidence.asserted` kinds], the "prior history now available"
-push-alert, the search-before-create funnel).
+(the "prior history now available" push-alert, the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-08) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
+**This session (2026-07-08, second) — §5.4 marks/belongings/EMS-context text identity evidence (matcher/identity
+tier; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`).** Three
+text-shaped `kind` values — `mark`, `belongings`, `ems-context` — on the **existing** `identity.evidence.asserted`
+event type (the photo slice's non-attachment sibling). **No new migration / floor / SCHEMA / ADR / spec change** —
+the type is already registered (`db/028`), additive, non-demographic (db/015 carries the authored twin verbatim); the
+observation is free text in the payload, so `attachments` stays `vec![]` (zero-attachment content-address preserved).
+Pure `cairn-event::identity_evidence` additions (`MARK`/`BELONGINGS`/`EMS_CONTEXT_EVIDENCE_KIND` + `TEXT_EVIDENCE_KINDS`
+closed set + `parse_text_evidence_kind` typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` +
+`render_text_evidence_twin`); a new `cairn-node::identity_evidence` author path (`validate_description` honest-content
+floor **in the library** so a future UI backend inherits it; pure `build_text_evidence_body`; one-statement
+`assert_text_evidence` — no blob tier).
+**Decisions:** provenance fixed `clinician-observed` for all three kinds (relayed/hearsay lives in `basis`;
+ems-context example "reported by paramedic"); `description` required-non-empty (the *floor* refuses an empty claim —
+whether a UI silently defaults it is soft policy above our line, principle 12). TDD 4 tasks; e2e read-back +
+bad-kind/empty-description rejects (DB-gated); CLI smoke on a provisioned node all four behaviors confirmed.
+**Review follow-up (this session, post-review of PR #142):** the two evidence commands were **folded into one**
+`assert-identity-evidence <patient> --kind photo|mark|belongings|ems-context …` — `--kind photo` takes
+`--file`/`--media-type`/`--descriptor`, the text kinds take `--description`; the mutually-exclusive "`--file` iff
+`--kind photo`" rule is a new **pure, unit-tested** `cairn-node::identity_evidence::route_identity_evidence` gate
+(the separate `assert-photo-evidence` subcommand was removed). Also aligned `assert_text_evidence` to
+discriminator-first validation (kind then description) to match the gate.
+**Suites:** cairn-event + full cairn-node workspace green; `clippy --workspace --tests -D warnings` clean (the exact CI
+gate). **Honest limits:** free-text `description` only (no structured belongings item list — YAGNI, additive-friendly);
+no projection/worklist/matcher signal (evidence is log-retrievable + twin-legible, same as photo). Note: repo is *not*
+rustfmt-default-clean (hand-formatted; CI does not gate on fmt) — matched surrounding style, did **not** run `cargo fmt`.
+
+**Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
 The FIRST content-addressed **attachment** on a clinical surface, which forced finalizing the ONE can't-retrofit
 piece of ADR-0013. **Two phases, 9-task subagent-SDD, final whole-branch review "ready to merge" (0 Critical/
@@ -319,9 +346,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   scoring via the composite `sex` field + the unconfirmed-chart REVIEW forcing rule + `chart_trust` plumbing, this
   session — closes [#130](https://github.com/cairn-ehr/cairn-ehr/issues/130), see top)** — **are now
   BUILT; NO new event type / migration / floor / SCHEMA / ADR / spec change.**
-  **Remaining §5.4:** ~~photo evidence~~ (DONE this session — `identity.evidence.asserted` + the ADR-0042 attachment
-  tier); marks/belongings/EMS-context evidence (future `identity.evidence.asserted` `kind` values — same event type,
-  zero wire change; marks/belongings are text, photo-shaped are attachments), the
+  **Remaining §5.4:** ~~photo evidence~~ (DONE — `identity.evidence.asserted` + the ADR-0042 attachment tier);
+  ~~marks/belongings/EMS-context evidence~~ (DONE this session — three text `kind` values on the same event type,
+  `cairn-node::identity_evidence` + `assert-identity-evidence` CLI, zero wire change), the
   "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
   registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
   count), a `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*

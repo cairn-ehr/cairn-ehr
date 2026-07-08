@@ -231,8 +231,8 @@ Full workspace + matcher suites green (cargo 0 failed / clippy clean; matcher 22
 `administrative-sex=male`, `chart_trust=unconfirmed`); opus whole-branch review READY-TO-MERGE. **Honest limit
 (recorded):** slice B's range is a *scoring* signal, **not a blocking key** (`"1981/1991"`→first-4-digit `1981` won't
 block a 1985-born candidate; a John Doe's only name is an excluded callsign) — the estimate helps once a pair is blocked
-by another key (belongings identifier, refined name, hub sweep). **Remaining §5.4:** photo/marks/belongings/EMS-context
-evidence (new field home + attachment tier), the "prior history now available" push-alert (§5.12, no notification tier),
+by another key (belongings identifier, refined name, hub sweep). **Remaining §5.4:** ~~photo/marks/belongings/EMS-context
+evidence~~ **(done — slices 26/27, below)**, the "prior history now available" push-alert (§5.12, no notification tier),
 the search-before-create funnel (UI/API tier), ~~a birth-year-*range* blocking pass~~ **(done — slice 21, below)**, a
 readable sequential callsign suffix, a `--observed-year` override, `identify`→optional-link resolution flow.
 
@@ -381,6 +381,27 @@ moved into the library (`validate_photo_descriptor`, not only the CLI); a direct
 added (both doors now directly cover `cairn_learn_attachment_refs`); local-blob size-guard gap lodged as
 [#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) (§6.6 byte-tier slice). Residual (benign): DO-UPDATE
 overwrites caller `media_type` on an already-present row.
+
+**Slice 27 — §5.4 marks/belongings/EMS-context text identity evidence** (2026-07-08; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`). Three text-shaped `kind` values —
+`mark`, `belongings`, `ems-context` — on the **existing** `identity.evidence.asserted` event type (the photo slice's
+non-attachment sibling). **No new migration / floor / SCHEMA / ADR / spec change** — the type is already registered
+(`db/028`), additive, non-demographic (db/015 carries the authored twin verbatim); the observation is free text in the
+payload, so `attachments` stays empty (zero-attachment content-address preserved). Pure `cairn-event::identity_evidence`
+additions (`MARK`/`BELONGINGS`/`EMS_CONTEXT_EVIDENCE_KIND` + `TEXT_EVIDENCE_KINDS` closed set + `parse_text_evidence_kind`
+typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` + `render_text_evidence_twin`); new
+`cairn-node::identity_evidence` author path (`validate_description` honest-content floor **in the library**; pure
+`build_text_evidence_body`; one-statement `assert_text_evidence` — no blob tier).
+Provenance fixed `clinician-observed` (relayed/hearsay in `basis`); `description` required-non-empty (floor refuses an
+empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e read-back + bad-kind/empty-description rejects
++ CLI smoke green; `clippy --workspace --tests -D warnings` clean. **Review follow-up (PR #142):** the slice-26 photo
+command and this slice's text command were **folded into one** `assert-identity-evidence --kind photo|mark|belongings|
+ems-context …` (photo takes `--file`/`--media-type`/`--descriptor`, text kinds take `--description`); the
+mutually-exclusive flag rule is a new **pure, unit-tested** `route_identity_evidence` gate and the standalone
+`assert-photo-evidence` subcommand was removed. **Honest limits:** free-text description only (no structured item list —
+additive-friendly); no projection/worklist/matcher signal (log-retrievable + twin-legible).
+**Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
+funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix.
 
 **Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
 aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
