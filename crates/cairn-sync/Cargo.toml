@@ -10,6 +10,10 @@ repository.workspace = true
 # `cairn-event` path dependency omit a version without tripping the cargo-deny wildcard gate.
 publish = false
 
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
 [dependencies]
 cairn-event = { path = "../cairn-event" }
 postgres = "0.19"          # sync client; NoTls — WireGuard is the transport (spike assumption)

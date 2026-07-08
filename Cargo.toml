@@ -9,9 +9,29 @@ exclude = ["extensions/cairn_pgx"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.74"
+# The Rust floor for the workspace. Kept in step with rust-toolchain.toml's pinned
+# channel: the project is developed and CI-validated against 1.96, and the modern
+# dependency graph (ed25519-dalek 2, bao 0.13, the postgres stack) does not build on
+# the old, unverified "1.74" this previously claimed — an honest floor, not aspirational
+# (issue #144). Bump alongside rust-toolchain.toml.
+rust-version = "1.96"
 license = "AGPL-3.0-only"
 repository = "https://github.com/cairn-ehr/cairn-ehr"
+
+# Central lint policy for the workspace (issue #144). Members opt in with
+# `[lints] workspace = true`. This mirrors the CI clippy gate
+# (`cargo clippy --workspace --tests -- -D warnings`) so a plain local
+# `cargo clippy` denies the same set CI does — no "green locally, red in CI" gap.
+# Safe to deny (not merely warn) because the toolchain is now pinned, so the exact
+# lint set is fixed and cannot grow silently under a stable bump.
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# The default clippy group (correctness + suspicious + style + complexity + perf) —
+# the same lints CI's `-D warnings` promotes to errors. pedantic/nursery are NOT
+# enabled (they are opinionated and noisy), matching CI.
+all = "deny"
 
 [profile.release]
 opt-level = 3
