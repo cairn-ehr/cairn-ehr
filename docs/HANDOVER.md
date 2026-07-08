@@ -81,8 +81,17 @@ would be a false claim on an un-bisected number; the pinned-toolchain build alre
 job now adds the PGDG apt repo (`signed-by=` keyring) and installs `postgresql-18`/`-server-dev-18` (Ubuntu 24.04 ships only 16);
 the extension already defaults to `pg18`, so testing 16 while we ship 18 let a PG18-only regression land green. DB-gated floor
 suite **run locally against PG18.1 + `cairn_pgx` 0.3.0: 431 passed / 0 failed** to de-risk the bump. **No Rust source touched** (Cargo manifests +
-toolchain + CI YAML only). **Deferred:** required status checks (#117), `[workspace.lints]` for the `cairn_pgx` tree (pgrx
-macro-generated code trips lints — left at defaults), a true bisected MSRV floor if we ever publish `cairn-event`.
+toolchain + CI YAML only). **Deferred:** `[workspace.lints]` for the `cairn_pgx` tree (pgrx macro-generated code trips
+lints — left at defaults), a true bisected MSRV floor if we ever publish `cairn-event`.
+**Rename-orphan fix + a fact correction (#117):** `main` **already has required status checks** (`build`, `rustfmt`,
+`cargo-deny`, `ruff + pytest`, and the floor test job) — so the old "#117 = make checks required" framing was wrong;
+they were configured at some point. Renaming the floor job `(PG16 …)`→`(PG18 …)` **orphaned** the required `(PG16 …)`
+check (matched by exact name → never reports → every PR `MERGEBLOCKED`). Fixed by making the job name
+**PG-version-independent**: `clippy + cargo test (cairn_pgx floor)` (a comment warns against re-adding the PG major).
+**Manual admin step still pending (user-run, blocked in auto mode):** update `main`'s required-status-checks list to
+swap `clippy + cargo test (PG16 + cairn_pgx floor)` → `clippy + cargo test (cairn_pgx floor)` — until then #147 stays
+`MERGEBLOCKED` on the orphaned name. #117's real remaining scope is now just *auditing/documenting* the existing
+required set, not creating it.
 
 **Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
