@@ -67,7 +67,10 @@ async fn every_door_surfaces_the_verify_error_as_detail() {
         ("submit_event", "SELECT submit_event($1)"),
         ("apply_remote_event", "SELECT apply_remote_event($1)"),
         ("submit_node_event", "SELECT submit_node_event($1)"),
-        ("apply_remote_node_event", "SELECT apply_remote_node_event($1)"),
+        (
+            "apply_remote_node_event",
+            "SELECT apply_remote_node_event($1)",
+        ),
         ("restore_node_event", "SELECT restore_node_event($1)"),
     ];
 

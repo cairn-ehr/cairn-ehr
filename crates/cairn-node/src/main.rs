@@ -13,7 +13,9 @@ use zeroize::Zeroizing;
 /// (issue #46): `rpassword` flushes its own internal buffer, but the copy we hold and
 /// pass on to the KDF would otherwise linger in freed memory.
 fn prompt_passphrase() -> anyhow::Result<Zeroizing<String>> {
-    Ok(Zeroizing::new(rpassword::prompt_password("operational passphrase: ")?))
+    Ok(Zeroizing::new(rpassword::prompt_password(
+        "operational passphrase: ",
+    )?))
 }
 
 /// Resolve the operational passphrase: from `--passphrase` (which clap also fills from
@@ -43,12 +45,15 @@ fn resolve_passphrase(flag: Option<String>) -> anyhow::Result<Zeroizing<String>>
 ///   - the UNATTENDED daemon (`run`/`serve`) must NEVER prompt — it fails fast with a
 ///     legible error instead, so a headless start can't block forever on a tty that
 ///     has no human (the availability floor: a stuck daemon serves nothing).
-fn load_signing_key(path: &std::path::Path, allow_prompt: bool)
-    -> anyhow::Result<cairn_event::SigningKey> {
+fn load_signing_key(
+    path: &std::path::Path,
+    allow_prompt: bool,
+) -> anyhow::Result<cairn_event::SigningKey> {
     use cairn_node::keystore::{load, KeystoreError};
     // Hold the env-provided secret as Zeroizing too, so the copy we lifted out of the
     // environment is wiped on drop (issue #46). We can't scrub the OS env store itself.
-    let env_secret = std::env::var("CAIRN_KEY_PASSPHRASE").ok()
+    let env_secret = std::env::var("CAIRN_KEY_PASSPHRASE")
+        .ok()
         .filter(|s| !s.is_empty())
         .map(Zeroizing::new);
     match load(path, env_secret.as_ref().map(|s| s.as_str())) {
@@ -96,7 +101,10 @@ fn print_recovery_code(code: &str) {
 ///     its own wraps), so the old recovery code still unseals already-written exports; only
 ///     FUTURE exports use the new sidecar.
 fn establish_local_state_escrow(
-    key_path: &std::path::Path, op_pass: &str, recovery_code: &str, overwrite: bool,
+    key_path: &std::path::Path,
+    op_pass: &str,
+    recovery_code: &str,
+    overwrite: bool,
 ) -> anyhow::Result<()> {
     use cairn_node::localstate::{establish_lsk, lsk_sidecar_path_for, serialize_sidecar};
     let sidecar = lsk_sidecar_path_for(key_path);
@@ -108,7 +116,11 @@ fn establish_local_state_escrow(
     cairn_node::fsio::atomic_write(&sidecar, &serialize_sidecar(&wraps), Some(0o600))?;
     eprintln!(
         "local-state escrow {} at {}",
-        if replacing { "re-established (replaced stale sidecar)" } else { "established" },
+        if replacing {
+            "re-established (replaced stale sidecar)"
+        } else {
+            "established"
+        },
         sidecar.display()
     );
     Ok(())
@@ -143,31 +155,40 @@ struct Cli {
     /// `GRANT cairn_node TO <that role>`, then point `--conn`/`CAIRN_CONN` at it.
     /// `status` reports whether the gate actually binds the connected role
     /// (`db_floor ENFORCED` vs `BYPASSABLE`). See `db/007_node_federation.sql`.
-    #[arg(long, env = "CAIRN_CONN")] conn: String,
-    #[arg(long, default_value = "node.key")] key: PathBuf,
-    #[command(subcommand)] cmd: Cmd,
+    #[arg(long, env = "CAIRN_CONN")]
+    conn: String,
+    #[arg(long, default_value = "node.key")]
+    key: PathBuf,
+    #[command(subcommand)]
+    cmd: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
     /// Provision this node: mint a keypair (SEALED by default) and append genesis.
     Init {
-        #[arg(long)] name: String,
-        #[arg(long)] address: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        address: String,
         /// Operational passphrase (else CAIRN_KEY_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")] passphrase: Option<String>,
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
         /// Write the key UNSEALED (test nodes only — no recovery escrow).
-        #[arg(long)] insecure_plaintext: bool,
+        #[arg(long)]
+        insecure_plaintext: bool,
     },
     /// Seal an existing plaintext key file and mint a fresh recovery code.
     SealKey {
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")] passphrase: Option<String>,
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
     },
     /// Establish the local-state escrow (`.lsk`) for a node provisioned before slice D.
     /// Prompts for the op passphrase AND the recovery code (both needed once). Errors if
     /// an escrow already exists.
     EstablishLocalStateKey {
-        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")] passphrase: Option<String>,
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
     },
     /// Print this node's identity (node_id, pubkey, fingerprint, address).
     Identity,
@@ -180,7 +201,8 @@ enum Cmd {
     /// requires a typed YES confirmation before authoring the peer.added event.
     PairAccept {
         offer: String,
-        #[arg(long)] role: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
     },
     /// List all peers (active and revoked).
     Peers,
@@ -363,10 +385,17 @@ enum Cmd {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init { name, address, passphrase, insecure_plaintext } => {
+        Cmd::Init {
+            name,
+            address,
+            passphrase,
+            insecure_plaintext,
+        } => {
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
             let (sk, kid) = if insecure_plaintext {
-                eprintln!("WARNING: --insecure-plaintext: signing key written UNSEALED (test use only)");
+                eprintln!(
+                    "WARNING: --insecure-plaintext: signing key written UNSEALED (test use only)"
+                );
                 cairn_node::keystore::generate_plaintext(&cli.key)?
             } else {
                 let op = resolve_passphrase(passphrase)?;
@@ -389,7 +418,10 @@ async fn main() -> anyhow::Result<()> {
                 kp
             };
             let node_id = cairn_node::identity::provision(&db, &sk, &kid, &name, &address).await?;
-            println!("provisioned node {node_id}\nfingerprint {}", cairn_event::short_fingerprint(&kid)?);
+            println!(
+                "provisioned node {node_id}\nfingerprint {}",
+                cairn_event::short_fingerprint(&kid)?
+            );
         }
         Cmd::SealKey { passphrase } => {
             use cairn_node::keystore::{key_at_rest_state, KeyAtRest};
@@ -398,13 +430,18 @@ async fn main() -> anyhow::Result<()> {
             // will then be rejected (which would look like a usable escrow but isn't).
             match key_at_rest_state(&cli.key) {
                 KeyAtRest::Plaintext => {}
-                KeyAtRest::Sealed { .. } =>
-                    anyhow::bail!("key at {} is already sealed", cli.key.display()),
-                KeyAtRest::Missing =>
-                    anyhow::bail!("no key file at {} (run `cairn-node init` first)", cli.key.display()),
-                KeyAtRest::Corrupt =>
-                    anyhow::bail!("key at {} is neither a plaintext seed nor a sealed bundle; \
-                                   refusing to seal", cli.key.display()),
+                KeyAtRest::Sealed { .. } => {
+                    anyhow::bail!("key at {} is already sealed", cli.key.display())
+                }
+                KeyAtRest::Missing => anyhow::bail!(
+                    "no key file at {} (run `cairn-node init` first)",
+                    cli.key.display()
+                ),
+                KeyAtRest::Corrupt => anyhow::bail!(
+                    "key at {} is neither a plaintext seed nor a sealed bundle; \
+                                   refusing to seal",
+                    cli.key.display()
+                ),
             }
             let op = resolve_passphrase(passphrase)?;
             let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
@@ -424,8 +461,9 @@ async fn main() -> anyhow::Result<()> {
             let op = resolve_passphrase(passphrase)?;
             // The recovery code is the OFF-NODE secret; the node never stored it, so the
             // operator must type the one shown at `init`/`seal-key`.
-            let code = Zeroizing::new(
-                rpassword::prompt_password("recovery code (from init/seal-key): ")?);
+            let code = Zeroizing::new(rpassword::prompt_password(
+                "recovery code (from init/seal-key): ",
+            )?);
             // Reject whitespace-only input, not just empty: `normalize_recovery_code`
             // (inside `establish_lsk`) strips ALL spacing, so a code of "   " would
             // normalize to empty and wrap the LSK under an effectively-empty recovery
@@ -442,8 +480,10 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Identity => {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            println!("node_id     {}\npubkey      {}\nfingerprint {}\naddress     {}",
-                id.node_id_hex, id.pubkey_hex, id.fingerprint, id.address);
+            println!(
+                "node_id     {}\npubkey      {}\nfingerprint {}\naddress     {}",
+                id.node_id_hex, id.pubkey_hex, id.fingerprint, id.address
+            );
         }
         Cmd::PairOffer { nonce } => {
             let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt
@@ -470,8 +510,14 @@ async fn main() -> anyhow::Result<()> {
             // not the DB row; on key/DB drift the door then gives a legible rejection.
             let kid = hex::encode(sk.verifying_key().to_bytes());
             cairn_node::identity::author_peer(
-                &db, &sk, &kid, &id.node_id_hex, &bundle, role.as_deref(),
-            ).await?;
+                &db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                &bundle,
+                role.as_deref(),
+            )
+            .await?;
             println!("peered with {}", bundle.node_id_hex);
         }
         Cmd::Peers => {
@@ -496,9 +542,7 @@ async fn main() -> anyhow::Result<()> {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             let kid = hex::encode(sk.verifying_key().to_bytes());
-            cairn_node::identity::author_unpeer(
-                &db, &sk, &kid, &id.node_id_hex, &node_id,
-            ).await?;
+            cairn_node::identity::author_unpeer(&db, &sk, &kid, &id.node_id_hex, &node_id).await?;
             println!("unpeered {node_id}");
         }
         Cmd::ProvisionRuntimeRole { role } => {
@@ -517,7 +561,9 @@ async fn main() -> anyhow::Result<()> {
             let st = cairn_node::identity::status(&db, &cli.key).await?;
             println!("node_id       {}", st.node_id_hex);
             if !st.initialized {
-                println!("              (not provisioned — run `cairn-node init` to enroll this node)");
+                println!(
+                    "              (not provisioned — run `cairn-node init` to enroll this node)"
+                );
             }
             println!("peers_active  {}", st.peers_active);
             println!("peers_revoked {}", st.peers_revoked);
@@ -560,16 +606,23 @@ async fn main() -> anyhow::Result<()> {
             // PROMPT here: an unattended/cron backup must not block on a tty, and an unsigned
             // marker is a safe degradation (operator-error-safe, just not tamper-evident) —
             // never a reason to fail the backup. A wrong/absent secret simply yields no key.
-            let key_secret: Option<Zeroizing<String>> = passphrase.clone()
+            let key_secret: Option<Zeroizing<String>> = passphrase
+                .clone()
                 .filter(|s| !s.is_empty())
-                .or_else(|| std::env::var("CAIRN_KEY_PASSPHRASE").ok().filter(|s| !s.is_empty()))
+                .or_else(|| {
+                    std::env::var("CAIRN_KEY_PASSPHRASE")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                })
                 .map(Zeroizing::new);
-            let signing = cairn_node::keystore::load(&cli.key, key_secret.as_deref().map(|s| s.as_str()))
-                .ok()
-                .map(|sk| (hex::encode(sk.verifying_key().to_bytes()), sk));
+            let signing =
+                cairn_node::keystore::load(&cli.key, key_secret.as_deref().map(|s| s.as_str()))
+                    .ok()
+                    .map(|sk| (hex::encode(sk.verifying_key().to_bytes()), sk));
             let marker_key = signing.as_ref().map(|(kid, sk)| (sk, kid.as_str()));
 
-            let report = cairn_node::backup::backup_to(&db, &to, &health_path, now_unix, marker_key).await?;
+            let report =
+                cairn_node::backup::backup_to(&db, &to, &health_path, now_unix, marker_key).await?;
             println!(
                 "backed up {} event(s) ({} bytes) to {}",
                 report.event_count,
@@ -582,22 +635,27 @@ async fn main() -> anyhow::Result<()> {
             // federated medium restore will ask for confirmation (a converged peer's medium could
             // be spliced — see crate::medium / restore::Provenance). Store any medium with care.
             match report.marker {
-                cairn_node::backup::WrittenMarker::Signed =>
-                    println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)"),
+                cairn_node::backup::WrittenMarker::Signed => {
+                    println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)")
+                }
                 cairn_node::backup::WrittenMarker::Unsigned => eprintln!(
                     "WARNING: self-marker UNSIGNED — this medium is operator-error-safe but NOT \
                      tamper-evident; set CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext \
-                     key) to sign it. Store and handle this medium with extra care."),
-                cairn_node::backup::WrittenMarker::None =>
-                    println!("self-marker  none (node not yet enrolled — nothing to attest)"),
+                     key) to sign it. Store and handle this medium with extra care."
+                ),
+                cairn_node::backup::WrittenMarker::None => {
+                    println!("self-marker  none (node not yet enrolled — nothing to attest)")
+                }
             }
             println!("backup health recorded at {}", health_path.display());
             // ADR-0026 slice D: co-locate the sealed local-state export beside the medium,
             // IF the local-state escrow exists. Degrades honestly (warn, never fail the
             // event backup) when the escrow is absent — the events are the load-bearing copy.
             let sidecar = cairn_node::localstate::lsk_sidecar_path_for(&cli.key);
-            match std::fs::read(&sidecar).ok()
-                .and_then(|b| cairn_node::localstate::parse_sidecar(&b).ok()) {
+            match std::fs::read(&sidecar)
+                .ok()
+                .and_then(|b| cairn_node::localstate::parse_sidecar(&b).ok())
+            {
                 Some(wraps) => {
                     // The sealed export is OPTIONAL — the event medium + health are ALREADY
                     // written (the load-bearing copy). So ANY failure here (a passphrase an
@@ -606,18 +664,21 @@ async fn main() -> anyhow::Result<()> {
                     // below. It must NEVER abort an already-complete event backup with a
                     // non-zero exit — that would page an operator over a backup that succeeded.
                     match seal_and_write_local_state_export(&db, &wraps, passphrase, &to).await {
-                        Ok(export_path) =>
-                            println!("local-state exported to {}", export_path.display()),
+                        Ok(export_path) => {
+                            println!("local-state exported to {}", export_path.display())
+                        }
                         Err(e) => eprintln!(
                             "WARNING: local-state export skipped: {e:#}. Backed up events only \
                              (they are the load-bearing copy and are safe); set \
-                             CAIRN_KEY_PASSPHRASE or pass --passphrase to write the sealed export."),
+                             CAIRN_KEY_PASSPHRASE or pass --passphrase to write the sealed export."
+                        ),
                     }
                 }
                 None => eprintln!(
                     "WARNING: no local-state escrow ({} absent) — backed up events only; \
                      run `cairn-node establish-local-state-key` to enable the sealed export",
-                    sidecar.display()),
+                    sidecar.display()
+                ),
             }
         }
         Cmd::VerifyBackup { from } => {
@@ -627,7 +688,10 @@ async fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let report = cairn_node::backup::verify_medium_bytes(&bytes)?;
             if report.all_intact() {
-                println!("backup OK: {}/{} event(s) verified", report.intact, report.total);
+                println!(
+                    "backup OK: {}/{} event(s) verified",
+                    report.intact, report.total
+                );
             } else {
                 // Non-zero exit (bail) so a cron/health check detects a bad backup.
                 anyhow::bail!(
@@ -638,7 +702,12 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
-        Cmd::Restore { from, superseded_node, passphrase, insecure_plaintext } => {
+        Cmd::Restore {
+            from,
+            superseded_node,
+            passphrase,
+            insecure_plaintext,
+        } => {
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
@@ -648,7 +717,9 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::bail!(
                     "refusing to restore a medium that fails self-verification: {}/{} intact, \
                      first bad at index {:?}",
-                    report.intact, report.total, report.first_bad
+                    report.intact,
+                    report.total,
+                    report.first_bad
                 );
             }
             // 2. Resolve this node's OWN genesis on the medium (the dead node to supersede),
@@ -659,7 +730,8 @@ async fn main() -> anyhow::Result<()> {
             //    risk (confirm below); UNSIGNED / no marker is flagged for confirmation too. An
             //    explicit --superseded-node is validated against the marker and rejected
             //    fail-closed if it names a peer or an off-medium id.
-            let dead = cairn_node::restore::resolve_dead_node(&container, superseded_node.as_deref())?;
+            let dead =
+                cairn_node::restore::resolve_dead_node(&container, superseded_node.as_deref())?;
             use cairn_node::restore::Provenance;
             match dead.provenance {
                 Provenance::Signed =>
@@ -680,10 +752,12 @@ async fn main() -> anyhow::Result<()> {
             }
             let (name, address) =
                 cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex)
-                    .ok_or_else(|| anyhow::anyhow!(
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
                         "internal: resolved dead node {} has no enroll on the medium (unreachable)",
                         dead.node_id_hex
-                    ))?;
+                    )
+                    })?;
 
             // 3. Connect to the FRESH db and load the schema (DDL: owner privileges, like init).
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
@@ -696,7 +770,9 @@ async fn main() -> anyhow::Result<()> {
 
             // 4. Mint the NEW key (the old signing key was never backed up).
             let (sk, kid) = if insecure_plaintext {
-                eprintln!("WARNING: --insecure-plaintext: new key written UNSEALED (test use only)");
+                eprintln!(
+                    "WARNING: --insecure-plaintext: new key written UNSEALED (test use only)"
+                );
                 cairn_node::keystore::generate_plaintext(&cli.key)?
             } else {
                 let op = resolve_passphrase(passphrase)?;
@@ -719,7 +795,14 @@ async fn main() -> anyhow::Result<()> {
             //    then author the new genesis + supersede.
             let applied = cairn_node::restore::apply_medium(&db, &container.events).await?;
             let outcome = cairn_node::restore::finalize_identity(
-                &db, &sk, &kid, &name, &address, &dead.node_id_hex).await?;
+                &db,
+                &sk,
+                &kid,
+                &name,
+                &address,
+                &dead.node_id_hex,
+            )
+            .await?;
 
             // ADR-0026 slice D: if a sealed local-state export sits beside the medium,
             // unseal it with the OLD recovery code and apply it (empty/noop today), then
@@ -763,7 +846,9 @@ async fn main() -> anyhow::Result<()> {
             println!("restored identity '{name}' ({address})");
             println!("new node {}", outcome.new_node_id_hex);
             println!("supersedes {}", outcome.superseded_node_id_hex);
-            println!("re-peer with `cairn-node pair-offer` / `pair-accept` (trust resets on restore)");
+            println!(
+                "re-peer with `cairn-node pair-offer` / `pair-accept` (trust resets on restore)"
+            );
         }
         Cmd::Serve { listen } => {
             use cairn_node::sync;
@@ -774,7 +859,11 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("serving node_event sync on {addr}");
             sync::serve(serve_cfg).await?;
         }
-        Cmd::Run { listen, peer, interval_secs } => {
+        Cmd::Run {
+            listen,
+            peer,
+            interval_secs,
+        } => {
             use cairn_node::sync;
             let sk = load_signing_key(&cli.key, false)?; // unattended: never prompt, fail fast
             sync::run(listen, peer, &cli.conn, &sk, interval_secs).await?;
@@ -802,7 +891,10 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("acked node_event {digest} ({n} row) — it no longer pins the floor or fails the pull");
         }
-        Cmd::ApplyAutoCandidates { passphrase, insecure_plaintext } => {
+        Cmd::ApplyAutoCandidates {
+            passphrase,
+            insecure_plaintext,
+        } => {
             // Owner connection (needs enroll_actor for the per-epoch matcher actor).
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             // Fail fast (legibly) if the DB predates the db/018 identity floor.
@@ -866,19 +958,35 @@ async fn main() -> anyhow::Result<()> {
             // additive registration events (idempotent — enrolls only on first use).
             ensure_registration_actor(&db, &kid).await?;
             let (pid, call) = cairn_node::john_doe::register_john_doe(
-                &mut db, &sk, &kid, &id.node_id_hex, &class, &site, &date, &basis,
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                &class,
+                &site,
+                &date,
+                &basis,
             )
             .await?;
             println!("registered John Doe {pid}\ncallsign {call}");
         }
-        Cmd::AssertObservedEvidence { patient, age, tol, age_basis, sex, sex_basis } => {
+        Cmd::AssertObservedEvidence {
+            patient,
+            age,
+            tol,
+            age_basis,
+            sex,
+            sex_basis,
+        } => {
             let sk = load_signing_key(&cli.key, true)?;
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             // Observation year comes from the node's own DB clock (the DB is the clock).
-            let observed_year: i32 = db.query_one("SELECT extract(year FROM current_date)::int", &[])
-                .await?.get(0);
+            let observed_year: i32 = db
+                .query_one("SELECT extract(year FROM current_date)::int", &[])
+                .await?
+                .get(0);
             ensure_registration_actor(&db, &kid).await?;
 
             // Clinical sanity bound on the human-entered estimate: a real apparent age and
@@ -894,20 +1002,48 @@ async fn main() -> anyhow::Result<()> {
                 (Some(_), None) => anyhow::bail!("--age requires --age-basis (§5.4: estimated age WITH basis)"),
                 (None, _) => None,
             };
-            let sex_obs = sex.map(|value| cairn_node::evidence::SexObservation { value, basis: sex_basis });
-            let ev = cairn_node::evidence::ObservedEvidence { age: age_obs, sex: sex_obs };
+            let sex_obs = sex.map(|value| cairn_node::evidence::SexObservation {
+                value,
+                basis: sex_basis,
+            });
+            let ev = cairn_node::evidence::ObservedEvidence {
+                age: age_obs,
+                sex: sex_obs,
+            };
 
             cairn_node::evidence::assert_observed_evidence(
-                &mut db, &sk, &kid, &id.node_id_hex, patient, &ev, observed_year).await?;
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                patient,
+                &ev,
+                observed_year,
+            )
+            .await?;
             println!("recorded clinician-observed evidence on {patient}");
         }
-        Cmd::AssertIdentityEvidence { patient, kind, description, file, media_type, descriptor, basis } => {
+        Cmd::AssertIdentityEvidence {
+            patient,
+            kind,
+            description,
+            file,
+            media_type,
+            descriptor,
+            basis,
+        } => {
             use cairn_node::identity_evidence::EvidenceRoute;
             // Resolve the flag combination to ONE evidence shape (pure, tested) before any
             // keystore/DB/file I/O — the single "--file iff --kind photo" gate. The libraries
             // then re-check content (non-empty descriptor/description) as the principle-4 floor.
             let route = cairn_node::identity_evidence::route_identity_evidence(
-                &kind, file, media_type, descriptor, description, basis)?;
+                &kind,
+                file,
+                media_type,
+                descriptor,
+                description,
+                basis,
+            )?;
             let sk = load_signing_key(&cli.key, true)?;
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
@@ -915,20 +1051,47 @@ async fn main() -> anyhow::Result<()> {
             ensure_registration_actor(&db, &kid).await?;
 
             match route {
-                EvidenceRoute::Photo { file, media_type, descriptor, basis } => {
+                EvidenceRoute::Photo {
+                    file,
+                    media_type,
+                    descriptor,
+                    basis,
+                } => {
                     // Fast-fail on an empty descriptor before reading the file — same rule the
                     // library re-checks (single source of truth: validate_photo_descriptor).
                     cairn_node::photo_evidence::validate_photo_descriptor(&descriptor)?;
                     let bytes = std::fs::read(&file)
                         .map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
                     let event_id = cairn_node::photo_evidence::assert_photo_evidence(
-                        &mut db, &sk, &kid, &id.node_id_hex, patient, &bytes, &media_type,
-                        &descriptor, basis.as_deref()).await?;
+                        &mut db,
+                        &sk,
+                        &kid,
+                        &id.node_id_hex,
+                        patient,
+                        &bytes,
+                        &media_type,
+                        &descriptor,
+                        basis.as_deref(),
+                    )
+                    .await?;
                     println!("attached photo evidence {event_id} to {patient}");
                 }
-                EvidenceRoute::Text { kind, description, basis } => {
+                EvidenceRoute::Text {
+                    kind,
+                    description,
+                    basis,
+                } => {
                     let event_id = cairn_node::identity_evidence::assert_text_evidence(
-                        &db, &sk, &kid, &id.node_id_hex, patient, kind, &description, basis.as_deref()).await?;
+                        &db,
+                        &sk,
+                        &kid,
+                        &id.node_id_hex,
+                        patient,
+                        kind,
+                        &description,
+                        basis.as_deref(),
+                    )
+                    .await?;
                     println!("recorded {kind} identity evidence {event_id} on {patient}");
                 }
             }
@@ -951,10 +1114,7 @@ async fn main() -> anyhow::Result<()> {
 /// second actor to a key already enrolled as (say) a matcher `agent` or a `human`, tripping
 /// exactly that dual-mapping. Keying on `signing_key_id` alone means a key already usable for
 /// authoring is left untouched — never split into two actors.
-async fn ensure_registration_actor(
-    db: &tokio_postgres::Client,
-    kid: &str,
-) -> anyhow::Result<()> {
+async fn ensure_registration_actor(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<()> {
     let already: bool = db
         .query_one(
             "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1)",
@@ -965,8 +1125,11 @@ async fn ensure_registration_actor(
     if !already {
         let pinned =
             serde_json::json!({ "role": "registration-desk", "node_key": kid }).to_string();
-        db.execute("SELECT enroll_actor('device', $1::text::jsonb, $2)", &[&pinned, &kid])
-            .await?;
+        db.execute(
+            "SELECT enroll_actor('device', $1::text::jsonb, $2)",
+            &[&pinned, &kid],
+        )
+        .await?;
     }
     Ok(())
 }
@@ -982,6 +1145,10 @@ mod tests {
         // annotation IS the assertion: this fails to compile if the secret is a bare String.
         let secret: zeroize::Zeroizing<String> =
             resolve_passphrase(Some("op-pass".to_string())).unwrap();
-        assert_eq!(secret.as_str(), "op-pass", "a non-empty flag is returned verbatim");
+        assert_eq!(
+            secret.as_str(),
+            "op-pass",
+            "a non-empty flag is returned verbatim"
+        );
     }
 }

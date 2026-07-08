@@ -86,7 +86,10 @@ impl Rendition {
 impl Attachment {
     /// The one-rendition attachment (a photo's `original`). Pure.
     pub fn single(descriptor: &str, rendition: Rendition) -> Attachment {
-        Attachment { descriptor: descriptor.to_string(), renditions: vec![rendition] }
+        Attachment {
+            descriptor: descriptor.to_string(),
+            renditions: vec![rendition],
+        }
     }
 }
 
@@ -97,7 +100,10 @@ impl Attachment {
 pub fn render_attachment_twin(a: &Attachment) -> String {
     let mut out = a.descriptor.clone();
     for r in &a.renditions {
-        out.push_str(&format!(" ({}: {}, {} bytes)", r.role, r.media_type, r.byte_len));
+        out.push_str(&format!(
+            " ({}: {}, {} bytes)",
+            r.role, r.media_type, r.byte_len
+        ));
     }
     out
 }
@@ -115,7 +121,10 @@ mod tests {
         assert_eq!(r.digest_hex, hex::encode(blob_address(b"hello")));
         assert_eq!(r.media_type, "text/plain");
         assert_eq!(r.byte_len, 5);
-        assert!(r.inline.is_none(), "a by-reference rendition inlines no bytes");
+        assert!(
+            r.inline.is_none(),
+            "a by-reference rendition inlines no bytes"
+        );
         assert!(r.seal.is_none(), "a plaintext rendition carries no seal");
     }
 
@@ -133,9 +142,18 @@ mod tests {
         let r = Rendition::reference(RENDITION_ROLE_ORIGINAL, b"PIXELDATA", "image/jpeg");
         let a = Attachment::single("wound on left forearm", r);
         let twin = render_attachment_twin(&a);
-        assert!(twin.contains("wound on left forearm"), "descriptor must appear: {twin}");
-        assert!(twin.contains("image/jpeg"), "media type must appear: {twin}");
-        assert!(!twin.contains("PIXELDATA"), "twin must NOT contain pixel bytes: {twin}");
+        assert!(
+            twin.contains("wound on left forearm"),
+            "descriptor must appear: {twin}"
+        );
+        assert!(
+            twin.contains("image/jpeg"),
+            "media type must appear: {twin}"
+        );
+        assert!(
+            !twin.contains("PIXELDATA"),
+            "twin must NOT contain pixel bytes: {twin}"
+        );
         assert!(!twin.trim().is_empty());
     }
 
@@ -150,9 +168,15 @@ mod tests {
             media_type: "image/jpeg".into(),
             byte_len: 10,
             inline: Some(serde_bytes::ByteBuf::from(b"inlinebytes".to_vec())),
-            seal: Some(SealRef { alg: "xchacha20poly1305".into(), dek_wrap: "dek-ref-1".into() }),
+            seal: Some(SealRef {
+                alg: "xchacha20poly1305".into(),
+                dek_wrap: "dek-ref-1".into(),
+            }),
         };
-        let a = Attachment { descriptor: "d".into(), renditions: vec![sealed] };
+        let a = Attachment {
+            descriptor: "d".into(),
+            renditions: vec![sealed],
+        };
         let mut buf = Vec::new();
         ciborium::into_writer(&a, &mut buf).unwrap();
         let back: Attachment = ciborium::from_reader(&buf[..]).unwrap();
@@ -167,7 +191,13 @@ mod tests {
         // CBOR map must NOT contain "inline" or "seal" keys.
         let r = Rendition::reference(RENDITION_ROLE_ORIGINAL, b"x", "image/jpeg");
         let v = serde_json::to_value(&r).unwrap();
-        assert!(v.get("inline").is_none(), "None inline must be omitted, not null");
-        assert!(v.get("seal").is_none(), "None seal must be omitted, not null");
+        assert!(
+            v.get("inline").is_none(),
+            "None inline must be omitted, not null"
+        );
+        assert!(
+            v.get("seal").is_none(),
+            "None seal must be omitted, not null"
+        );
     }
 }

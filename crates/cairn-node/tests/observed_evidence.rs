@@ -10,12 +10,17 @@ use cairn_node::evidence::{self, AgeObservation, ObservedEvidence, SexObservatio
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-fn cs() -> Option<String> { std::env::var("CAIRN_TEST_PG").ok() }
+fn cs() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG").ok()
+}
 
 async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic, patient_name CASCADE").await.unwrap();
+         patient_demographic, patient_name CASCADE",
+    )
+    .await
+    .unwrap();
     let (sk, kid) = generate_key().unwrap();
     c.execute(
         "SELECT enroll_actor('agent', '{\"model\":\"reg-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
@@ -31,29 +36,47 @@ async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
 /// `demographics_fields.rs` sidesteps the same gap with `facets->>'key'`; here the caller
 /// wants the whole object, so we cast to text and parse it back to `Value` in Rust — same
 /// observable projection content, no new capability pulled in.
-async fn demographic_of(c: &Client, patient: Uuid, field: &str) -> Option<(String, serde_json::Value, String)> {
+async fn demographic_of(
+    c: &Client,
+    patient: Uuid,
+    field: &str,
+) -> Option<(String, serde_json::Value, String)> {
     let p = patient.to_string();
     c.query_opt(
         "SELECT value, facets::text, provenance FROM patient_demographic \
-         WHERE patient_id = $1::text::uuid AND field = $2", &[&p, &field])
-        .await.unwrap().map(|r| {
-            // `facets` is nullable (e.g. observed-sex with no stated basis omits it
-            // entirely) — Option<String> so a NULL column doesn't panic the row decode.
-            let facets_text: Option<String> = r.get(1);
-            let facets = facets_text
-                .map(|t| serde_json::from_str(&t).unwrap())
-                .unwrap_or(serde_json::Value::Null);
-            (r.get(0), facets, r.get(2))
-        })
+         WHERE patient_id = $1::text::uuid AND field = $2",
+        &[&p, &field],
+    )
+    .await
+    .unwrap()
+    .map(|r| {
+        // `facets` is nullable (e.g. observed-sex with no stated basis omits it
+        // entirely) — Option<String> so a NULL column doesn't panic the row decode.
+        let facets_text: Option<String> = r.get(1);
+        let facets = facets_text
+            .map(|t| serde_json::from_str(&t).unwrap())
+            .unwrap_or(serde_json::Value::Null);
+        (r.get(0), facets, r.get(2))
+    })
 }
 
 /// Author a single document-verified point dob (`precision=day`, rank 60) through the real
 /// door, so a test can prove it DISPLACES a rank-30 clinician estimate in the projection.
 async fn author_document_dob(
-    db: &mut Client, sk: &cairn_event::SigningKey, kid: &str, node: &str, patient: Uuid, iso: &str,
+    db: &mut Client,
+    sk: &cairn_event::SigningKey,
+    kid: &str,
+    node: &str,
+    patient: Uuid,
+    iso: &str,
 ) {
     let h = db::next_hlc(db, node).await.unwrap();
-    let payload = cairn_event::demographics::dob_assertion_body(iso, "day", Some("passport"), "document-verified");
+    let payload = cairn_event::demographics::dob_assertion_body(
+        iso,
+        "day",
+        Some("passport"),
+        "document-verified",
+    );
     let body = cairn_event::EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: patient.to_string(),
@@ -65,10 +88,16 @@ async fn author_document_dob(
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload,
         attachments: vec![],
-        plaintext_twin: Some(cairn_event::demographics::render_dob_twin(iso, "day", "document-verified")),
+        plaintext_twin: Some(cairn_event::demographics::render_dob_twin(
+            iso,
+            "day",
+            "document-verified",
+        )),
     };
     let signed = cairn_event::sign(&body, sk).unwrap();
-    db.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await.unwrap();
+    db.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -80,12 +109,20 @@ async fn estimated_age_lands_as_a_clinician_observed_year_range_dob() {
     let patient = Uuid::now_v7();
 
     let ev = ObservedEvidence {
-        age: Some(AgeObservation { age_years: 40, tolerance_years: 5, basis: "dentition, greying".into() }),
+        age: Some(AgeObservation {
+            age_years: 40,
+            tolerance_years: 5,
+            basis: "dentition, greying".into(),
+        }),
         sex: None,
     };
-    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2026).await.unwrap();
+    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2026)
+        .await
+        .unwrap();
 
-    let (value, facets, prov) = demographic_of(&db, patient, "dob").await.expect("dob projected");
+    let (value, facets, prov) = demographic_of(&db, patient, "dob")
+        .await
+        .expect("dob projected");
     assert_eq!(value, "1981/1991");
     assert_eq!(facets["precision"], "year-range");
     assert_eq!(prov, "clinician-observed");
@@ -101,15 +138,26 @@ async fn a_document_verified_dob_displaces_the_estimate() {
 
     // First the clinician estimate (rank 30)...
     let est = ObservedEvidence {
-        age: Some(AgeObservation { age_years: 40, tolerance_years: 5, basis: "dentition".into() }),
+        age: Some(AgeObservation {
+            age_years: 40,
+            tolerance_years: 5,
+            basis: "dentition".into(),
+        }),
         sex: None,
     };
-    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &est, 2026).await.unwrap();
+    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &est, 2026)
+        .await
+        .unwrap();
     // ...then a document-verified exact dob (rank 60) — must win the projection.
     author_document_dob(&mut db, &sk, &kid, "test-node", patient, "1985-03-12").await;
 
-    let (value, _facets, prov) = demographic_of(&db, patient, "dob").await.expect("dob projected");
-    assert_eq!(prov, "document-verified", "the document must displace the clinician estimate");
+    let (value, _facets, prov) = demographic_of(&db, patient, "dob")
+        .await
+        .expect("dob projected");
+    assert_eq!(
+        prov, "document-verified",
+        "the document must displace the clinician estimate"
+    );
     assert_eq!(value, "1985-03-12");
 }
 
@@ -123,11 +171,18 @@ async fn observed_sex_lands_on_administrative_sex() {
 
     let ev = ObservedEvidence {
         age: None,
-        sex: Some(SexObservation { value: "male".into(), basis: Some("external genitalia".into()) }),
+        sex: Some(SexObservation {
+            value: "male".into(),
+            basis: Some("external genitalia".into()),
+        }),
     };
-    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2026).await.unwrap();
+    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2026)
+        .await
+        .unwrap();
 
-    let (value, _facets, prov) = demographic_of(&db, patient, "administrative-sex").await.expect("sex projected");
+    let (value, _facets, prov) = demographic_of(&db, patient, "administrative-sex")
+        .await
+        .expect("sex projected");
     assert_eq!(value, "male");
     assert_eq!(prov, "clinician-observed");
     // sex-at-birth must be UNTOUCHED — the clinician never claimed the birth fact.
@@ -143,11 +198,29 @@ async fn age_and_sex_are_authored_atomically() {
     let patient = Uuid::now_v7();
 
     let ev = ObservedEvidence {
-        age: Some(AgeObservation { age_years: 25, tolerance_years: 3, basis: "young adult".into() }),
-        sex: Some(SexObservation { value: "female".into(), basis: None }),
+        age: Some(AgeObservation {
+            age_years: 25,
+            tolerance_years: 3,
+            basis: "young adult".into(),
+        }),
+        sex: Some(SexObservation {
+            value: "female".into(),
+            basis: None,
+        }),
     };
-    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2020).await.unwrap();
+    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2020)
+        .await
+        .unwrap();
 
-    assert_eq!(demographic_of(&db, patient, "dob").await.unwrap().0, "1992/1998");
-    assert_eq!(demographic_of(&db, patient, "administrative-sex").await.unwrap().0, "female");
+    assert_eq!(
+        demographic_of(&db, patient, "dob").await.unwrap().0,
+        "1992/1998"
+    );
+    assert_eq!(
+        demographic_of(&db, patient, "administrative-sex")
+            .await
+            .unwrap()
+            .0,
+        "female"
+    );
 }

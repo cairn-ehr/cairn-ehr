@@ -24,8 +24,11 @@ pub const EMS_CONTEXT_EVIDENCE_KIND: &str = "ems-context";
 
 /// The closed set of text-shaped evidence kinds, in one place so the parser below and any
 /// future reader share a single source of truth (a test pins it to the three constants).
-pub const TEXT_EVIDENCE_KINDS: [&str; 3] =
-    [MARK_EVIDENCE_KIND, BELONGINGS_EVIDENCE_KIND, EMS_CONTEXT_EVIDENCE_KIND];
+pub const TEXT_EVIDENCE_KINDS: [&str; 3] = [
+    MARK_EVIDENCE_KIND,
+    BELONGINGS_EVIDENCE_KIND,
+    EMS_CONTEXT_EVIDENCE_KIND,
+];
 
 /// Map an input kind string to its canonical `&'static str`, returning `None` for anything
 /// outside the closed set. The set is closed at the AUTHOR edge — a typo-drift guard so the
@@ -84,8 +87,15 @@ pub fn photo_evidence_body(basis: Option<&str>) -> Value {
 /// then the attachment's own descriptor-derived twin (never the bytes), then the basis if
 /// stated. This is a pure mechanical derivation (ADR-0039 pattern) the db/015 floor carries
 /// verbatim for this non-demographic type.
-pub fn render_identity_evidence_twin(kind: &str, basis: Option<&str>, attachment: &Attachment) -> String {
-    let mut out = format!("identity evidence ({kind}): {}", render_attachment_twin(attachment));
+pub fn render_identity_evidence_twin(
+    kind: &str,
+    basis: Option<&str>,
+    attachment: &Attachment,
+) -> String {
+    let mut out = format!(
+        "identity evidence ({kind}): {}",
+        render_attachment_twin(attachment)
+    );
     if let Some(b) = basis {
         out.push_str(&format!(" — {b}"));
     }
@@ -106,7 +116,10 @@ mod tests {
 
         let without = photo_evidence_body(None);
         assert_eq!(without["kind"], "photo");
-        assert!(without.get("basis").is_none(), "absent basis is omitted, never null");
+        assert!(
+            without.get("basis").is_none(),
+            "absent basis is omitted, never null"
+        );
     }
 
     #[test]
@@ -115,7 +128,10 @@ mod tests {
         let att = Attachment::single("frontal face photograph", r);
         let twin = render_identity_evidence_twin("photo", Some("on arrival"), &att);
         assert!(twin.contains("photo"), "twin names the kind: {twin}");
-        assert!(twin.contains("frontal face photograph"), "descriptor: {twin}");
+        assert!(
+            twin.contains("frontal face photograph"),
+            "descriptor: {twin}"
+        );
         assert!(twin.contains("image/jpeg"));
         assert!(twin.contains("on arrival"), "basis when present: {twin}");
         assert!(!twin.contains("PIXELS"));
@@ -127,20 +143,43 @@ mod tests {
         let r = Rendition::reference("original", b"x", "image/jpeg");
         let att = Attachment::single("photo", r);
         let twin = render_identity_evidence_twin("photo", None, &att);
-        assert!(!twin.contains(" — "), "no trailing basis separator when basis is None: {twin}");
+        assert!(
+            !twin.contains(" — "),
+            "no trailing basis separator when basis is None: {twin}"
+        );
     }
 
     #[test]
     fn text_evidence_kinds_parse_to_canonical_constants_and_reject_unknowns() {
         assert_eq!(parse_text_evidence_kind("mark"), Some(MARK_EVIDENCE_KIND));
-        assert_eq!(parse_text_evidence_kind("belongings"), Some(BELONGINGS_EVIDENCE_KIND));
-        assert_eq!(parse_text_evidence_kind("ems-context"), Some(EMS_CONTEXT_EVIDENCE_KIND));
-        assert_eq!(parse_text_evidence_kind("photo"), None, "photo is the attachment path, not a text kind");
-        assert_eq!(parse_text_evidence_kind("Mark"), None, "case-sensitive: canonical spelling only");
+        assert_eq!(
+            parse_text_evidence_kind("belongings"),
+            Some(BELONGINGS_EVIDENCE_KIND)
+        );
+        assert_eq!(
+            parse_text_evidence_kind("ems-context"),
+            Some(EMS_CONTEXT_EVIDENCE_KIND)
+        );
+        assert_eq!(
+            parse_text_evidence_kind("photo"),
+            None,
+            "photo is the attachment path, not a text kind"
+        );
+        assert_eq!(
+            parse_text_evidence_kind("Mark"),
+            None,
+            "case-sensitive: canonical spelling only"
+        );
         assert_eq!(parse_text_evidence_kind(""), None);
         // The closed set and the constants cannot drift apart.
-        assert_eq!(TEXT_EVIDENCE_KINDS,
-                   [MARK_EVIDENCE_KIND, BELONGINGS_EVIDENCE_KIND, EMS_CONTEXT_EVIDENCE_KIND]);
+        assert_eq!(
+            TEXT_EVIDENCE_KINDS,
+            [
+                MARK_EVIDENCE_KIND,
+                BELONGINGS_EVIDENCE_KIND,
+                EMS_CONTEXT_EVIDENCE_KIND
+            ]
+        );
     }
 
     #[test]
@@ -154,20 +193,37 @@ mod tests {
         let without = text_evidence_body("belongings", "blue wallet, €40, keys", None);
         assert_eq!(without["kind"], "belongings");
         assert_eq!(without["description"], "blue wallet, €40, keys");
-        assert!(without.get("basis").is_none(), "absent basis is omitted, never null");
+        assert!(
+            without.get("basis").is_none(),
+            "absent basis is omitted, never null"
+        );
     }
 
     #[test]
     fn text_twin_is_legible_names_the_kind_and_appends_basis_only_when_present() {
-        let with = render_text_evidence_twin("ems-context", "found unconscious at bus stop", Some("reported by paramedic"));
+        let with = render_text_evidence_twin(
+            "ems-context",
+            "found unconscious at bus stop",
+            Some("reported by paramedic"),
+        );
         assert!(with.contains("ems-context"), "twin names the kind: {with}");
-        assert!(with.contains("found unconscious at bus stop"), "description: {with}");
-        assert!(with.contains("reported by paramedic"), "basis when present: {with}");
+        assert!(
+            with.contains("found unconscious at bus stop"),
+            "description: {with}"
+        );
+        assert!(
+            with.contains("reported by paramedic"),
+            "basis when present: {with}"
+        );
         assert!(with.contains(" — "), "basis is set off by an em-dash");
 
-        let without = render_text_evidence_twin("mark", "tattoo of an anchor, right shoulder", None);
+        let without =
+            render_text_evidence_twin("mark", "tattoo of an anchor, right shoulder", None);
         assert!(without.contains("tattoo of an anchor"), "{without}");
-        assert!(!without.contains(" — "), "no trailing basis separator when basis is None: {without}");
+        assert!(
+            !without.contains(" — "),
+            "no trailing basis separator when basis is None: {without}"
+        );
         assert!(!without.trim().is_empty());
     }
 }

@@ -1,0 +1,43 @@
+name: matcher
+
+# CI gate for the advisory Python matcher (matcher/). Before this the entire advisory tier had
+# NO automated gate — ruff + pytest ran only when a developer remembered, so it could rot
+# silently while the Rust side stayed green. Fast (no database): runs ruff lint + the pure
+# pytest suite. The DB-gated integration tests self-skip when CAIRN_TEST_PG is unset (they need
+# the same PG + cairn_pgx rig as the Rust floor tests — wiring that into this job is a follow-up).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: matcher-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    name: ruff + pytest
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: matcher
+    steps:
+      - uses: actions/checkout@v6
+
+      # uv is the project's mandated Python tool (never venv/pip). setup-uv provisions uv and
+      # the Python interpreter uv resolves from `requires-python`, and caches the uv store.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: matcher/uv.lock
+
+      - name: ruff (lint — the pinned rule set in pyproject.toml)
+        run: uv run ruff check .
+
+      - name: pytest (pure suite; DB-gated tests self-skip without CAIRN_TEST_PG)
+        run: uv run pytest -q

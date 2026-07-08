@@ -1,0 +1,69 @@
+# cargo-deny configuration — the automated supply-chain gate for the Rust surface.
+#
+# WHY THIS EXISTS (the mission, made executable): Cairn is AGPL-3.0 and anti-capture. Two
+# house rules that were previously enforced only by human vigilance are enforced here instead:
+#   1. Every dependency must be AGPL-3.0-COMPATIBLE (licensing is non-negotiable — CLAUDE.md).
+#   2. No dependency may carry a known security advisory (we are building a medical record).
+# It also watches duplicate-version bloat (issue #11) without failing the build on it yet.
+#
+# Run locally exactly as CI does:  cargo deny check
+# (and, for the pgrx extension:      cd extensions/cairn_pgx && cargo deny check --config ../../deny.toml)
+
+# ---------------------------------------------------------------------------------------------
+# Only evaluate the platforms we actually build for. This prunes Windows/UEFI-only transitive
+# crates (winapi, r-efi, …) that never compile on our targets, so the license/advisory review
+# reflects what we really ship: linux servers/Pi/DGX, an aarch64 dev Mac, and Android phones.
+# ---------------------------------------------------------------------------------------------
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "aarch64-linux-android",
+]
+all-features = true
+
+[licenses]
+# The allow-list is PERMISSIVE-ONLY by design: every entry is uncontroversially compatible with
+# an AGPL-3.0 distribution. A dependency introducing anything else (GPL, MPL, proprietary, or an
+# unlicensed crate) FAILS the gate — that is the whole point. Adding a license here is a
+# deliberate, reviewed act, not a convenience. Confidence threshold left at the strict default.
+allow = [
+    "AGPL-3.0-only",              # our own crates (inbound = outbound)
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",                    # Boost — permissive
+    "CC0-1.0",                    # public-domain dedication
+    "ISC",
+    "Unicode-3.0",               # permissive (unicode-ident, ICU crates)
+    "Unlicense",                 # public domain
+    "Zlib",
+]
+
+[advisories]
+# Fail on any crate with a known RUSTSEC vulnerability or a yanked release. `unmaintained` is
+# scoped to workspace-direct deps: a transitively-pulled unmaintained crate is noise we cannot
+# act on directly, but one WE chose to depend on is a signal worth surfacing.
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+
+[bans]
+# Duplicate transitive versions are HYGIENE, not a safety failure — and today several are
+# upstream-blocked (issue #11: the postgres stack pulls digest/sha2 0.11 while the dalek/AEAD
+# stack pins 0.10). Warn (visible in CI logs) rather than fail, so the gate is honest about what
+# is and isn't in our control. Flip to "deny" once the ecosystem converges and #11 closes.
+multiple-versions = "warn"
+wildcards = "deny"               # a `version = "*"` dependency is never acceptable
+allow-wildcard-paths = true      # …but path deps within the workspace may omit a version
+
+[sources]
+# Only crates.io (the registry we vet). An unknown registry or git source must be an explicit,
+# reviewed addition — a supply-chain entry point otherwise.
+unknown-registry = "deny"
+unknown-git = "deny"

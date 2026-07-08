@@ -26,7 +26,9 @@ fn cairn_verify(signed: &[u8]) -> bool {
 /// wire-format skew is indistinguishable from tampering.
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_verify_error(signed: &[u8]) -> Option<String> {
-    cairn_event::verify_self_described(signed).err().map(|e| e.to_string())
+    cairn_event::verify_self_described(signed)
+        .err()
+        .map(|e| e.to_string())
 }
 
 /// The version of the verify floor actually LOADED into this backend — the
@@ -134,7 +136,11 @@ mod tests {
             patient_id: "00000000-0000-7000-8000-000000000011".into(),
             event_type: "advisory.added".into(),
             schema_version: "advisory/1".into(),
-            hlc: cairn_event::Hlc { wall: 5, counter: 0, node_origin: "t".into() },
+            hlc: cairn_event::Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "t".into(),
+            },
             t_effective: None,
             signer_key_id: kid.clone(),
             contributors: serde_json::json!([{"actor_id": "x", "role": "triaged"}]),
@@ -150,8 +156,12 @@ mod tests {
         assert!(crate::cairn_body(b"not an event").is_none());
 
         // actor_id is stable under key reorder (C4).
-        let id1 = crate::cairn_actor_id(pgrx::JsonB(serde_json::json!({"model": "m", "skill_epoch": "e"})));
-        let id2 = crate::cairn_actor_id(pgrx::JsonB(serde_json::json!({"skill_epoch": "e", "model": "m"})));
+        let id1 = crate::cairn_actor_id(pgrx::JsonB(
+            serde_json::json!({"model": "m", "skill_epoch": "e"}),
+        ));
+        let id2 = crate::cairn_actor_id(pgrx::JsonB(
+            serde_json::json!({"skill_epoch": "e", "model": "m"}),
+        ));
         assert_eq!(id1, id2);
     }
 
@@ -181,7 +191,11 @@ mod tests {
             patient_id: "00000000-0000-7000-8000-000000000021".into(),
             event_type: "advisory.added".into(),
             schema_version: "advisory/1".into(),
-            hlc: cairn_event::Hlc { wall: 7, counter: 0, node_origin: "t".into() },
+            hlc: cairn_event::Hlc {
+                wall: 7,
+                counter: 0,
+                node_origin: "t".into(),
+            },
             t_effective: None,
             signer_key_id: kid,
             contributors: serde_json::json!([]),
@@ -211,7 +225,10 @@ mod tests {
         bad[3] ^= 0x01;
         assert!(!crate::cairn_blob_verify(&addr, &bad));
         let err = crate::cairn_blob_verify_error(&addr, &bad).expect("mismatch is diagnosed");
-        assert!(err.contains("hashes to"), "mismatch names both hashes: {err}");
+        assert!(
+            err.contains("hashes to"),
+            "mismatch names both hashes: {err}"
+        );
 
         // Malformed addresses fail closed: truncated, wrong multihash prefix
         // (an event's sha2-256 address), and empty.
@@ -220,8 +237,14 @@ mod tests {
         assert!(!crate::cairn_blob_verify(&sha_addr, content));
         assert!(!crate::cairn_blob_verify(&[], content));
         let err = crate::cairn_blob_verify_error(&[], content).expect("malformed is diagnosed");
-        assert!(err.contains("not a BLAKE3 multihash"), "malformed address is named: {err}");
-        assert!(err.contains("got 0 bytes"), "wrong length is named as a length problem: {err}");
+        assert!(
+            err.contains("not a BLAKE3 multihash"),
+            "malformed address is named: {err}"
+        );
+        assert!(
+            err.contains("got 0 bytes"),
+            "wrong length is named as a length problem: {err}"
+        );
 
         // Right length, wrong hash family: diagnosed as a PREFIX problem, never
         // as the length (which is fine) — a sha2-256 event address is 34 bytes
@@ -229,7 +252,10 @@ mod tests {
         // down the wrong path.
         let err =
             crate::cairn_blob_verify_error(&sha_addr, content).expect("wrong prefix is diagnosed");
-        assert!(err.contains("wrong multihash prefix 0x1220"), "prefix is the named cause: {err}");
+        assert!(
+            err.contains("wrong multihash prefix 0x1220"),
+            "prefix is the named cause: {err}"
+        );
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,
@@ -242,7 +268,11 @@ mod tests {
             patient_id: "00000000-0000-7000-8000-000000000002".into(),
             event_type: "advisory.added".into(),
             schema_version: "advisory/1".into(),
-            hlc: cairn_event::Hlc { wall: 1, counter: 0, node_origin: "t".into() },
+            hlc: cairn_event::Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "t".into(),
+            },
             t_effective: None,
             signer_key_id: kid,
             contributors: serde_json::json!([]),

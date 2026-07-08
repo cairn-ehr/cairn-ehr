@@ -43,7 +43,12 @@ pub fn build_suggested_link_body(
 ) -> EventBody {
     let low_s = low.to_string();
     let high_s = high.to_string();
-    let la = LinkAssertion { subject_a: &low_s, subject_b: &high_s, provenance, confidence };
+    let la = LinkAssertion {
+        subject_a: &low_s,
+        subject_b: &high_s,
+        provenance,
+        confidence,
+    };
     EventBody {
         event_id: event_id.to_string(),
         patient_id: low_s.clone(), // C1 convention: an identity event is "about" subject_a
@@ -92,7 +97,11 @@ pub async fn apply_auto_candidate(
     matcher_kid: &str,
     hlc: Hlc,
 ) -> anyhow::Result<AutoOutcome> {
-    let (low, high) = if low <= high { (low, high) } else { (high, low) };
+    let (low, high) = if low <= high {
+        (low, high)
+    } else {
+        (high, low)
+    };
     let (low_s, high_s) = (low.to_string(), high.to_string());
     let tx = client.transaction().await?;
 
@@ -105,7 +114,9 @@ pub async fn apply_auto_candidate(
         )
         .await?;
     let Some(row) = row else {
-        return Ok(AutoOutcome::Skipped(format!("no proposal for ({low}, {high})")));
+        return Ok(AutoOutcome::Skipped(format!(
+            "no proposal for ({low}, {high})"
+        )));
     };
     let band: String = row.get(0);
     let status: String = row.get(1);
@@ -155,7 +166,8 @@ pub async fn apply_auto_candidate(
 
     // 4. Submit through the 1-arg (un-attested) door. The db/018 identity floor +
     //    patient_link_apply trigger run here.
-    tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await?;
+    tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await?;
 
     // 5. Mark the proposal auto_applied (distinct from C2's human 'applied').
     let event_id_s = event_id.to_string();
@@ -233,7 +245,12 @@ pub async fn apply_auto_candidates(
     // for every remaining pair of a broken/revoked epoch, but STILL count each affected
     // pair as errored (the operator sees the true blast radius, not one line).
     let mut failed_versions: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut summary = AutoSummary { applied: 0, vetoed_to_review: 0, skipped: 0, errored: 0 };
+    let mut summary = AutoSummary {
+        applied: 0,
+        vetoed_to_review: 0,
+        skipped: 0,
+        errored: 0,
+    };
 
     for r in rows {
         let low: Uuid = r.get::<_, String>(0).parse()?;
@@ -311,7 +328,10 @@ mod tests {
         let p = compose_auto_provenance("0.3.0+abc");
         assert!(p.contains("0.3.0+abc"));
         assert!(p.contains("auto"));
-        assert!(!p.contains("accepted-by"), "the auto path has no human voucher");
+        assert!(
+            !p.contains("accepted-by"),
+            "the auto path has no human voucher"
+        );
     }
 
     #[test]
@@ -324,7 +344,11 @@ mod tests {
             "matcher:x auto",
             None,
             "mkid",
-            Hlc { wall: 5, counter: 0, node_origin: "n".into() },
+            Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         );
         let c = &body.contributors[0];
         assert_eq!(c["actor_id"], "mkid");
@@ -345,14 +369,21 @@ mod tests {
             "matcher:x auto",
             Some("0.950"),
             "mkid",
-            Hlc { wall: 5, counter: 0, node_origin: "n".into() },
+            Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         );
         assert_eq!(body.event_type, "identity.link.asserted");
         assert_eq!(body.payload["subject_a"], a.to_string());
         assert_eq!(body.payload["subject_b"], b.to_string());
         assert_eq!(body.payload["confidence"], "0.950");
         assert!(
-            body.plaintext_twin.as_deref().unwrap().starts_with("link: "),
+            body.plaintext_twin
+                .as_deref()
+                .unwrap()
+                .starts_with("link: "),
             "authored twin required by the db/018 floor"
         );
     }

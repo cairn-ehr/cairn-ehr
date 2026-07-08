@@ -80,7 +80,10 @@ mod tests {
     #[test]
     fn callsign_opens_with_the_unknown_prefix() {
         let c = callsign("ED", "site1", "2026-07-03", "A1B2");
-        assert!(c.starts_with("Unknown-"), "callsign must be an obvious placeholder: {c}");
+        assert!(
+            c.starts_with("Unknown-"),
+            "callsign must be an obvious placeholder: {c}"
+        );
     }
 
     #[test]
@@ -112,14 +115,20 @@ mod tests {
     fn distinct_suffixes_yield_distinct_callsigns() {
         let a = callsign("ED", "s", "2026-07-03", "aaaa");
         let b = callsign("ED", "s", "2026-07-03", "bbbb");
-        assert_ne!(a, b, "the suffix is what keeps two same-site same-day John Does distinct");
+        assert_ne!(
+            a, b,
+            "the suffix is what keeps two same-site same-day John Does distinct"
+        );
     }
 
     #[test]
     fn empty_or_separator_only_part_folds_to_a_stable_token_never_a_doubled_delimiter() {
         let c = callsign("", "  ", "2026-07-03", "a1");
         assert_eq!(c, "Unknown-unknown-unknown-2026-07-03-a1");
-        assert!(!c.contains("--"), "no empty segment / doubled delimiter: {c}");
+        assert!(
+            !c.contains("--"),
+            "no empty segment / doubled delimiter: {c}"
+        );
     }
 
     #[test]

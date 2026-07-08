@@ -408,8 +408,12 @@ mod tests {
         let self_ev = enroll(&self_k, "Self");
         let self_id = node_id(&self_ev);
         let attacker = sk();
-        let forged =
-            build_self_attestation(&attacker, &kid(&attacker), &self_id, std::slice::from_ref(&self_ev));
+        let forged = build_self_attestation(
+            &attacker,
+            &kid(&attacker),
+            &self_id,
+            std::slice::from_ref(&self_ev),
+        );
         let c = Container {
             self_marker: Some(SelfMarker::Signed(forged)),
             events: vec![self_ev],

@@ -1,6 +1,8 @@
-use cairn_event::{sign_pairing_bundle, verify_pairing_bundle, short_fingerprint, Hlc, PairingBundle, SigningKey};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use crate::identity::Identity;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use cairn_event::{
+    short_fingerprint, sign_pairing_bundle, verify_pairing_bundle, Hlc, PairingBundle, SigningKey,
+};
 
 /// Build a signed, base64-encoded pairing offer from this node's identity.
 pub fn make_offer(id: &Identity, sk: &SigningKey, nonce: &str) -> anyhow::Result<String> {
@@ -22,7 +24,11 @@ pub fn make_offer_for(
         address: address.into(),
         fingerprint: short_fingerprint(pubkey_hex)?,
         nonce: nonce.into(),
-        hlc: Hlc { wall: 0, counter: 0, node_origin: node_id_hex.into() },
+        hlc: Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: node_id_hex.into(),
+        },
     };
     Ok(STANDARD.encode(sign_pairing_bundle(&b, sk)?))
 }

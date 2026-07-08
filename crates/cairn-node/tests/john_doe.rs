@@ -11,7 +11,9 @@ use cairn_node::{db, john_doe};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-fn cs() -> Option<String> { std::env::var("CAIRN_TEST_PG").ok() }
+fn cs() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG").ok()
+}
 
 /// Truncate the clinical + identity tables and enroll one agent signer. Returns (sk, kid).
 /// `chart_identity_state` is created by db/024, so it is truncated behind a `to_regclass`
@@ -19,8 +21,10 @@ fn cs() -> Option<String> { std::env::var("CAIRN_TEST_PG").ok() }
 async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic, patient_name CASCADE")
-        .await.unwrap();
+         patient_demographic, patient_name CASCADE",
+    )
+    .await
+    .unwrap();
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.chart_identity_state') IS NOT NULL THEN TRUNCATE chart_identity_state; END IF; \
@@ -38,16 +42,24 @@ async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
 async fn trust_of(c: &Client, subject: Uuid) -> Option<String> {
     let s_s = subject.to_string();
     c.query_opt(
-        "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid", &[&s_s],
-    ).await.unwrap().map(|r| r.get::<_, String>(0))
+        "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid",
+        &[&s_s],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get::<_, String>(0))
 }
 
 /// The standing identity state of a chart (db/024 overlay), or None if no row exists.
 async fn identity_state(c: &Client, subject: Uuid) -> Option<String> {
     let s_s = subject.to_string();
     c.query_opt(
-        "SELECT state FROM chart_identity_state WHERE subject = $1::text::uuid", &[&s_s],
-    ).await.unwrap().map(|r| r.get::<_, String>(0))
+        "SELECT state FROM chart_identity_state WHERE subject = $1::text::uuid",
+        &[&s_s],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get::<_, String>(0))
 }
 
 /// The (use_key, value) of every retained name on a chart.
@@ -56,15 +68,24 @@ async fn names_of(c: &Client, subject: Uuid) -> Vec<(String, String)> {
     c.query(
         "SELECT use_key, value FROM patient_name WHERE patient_id = $1::text::uuid ORDER BY value",
         &[&s_s],
-    ).await.unwrap().iter().map(|r| (r.get(0), r.get(1))).collect()
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1)))
+    .collect()
 }
 
 /// The display-winner name for a chart (patient_name_current), or None.
 async fn current_name(c: &Client, subject: Uuid) -> Option<String> {
     let s_s = subject.to_string();
     c.query_opt(
-        "SELECT value FROM patient_name_current WHERE patient_id = $1::text::uuid", &[&s_s],
-    ).await.unwrap().map(|r| r.get::<_, String>(0))
+        "SELECT value FROM patient_name_current WHERE patient_id = $1::text::uuid",
+        &[&s_s],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get::<_, String>(0))
 }
 
 // --- registration behaviour ---
@@ -77,8 +98,17 @@ async fn register_john_doe_creates_an_unconfirmed_chart() {
     let (sk, kid) = setup(&c).await;
 
     let (pid, _call) = john_doe::register_john_doe(
-        &mut c, &sk, &kid, "n", "ED", "site1", "2026-07-03", "unconscious ED arrival, no ID",
-    ).await.expect("registration accepted by the floor");
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("registration accepted by the floor");
 
     // §5.4: identity-pending is an active workflow state → chart renders *unconfirmed*.
     assert_eq!(identity_state(&c, pid).await.as_deref(), Some("pending"));
@@ -93,8 +123,17 @@ async fn callsign_is_stored_as_a_placeholder_use_name_and_is_the_display_winner(
     let (sk, kid) = setup(&c).await;
 
     let (pid, call) = john_doe::register_john_doe(
-        &mut c, &sk, &kid, "n", "ED", "site1", "2026-07-03", "unconscious ED arrival, no ID",
-    ).await.unwrap();
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .unwrap();
 
     // The callsign lives in patient_name under the reserved 'callsign' use — that use is
     // what the advisory matcher excludes on, and it is what marks the name a placeholder.
@@ -103,7 +142,10 @@ async fn callsign_is_stored_as_a_placeholder_use_name_and_is_the_display_winner(
     // With no legal name, db/012's unidentified-patient fallback makes the callsign the
     // display winner — the chart header shows the obvious placeholder, never a fake name.
     assert_eq!(current_name(&c, pid).await.as_deref(), Some(call.as_str()));
-    assert!(call.starts_with("Unknown-"), "the header is an obvious placeholder: {call}");
+    assert!(
+        call.starts_with("Unknown-"),
+        "the header is an obvious placeholder: {call}"
+    );
 }
 
 #[tokio::test]
@@ -115,14 +157,35 @@ async fn two_john_does_coexist_as_distinct_pending_charts_with_distinct_callsign
 
     // Same site, same day — the partition-safe suffix must still keep them apart.
     let (p1, c1) = john_doe::register_john_doe(
-        &mut c, &sk, &kid, "n", "ED", "site1", "2026-07-03", "unconscious, no ID",
-    ).await.unwrap();
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious, no ID",
+    )
+    .await
+    .unwrap();
     let (p2, c2) = john_doe::register_john_doe(
-        &mut c, &sk, &kid, "n", "ED", "site1", "2026-07-03", "unresponsive trauma, no ID",
-    ).await.unwrap();
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unresponsive trauma, no ID",
+    )
+    .await
+    .unwrap();
 
     assert_ne!(p1, p2, "distinct UUIDs");
-    assert_ne!(c1, c2, "distinct callsigns even at same site/day (suffix disambiguates)");
+    assert_ne!(
+        c1, c2,
+        "distinct callsigns even at same site/day (suffix disambiguates)"
+    );
     assert_eq!(trust_of(&c, p1).await.as_deref(), Some("unconfirmed"));
     assert_eq!(trust_of(&c, p2).await.as_deref(), Some("unconfirmed"));
 }

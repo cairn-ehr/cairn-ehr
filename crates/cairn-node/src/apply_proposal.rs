@@ -41,7 +41,12 @@ pub fn build_attested_link_body(
 ) -> EventBody {
     let low_s = low.to_string();
     let high_s = high.to_string();
-    let la = LinkAssertion { subject_a: &low_s, subject_b: &high_s, provenance, confidence };
+    let la = LinkAssertion {
+        subject_a: &low_s,
+        subject_b: &high_s,
+        provenance,
+        confidence,
+    };
     EventBody {
         event_id: event_id.to_string(),
         patient_id: low_s.clone(), // C1 convention: an identity event is "about" subject_a
@@ -94,7 +99,11 @@ pub async fn apply_accepted_proposal(
     // `CHECK (patient_low < patient_high)` storage regardless of the order the caller
     // supplied. `build_attested_link_body` then also receives the canonical pair
     // (subject_a := low), matching the C1 edge overlay's canonical (low, high) key.
-    let (low, high) = if low <= high { (low, high) } else { (high, low) };
+    let (low, high) = if low <= high {
+        (low, high)
+    } else {
+        (high, low)
+    };
 
     // Text-cast the UUIDs at the binding boundary: this crate's `uuid` dependency has no
     // `postgres`/`with-uuid-1` feature enabled, so `Uuid` does not implement `ToSql` here.
@@ -119,7 +128,9 @@ pub async fn apply_accepted_proposal(
     let status: String = row.get(2);
     if status != "accepted" {
         // Rolls back on drop; nothing was written.
-        anyhow::bail!("match_proposal ({low}, {high}) is '{status}', not 'accepted' — refusing to apply");
+        anyhow::bail!(
+            "match_proposal ({low}, {high}) is '{status}', not 'accepted' — refusing to apply"
+        );
     }
 
     // 2. Compose provenance + confidence and build the attested link body.
@@ -127,7 +138,13 @@ pub async fn apply_accepted_proposal(
     let confidence = format!("{score:.3}");
     let event_id = Uuid::now_v7();
     let body = build_attested_link_body(
-        event_id, low, high, &provenance, Some(&confidence), human_kid, hlc,
+        event_id,
+        low,
+        high,
+        &provenance,
+        Some(&confidence),
+        human_kid,
+        hlc,
     );
 
     // 3. Sign (human authors) + mint an attestation token (human vouches).
@@ -182,22 +199,52 @@ mod tests {
     #[test]
     fn body_carries_responsibility_bearing_human_contributor() {
         let (eid, a, b) = ids();
-        let body = build_attested_link_body(eid, a, b, "matcher:x accepted-by:h", None, "h", Hlc { wall: 5, counter: 0, node_origin: "n".into() });
+        let body = build_attested_link_body(
+            eid,
+            a,
+            b,
+            "matcher:x accepted-by:h",
+            None,
+            "h",
+            Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+        );
         let c = &body.contributors[0];
         assert_eq!(c["actor_id"], "h");
         assert_eq!(c["role"], "attested");
-        assert!(c.get("responsibility").is_some(), "must carry a responsibility marker to trip the attestation gate");
+        assert!(
+            c.get("responsibility").is_some(),
+            "must carry a responsibility marker to trip the attestation gate"
+        );
     }
 
     #[test]
     fn body_is_a_link_event_with_authored_twin_and_canonical_subjects() {
         let (eid, a, b) = ids();
-        let body = build_attested_link_body(eid, a, b, "matcher:x accepted-by:h", Some("0.910"), "h", Hlc { wall: 5, counter: 0, node_origin: "n".into() });
+        let body = build_attested_link_body(
+            eid,
+            a,
+            b,
+            "matcher:x accepted-by:h",
+            Some("0.910"),
+            "h",
+            Hlc {
+                wall: 5,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+        );
         assert_eq!(body.event_type, "identity.link.asserted");
         assert_eq!(body.payload["subject_a"], a.to_string());
         assert_eq!(body.payload["subject_b"], b.to_string());
         assert_eq!(body.payload["confidence"], "0.910");
         let twin = body.plaintext_twin.as_deref().unwrap();
-        assert!(twin.starts_with("link: "), "authored twin required by the db/018 floor");
+        assert!(
+            twin.starts_with("link: "),
+            "authored twin required by the db/018 floor"
+        );
     }
 }

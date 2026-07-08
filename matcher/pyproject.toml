@@ -19,7 +19,7 @@ Homepage = "https://cairn-ehr.org"
 Repository = "https://github.com/cairn-ehr/cairn-ehr"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.13"]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,3 +33,17 @@ pipeline = ["psycopg[binary]>=3.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# The linting contract the matcher CI enforces. This is ruff's DEFAULT rule set stated
+# explicitly, so a ruff version bump can never silently change what "clean" means: pyflakes
+# (F — unused imports/names, real bugs) plus the curated pycodestyle subset (E4 imports,
+# E7 statements, E9 syntax). The code is already clean under it.
+#
+# Deliberately NOT yet enabled: import-sorting (I), pyupgrade (UP), bugbear (B), and line
+# length (E5). Turning them on surfaces ~30 mechanical fixes across src/ + tests/ — a separate
+# quality pass, kept out of this infrastructure change so the gate lands green and reviewable.
+select = ["E4", "E7", "E9", "F"]

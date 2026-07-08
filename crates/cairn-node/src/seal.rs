@@ -95,10 +95,14 @@ const MAGIC: &[u8] = b"CAIRNK1\n";
 
 #[derive(thiserror::Error, Debug)]
 pub enum SealError {
-    #[error("kdf: {0}")] Kdf(String),
-    #[error("aead")] Aead,
-    #[error("entropy: {0}")] Entropy(String),
-    #[error("decode: {0}")] Decode(String),
+    #[error("kdf: {0}")]
+    Kdf(String),
+    #[error("aead")]
+    Aead,
+    #[error("entropy: {0}")]
+    Entropy(String),
+    #[error("decode: {0}")]
+    Decode(String),
 }
 
 /// One AEAD-wrapped copy of the Data Encryption Key under a single secret's KEK.
@@ -121,7 +125,11 @@ impl Default for ArgonParams {
     fn default() -> Self {
         // RustCrypto Argon2 defaults: 19 MiB, 2 passes, 1 lane. Adequate for an
         // at-rest key wrap; tunable later without breaking old files (params are in-file).
-        Self { m_cost: 19_456, t_cost: 2, p_cost: 1 }
+        Self {
+            m_cost: 19_456,
+            t_cost: 2,
+            p_cost: 1,
+        }
     }
 }
 
@@ -173,22 +181,32 @@ pub(crate) fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
 /// Derive a 32-byte key-encryption-key from a secret + salt via Argon2id. The KEK is
 /// returned wrapped in `Zeroizing` so it is wiped once the caller (a wrap/unwrap step)
 /// is done with it — the memory-hard-derived KEK is the juiciest target in this module.
-fn derive_kek(secret: &str, salt: &[u8; 16], p: &ArgonParams)
-    -> Result<Zeroizing<[u8; 32]>, SealError> {
+fn derive_kek(
+    secret: &str,
+    salt: &[u8; 16],
+    p: &ArgonParams,
+) -> Result<Zeroizing<[u8; 32]>, SealError> {
     let params = Params::new(p.m_cost, p.t_cost, p.p_cost, Some(32))
         .map_err(|e| SealError::Kdf(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     // Derive directly into the zeroizing buffer (`&mut *kek` is the inner `&mut [u8; 32]`),
     // so the only copy of the KEK lives inside the wrapper that wipes it.
     let mut kek = Zeroizing::new([0u8; 32]);
-    argon.hash_password_into(secret.as_bytes(), salt, &mut *kek)
+    argon
+        .hash_password_into(secret.as_bytes(), salt, &mut *kek)
         .map_err(|e| SealError::Kdf(e.to_string()))?;
     Ok(kek)
 }
 
-pub(crate) fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], pt: &[u8]) -> Result<Vec<u8>, SealError> {
+pub(crate) fn aead_encrypt(
+    key: &[u8; 32],
+    nonce: &[u8; 24],
+    pt: &[u8],
+) -> Result<Vec<u8>, SealError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    cipher.encrypt(XNonce::from_slice(nonce), pt).map_err(|_| SealError::Aead)
+    cipher
+        .encrypt(XNonce::from_slice(nonce), pt)
+        .map_err(|_| SealError::Aead)
 }
 
 pub(crate) fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
@@ -215,16 +233,24 @@ fn key_into_zeroizing(bytes: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
 
 /// Wrap one DEK copy under a secret. The recovery code is normalized first so any
 /// spacing/case the human re-types still derives the same KEK.
-pub(crate) fn wrap_dek(dek: &[u8; 32], secret: &str, salt: &[u8; 16], p: &ArgonParams)
-    -> Result<Wrap, SealError> {
+pub(crate) fn wrap_dek(
+    dek: &[u8; 32],
+    secret: &str,
+    salt: &[u8; 16],
+    p: &ArgonParams,
+) -> Result<Wrap, SealError> {
     let kek = derive_kek(secret, salt, p)?;
     let nonce = rand_bytes::<24>()?;
     let ct = aead_encrypt(&kek, &nonce, dek)?;
     Ok(Wrap { nonce, ct })
 }
 
-pub(crate) fn try_unwrap(w: &Wrap, secret: &str, salt: &[u8; 16], p: &ArgonParams)
-    -> Option<Zeroizing<[u8; 32]>> {
+pub(crate) fn try_unwrap(
+    w: &Wrap,
+    secret: &str,
+    salt: &[u8; 16],
+    p: &ArgonParams,
+) -> Option<Zeroizing<[u8; 32]>> {
     let kek = derive_kek(secret, salt, p).ok()?;
     // Hold the decrypted bytes in `Zeroizing` so the plaintext DEK on the heap is wiped,
     // then copy straight into a zeroizing fixed-size array (no bare `[u8;32]` intermediate).
@@ -244,9 +270,21 @@ pub fn seal(seed: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<Seale
     let salt_rec = rand_bytes::<16>()?;
     let wrap_op = wrap_dek(&dek, op_pass, &salt_op, &argon)?;
     // Normalize the recovery code so re-typing with different spacing/case unseals.
-    let wrap_rec = wrap_dek(&dek, &normalize_recovery_code(recovery_code), &salt_rec, &argon)?;
+    let wrap_rec = wrap_dek(
+        &dek,
+        &normalize_recovery_code(recovery_code),
+        &salt_rec,
+        &argon,
+    )?;
     Ok(SealedKey {
-        version: 1, argon, salt_op, salt_rec, seed_nonce, seed_ct, wrap_op, wrap_rec,
+        version: 1,
+        argon,
+        salt_op,
+        salt_rec,
+        seed_nonce,
+        seed_ct,
+        wrap_op,
+        wrap_rec,
     })
 }
 
@@ -266,7 +304,12 @@ pub fn unseal_op(s: &SealedKey, op_pass: &str) -> Option<Zeroizing<[u8; 32]>> {
 /// Recover the seed via ONLY the recovery-code recipient: exactly one Argon2
 /// derivation. The code is normalized first so any spacing/case unseals.
 pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<Zeroizing<[u8; 32]>> {
-    let dek = try_unwrap(&s.wrap_rec, &normalize_recovery_code(recovery_code), &s.salt_rec, &s.argon)?;
+    let dek = try_unwrap(
+        &s.wrap_rec,
+        &normalize_recovery_code(recovery_code),
+        &s.salt_rec,
+        &s.argon,
+    )?;
     let seed = Zeroizing::new(aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?);
     key_into_zeroizing(&seed)
 }
@@ -292,7 +335,8 @@ pub fn to_cbor(s: &SealedKey) -> Vec<u8> {
 /// Parse magic-prefixed CBOR bytes. Errors (not panics) on a missing magic header
 /// or malformed body — so `keystore::load` can fall through to the plaintext path.
 pub fn from_cbor(bytes: &[u8]) -> Result<SealedKey, SealError> {
-    let body = bytes.strip_prefix(MAGIC)
+    let body = bytes
+        .strip_prefix(MAGIC)
         .ok_or_else(|| SealError::Decode("missing CAIRNK1 magic".into()))?;
     ciborium::from_reader(body).map_err(|e| SealError::Decode(e.to_string()))
 }
@@ -376,7 +420,11 @@ mod tests {
     #[test]
     fn tampered_fields_return_none() {
         let base = seal(&SEED, "op-pass", "REC-CODE").unwrap();
-        let mutate = |f: fn(&mut SealedKey)| { let mut s = base.clone(); f(&mut s); s };
+        let mutate = |f: fn(&mut SealedKey)| {
+            let mut s = base.clone();
+            f(&mut s);
+            s
+        };
         // Flipping a byte in any ciphertext, salt, or nonce must fail the AEAD tag.
         assert!(unseal(&mutate(|s| s.seed_ct[0] ^= 1), "op-pass").is_none());
         assert!(unseal(&mutate(|s| s.wrap_op.ct[0] ^= 1), "op-pass").is_none());
@@ -409,18 +457,30 @@ mod tests {
         // A partial write that truncates the recovery wrap must report NO escrow, so
         // `status` never tells an operator the off-node code is good when it isn't.
         let mut s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
-        assert!(s.has_recovery_wrap(), "a freshly sealed key has an intact recovery wrap");
+        assert!(
+            s.has_recovery_wrap(),
+            "a freshly sealed key has an intact recovery wrap"
+        );
         s.wrap_rec.ct.truncate(WRAPPED_DEK_LEN - 1);
-        assert!(!s.has_recovery_wrap(), "a truncated recovery wrap is not an escrow");
+        assert!(
+            !s.has_recovery_wrap(),
+            "a truncated recovery wrap is not an escrow"
+        );
         s.wrap_rec.ct.clear();
-        assert!(!s.has_recovery_wrap(), "an empty recovery wrap is not an escrow");
+        assert!(
+            !s.has_recovery_wrap(),
+            "an empty recovery wrap is not an escrow"
+        );
     }
 
     #[test]
     fn cbor_roundtrips_and_has_magic() {
         let s = seal(&SEED, "op-pass", "REC-CODE").unwrap();
         let bytes = to_cbor(&s);
-        assert!(bytes.starts_with(b"CAIRNK1\n"), "magic header must be present");
+        assert!(
+            bytes.starts_with(b"CAIRNK1\n"),
+            "magic header must be present"
+        );
         let back = from_cbor(&bytes).unwrap();
         assert_eq!(unseal(&back, "op-pass").as_deref(), Some(&SEED));
         assert!(back.has_recovery_wrap());
@@ -429,15 +489,27 @@ mod tests {
     #[test]
     fn from_cbor_rejects_garbage_and_plaintext() {
         assert!(from_cbor(b"not a sealed bundle").is_err());
-        assert!(from_cbor(&[0u8; 32]).is_err(), "a raw 32-byte seed is not a bundle");
+        assert!(
+            from_cbor(&[0u8; 32]).is_err(),
+            "a raw 32-byte seed is not a bundle"
+        );
     }
 
     #[test]
     fn base32_roundtrips_arbitrary_bytes() {
-        for v in [vec![], vec![0u8], vec![0xff; 20], (0u8..=255).collect::<Vec<_>>()] {
+        for v in [
+            vec![],
+            vec![0u8],
+            vec![0xff; 20],
+            (0u8..=255).collect::<Vec<_>>(),
+        ] {
             let enc = base32_encode(&v);
-            assert_eq!(base32_decode(&enc).as_deref(), Some(v.as_slice()),
-                       "roundtrip failed for {} bytes", v.len());
+            assert_eq!(
+                base32_decode(&enc).as_deref(),
+                Some(v.as_slice()),
+                "roundtrip failed for {} bytes",
+                v.len()
+            );
         }
     }
 
@@ -464,6 +536,9 @@ mod tests {
         let b = generate_recovery_code();
         assert_ne!(a, b, "two codes must differ (entropy smoke test)");
         // Decodes to exactly 20 bytes (160 bits).
-        assert_eq!(base32_decode(&normalize_recovery_code(&a)).map(|v| v.len()), Some(20));
+        assert_eq!(
+            base32_decode(&normalize_recovery_code(&a)).map(|v| v.len()),
+            Some(20)
+        );
     }
 }

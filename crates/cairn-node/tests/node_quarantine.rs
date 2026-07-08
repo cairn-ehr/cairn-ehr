@@ -43,7 +43,9 @@ async fn self_node(base: &str, listen_addr: &str) -> SelfNode {
     db::reset_node_federation_tables(&a).await.ok();
     let tmp = tempfile::tempdir().unwrap();
     let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
-    identity::provision(&a, &sk, &kid, "A", listen_addr).await.unwrap();
+    identity::provision(&a, &sk, &kid, "A", listen_addr)
+        .await
+        .unwrap();
     let id = identity::load_local(&a).await.unwrap();
     // Self-peer so the mutual-mTLS handshake pins A's own key as trusted.
     let self_bundle = cairn_event::PairingBundle {
@@ -52,7 +54,11 @@ async fn self_node(base: &str, listen_addr: &str) -> SelfNode {
         address: listen_addr.into(),
         fingerprint: cairn_event::short_fingerprint(&id.pubkey_hex).unwrap(),
         nonce: "n".into(),
-        hlc: cairn_event::Hlc { wall: 0, counter: 0, node_origin: id.node_id_hex.clone() },
+        hlc: cairn_event::Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: id.node_id_hex.clone(),
+        },
     };
     identity::author_peer(&a, &sk, &kid, &id.node_id_hex, &self_bundle, Some("peer"))
         .await
@@ -61,7 +67,13 @@ async fn self_node(base: &str, listen_addr: &str) -> SelfNode {
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let (addr, serve_cfg) = sync::bind_serve(listen, base, &sk, trust).await.unwrap();
     let serve = tokio::spawn(sync::serve(serve_cfg));
-    SelfNode { a, addr, serve, sk, _tmp: tmp }
+    SelfNode {
+        a,
+        addr,
+        serve,
+        sk,
+        _tmp: tmp,
+    }
 }
 
 /// Raw-insert an UNVERIFIABLE node_event into A's log (owner privilege bypasses
@@ -105,13 +117,18 @@ async fn unverifiable_node_event_is_penned_loudly_and_dedupes_on_reoffer() {
         .await
         .unwrap();
     let s1 = sync::pull_once(n.addr, cfg, true).await.unwrap();
-    assert_eq!(s1.quarantined, 1, "the unverifiable event was quarantined this cycle");
-    assert!(s1.pending >= 1, "an unacked pen makes the pull report a LOUD pending count");
+    assert_eq!(
+        s1.quarantined, 1,
+        "the unverifiable event was quarantined this cycle"
+    );
+    assert!(
+        s1.pending >= 1,
+        "an unacked pen makes the pull report a LOUD pending count"
+    );
     assert_eq!(pen_count(&n.a).await, 1, "exactly one durable pen row");
 
-    let row = n
-        .a
-        .query_one(
+    let row =
+        n.a.query_one(
             "SELECT peer, refused_seq, reason, seen_count, acked
                FROM node_event_quarantine
               WHERE content_digest = '\\x1220'::bytea || digest($1::bytea, 'sha256')",
@@ -123,8 +140,14 @@ async fn unverifiable_node_event_is_penned_loudly_and_dedupes_on_reoffer() {
     let reason: String = row.get(2);
     let seen_count: i32 = row.get(3);
     let acked: bool = row.get(4);
-    assert_eq!(refused_seq, corrupt_seq, "the serving seq is recorded (the re-offer floor)");
-    assert!(!reason.trim().is_empty(), "a legible refusal reason is stored");
+    assert_eq!(
+        refused_seq, corrupt_seq,
+        "the serving seq is recorded (the re-offer floor)"
+    );
+    assert!(
+        !reason.trim().is_empty(),
+        "a legible refusal reason is stored"
+    );
     assert_eq!(seen_count, 1, "first offer");
     assert!(!acked, "a fresh pen is unacked");
 
@@ -135,10 +158,13 @@ async fn unverifiable_node_event_is_penned_loudly_and_dedupes_on_reoffer() {
         .unwrap();
     let s2 = sync::pull_once(n.addr, cfg2, true).await.unwrap();
     assert!(s2.pending >= 1, "still loud until resolved or acked");
-    assert_eq!(pen_count(&n.a).await, 1, "re-offer dedupes onto the one row");
-    let seen_count2: i32 = n
-        .a
-        .query_one(
+    assert_eq!(
+        pen_count(&n.a).await,
+        1,
+        "re-offer dedupes onto the one row"
+    );
+    let seen_count2: i32 =
+        n.a.query_one(
             "SELECT seen_count FROM node_event_quarantine
               WHERE content_digest = '\\x1220'::bytea || digest($1::bytea, 'sha256')",
             &[&BAD.to_vec()],
@@ -146,7 +172,10 @@ async fn unverifiable_node_event_is_penned_loudly_and_dedupes_on_reoffer() {
         .await
         .unwrap()
         .get(0);
-    assert!(seen_count2 > 1, "seen_count bumped on re-offer, got {seen_count2}");
+    assert!(
+        seen_count2 > 1,
+        "seen_count bumped on re-offer, got {seen_count2}"
+    );
 
     n.serve.abort();
 }
@@ -167,9 +196,8 @@ async fn the_derived_floor_reoffers_a_penned_event_on_an_incremental_pull() {
         .unwrap();
     let s1 = sync::pull_once(n.addr, cfg, true).await.unwrap();
     assert_eq!(s1.quarantined, 1, "penned on the first sweep");
-    let seen1: i32 = n
-        .a
-        .query_one(
+    let seen1: i32 =
+        n.a.query_one(
             "SELECT seen_count FROM node_event_quarantine
               WHERE content_digest = '\\x1220'::bytea || digest($1::bytea, 'sha256')",
             &[&BAD.to_vec()],
@@ -186,11 +214,13 @@ async fn the_derived_floor_reoffers_a_penned_event_on_an_incremental_pull() {
         .await
         .unwrap();
     let s2 = sync::pull_once(n.addr, cfg2, false).await.unwrap();
-    assert!(s2.received >= 1, "the incremental pull re-received the penned slot via the floor");
+    assert!(
+        s2.received >= 1,
+        "the incremental pull re-received the penned slot via the floor"
+    );
     assert!(s2.pending >= 1, "still loud");
-    let seen2: i32 = n
-        .a
-        .query_one(
+    let seen2: i32 =
+        n.a.query_one(
             "SELECT seen_count FROM node_event_quarantine
               WHERE content_digest = '\\x1220'::bytea || digest($1::bytea, 'sha256')",
             &[&BAD.to_vec()],
@@ -198,7 +228,10 @@ async fn the_derived_floor_reoffers_a_penned_event_on_an_incremental_pull() {
         .await
         .unwrap()
         .get(0);
-    assert!(seen2 > seen1, "incremental re-offer bumped seen_count ({seen1} -> {seen2})");
+    assert!(
+        seen2 > seen1,
+        "incremental re-offer bumped seen_count ({seen1} -> {seen2})"
+    );
 
     n.serve.abort();
 }
@@ -235,7 +268,11 @@ async fn acking_a_pen_row_silences_the_loud_pull() {
         .unwrap();
     let s2 = sync::pull_once(n.addr, cfg2, true).await.unwrap();
     assert_eq!(s2.pending, 0, "an acked pen no longer makes the pull loud");
-    assert_eq!(pen_count(&n.a).await, 1, "the acked row is retained as the recorded decision");
+    assert_eq!(
+        pen_count(&n.a).await,
+        1,
+        "the acked row is retained as the recorded decision"
+    );
 
     n.serve.abort();
 }
@@ -272,21 +309,33 @@ async fn a_penned_event_that_now_applies_is_auto_released() {
     )
     .await
     .unwrap();
-    assert_eq!(pen_count(&n.a).await, 1, "the stale pen row is present before the pull");
+    assert_eq!(
+        pen_count(&n.a).await,
+        1,
+        "the stale pen row is present before the pull"
+    );
 
     let cfg = sync::client_config(&base, &n.sk, sync::trust_store_from_db(&n.a).await.unwrap())
         .await
         .unwrap();
     let s = sync::pull_once(n.addr, cfg, true).await.unwrap();
-    assert_eq!(s.pending, 0, "no unacked pen remains after the event applied");
+    assert_eq!(
+        s.pending, 0,
+        "no unacked pen remains after the event applied"
+    );
 
-    let still_there: i64 = n
-        .a
-        .query_one("SELECT count(*) FROM node_event_quarantine WHERE content_digest = $1", &[&digest])
+    let still_there: i64 =
+        n.a.query_one(
+            "SELECT count(*) FROM node_event_quarantine WHERE content_digest = $1",
+            &[&digest],
+        )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(still_there, 0, "a penned event that now applies is auto-released (deleted)");
+    assert_eq!(
+        still_there, 0,
+        "a penned event that now applies is auto-released (deleted)"
+    );
 
     n.serve.abort();
 }
@@ -311,8 +360,14 @@ async fn list_and_ack_quarantine_helpers_drive_the_cli_surface() {
     let r = &rows[0];
     let digest = r["digest"].as_str().expect("digest is hex text");
     assert!(!digest.is_empty(), "digest present");
-    assert!(r["refused_seq"].as_i64().unwrap() >= 1, "refused_seq recorded");
-    assert!(!r["reason"].as_str().unwrap().trim().is_empty(), "legible reason");
+    assert!(
+        r["refused_seq"].as_i64().unwrap() >= 1,
+        "refused_seq recorded"
+    );
+    assert!(
+        !r["reason"].as_str().unwrap().trim().is_empty(),
+        "legible reason"
+    );
     assert_eq!(r["acked"], serde_json::json!(false), "fresh pen is unacked");
 
     // An unknown-but-valid-hex digest acks nothing (0 rows) — the CLI reports "no such digest".
@@ -334,7 +389,11 @@ async fn list_and_ack_quarantine_helpers_drive_the_cli_surface() {
         "acking the listed digest updates its row"
     );
     let after = sync::list_node_quarantine(&n.a).await.unwrap();
-    assert_eq!(after[0]["acked"], serde_json::json!(true), "the row now reads acked");
+    assert_eq!(
+        after[0]["acked"],
+        serde_json::json!(true),
+        "the row now reads acked"
+    );
 
     n.serve.abort();
 }
@@ -360,7 +419,11 @@ async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
         patient_id: uuid::Uuid::now_v7().to_string(),
         event_type: "note.added".into(),
         schema_version: "note/1".into(),
-        hlc: Hlc { wall: 1, counter: 0, node_origin: "stranger".into() },
+        hlc: Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "stranger".into(),
+        },
         t_effective: None,
         signer_key_id: kid.clone(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
@@ -386,10 +449,18 @@ async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
         .await
         .unwrap();
     let s = sync::pull_once(n.addr, cfg, true).await.unwrap();
-    assert!(s.rejected >= 1, "the unknown-type event was refused (deny-all), got {}", s.rejected);
+    assert!(
+        s.rejected >= 1,
+        "the unknown-type event was refused (deny-all), got {}",
+        s.rejected
+    );
     assert_eq!(s.quarantined, 0, "a verifiable refusal is NOT penned");
     assert_eq!(s.pending, 0, "no unacked pen ⇒ the pull is not loud");
-    assert_eq!(pen_count(&n.a).await, 0, "the pen stays empty for a self-healing refusal");
+    assert_eq!(
+        pen_count(&n.a).await,
+        0,
+        "the pen stays empty for a self-healing refusal"
+    );
 
     n.serve.abort();
 }

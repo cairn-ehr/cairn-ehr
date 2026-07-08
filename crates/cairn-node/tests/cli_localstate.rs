@@ -95,7 +95,9 @@ async fn backup_degrades_when_the_export_cannot_be_sealed() {
     let a = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&a).await.ok();
     let (sk, kid) = keystore::generate_plaintext(&key).unwrap();
-    identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7912").await.unwrap();
+    identity::provision(&a, &sk, &kid, "A", "127.0.0.1:7912")
+        .await
+        .unwrap();
     write_existing_escrow(&key, "right-op", "RIGHT-CODE");
 
     let medium = dir.path().join("cairn.medium");
@@ -115,7 +117,10 @@ async fn backup_degrades_when_the_export_cannot_be_sealed() {
         "backup must exit 0 even when the optional export can't be sealed; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(medium.exists(), "the event medium (load-bearing copy) must be written");
+    assert!(
+        medium.exists(),
+        "the event medium (load-bearing copy) must be written"
+    );
     assert!(
         !cairn_node::localstate::localstate_path_for(&medium).exists(),
         "a failed seal must NOT leave a partial export sibling"

@@ -9,9 +9,9 @@ use serde_json::{json, Value};
 /// rejected by the in-DB floor (db/010), so a caller materialising a normalized
 /// form must also name the profile that produced it (the §4.4 materialised-key rule).
 pub struct IdentifierAssertion<'a> {
-    pub value: &'a str,      // §4.4 mandatory — as-entered, never rewritten
-    pub system: &'a str,     // §4.4 mandatory — stable namespace (or the literal "unknown")
-    pub provenance: &'a str, // §4.1 provenance ladder — required-present, value-open
+    pub value: &'a str,              // §4.4 mandatory — as-entered, never rewritten
+    pub system: &'a str,             // §4.4 mandatory — stable namespace (or the literal "unknown")
+    pub provenance: &'a str,         // §4.1 provenance ladder — required-present, value-open
     pub normalized: Option<&'a str>, // §4.4 — materialised matching key when a profile is present
     pub profile: Option<&'a str>,    // §4.4 — namespace@hash validator-bundle reference
     pub use_: Option<&'a str>,       // §4.4 — recommended-but-open use/type vocabulary
@@ -28,9 +28,15 @@ pub fn identifier_assertion_body(a: &IdentifierAssertion) -> Value {
         "system": a.system,
     });
     let obj = p.as_object_mut().expect("json! built an object");
-    if let Some(n) = a.normalized { obj.insert("normalized".into(), json!(n)); }
-    if let Some(pr) = a.profile   { obj.insert("profile".into(),    json!(pr)); }
-    if let Some(u) = a.use_       { obj.insert("use".into(),        json!(u)); }
+    if let Some(n) = a.normalized {
+        obj.insert("normalized".into(), json!(n));
+    }
+    if let Some(pr) = a.profile {
+        obj.insert("profile".into(), json!(pr));
+    }
+    if let Some(u) = a.use_ {
+        obj.insert("use".into(), json!(u));
+    }
     p
 }
 
@@ -46,11 +52,16 @@ pub fn render_identifier_twin(a: &IdentifierAssertion) -> String {
 /// `facets` is an optional per-field bag (DOB's precision/basis), omitted entirely
 /// when absent so the in-DB floor's key-presence checks see exactly what was asserted.
 pub fn demographic_field_body(
-    field: &str, value: &str, facets: Option<Value>, provenance: &str,
+    field: &str,
+    value: &str,
+    facets: Option<Value>,
+    provenance: &str,
 ) -> Value {
     let mut p = json!({ "field": field, "provenance": provenance, "value": value });
     let obj = p.as_object_mut().expect("json! built an object");
-    if let Some(f) = facets { obj.insert("facets".into(), f); }
+    if let Some(f) = facets {
+        obj.insert("facets".into(), f);
+    }
     p
 }
 
@@ -58,11 +69,17 @@ pub fn demographic_field_body(
 /// must declare how precise it is; the in-DB floor rejects a dob with no precision).
 /// `basis` (how the date was derived) is optional and omitted when `None`.
 pub fn dob_assertion_body(
-    value: &str, precision: &str, basis: Option<&str>, provenance: &str,
+    value: &str,
+    precision: &str,
+    basis: Option<&str>,
+    provenance: &str,
 ) -> Value {
     let mut facets = json!({ "precision": precision });
     if let Some(b) = basis {
-        facets.as_object_mut().expect("json! built an object").insert("basis".into(), json!(b));
+        facets
+            .as_object_mut()
+            .expect("json! built an object")
+            .insert("basis".into(), json!(b));
     }
     demographic_field_body("dob", value, Some(facets), provenance)
 }
@@ -179,16 +196,26 @@ pub fn address_assertion_body(a: &AddressAssertion) -> Value {
         facets.insert("use".into(), json!(u));
     }
     if let Some(g) = &a.geo {
-        facets.insert("geo".into(), json!({
-            "lat": g.lat, "lon": g.lon, "accuracy_m": g.accuracy_m, "basis": g.basis,
-        }));
+        facets.insert(
+            "geo".into(),
+            json!({
+                "lat": g.lat, "lon": g.lon, "accuracy_m": g.accuracy_m, "basis": g.basis,
+            }),
+        );
     }
     if let Some(s) = &a.structured {
-        facets.insert("structured".into(), json!({
-            "profile": s.profile, "parts": s.parts,
-        }));
+        facets.insert(
+            "structured".into(),
+            json!({
+                "profile": s.profile, "parts": s.parts,
+            }),
+        );
     }
-    let facets = if facets.is_empty() { None } else { Some(Value::Object(facets)) };
+    let facets = if facets.is_empty() {
+        None
+    } else {
+        Some(Value::Object(facets))
+    };
     demographic_field_body("address", a.display, facets, a.provenance)
 }
 
@@ -207,9 +234,11 @@ mod tests {
 
     fn sample() -> IdentifierAssertion<'static> {
         IdentifierAssertion {
-            value: "943 476 5919", system: "nhs-number",
+            value: "943 476 5919",
+            system: "nhs-number",
             provenance: "document-verified",
-            normalized: Some("9434765919"), profile: Some("nhs-number@b3-abc"),
+            normalized: Some("9434765919"),
+            profile: Some("nhs-number@b3-abc"),
             use_: Some("national-id"),
         }
     }
@@ -229,12 +258,19 @@ mod tests {
     #[test]
     fn body_omits_absent_optional_facets_never_null() {
         let a = IdentifierAssertion {
-            value: "X1", system: "unknown", provenance: "patient-stated",
-            normalized: None, profile: None, use_: None,
+            value: "X1",
+            system: "unknown",
+            provenance: "patient-stated",
+            normalized: None,
+            profile: None,
+            use_: None,
         };
         let v = identifier_assertion_body(&a);
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("normalized"), "absent facet must be omitted, not null");
+        assert!(
+            !obj.contains_key("normalized"),
+            "absent facet must be omitted, not null"
+        );
         assert!(!obj.contains_key("profile"));
         assert!(!obj.contains_key("use"));
     }
@@ -262,7 +298,10 @@ mod tests {
         let v = dob_assertion_body("1980", "year", None, "patient-stated");
         assert_eq!(v["facets"]["precision"], "year");
         let facets = v["facets"].as_object().unwrap();
-        assert!(!facets.contains_key("basis"), "absent basis must be omitted, not null");
+        assert!(
+            !facets.contains_key("basis"),
+            "absent basis must be omitted, not null"
+        );
     }
 
     #[test]
@@ -272,7 +311,10 @@ mod tests {
         assert_eq!(v["value"], "female");
         assert_eq!(v["provenance"], "clinician-observed");
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("facets"), "sex-at-birth carries no facets bag");
+        assert!(
+            !obj.contains_key("facets"),
+            "sex-at-birth carries no facets bag"
+        );
     }
 
     #[test]
@@ -302,7 +344,10 @@ mod tests {
         assert_eq!(v["field"], "name");
         assert_eq!(v["value"], "Ronaldinho");
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("facets"), "absent use carries no facets bag, never null");
+        assert!(
+            !obj.contains_key("facets"),
+            "absent use carries no facets bag, never null"
+        );
     }
 
     #[test]
@@ -324,7 +369,10 @@ mod tests {
         assert_eq!(v["value"], "M");
         assert_eq!(v["provenance"], "document-verified");
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("facets"), "administrative-sex carries no facets bag");
+        assert!(
+            !obj.contains_key("facets"),
+            "administrative-sex carries no facets bag"
+        );
     }
 
     #[test]
@@ -334,7 +382,10 @@ mod tests {
         assert_eq!(v["value"], "non-binary");
         assert_eq!(v["provenance"], "patient-stated");
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("facets"), "gender-identity carries no facets bag");
+        assert!(
+            !obj.contains_key("facets"),
+            "gender-identity carries no facets bag"
+        );
     }
 
     #[test]
@@ -354,7 +405,12 @@ mod tests {
             display: "12 Main St, Springfield",
             provenance: "patient-stated",
             use_: Some("residential"),
-            geo: Some(Geo { lat: -33.87, lon: 151.21, accuracy_m: 10.0, basis: "device_gps" }),
+            geo: Some(Geo {
+                lat: -33.87,
+                lon: 151.21,
+                accuracy_m: 10.0,
+                basis: "device_gps",
+            }),
             structured: Some(StructuredAddress {
                 profile: "au-address@b3-xyz",
                 parts: json!({ "street": "12 Main St", "town": "Springfield", "country": "AU" }),
@@ -382,13 +438,18 @@ mod tests {
         let a = AddressAssertion {
             display: "Refugee camp sector 4, tent 27",
             provenance: "clinician-observed",
-            use_: None, geo: None, structured: None,
+            use_: None,
+            geo: None,
+            structured: None,
         };
         let v = address_assertion_body(&a);
         assert_eq!(v["field"], "address");
         assert_eq!(v["value"], "Refugee camp sector 4, tent 27");
         let obj = v.as_object().unwrap();
-        assert!(!obj.contains_key("facets"), "no use/geo/structured ⇒ no facets bag, never null");
+        assert!(
+            !obj.contains_key("facets"),
+            "no use/geo/structured ⇒ no facets bag, never null"
+        );
     }
 
     #[test]
@@ -397,14 +458,22 @@ mod tests {
             display: "-33.87, 151.21",
             provenance: "declared",
             use_: None,
-            geo: Some(Geo { lat: -33.87, lon: 151.21, accuracy_m: 2000.0, basis: "region_centroid" }),
+            geo: Some(Geo {
+                lat: -33.87,
+                lon: 151.21,
+                accuracy_m: 2000.0,
+                basis: "region_centroid",
+            }),
             structured: None,
         };
         let v = address_assertion_body(&a);
         let facets = v["facets"].as_object().unwrap();
         assert!(facets.contains_key("geo"));
         assert!(!facets.contains_key("use"), "absent use omitted");
-        assert!(!facets.contains_key("structured"), "absent structured omitted");
+        assert!(
+            !facets.contains_key("structured"),
+            "absent structured omitted"
+        );
     }
 
     #[test]
@@ -414,9 +483,15 @@ mod tests {
             "Address (residential): 12 Main St, Springfield"
         );
         let a = AddressAssertion {
-            display: "Tent 27", provenance: "clinician-observed",
-            use_: None, geo: None, structured: None,
+            display: "Tent 27",
+            provenance: "clinician-observed",
+            use_: None,
+            geo: None,
+            structured: None,
         };
-        assert_eq!(render_address_twin(&a), "Address (clinician-observed): Tent 27");
+        assert_eq!(
+            render_address_twin(&a),
+            "Address (clinician-observed): Tent 27"
+        );
     }
 }

@@ -36,7 +36,11 @@ pub const CLINICIAN_OBSERVED_PROVENANCE: &str = "clinician-observed";
 /// worth, not billions). The caller (the CLI arm) bounds them; a value near `u32::MAX`
 /// would reinterpret negative on the `as i32` cast and overflow the subtraction. This is
 /// a pure helper, so it does not re-validate — keep the bound at the human input boundary.
-pub fn birth_year_range_from_age(age_years: u32, tolerance_years: u32, observed_year: i32) -> (i32, i32) {
+pub fn birth_year_range_from_age(
+    age_years: u32,
+    tolerance_years: u32,
+    observed_year: i32,
+) -> (i32, i32) {
     let mid = observed_year - age_years as i32;
     let tol = tolerance_years as i32;
     (mid - tol, mid + tol)
@@ -90,19 +94,30 @@ mod tests {
 
     #[test]
     fn estimated_dob_body_is_a_year_range_dob_with_basis_and_provenance() {
-        let v = estimated_dob_body(1981, 1991, "apparent age ~40±5: dentition, greying",
-                                   CLINICIAN_OBSERVED_PROVENANCE);
+        let v = estimated_dob_body(
+            1981,
+            1991,
+            "apparent age ~40±5: dentition, greying",
+            CLINICIAN_OBSERVED_PROVENANCE,
+        );
         assert_eq!(v["field"], "dob");
         assert_eq!(v["value"], "1981/1991");
         assert_eq!(v["facets"]["precision"], "year-range");
-        assert_eq!(v["facets"]["basis"], "apparent age ~40±5: dentition, greying");
+        assert_eq!(
+            v["facets"]["basis"],
+            "apparent age ~40±5: dentition, greying"
+        );
         assert_eq!(v["provenance"], "clinician-observed");
     }
 
     #[test]
     fn estimated_dob_twin_is_legible_without_a_profile() {
         // The reused render_dob_twin must produce a non-empty, human-readable twin.
-        let twin = render_dob_twin("1981/1991", YEAR_RANGE_PRECISION, CLINICIAN_OBSERVED_PROVENANCE);
+        let twin = render_dob_twin(
+            "1981/1991",
+            YEAR_RANGE_PRECISION,
+            CLINICIAN_OBSERVED_PROVENANCE,
+        );
         assert!(twin.contains("1981/1991"));
         assert!(twin.contains("year-range"));
         assert!(!twin.trim().is_empty());
@@ -110,7 +125,11 @@ mod tests {
 
     #[test]
     fn observed_sex_body_is_administrative_sex_with_optional_basis() {
-        let with = observed_sex_body("male", Some("external genitalia"), CLINICIAN_OBSERVED_PROVENANCE);
+        let with = observed_sex_body(
+            "male",
+            Some("external genitalia"),
+            CLINICIAN_OBSERVED_PROVENANCE,
+        );
         assert_eq!(with["field"], "administrative-sex");
         assert_eq!(with["value"], "male");
         assert_eq!(with["facets"]["basis"], "external genitalia");
@@ -118,6 +137,9 @@ mod tests {
 
         let without = observed_sex_body("female", None, CLINICIAN_OBSERVED_PROVENANCE);
         assert_eq!(without["field"], "administrative-sex");
-        assert!(without.get("facets").is_none(), "absent basis must omit facets entirely, never null");
+        assert!(
+            without.get("facets").is_none(),
+            "absent basis must omit facets entirely, never null"
+        );
     }
 }

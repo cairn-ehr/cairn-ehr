@@ -4,8 +4,10 @@ use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
 pub enum KeystoreError {
-    #[error("io: {0}")] Io(#[from] std::io::Error),
-    #[error("key material: {0}")] Key(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("key material: {0}")]
+    Key(String),
     /// The file is a sealed bundle but no secret was supplied. A DISTINCT variant (not
     /// folded into `Key`) so a caller can react — e.g. the CLI prompts interactively
     /// for the passphrase — by matching ONE load attempt's error, with no separate
@@ -38,8 +40,11 @@ pub fn generate_plaintext(path: &Path) -> Result<(SigningKey, String), KeystoreE
 
 /// Generate a keypair and write it SEALED under both secrets (ADR-0026 slice A).
 /// The caller supplies (and is responsible for displaying) the recovery code.
-pub fn generate_sealed(path: &Path, op_pass: &str, recovery_code: &str)
-    -> Result<(SigningKey, String), KeystoreError> {
+pub fn generate_sealed(
+    path: &Path,
+    op_pass: &str,
+    recovery_code: &str,
+) -> Result<(SigningKey, String), KeystoreError> {
     let (sk, kid) = generate_key().map_err(|e| KeystoreError::Key(e.to_string()))?;
     let sealed = seal::seal(&sk.to_bytes(), op_pass, recovery_code)
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
@@ -60,10 +65,12 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
     if seal::from_cbor(&bytes).is_ok() {
         return Err(KeystoreError::Key("key is already sealed".into()));
     }
-    let seed: [u8; 32] = bytes.as_slice().try_into()
+    let seed: [u8; 32] = bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| KeystoreError::Key("not a 32-byte plaintext key".into()))?;
-    let sealed = seal::seal(&seed, op_pass, recovery_code)
-        .map_err(|e| KeystoreError::Key(e.to_string()))?;
+    let sealed =
+        seal::seal(&seed, op_pass, recovery_code).map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
 
     // Read-after-write integrity check: re-read the file, parse it, and unseal under
@@ -73,20 +80,25 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
     // `unseal` (which would re-try the op path for the recovery code), halving the
     // memory-hard cost of this check — it runs on every migration, incl. on Pi-class nodes.
     let readback = std::fs::read(path)?;
-    let readback_sealed = seal::from_cbor(&readback)
-        .map_err(|e| KeystoreError::Key(
-            format!("seal verification failed after write (parse): {e}")))?;
-    let seed_op = seal::unseal_op(&readback_sealed, op_pass)
-        .ok_or_else(|| KeystoreError::Key(
-            "seal verification failed after write: op passphrase did not unseal".into()))?;
-    let seed_rec = seal::unseal_rec(&readback_sealed, recovery_code)
-        .ok_or_else(|| KeystoreError::Key(
-            "seal verification failed after write: recovery code did not unseal".into()))?;
+    let readback_sealed = seal::from_cbor(&readback).map_err(|e| {
+        KeystoreError::Key(format!("seal verification failed after write (parse): {e}"))
+    })?;
+    let seed_op = seal::unseal_op(&readback_sealed, op_pass).ok_or_else(|| {
+        KeystoreError::Key(
+            "seal verification failed after write: op passphrase did not unseal".into(),
+        )
+    })?;
+    let seed_rec = seal::unseal_rec(&readback_sealed, recovery_code).ok_or_else(|| {
+        KeystoreError::Key(
+            "seal verification failed after write: recovery code did not unseal".into(),
+        )
+    })?;
     // `seed_op`/`seed_rec` are `Zeroizing<[u8; 32]>` (issue #54); deref to compare bytes
     // against the original plaintext seed.
     if *seed_op != seed || *seed_rec != seed {
         return Err(KeystoreError::Key(
-            "seal verification failed after write: recovered seed does not match original".into()));
+            "seal verification failed after write: recovered seed does not match original".into(),
+        ));
     }
     Ok(())
 }
@@ -98,11 +110,16 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
     let bytes = std::fs::read(path)?;
     if let Ok(sealed) = seal::from_cbor(&bytes) {
         let secret = secret.ok_or(KeystoreError::Sealed)?;
-        let seed = seal::unseal(&sealed, secret).ok_or_else(|| KeystoreError::Key(
-            "cannot unseal key: wrong passphrase/recovery code or corrupt file".into()))?;
+        let seed = seal::unseal(&sealed, secret).ok_or_else(|| {
+            KeystoreError::Key(
+                "cannot unseal key: wrong passphrase/recovery code or corrupt file".into(),
+            )
+        })?;
         Ok(SigningKey::from_bytes(&seed))
     } else {
-        let seed: [u8; 32] = bytes.as_slice().try_into()
+        let seed: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
             .map_err(|_| KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into()))?;
         Ok(SigningKey::from_bytes(&seed))
     }
@@ -117,7 +134,9 @@ pub fn key_at_rest_state(path: &Path) -> KeyAtRest {
         Err(_) => KeyAtRest::Corrupt, // present but unreadable — caller can't trust the state
         Ok(bytes) => {
             if let Ok(sealed) = seal::from_cbor(&bytes) {
-                KeyAtRest::Sealed { dual_recipient: sealed.has_recovery_wrap() }
+                KeyAtRest::Sealed {
+                    dual_recipient: sealed.has_recovery_wrap(),
+                }
             } else if bytes.len() == 32 {
                 KeyAtRest::Plaintext
             } else {
@@ -139,13 +158,23 @@ mod tests {
         let p = dir.path().join("node.key");
         let (sk, _kid) = generate_sealed(&p, "op", "REC-CODE").unwrap();
         assert_eq!(load(&p, Some("op")).unwrap().to_bytes(), sk.to_bytes());
-        assert_eq!(load(&p, Some("REC-CODE")).unwrap().to_bytes(), sk.to_bytes());
+        assert_eq!(
+            load(&p, Some("REC-CODE")).unwrap().to_bytes(),
+            sk.to_bytes()
+        );
         // No secret on a sealed key yields the DISTINCT `Sealed` variant (so the CLI
         // can decide to prompt), not a generic Key error.
-        assert!(matches!(load(&p, None), Err(KeystoreError::Sealed)),
-            "sealed key with no secret must return the Sealed variant");
+        assert!(
+            matches!(load(&p, None), Err(KeystoreError::Sealed)),
+            "sealed key with no secret must return the Sealed variant"
+        );
         assert!(load(&p, Some("wrong")).is_err());
-        assert!(matches!(key_at_rest_state(&p), KeyAtRest::Sealed { dual_recipient: true }));
+        assert!(matches!(
+            key_at_rest_state(&p),
+            KeyAtRest::Sealed {
+                dual_recipient: true
+            }
+        ));
     }
 
     #[test]
@@ -164,12 +193,24 @@ mod tests {
         let (sk, _kid) = generate_plaintext(&p).unwrap();
         seal_existing(&p, "op", "REC-CODE").unwrap();
         // Both recipients must survive migration: op passphrase and recovery code.
-        assert_eq!(load(&p, Some("op")).unwrap().to_bytes(), sk.to_bytes(),
-            "op passphrase must unseal migrated key");
-        assert_eq!(load(&p, Some("REC-CODE")).unwrap().to_bytes(), sk.to_bytes(),
-            "recovery code must unseal migrated key (off-node escrow path)");
-        assert!(load(&p, None).is_err(), "after sealing, no-secret load must fail");
-        assert!(seal_existing(&p, "op", "REC-CODE").is_err(), "double-seal must error");
+        assert_eq!(
+            load(&p, Some("op")).unwrap().to_bytes(),
+            sk.to_bytes(),
+            "op passphrase must unseal migrated key"
+        );
+        assert_eq!(
+            load(&p, Some("REC-CODE")).unwrap().to_bytes(),
+            sk.to_bytes(),
+            "recovery code must unseal migrated key (off-node escrow path)"
+        );
+        assert!(
+            load(&p, None).is_err(),
+            "after sealing, no-secret load must fail"
+        );
+        assert!(
+            seal_existing(&p, "op", "REC-CODE").is_err(),
+            "double-seal must error"
+        );
     }
 
     #[test]
@@ -178,7 +219,10 @@ mod tests {
         let p = dir.path().join("node.key");
         generate_sealed(&p, "op", "REC-CODE").unwrap();
         // The temp sibling used during the atomic write must be cleaned up (renamed away).
-        assert!(!tmp_sibling(&p).exists(), "atomic write must not leave a .tmp sibling");
+        assert!(
+            !tmp_sibling(&p).exists(),
+            "atomic write must not leave a .tmp sibling"
+        );
         assert!(matches!(key_at_rest_state(&p), KeyAtRest::Sealed { .. }));
     }
 
@@ -191,7 +235,10 @@ mod tests {
         std::fs::write(tmp_sibling(&p), b"garbage from a half-finished write").unwrap();
         let (sk, _kid) = generate_sealed(&p, "op", "REC-CODE").unwrap();
         assert_eq!(load(&p, Some("op")).unwrap().to_bytes(), sk.to_bytes());
-        assert!(!tmp_sibling(&p).exists(), "stale temp must be gone after a successful write");
+        assert!(
+            !tmp_sibling(&p).exists(),
+            "stale temp must be gone after a successful write"
+        );
     }
 
     #[cfg(unix)]
@@ -225,13 +272,19 @@ mod tests {
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
         generate_sealed(&p, "op", "REC-CODE").unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "a stale wide-perm temp must not leak its mode into the key");
+        assert_eq!(
+            mode, 0o600,
+            "a stale wide-perm temp must not leak its mode into the key"
+        );
     }
 
     #[test]
     fn state_reports_missing_and_corrupt() {
         let dir = tempdir().unwrap();
-        assert!(matches!(key_at_rest_state(&dir.path().join("nope.key")), KeyAtRest::Missing));
+        assert!(matches!(
+            key_at_rest_state(&dir.path().join("nope.key")),
+            KeyAtRest::Missing
+        ));
         let bad = dir.path().join("bad.key");
         std::fs::write(&bad, b"only 5").unwrap(); // not 32 bytes, not a bundle
         assert!(matches!(key_at_rest_state(&bad), KeyAtRest::Corrupt));

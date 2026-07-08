@@ -6,7 +6,9 @@ use cairn_event::demographics::{
     identifier_assertion_body, render_identifier_twin, IdentifierAssertion,
 };
 use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
-use cairn_node::auto_apply::{apply_auto_candidate, apply_auto_candidates, AutoOutcome, AutoSummary};
+use cairn_node::auto_apply::{
+    apply_auto_candidate, apply_auto_candidates, AutoOutcome, AutoSummary,
+};
 use cairn_node::db;
 use cairn_node::matcher_actor::resolve_matcher_actor;
 use tokio_postgres::Client;
@@ -83,7 +85,11 @@ async fn submit_identifier(
         patient_id: patient.to_string(),
         event_type: "demographic.identifier.asserted".into(),
         schema_version: "demographic.identifier/1".into(),
-        hlc: Hlc { wall, counter: 0, node_origin: "n".into() },
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "n".into(),
+        },
         t_effective: None,
         signer_key_id: kid.into(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
@@ -100,7 +106,13 @@ async fn submit_identifier(
 /// Create a hard veto between the pair: two SAME-system identifiers with DIFFERENT
 /// normalized values (db/016 `identifier` hard_veto). After this,
 /// `EXISTS(SELECT 1 FROM cairn_match_veto(a,b))` is TRUE.
-async fn assert_identifier_clash(c: &Client, seeder_sk: &SigningKey, seeder_kid: &str, a: Uuid, b: Uuid) {
+async fn assert_identifier_clash(
+    c: &Client,
+    seeder_sk: &SigningKey,
+    seeder_kid: &str,
+    a: Uuid,
+    b: Uuid,
+) {
     let ia = |value: &'static str| IdentifierAssertion {
         value,
         system: "medicare-au",
@@ -121,7 +133,10 @@ async fn assert_identifier_clash(c: &Client, seeder_sk: &SigningKey, seeder_kid:
         .await
         .unwrap()
         .get(0);
-    assert!(vetoed, "identifier clash must produce a veto (test precondition)");
+    assert!(
+        vetoed,
+        "identifier clash must produce a veto (test precondition)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +151,9 @@ async fn resolve_enrolls_agent_once_and_reuses_it() {
     reset(&c).await;
     let dir = tempfile::tempdir().unwrap();
 
-    let (_sk1, kid1) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
+    let (_sk1, kid1) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
     let n1: i64 = c
         .query_one(
             "SELECT count(*) FROM actor_event WHERE signing_key_id=$1 AND kind='agent' AND op='enroll'",
@@ -147,7 +164,9 @@ async fn resolve_enrolls_agent_once_and_reuses_it() {
         .get(0);
     assert_eq!(n1, 1, "matcher agent enrolled on first sight");
 
-    let (_sk2, kid2) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
+    let (_sk2, kid2) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
     assert_eq!(kid1, kid2, "same epoch reuses the same key");
     let n2: i64 = c
         .query_one(
@@ -168,8 +187,12 @@ async fn distinct_epochs_get_distinct_actors_and_keys() {
     reset(&c).await;
     let dir = tempfile::tempdir().unwrap();
 
-    let (_a, kid_a) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
-    let (_b, kid_b) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bbb").await.unwrap();
+    let (_a, kid_a) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
+    let (_b, kid_b) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bbb")
+        .await
+        .unwrap();
     assert_ne!(kid_a, kid_b, "a fresh key per epoch");
     let n: i64 = c
         .query_one(
@@ -196,7 +219,9 @@ async fn revoked_matcher_epoch_is_refused_not_resurrected() {
 
     // Enroll the epoch once (its key is written to `dir`), then REVOKE it by appending a
     // revoke actor_event for the same actor_id (what a db/006 recall of a bad config does).
-    let (_sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bad").await.unwrap();
+    let (_sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bad")
+        .await
+        .unwrap();
     c.execute(
         "INSERT INTO actor_event (actor_id, op, kind, signing_key_id) \
          SELECT actor_id, 'revoke', 'agent', signing_key_id FROM actor_event \
@@ -206,7 +231,10 @@ async fn revoked_matcher_epoch_is_refused_not_resurrected() {
     .await
     .unwrap();
     let live: i64 = c
-        .query_one("SELECT count(*) FROM actor_current WHERE signing_key_id=$1", &[&kid])
+        .query_one(
+            "SELECT count(*) FROM actor_current WHERE signing_key_id=$1",
+            &[&kid],
+        )
         .await
         .unwrap()
         .get(0);
@@ -214,7 +242,10 @@ async fn revoked_matcher_epoch_is_refused_not_resurrected() {
 
     // Resolving again (the key file is still on disk) must REFUSE — never re-enroll.
     let again = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+bad").await;
-    assert!(again.is_err(), "a revoked matcher epoch must not be re-enrolled/resurrected");
+    assert!(
+        again.is_err(),
+        "a revoked matcher epoch must not be re-enrolled/resurrected"
+    );
 
     // No second enroll was appended: the revoke stands.
     let enrolls: i64 = c
@@ -227,7 +258,10 @@ async fn revoked_matcher_epoch_is_refused_not_resurrected() {
         .get(0);
     assert_eq!(enrolls, 1, "no resurrecting re-enroll");
     let still_dead: i64 = c
-        .query_one("SELECT count(*) FROM actor_current WHERE signing_key_id=$1", &[&kid])
+        .query_one(
+            "SELECT count(*) FROM actor_current WHERE signing_key_id=$1",
+            &[&kid],
+        )
         .await
         .unwrap()
         .get(0);
@@ -248,14 +282,20 @@ async fn auto_candidate_becomes_unattested_link_and_projects_person() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
-    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
     let out = apply_auto_candidate(
         &mut c,
         low,
         high,
         &sk,
         &kid,
-        Hlc { wall: 100, counter: 0, node_origin: "testnode".into() },
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
     )
     .await
     .unwrap();
@@ -292,7 +332,11 @@ async fn auto_candidate_becomes_unattested_link_and_projects_person() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(person, low.min(high).to_string(), "person = min-UUID of the component");
+    assert_eq!(
+        person,
+        low.min(high).to_string(),
+        "person = min-UUID of the component"
+    );
 
     // Proposal marked auto_applied with an applied_event_id.
     let r = c
@@ -323,14 +367,20 @@ async fn veto_appeared_since_propose_kicks_to_review_no_event() {
     let (seed_sk, seed_kid) = enroll_seeder(&c).await;
     assert_identifier_clash(&c, &seed_sk, &seed_kid, low, high).await;
 
-    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
     let out = apply_auto_candidate(
         &mut c,
         low,
         high,
         &sk,
         &kid,
-        Hlc { wall: 100, counter: 0, node_origin: "testnode".into() },
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
     )
     .await
     .unwrap();
@@ -367,14 +417,20 @@ async fn human_rejected_auto_candidate_is_skipped() {
     // A human already REJECTED this auto_candidate -> must NOT be auto-applied.
     seed_proposal(&c, low, high, "auto_candidate", "rejected", "0.3.0+aaa").await;
 
-    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa").await.unwrap();
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
     let out = apply_auto_candidate(
         &mut c,
         low,
         high,
         &sk,
         &kid,
-        Hlc { wall: 100, counter: 0, node_origin: "testnode".into() },
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
     )
     .await
     .unwrap();
@@ -419,20 +475,33 @@ async fn batch_applies_all_pending_auto_candidates_across_epochs_and_is_idempote
     let (l3, h3) = canonical(Uuid::now_v7(), Uuid::now_v7());
     seed_proposal(&c, l3, h3, "review", "pending", "0.3.0+aaa").await;
 
-    let s: AutoSummary = apply_auto_candidates(&mut c, dir.path(), None, "testnode").await.unwrap();
+    let s: AutoSummary = apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+        .await
+        .unwrap();
     assert_eq!(s.applied, 2);
     let n_ev: i64 = c
-        .query_one("SELECT count(*) FROM event_log WHERE event_type='identity.link.asserted'", &[])
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type='identity.link.asserted'",
+            &[],
+        )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n_ev, 2, "both auto_candidate pairs linked; the review pair ignored");
+    assert_eq!(
+        n_ev, 2,
+        "both auto_candidate pairs linked; the review pair ignored"
+    );
 
     // Idempotent: a second run applies nothing new.
-    let s2 = apply_auto_candidates(&mut c, dir.path(), None, "testnode").await.unwrap();
+    let s2 = apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+        .await
+        .unwrap();
     assert_eq!(s2.applied, 0);
     let n_ev2: i64 = c
-        .query_one("SELECT count(*) FROM event_log WHERE event_type='identity.link.asserted'", &[])
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type='identity.link.asserted'",
+            &[],
+        )
         .await
         .unwrap()
         .get(0);
@@ -449,7 +518,9 @@ async fn recall_over_the_matcher_epoch_selects_its_autolinks_precisely() {
 
     let (l1, h1) = canonical(Uuid::now_v7(), Uuid::now_v7());
     seed_proposal(&c, l1, h1, "auto_candidate", "pending", "0.3.0+aaa").await;
-    apply_auto_candidates(&mut c, dir.path(), None, "testnode").await.unwrap();
+    apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+        .await
+        .unwrap();
 
     // The matcher epoch's signing key (signer_key_id) is the recall key (db/006).
     let kid: String = c
@@ -472,7 +543,10 @@ async fn recall_over_the_matcher_epoch_selects_its_autolinks_precisely() {
         .await
         .unwrap()
         .get(0);
-    assert!(hit >= 1, "contamination-cascade recall selects the epoch's auto-link");
+    assert!(
+        hit >= 1,
+        "contamination-cascade recall selects the epoch's auto-link"
+    );
 
     // A recall over a DIFFERENT epoch (never registered for this key) selects nothing.
     let miss: i64 = c

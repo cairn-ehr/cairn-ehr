@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 
 // Re-exported so downstream crates (cairn-sync) need not depend on ed25519-dalek
 // directly — the keypair type travels with this crate's signing API.
-pub use ed25519_dalek::{SigningKey, VerifyingKey};
 pub use attachment::{Attachment, Rendition, SealRef};
+pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
 pub mod attachment;
 pub mod demographics;
@@ -168,7 +168,8 @@ fn cose_verify1_parsed(
     sign1.verify_signature(ctx.as_bytes(), |sig, tbs| {
         let signature =
             ed25519_dalek::Signature::from_slice(sig).map_err(|_| EventError::BadSignature)?;
-        vk.verify(tbs, &signature).map_err(|_| EventError::BadSignature)
+        vk.verify(tbs, &signature)
+            .map_err(|_| EventError::BadSignature)
     })?;
     sign1.payload.ok_or(EventError::NoPayload)
 }
@@ -181,8 +182,7 @@ fn cose_verify1_in_context(
     ctx: SigningContext,
 ) -> Result<Vec<u8>, EventError> {
     use coset::{CborSerializable, CoseSign1};
-    let sign1 =
-        CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
+    let sign1 = CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
     cose_verify1_parsed(sign1, vk, ctx)
 }
 
@@ -198,8 +198,7 @@ fn cose_verify1_self_described(
     ctx: SigningContext,
 ) -> Result<([u8; 32], Vec<u8>), EventError> {
     use coset::{CborSerializable, CoseSign1};
-    let sign1 =
-        CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
+    let sign1 = CoseSign1::from_slice(signed_bytes).map_err(|e| EventError::Cose(e.to_string()))?;
     let key_bytes: [u8; 32] = sign1
         .protected
         .header
@@ -225,15 +224,15 @@ pub struct Hlc {
 /// one serialization; verifiers byte-compare and never re-encode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EventBody {
-    pub event_id: String,      // UUIDv7
-    pub patient_id: String,    // immortal subject UUID
-    pub event_type: String,    // patient.created | patient.amended | note.added
+    pub event_id: String,   // UUIDv7
+    pub patient_id: String, // immortal subject UUID
+    pub event_type: String, // patient.created | patient.amended | note.added
     pub schema_version: String,
     pub hlc: Hlc,
     pub t_effective: Option<String>, // asserted effective time (ISO-8601); None = unknown
     pub signer_key_id: String,       // hex(Ed25519 public key) — see note on the registry below
     pub contributors: serde_json::Value, // §3.9 contributor set (skeleton: a single author)
-    pub payload: serde_json::Value,      // clinical/demographic content; becomes the DB `body`
+    pub payload: serde_json::Value,  // clinical/demographic content; becomes the DB `body`
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     /// The §4.5 materialised legibility twin, authored into the signed body. Absent
@@ -327,7 +326,8 @@ pub fn extract_slice(
         len,
     );
     let mut out = Vec::new();
-    ex.read_to_end(&mut out).map_err(|e| EventError::BlobSlice(e.to_string()))?;
+    ex.read_to_end(&mut out)
+        .map_err(|e| EventError::BlobSlice(e.to_string()))?;
     Ok(out)
 }
 
@@ -343,7 +343,8 @@ pub fn verify_slice(
 ) -> Result<Vec<u8>, EventError> {
     let mut dec = bao::decode::SliceDecoder::new(Cursor::new(slice), root, start, len);
     let mut out = Vec::new();
-    dec.read_to_end(&mut out).map_err(|_| EventError::BlobVerify)?;
+    dec.read_to_end(&mut out)
+        .map_err(|_| EventError::BlobVerify)?;
     Ok(out)
 }
 
@@ -658,7 +659,8 @@ pub fn verify_pairing_bundle(token: &[u8]) -> Result<PairingBundle, EventError> 
     let b: PairingBundle =
         ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
     // The bundle must be honest about the key it carries and that key's fingerprint.
-    if b.pubkey_hex != hex::encode(key_bytes) || b.fingerprint != short_fingerprint(&b.pubkey_hex)? {
+    if b.pubkey_hex != hex::encode(key_bytes) || b.fingerprint != short_fingerprint(&b.pubkey_hex)?
+    {
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(b)
@@ -814,7 +816,10 @@ mod tests {
             "list": [{"x": "2", "y": "1"}],
             "outer": {"a": 2, "z": 1}
         }));
-        assert_eq!(a, b, "nested object/array key order must not change the address");
+        assert_eq!(
+            a, b,
+            "nested object/array key order must not change the address"
+        );
     }
 
     #[test]
@@ -837,7 +842,10 @@ mod tests {
         let ca = event_address(b"some signed event bytes");
 
         let token = sign_attestation(&ca, &kid, "attested", &sk).unwrap();
-        assert!(verify_attestation(&token, &ca, &vk), "valid token for right key + address");
+        assert!(
+            verify_attestation(&token, &ca, &vk),
+            "valid token for right key + address"
+        );
 
         // Wrong content-address -> reject (a token cannot be replayed onto another event).
         let other = event_address(b"a different event");
@@ -863,7 +871,11 @@ mod tests {
         let vk = sk.verifying_key();
         let ca = event_address(b"evt");
         // Claim a victim's key id while signing with our own key.
-        let victim_kid = hex::encode(SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes());
+        let victim_kid = hex::encode(
+            SigningKey::from_bytes(&[9u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
         let forged = sign_attestation(&ca, &victim_kid, "attested", &sk).unwrap();
         // Signature verifies against vk and the content-address matches, but the claimed
         // attester_key_id != hex(vk), so the binding check must reject it.
@@ -906,7 +918,11 @@ mod tests {
         let fp2 = short_fingerprint(&kid).unwrap();
         assert_eq!(fp1, fp2, "same key -> same fingerprint");
         let (_sk2, kid2) = generate_key().unwrap();
-        assert_ne!(fp1, short_fingerprint(&kid2).unwrap(), "different key -> different fingerprint");
+        assert_ne!(
+            fp1,
+            short_fingerprint(&kid2).unwrap(),
+            "different key -> different fingerprint"
+        );
         assert!(short_fingerprint("not-hex").is_err());
     }
 
@@ -916,31 +932,57 @@ mod tests {
     fn twin_absent_is_wire_identical_to_pre_field_shape() {
         #[derive(serde::Serialize)]
         struct LegacyBody<'a> {
-            event_id: &'a str, patient_id: &'a str, event_type: &'a str,
-            schema_version: &'a str, hlc: &'a Hlc, t_effective: Option<String>,
-            signer_key_id: &'a str, contributors: &'a serde_json::Value,
-            payload: &'a serde_json::Value, attachments: &'a Vec<Attachment>,
+            event_id: &'a str,
+            patient_id: &'a str,
+            event_type: &'a str,
+            schema_version: &'a str,
+            hlc: &'a Hlc,
+            t_effective: Option<String>,
+            signer_key_id: &'a str,
+            contributors: &'a serde_json::Value,
+            payload: &'a serde_json::Value,
+            attachments: &'a Vec<Attachment>,
         }
-        let hlc = Hlc { wall: 1, counter: 0, node_origin: "n".into() };
+        let hlc = Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "n".into(),
+        };
         let contributors = serde_json::json!([{"actor_id": "k", "role": "triaged"}]);
         let payload = serde_json::json!({"text": "hi"});
         let attachments: Vec<Attachment> = vec![];
         let legacy = LegacyBody {
-            event_id: "e", patient_id: "p", event_type: "note.added",
-            schema_version: "advisory/1", hlc: &hlc, t_effective: None,
-            signer_key_id: "k", contributors: &contributors, payload: &payload,
+            event_id: "e",
+            patient_id: "p",
+            event_type: "note.added",
+            schema_version: "advisory/1",
+            hlc: &hlc,
+            t_effective: None,
+            signer_key_id: "k",
+            contributors: &contributors,
+            payload: &payload,
             attachments: &attachments,
         };
         let body = EventBody {
-            event_id: "e".into(), patient_id: "p".into(), event_type: "note.added".into(),
-            schema_version: "advisory/1".into(), hlc: hlc.clone(), t_effective: None,
-            signer_key_id: "k".into(), contributors: contributors.clone(),
-            payload: payload.clone(), attachments: vec![], plaintext_twin: None,
+            event_id: "e".into(),
+            patient_id: "p".into(),
+            event_type: "note.added".into(),
+            schema_version: "advisory/1".into(),
+            hlc: hlc.clone(),
+            t_effective: None,
+            signer_key_id: "k".into(),
+            contributors: contributors.clone(),
+            payload: payload.clone(),
+            attachments: vec![],
+            plaintext_twin: None,
         };
         let mut legacy_bytes = Vec::new();
         ciborium::into_writer(&legacy, &mut legacy_bytes).unwrap();
-        assert_eq!(canonical_cbor(&body).unwrap(), legacy_bytes,
-                   "None twin must encode byte-identically to the pre-field shape");
+        assert_eq!(
+            canonical_cbor(&body).unwrap(),
+            legacy_bytes,
+            "None twin must encode byte-identically to the pre-field shape"
+        );
     }
 
     // Bytes authored before the field existed must still decode (forward-compat).
@@ -952,26 +994,44 @@ mod tests {
     fn legacy_bytes_decode_with_twin_none() {
         #[derive(serde::Serialize)]
         struct LegacyBody<'a> {
-            event_id: &'a str, patient_id: &'a str, event_type: &'a str,
-            schema_version: &'a str, hlc: &'a Hlc, t_effective: Option<String>,
-            signer_key_id: &'a str, contributors: &'a serde_json::Value,
-            payload: &'a serde_json::Value, attachments: &'a Vec<Attachment>,
+            event_id: &'a str,
+            patient_id: &'a str,
+            event_type: &'a str,
+            schema_version: &'a str,
+            hlc: &'a Hlc,
+            t_effective: Option<String>,
+            signer_key_id: &'a str,
+            contributors: &'a serde_json::Value,
+            payload: &'a serde_json::Value,
+            attachments: &'a Vec<Attachment>,
         }
-        let hlc = Hlc { wall: 1, counter: 0, node_origin: "n".into() };
+        let hlc = Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "n".into(),
+        };
         let contributors = serde_json::json!([]);
         let payload = serde_json::json!({});
         let attachments: Vec<Attachment> = vec![];
         let legacy = LegacyBody {
-            event_id: "e", patient_id: "p", event_type: "note.added",
-            schema_version: "advisory/1", hlc: &hlc, t_effective: None,
-            signer_key_id: "k", contributors: &contributors, payload: &payload,
+            event_id: "e",
+            patient_id: "p",
+            event_type: "note.added",
+            schema_version: "advisory/1",
+            hlc: &hlc,
+            t_effective: None,
+            signer_key_id: "k",
+            contributors: &contributors,
+            payload: &payload,
             attachments: &attachments,
         };
         let mut bytes = Vec::new();
         ciborium::into_writer(&legacy, &mut bytes).unwrap();
         let decoded: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
-        assert_eq!(decoded.plaintext_twin, None,
-                   "a missing plaintext_twin key must decode to None (serde default)");
+        assert_eq!(
+            decoded.plaintext_twin, None,
+            "a missing plaintext_twin key must decode to None (serde default)"
+        );
     }
 
     // Task 2: EventBody.attachments now holds real Attachment values (Task 1's shape),
@@ -982,13 +1042,21 @@ mod tests {
         let r = crate::attachment::Rendition::reference("original", b"jpegbytes", "image/jpeg");
         let att = crate::attachment::Attachment::single("id photo", r);
         let body = EventBody {
-            event_id: "e".into(), patient_id: "p".into(),
+            event_id: "e".into(),
+            patient_id: "p".into(),
             event_type: "identity.evidence.asserted".into(),
             schema_version: "identity.evidence.asserted/1".into(),
-            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
-            t_effective: None, signer_key_id: "k".into(),
-            contributors: serde_json::json!([]), payload: serde_json::json!({"kind":"photo"}),
-            attachments: vec![att.clone()], plaintext_twin: Some("t".into()),
+            hlc: Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+            t_effective: None,
+            signer_key_id: "k".into(),
+            contributors: serde_json::json!([]),
+            payload: serde_json::json!({"kind":"photo"}),
+            attachments: vec![att.clone()],
+            plaintext_twin: Some("t".into()),
         };
         let bytes = canonical_cbor(&body).unwrap();
         let back: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
@@ -1004,7 +1072,11 @@ mod tests {
             address: "10.0.0.2:7800".into(),
             fingerprint: short_fingerprint(&kid).unwrap(),
             nonce: "abcd1234".into(),
-            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+            hlc: Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         };
         let token = sign_pairing_bundle(&b, &sk).unwrap();
         assert_eq!(verify_pairing_bundle(&token).unwrap(), b);
@@ -1017,7 +1089,8 @@ mod tests {
 
         // Tampered bytes -> reject.
         let mut t = token.clone();
-        let m = t.len() / 2; t[m] ^= 0x01;
+        let m = t.len() / 2;
+        t[m] ^= 0x01;
         assert!(verify_pairing_bundle(&t).is_err());
     }
 
@@ -1028,7 +1101,11 @@ mod tests {
             patient_id: "00000000-0000-7000-8000-000000000002".into(),
             event_type: "note.added".into(),
             schema_version: "note/1".into(),
-            hlc: Hlc { wall: 7, counter: 0, node_origin: "n".into() },
+            hlc: Hlc {
+                wall: 7,
+                counter: 0,
+                node_origin: "n".into(),
+            },
             t_effective: None,
             signer_key_id: "k".into(),
             contributors: serde_json::json!([{"actor_id": "k", "role": "recorded"}]),
@@ -1057,7 +1134,11 @@ mod tests {
         let m = materialise_generic_twin(body.clone());
         let twin = m.plaintext_twin.as_deref().expect("twin materialised");
         assert!(!twin.trim().is_empty(), "materialised twin is non-empty");
-        assert_eq!(twin, plaintext_twin(&body), "materialised == the generic rendering");
+        assert_eq!(
+            twin,
+            plaintext_twin(&body),
+            "materialised == the generic rendering"
+        );
         // Idempotent: an already-authored twin is preserved unchanged.
         let mut authored = sample_note_body();
         authored.plaintext_twin = Some("kept verbatim".into());
@@ -1197,7 +1278,11 @@ mod tests {
             address: "10.0.0.2:7800".into(),
             fingerprint: short_fingerprint(&kid).unwrap(),
             nonce: "abcd".into(),
-            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+            hlc: Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         };
         let mut payload = Vec::new();
         ciborium::into_writer(&bundle, &mut payload).unwrap();
@@ -1246,7 +1331,11 @@ mod tests {
             address: "10.0.0.2:7800".into(),
             fingerprint: short_fingerprint(&kid).unwrap(),
             nonce: "abcd".into(),
-            hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+            hlc: Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
         };
         let mut payload = Vec::new();
         ciborium::into_writer(&bundle, &mut payload).unwrap();
@@ -1297,10 +1386,17 @@ mod tests {
         body.signer_key_id = kid;
         let payload = canonical_cbor(&body).unwrap();
 
-        let lying = sign1_with_alg(payload.clone(), &sk, CTX_EVENT, Some(coset::iana::Algorithm::ES256));
+        let lying = sign1_with_alg(
+            payload.clone(),
+            &sk,
+            CTX_EVENT,
+            Some(coset::iana::Algorithm::ES256),
+        );
         match verify_self_described(&lying) {
             Err(EventError::AlgMismatch) => {}
-            other => panic!("an ES256-claiming header must be rejected as AlgMismatch, got {other:?}"),
+            other => {
+                panic!("an ES256-claiming header must be rejected as AlgMismatch, got {other:?}")
+            }
         }
 
         let missing = sign1_with_alg(payload.clone(), &sk, CTX_EVENT, None);
@@ -1342,7 +1438,9 @@ mod tests {
         let mutated = s1.to_vec().unwrap();
         match verify_self_described(&mutated) {
             Err(EventError::ContextMismatch) => {}
-            other => panic!("a conflicting unprotected content type must be rejected, got {other:?}"),
+            other => {
+                panic!("a conflicting unprotected content type must be rejected, got {other:?}")
+            }
         }
     }
 
@@ -1353,7 +1451,10 @@ mod tests {
     #[test]
     fn signing_context_registry_is_pinned_and_distinct() {
         assert_eq!(CTX_EVENT.as_str(), "application/cairn-event+cbor");
-        assert_eq!(CTX_ATTESTATION.as_str(), "application/cairn-attestation+cbor");
+        assert_eq!(
+            CTX_ATTESTATION.as_str(),
+            "application/cairn-attestation+cbor"
+        );
         assert_eq!(CTX_PAIRING.as_str(), "application/cairn-pairing+cbor");
         // Pairwise distinct: a copy-paste collision between two consts would
         // silently merge two signing domains (the issue #95 class reborn).
@@ -1387,6 +1488,9 @@ mod tests {
         let signed = sign(&body, &sk).unwrap();
         let decoded = verify_self_described(&signed.signed_bytes).unwrap();
         assert_eq!(decoded.plaintext_twin, body.plaintext_twin);
-        assert!(decoded.plaintext_twin.is_some(), "a materialised twin survives the wire");
+        assert!(
+            decoded.plaintext_twin.is_some(),
+            "a materialised twin survives the wire"
+        );
     }
 }
