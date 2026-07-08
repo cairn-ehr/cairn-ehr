@@ -26,6 +26,24 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
+**This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (no product/floor/spec/ADR
+change; advisory-tier + test-infra only).** (1) **#135 — stale forced-REVIEW proposals now retract once the Doe is
+identified** ([PR #151](https://github.com/cairn-ehr/cairn-ehr/pull/151)). The §5.4 forcing rule persisted a REVIEW
+`match_proposal` conditioned on `chart_trust='unconfirmed'` — a *transient* state — but `propose()` only touched the
+table when `band()` was non-None, so after identification the pair banded None, `propose()` rolled back, and a
+permanent `band='review'`/`status='pending'` row with a misleading `identity_pending` marker lingered on the hub
+worklist. Fix (append-only, no DELETE — db/017 grants none): new `db.retract_pending_proposal()` (UPDATE a *still-pending*
+row → `status='retracted'`, preserving any human/applied disposition), `propose()`'s band-None branch calls it
+(commit iff a row was retracted, else the unchanged xmin-horizon rollback), and `upsert_proposal()` reverts
+`retracted→pending` on a genuine re-proposal so a resurrected match re-surfaces. Marker-freshness was already covered
+(upsert overwrites `evidence` every re-propose). TDD, DB-gated: retract-on-identify, human-disposition preserved,
+revert-on-reproposal, + the full `sweep→identify→sweep` e2e. (2) **#84 pt1 — matcher integration-test committed-row
+leak fixed** ([PR #150](https://github.com/cairn-ehr/cairn-ehr/pull/150)). The seed helpers COMMIT but `pg_conn` only
+truncated at *setup* (teardown was `rollback()`), so the last test's rows persisted; new `managed_pg_conn` context
+manager truncates projections on exit too (rewired fixture + a direct lifecycle test). #84 pt2 (eval `KeyError`) was
+already fixed in PR #131's review wave — noted, no code. Both PRs branch off `main`, disjoint files; matcher suite
+**381 passed**, ruff (I/UP/B/E5@100) clean.
+
 **This session (2026-07-08, fifth) — closed the three CI gaps opened by the tooling catch-up ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)/[#146](https://github.com/cairn-ehr/cairn-ehr/issues/146)/[#117](https://github.com/cairn-ehr/cairn-ehr/issues/117); PR [#149](https://github.com/cairn-ehr/cairn-ehr/pull/149)).**
 No product/floor/spec/ADR/SCHEMA change — CI + test-fixtures + docs only. (1) **#145 — the matcher DB-gated suite now
 runs in CI.** Its integration tests self-skip without `CAIRN_TEST_PG`, so they ran nowhere (the "298 passed" was the
@@ -323,9 +341,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   near-window softening; hub-tier range sweep. Deferred
   (earlier): variable cluster size / an unrecoverable
   fraction / hard negatives in the volume generator; a **veto-aware / end-to-end scorer mode**; deceased-status veto
-  (stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; the matcher conftest test-leak
-  ([issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) — its harness-`KeyError` arm was FIXED in PR #131's
-  review wave; the committed-row leak remains); B2 follow-up Minors (Thresholds `review<auto` guard,
+  (stub in db/016); a `compare_address` comparator; a **CLI** sweep entry; ~~the matcher conftest test-leak
+  ([#84](https://github.com/cairn-ehr/cairn-ehr/issues/84))~~ — **pt1 committed-row leak fixed** (PR #150, sixth
+  session; pt2 `KeyError` was fixed in PR #131); ~~stale forced-REVIEW proposal retraction
+  ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ — **fixed** (PR #151, sixth session);
+  B2 follow-up Minors (Thresholds `review<auto` guard,
   `band` CHECK, `updated_at` trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
   Rust DB-gated tests + the matcher integration tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
   dbname=cairn_test"` (PG18+cairn_pgx); matcher integration: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline

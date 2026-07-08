@@ -393,18 +393,22 @@ typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` +
 `cairn-node::identity_evidence` author path (`validate_description` honest-content floor **in the library**; pure
 `build_text_evidence_body`; one-statement `assert_text_evidence` — no blob tier).
 Provenance fixed `clinician-observed` (relayed/hearsay in `basis`); `description` required-non-empty (floor refuses an
-empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e read-back + bad-kind/empty-description rejects
-+ CLI smoke green; `clippy --workspace --tests -D warnings` clean. **Review follow-up (PR #142):** the slice-26 photo
-command and this slice's text command were **folded into one** `assert-identity-evidence --kind photo|mark|belongings|
-ems-context …` (photo takes `--file`/`--media-type`/`--descriptor`, text kinds take `--description`); the
-mutually-exclusive flag rule is a new **pure, unit-tested** `route_identity_evidence` gate and the standalone
-`assert-photo-evidence` subcommand was removed. **Honest limits:** free-text description only (no structured item list —
-additive-friendly); no projection/worklist/matcher signal (log-retrievable + twin-legible).
+empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e + CLI smoke green; clippy clean.
+**Review follow-up (PR #142):** the slice-26 photo command and this slice's text command were **folded into one**
+`assert-identity-evidence --kind photo|mark|belongings|ems-context …` behind a new pure, unit-tested
+`route_identity_evidence` flag gate. **Honest limits:** free-text description only; no projection/worklist/matcher signal.
 **Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
 funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix.
 
+**Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
+~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
+(PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no
+DELETE) once a Doe is identified, `upsert_proposal` reverts `retracted→pending` on a genuine re-proposal, human
+dispositions preserved. ~~matcher integration-test committed-row leak ([#84](https://github.com/cairn-ehr/cairn-ehr/issues/84) pt1)~~
+**done** (PR #150): `managed_pg_conn` truncates projections on teardown (pt2 `KeyError` already fixed in PR #131).
+
 **Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
-aggressive duplicate-sweep + proposal retraction + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
+aggressive duplicate-sweep + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
 `generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
 ([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130))~~ **(done — slice 22)**. **Identity: pieces C1
 (the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
@@ -413,9 +417,7 @@ are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `au
 trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract, and **C5** —
 `repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
 **C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
-a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Next:**
-a large hand-crafted gold set to re-run the slice-24 learner,
-C5+, or the matcher-actor's fuller §7.5 registration (served-model digest etc.); a veto-aware
+a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Other deferred:** a veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 ([Issue #69](https://github.com/cairn-ehr/cairn-ehr/issues/69): codebase-wide projection-tiebreak collation canonicalization, deferred.)

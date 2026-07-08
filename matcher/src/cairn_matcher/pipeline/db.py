@@ -463,8 +463,12 @@ def generate_candidate_pairs(
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
     """Write (or refresh) the advisory proposal for a canonical-ordered pair.
 
-    Latest-wins on (patient_low, patient_high), but a non-'pending' status (a human's
-    decision) is PRESERVED — a re-run refreshes the score/band/evidence, never a verdict.
+    Latest-wins on (patient_low, patient_high), but a human's decision (accepted / rejected
+    / applied / auto_applied / the C2b veto-driven 'review') is PRESERVED — a re-run
+    refreshes the score/band/evidence, never a verdict. The ONE matcher-owned exception is
+    'retracted' -> 'pending': a row the matcher itself withdrew (band dropped below review,
+    see retract_pending_proposal) but now proposes again must re-surface on the worklist, so
+    a genuinely resurrected match is never left hidden. Every other status is left untouched.
 
     Does NOT commit. The caller owns the transaction boundary.
     """
@@ -477,8 +481,33 @@ def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
             "ON CONFLICT (patient_low, patient_high) DO UPDATE SET "
             "score_total=EXCLUDED.score_total, band=EXCLUDED.band, "
             "veto_findings=EXCLUDED.veto_findings, evidence=EXCLUDED.evidence, "
-            "matcher_version=EXCLUDED.matcher_version, updated_at=clock_timestamp()",
+            "matcher_version=EXCLUDED.matcher_version, updated_at=clock_timestamp(), "
+            "status=CASE WHEN match_proposal.status='retracted' THEN 'pending' "
+            "ELSE match_proposal.status END",
             (low, high, payload.score_total, payload.band.value,
              json.dumps(list(payload.veto_findings)), json.dumps(list(payload.evidence)),
              payload.matcher_version),
         )
+
+
+def retract_pending_proposal(conn, low, high) -> int:
+    """Withdraw a still-PENDING advisory proposal (status -> 'retracted'); return rows hit.
+
+    Called when a pair the matcher previously surfaced now bands below the review floor —
+    most sharply the §5.4 forcing rule, which persisted a REVIEW row while a chart was
+    'unconfirmed' (a transient state) that must not linger once the Doe is identified
+    (issue #135). Append-only-friendly: a status move, never a DELETE (db/017 grants none),
+    so the advisory row's history is preserved and a hub worklist (which filters on
+    status='pending') stops grouping a resolved chart under a nonexistent Doe.
+
+    Only 'pending' rows transition — a human's disposition or a matcher auto-application is
+    left untouched. A no-op (0 rows) for the common case: a sub-threshold pair that never
+    had a proposal. Does NOT commit; the caller owns the transaction boundary.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE match_proposal SET status='retracted', updated_at=clock_timestamp() "
+            "WHERE patient_low=%s AND patient_high=%s AND status='pending'",
+            (low, high),
+        )
+        return cur.rowcount
