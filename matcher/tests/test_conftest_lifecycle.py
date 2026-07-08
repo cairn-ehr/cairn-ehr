@@ -90,8 +90,9 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
 
     # The body raises _Sentinel; the exit truncation raises RuntimeError. The caller must
     # see _Sentinel (the real failure), not the swallowed cleanup RuntimeError.
-    with pytest.raises(_Sentinel):
-        with managed_pg_conn("dummy-dsn"):
-            raise _Sentinel
-
-    assert fake.closed, "the connection must still be closed even when exit truncation fails"
+    try:
+        with pytest.raises(_Sentinel):
+            with managed_pg_conn("dummy-dsn"):
+                raise _Sentinel
+    finally:
+        assert fake.closed, "the connection must still be closed even when exit truncation fails"
