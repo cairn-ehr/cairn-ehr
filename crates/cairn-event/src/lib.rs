@@ -28,7 +28,9 @@ use serde::{Deserialize, Serialize};
 // Re-exported so downstream crates (cairn-sync) need not depend on ed25519-dalek
 // directly — the keypair type travels with this crate's signing API.
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
+pub use attachment::{Attachment, Rendition, SealRef};
 
+pub mod attachment;
 pub mod demographics;
 pub mod evidence;
 pub mod identity;
