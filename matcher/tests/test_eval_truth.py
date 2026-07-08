@@ -12,7 +12,10 @@ from cairn_matcher.pipeline.adapter import candidate_from_rows
 _DS = {
     "name": "t",
     "entities": [
-        {"entity_id": "e1", "records": [{"record_id": "r1"}, {"record_id": "r2"}, {"record_id": "r3"}]},
+        {
+            "entity_id": "e1",
+            "records": [{"record_id": "r1"}, {"record_id": "r2"}, {"record_id": "r3"}],
+        },
         {"entity_id": "e2", "records": [{"record_id": "r4"}]},
     ],
 }

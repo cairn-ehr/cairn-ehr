@@ -1,8 +1,8 @@
 """Pure tests for the plain-text report formatter."""
 
+from cairn_matcher.eval.loader import load_bundled_gold
 from cairn_matcher.eval.report import format_scorer
 from cairn_matcher.eval.scorer_eval import evaluate_scorer
-from cairn_matcher.eval.loader import load_bundled_gold
 
 
 def test_scorer_report_mentions_key_metrics_and_the_caveat():

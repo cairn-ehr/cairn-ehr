@@ -1,11 +1,12 @@
 """Drift canary: pin the generator's recoverability predicate to the real blocking SQL.
 
 `generator.shares_blocking_key` is a hand-maintained mirror of the base blocking passes in
-`pipeline/db.py`'s `_GROUPS_SQL` / `_RANGE_GROUPS_SQL` — the two are coupled only by a comment. The coupling is
-*asymmetric*: if a future edit WIDENS the SQL (adds a pass) the predicate merely over-repairs
-(still safe); but if an edit NARROWS or renames a base pass the predicate keeps claiming those
-pairs are recoverable, so `_repair` skips them and the DB silently drops true matches — a break
-that only the DB-gated volume test would catch, and only when a database is configured.
+`pipeline/db.py`'s `_GROUPS_SQL` / `_RANGE_GROUPS_SQL` — the two are coupled only by a comment.
+The coupling is *asymmetric*: if a future edit WIDENS the SQL (adds a pass) the predicate merely
+over-repairs (still safe); but if an edit NARROWS or renames a base pass the predicate keeps
+claiming those pairs are recoverable, so `_repair` skips them and the DB silently drops true
+matches — a break that only the DB-gated volume test would catch, and only when a database is
+configured.
 
 This test gives the FAST (no-DB) suite that missing signal: it asserts every base pass the
 predicate leans on is still present in the SQL text. It needs psycopg only to import the SQL
@@ -15,7 +16,9 @@ constant (no connection), so it degrades cleanly to a skip where the extra is ab
 import pytest
 
 # The SQL lives in the psycopg-touching module; import the constant only, no connection.
-pytest.importorskip("psycopg", reason="pipeline extra (psycopg) absent — cannot read the blocking SQL")
+pytest.importorskip(
+    "psycopg", reason="pipeline extra (psycopg) absent — cannot read the blocking SQL"
+)
 
 from cairn_matcher.pipeline.db import _GROUPS_SQL, _RANGE_GROUPS_SQL  # noqa: E402
 

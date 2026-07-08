@@ -13,7 +13,6 @@ import sys
 
 from cairn_matcher.eval.generator import GenSpec, generate_dataset
 
-
 # Shared json.dump flags across file-write and stdout output paths to preserve determinism
 _DUMP_KWARGS = {"ensure_ascii": False, "indent": 2, "sort_keys": True}
 

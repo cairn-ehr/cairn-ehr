@@ -36,14 +36,18 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"
+# 100 columns, matching the Rust workspace's rustfmt max_width — one width across the whole repo.
+line-length = 100
 
 [tool.ruff.lint]
-# The linting contract the matcher CI enforces. This is ruff's DEFAULT rule set stated
-# explicitly, so a ruff version bump can never silently change what "clean" means: pyflakes
-# (F — unused imports/names, real bugs) plus the curated pycodestyle subset (E4 imports,
-# E7 statements, E9 syntax). The code is already clean under it.
-#
-# Deliberately NOT yet enabled: import-sorting (I), pyupgrade (UP), bugbear (B), and line
-# length (E5). Turning them on surfaces ~30 mechanical fixes across src/ + tests/ — a separate
-# quality pass, kept out of this infrastructure change so the gate lands green and reviewable.
-select = ["E4", "E7", "E9", "F"]
+# The linting contract the matcher CI enforces, stated EXPLICITLY so a ruff version bump can
+# never silently change what "clean" means. Beyond ruff's defaults (F pyflakes — unused
+# imports/names, real bugs; plus the E4/E7/E9 pycodestyle subset — imports/statements/syntax)
+# this enforces:
+#   E5 — line length (line-too-long), at the 100-col repo width above
+#   I  — import sorting (isort), so import order cannot drift
+#   UP — pyupgrade, keeping the code idiomatic for the py311 floor
+#   B  — flake8-bugbear, catching real footguns (e.g. zip() without an explicit strict=)
+# The code is clean under the full set (imports auto-sorted, one zip() made strict-explicit,
+# and the handful of >100-col lines wrapped).
+select = ["E4", "E5", "E7", "E9", "F", "I", "UP", "B"]

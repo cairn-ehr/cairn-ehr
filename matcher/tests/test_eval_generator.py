@@ -6,9 +6,14 @@ import random
 
 from cairn_matcher.eval.dataset import load_dataset, truth_pairs
 from cairn_matcher.eval.generator import (
-    GenSpec, generate_dataset,
-    name_tokens, shares_blocking_key,
-    corrupt_dob_format, corrupt_dob_typo, corrupt_name, corrupt_identifier,
+    GenSpec,
+    corrupt_dob_format,
+    corrupt_dob_typo,
+    corrupt_identifier,
+    corrupt_name,
+    generate_dataset,
+    name_tokens,
+    shares_blocking_key,
     synth_seed,
 )
 
@@ -109,7 +114,10 @@ def test_operators_are_noops_when_field_absent():
     assert corrupt_dob_format(bare, r) == bare
     assert corrupt_dob_typo(bare, r) == bare
     assert corrupt_identifier(bare, r) == bare
-    no_names = {"record_id": "y", "dob": {"value": "1990-01-01", "precision": "day", "provenance_rank": 30}}
+    no_names = {
+        "record_id": "y",
+        "dob": {"value": "1990-01-01", "precision": "day", "provenance_rank": 30},
+    }
     assert corrupt_name(no_names, r) == no_names
 
 

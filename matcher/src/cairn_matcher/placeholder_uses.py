@@ -17,7 +17,8 @@ This set is the Python MIRROR of that Rust emitter, and the mirror is safety-rel
 is NOT recall-safe in the dangerous direction: a use the Rust side emits that is MISSING here
 UNDER-excludes — those callsign names re-enter the feature space, and two same-site/same-day
 John Does can then block+score+auto-band into a FALSE MERGE (§5.2's "false merge >> false
-split"). So an addition on the Rust side MUST be mirrored here. `tests/test_placeholder_uses_sync.py`
+split"). So an addition on the Rust side MUST be mirrored here.
+`tests/test_placeholder_uses_sync.py`
 reads the Rust constant and fails CI if it drifts out of this set — the mechanical guard that
 replaces the old "documented on both sides, hope nobody forgets" coupling.
 """

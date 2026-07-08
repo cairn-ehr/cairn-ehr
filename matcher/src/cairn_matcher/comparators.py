@@ -67,9 +67,10 @@ def jaro_winkler(s1: str, s2: str, prefix_scale: float = 0.1) -> float:
     m = matches
     jaro = (m / len1 + m / len2 + (m - transpositions) / m) / 3.0
 
-    # Winkler prefix boost (common prefix up to 4 characters).
+    # Winkler prefix boost (common prefix up to 4 characters). strict=False is intentional:
+    # s1 and s2 may differ in length and the common prefix ends at the shorter of the two.
     prefix = 0
-    for c1, c2 in zip(s1, s2):
+    for c1, c2 in zip(s1, s2, strict=False):
         if c1 != c2:
             break
         prefix += 1

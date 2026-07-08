@@ -143,7 +143,11 @@ def test_build_payload_appends_known_alias_evidence():
     payload = build_payload(score, [], Band.REVIEW, alias_evidence=alias_ev)
     # Field evidence still present, with the known-alias entry appended after it.
     assert payload.evidence[0]["field"] == "name"
-    assert payload.evidence[-1] == {"kind": "known_alias", "value": "John Fakename", "alias_of": "abc"}
+    assert payload.evidence[-1] == {
+        "kind": "known_alias",
+        "value": "John Fakename",
+        "alias_of": "abc",
+    }
 
 
 # --- unconfirmed-chart forcing rule (§5.4) -----------------------------------------------

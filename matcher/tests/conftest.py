@@ -88,7 +88,8 @@ def seed_patient(
             precision = rest[0] if rest else "day"
             cur.execute(
                 "INSERT INTO patient_demographic (patient_id, field, value, facets, "
-                "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+                "provenance, provenance_rank, asserted_hlc_wall, "
+                "asserted_hlc_count, asserted_origin) "
                 "VALUES (%s,'dob',%s,%s,'seed',%s,0,0,'seed')",
                 (patient_id, value, json.dumps({"precision": precision}), rank),
             )
@@ -96,7 +97,8 @@ def seed_patient(
             value, rank = sex
             cur.execute(
                 "INSERT INTO patient_demographic (patient_id, field, value, facets, "
-                "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+                "provenance, provenance_rank, asserted_hlc_wall, "
+                "asserted_hlc_count, asserted_origin) "
                 "VALUES (%s,'sex-at-birth',%s,NULL,'seed',%s,0,0,'seed')",
                 (patient_id, value, rank),
             )
@@ -104,7 +106,8 @@ def seed_patient(
             value, rank = admin_sex
             cur.execute(
                 "INSERT INTO patient_demographic (patient_id, field, value, facets, "
-                "provenance, provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+                "provenance, provenance_rank, asserted_hlc_wall, "
+                "asserted_hlc_count, asserted_origin) "
                 "VALUES (%s,'administrative-sex',%s,NULL,'seed',%s,0,0,'seed')",
                 (patient_id, value, rank),
             )
@@ -125,7 +128,8 @@ def seed_patient(
         for system, match_key, value in identifiers:
             cur.execute(
                 "INSERT INTO patient_identifier (patient_id, system, match_key, value, normalized, "
-                "profile, use_type, provenance, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+                "profile, use_type, provenance, asserted_hlc_wall, "
+                "asserted_hlc_count, asserted_origin) "
                 "VALUES (%s,%s,%s,%s,%s,NULL,NULL,'seed',0,0,'seed') ON CONFLICT DO NOTHING",
                 (patient_id, system, match_key, value, match_key),
             )
@@ -157,7 +161,8 @@ def seed_identity_pending(conn, subject, *, basis="unidentified at registration"
     """
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO chart_identity_state (subject, state, detail, hlc_wall, hlc_counter, origin) "
+            "INSERT INTO chart_identity_state "
+            "(subject, state, detail, hlc_wall, hlc_counter, origin) "
             "VALUES (%s,'pending',%s,0,0,'seed') "
             "ON CONFLICT (subject) DO UPDATE SET state='pending', detail=EXCLUDED.detail",
             (subject, basis),

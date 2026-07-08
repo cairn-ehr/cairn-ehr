@@ -471,7 +471,8 @@ def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO match_proposal "
-            "(patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version) "
+            "(patient_low, patient_high, score_total, band, "
+            "veto_findings, evidence, matcher_version) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (patient_low, patient_high) DO UPDATE SET "
             "score_total=EXCLUDED.score_total, band=EXCLUDED.band, "

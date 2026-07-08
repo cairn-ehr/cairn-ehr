@@ -5,9 +5,9 @@ with no block over the cap, blocking recall is total and no true match is droppe
 evaluate_blocking's rollback discipline, so it leaves no synthetic patients behind.
 """
 
+from cairn_matcher.eval.blocking_eval import evaluate_blocking
 from cairn_matcher.eval.dataset import load_dataset
 from cairn_matcher.eval.generator import GenSpec, generate_dataset, shares_blocking_key
-from cairn_matcher.eval.blocking_eval import evaluate_blocking
 
 
 def test_generated_volume_set_is_fully_recoverable(pg_conn):
