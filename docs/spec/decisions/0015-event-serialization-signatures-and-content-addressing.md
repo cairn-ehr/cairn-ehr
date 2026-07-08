@@ -2,6 +2,14 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-16
+- **Resolution (2026-07-07):** the one provisional sub-choice — the **BLAKE3 blob digest** (Decision §4) — is
+  now **confirmed; no longer provisional.** Bet B **B4** on real ARM (Raspberry Pi 5 / Cortex-A76) measured
+  **BLAKE3 913 vs SHA-256 230 MB/s** (BLAKE3 ~4× faster), so BLAKE3's chunk-verification benefit carries no
+  throughput penalty on the target hardware — the "revisit if materially slower" condition below did not
+  trigger. First measured 2026-06-25 and reproduced caveat-free on the 2026-07-07 PG 18 + NVMe clean re-run
+  ([Spike 0001 §9.5](../../spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#95-clean-re-run-pg-18-nvme-2026-07-07-pass-both-caveats-resolved)).
+  This note *overlays* — it does not erase — the "provisional" prose below (Context, Decision §4, and the
+  risk list), which faithfully records the pre-Bet-B state.
 
 ## Context
 

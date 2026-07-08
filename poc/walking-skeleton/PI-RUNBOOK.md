@@ -164,7 +164,9 @@ vcgencmd measure_temp
 
 **PostgreSQL tuning for a 16 GB Pi.** Modest, deployment-honest settings (do **not**
 disable `fsync`/`synchronous_commit` — a rural clinic node must survive power loss, so
-measure the safe configuration):
+measure the safe configuration). **On an 8 GB board** (what both the 2026-06-25 and
+2026-07-07 runs actually used) halve the memory knobs — `shared_buffers = '2GB'`,
+`effective_cache_size = '5GB'` — and keep the rest:
 
 ```bash
 sudo -u postgres psql -p 5444 -d pi <<'SQL'
@@ -195,13 +197,19 @@ cargo build --release -p cairn-sync   # produces target/release/cairn-sync (arm6
 cargo test --release             # sanity: the 6 crypto/round-trip tests should pass
 ```
 
-> [!WARNING]
-> **DB-backed gates (B1/B2/B5) currently require PostgreSQL 16, not 18.** `cairn-sync init` does
-> `CREATE EXTENSION cairn_pgx`, and `extensions/cairn_pgx` is pinned to **`pgrx =0.12.9` with only a `pg16`
-> feature** — it does not build against PG 18. Until the extension is ported to a PG-18-capable pgrx, install
-> **PG 16** for the DB run (build the extension on the board with `cargo pgrx install --release --sudo
-> --pg-config /usr/lib/postgresql/16/bin/pg_config`). The **crypto-only B3/B4 `bench`** needs no DB and runs
-> fine regardless. See the 2026-06-25 Bet B run, [Spike 0001 §9.3](../../docs/spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#93-caveat-2--ran-on-pg-16-because-cairn_pgx-cant-build-on-pg-18-a-build-prep-finding).
+> [!NOTE]
+> **Build the extension for PG 18** (this is the deployment floor and the default). `cairn_pgx` now targets
+> **pgrx 0.18.1** with a `pg18` feature, so the whole run — including the DB gates B1/B2/B5 — happens on
+> **PostgreSQL 18** (the 2026-06-25 PG-16-only caveat is resolved; see [§9.5](../../docs/spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md#95-clean-re-run-pg-18-nvme-2026-07-07-pass-both-caveats-resolved)).
+> Two build prerequisites the 2026-07-07 re-run surfaced on a fresh board:
+> 1. **`cargo-pgrx` must match the pgrx crate** — upgrade it: `cargo install cargo-pgrx --version 0.18.1 --locked --force`.
+> 2. **Register the system PG 18 with pgrx** before building, or the `pgrx-pg-sys` build fails with *"Postgres
+>    `pg18` is not managed by pgrx"*: `cargo pgrx init --pg18 /usr/lib/postgresql/18/bin/pg_config`.
+>
+> Then build+install the extension on the board (needs `postgresql-server-dev-18` + `libclang-dev`):
+> `LIBCLANG_PATH=/usr/lib/llvm-19/lib cargo pgrx install --no-default-features --features pg18
+> --pg-config /usr/lib/postgresql/18/bin/pg_config --release --sudo`. The **crypto-only B3/B4 `bench`** needs
+> no DB and runs fine regardless.
 
 ---
 

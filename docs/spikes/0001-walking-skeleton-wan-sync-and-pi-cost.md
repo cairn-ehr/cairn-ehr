@@ -3,14 +3,15 @@
 - **Status:** Bet A **PASS** (run 2026-06-16 over the Cape York ↔ Dorrigo WireGuard link — see §8; the run also
   surfaced and fixed a real availability-floor bug in the field `run` loop, §8.1) → **§4 primitives ratified as
   [ADR-0015](../spec/decisions/0015-event-serialization-signatures-and-content-addressing.md)** (blob-digest
-  line provisional pending Bet B). **Bet B (Pi) PASS** (run 2026-06-25 on a Raspberry Pi 5 / **8 GB** — see
+  line was provisional pending Bet B — **now confirmed**, ADR-0015 Resolution 2026-07-07). **Bet B (Pi) PASS**
+  (run 2026-06-25 on a Raspberry Pi 5 / **8 GB** — see
   §9): all §6 gates green with large headroom; the **B4 ARM crypto number confirms ADR-0015's BLAKE3
-  blob-digest default** (BLAKE3 ~4× SHA-256 on Cortex-A76). Two honest caveats on this run — storage was on a
-  **USB-2-limited dock** (35 MB/s, power-offload workaround, §9.2) and it ran on **PG 16** (the `cairn_pgx`
-  pgrx extension is pinned to pgrx 0.12.9 / `pg16` and won't build on PG 18, §9.3) — but both *cost precision,
-  not the verdict* (gates clear by 11×/394×). A clean **PG 18 + USB-3 + official-PSU** re-run is the remaining
-  follow-up (§9.4).
-- **Date:** 2026-06-16 (Bet A); 2026-06-25 (Bet B)
+  blob-digest default** (BLAKE3 ~4× SHA-256 on Cortex-A76). The 2026-06-25 run carried two honest caveats
+  (USB-2-limited storage §9.2; ran on PG 16 because `cairn_pgx` couldn't build on PG 18 §9.3) that cost
+  *precision, not the verdict* — **both are now resolved by the clean PG 18 + NVMe re-run (2026-07-07, §9.5)**:
+  B1 held p95 3.99 ms *below* the old number **at 10× the log size** (2 M events), flat ×2.50; B5 ×1.40
+  FK-index shrink at 2 M rows; crypto reproduced within noise. **Bet B is now caveat-free.**
+- **Date:** 2026-06-16 (Bet A); 2026-06-25 (Bet B); 2026-07-07 (Bet B clean re-run, §9.5)
 - **Validates:** [ADR-0001](../spec/decisions/0001-fat-postgres-thin-daemon.md) (projection cost on weak
   hardware), the [§6.2](../spec/sync.md#62-consistency-model) set-union convergence claim under a *real*
   partition, the [ADR-0013](../spec/decisions/0013-attachments-content-addressed-lazy-blob-tier.md)
@@ -491,12 +492,44 @@ real ARM**, complementing the Android pgrx result in [Spike 0003](0003-postgres-
 
 ### 9.4 Follow-ups
 
-1. **Clean re-run on PG 18 + USB-3 + official PSU.** Resolves both caveats and yields the authoritative,
-   precision floor numbers (expected to widen B1/B2 headroom further). Blocked on: porting `cairn_pgx` to a
-   PG-18-capable pgrx (§9.3), and the power/storage BOM (§9.2).
-2. **ADR-0015 follow-up:** the B4 ARM number (**BLAKE3 915 vs SHA-256 230 MB/s**) **confirms** the provisional
-   blob-digest default — fold into the ADR-0015 follow-up to drop the "provisional" caveat on the blob-digest
-   line.
+1. **Clean re-run on PG 18 + NVMe + official PSU — DONE 2026-07-07 (§9.5).** Both caveats resolved; the
+   authoritative, precision numbers are in. The two blockers cleared: `cairn_pgx` now builds on PG 18 (pgrx
+   0.18.1, `pg18` feature — §9.3 caveat gone) and storage moved to a PCIe NVMe HAT (better than the USB-3 SSD
+   this item asked for — §9.2 caveat gone). Prediction held: B1 stayed flat *and* faster at 10× the log size.
+2. **ADR-0015 — DONE 2026-07-07.** The B4 ARM number (**BLAKE3 913 vs SHA-256 230 MB/s**, reproduced from the
+   2026-06-25 915) **confirmed** the provisional blob-digest default; ADR-0015 now carries a dated **Resolution**
+   overlay dropping "provisional" from the BLAKE3 blob-digest line.
 3. **ADR-0031:** the ×1.39 FK-index shrink with a competitive surrogate read **confirms** the interning
    discipline pays on ARM and **narrows nothing** — interning earns its indirection for the wide/high-fan-out
    references, as designed.
+
+### 9.5 Clean re-run — PG 18 + NVMe, 2026-07-07 — **PASS** (both caveats resolved)
+
+The §9.4 follow-up #1 clean re-run, on the **same Raspberry Pi 5 / 8 GB** board (`Raspie58`), this time with
+both 2026-06-25 caveats removed: the SSD is now a **PCIe M.2 NVMe HAT** (not the USB-2-limited dock of §9.2 —
+`pg_storage_device: /dev/nvme0n1`, `pg_on_sd_card: false`), the run is on **PostgreSQL 18.4** (not the PG 16
+of §9.3), and it ran on the **official 5 A PSU** (`throttle` clean `0x0` throughout, ~55–60 °C, `performance`
+governor). The blocker that forced PG 16 last time is gone: **`cairn_pgx` now builds and loads on PG 18**
+(pgrx **0.18.1**, `pg18` feature; extension version **0.3.0**, satisfying the daemon's `REQUIRED_PGX_FLOOR`).
+This run also pushes the flatness ladder to the full **2,000,000-event** tier the impatient first pass skipped.
+Tuning is scaled to the 8 GB board (`shared_buffers 2GB`, `effective_cache_size 5GB`; `fsync` +
+`synchronous_commit` left `on` — the safe rural-clinic config). Artifacts:
+[`poc/walking-skeleton/results/`](../../poc/walking-skeleton/results/) (`betb-pi5-nvme-pg18-full.json`,
+`betb-pi5-nvme-pg18-crypto.json`, `betb-pi5-nvme-pg18-b5.log`).
+
+| # | Question | Result | Detail (this run — PG 18 + NVMe) | 2026-06-25 (PG 16 + USB-2) |
+|---|---|---|---|---|
+| **B1** | projection maintenance cheap + flat? | **PASS** | p95 **3.99 ms @ 2,004,000 events** — **13× under** the 50 ms budget; growth **×2.50** vs 54,000 events (flat ≤ ×3.0) | p95 4.38 ms @ 202k (11×); growth ×2.15 |
+| **B2** | chart read beats paper? | **PASS** | p50 4.3 ms / p95 **4.5 ms** over a **374-note** chart — **222× under** the 1 s paper-parity floor | p95 2.5 ms over 200 notes (394×) |
+| **B3** | keystore (crypto-shred) cost? | **INFO** | DEK-wrap **1,587,411/s**, body-seal **242 MB/s** | 1,581,249/s, 242 MB/s |
+| **B4** | crypto keeps up on ARM? | **PASS** | Ed25519 **5,501 verify/s** (2.8× over the 2,000 floor); **BLAKE3 913 vs SHA-256 230 MB/s** ⇒ ADR-0015 default holds | 5,490/s; 915 vs 230 |
+| **B5** | surrogate-key interning pays? (ADR-0031) | **CONFIRMS** | FK-index **shrink ×1.40** (18→13 MB / **2,000,000 rows**); heap 146→130 MB; surrogate read **8 vs 5 buffer hits** (both sub-ms all-cache). Guard **G1–G6 ALL PASS** | ×1.39 @ 500k rows; 8 vs 5 |
+
+**Verdict: Bet B PASS, now caveat-free.** The headline is B1: the storage caveat mattered even less than
+feared — on real NVMe, projection-maintenance p95 landed **below** the old USB-2 number (3.99 ms vs 4.38 ms)
+**while running at 10× the log size** (2.0 M vs 202 k events), and stayed flat (×2.50) across a **×37**
+log-growth jump (54 k → 2 M). B3/B4 are disk-independent and reproduced the 2026-06-25 crypto numbers within
+noise (confirming rig consistency), so **ADR-0015's BLAKE3 blob-digest default is confirmed on ARM without an
+asterisk**. Measured on-disk cost at the 2 M tier: **~1,515 B/event** for `event_log` (feeds the sizing
+appendix with a real number, well under the ~2–4 KB estimate). The board remains the constrained **8 GB**
+(not the 16 GB runbook target), so the headroom shown is still a *stronger-than-target* floor signal.
