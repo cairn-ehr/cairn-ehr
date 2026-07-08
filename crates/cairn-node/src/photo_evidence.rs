@@ -90,11 +90,20 @@ pub async fn assert_photo_evidence(
 
     let tx = client.transaction().await?;
     // Store the bytes present=TRUE — verified in-DB by the db/026 trigger before it commits.
+    // DO UPDATE, not DO NOTHING: a row may already exist at this content address as a
+    // present=FALSE reference-only placeholder (e.g. a remote-synced event referenced this
+    // photo before this node held its bytes, or blob_note_reference created it). DO NOTHING
+    // would leave that placeholder unfilled while the event still commits, so the chart would
+    // reference a blob whose bytes were silently discarded — a content-address match guarantees
+    // identical bytes, so overwriting (even a present=TRUE row) is always safe.
     tx.execute(
         "INSERT INTO blob_store (blob_address, media_type, byte_len, content, outboard, present, fetched_at)
          VALUES ($1, $2, $3, $4, $5, TRUE, clock_timestamp())
-         ON CONFLICT (blob_address) DO NOTHING",
-        &[&lb.addr, &media_type, &byte_len, &bytes.to_vec(), &lb.outboard],
+         ON CONFLICT (blob_address) DO UPDATE
+            SET content = EXCLUDED.content, outboard = EXCLUDED.outboard, present = TRUE,
+                media_type = EXCLUDED.media_type, byte_len = EXCLUDED.byte_len,
+                fetched_at = EXCLUDED.fetched_at",
+        &[&lb.addr, &media_type, &byte_len, &bytes, &lb.outboard],
     ).await?;
     // Author the event (its floor learns the reference — ON CONFLICT no-op against the row above).
     tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes]).await?;
