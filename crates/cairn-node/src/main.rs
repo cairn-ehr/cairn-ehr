@@ -321,6 +321,27 @@ enum Cmd {
         #[arg(long)]
         sex_basis: Option<String>,
     },
+
+    /// Attach a clinician-observed photograph as §5.4 identity evidence to an existing chart.
+    /// The photo becomes a content-addressed blob stored locally (present + self-verified) and
+    /// referenced by an `identity.evidence.asserted` event. OWNER ceremony: enrolls the node key
+    /// as a registration actor on first use (a real UI attaches the operating clerk's actor).
+    AssertPhotoEvidence {
+        /// The patient UUID to attach the photo to.
+        patient: Uuid,
+        /// Path to the image file on disk.
+        #[arg(long)]
+        file: std::path::PathBuf,
+        /// The MIME media type of the file (e.g. image/jpeg). Caller-supplied — no sniffing.
+        #[arg(long = "media-type")]
+        media_type: String,
+        /// Honest human description of the photo (required, non-empty — principle 4).
+        #[arg(long)]
+        descriptor: String,
+        /// How/why the photo was taken (optional).
+        #[arg(long)]
+        basis: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -864,6 +885,23 @@ async fn main() -> anyhow::Result<()> {
             cairn_node::evidence::assert_observed_evidence(
                 &mut db, &sk, &kid, &id.node_id_hex, patient, &ev, observed_year).await?;
             println!("recorded clinician-observed evidence on {patient}");
+        }
+        Cmd::AssertPhotoEvidence { patient, file, media_type, descriptor, basis } => {
+            if descriptor.trim().is_empty() {
+                anyhow::bail!("--descriptor must be non-empty (§5.4/principle 4: say what the photo shows)");
+            }
+            let bytes = std::fs::read(&file)
+                .map_err(|e| anyhow::anyhow!("reading {}: {e}", file.display()))?;
+            let sk = load_signing_key(&cli.key, true)?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &kid).await?;
+
+            let event_id = cairn_node::photo_evidence::assert_photo_evidence(
+                &mut db, &sk, &kid, &id.node_id_hex, patient, &bytes, &media_type,
+                &descriptor, basis.as_deref()).await?;
+            println!("attached photo evidence {event_id} to {patient}");
         }
     }
     Ok(())
