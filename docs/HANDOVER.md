@@ -49,8 +49,20 @@ bad-kind/empty-description rejects (DB-gated); CLI smoke on a provisioned node a
 discriminator-first validation (kind then description) to match the gate.
 **Suites:** cairn-event + full cairn-node workspace green; `clippy --workspace --tests -D warnings` clean (the exact CI
 gate). **Honest limits:** free-text `description` only (no structured belongings item list — YAGNI, additive-friendly);
-no projection/worklist/matcher signal (evidence is log-retrievable + twin-legible, same as photo). Note: repo is *not*
-rustfmt-default-clean (hand-formatted; CI does not gate on fmt) — matched surrounding style, did **not** run `cargo fmt`.
+no projection/worklist/matcher signal (evidence is log-retrievable + twin-legible, same as photo).
+
+**This session (2026-07-08, third) — CI + tooling catch-up (PR #143).** Closed the SW-hygiene gaps found after
+switching from ADR/spec work to building code. Three independent, verified-green gates: (1) **rustfmt** — one-time
+mechanical whole-workspace + `cairn_pgx` reformat to rustfmt defaults (`max_width=100`, comments untouched, `poc/`
+excluded; clippy/`cargo test` still green) + a `fmt` job in `rust.yml`. **The repo is now rustfmt-default-clean and
+CI gates on it** (this supersedes the prior "hand-formatted, CI does not gate on fmt" note). (2) **cargo-deny** —
+`deny.toml` (AGPL-compat permissive-only license allow-list · `advisories=deny` · `wildcards=deny` · crates.io-only)
++ a `deny` job; caught `RUSTSEC-2026-0190` → `anyhow 1.0.102`→`1.0.103`; `publish = false` on the three application
+crates. cargo-deny **pinned to 0.19.9** (post-review fix: `cargo install --locked` pins only its deps, not itself).
+(3) **matcher** — `matcher.yml` (`ruff check` + pure `pytest`, DB tests self-skip) + explicit ruff rule set in
+`pyproject.toml`. **Deferred (tracked):** required status checks ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)),
+Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144)), DB-gated tests run
+nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)), stricter ruff ruleset (separate PR).
 
 **Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
