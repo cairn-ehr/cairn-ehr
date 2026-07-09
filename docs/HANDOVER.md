@@ -52,7 +52,11 @@ winner). Full workspace green (overlay_tiebreaker 6, no regressions across ident
 clean. brainstorm→design→plan→**subagent-driven TDD** (per-task spec+quality review + opus whole-branch review,
 APPROVE, 0 Critical/Important). Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-overlay-tiebreaker*`.
 **Remaining #115:** part 2's twin-ladder registry + `cairn_require_uuid` helper (independent refactors), and #69
-(TEXT-collation of the intermediate `origin`/`value`/`display` comparisons).
+(TEXT-collation of the intermediate `origin`/`value`/`display` comparisons). **PR-review follow-on filed
+([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)):** a genuine HLC-triple collision between two
+distinct `content_address`es is proof of a broken/hostile signer; the tiebreaker resolves it to a deterministic
+winner but *silently* — surface it as an advisory signal (§5.13 duplicate sweep / human worklist), never gating
+the apply path. Enhancement, out of scope for part 1.
 
 **Prior session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
 ([#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) CLOSED; ADR-0044; spec v0.44→0.45).** The SECOND

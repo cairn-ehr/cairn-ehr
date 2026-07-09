@@ -3,6 +3,10 @@
 //! two DISTINCT events share an identical (wall, counter, origin) triple (a Byzantine /
 //! broken-signer collision). Real Postgres, gated on `$CAIRN_TEST_PG`, serialized
 //! cluster-wide via `db::test_serial_guard`.
+//!
+//! Convention: tokio-postgres has no uuid `ToSql` feature enabled in this project (see
+//! `identity_linkage.rs::edge_state`), so UUID lookup params are bound as text and cast in
+//! SQL via `$n::text::uuid`. That's why the read-back queries below take `*.to_string()`.
 use cairn_event::identity::{
     dispute_assertion_body, dispute_resolution_body, identify_assertion_body, link_assertion_body,
     pending_assertion_body, render_dispute_resolved_twin, render_dispute_twin,
@@ -268,8 +272,6 @@ async fn patient_link_converges_under_hlc_collision() {
         "link"
     };
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project
-    // convention, see identity_linkage.rs::edge_state) — cast text params through uuid.
     let (lo_s, hi_s) = (lo.to_string(), hi.to_string());
 
     apply(&c, &e_link).await.expect("link applies");
@@ -394,8 +396,6 @@ async fn chart_dispute_converges_under_hlc_collision() {
 
     apply(&c, &e_open).await.expect("open applies");
     apply(&c, &e_resolved).await.expect("resolve applies");
-    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
-    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
     let did_s = did.to_string();
     let s1: String = c
         .query_one(
@@ -509,8 +509,6 @@ async fn chart_identity_state_converges_under_hlc_collision() {
     } else {
         "pending"
     };
-    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
-    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
     let subj_s = subj.to_string();
 
     apply(&c, &e_pending).await.expect("pending applies");
@@ -638,8 +636,6 @@ async fn name_repudiation_converges_under_hlc_collision() {
     apply_attested(&c, &e2, &t2, &hkey)
         .await
         .expect("repudiation two applies");
-    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
-    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
     let subj_s = subj.to_string();
     let r1: String = c
         .query_one(
@@ -720,8 +716,6 @@ async fn patient_chart_converges_under_hlc_collision() {
     } else {
         "Alice A"
     };
-    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
-    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
     let p_s = p.to_string();
 
     apply(&c, &e_a).await.expect("amend A applies");
