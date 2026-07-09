@@ -62,6 +62,8 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0039](0039-globalise-authored-legibility-twin.md) | Globalise the authored legibility twin; honest-degradation floor for non-demographic types | Accepted (refines 0012, 0034) | 2026-06-28 |
 | [0040](0040-signing-context-domain-separation.md) | Signing-context domain separation (content-type + external_aad); one signature per event, co-signing by overlay | Accepted (refines 0015, 0007, 0030) | 2026-07-02 |
 | [0041](0041-progress-note-narrative-format.md) | The progress-note narrative format: one signed event, markdown narrative, manifest-keyed media anchors | Accepted (refines 0012, 0013, 0020, 0039) | 2026-07-04 |
+| [0042](0042-concrete-attachment-reference-shape.md) | The concrete attachment-reference shape (Attachment / Rendition / SealRef) | Accepted (refines 0013) | 2026-07-08 |
+| [0043](0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | Accepted (refines 0010, 0022) | 2026-07-09 |
 
 ## Template
 
