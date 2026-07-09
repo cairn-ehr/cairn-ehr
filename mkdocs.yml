@@ -146,6 +146,7 @@ nav:
       - ADR-0040 · Signing-context domain separation & one signature per event: spec/decisions/0040-signing-context-domain-separation.md
       - ADR-0041 · The progress-note narrative format: spec/decisions/0041-progress-note-narrative-format.md
       - ADR-0042 · The concrete attachment-reference shape: spec/decisions/0042-concrete-attachment-reference-shape.md
+      - ADR-0043 · Suppression is self-only; disagreement is additive: spec/decisions/0043-suppression-self-only-disagreement-is-additive.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
