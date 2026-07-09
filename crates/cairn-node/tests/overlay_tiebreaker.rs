@@ -430,6 +430,7 @@ async fn chart_dispute_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "chart_dispute").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_resolved).await.expect("resolve applies");
@@ -450,6 +451,15 @@ async fn chart_dispute_converges_under_hlc_collision() {
     assert_eq!(
         s1, expect,
         "winner is the higher content_address, deterministically"
+    );
+
+    // #157: the resolved open-vs-resolved collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "chart_dispute").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
     );
 }
 

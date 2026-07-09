@@ -154,7 +154,23 @@ DECLARE
     -- so the overlay row is self-describing without a misleading column name.
     v_detail text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved'
                            THEN p ->> 'resolution' ELSE p ->> 'reason' END;
+    v_cur record;
 BEGIN
+    -- #157: detect a Byzantine HLC-triple collision against the current dispute state and record
+    -- an advisory signal before overlaying. Placed before the subject-consistency guard so the
+    -- collision is observed regardless of which door (local submit / remote apply) we are on.
+    SELECT hlc_wall, hlc_counter, origin, content_address
+      INTO v_cur
+      FROM chart_dispute WHERE dispute_id = (p ->> 'dispute_id')::uuid;
+    IF FOUND AND cairn_hlc_triple_collision(
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
+        PERFORM cairn_record_hlc_collision(
+            'chart_dispute', p ->> 'dispute_id',
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+            NEW.content_address, v_cur.content_address);
+    END IF;
+
     -- Subject-consistency guard, split exactly like C1's oversize guard (db/018):
     -- FAIL LOUD locally, CONVERGE on sync. A dispute_id names ONE chart for its whole
     -- life, so a second assertion binding the SAME dispute_id to a DIFFERENT subject is
