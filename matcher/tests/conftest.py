@@ -10,6 +10,7 @@ the cairn-node loader applies on connect — all idempotent) so the Python suite
 self-sufficient given a PG+cairn_pgx cluster.
 """
 
+import hashlib
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,21 @@ from pathlib import Path
 import pytest
 
 CAIRN_TEST_PG = os.environ.get("CAIRN_TEST_PG")
+
+
+def _seed_content_address(*parts: str) -> bytes:
+    """A synthetic, multihash-shaped content_address for a directly-seeded projection row.
+
+    The state overlays (name_repudiation, chart_identity_state, …) carry the winning event's
+    `content_address` as the #115 deterministic overlay tiebreaker, and store it NOT NULL. The
+    seeds below inject projection rows directly (bypassing the event floor on purpose — see
+    their docstrings), so they must supply this column themselves. A real content_address is
+    `\\x1220` + sha256(signed_bytes); we mirror that shape with a deterministic digest of the
+    row's identifying fields so each seed row gets a distinct, stable value. It is inert for
+    these consumption tests (any real event carries hlc_wall > 0 and so outranks the seed's
+    (0, 0, 'seed') triple before the tiebreaker is ever consulted). Not key material.
+    """
+    return b"\x12\x20" + hashlib.sha256("|".join(parts).encode()).digest()
 
 # Mirror crates/cairn-node/src/db.rs SCHEMA order. 008 is intentionally skipped (spike-only).
 _SCHEMA_FILES = [
@@ -183,9 +199,10 @@ def seed_repudiation(conn, subject, value, *, reason="test fabricated persona"):
     """
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO name_repudiation (subject, value, reason, hlc_wall, hlc_counter, origin) "
-            "VALUES (%s,%s,%s,0,0,'seed') ON CONFLICT DO NOTHING",
-            (subject, value, reason),
+            "INSERT INTO name_repudiation "
+            "(subject, value, reason, hlc_wall, hlc_counter, origin, content_address) "
+            "VALUES (%s,%s,%s,0,0,'seed',%s) ON CONFLICT DO NOTHING",
+            (subject, value, reason, _seed_content_address(subject, value, "repudiation")),
         )
     conn.commit()
 
@@ -200,9 +217,9 @@ def seed_identity_pending(conn, subject, *, basis="unidentified at registration"
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO chart_identity_state "
-            "(subject, state, detail, hlc_wall, hlc_counter, origin) "
-            "VALUES (%s,'pending',%s,0,0,'seed') "
+            "(subject, state, detail, hlc_wall, hlc_counter, origin, content_address) "
+            "VALUES (%s,'pending',%s,0,0,'seed',%s) "
             "ON CONFLICT (subject) DO UPDATE SET state='pending', detail=EXCLUDED.detail",
-            (subject, basis),
+            (subject, basis, _seed_content_address(subject, "pending")),
         )
     conn.commit()
