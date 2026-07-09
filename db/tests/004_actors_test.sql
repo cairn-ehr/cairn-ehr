@@ -44,4 +44,34 @@ DO $$ BEGIN
     END;
 END $$;
 
+-- issue #152: enroll fails CLOSED when the same pinned set (→ same actor_id) is
+-- enrolled with a DIFFERENT signing key. The minimal human pinned set is the classic
+-- collision; a distinguishing determinant is what keeps two clinicians distinct.
+DO $$
+DECLARE aid1 bytea; aid2 bytea;
+BEGIN
+    aid1 := enroll_actor('human', '{"role":"clinician"}', 'keyAAAA');
+    -- Idempotent same-key re-enroll is allowed (re-runnable provisioning).
+    aid2 := enroll_actor('human', '{"role":"clinician"}', 'keyAAAA');
+    IF aid1 IS DISTINCT FROM aid2 THEN
+        RAISE EXCEPTION 'collision test FAILED: same (pinned,key) should map to one actor_id';
+    END IF;
+    -- Different key, identical pinned set → must raise.
+    BEGIN
+        PERFORM enroll_actor('human', '{"role":"clinician"}', 'keyBBBB');
+        RAISE EXCEPTION 'collision test FAILED: distinct-key collision was NOT refused';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM LIKE '%different signing key%' THEN
+            RAISE NOTICE 'actor_id collision refusal OK';
+        ELSE RAISE; END IF;
+    END;
+    -- The pure predicate agrees.
+    IF NOT cairn_actor_id_key_conflict(aid1, 'keyBBBB') THEN
+        RAISE EXCEPTION 'predicate FAILED: keyBBBB should conflict with aid1';
+    END IF;
+    IF cairn_actor_id_key_conflict(aid1, 'keyAAAA') THEN
+        RAISE EXCEPTION 'predicate FAILED: keyAAAA is the SAME key, no conflict';
+    END IF;
+END $$;
+
 ROLLBACK;
