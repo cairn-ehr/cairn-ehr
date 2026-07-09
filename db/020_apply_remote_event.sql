@@ -177,6 +177,14 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'apply_remote_event: overlay targets unknown event %', v_target_id;
         END IF;
+
+        -- ADR-0043 owner-gate (shared helper — see db/005): a replicated cross-human
+        -- suppress faces the SAME refusal a locally-authored one does (principle 12).
+        -- p_attester_key is non-NULL here (step 4 refused a suppress with no token).
+        IF v_mode = 'suppressing'
+           AND NOT cairn_suppression_author_ok(v_target_id, p_attester_key) THEN
+            RAISE EXCEPTION 'apply_remote_event: cross-author suppression refused — a suppress of another human''s event may not be admitted; disagreement is additive. (ADR-0043)';
+        END IF;
     END IF;
 
     -- 6. Provenance binding (C3): an advisory must cite its source blob's address.

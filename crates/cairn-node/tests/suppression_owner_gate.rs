@@ -189,6 +189,40 @@ async fn self_suppression_by_human_attester_accepted() {
 }
 
 #[tokio::test]
+async fn cross_human_suppress_refused_at_apply_door() {
+    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    // Human A authors a note through the LOCAL door (submit_event) — establishes
+    // A as the target's sole human author-of-record.
+    let tgt = author_note(&c, p, &kid_a, &sk_a).await;
+    // Human B's cross-human salience.downgrade of A's note, pushed through the
+    // REMOTE-APPLY door (apply_remote_event) exactly as a synced event would arrive:
+    // signed bytes + attestation token + attester key travel together (call shape
+    // copied verbatim from apply_remote_event.rs::attested_suppress_applies_and_stores_the_token).
+    let supp = body("salience.downgrade", p, &kid_b, false, Some(&tgt));
+    let signed = sign(&supp, &sk_b).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_b, "attested", &sk_b).unwrap();
+    let hkey = hex::decode(&kid_b).unwrap();
+    let r = c
+        .execute(
+            "SELECT apply_remote_event($1, $2, $3)",
+            &[&signed.signed_bytes, &token, &hkey],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| db_msg(&e));
+    assert!(r.is_err(), "a synced cross-human suppress must be refused at apply");
+    assert!(
+        r.unwrap_err().contains("cross-author suppression refused"),
+        "legible ADR-0043 reason"
+    );
+}
+
+#[tokio::test]
 async fn agent_advisory_dismissable_by_any_human() {
     let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
     let _g = db::test_serial_guard(&base).await.unwrap();
