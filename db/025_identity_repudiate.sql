@@ -178,7 +178,25 @@ CREATE OR REPLACE FUNCTION name_repudiation_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := NEW.body;
+    v_cur record;
 BEGIN
+    -- #157: detect a Byzantine HLC-triple collision against the current repudiation of this exact
+    -- (subject, value) and record an advisory signal before overlaying the winning `reason`. Note
+    -- the SUPPRESSION decision itself is value-keyed + idempotent (see the #69 note below), so this
+    -- only ever surfaces which advisory `reason` the collision resolved to — never un-suppresses.
+    SELECT hlc_wall, hlc_counter, origin, content_address
+      INTO v_cur
+      FROM name_repudiation
+      WHERE subject = (p ->> 'subject')::uuid AND value = p ->> 'value';
+    IF FOUND AND cairn_hlc_triple_collision(
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
+        PERFORM cairn_record_hlc_collision(
+            'name_repudiation', (p ->> 'subject') || '|' || (p ->> 'value'),
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+            NEW.content_address, v_cur.content_address);
+    END IF;
+
     INSERT INTO name_repudiation
         (subject, value, reason, hlc_wall, hlc_counter, origin, content_address)
     VALUES
