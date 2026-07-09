@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-08 · **Spec/ADRs:** v0.43 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-09 · **Spec/ADRs:** v0.44 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -25,6 +25,29 @@ the §3.14 day-one attachment-reference shape)
 (the "prior history now available" push-alert, the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**This session (2026-07-09) — the suppression owner-gate: self-only, disagreement is additive (ADR-0043; spec
+v0.43→0.44; closes the last open sub-item of [#99](https://github.com/cairn-ehr/cairn-ehr/issues/99)).** The
+FIRST in-DB **floor authorization** change since the demographics build began. Design+plan under
+`docs/superpowers/{specs,plans}/2026-07-09-suppression-self-only-owner-gate*`. A suppressing overlay
+(`salience.downgrade` / `visibility.suppress`) that forecloses on a **human author's** event is now refused unless
+the suppressor is that human — disagreement is expressed **additively** (a note referencing the target), never by
+touching another author's content (principle 1/2 + paper-parity, read correctly: you cannot un-write a colleague's
+ink). **Agent-authored / un-owned advisories stay dismissable** by any enrolled human (principle 10 —
+clinician-overrides-the-machine). One shared STABLE helper `cairn_suppression_author_ok(target, attester_key)`
+(human-authors = `{signer_key_id if kind='human'} ∪ {hex(attester_key) if present}`; empty ⇒ dismissable, non-empty
+⇒ self-only; safe-refuse on ambiguity) enforced identically at **both** write doors — `submit_event` (`db/005`) and
+`apply_remote_event` (`db/020`) — so a replicated cross-human suppress faces the same refusal (principle 12). Both
+migration files edited **in place** (the #99 hardening pattern; pre-clinical posture). **Scope carve-outs:** §5.9
+sensitivity-sealing (separate authorized path, its own safety projection) and `repudiate` (`targets_other=FALSE`,
+value-grained) are untouched. **Deliberate divergence from ADR-0010 §2** (cross-author *demotion* is gated too, not
+just hiding — the maintainer's clinical call). **The other three #99 sub-items were already fixed 2026-07-02**
+(recall-epoch join, `recall_overlay` FK, `actor_current` tiebreak). TDD, 6 DB-gated tests (self via signer/attester
+paths; agent-dismissable; cross-human downgrade + hide refused; cross-human refused at the apply door); full
+workspace green (cairn-node DB-gated all pass · cairn-event 86 · cairn-sync 18); clippy + fmt clean. **Follow-up
+filed (house rule 5):** `enroll_actor`/`actor_current` collide two humans with identical pinned JSON into one
+`actor_id` (`cairn_actor_id` hashes the pinned set only, not the signing key) — a latent identity-merge footgun on
+the `db/004` actor floor, surfaced by this task's tests. ADR-0042 index row (previously missing) also added.
 
 **This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (no product/floor/spec/ADR
 change; advisory-tier + test-infra only).** (1) **#135 — stale forced-REVIEW proposals now retract once the Doe is
@@ -467,6 +490,7 @@ ADR before reopening any of these.
 | [0040](spec/decisions/0040-signing-context-domain-separation.md) | Signing-context domain separation (content-type + `external_aad`); one signature per event, co-signing by overlay | §3.5 (refines 0015/0007/0030) |
 | [0041](spec/decisions/0041-progress-note-narrative-format.md) | Progress-note format: one signed event, markdown narrative + manifest-keyed media anchors | §3.19 (refines 0012/0013/0020/0039) |
 | [0042](spec/decisions/0042-concrete-attachment-reference-shape.md) | Concrete attachment-reference shape (Attachment/Rendition/SealRef; frozen field order) | §3.14 (refines 0013, reconciles 0041) |
+| [0043](spec/decisions/0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | §9.6/§3.9 (refines 0010/0022) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
