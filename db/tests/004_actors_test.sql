@@ -44,4 +44,57 @@ DO $$ BEGIN
     END;
 END $$;
 
+-- issue #152: enroll fails CLOSED when the same pinned set (→ same actor_id) is
+-- enrolled with a DIFFERENT signing key. The minimal human pinned set is the classic
+-- collision; a distinguishing determinant is what keeps two clinicians distinct.
+DO $$
+DECLARE aid1 bytea; aid2 bytea;
+BEGIN
+    aid1 := enroll_actor('human', '{"role":"clinician"}', 'keyAAAA');
+    -- Idempotent same-key re-enroll is allowed (re-runnable provisioning).
+    aid2 := enroll_actor('human', '{"role":"clinician"}', 'keyAAAA');
+    IF aid1 IS DISTINCT FROM aid2 THEN
+        RAISE EXCEPTION 'collision test FAILED: same (pinned,key) should map to one actor_id';
+    END IF;
+    -- Different key, identical pinned set → must raise.
+    BEGIN
+        PERFORM enroll_actor('human', '{"role":"clinician"}', 'keyBBBB');
+        RAISE EXCEPTION 'collision test FAILED: distinct-key collision was NOT refused';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM LIKE '%different signing key%' THEN
+            RAISE NOTICE 'actor_id collision refusal OK';
+        ELSE RAISE; END IF;
+    END;
+    -- The pure predicate agrees.
+    IF NOT cairn_actor_id_key_conflict(aid1, 'keyBBBB') THEN
+        RAISE EXCEPTION 'predicate FAILED: keyBBBB should conflict with aid1';
+    END IF;
+    IF cairn_actor_id_key_conflict(aid1, 'keyAAAA') THEN
+        RAISE EXCEPTION 'predicate FAILED: keyAAAA is the SAME key, no conflict';
+    END IF;
+END $$;
+
+-- issue #152, immortality edge: after a REVOKE, re-enrolling even the ORIGINAL key is
+-- refused — a fresh enroll would outrank the revoke in actor_current and RESURRECT a
+-- retired actor. The keyless revoke row makes the predicate fire for the same key too;
+-- pin it so the predicate can't be "tidied" back to reopening resurrection.
+DO $$
+DECLARE aid bytea;
+BEGIN
+    aid := enroll_actor('human', '{"role":"clinician","actor":"revoke-edge"}', 'keyCCCC');
+    INSERT INTO actor_event (actor_id, op) VALUES (aid, 'revoke');
+    -- The predicate now conflicts even with the SAME key (a keyless revoke row exists).
+    IF NOT cairn_actor_id_key_conflict(aid, 'keyCCCC') THEN
+        RAISE EXCEPTION 'predicate FAILED: same key after revoke must conflict (no resurrection)';
+    END IF;
+    BEGIN
+        PERFORM enroll_actor('human', '{"role":"clinician","actor":"revoke-edge"}', 'keyCCCC');
+        RAISE EXCEPTION 'resurrection test FAILED: same-key re-enroll after revoke was NOT refused';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM LIKE '%issue #152%' THEN
+            RAISE NOTICE 'post-revoke resurrection refusal OK';
+        ELSE RAISE; END IF;
+    END;
+END $$;
+
 ROLLBACK;

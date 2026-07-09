@@ -283,15 +283,22 @@ async fn cross_human_suppress_refused_after_author_key_rotation() {
     // target's sole human author-of-record under A's ORIGINAL key (kid_a).
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
 
-    // "Rotate" A's key: enroll a NEW signing key under the IDENTICAL pinned JSON
-    // setup() used for A ({"role":"clinician","actor":"A"}). This inserts another
-    // `enroll` row with the same actor_id, so actor_current's DISTINCT ON keeps only
-    // the NEW key for A's actor_id — A's original kid_a drops out of actor_current
-    // but remains in actor_event history.
+    // "Rotate" A's key. rotate-key is not yet an implemented actor op, so simulate its
+    // END-STATE directly: a second actor_event row carrying A's SAME actor_id and a NEW
+    // key (kid_a2). NOTE: we go through a raw INSERT, NOT enroll_actor — since #152 /
+    // ADR-0044 the enroll FRONT DOOR fails closed on a colliding second key (enroll mints
+    // a NEW identity; rotate-key is the sanctioned path to add a key to the SAME actor).
+    // This raw insert is what that future rotate-key door produces internally: actor_current's
+    // DISTINCT ON keeps only the new key, and A's original kid_a drops out of actor_current
+    // but remains human-by-history in actor_event. (Before #152 this test re-enrolled the
+    // identical pinned set to stage the rotation — i.e. it leaned on the very silent-merge
+    // bug #152 fixes; the raw insert stages the same end-state honestly.)
     let (_sk_a2, kid_a2) = generate_key().unwrap();
     c.execute(
-        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"actor\":\"A\"}', $1)",
-        &[&kid_a2],
+        "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id) \
+         SELECT actor_id, 'enroll', 'human', pinned, $1 \
+         FROM actor_event WHERE signing_key_id = $2 AND op = 'enroll'",
+        &[&kid_a2, &kid_a],
     )
     .await
     .unwrap();

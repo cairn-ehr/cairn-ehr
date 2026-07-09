@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-09 · **Spec/ADRs:** v0.44 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-09 · **Spec/ADRs:** v0.45 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -25,6 +25,41 @@ the §3.14 day-one attachment-reference shape)
 (the "prior history now available" push-alert, the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**This session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
+([#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) CLOSED; ADR-0044; spec v0.44→0.45).** The SECOND
+in-DB **floor authorization** change of the demographics build (after #99). `enroll_actor` derives
+`actor_id = cairn_actor_id(pinned)` — the content-address of the **pinned set only**, never the signing key
+(the key must stay mutable across the future `rotate-key`, ADR-0011 §5). So two **different** humans enrolled
+with an **identical** pinned set (the minimal `{"role":"clinician"}`) collided into one `actor_id`, and
+`actor_current`'s `DISTINCT ON (actor_id)` silently dropped the earlier key — a **silent identity-merge** on
+the trust anchor (principle 2), surfaced by the #99 owner-gate tests. Fix: a new pure `STABLE`
+`cairn_actor_id_key_conflict(actor_id, key)` predicate + an `enroll_actor` guard that **refuses** a
+distinct-key collision across the **whole `actor_event` history** (immortal even after `revoke` — no
+post-revoke reuse); **idempotent same-key re-enroll still passes** (re-runnable provisioning; the matcher
+per-epoch re-enroll). The key is deliberately **not** hashed into `actor_id` — this is an enforcement gate,
+not a derivation change. **Human determinant = guidance only** (ADR + `db/004` comment: a human's pinned set
+should carry a person-distinguishing handle/registration id; the floor makes a forgotten one **loud** on the
+second enroll; the actual field is left to the future enrollment surface — ADR-0011 keeps pinned-set contents
+as policy). **Single door** — no remote-apply door for actor enrollment exists yet (`INSERT INTO actor_event`
+lives only in `enroll_actor`); forward caveat recorded (mirror the check when actor-event sync lands, ADR-0011
+§4 — analogue of #154). `db/004` edited **in place** (pre-clinical posture, the #99 pattern). **Notable
+side-fix (house rule 5):** the #99 `cross_human_suppress_refused_after_author_key_rotation` test **staged a
+key rotation by re-enrolling the identical pinned set with a new key** — i.e. it leaned on the very
+silent-merge bug #152 fixes; it now stages the rotation end-state with a raw `actor_event` insert (what a
+future `rotate-key` door produces internally), making the #99 test more honest. TDD, **5 DB-gated Rust tests**
+(`actor_enroll_collision.rs`: collision refused via distinct key; idempotent same-key allowed; distinct pinned
+sets don't collide; immortality after revoke; same-key re-enroll after revoke refused) + a SQL mirror in
+`db/tests/004_actors_test.sql`. Full cairn-node DB-gated workspace green; fmt + clippy clean; mkdocs builds.
+Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-actor-id-collision-floor*`. **Post-review polish
+(this PR):** (1) `enroll_actor` now takes a txn-scoped `pg_advisory_xact_lock` on the `actor_id` before the
+conflict check, closing the check-then-insert (TOCTOU) race under READ COMMITTED; (2) the predicate's
+intentional catch of keyless `revoke`/`supersede` rows — which also refuses a same-key re-enroll onto a
+revoked `actor_id`, preventing **resurrection** (a post-revoke enroll would outrank the revoke in
+`actor_current`) — is now documented and pinned by a test (Rust + SQL), with a warning against an `IS NOT
+NULL` "tidy-up"; (3) the RAISE message and ADR-0044 consequences record the resurrection edge, the operational
+note (losing a per-epoch agent/device key file within an epoch now fails loud → bump the epoch until
+`rotate-key` exists), and the race closure.
 
 **This session (2026-07-09) — the suppression owner-gate: self-only, disagreement is additive (ADR-0043; spec
 v0.43→0.44; closes the last open sub-item of [#99](https://github.com/cairn-ehr/cairn-ehr/issues/99)).** The
@@ -59,51 +94,10 @@ travels); the origin always refuses, and it closes with registry federation. ADR
 also added. **Post-review polish (this PR):** ADR-0043 prose corrected from `actor_current` → `actor_event` history
 (matching the shipped helper) and its principle-12 apply-door claim qualified with the #154 caveat.
 
-**This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (no product/floor/spec/ADR
-change; advisory-tier + test-infra only).** (1) **#135 — stale forced-REVIEW proposals now retract once the Doe is
-identified** ([PR #151](https://github.com/cairn-ehr/cairn-ehr/pull/151)). The §5.4 forcing rule persisted a REVIEW
-`match_proposal` conditioned on `chart_trust='unconfirmed'` — a *transient* state — but `propose()` only touched the
-table when `band()` was non-None, so after identification the pair banded None, `propose()` rolled back, and a
-permanent `band='review'`/`status='pending'` row with a misleading `identity_pending` marker lingered on the hub
-worklist. Fix (append-only, no DELETE — db/017 grants none): new `db.retract_pending_proposal()` (UPDATE a *still-pending*
-row → `status='retracted'`, preserving any human/applied disposition), `propose()`'s band-None branch calls it
-(commit iff a row was retracted, else the unchanged xmin-horizon rollback), and `upsert_proposal()` reverts
-`retracted→pending` on a genuine re-proposal so a resurrected match re-surfaces. Marker-freshness was already covered
-(upsert overwrites `evidence` every re-propose). TDD, DB-gated: retract-on-identify, human-disposition preserved,
-revert-on-reproposal, + the full `sweep→identify→sweep` e2e. (2) **#84 pt1 — matcher integration-test committed-row
-leak fixed** ([PR #150](https://github.com/cairn-ehr/cairn-ehr/pull/150)). The seed helpers COMMIT but `pg_conn` only
-truncated at *setup* (teardown was `rollback()`), so the last test's rows persisted; new `managed_pg_conn` context
-manager truncates projections on exit too (rewired fixture + a direct lifecycle test). #84 pt2 (eval `KeyError`) was
-already fixed in PR #131's review wave — noted, no code. Both PRs branch off `main`, disjoint files; matcher suite
-**381 passed**, ruff (I/UP/B/E5@100) clean.
+**This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (advisory-tier + test-infra
+only, no product/floor/spec/ADR change; condensed — full detail in git + the PRs).** (1) **[#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)** ([PR #151](https://github.com/cairn-ehr/cairn-ehr/pull/151)) — stale forced-REVIEW `match_proposal`s (conditioned on the *transient* `chart_trust='unconfirmed'`) lingered on the hub worklist after identification because `propose()`'s band-None branch rolled back instead of retracting; fixed append-only (no DELETE) with `db.retract_pending_proposal()` (→`status='retracted'`, preserving human/applied disposition) + `upsert_proposal()` revert-on-reproposal; TDD incl. the `sweep→identify→sweep` e2e. (2) **[#84](https://github.com/cairn-ehr/cairn-ehr/issues/84) pt1** ([PR #150](https://github.com/cairn-ehr/cairn-ehr/pull/150)) — matcher integration-test committed-row leak fixed via a `managed_pg_conn` context manager that truncates projections on exit too (pt2 `KeyError` was already fixed in PR #131). Matcher suite **381 passed**, ruff clean.
 
-**This session (2026-07-08, fifth) — closed the three CI gaps opened by the tooling catch-up ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)/[#146](https://github.com/cairn-ehr/cairn-ehr/issues/146)/[#117](https://github.com/cairn-ehr/cairn-ehr/issues/117); PR [#149](https://github.com/cairn-ehr/cairn-ehr/pull/149)).**
-No product/floor/spec/ADR/SCHEMA change — CI + test-fixtures + docs only. (1) **#145 — the matcher DB-gated suite now
-runs in CI.** Its integration tests self-skip without `CAIRN_TEST_PG`, so they ran nowhere (the "298 passed" was the
-*pure* suite only; the DB-touching path had zero automated coverage). Rather than stand up — and rebuild the expensive
-`cairn_pgx` extension for — a second rig in `matcher.yml`, the `rust.yml` floor `test` job now also runs
-`uv run --extra pipeline pytest` against the PG18+`cairn_pgx` cluster it already builds (the matcher conftest applies
-the `db/*.sql` schema itself, so it needs only that cluster). Verified locally against PG18.1 + `cairn_pgx` 0.3.0:
-**376 passed** (~79 DB-gated tests actually executing). (2) **#146 — CodeQL test-fixture crypto false positives fixed at
-the source.** Path-exclusion is unreliable for compiled Rust (and one fixture is a `#[cfg(test)]` block *inside*
-`src/seal.rs`), so the deterministic test seed / KDF-salt / pairing-nonce are now **computed at runtime**
-(`std::array::from_fn`, `format!`) instead of hard-coded literals — no literal reaches a crypto sink, so
-`rust/hard-coded-cryptographic-value` stops firing while staying live for *production* code. New **CLAUDE.md house
-rule 6** codifies it (never hard-code crypto material in tests). seal.rs 16/16 + `clippy --workspace --tests -D warnings`
-clean; the DB-gated `pairing.rs` test green on PG18. (3) **#117 — required-check set documented.** New *Continuous
-integration* section in `CONTRIBUTING.md` tables the five required checks (`build`, `rustfmt`, `cargo-deny`,
-`ruff + pytest`, `clippy + cargo test (cairn_pgx floor)`) with what each gates + the two traps: keep the floor check
-**PG-version-independent** (a rename orphans branch protection — the #144 lesson) and update branch protection in
-lockstep with any required-job rename. Also corrected CONTRIBUTING's stale "no code yet" claim. #117's remaining scope
-was audit/document only — the gate itself has existed since PR #133/#143/#147. **Plus doc-currency at session start:**
-HANDOVER/ROADMAP now reflect #144/#147 **merged** and the required-checks admin swap **done** (both were mid-flight
-in the fourth-session block). **Honest limit:** the matcher DB suite re-runs the pure tests too (no marker to select
-only DB-gated ones — cheap, and running the full suite against the DB is *more* coverage, not less).
-**Two follow-ups folded into #149 on request:** (a) the **stricter ruff ruleset** — `select` now adds `I`
-(import-sorting), `UP` (pyupgrade), `B` (bugbear), `E5` (line-length) at **`line-length = 100`** (Rust-parity); imports
-auto-sorted, one `zip()` made `strict=False`-explicit, 22 >100-col lines hand-wrapped; ruff + the full 376-test suite
-(pure + DB) green (closes the last PR #143 deferral). (b) this **HANDOVER prune** — the 07-04→07-07 per-slice blocks
-collapsed into one index (538→450 lines, back under the 500 target); nothing lost that isn't in ROADMAP + git.
+**This session (2026-07-08, fifth) — closed the three CI gaps from the tooling catch-up (PR [#149](https://github.com/cairn-ehr/cairn-ehr/pull/149); condensed — full detail in git + ROADMAP Phase 1).** CI + test-fixtures + docs only, no product/floor/spec/ADR/SCHEMA change. (1) **[#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)** — the matcher DB-gated suite (self-skips without `CAIRN_TEST_PG`, so it ran nowhere) now runs in the `rust.yml` floor `test` job against the PG18+`cairn_pgx` cluster it already builds; **376 passed** locally. (2) **[#146](https://github.com/cairn-ehr/cairn-ehr/issues/146)** — CodeQL test-fixture crypto false positives fixed at source: the deterministic test seed/KDF-salt/pairing-nonce are **computed at runtime** (no literal reaches a crypto sink; query stays live for production), codified as **CLAUDE.md house rule 6**. (3) **[#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)** — the five required checks are tabled in `CONTRIBUTING.md` (keep the floor check PG-version-independent; update branch protection in lockstep with any rename). **Folded in on request:** the **stricter ruff ruleset** (`I`/`UP`/`B`/`E5` at `line-length=100`, Rust-parity; closes the last PR #143 deferral) + a HANDOVER prune (538→450 lines).
 
 **This session (2026-07-08, second) — §5.4 marks/belongings/EMS-context text identity evidence (matcher/identity
 tier; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`).** Three
@@ -501,6 +495,7 @@ ADR before reopening any of these.
 | [0041](spec/decisions/0041-progress-note-narrative-format.md) | Progress-note format: one signed event, markdown narrative + manifest-keyed media anchors | §3.19 (refines 0012/0013/0020/0039) |
 | [0042](spec/decisions/0042-concrete-attachment-reference-shape.md) | Concrete attachment-reference shape (Attachment/Rendition/SealRef; frozen field order) | §3.14 (refines 0013, reconciles 0041) |
 | [0043](spec/decisions/0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | §9.6/§3.9 (refines 0010/0022) |
+| [0044](spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md) | Enroll fails closed on `actor_id` collision with a distinct key; humans carry a person-distinguishing determinant | §7.5 (refines 0011/0029) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
