@@ -30,9 +30,11 @@ Three of #99's four sub-items were fixed on 2026-07-02 and are cited in-code:
 
 ## The decision
 
-**A suppressing overlay that targets another author's event is refused at the floor. Suppression is
-self-only. Disagreement with another author's content is expressed additively — a note/advisory that
-references their event — never by touching their event.**
+**A suppressing overlay that targets another *human author's* event is refused at the floor.
+Suppression of human-authored content is self-only. Disagreement with another author's content is
+expressed additively — a note/advisory that references their event — never by touching their event.
+Agent-authored / un-owned advisories (no responsible human) stay dismissable by any enrolled human —
+that is the clinician-overrides-the-machine path, not the burying of a colleague.**
 
 This is the principle-correct answer, not a compromise:
 
@@ -51,6 +53,22 @@ This is the principle-correct answer, not a compromise:
 Self-suppression stays allowed: the digital equivalent of an author drawing a line through their own
 erroneous entry and initialling it. The original event stays in the log, legible under the overlay
 (append-only, never erase).
+
+### "Author" means *human* author (principle 10)
+
+The rule protects **human-authored** content. An **agent-authored advisory** (ADR-0030 / principle 10:
+authorship is compositional but the agent bears no responsibility) is the machine's suggestion, not a
+colleague's clinical judgment — so a clinician dismissing it via `salience.downgrade` / `visibility.suppress`
+is the intended *human-overrides-the-machine* workflow, not a burying of another author. Suppressing an
+un-owned advisory therefore stays open to any enrolled human. Only content that has a **human author**
+is self-only. (This keeps the existing `accepts_suppressing_event_with_valid_human_token` test green —
+it suppresses an agent-authored baseline — which is the correct behaviour, not an exception.)
+
+A target is **human-authored** iff its `signer_key_id` resolves (via `actor_current`) to a `kind='human'`
+actor, **or** it carries a stored human attestation (`event_log.attester_key IS NOT NULL` — the floor
+only ever stores a `kind='human'` attester key). The target's set of human authors is
+`{signer_key_id if human} ∪ {hex(attester_key) if present}`. This uses stored columns plus one registry
+lookup — no fragile contributor-JSON parsing.
 
 ### Deliberate divergence from ADR-0010 §2
 
@@ -83,18 +101,20 @@ record, so it goes in the smallest, most reviewer-legible surface (§9).
 cairn_suppression_author_ok(p_target uuid, p_attester_key bytea) RETURNS boolean   -- STABLE
 ```
 
-Returns TRUE iff the attester (the responsible human of the suppressing event) is the author of the
-target event. "Author of the target" is any of:
+Returns TRUE iff suppression is permitted:
 
-- `encode(p_attester_key,'hex') = target.signer_key_id` — the attester's key signed the target; **or**
-- the attester's resolved `actor_id` (via `actor_current`, `kind='human'`) `= target.actor_id`; **or**
-- the attester's `actor_id` appears among `target.contributors[]` with a responsibility role
-  (`e ? 'responsibility'`).
+1. Compute the target's **human authors**: `H = {target.signer_key_id | it resolves to a kind='human'
+   actor} ∪ {hex(target.attester_key) | target.attester_key IS NOT NULL}`.
+2. **If `H` is empty** — the target is agent-authored / un-owned — return **TRUE** (any enrolled human
+   may dismiss an AI advisory).
+3. **Otherwise** (target is human-authored) return **TRUE iff `encode(p_attester_key,'hex') ∈ H`** — the
+   attester is one of the target's human authors (self-suppression). Else **FALSE** (cross-human
+   suppression refused).
 
-**Safe-refuse (returns FALSE):** a NULL/ambiguous attester actor (key maps to several actors), or no
-match on any branch. A same-person-different-key case therefore reads as cross-author and is refused —
-the safe direction (the clinician re-expresses as a note; mild friction, never a silent bury). The
-failure mode of the whole gate is over-refusal, never over-permission.
+**Safe-refuse:** when the target is human-authored and the attester is not among its human authors, the
+result is FALSE. A same-human-different-key case therefore reads as cross-author and is refused — the
+safe direction (the clinician re-expresses as a note; mild friction, never a silent bury). The failure
+mode of the whole gate is over-refusal on human-authored content, never over-permission.
 
 Defined in `db/005` (before `submit_event`) so both doors — `submit_event` (db/005) and
 `apply_remote_event` (db/020), which runs later in the schema array — can call the one helper and never
@@ -129,17 +149,19 @@ cross-author suppression in over the wire.
 
 Failing test first, then the floor code. Against PG18 + `cairn_pgx` (`CAIRN_TEST_PG`). Cases:
 
-1. **self-suppression accepted, signer-key path** — the author `salience.downgrade`s their own event
-   (attester key = target `signer_key_id`).
-2. **self-suppression accepted, contributor-role path** — attester is a responsibility-bearing
-   contributor of the target (not its signer).
-3. **cross-author `salience.downgrade` refused** — human B attests a downgrade of human A's event.
-4. **cross-author `visibility.suppress` refused** — same, for the hiding op.
-5. **remote-apply door refuses cross-author suppress (db/020)** — a synced cross-author suppress is
+1. **self-suppression accepted, human-signer path** — human A `salience.downgrade`s an event A signed
+   (attester key = target `signer_key_id`, human).
+2. **self-suppression accepted, human-attester path** — human A suppresses a target A authored as a
+   responsibility-bearing contributor (target `attester_key` = A, A did not sign it).
+3. **agent advisory dismissable** — a human suppresses an agent-authored, un-owned target
+   (`H` empty) — accepted (the human-overrides-machine path; also the existing
+   `accepts_suppressing_event_with_valid_human_token` regression).
+4. **cross-human `salience.downgrade` refused** — human B attests a downgrade of human A's event.
+5. **cross-human `visibility.suppress` refused** — same, for the hiding op.
+6. **remote-apply door refuses cross-human suppress (db/020)** — a synced cross-human suppress is
    rejected at apply (principle 12).
-6. **`repudiate` unaffected** — a `targets_other_author=FALSE` suppressing event is not gated
+7. **`repudiate` unaffected** — a `targets_other_author=FALSE` suppressing event is not gated
    (regression guard).
-7. **safe-refuse edge** — an attester key that resolves to no / ambiguous actor is refused.
 
 ## Deliverables (one PR)
 
@@ -157,9 +179,13 @@ Failing test first, then the floor code. Against PG18 + `cairn_pgx` (`CAIRN_TEST
   "no cross-author suppression," not "cross-author suppression under authority X").
 - No notification tier is required (there is nothing to notify about — the suppression simply doesn't
   happen; the disagreeing clinician authors their own note through the normal additive path).
-- "Author of target" is keyed on signing-key / actor identity; a robust person↔multiple-keys identity
-  model is out of scope, and the conservative same-person-different-key → cross-author refusal is the
-  safe placeholder until one exists.
+- "Human author of target" is keyed on signing-key identity + the stored human attester key + the
+  signer's registry `kind`; a robust person↔multiple-keys identity model is out of scope, and the
+  conservative same-human-different-key → cross-author refusal is the safe placeholder until one exists.
+- The agent/human split rests on the actor registry `kind` at the target's signer resolution. An agent
+  key later re-enrolled as a human, or vice versa, is not a modelled case (registry `kind` is fixed per
+  key in the current model); if that ever changes, the gate reads the *current* kind — acceptable, since
+  the failure direction stays over-refusal on anything that looks human-authored.
 - SCHEMA version: no new table; whether the `SCHEMA` array constant bumps is decided during
   implementation per the db.rs convention (the migration files are edited in place, not appended).
 ```
