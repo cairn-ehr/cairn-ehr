@@ -74,4 +74,27 @@ BEGIN
     END IF;
 END $$;
 
+-- issue #152, immortality edge: after a REVOKE, re-enrolling even the ORIGINAL key is
+-- refused — a fresh enroll would outrank the revoke in actor_current and RESURRECT a
+-- retired actor. The keyless revoke row makes the predicate fire for the same key too;
+-- pin it so the predicate can't be "tidied" back to reopening resurrection.
+DO $$
+DECLARE aid bytea;
+BEGIN
+    aid := enroll_actor('human', '{"role":"clinician","actor":"revoke-edge"}', 'keyCCCC');
+    INSERT INTO actor_event (actor_id, op) VALUES (aid, 'revoke');
+    -- The predicate now conflicts even with the SAME key (a keyless revoke row exists).
+    IF NOT cairn_actor_id_key_conflict(aid, 'keyCCCC') THEN
+        RAISE EXCEPTION 'predicate FAILED: same key after revoke must conflict (no resurrection)';
+    END IF;
+    BEGIN
+        PERFORM enroll_actor('human', '{"role":"clinician","actor":"revoke-edge"}', 'keyCCCC');
+        RAISE EXCEPTION 'resurrection test FAILED: same-key re-enroll after revoke was NOT refused';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM LIKE '%issue #152%' THEN
+            RAISE NOTICE 'post-revoke resurrection refusal OK';
+        ELSE RAISE; END IF;
+    END;
+END $$;
+
 ROLLBACK;

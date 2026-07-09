@@ -47,11 +47,19 @@ lives only in `enroll_actor`); forward caveat recorded (mirror the check when ac
 side-fix (house rule 5):** the #99 `cross_human_suppress_refused_after_author_key_rotation` test **staged a
 key rotation by re-enrolling the identical pinned set with a new key** — i.e. it leaned on the very
 silent-merge bug #152 fixes; it now stages the rotation end-state with a raw `actor_event` insert (what a
-future `rotate-key` door produces internally), making the #99 test more honest. TDD, **4 DB-gated Rust tests**
+future `rotate-key` door produces internally), making the #99 test more honest. TDD, **5 DB-gated Rust tests**
 (`actor_enroll_collision.rs`: collision refused via distinct key; idempotent same-key allowed; distinct pinned
-sets don't collide; immortality after revoke) + a SQL mirror in `db/tests/004_actors_test.sql`. Full
-cairn-node DB-gated workspace green; fmt + clippy clean; mkdocs builds. Design+plan under
-`docs/superpowers/{specs,plans}/2026-07-09-actor-id-collision-floor*`.
+sets don't collide; immortality after revoke; same-key re-enroll after revoke refused) + a SQL mirror in
+`db/tests/004_actors_test.sql`. Full cairn-node DB-gated workspace green; fmt + clippy clean; mkdocs builds.
+Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-actor-id-collision-floor*`. **Post-review polish
+(this PR):** (1) `enroll_actor` now takes a txn-scoped `pg_advisory_xact_lock` on the `actor_id` before the
+conflict check, closing the check-then-insert (TOCTOU) race under READ COMMITTED; (2) the predicate's
+intentional catch of keyless `revoke`/`supersede` rows — which also refuses a same-key re-enroll onto a
+revoked `actor_id`, preventing **resurrection** (a post-revoke enroll would outrank the revoke in
+`actor_current`) — is now documented and pinned by a test (Rust + SQL), with a warning against an `IS NOT
+NULL` "tidy-up"; (3) the RAISE message and ADR-0044 consequences record the resurrection edge, the operational
+note (losing a per-epoch agent/device key file within an epoch now fails loud → bump the epoch until
+`rotate-key` exists), and the race closure.
 
 **This session (2026-07-09) — the suppression owner-gate: self-only, disagreement is additive (ADR-0043; spec
 v0.43→0.44; closes the last open sub-item of [#99](https://github.com/cairn-ehr/cairn-ehr/issues/99)).** The

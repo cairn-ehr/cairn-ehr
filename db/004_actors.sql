@@ -73,10 +73,23 @@ ORDER BY ae.actor_id, ae.recorded_at DESC, ae.seq DESC;
 -- two DIFFERENT signing keys enrolled with an IDENTICAL pinned set compute the SAME
 -- actor_id, and actor_current's `DISTINCT ON (actor_id)` silently keeps only the
 -- latest key — a silent identity merge on the trust anchor (principle 2). This pure
--- predicate is TRUE iff some existing actor_event row already binds this actor_id to a
--- DIFFERENT key. Whole history (incl. revoked rows): an actor_id is immortal and is
--- never reusable by a different key, even after revoke. STABLE + a small pure function
--- so it is independently testable and reusable at the future actor-sync apply door.
+-- predicate is TRUE iff some existing actor_event row for this actor_id does NOT carry
+-- exactly p_key.
+--
+-- `IS DISTINCT FROM` intentionally matches TWO kinds of row: (a) a row bound to a
+-- DIFFERENT key (the #152 silent-merge), and (b) a row with a NULL key — revoke and
+-- supersede rows carry no signing_key_id. Case (b) is deliberate, not incidental: it
+-- means a fresh enroll onto an actor_id that was ever revoked/superseded is refused even
+-- with the ORIGINAL key. That prevents RESURRECTION — a post-revoke enroll would outrank
+-- the revoke in actor_current's (recorded_at, seq) order and silently re-authorise a
+-- recalled actor (the exact hazard matcher_actor.rs guards in Rust; here it is enforced
+-- at the DB floor itself, principle 2). Do NOT add `signing_key_id IS NOT NULL` to
+-- "tidy up" case (b) without adding a separate explicit revoke-history guard, or you
+-- reopen resurrection.
+--
+-- Whole history (incl. revoked rows): an actor_id is immortal and is never reusable by a
+-- different key, even after revoke. STABLE + a small pure function so it is independently
+-- testable and reusable at the future actor-sync apply door.
 CREATE OR REPLACE FUNCTION cairn_actor_id_key_conflict(p_actor_id BYTEA, p_key TEXT)
 RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
@@ -103,9 +116,17 @@ RETURNS BYTEA LANGUAGE plpgsql AS $$
 DECLARE aid BYTEA;
 BEGIN
     aid := cairn_actor_id(p_pinned);
+    -- Close the check-then-insert race (TOCTOU): the conflict check below reads
+    -- COMMITTED rows, so two concurrent transactions enrolling the SAME actor_id with
+    -- DIFFERENT keys could each see no conflict and both insert — the very silent merge
+    -- this guard exists to prevent. A txn-scoped advisory lock keyed on the actor_id
+    -- serializes only same-actor_id enrolls (never distinct actors) and is released at
+    -- COMMIT/ROLLBACK; under the default READ COMMITTED isolation the loser then re-reads
+    -- the winner's committed row and is refused. (hashtextextended → the bigint lock key.)
+    PERFORM pg_advisory_xact_lock(hashtextextended(encode(aid, 'hex'), 0));
     IF cairn_actor_id_key_conflict(aid, p_key) THEN
         RAISE EXCEPTION
-            'enroll_actor: actor_id % is already enrolled with a different signing key (silent identity-merge refused, issue #152)',
+            'enroll_actor: actor_id % already has prior registration history under this identity (a different signing key, and/or a revoke/supersede) — a fresh enroll is refused: it would silently merge two actors or resurrect a retired one (issue #152)',
             encode(aid, 'hex')
         USING HINT =
             'Give this actor a distinguishing pinned determinant (e.g. a person handle / registration id), or use rotate-key to add a key to the SAME actor.';

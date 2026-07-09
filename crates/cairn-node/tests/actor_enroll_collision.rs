@@ -46,7 +46,7 @@ async fn distinct_key_same_pinned_is_refused() {
         .await
         .expect_err("colliding enroll must be refused");
     assert!(
-        db_msg(&err).contains("already enrolled with a different signing key"),
+        db_msg(&err).contains("different signing key"),
         "expected the collision RAISE, got: {}",
         db_msg(&err)
     );
@@ -128,7 +128,40 @@ async fn actor_id_is_immortal_after_revoke() {
         .await
         .expect_err("post-revoke reuse by a different key must be refused");
     assert!(
-        db_msg(&err).contains("already enrolled with a different signing key"),
+        db_msg(&err).contains("different signing key"),
+        "expected the collision RAISE, got: {}",
+        db_msg(&err)
+    );
+}
+
+#[tokio::test]
+async fn same_key_re_enroll_after_revoke_is_refused() {
+    // Principle-2 immortality has a second edge the whole-history check must cover: a
+    // fresh enroll of the ORIGINAL key onto a REVOKED actor_id must also be refused. A
+    // post-revoke enroll would outrank the revoke in actor_current's (recorded_at, seq)
+    // order and silently RESURRECT a retired actor — so the DB floor refuses it directly
+    // (the same hazard matcher_actor.rs guards in Rust). The keyless revoke row makes the
+    // conflict predicate fire even for the same key; this test pins that behaviour so a
+    // later "IS NOT NULL tidy-up" of the predicate can't silently reopen resurrection.
+    let Some(cs) = cs() else { return };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let c = db::connect_and_load_schema(&cs).await.unwrap();
+    reset(&c).await;
+    let (_sk, kid) = generate_key().unwrap();
+    let aid: Vec<u8> = c.query_one(ENROLL_HUMAN, &[&kid]).await.unwrap().get(0);
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op) VALUES ($1, 'revoke')",
+        &[&aid],
+    )
+    .await
+    .unwrap();
+    // SAME key, now-revoked actor_id → refused (no resurrection).
+    let err = c
+        .execute(ENROLL_HUMAN, &[&kid])
+        .await
+        .expect_err("same-key re-enroll after revoke must be refused");
+    assert!(
+        db_msg(&err).contains("issue #152"),
         "expected the collision RAISE, got: {}",
         db_msg(&err)
     );

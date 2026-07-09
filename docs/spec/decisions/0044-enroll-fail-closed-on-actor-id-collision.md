@@ -35,9 +35,14 @@ across rotation.
    `signing_key_id` — checked across the **whole history**, including revoked rows. An `actor_id` is
    **immortal**: it is never reusable by a different key, even after `revoke` (principle 2, the immortal-UUID
    rule now applied to actors). The refusal is legible and names the remedy. Idempotent re-enroll with the
-   **same** key passes (re-runnable provisioning; the per-epoch matcher-actor re-enroll). The check is a
-   small pure `STABLE` predicate `cairn_actor_id_key_conflict(actor_id, key)`, independently testable and
-   reusable at the future actor-sync apply door.
+   **same** key passes *while the actor is live* (re-runnable provisioning; the per-epoch matcher-actor
+   re-enroll) — but once the `actor_id` has been **revoked** (or superseded), even a same-key re-enroll is
+   refused, because a fresh enroll would outrank the revoke in `actor_current`'s `(recorded_at, seq)` order
+   and silently **resurrect** a retired actor. The whole-history check catches that edge at the DB floor
+   itself, mirroring the Rust `matcher_actor` resurrection guard. The check is a small pure `STABLE`
+   predicate `cairn_actor_id_key_conflict(actor_id, key)`, independently testable and reusable at the future
+   actor-sync apply door; `enroll_actor` takes a txn-scoped advisory lock on the `actor_id` first, so the
+   check is not a check-then-insert (TOCTOU) window under concurrent same-`actor_id` enrolls.
 
 2. **A human actor's pinned set carries a person-distinguishing determinant.** A handle / registration id
    (whatever the future §7.5 enrollment surface adopts) keeps two clinicians' `actor_id`s genuinely distinct,
@@ -61,6 +66,18 @@ across rotation.
   is loud, auditable, and repairable by adding a distinguishing determinant — no data loss.
 - **Harder:** the future human-enrollment surface must supply a person-distinguishing determinant (a small,
   cheap-at-provisioning obligation). A second write door (actor-event sync) must carry the same check.
+- **Operational (agents/devices):** losing a per-epoch key file (matcher/device) and regenerating it *within
+  the same epoch* now **fails loudly** at `enroll_actor` (the regenerated key collides with the epoch's
+  existing `actor_id`) instead of silently taking the identity over — the correct outcome, but until
+  `rotate-key` is implemented the recovery is to **bump the epoch** (mint a new determinant set), not to
+  re-enroll. This is consistent with the recall/immortality intent, and is exactly what `matcher_actor`
+  already refuses in Rust.
+- **Concurrency:** the advisory lock closes the collision race under the default READ COMMITTED isolation
+  (the only isolation the enrollment callers use); it does not, by itself, defeat a stale snapshot under
+  REPEATABLE READ / SERIALIZABLE — SERIALIZABLE would abort such a conflict as a serialization failure. A
+  unique/exclusion constraint would be a stronger guarantee, but the invariant ("≤ 1 distinct non-null key
+  per `actor_id`, and no enroll after revoke") is not a plain uniqueness, and enrollment is a rare
+  owner-gated ceremony — the lock is the proportionate floor.
 - **The bet:** the collision check plus a person-distinguishing human determinant is the whole fix — no change
   to `actor_id` derivation, `actor_current`, or `rotate-key` (which remains the sanctioned same-actor /
   new-key path). We would revisit if a legitimate flow needs two distinct actors to share one `actor_id`
