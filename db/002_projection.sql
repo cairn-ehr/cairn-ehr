@@ -12,6 +12,33 @@
 
 BEGIN;
 
+-- ── Shared overlay-winner predicate (#115) ──────────────────────────────────────────────
+-- Every standing-state overlay (patient_chart below, plus patient_link/db-018,
+-- chart_dispute/db-023, chart_identity_state/db-024, name_repudiation/db-025) folds a new
+-- event in only when it OUTRANKS the stored winner. Ranking is the HLC total order (wall,
+-- then counter, then origin) exactly as before — BUT a Byzantine or broken signer can reuse
+-- its own (wall, counter, origin) triple across two DIFFERENT signed bodies. A plain
+-- strict-`>` guard is then false in both directions, so the winner would be decided by
+-- ARRIVAL ORDER and two honest nodes could converge to different standing state — a silent
+-- cross-node divergence in the safety-critical projection layer, exactly what "sync = safe
+-- set-union" must not allow. The event's content_address (the BYTEA multihash of its signed
+-- bytes) is the deterministic final tiebreaker: canonical, UNIQUE, byte-compared (so it is
+-- immune to the TEXT-collation concern that #69 tracks for the `origin` comparison), and
+-- never shared by two distinct events. Appending it makes the overlay pick the SAME winner
+-- on every node even under an HLC collision. COALESCE encodes "no current winner yet" (an
+-- overlay's first insert, e.g. patient_chart's note-only row): -1 wall/counter and '' origin
+-- sort below any real event, and an empty bytea sorts below any real \x1220… address, so a
+-- real event always beats an absent one. Only the CURRENT side is COALESCEd — the NEW side is
+-- always a real, fully-populated event.
+CREATE OR REPLACE FUNCTION cairn_hlc_overlay_wins(
+    new_wall bigint, new_counter int, new_origin text, new_addr bytea,
+    cur_wall bigint, cur_counter int, cur_origin text, cur_addr bytea
+) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT (new_wall, new_counter, new_origin, new_addr)
+         > (COALESCE(cur_wall, -1), COALESCE(cur_counter, -1),
+            COALESCE(cur_origin, ''), COALESCE(cur_addr, '\x'::bytea));
+$$;
+
 -- The projection Bet B times: one row per patient, kept current by overlay.
 CREATE TABLE IF NOT EXISTS patient_chart (
     patient_id     UUID PRIMARY KEY,
