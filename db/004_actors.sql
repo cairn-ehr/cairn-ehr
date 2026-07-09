@@ -68,13 +68,48 @@ WHERE ae.op IN ('enroll','supersede')
         AND (r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq))
 ORDER BY ae.actor_id, ae.recorded_at DESC, ae.seq DESC;
 
+-- issue #152: an actor_id is the content-address of the PINNED set only, never the
+-- signing key (the key must stay mutable across a future rotate-key, ADR-0011 §5). So
+-- two DIFFERENT signing keys enrolled with an IDENTICAL pinned set compute the SAME
+-- actor_id, and actor_current's `DISTINCT ON (actor_id)` silently keeps only the
+-- latest key — a silent identity merge on the trust anchor (principle 2). This pure
+-- predicate is TRUE iff some existing actor_event row already binds this actor_id to a
+-- DIFFERENT key. Whole history (incl. revoked rows): an actor_id is immortal and is
+-- never reusable by a different key, even after revoke. STABLE + a small pure function
+-- so it is independently testable and reusable at the future actor-sync apply door.
+CREATE OR REPLACE FUNCTION cairn_actor_id_key_conflict(p_actor_id BYTEA, p_key TEXT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM actor_event
+        WHERE actor_id = p_actor_id
+          AND signing_key_id IS DISTINCT FROM p_key
+    );
+$$;
+
 -- Enroll an actor; its identity is derived in-DB from the pinned set (cairn_pgx),
--- so "identity = hash of what is pinned" is enforced, not asserted.
+-- so "identity = hash of what is pinned" is enforced, not asserted. Because the
+-- signing key is deliberately NOT part of that hash (rotate-key preserves actor_id,
+-- ADR-0011 §5), enroll must fail CLOSED if the computed actor_id already binds a
+-- DIFFERENT key — otherwise two distinct actors silently merge (issue #152). A HUMAN
+-- actor therefore needs a person-distinguishing determinant in its pinned set (a handle
+-- / registration id); the minimal `{"role":...}` collides across people. That field is
+-- left to the future enrollment surface (ADR-0011 keeps pinned-set CONTENTS as policy);
+-- this floor only makes a forgotten determinant LOUD on the second enroll.
+-- SINGLE DOOR: there is no remote-apply door for actor enrollment yet (INSERT INTO
+-- actor_event lives only here). When actor-event sync lands (ADR-0011 §4), mirror this
+-- check at that apply door — same shape as the #154 apply-door caveat.
 CREATE OR REPLACE FUNCTION enroll_actor(p_kind TEXT, p_pinned JSONB, p_key TEXT)
 RETURNS BYTEA LANGUAGE plpgsql AS $$
 DECLARE aid BYTEA;
 BEGIN
     aid := cairn_actor_id(p_pinned);
+    IF cairn_actor_id_key_conflict(aid, p_key) THEN
+        RAISE EXCEPTION
+            'enroll_actor: actor_id % is already enrolled with a different signing key (silent identity-merge refused, issue #152)',
+            encode(aid, 'hex')
+        USING HINT =
+            'Give this actor a distinguishing pinned determinant (e.g. a person handle / registration id), or use rotate-key to add a key to the SAME actor.';
+    END IF;
     INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id)
     VALUES (aid, 'enroll', p_kind, p_pinned, p_key);
     RETURN aid;
@@ -101,5 +136,8 @@ END $$;
 -- cairn_agent cannot enroll — mirrors the C5.4 raw-INSERT floor tests.)
 REVOKE INSERT, UPDATE, DELETE ON actor_event FROM PUBLIC, cairn_agent;
 REVOKE EXECUTE ON FUNCTION enroll_actor(text, jsonb, text) FROM PUBLIC;
+-- Defense in depth: the collision predicate reads the trust-anchor table; keep it off
+-- PUBLIC too (STABLE + read-only makes it low-risk, but the floor stays explicit).
+REVOKE EXECUTE ON FUNCTION cairn_actor_id_key_conflict(bytea, text) FROM PUBLIC;
 
 COMMIT;
