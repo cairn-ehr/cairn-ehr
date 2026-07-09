@@ -24,15 +24,16 @@ BEGIN;
 -- ── The detection predicate (sibling of cairn_hlc_overlay_wins) ──────────────────────────────
 -- true iff the HLC triples are EQUAL and the content_addresses are DISTINCT — i.e. exactly the
 -- Byzantine case cairn_hlc_overlay_wins resolves arbitrarily. Pure/IMMUTABLE so it is safe to call
--- inline in the overlay triggers. IS [NOT] DISTINCT FROM keeps it null-total (a real event always
--- has a non-null triple; the overlays only call it after a FOUND current row, but null-safety keeps
--- the predicate honest for the note-only patient_chart row whose demographic winner is still null).
+-- inline in the overlay triggers. All three equality terms use IS NOT DISTINCT FROM so the
+-- predicate is null-total: a real incoming event (non-null wall/counter/origin) against a null
+-- current side (a note-only patient_chart row whose demographic winner is still absent) returns
+-- FALSE, never NULL.
 CREATE OR REPLACE FUNCTION cairn_hlc_triple_collision(
     new_wall bigint, new_counter int, new_origin text, new_addr bytea,
     cur_wall bigint, cur_counter int, cur_origin text, cur_addr bytea
 ) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-    SELECT new_wall = cur_wall
-       AND new_counter = cur_counter
+    SELECT new_wall IS NOT DISTINCT FROM cur_wall
+       AND new_counter IS NOT DISTINCT FROM cur_counter
        AND new_origin IS NOT DISTINCT FROM cur_origin
        AND new_addr IS DISTINCT FROM cur_addr;
 $$;
@@ -64,6 +65,10 @@ CREATE TABLE IF NOT EXISTS hlc_collision_log (
 -- unordered pair via LEAST/GREATEST so arrival order does not matter, then appends idempotently.
 -- ON CONFLICT DO NOTHING guarantees it can never raise on a re-observation — so it can never gate
 -- the apply path (availability over consistency). SQL (not plpgsql): a single INSERT, no control flow.
+-- Caller invariant: this relies on non-null arguments (every hlc_collision_log column is NOT NULL)
+-- — it is called only when cairn_hlc_triple_collision is TRUE, which requires a non-null current
+-- side, and each overlay passes non-null NEW.* fields, so a NULL-arg NOT-NULL violation cannot
+-- arise from the wiring.
 CREATE OR REPLACE FUNCTION cairn_record_hlc_collision(
     p_overlay text, p_subject_key text,
     p_wall bigint, p_counter int, p_origin text,

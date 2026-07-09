@@ -10,8 +10,8 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// Evaluate the pure collision predicate in the DB. Current side is non-null here (the overlays
-/// only call it after a FOUND row); the null-current case is exercised via the overlays.
+/// Evaluate the pure collision predicate in the DB. Current side is nullable (mirrors `wins()` in
+/// overlay_tiebreaker.rs) — the null-current case is the "no winner yet" row.
 #[allow(clippy::too_many_arguments)] // mirrors the same-shaped `wins()` helper in overlay_tiebreaker.rs
 async fn collides(
     c: &Client,
@@ -19,10 +19,10 @@ async fn collides(
     nc: i32,
     no: &str,
     na: Vec<u8>,
-    cw: i64,
-    cc: i32,
-    co: &str,
-    ca: Vec<u8>,
+    cw: Option<i64>,
+    cc: Option<i32>,
+    co: Option<&str>,
+    ca: Option<Vec<u8>>,
 ) -> bool {
     c.query_one(
         "SELECT cairn_hlc_triple_collision($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -43,15 +43,95 @@ async fn triple_collision_predicate_is_equal_triple_distinct_address() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
     // Equal (wall, counter, origin) but DISTINCT content_address → collision.
-    assert!(collides(&c, 5, 3, "peer", vec![1], 5, 3, "peer", vec![2]).await);
-    assert!(collides(&c, 5, 3, "peer", vec![2], 5, 3, "peer", vec![1]).await);
+    assert!(
+        collides(
+            &c,
+            5,
+            3,
+            "peer",
+            vec![1],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![2])
+        )
+        .await
+    );
+    assert!(
+        collides(
+            &c,
+            5,
+            3,
+            "peer",
+            vec![2],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![1])
+        )
+        .await
+    );
     // Identical address (same event, an idempotent re-apply) → NOT a collision.
-    assert!(!collides(&c, 5, 3, "peer", vec![7], 5, 3, "peer", vec![7]).await);
+    assert!(
+        !collides(
+            &c,
+            5,
+            3,
+            "peer",
+            vec![7],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![7])
+        )
+        .await
+    );
     // Any triple difference → NOT a collision, even with distinct addresses.
-    assert!(!collides(&c, 6, 3, "peer", vec![1], 5, 3, "peer", vec![2]).await); // wall
-    assert!(!collides(&c, 5, 4, "peer", vec![1], 5, 3, "peer", vec![2]).await); // counter
-    assert!(!collides(&c, 5, 3, "peerX", vec![1], 5, 3, "peer", vec![2]).await);
+    assert!(
+        !collides(
+            &c,
+            6,
+            3,
+            "peer",
+            vec![1],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![2])
+        )
+        .await
+    ); // wall
+    assert!(
+        !collides(
+            &c,
+            5,
+            4,
+            "peer",
+            vec![1],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![2])
+        )
+        .await
+    ); // counter
+    assert!(
+        !collides(
+            &c,
+            5,
+            3,
+            "peerX",
+            vec![1],
+            Some(5),
+            Some(3),
+            Some("peer"),
+            Some(vec![2])
+        )
+        .await
+    );
     // origin
+    // Null current side (absent winner, e.g. a note-only patient_chart row) → NOT a collision.
+    assert!(!collides(&c, 5, 3, "peer", vec![1], None, None, None, None).await);
 }
 
 #[tokio::test]
