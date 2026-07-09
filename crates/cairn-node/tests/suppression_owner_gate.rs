@@ -327,3 +327,67 @@ async fn agent_advisory_dismissable_by_any_human() {
         "an agent advisory must be dismissable by any enrolled human: {r:?}"
     );
 }
+
+/// The symmetric cross-author case, routed through the helper's ATTESTER branch
+/// rather than its signer branch. The other cross-human tests protect a
+/// plain-signed note (human authorship known via the signer→actor_event lookup);
+/// here the target is an AGENT-signed note that human A has vouched for, so A is
+/// the target's sole human author ONLY by the stored attester_key. `H = {hex(A)}`
+/// with the agent signer contributing nothing. Human B — who is NOT the vouching
+/// human — must still be refused. This is the case most like a real
+/// agent-advisory-with-human-ownership, and it guards the attester branch's
+/// refusal side (the accept side is covered by
+/// self_suppression_by_human_attester_accepted).
+#[tokio::test]
+async fn cross_human_suppress_of_human_attested_advisory_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_ag, kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    // Agent signs a note; human A vouches for it (responsibility) — attester_key = A.
+    let b = body("note.added", p, &kid_ag, true, None);
+    let signed = sign(&b, &sk_ag).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
+    let vk_a = sk_a.verifying_key().to_bytes().to_vec();
+    c.execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk_a])
+        .await
+        .unwrap();
+    // Human B (not the vouching human) tries to downgrade A's owned advisory.
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_b, &sk_b, &b.event_id).await;
+    assert!(
+        r.is_err(),
+        "a different human may not suppress an advisory another human owns: {r:?}"
+    );
+    assert!(
+        r.unwrap_err().contains("cross-author suppression refused"),
+        "legible ADR-0043 reason"
+    );
+}
+
+/// visibility.suppress (hide), not just salience.downgrade (demote), is accepted
+/// when an author hides their OWN event — the digital equivalent of an author
+/// striking through their own erroneous entry. Complements
+/// self_suppression_by_human_signer_accepted (which covers self-DEMOTE) so both
+/// suppressing overlay types are exercised on the self-accept path.
+#[tokio::test]
+async fn self_visibility_suppress_by_human_signer_accepted() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let tgt = author_note(&c, p, &kid_a, &sk_a).await;
+    let r = try_suppress(&c, p, "visibility.suppress", &kid_a, &sk_a, &tgt).await;
+    assert!(
+        r.is_ok(),
+        "an author hiding their own event must be accepted: {r:?}"
+    );
+}

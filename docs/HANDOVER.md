@@ -42,12 +42,22 @@ migration files edited **in place** (the #99 hardening pattern; pre-clinical pos
 sensitivity-sealing (separate authorized path, its own safety projection) and `repudiate` (`targets_other=FALSE`,
 value-grained) are untouched. **Deliberate divergence from ADR-0010 §2** (cross-author *demotion* is gated too, not
 just hiding — the maintainer's clinical call). **The other three #99 sub-items were already fixed 2026-07-02**
-(recall-epoch join, `recall_overlay` FK, `actor_current` tiebreak). TDD, 6 DB-gated tests (self via signer/attester
-paths; agent-dismissable; cross-human downgrade + hide refused; cross-human refused at the apply door); full
-workspace green (cairn-node DB-gated all pass · cairn-event 86 · cairn-sync 18); clippy + fmt clean. **Follow-up
-filed (house rule 5):** `enroll_actor`/`actor_current` collide two humans with identical pinned JSON into one
-`actor_id` (`cairn_actor_id` hashes the pinned set only, not the signing key) — a latent identity-merge footgun on
-the `db/004` actor floor, surfaced by this task's tests. ADR-0042 index row (previously missing) also added.
+(recall-epoch join, `recall_overlay` FK, `actor_current` tiebreak). Signer human-ness is resolved from the
+**append-only `actor_event` history**, not `actor_current`, so a departed/rotated author's notes stay protected
+(the over-permission hole caught in whole-branch review; guarded by a rotation regression test). TDD, **9 DB-gated
+tests** (self via signer + attester paths; self-hide via `visibility.suppress`; agent-dismissable; cross-human
+downgrade + hide refused; cross-human refused at the apply door; cross-human refused after author-key rotation;
+cross-human suppress of a human-*attested* advisory refused — the attester-branch refusal); full workspace green
+(cairn-node DB-gated all pass · cairn-event 86 · cairn-sync 18); clippy + fmt clean; mkdocs builds. **Follow-ups
+filed (house rule 5):** (1) [#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) — `enroll_actor`/`actor_current`
+collide two humans with identical pinned JSON into one `actor_id` (`cairn_actor_id` hashes the pinned set only, not
+the signing key), a latent identity-merge footgun on the `db/004` actor floor, surfaced by this task's tests; (2)
+[#154](https://github.com/cairn-ehr/cairn-ehr/issues/154) — the apply-door gate inherits the node-local-registry
+limitation: a **plain-signed** human note (no stored `attester_key`) is protected at a remote node only once that
+node has learned the author's `kind='human'` enrolment (attested targets are registry-independent — the key
+travels); the origin always refuses, and it closes with registry federation. ADR-0042 index row (previously missing)
+also added. **Post-review polish (this PR):** ADR-0043 prose corrected from `actor_current` → `actor_event` history
+(matching the shipped helper) and its principle-12 apply-door claim qualified with the #154 caveat.
 
 **This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (no product/floor/spec/ADR
 change; advisory-tier + test-infra only).** (1) **#135 — stale forced-REVIEW proposals now retract once the Doe is
