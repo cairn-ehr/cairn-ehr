@@ -686,3 +686,84 @@ async fn name_repudiation_converges_under_hlc_collision() {
         "winner is the higher content_address, deterministically"
     );
 }
+
+/// A signed patient.amended carrying a `name` at a chosen HLC triple. Two amendments with
+/// different names differ in content_address, colliding on (wall, counter, origin) only.
+fn amended_event(kid: &str, patient: Uuid, name: &str, wall: i64, counter: i32) -> EventBody {
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "patient.amended".into(),
+        schema_version: "patient/1".into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"name": name}),
+        attachments: vec![],
+        plaintext_twin: Some(format!("patient amended: {name}")),
+    }
+}
+
+#[tokio::test]
+async fn patient_chart_converges_under_hlc_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    let p = Uuid::now_v7();
+    let e_a = sign(&amended_event(&kid, p, "Alice A", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_b = sign(&amended_event(&kid, p, "Bob B", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let expect = if event_address(&e_b) > event_address(&e_a) {
+        "Bob B"
+    } else {
+        "Alice A"
+    };
+    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
+    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
+    let p_s = p.to_string();
+
+    apply(&c, &e_a).await.expect("amend A applies");
+    apply(&c, &e_b).await.expect("amend B applies");
+    let n1: String = c
+        .query_one(
+            "SELECT name FROM patient_chart WHERE patient_id = $1::text::uuid",
+            &[&p_s],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    reset_between_orders(&c).await;
+    apply(&c, &e_b).await.expect("amend B applies");
+    apply(&c, &e_a).await.expect("amend A applies");
+    let n2: String = c
+        .query_one(
+            "SELECT name FROM patient_chart WHERE patient_id = $1::text::uuid",
+            &[&p_s],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    assert_eq!(
+        n1, n2,
+        "the demographic winner must not flip by arrival order (#115)"
+    );
+    assert_eq!(
+        n1, expect,
+        "winner is the higher content_address, deterministically"
+    );
+}

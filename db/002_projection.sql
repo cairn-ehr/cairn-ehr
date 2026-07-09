@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS patient_chart (
     demo_hlc_wall  BIGINT,
     demo_hlc_count INTEGER,
     demo_origin    TEXT,
+    demo_content_address BYTEA,   -- winning demographic event's content address; #115 tiebreak
+                                  -- (nullable: a note-only row has no demographic winner yet)
     note_count     INTEGER     NOT NULL DEFAULT 0,
     last_activity  TIMESTAMPTZ,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
@@ -64,30 +66,33 @@ BEGIN
     IF NEW.event_type IN ('patient.created', 'patient.amended') THEN
         INSERT INTO patient_chart AS pc (
             patient_id, name, dob, sex,
-            demo_hlc_wall, demo_hlc_count, demo_origin,
+            demo_hlc_wall, demo_hlc_count, demo_origin, demo_content_address,
             last_activity, updated_at)
         VALUES (
             NEW.patient_id,
             NEW.body ->> 'name', NEW.body ->> 'dob', NEW.body ->> 'sex',
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
             NEW.recorded_at, clock_timestamp())
         ON CONFLICT (patient_id) DO UPDATE SET
             -- Only overlay if this event is HLC-later than the current winner.
-            name           = CASE WHEN (NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-                                     > (COALESCE(pc.demo_hlc_wall,-1), COALESCE(pc.demo_hlc_count,-1), COALESCE(pc.demo_origin,''))
+            name           = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
                                   THEN NEW.body ->> 'name' ELSE pc.name END,
-            dob            = CASE WHEN (NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-                                     > (COALESCE(pc.demo_hlc_wall,-1), COALESCE(pc.demo_hlc_count,-1), COALESCE(pc.demo_origin,''))
+            dob            = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
                                   THEN NEW.body ->> 'dob' ELSE pc.dob END,
-            sex            = CASE WHEN (NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-                                     > (COALESCE(pc.demo_hlc_wall,-1), COALESCE(pc.demo_hlc_count,-1), COALESCE(pc.demo_origin,''))
+            sex            = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
                                   THEN NEW.body ->> 'sex' ELSE pc.sex END,
+            demo_content_address = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
+                                  THEN NEW.content_address ELSE pc.demo_content_address END,
             demo_hlc_wall  = GREATEST(pc.demo_hlc_wall, NEW.hlc_wall),
-            demo_hlc_count = CASE WHEN (NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-                                     > (COALESCE(pc.demo_hlc_wall,-1), COALESCE(pc.demo_hlc_count,-1), COALESCE(pc.demo_origin,''))
+            demo_hlc_count = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
                                   THEN NEW.hlc_counter ELSE pc.demo_hlc_count END,
-            demo_origin    = CASE WHEN (NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
-                                     > (COALESCE(pc.demo_hlc_wall,-1), COALESCE(pc.demo_hlc_count,-1), COALESCE(pc.demo_origin,''))
+            demo_origin    = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                     pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
                                   THEN NEW.node_origin ELSE pc.demo_origin END,
             last_activity  = GREATEST(pc.last_activity, NEW.recorded_at),
             updated_at     = clock_timestamp();
