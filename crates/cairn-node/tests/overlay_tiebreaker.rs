@@ -4,9 +4,11 @@
 //! broken-signer collision). Real Postgres, gated on `$CAIRN_TEST_PG`, serialized
 //! cluster-wide via `db::test_serial_guard`.
 use cairn_event::identity::{
-    dispute_assertion_body, dispute_resolution_body, link_assertion_body,
-    render_dispute_resolved_twin, render_dispute_twin, render_link_twin, render_unlink_twin,
-    unlink_assertion_body, DisputeAssertion, DisputeResolution, LinkAssertion,
+    dispute_assertion_body, dispute_resolution_body, identify_assertion_body, link_assertion_body,
+    pending_assertion_body, render_dispute_resolved_twin, render_dispute_twin,
+    render_identify_twin, render_link_twin, render_pending_twin, render_unlink_twin,
+    unlink_assertion_body, DisputeAssertion, DisputeResolution, IdentifyAssertion, LinkAssertion,
+    PendingAssertion,
 };
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
@@ -428,6 +430,124 @@ async fn chart_dispute_converges_under_hlc_collision() {
     assert_eq!(
         s1, s2,
         "a dispute must not settle open-vs-resolved by arrival order (#115)"
+    );
+    assert_eq!(
+        s1, expect,
+        "winner is the higher content_address, deterministically"
+    );
+}
+
+/// A signed identity-pending (or identify) for the SAME subject at a chosen HLC triple.
+/// pending vs identify changes the event_type (and event_id) ⇒ different content_address.
+fn identity_state_event(
+    kid: &str,
+    subject: Uuid,
+    identified: bool,
+    descriptive: &str,
+    wall: i64,
+    counter: i32,
+) -> EventBody {
+    let subj = subject.to_string();
+    let (etype, payload, twin, sver) = if identified {
+        let a = IdentifyAssertion {
+            subject: &subj,
+            method: descriptive,
+        };
+        (
+            "identity.identify.asserted",
+            identify_assertion_body(&a),
+            render_identify_twin(&a),
+            "identity.identify.asserted/1",
+        )
+    } else {
+        let a = PendingAssertion {
+            subject: &subj,
+            basis: descriptive,
+        };
+        (
+            "identity.pending.asserted",
+            pending_assertion_body(&a),
+            render_pending_twin(&a),
+            "identity.pending.asserted/1",
+        )
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: subj.clone(),
+        event_type: etype.into(),
+        schema_version: sver.into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload,
+        attachments: vec![],
+        plaintext_twin: Some(twin),
+    }
+}
+
+#[tokio::test]
+async fn chart_identity_state_converges_under_hlc_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    let subj = Uuid::now_v7();
+    let e_pending = sign(
+        &identity_state_event(&kid, subj, false, "unconscious ED arrival", 5000, 7),
+        &sk,
+    )
+    .unwrap()
+    .signed_bytes;
+    let e_identified = sign(
+        &identity_state_event(&kid, subj, true, "photo id matched", 5000, 7),
+        &sk,
+    )
+    .unwrap()
+    .signed_bytes;
+    let expect = if event_address(&e_identified) > event_address(&e_pending) {
+        "identified"
+    } else {
+        "pending"
+    };
+    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
+    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
+    let subj_s = subj.to_string();
+
+    apply(&c, &e_pending).await.expect("pending applies");
+    apply(&c, &e_identified).await.expect("identify applies");
+    let s1: String = c
+        .query_one(
+            "SELECT state FROM chart_identity_state WHERE subject = $1::text::uuid",
+            &[&subj_s],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    reset_between_orders(&c).await;
+    apply(&c, &e_identified).await.expect("identify applies");
+    apply(&c, &e_pending).await.expect("pending applies");
+    let s2: String = c
+        .query_one(
+            "SELECT state FROM chart_identity_state WHERE subject = $1::text::uuid",
+            &[&subj_s],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    assert_eq!(
+        s1, s2,
+        "identity-pending vs identified must not flip by arrival order (#115)"
     );
     assert_eq!(
         s1, expect,
