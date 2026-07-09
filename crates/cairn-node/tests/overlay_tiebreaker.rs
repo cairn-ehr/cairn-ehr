@@ -132,17 +132,6 @@ async fn overlay_predicate_is_a_deterministic_total_order() {
     assert!(wins(&c, 0, 0, "", vec![0], None, None, None, None).await);
 }
 
-/// The Postgres RAISE text for a failed statement (Display renders only "db error"; the real
-/// message lives in the DbError payload — project convention, see identity_linkage.rs).
-/// Unused by this task's test (which only asserts convergence, not a specific rejection
-/// message) but part of the shared harness later collision tests (#115 follow-on tasks) reuse.
-#[allow(dead_code)]
-fn db_msg(e: &tokio_postgres::Error) -> String {
-    e.as_db_error()
-        .map(|d| d.message().to_string())
-        .unwrap_or_else(|| e.to_string())
-}
-
 /// Truncate every clinical + Group-A overlay table and enroll one agent signer + one human
 /// attester (distinct keys — the suppressing repudiation in Task 5 needs a human token).
 /// Overlay tables from later migrations are truncated behind `to_regclass` guards so setup()
