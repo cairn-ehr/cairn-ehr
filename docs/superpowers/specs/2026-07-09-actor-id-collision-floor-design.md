@@ -67,7 +67,11 @@ field is left to the future enrollment surface — ADR-0011 keeps pinned-set **c
 
 - `db/004_actors.sql` — new `cairn_actor_id_key_conflict` helper; `enroll_actor` calls it and raises;
   comment on the human-determinant guidance + the single-door forward caveat.
-- `db/tests/004_actors_test.sql` — the new floor tests (below).
+- `crates/cairn-node/tests/actor_enroll_collision.rs` — **the CI-gated coverage** (new Rust integration
+  test; CI runs `cargo test --workspace`, not the `db/tests/*.sql` files — mirrors the #99
+  `suppression_owner_gate.rs` pattern).
+- `db/tests/004_actors_test.sql` — a couple of parallel SQL assertions for the canonical floor-test doc
+  (run manually via `psql`; documentation, not the CI gate).
 - `docs/spec/decisions/0044-*.md` — the short refining ADR.
 - `docs/spec/security.md` §7.5 — one sentence (enroll fail-closes on `actor_id` collision with a distinct
   key; human actors carry a person-distinguishing determinant). Spec version bump in `docs/spec/index.md`.
@@ -85,9 +89,11 @@ Failing test first, then the floor change.
 5. **Pure predicate** — `cairn_actor_id_key_conflict(aid, key)` returns the expected boolean directly for
    the same-key, different-key, and no-row cases.
 
-All DB-gated (need PG18 + `cairn_pgx`; `CAIRN_TEST_PG=…`). Existing tests already enroll distinct pinned
-sets, so none should regress; the implementation step will confirm the full `db/tests` + workspace suites
-stay green.
+Primary coverage is the CI-gated Rust integration test (`cargo test --workspace`); tests 1–4 live there,
+plus a mirror in `db/tests/004_actors_test.sql`. All DB-gated (need PG18 + `cairn_pgx`; `CAIRN_TEST_PG=…`).
+The Rust harness `setup()` truncates `actor_event` per test, and no existing test enrolls two identical-pinned
+humans (verified: each enrolls one `{"role":"clinician"}` human per test, distinct keys, isolated state), so
+none should regress; the implementation step confirms the full cairn-node workspace suite stays green.
 
 ## Non-goals
 
