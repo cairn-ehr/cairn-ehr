@@ -3,7 +3,9 @@
 //! event is self-only. Cross-human suppression is refused at BOTH write doors;
 //! agent-authored / un-owned advisories stay dismissable (clinician-overrides-machine,
 //! principle 10). Real Postgres, gated on $CAIRN_TEST_PG, serialized cluster-wide.
-use cairn_event::{event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey};
+use cairn_event::{
+    event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
+};
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -28,9 +30,7 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 
 /// Enroll one agent signer + two distinct human actors (A the author, B the
 /// would-be cross-author suppressor). Returns their (sk, kid) pairs.
-async fn setup(
-    c: &Client,
-) -> (SigningKey, String, SigningKey, String, SigningKey, String) {
+async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String, SigningKey, String) {
     c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
         .await
         .unwrap();
@@ -88,7 +88,11 @@ fn body(
         patient_id: patient.to_string(),
         event_type: event_type.into(),
         schema_version: "advisory/1".into(),
-        hlc: Hlc { wall: 1, counter: 0, node_origin: "n".into() },
+        hlc: Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "n".into(),
+        },
         t_effective: None,
         signer_key_id: signer_kid.into(),
         contributors: contrib,
@@ -107,21 +111,22 @@ async fn author_note(c: &Client, patient: Uuid, signer_kid: &str, sk: &SigningKe
 }
 
 /// Try to submit a human-attested suppress of `target`. Returns Ok(()) on accept.
+/// The suppressor signs their own suppress event AND self-attests it (the realistic
+/// case: a human authoring a suppress signs it and vouches for it), so one (kid, sk)
+/// actor pair drives both the signature and the attestation token.
 async fn try_suppress(
     c: &Client,
     patient: Uuid,
     event_type: &str,
-    signer_kid: &str,
-    signer_sk: &SigningKey,
+    actor_kid: &str,
+    actor_sk: &SigningKey,
     target: &str,
-    attester_kid: &str,
-    attester_sk: &SigningKey,
 ) -> Result<(), String> {
-    let supp = body(event_type, patient, signer_kid, false, Some(target));
-    let signed = sign(&supp, signer_sk).unwrap();
+    let supp = body(event_type, patient, actor_kid, false, Some(target));
+    let signed = sign(&supp, actor_sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
-    let token = sign_attestation(&ca, attester_kid, "attested", attester_sk).unwrap();
-    let vk = attester_sk.verifying_key().to_bytes().to_vec();
+    let token = sign_attestation(&ca, actor_kid, "attested", actor_sk).unwrap();
+    let vk = actor_sk.verifying_key().to_bytes().to_vec();
     c.execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk])
         .await
         .map(|_| ())
@@ -130,47 +135,68 @@ async fn try_suppress(
 
 #[tokio::test]
 async fn self_suppression_by_human_signer_accepted() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
     // Human A signs a note, then A downgrades A's own note.
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
-    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt, &kid_a, &sk_a).await;
-    assert!(r.is_ok(), "author suppressing their own event must be accepted: {r:?}");
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt).await;
+    assert!(
+        r.is_ok(),
+        "author suppressing their own event must be accepted: {r:?}"
+    );
 }
 
 #[tokio::test]
 async fn cross_human_salience_downgrade_refused() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
     // Human A authors; human B tries to downgrade A's note.
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
-    let r = try_suppress(&c, p, "salience.downgrade", &kid_b, &sk_b, &tgt, &kid_b, &sk_b).await;
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_b, &sk_b, &tgt).await;
     assert!(r.is_err(), "cross-human downgrade must be refused");
-    assert!(r.unwrap_err().contains("cross-author suppression refused"), "legible reason");
+    assert!(
+        r.unwrap_err().contains("cross-author suppression refused"),
+        "legible reason"
+    );
 }
 
 #[tokio::test]
 async fn cross_human_visibility_suppress_refused() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
-    let r = try_suppress(&c, p, "visibility.suppress", &kid_b, &sk_b, &tgt, &kid_b, &sk_b).await;
+    let r = try_suppress(&c, p, "visibility.suppress", &kid_b, &sk_b, &tgt).await;
     assert!(r.is_err(), "cross-human hide must be refused");
-    assert!(r.unwrap_err().contains("cross-author suppression refused"), "legible reason");
+    assert!(
+        r.unwrap_err().contains("cross-author suppression refused"),
+        "legible reason"
+    );
 }
 
 #[tokio::test]
 async fn self_suppression_by_human_attester_accepted() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_ag, kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
@@ -182,15 +208,23 @@ async fn self_suppression_by_human_attester_accepted() {
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
     let vk_a = sk_a.verifying_key().to_bytes().to_vec();
-    c.execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk_a]).await.unwrap();
+    c.execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk_a])
+        .await
+        .unwrap();
     // A (the human author-of-record) may suppress it.
-    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &b.event_id, &kid_a, &sk_a).await;
-    assert!(r.is_ok(), "the human attester-of-record may suppress: {r:?}");
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &b.event_id).await;
+    assert!(
+        r.is_ok(),
+        "the human attester-of-record may suppress: {r:?}"
+    );
 }
 
 #[tokio::test]
 async fn cross_human_suppress_refused_at_apply_door() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
@@ -215,7 +249,10 @@ async fn cross_human_suppress_refused_at_apply_door() {
         .await
         .map(|_| ())
         .map_err(|e| db_msg(&e));
-    assert!(r.is_err(), "a synced cross-human suppress must be refused at apply");
+    assert!(
+        r.is_err(),
+        "a synced cross-human suppress must be refused at apply"
+    );
     assert!(
         r.unwrap_err().contains("cross-author suppression refused"),
         "legible ADR-0043 reason"
@@ -224,13 +261,19 @@ async fn cross_human_suppress_refused_at_apply_door() {
 
 #[tokio::test]
 async fn agent_advisory_dismissable_by_any_human() {
-    let Some(base) = cs() else { eprintln!("skipped: set CAIRN_TEST_PG"); return; };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_ag, kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
     // Target: an agent-authored, un-owned note (no human author). Human A dismisses it.
     let tgt = author_note(&c, p, &kid_ag, &sk_ag).await;
-    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt, &kid_a, &sk_a).await;
-    assert!(r.is_ok(), "an agent advisory must be dismissable by any enrolled human: {r:?}");
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt).await;
+    assert!(
+        r.is_ok(),
+        "an agent advisory must be dismissable by any enrolled human: {r:?}"
+    );
 }
