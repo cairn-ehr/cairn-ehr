@@ -48,6 +48,20 @@ async fn wins(
     .get(0)
 }
 
+/// All recorded collision rows for an overlay, as (addr_lo, addr_hi) byte pairs, ordered so the
+/// vec is comparable across arrival orders. Empty when no Byzantine collision was detected.
+async fn collision_rows(c: &Client, overlay: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
+    c.query(
+        "SELECT addr_lo, addr_hi FROM hlc_collision_log WHERE overlay = $1 ORDER BY addr_lo, addr_hi",
+        &[&overlay],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1)))
+    .collect()
+}
+
 #[tokio::test]
 async fn overlay_predicate_is_a_deterministic_total_order() {
     let Some(base) = cs() else {
@@ -144,7 +158,7 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
          patient_demographic, patient_name, patient_link, person_member, \
-         identity_projection_flag CASCADE",
+         identity_projection_flag, hlc_collision_log CASCADE",
     )
     .await
     .unwrap();
@@ -187,7 +201,8 @@ async fn apply(c: &Client, signed: &[u8]) -> Result<u64, tokio_postgres::Error> 
 async fn reset_between_orders(c: &Client) {
     c.batch_execute(
         "TRUNCATE event_log, patient_chart, patient_identifier, patient_demographic, \
-         patient_name, patient_link, person_member, identity_projection_flag CASCADE",
+         patient_name, patient_link, person_member, identity_projection_flag, \
+         hlc_collision_log CASCADE",
     )
     .await
     .unwrap();
@@ -728,6 +743,7 @@ async fn patient_chart_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "patient_chart").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_b).await.expect("amend B applies");
@@ -748,5 +764,43 @@ async fn patient_chart_converges_under_hlc_collision() {
     assert_eq!(
         n1, expect,
         "winner is the higher content_address, deterministically"
+    );
+
+    // #157: the resolved collision is also SURFACED — exactly one advisory row, identical across
+    // both arrival orders (the signal is itself a convergent set-union projection).
+    let sig2 = collision_rows(&c, "patient_chart").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
+}
+
+#[tokio::test]
+async fn distinct_triples_record_no_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    // Two ordinary amendments at DIFFERENT HLC triples (wall 5000 then 5001) — a normal overlay,
+    // never a Byzantine collision. No advisory row must be recorded.
+    let p = Uuid::now_v7();
+    let e_a = sign(&amended_event(&kid, p, "Alice A", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_b = sign(&amended_event(&kid, p, "Bob B", 5001, 0), &sk)
+        .unwrap()
+        .signed_bytes;
+    apply(&c, &e_a).await.expect("amend A applies");
+    apply(&c, &e_b).await.expect("amend B applies");
+
+    assert!(
+        collision_rows(&c, "patient_chart").await.is_empty(),
+        "distinct HLC triples are normal overlay, not a Byzantine collision (#157)"
     );
 }
