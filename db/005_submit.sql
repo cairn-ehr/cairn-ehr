@@ -53,12 +53,24 @@ $$;
 -- any enrolled human — the clinician-overrides-the-machine path (principle 10), NOT
 -- the burying of a colleague.
 --
--- The target's human authors = {signer_key_id if it resolves to a kind='human'
+-- The target's human authors = {signer_key_id if it EVER resolved to a kind='human'
 -- actor} ∪ {hex(attester_key) if a human attestation is stored}. Empty set ⇒
 -- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester is in it.
--- STABLE (reads event_log + actor_current). Shared by BOTH doors so a replicated
+-- STABLE (reads event_log + actor_event). Shared by BOTH doors so a replicated
 -- cross-human suppress faces the identical refusal (principle 12). Safe direction:
 -- an unknown/ambiguous attester on human-authored content refuses, never permits.
+--
+-- Signer human-ness is resolved from the append-only actor_event HISTORY, not
+-- actor_current — mirroring the discipline db/020 step 2 already uses for stamping.
+-- Authorship is an immutable historical fact: a plain note.added stores no
+-- attester_key, so its ONLY human-author signal is the signer's registry kind AT
+-- AUTHORING TIME. If a departed/rotated author's key later drops out of
+-- actor_current (revoke, or supersede onto a new key), querying actor_current here
+-- would silently empty the human-author set and flip the gate open — over-permission
+-- on the safety floor (any enrolled human could then suppress a departed colleague's
+-- notes), which contradicts ADR-0043's never-over-permission invariant. actor_event
+-- is append-only, so this branch is monotonic: a key that was ever human stays human
+-- for this check forever. Wrong direction is over-refusal, never over-permission.
 CREATE OR REPLACE FUNCTION cairn_suppression_author_ok(p_target UUID, p_attester_key BYTEA)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     WITH tgt AS (
@@ -67,8 +79,10 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     ),
     human_authors AS (
         SELECT t.signer_key_id AS kid FROM tgt t
-        WHERE EXISTS (SELECT 1 FROM actor_current ac
-                      WHERE ac.signing_key_id = t.signer_key_id AND ac.kind = 'human')
+        WHERE EXISTS (SELECT 1 FROM actor_event ae
+                      WHERE ae.signing_key_id = t.signer_key_id
+                        AND ae.op IN ('enroll','supersede')
+                        AND ae.kind = 'human')
         UNION
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL

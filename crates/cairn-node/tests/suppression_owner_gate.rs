@@ -259,6 +259,56 @@ async fn cross_human_suppress_refused_at_apply_door() {
     );
 }
 
+/// Guards Finding 1 of the final review: the helper's signer branch must resolve
+/// human-ness from the append-only actor_event HISTORY, not actor_current. A's
+/// original signing key drops out of actor_current the moment A "rotates" (a fresh
+/// enroll_actor row under the SAME pinned identity, modelling supersede/re-enroll or
+/// a departed colleague's key being revoked and replaced). Under the pre-fix helper
+/// (queried actor_current) A's original note.added would then have an EMPTY
+/// human-author set, flipping the gate open for ANY enrolled human — over-permission
+/// on the safety floor. Under the fix, A stays a human author by history, so B is
+/// still refused.
+#[tokio::test]
+async fn cross_human_suppress_refused_after_author_key_rotation() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // Human A signs a plain note through the local door — establishes A as the
+    // target's sole human author-of-record under A's ORIGINAL key (kid_a).
+    let tgt = author_note(&c, p, &kid_a, &sk_a).await;
+
+    // "Rotate" A's key: enroll a NEW signing key under the IDENTICAL pinned JSON
+    // setup() used for A ({"role":"clinician","actor":"A"}). This inserts another
+    // `enroll` row with the same actor_id, so actor_current's DISTINCT ON keeps only
+    // the NEW key for A's actor_id — A's original kid_a drops out of actor_current
+    // but remains in actor_event history.
+    let (_sk_a2, kid_a2) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"actor\":\"A\"}', $1)",
+        &[&kid_a2],
+    )
+    .await
+    .unwrap();
+
+    // Human B attempts to downgrade A's note, now that A's ORIGINAL authoring key
+    // is no longer current (but is still human-by-history in actor_event).
+    let r = try_suppress(&c, p, "salience.downgrade", &kid_b, &sk_b, &tgt).await;
+    assert!(
+        r.is_err(),
+        "cross-human downgrade of a departed/rotated author's note must still be refused: {r:?}"
+    );
+    assert!(
+        r.unwrap_err().contains("cross-author suppression refused"),
+        "legible ADR-0043 reason"
+    );
+}
+
 #[tokio::test]
 async fn agent_advisory_dismissable_by_any_human() {
     let Some(base) = cs() else {

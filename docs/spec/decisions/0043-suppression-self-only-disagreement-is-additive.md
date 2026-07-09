@@ -106,8 +106,10 @@ of a colleague.
   out of scope for this decision.
 - **`repudiate` (`identity.repudiate.asserted`) is untouched.** It is `suppressing` but
   `targets_other_author = FALSE` — it is value-grained (it strikes a known-false *name*, not a target
-  *event*). The gate fires only when `targets_other_author AND` the payload carries `target_event_id`,
-  so `repudiate` never reaches it (a regression the test suite guards).
+  *event*). Because the gate fires only when `v_targets_other AND` the payload carries `target_event_id`,
+  `repudiate`'s `targets_other_author = FALSE` classification structurally excludes it from ever reaching
+  the gate's `v_targets_other` predicate; this is exercised by
+  `crates/cairn-node/tests/identity_repudiate.rs`.
 - **Safe-refuse direction.** A same-human-different-key case reads as cross-author and is refused — the
   safe direction, since the clinician re-expresses as a note (mild friction, never a silent bury). The
   failure mode of the whole gate is **over-refusal on human-authored content, never over-permission**.
