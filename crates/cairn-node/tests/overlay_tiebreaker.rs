@@ -299,6 +299,7 @@ async fn patient_link_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "patient_link").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_unlink).await.expect("unlink applies");
@@ -311,6 +312,15 @@ async fn patient_link_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+
+    // #157: the resolved link/unlink collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "patient_link").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
 
     assert_eq!(
         state1, state2,
