@@ -48,6 +48,13 @@ $$;
 -- The triple + subject_key columns are descriptive redundancy kept for worklist legibility.
 -- detected_at is deliberately NOT part of the key — it is node-local observation metadata (when
 -- THIS node first noticed), intentionally non-convergent.
+--
+-- CONVERGENCE CAVEAT: this "exactly one row per node" guarantee holds for SEQUENTIAL apply of
+-- the two colliding events. Because detection is a SELECT-then-upsert in the AFTER-INSERT
+-- trigger under READ COMMITTED and the clinical apply door takes no apply-serializing lock, two
+-- CONCURRENT applies of the colliding pair could each miss the other's not-yet-committed winner
+-- and record zero rows. This is advisory-only degradation — the #115 RESOLUTION stays correct
+-- regardless — and the §5.13 background duplicate/anomaly sweep is the intended miss backstop.
 CREATE TABLE IF NOT EXISTS hlc_collision_log (
     overlay      TEXT        NOT NULL,   -- 'patient_chart' | 'patient_link' | 'chart_dispute' | ...
     subject_key  TEXT        NOT NULL,   -- text rendering of the overlay's conflict key

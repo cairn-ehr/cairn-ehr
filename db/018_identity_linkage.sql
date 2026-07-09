@@ -251,6 +251,11 @@ BEGIN
 
     -- #157: detect a Byzantine HLC-triple collision against the current standing link and record
     -- an advisory signal before overlaying. lo/hi are the canonical pair already computed above.
+    -- NOTE: the pg_advisory_xact_lock above is INCIDENTAL to this detection — it exists only for
+    -- the component-recompute race fix, but happens to also serialize this overlay's SELECT-then-
+    -- upsert, so patient_link cannot suffer the concurrent-apply miss described in db/029. The
+    -- other four overlays (db/002/023/024/025) hold no such lock and rely on the sequential-apply
+    -- assumption documented there.
     SELECT hlc_wall, hlc_counter, origin, content_address
       INTO v_cur
       FROM patient_link WHERE low = lo AND high = hi;
