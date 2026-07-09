@@ -44,6 +44,39 @@ BEGIN
 END;
 $$;
 
+-- Suppression owner-gate (ADR-0043 / issue #99). A suppressing overlay
+-- (salience.downgrade / visibility.suppress) that forecloses on a HUMAN author's
+-- event is self-only: only that human may suppress it. Cross-human suppression is
+-- refused — disagreement is expressed additively (a note referencing the target),
+-- never by touching another author's content (principle 1/2, paper-parity).
+-- An agent-authored / un-owned advisory (no responsible human) stays dismissable by
+-- any enrolled human — the clinician-overrides-the-machine path (principle 10), NOT
+-- the burying of a colleague.
+--
+-- The target's human authors = {signer_key_id if it resolves to a kind='human'
+-- actor} ∪ {hex(attester_key) if a human attestation is stored}. Empty set ⇒
+-- agent/un-owned ⇒ permitted. Non-empty ⇒ permitted only if the attester is in it.
+-- STABLE (reads event_log + actor_current). Shared by BOTH doors so a replicated
+-- cross-human suppress faces the identical refusal (principle 12). Safe direction:
+-- an unknown/ambiguous attester on human-authored content refuses, never permits.
+CREATE OR REPLACE FUNCTION cairn_suppression_author_ok(p_target UUID, p_attester_key BYTEA)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    WITH tgt AS (
+        SELECT el.signer_key_id, el.attester_key
+        FROM event_log el WHERE el.event_id = p_target
+    ),
+    human_authors AS (
+        SELECT t.signer_key_id AS kid FROM tgt t
+        WHERE EXISTS (SELECT 1 FROM actor_current ac
+                      WHERE ac.signing_key_id = t.signer_key_id AND ac.kind = 'human')
+        UNION
+        SELECT encode(t.attester_key, 'hex') FROM tgt t
+        WHERE t.attester_key IS NOT NULL
+    )
+    SELECT NOT EXISTS (SELECT 1 FROM human_authors)
+        OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
+$$;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -162,18 +195,22 @@ BEGIN
     -- 5. Target-existence gate for an overlay on another author's event.
     --    (The skeleton stores the target in the body as `target_event_id`.)
     --
-    --    DEFERRED (known limitation, not a fix): this does NOT verify that the
-    --    attester is *entitled* to suppress THIS target. Step 4 only requires
-    --    *some* enrolled human attester, so any human could downgrade any author's
-    --    event. Real owner/authority semantics (target-author vs attester, role
-    --    authority, delegation) are an ADR-level design question, not a spike hack;
-    --    it is therefore left explicit here. C5.5 only demonstrates the *un-attested*
-    --    cross-author downgrade is refused, which is the attestation gate, not an
-    --    ownership check.
+    --    The owner-gate (was DEFERRED here; now closed) is enforced below by
+    --    cairn_suppression_author_ok (ADR-0043 / issue #99).
     IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
         v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'submit_event: overlay targets unknown event %', v_target_id;
+        END IF;
+
+        -- ADR-0043 owner-gate: a suppressing overlay of a HUMAN author's event is
+        -- self-only. Cross-human suppression is refused; express disagreement
+        -- additively. (Agent advisories are un-owned ⇒ cairn_suppression_author_ok
+        -- returns TRUE ⇒ dismissable.) p_attester_key is non-NULL here: step 4
+        -- already refused a suppressing event without a valid human token.
+        IF v_mode = 'suppressing'
+           AND NOT cairn_suppression_author_ok(v_target_id, p_attester_key) THEN
+            RAISE EXCEPTION 'submit_event: cross-author suppression refused — you may only suppress your own events; express disagreement additively (a note referencing the target). (ADR-0043)';
         END IF;
     END IF;
 
