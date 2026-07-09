@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS name_repudiation (
     hlc_wall    BIGINT  NOT NULL,
     hlc_counter INTEGER NOT NULL,
     origin      TEXT    NOT NULL,
+    content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (subject, value)
 );
@@ -179,24 +180,27 @@ DECLARE
     p jsonb := NEW.body;
 BEGIN
     INSERT INTO name_repudiation
-        (subject, value, reason, hlc_wall, hlc_counter, origin)
+        (subject, value, reason, hlc_wall, hlc_counter, origin, content_address)
     VALUES
         ((p ->> 'subject')::uuid, p ->> 'value', p ->> 'reason',
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
     ON CONFLICT (subject, value) DO UPDATE SET
         reason      = EXCLUDED.reason,
         hlc_wall    = EXCLUDED.hlc_wall,
         hlc_counter = EXCLUDED.hlc_counter,
         origin      = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
         updated_at  = clock_timestamp()
-    -- The (wall, counter, origin) tuple mirrors db/012/024; `origin` is TEXT, so it carries
-    -- the same collation-sensitivity tracked by #69 and the same "add content_address as a
-    -- deterministic final tiebreaker" follow-up as #115 (C3 review). Low-stakes here: `reason`
-    -- is advisory and the SUPPRESSION decision itself is value-keyed + idempotent (independent
-    -- of this tuple), so an equal-HLC cross-collation tie can only pick a different advisory
-    -- reason, never un-suppress a name. Folded into #115's codebase-wide overlay-tiebreak fix.
-    WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
-        > (name_repudiation.hlc_wall, name_repudiation.hlc_counter, name_repudiation.origin);
+    -- content_address is the deterministic final tiebreaker (#115): a Byzantine (wall,counter,
+    -- origin) collision now converges to the same winner on every node. The remaining TEXT
+    -- collation-sensitivity of the intermediate `origin` comparison stays tracked by #69 (a
+    -- cross-collation tie can only pick a different advisory `reason`, never un-suppress a
+    -- name, since the SUPPRESSION decision itself is value-keyed + idempotent, independent of
+    -- this tuple).
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        name_repudiation.hlc_wall, name_repudiation.hlc_counter, name_repudiation.origin,
+        name_repudiation.content_address);
     RETURN NULL;  -- AFTER trigger
 END;
 $$;

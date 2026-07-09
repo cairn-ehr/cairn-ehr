@@ -26,7 +26,39 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
+**This session (2026-07-09, evening) — deterministic HLC-overlay tiebreaker
+([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change).** A silent
+cross-node divergence in the safety-critical projection layer: every standing-state overlay folded a new event in
+by comparing `(hlc_wall, hlc_counter, origin)` with a strict-`>` guard, so two **distinct** events sharing an
+identical triple (a Byzantine/broken signer reusing its own triple) settled by **arrival order** — two honest
+nodes could reach different standing state (clinician-visible for `chart_dispute`: *under-review* vs *confirmed*).
+Fix: one shared pure `cairn_hlc_overlay_wins(new_wall,new_counter,new_origin,new_addr, cur_wall,cur_counter,
+cur_origin,cur_addr)` predicate (in `db/002`) appends the event **`content_address`** (BYTEA multihash — canonical,
+`UNIQUE`, byte-compared so collation-free, never shared by two distinct events) as the deterministic final
+tiebreaker, and each overlay stores it so the comparison has both sides. Applied to the **five uniform state
+overlays**: `patient_chart` (db/002, inline CASE-form, nullable `demo_content_address`), `patient_link` (db/018),
+`chart_dispute` (db/023), `chart_identity_state` (db/024), `name_repudiation` (db/025, suppressing → tested through
+the attested apply door). **Projection-read-side only** — no wire/event-format/floor-gate change, no new event type,
+no SCHEMA-array change, no ADR/spec bump; `content_address` already travels on every event. **Scope deliberately
+narrowed** (design finding): the demographic overlays (db/010–014) already converge to a deterministic winner
+*modulo TEXT-collation* (they carry `value`/`display` as a final key), so their residual is exactly
+[#69](https://github.com/cairn-ehr/cairn-ehr/issues/69)'s remit — deferred, not in #115. **Honest limit recorded:**
+the predicate compares `origin` (TEXT) *before* `content_address`, so it makes only the **same-origin** collision
+deterministic; a cross-origin `(wall,counter)` tie is still a collation-sensitive TEXT compare (#69). TDD, **6
+DB-gated tests** (`overlay_tiebreaker.rs`: the pure predicate as a total order incl. address-tiebreak + null-current;
++ one convergence test per overlay applying two HLC-colliding events through the **remote-apply door** — the only
+door taking the wire HLC verbatim — in **both arrival orders**, asserting the same content_address-determined
+winner). Full workspace green (overlay_tiebreaker 6, no regressions across identity/demographics/sync); fmt + clippy
+clean. brainstorm→design→plan→**subagent-driven TDD** (per-task spec+quality review + opus whole-branch review,
+APPROVE, 0 Critical/Important). Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-overlay-tiebreaker*`.
+**Remaining #115:** part 2's twin-ladder registry + `cairn_require_uuid` helper (independent refactors), and #69
+(TEXT-collation of the intermediate `origin`/`value`/`display` comparisons). **PR-review follow-on filed
+([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)):** a genuine HLC-triple collision between two
+distinct `content_address`es is proof of a broken/hostile signer; the tiebreaker resolves it to a deterministic
+winner but *silently* — surface it as an advisory signal (§5.13 duplicate sweep / human worklist), never gating
+the apply path. Enhancement, out of scope for part 1.
+
+**Prior session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
 ([#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) CLOSED; ADR-0044; spec v0.44→0.45).** The SECOND
 in-DB **floor authorization** change of the demographics build (after #99). `enroll_actor` derives
 `actor_id = cairn_actor_id(pinned)` — the content-address of the **pinned set only**, never the signing key
@@ -94,61 +126,20 @@ travels); the origin always refuses, and it closes with registry federation. ADR
 also added. **Post-review polish (this PR):** ADR-0043 prose corrected from `actor_current` → `actor_event` history
 (matching the shipped helper) and its principle-12 apply-door claim qualified with the #154 caveat.
 
-**This session (2026-07-08, sixth) — matcher debt/bug cleanup, two independent PRs (advisory-tier + test-infra
-only, no product/floor/spec/ADR change; condensed — full detail in git + the PRs).** (1) **[#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)** ([PR #151](https://github.com/cairn-ehr/cairn-ehr/pull/151)) — stale forced-REVIEW `match_proposal`s (conditioned on the *transient* `chart_trust='unconfirmed'`) lingered on the hub worklist after identification because `propose()`'s band-None branch rolled back instead of retracting; fixed append-only (no DELETE) with `db.retract_pending_proposal()` (→`status='retracted'`, preserving human/applied disposition) + `upsert_proposal()` revert-on-reproposal; TDD incl. the `sweep→identify→sweep` e2e. (2) **[#84](https://github.com/cairn-ehr/cairn-ehr/issues/84) pt1** ([PR #150](https://github.com/cairn-ehr/cairn-ehr/pull/150)) — matcher integration-test committed-row leak fixed via a `managed_pg_conn` context manager that truncates projections on exit too (pt2 `KeyError` was already fixed in PR #131). Matcher suite **381 passed**, ruff clean.
-
-**This session (2026-07-08, fifth) — closed the three CI gaps from the tooling catch-up (PR [#149](https://github.com/cairn-ehr/cairn-ehr/pull/149); condensed — full detail in git + ROADMAP Phase 1).** CI + test-fixtures + docs only, no product/floor/spec/ADR/SCHEMA change. (1) **[#145](https://github.com/cairn-ehr/cairn-ehr/issues/145)** — the matcher DB-gated suite (self-skips without `CAIRN_TEST_PG`, so it ran nowhere) now runs in the `rust.yml` floor `test` job against the PG18+`cairn_pgx` cluster it already builds; **376 passed** locally. (2) **[#146](https://github.com/cairn-ehr/cairn-ehr/issues/146)** — CodeQL test-fixture crypto false positives fixed at source: the deterministic test seed/KDF-salt/pairing-nonce are **computed at runtime** (no literal reaches a crypto sink; query stays live for production), codified as **CLAUDE.md house rule 6**. (3) **[#117](https://github.com/cairn-ehr/cairn-ehr/issues/117)** — the five required checks are tabled in `CONTRIBUTING.md` (keep the floor check PG-version-independent; update branch protection in lockstep with any rename). **Folded in on request:** the **stricter ruff ruleset** (`I`/`UP`/`B`/`E5` at `line-length=100`, Rust-parity; closes the last PR #143 deferral) + a HANDOVER prune (538→450 lines).
-
-**This session (2026-07-08, second) — §5.4 marks/belongings/EMS-context text identity evidence (matcher/identity
-tier; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`).** Three
-text-shaped `kind` values — `mark`, `belongings`, `ems-context` — on the **existing** `identity.evidence.asserted`
-event type (the photo slice's non-attachment sibling). **No new migration / floor / SCHEMA / ADR / spec change** —
-the type is already registered (`db/028`), additive, non-demographic (db/015 carries the authored twin verbatim); the
-observation is free text in the payload, so `attachments` stays `vec![]` (zero-attachment content-address preserved).
-Pure `cairn-event::identity_evidence` additions (`MARK`/`BELONGINGS`/`EMS_CONTEXT_EVIDENCE_KIND` + `TEXT_EVIDENCE_KINDS`
-closed set + `parse_text_evidence_kind` typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` +
-`render_text_evidence_twin`); a new `cairn-node::identity_evidence` author path (`validate_description` honest-content
-floor **in the library** so a future UI backend inherits it; pure `build_text_evidence_body`; one-statement
-`assert_text_evidence` — no blob tier).
-**Decisions:** provenance fixed `clinician-observed` for all three kinds (relayed/hearsay lives in `basis`;
-ems-context example "reported by paramedic"); `description` required-non-empty (the *floor* refuses an empty claim —
-whether a UI silently defaults it is soft policy above our line, principle 12). TDD 4 tasks; e2e read-back +
-bad-kind/empty-description rejects (DB-gated); CLI smoke on a provisioned node all four behaviors confirmed.
-**Review follow-up (this session, post-review of PR #142):** the two evidence commands were **folded into one**
-`assert-identity-evidence <patient> --kind photo|mark|belongings|ems-context …` — `--kind photo` takes
-`--file`/`--media-type`/`--descriptor`, the text kinds take `--description`; the mutually-exclusive "`--file` iff
-`--kind photo`" rule is a new **pure, unit-tested** `cairn-node::identity_evidence::route_identity_evidence` gate
-(the separate `assert-photo-evidence` subcommand was removed). Also aligned `assert_text_evidence` to
-discriminator-first validation (kind then description) to match the gate.
-**Suites:** cairn-event + full cairn-node workspace green; `clippy --workspace --tests -D warnings` clean (the exact CI
-gate). **Honest limits:** free-text `description` only (no structured belongings item list — YAGNI, additive-friendly);
-no projection/worklist/matcher signal (evidence is log-retrievable + twin-legible, same as photo).
-
-**This session (2026-07-08, third) — CI + tooling catch-up (PR #143).** Closed the SW-hygiene gaps found after
-switching from ADR/spec work to building code. Three independent, verified-green gates: (1) **rustfmt** — one-time
-mechanical whole-workspace + `cairn_pgx` reformat to rustfmt defaults (`max_width=100`, comments untouched, `poc/`
-excluded; clippy/`cargo test` still green) + a `fmt` job in `rust.yml`. **The repo is now rustfmt-default-clean and
-CI gates on it** (this supersedes the prior "hand-formatted, CI does not gate on fmt" note). (2) **cargo-deny** —
-`deny.toml` (AGPL-compat permissive-only license allow-list · `advisories=deny` · `wildcards=deny` · crates.io-only)
-+ a `deny` job; caught `RUSTSEC-2026-0190` → `anyhow 1.0.102`→`1.0.103`; `publish = false` on the three application
-crates. cargo-deny **pinned to 0.19.9** (post-review fix: `cargo install --locked` pins only its deps, not itself).
-(3) **matcher** — `matcher.yml` (`ruff check` + pure `pytest`, DB tests self-skip) + explicit ruff rule set in
-`pyproject.toml`. **Deferred follow-ons — now mostly closed:** ~~required status checks / audit ([#117](https://github.com/cairn-ehr/cairn-ehr/issues/117))~~,
-~~Rust toolchain/MSRV pinning + PG16→18 ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144), PR #147)~~,
-~~DB-gated tests run nowhere in CI ([#145](https://github.com/cairn-ehr/cairn-ehr/issues/145))~~, ~~CodeQL test-fixture crypto false positives ([#146](https://github.com/cairn-ehr/cairn-ehr/issues/146))~~ — all closed by the fourth+fifth sessions (above); still open: stricter ruff ruleset (separate PR).
-
-**Prior session (2026-07-08, fourth) — Rust toolchain pinning + honest MSRV + PG16→18 CI bump ([#144](https://github.com/cairn-ehr/cairn-ehr/issues/144); PR #147, MERGED; full detail in git).**
-No Rust source — Cargo manifests + toolchain + CI YAML only. `rust-toolchain.toml` pins `channel = "1.96.0"` +
-rustfmt/clippy for BOTH cargo trees (stops fmt-gate drift once the runner's stable moves); `[workspace.lints]`
-(`rust.warnings`/`clippy.all` = deny) + per-crate `workspace = true` mirrors the CI clippy gate locally; honest
-`rust-version` `1.74`→`1.96` (the old value did not build the modern dep graph; no separate MSRV gate — the
-pinned-toolchain build already proves 1.96); the `test` job installs PG18 via the PGDG apt repo (Ubuntu 24.04 ships
-only 16) matching the shipped `pg18` default (DB-gated floor **431/0** locally to de-risk). The required floor job was
-renamed **PG-version-independent** (`clippy + cargo test (cairn_pgx floor)`) because the `(PG16 …)`→`(PG18 …)` rename
-had orphaned the required check (exact-name match → never reports → `MERGEBLOCKED`); the branch-protection swap is
-**done** and #147 merged. **Deferred:** `[workspace.lints]` for the `cairn_pgx` tree (pgrx macro code trips lints), a
-bisected MSRV floor if `cairn-event` is ever published.
-
+**Merged 2026-07-08 (condensed — full detail in git + the PRs + ROADMAP Phase 1).** A dense build+hardening day,
+all on `main`:
+- **§5.4 marks/belongings/EMS-context text identity evidence** (PR #142) — three text `kind` values (`mark`,
+  `belongings`, `ems-context`) on the **existing** `identity.evidence.asserted` type (photo's non-attachment
+  sibling); no migration/floor/SCHEMA/ADR/spec change, `attachments` stays `vec![]`. Pure
+  `cairn-event::identity_evidence` (`TEXT_EVIDENCE_KINDS` closed set + typo-drift guard + `text_evidence_body`/twin)
+  + a `cairn-node` author path (`validate_description` honest-content floor in the library) + one folded
+  `assert-identity-evidence --kind photo|mark|belongings|ems-context` CLI gated by a pure `route_identity_evidence`.
+- **CI + tooling catch-up** (PRs #143/#147/#149/#150/#151) — rustfmt-defaults `fmt` gate + cargo-deny (`deny.toml`,
+  pinned 0.19.9) + `matcher.yml` (ruff+pytest); `rust-toolchain.toml` pins `1.96.0` + `[workspace.lints]`; PG16→18 CI
+  bump + PG-version-independent floor job name; matcher DB-suite now runs in CI ([#145]); CodeQL crypto FP fixed at
+  source → **CLAUDE.md house rule 6** ([#146]); required-checks tabled in `CONTRIBUTING.md` ([#117]); stricter ruff
+  ruleset. Closed [#144]/[#145]/[#146]/[#117]. Matcher debt: stale forced-REVIEW proposal retraction ([#135], PR #151,
+  append-only `retract_pending_proposal`) + integration-test committed-row leak ([#84] pt1, PR #150).
 **Prior session (2026-07-08, first) — §5.4 photo evidence + the day-one §3.14 attachment-reference shape (ADR-0042; spec
 v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).**
 The FIRST content-addressed **attachment** on a clinical surface, which forced finalizing the ONE can't-retrofit

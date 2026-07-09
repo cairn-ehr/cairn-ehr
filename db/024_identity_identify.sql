@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS chart_identity_state (
     hlc_wall    BIGINT  NOT NULL,
     hlc_counter INTEGER NOT NULL,
     origin      TEXT    NOT NULL,
+    content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON chart_identity_state TO cairn_agent;
@@ -167,19 +168,24 @@ DECLARE
                            THEN p ->> 'method' ELSE p ->> 'basis' END;
 BEGIN
     INSERT INTO chart_identity_state
-        (subject, state, detail, hlc_wall, hlc_counter, origin)
+        (subject, state, detail, hlc_wall, hlc_counter, origin, content_address)
     VALUES
         ((p ->> 'subject')::uuid, v_state, v_detail,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
     ON CONFLICT (subject) DO UPDATE SET
         state       = EXCLUDED.state,
         detail      = EXCLUDED.detail,
         hlc_wall    = EXCLUDED.hlc_wall,
         hlc_counter = EXCLUDED.hlc_counter,
         origin      = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
         updated_at  = clock_timestamp()
-    WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
-        > (chart_identity_state.hlc_wall, chart_identity_state.hlc_counter, chart_identity_state.origin);
+    -- content_address is the deterministic final tiebreaker (#115) so an HLC-triple collision
+    -- converges pending-vs-identified identically on every node.
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        chart_identity_state.hlc_wall, chart_identity_state.hlc_counter,
+        chart_identity_state.origin, chart_identity_state.content_address);
     RETURN NULL;  -- AFTER trigger
 END;
 $$;

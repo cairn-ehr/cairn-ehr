@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS patient_link (
     origin      TEXT    NOT NULL,
     provenance  TEXT    NOT NULL,
     confidence  TEXT,
+    content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (low, high),
     CHECK (low < high)
@@ -248,10 +249,11 @@ BEGIN
     PERFORM pg_advisory_xact_lock(x'4341524E4C4B'::bigint);  -- 'CARNLK'
 
     INSERT INTO patient_link
-        (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence)
+        (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,
+         content_address)
     VALUES
         (lo, hi, v_state, NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-         p ->> 'provenance', p ->> 'confidence')
+         p ->> 'provenance', p ->> 'confidence', NEW.content_address)
     ON CONFLICT (low, high) DO UPDATE SET
         state       = EXCLUDED.state,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -259,9 +261,14 @@ BEGIN
         origin      = EXCLUDED.origin,
         provenance  = EXCLUDED.provenance,
         confidence  = EXCLUDED.confidence,
+        content_address = EXCLUDED.content_address,
         updated_at  = clock_timestamp()
-    WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
-        > (patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin);
+    -- Overlay only when the incoming event outranks the stored winner, with content_address
+    -- as the deterministic final tiebreaker (#115) so an HLC-triple collision converges.
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin,
+        patient_link.content_address);
 
     -- Recompute the touched component(s). Recomputing BOTH endpoints is always
     -- correct: a link merges (both endpoints reach the same union); an unlink splits

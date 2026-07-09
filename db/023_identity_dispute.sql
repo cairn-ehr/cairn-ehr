@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS chart_dispute (
     hlc_wall    BIGINT  NOT NULL,
     hlc_counter INTEGER NOT NULL,
     origin      TEXT    NOT NULL,
+    content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON chart_dispute TO cairn_agent;
@@ -175,10 +176,10 @@ BEGIN
     END IF;
 
     INSERT INTO chart_dispute
-        (dispute_id, subject, state, detail, hlc_wall, hlc_counter, origin)
+        (dispute_id, subject, state, detail, hlc_wall, hlc_counter, origin, content_address)
     VALUES
         ((p ->> 'dispute_id')::uuid, (p ->> 'subject')::uuid, v_state, v_detail,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
     ON CONFLICT (dispute_id) DO UPDATE SET
         subject     = EXCLUDED.subject,
         state       = EXCLUDED.state,
@@ -186,9 +187,14 @@ BEGIN
         hlc_wall    = EXCLUDED.hlc_wall,
         hlc_counter = EXCLUDED.hlc_counter,
         origin      = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
         updated_at  = clock_timestamp()
-    WHERE (EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin)
-        > (chart_dispute.hlc_wall, chart_dispute.hlc_counter, chart_dispute.origin);
+    -- content_address is the deterministic final tiebreaker (#115) so an HLC-triple collision
+    -- settles open-vs-resolved identically on every node.
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        chart_dispute.hlc_wall, chart_dispute.hlc_counter, chart_dispute.origin,
+        chart_dispute.content_address);
     RETURN NULL;  -- AFTER trigger
 END;
 $$;
