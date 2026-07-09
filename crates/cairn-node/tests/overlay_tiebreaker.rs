@@ -6,11 +6,13 @@
 use cairn_event::identity::{
     dispute_assertion_body, dispute_resolution_body, identify_assertion_body, link_assertion_body,
     pending_assertion_body, render_dispute_resolved_twin, render_dispute_twin,
-    render_identify_twin, render_link_twin, render_pending_twin, render_unlink_twin,
-    unlink_assertion_body, DisputeAssertion, DisputeResolution, IdentifyAssertion, LinkAssertion,
-    PendingAssertion,
+    render_identify_twin, render_link_twin, render_pending_twin, render_repudiate_twin,
+    render_unlink_twin, repudiation_assertion_body, unlink_assertion_body, DisputeAssertion,
+    DisputeResolution, IdentifyAssertion, LinkAssertion, PendingAssertion, RepudiationAssertion,
 };
-use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
+use cairn_event::{
+    event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
+};
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -551,6 +553,136 @@ async fn chart_identity_state_converges_under_hlc_collision() {
     );
     assert_eq!(
         s1, expect,
+        "winner is the higher content_address, deterministically"
+    );
+}
+
+/// A signed repudiation of (subject, value). Two repudiations of the SAME (subject, value)
+/// with different `reason` differ in signed bytes ⇒ different content_address, colliding on
+/// (wall, counter, origin) only — the #115 case for the suppressing overlay.
+fn repudiation_event(
+    kid: &str,
+    subject: Uuid,
+    value: &str,
+    reason: &str,
+    wall: i64,
+    counter: i32,
+) -> EventBody {
+    let subj = subject.to_string();
+    let a = RepudiationAssertion {
+        subject: &subj,
+        value,
+        reason,
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: subj.clone(),
+        event_type: "identity.repudiate.asserted".into(),
+        schema_version: "identity.repudiate.asserted/1".into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: repudiation_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(render_repudiate_twin(&a)),
+    }
+}
+
+/// Apply a validly-signed suppressing event through the attested apply door (db/020, 3-arg):
+/// signed bytes + a human attestation token over its content_address + the attester's key.
+async fn apply_attested(
+    c: &Client,
+    signed: &[u8],
+    token: &[u8],
+    hkey: &[u8],
+) -> Result<u64, tokio_postgres::Error> {
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.to_vec(), &token.to_vec(), &hkey.to_vec()],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn name_repudiation_converges_under_hlc_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, sk_h, kid_h) = setup(&c).await;
+    let hkey = hex::decode(&kid_h).unwrap();
+
+    let subj = Uuid::now_v7();
+    let value = "Fabricated Persona";
+    // Two repudiations of the same struck name at an IDENTICAL HLC triple; the winning `reason`
+    // must be the higher content_address either arrival order.
+    let e1 = sign(
+        &repudiation_event(&kid, subj, value, "reason-one", 5000, 7),
+        &sk,
+    )
+    .unwrap()
+    .signed_bytes;
+    let e2 = sign(
+        &repudiation_event(&kid, subj, value, "reason-two", 5000, 7),
+        &sk,
+    )
+    .unwrap()
+    .signed_bytes;
+    let t1 = sign_attestation(&event_address(&e1), &kid_h, "attested", &sk_h).unwrap();
+    let t2 = sign_attestation(&event_address(&e2), &kid_h, "attested", &sk_h).unwrap();
+    let expect = if event_address(&e2) > event_address(&e1) {
+        "reason-two"
+    } else {
+        "reason-one"
+    };
+
+    apply_attested(&c, &e1, &t1, &hkey)
+        .await
+        .expect("repudiation one applies");
+    apply_attested(&c, &e2, &t2, &hkey)
+        .await
+        .expect("repudiation two applies");
+    // tokio-postgres in this project has no uuid `ToSql` feature enabled (project convention,
+    // see identity_linkage.rs::edge_state) — cast the text param through uuid.
+    let subj_s = subj.to_string();
+    let r1: String = c
+        .query_one(
+            "SELECT reason FROM name_repudiation WHERE subject = $1::text::uuid AND value = $2",
+            &[&subj_s, &value],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    reset_between_orders(&c).await;
+    apply_attested(&c, &e2, &t2, &hkey)
+        .await
+        .expect("repudiation two applies");
+    apply_attested(&c, &e1, &t1, &hkey)
+        .await
+        .expect("repudiation one applies");
+    let r2: String = c
+        .query_one(
+            "SELECT reason FROM name_repudiation WHERE subject = $1::text::uuid AND value = $2",
+            &[&subj_s, &value],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    assert_eq!(
+        r1, r2,
+        "a repudiation must not settle by arrival order (#115)"
+    );
+    assert_eq!(
+        r1, expect,
         "winner is the higher content_address, deterministically"
     );
 }
