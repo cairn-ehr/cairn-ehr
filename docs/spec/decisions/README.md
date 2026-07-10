@@ -65,6 +65,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0042](0042-concrete-attachment-reference-shape.md) | The concrete attachment-reference shape (Attachment / Rendition / SealRef) | Accepted (refines 0013) | 2026-07-08 |
 | [0043](0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | Accepted (refines 0010, 0022) | 2026-07-09 |
 | [0044](0044-enroll-fail-closed-on-actor-id-collision.md) | Enroll fails closed on `actor_id` collision; human actors carry a person-distinguishing determinant | Accepted (refines 0011, 0029) | 2026-07-09 |
+| [0045](0045-collation-independent-projection-tiebreaks.md) | Collation-independent projection winner tiebreaks | Accepted (refines principle 1; relates to 0031, #115) | 2026-07-10 |
 
 ## Template
 
