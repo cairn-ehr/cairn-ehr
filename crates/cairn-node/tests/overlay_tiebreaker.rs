@@ -898,21 +898,49 @@ async fn overlay_origin_tiebreak_is_collation_independent() {
 
     // Sanity: a real locale collation orders the pair the OTHER way — this is why #69 matters.
     let unicode_flips: bool = c
-        .query_one("SELECT 'B' COLLATE \"unicode\" > 'a' COLLATE \"unicode\"", &[])
+        .query_one(
+            "SELECT 'B' COLLATE \"unicode\" > 'a' COLLATE \"unicode\"",
+            &[],
+        )
         .await
         .unwrap()
         .get(0);
-    assert!(unicode_flips, "'B' > 'a' should hold under a locale collation");
+    assert!(
+        unicode_flips,
+        "'B' > 'a' should hold under a locale collation"
+    );
 
     // Same (wall, counter); origins 'B' (new) vs 'a' (current); content_address never consulted
     // because the origins differ. Under COLLATE "C", 'a' > 'B', so new='B' does NOT outrank cur='a'.
     assert!(
-        !wins(&c, 7, 0, "B", vec![9], Some(7), Some(0), Some("a"), Some(vec![1])).await,
+        !wins(
+            &c,
+            7,
+            0,
+            "B",
+            vec![9],
+            Some(7),
+            Some(0),
+            Some("a"),
+            Some(vec![1])
+        )
+        .await,
         "new origin 'B' must LOSE to current origin 'a' under C byte order"
     );
     // Symmetric: new='a' outranks cur='B'.
     assert!(
-        wins(&c, 7, 0, "a", vec![1], Some(7), Some(0), Some("B"), Some(vec![9])).await,
+        wins(
+            &c,
+            7,
+            0,
+            "a",
+            vec![1],
+            Some(7),
+            Some(0),
+            Some("B"),
+            Some(vec![9])
+        )
+        .await,
         "new origin 'a' must WIN over current origin 'B' under C byte order"
     );
 }
