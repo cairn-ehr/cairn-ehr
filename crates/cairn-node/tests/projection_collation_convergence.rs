@@ -443,3 +443,136 @@ async fn name_trigger_origin_tiebreak_is_collation_independent() {
         );
     }
 }
+
+/// A demographic.field.asserted address payload (§4.3). `display` is the legibility twin core.
+fn address_payload(display: &str, addr_use: &str, provenance: &str) -> serde_json::Value {
+    json!({"field": "address", "value": display, "provenance": provenance,
+           "facets": {"use": addr_use, "display": display}})
+}
+
+/// #69: patient_address_current picks its per-use display across equal-(rank,wall,counter,origin)
+/// members by `display` under COLLATE "C". 'B'/'a' flip vs a locale collation; the shown address
+/// must be the byte-order winner ('a').
+#[tokio::test]
+async fn address_display_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    for (first, second) in [("B", "a"), ("a", "B")] {
+        let (sk, kid) = setup(&c).await;
+        let p = Uuid::now_v7();
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            4,
+            0,
+            "n",
+            address_payload(first, "home", "patient-stated"),
+            &format!("addr {first}"),
+        )
+        .await;
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            4,
+            0,
+            "n",
+            address_payload(second, "home", "patient-stated"),
+            &format!("addr {second}"),
+        )
+        .await;
+
+        let display: String = c
+            .query_one(
+                "SELECT display FROM patient_address_current WHERE patient_id = $1::text::uuid",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            display, "a",
+            "shown address is the C byte-order winner for {first}->{second}"
+        );
+    }
+}
+
+/// #69 review: `patient_address_apply()`'s `ON CONFLICT ... WHERE` tiebreak on `asserted_origin`
+/// has NO direct test — `address_display_tiebreak_is_collation_independent` above submits two
+/// DIFFERENT `display` values, so they land as separate retained-set PK rows
+/// `(patient_id, use_key, display)` and `ON CONFLICT` never fires; that test only exercises the
+/// `patient_address_current` VIEW's own `ORDER BY ... COLLATE "C"`. This test isolates the
+/// TRIGGER's conflict path instead: two events share the SAME (patient, use, display) — so the
+/// second submit collides on the retained set's full PK — with equal (wall, counter, provenance)
+/// so only `asserted_origin COLLATE "C"` decides which row's assertion is retained. Reads
+/// `patient_address` (the retained-set TABLE) directly, not the VIEW, so the VIEW's own
+/// tiebreak can't mask a regression in the trigger's.
+#[tokio::test]
+async fn address_trigger_origin_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    for (first, second) in [("B", "a"), ("a", "B")] {
+        let (sk, kid) = setup(&c).await;
+        let p = Uuid::now_v7();
+        // Same display+use+provenance+(wall,counter) → same retained-set PK
+        // (patient_id, use_key, display), equal rank/HLC; only origin differs → the second
+        // submit's ON CONFLICT WHERE decides the winner.
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            6,
+            0,
+            first,
+            address_payload("12 Main St", "home", "patient-stated"),
+            &format!("addr 12 Main St ({first})"),
+        )
+        .await;
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            6,
+            0,
+            second,
+            address_payload("12 Main St", "home", "patient-stated"),
+            &format!("addr 12 Main St ({second})"),
+        )
+        .await;
+
+        let origin: String = c
+            .query_one(
+                "SELECT asserted_origin FROM patient_address \
+                 WHERE patient_id = $1::text::uuid AND use_key = 'home' AND display = '12 Main St'",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            origin, "a",
+            "trigger ON CONFLICT WHERE: C byte-order winner for {first}->{second}"
+        );
+    }
+}

@@ -175,9 +175,9 @@ BEGIN
         asserted_origin = EXCLUDED.asserted_origin,
         updated_at      = clock_timestamp()
     WHERE (EXCLUDED.last_hlc_wall, EXCLUDED.last_hlc_count,
-           EXCLUDED.provenance_rank, EXCLUDED.asserted_origin)
+           EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C")
         > (pa.last_hlc_wall, pa.last_hlc_count,
-           pa.provenance_rank, pa.asserted_origin);
+           pa.provenance_rank, pa.asserted_origin COLLATE "C");
     RETURN NULL;
 END;
 $$;
@@ -198,9 +198,12 @@ CREATE TRIGGER patient_address_apply_trg
 -- arbitrarily and two nodes to show different addresses per use (silent set-union
 -- divergence — wrong post-discharge letters / ambulance dispatch). Appending `display`
 -- (the retained set's remaining PK column) makes the order total, so the current address
--- converges regardless of client HLC hygiene. (`display` is text, so like node_origin it
--- shares the collation-sensitivity tracked in #69: convergence holds across nodes sharing
--- a DB collation; the codebase-wide COLLATE "C" fix lives in #69.)
+-- converges regardless of client HLC hygiene. `display` is text, so — like node_origin —
+-- it is collation-sensitive: two nodes running with different default collations (e.g. "C"
+-- vs an ICU locale) could order the SAME byte strings differently and diverge on the
+-- displayed address. Per ADR-0045 (#69) this is now fixed here: the trigger's ON CONFLICT
+-- WHERE tiebreak and this VIEW's ORDER BY both pin every TEXT tiebreak key to COLLATE "C",
+-- so convergence holds regardless of each node's default collation.
 CREATE OR REPLACE VIEW patient_address_current AS
 SELECT DISTINCT ON (patient_id, use_key)
     patient_id, use_key, display, use_raw, geo, structured,
@@ -208,8 +211,8 @@ SELECT DISTINCT ON (patient_id, use_key)
 FROM patient_address
 ORDER BY patient_id, use_key,
          last_hlc_wall DESC, last_hlc_count DESC,
-         provenance_rank DESC, asserted_origin DESC,
-         display DESC;
+         provenance_rank DESC, asserted_origin COLLATE "C" DESC,
+         display COLLATE "C" DESC;
 
 GRANT SELECT ON patient_address, patient_address_current TO cairn_agent;
 
