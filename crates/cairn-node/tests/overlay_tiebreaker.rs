@@ -48,6 +48,20 @@ async fn wins(
     .get(0)
 }
 
+/// All recorded collision rows for an overlay, as (addr_lo, addr_hi) byte pairs, ordered so the
+/// vec is comparable across arrival orders. Empty when no Byzantine collision was detected.
+async fn collision_rows(c: &Client, overlay: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
+    c.query(
+        "SELECT addr_lo, addr_hi FROM hlc_collision_log WHERE overlay = $1 ORDER BY addr_lo, addr_hi",
+        &[&overlay],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1)))
+    .collect()
+}
+
 #[tokio::test]
 async fn overlay_predicate_is_a_deterministic_total_order() {
     let Some(base) = cs() else {
@@ -144,7 +158,7 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
          patient_demographic, patient_name, patient_link, person_member, \
-         identity_projection_flag CASCADE",
+         identity_projection_flag, hlc_collision_log CASCADE",
     )
     .await
     .unwrap();
@@ -187,7 +201,8 @@ async fn apply(c: &Client, signed: &[u8]) -> Result<u64, tokio_postgres::Error> 
 async fn reset_between_orders(c: &Client) {
     c.batch_execute(
         "TRUNCATE event_log, patient_chart, patient_identifier, patient_demographic, \
-         patient_name, patient_link, person_member, identity_projection_flag CASCADE",
+         patient_name, patient_link, person_member, identity_projection_flag, \
+         hlc_collision_log CASCADE",
     )
     .await
     .unwrap();
@@ -284,6 +299,7 @@ async fn patient_link_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "patient_link").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_unlink).await.expect("unlink applies");
@@ -296,6 +312,15 @@ async fn patient_link_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+
+    // #157: the resolved link/unlink collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "patient_link").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
 
     assert_eq!(
         state1, state2,
@@ -405,6 +430,7 @@ async fn chart_dispute_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "chart_dispute").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_resolved).await.expect("resolve applies");
@@ -425,6 +451,15 @@ async fn chart_dispute_converges_under_hlc_collision() {
     assert_eq!(
         s1, expect,
         "winner is the higher content_address, deterministically"
+    );
+
+    // #157: the resolved open-vs-resolved collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "chart_dispute").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
     );
 }
 
@@ -521,6 +556,7 @@ async fn chart_identity_state_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "chart_identity_state").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_identified).await.expect("identify applies");
@@ -533,6 +569,15 @@ async fn chart_identity_state_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+
+    // #157: the resolved pending-vs-identified collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "chart_identity_state").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
 
     assert_eq!(
         s1, s2,
@@ -645,6 +690,7 @@ async fn name_repudiation_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "name_repudiation").await;
 
     reset_between_orders(&c).await;
     apply_attested(&c, &e2, &t2, &hkey)
@@ -661,6 +707,15 @@ async fn name_repudiation_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+
+    // #157: the resolved repudiation-reason collision is surfaced — one convergent advisory row.
+    let sig2 = collision_rows(&c, "name_repudiation").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
 
     assert_eq!(
         r1, r2,
@@ -728,6 +783,7 @@ async fn patient_chart_converges_under_hlc_collision() {
         .await
         .unwrap()
         .get(0);
+    let sig1 = collision_rows(&c, "patient_chart").await;
 
     reset_between_orders(&c).await;
     apply(&c, &e_b).await.expect("amend B applies");
@@ -748,5 +804,81 @@ async fn patient_chart_converges_under_hlc_collision() {
     assert_eq!(
         n1, expect,
         "winner is the higher content_address, deterministically"
+    );
+
+    // #157: the resolved collision is also SURFACED — exactly one advisory row, identical across
+    // both arrival orders (the signal is itself a convergent set-union projection).
+    let sig2 = collision_rows(&c, "patient_chart").await;
+    assert_eq!(sig1.len(), 1, "one collision recorded, order 1");
+    assert_eq!(sig2.len(), 1, "one collision recorded, order 2");
+    assert_eq!(
+        sig1, sig2,
+        "the advisory signal converges across arrival order (#157)"
+    );
+}
+
+#[tokio::test]
+async fn distinct_triples_record_no_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    // Two ordinary amendments at DIFFERENT HLC triples (wall 5000 then 5001) — a normal overlay,
+    // never a Byzantine collision. No advisory row must be recorded.
+    let p = Uuid::now_v7();
+    let e_a = sign(&amended_event(&kid, p, "Alice A", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_b = sign(&amended_event(&kid, p, "Bob B", 5001, 0), &sk)
+        .unwrap()
+        .signed_bytes;
+    apply(&c, &e_a).await.expect("amend A applies");
+    apply(&c, &e_b).await.expect("amend B applies");
+
+    assert!(
+        collision_rows(&c, "patient_chart").await.is_empty(),
+        "distinct HLC triples are normal overlay, not a Byzantine collision (#157)"
+    );
+}
+
+#[tokio::test]
+async fn three_way_collision_records_a_pairwise_chain() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    // Three DISTINCT events sharing ONE (wall, counter, origin) triple — a 3-way Byzantine
+    // collision. Detection compares each arriving event only against the CURRENT overlay winner,
+    // so the node records a pairwise CHAIN (event-vs-running-winner), NOT all C(3,2)=3 pairs: the
+    // 2nd apply records {A, B}, the 3rd records {winner(A,B), C} → exactly two rows. This pins the
+    // documented ≥3-way accepted limit (db/029 CONVERGENCE CAVEAT 2): the ≥3-way signal is
+    // arrival-order-dependent and NOT guaranteed convergent — the §5.13 sweep is the backstop. The
+    // exactly-one-convergent-row guarantee is the TWO-way case (the five per-overlay tests above).
+    let p = Uuid::now_v7();
+    let e_a = sign(&amended_event(&kid, p, "Alice A", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_b = sign(&amended_event(&kid, p, "Bob B", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_c = sign(&amended_event(&kid, p, "Carol C", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    apply(&c, &e_a).await.expect("amend A applies");
+    apply(&c, &e_b).await.expect("amend B applies");
+    apply(&c, &e_c).await.expect("amend C applies");
+
+    assert_eq!(
+        collision_rows(&c, "patient_chart").await.len(),
+        2,
+        "a 3-way collision records a pairwise chain (event vs running winner), not all pairs (#157)"
     );
 }

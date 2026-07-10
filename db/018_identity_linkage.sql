@@ -237,6 +237,7 @@ DECLARE
     lo      uuid  := LEAST(a, b);
     hi      uuid  := GREATEST(a, b);
     v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
+    v_cur   record;
 BEGIN
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
@@ -247,6 +248,25 @@ BEGIN
     -- path never takes it, so there is no contention with normal event submission. (Keyed on
     -- a fixed project constant distinct from the test-serialization guard key.)
     PERFORM pg_advisory_xact_lock(x'4341524E4C4B'::bigint);  -- 'CARNLK'
+
+    -- #157: detect a Byzantine HLC-triple collision against the current standing link and record
+    -- an advisory signal before overlaying. lo/hi are the canonical pair already computed above.
+    -- NOTE: the pg_advisory_xact_lock above is INCIDENTAL to this detection — it exists only for
+    -- the component-recompute race fix, but happens to also serialize this overlay's SELECT-then-
+    -- upsert, so patient_link cannot suffer the concurrent-apply miss described in db/029. The
+    -- other four overlays (db/002/023/024/025) hold no such lock and rely on the sequential-apply
+    -- assumption documented there.
+    SELECT hlc_wall, hlc_counter, origin, content_address
+      INTO v_cur
+      FROM patient_link WHERE low = lo AND high = hi;
+    IF FOUND AND cairn_hlc_triple_collision(
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
+        PERFORM cairn_record_hlc_collision(
+            'patient_link', lo::text || '|' || hi::text,
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+            NEW.content_address, v_cur.content_address);
+    END IF;
 
     INSERT INTO patient_link
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,

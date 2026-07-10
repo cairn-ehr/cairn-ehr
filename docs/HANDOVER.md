@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-09 · **Spec/ADRs:** v0.45 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-10 · **Spec/ADRs:** v0.45 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -26,37 +26,47 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-09, evening) — deterministic HLC-overlay tiebreaker
-([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change).** A silent
-cross-node divergence in the safety-critical projection layer: every standing-state overlay folded a new event in
-by comparing `(hlc_wall, hlc_counter, origin)` with a strict-`>` guard, so two **distinct** events sharing an
-identical triple (a Byzantine/broken signer reusing its own triple) settled by **arrival order** — two honest
-nodes could reach different standing state (clinician-visible for `chart_dispute`: *under-review* vs *confirmed*).
-Fix: one shared pure `cairn_hlc_overlay_wins(new_wall,new_counter,new_origin,new_addr, cur_wall,cur_counter,
-cur_origin,cur_addr)` predicate (in `db/002`) appends the event **`content_address`** (BYTEA multihash — canonical,
-`UNIQUE`, byte-compared so collation-free, never shared by two distinct events) as the deterministic final
-tiebreaker, and each overlay stores it so the comparison has both sides. Applied to the **five uniform state
-overlays**: `patient_chart` (db/002, inline CASE-form, nullable `demo_content_address`), `patient_link` (db/018),
-`chart_dispute` (db/023), `chart_identity_state` (db/024), `name_repudiation` (db/025, suppressing → tested through
-the attested apply door). **Projection-read-side only** — no wire/event-format/floor-gate change, no new event type,
-no SCHEMA-array change, no ADR/spec bump; `content_address` already travels on every event. **Scope deliberately
-narrowed** (design finding): the demographic overlays (db/010–014) already converge to a deterministic winner
-*modulo TEXT-collation* (they carry `value`/`display` as a final key), so their residual is exactly
-[#69](https://github.com/cairn-ehr/cairn-ehr/issues/69)'s remit — deferred, not in #115. **Honest limit recorded:**
-the predicate compares `origin` (TEXT) *before* `content_address`, so it makes only the **same-origin** collision
-deterministic; a cross-origin `(wall,counter)` tie is still a collation-sensitive TEXT compare (#69). TDD, **6
-DB-gated tests** (`overlay_tiebreaker.rs`: the pure predicate as a total order incl. address-tiebreak + null-current;
-+ one convergence test per overlay applying two HLC-colliding events through the **remote-apply door** — the only
-door taking the wire HLC verbatim — in **both arrival orders**, asserting the same content_address-determined
-winner). Full workspace green (overlay_tiebreaker 6, no regressions across identity/demographics/sync); fmt + clippy
-clean. brainstorm→design→plan→**subagent-driven TDD** (per-task spec+quality review + opus whole-branch review,
-APPROVE, 0 Critical/Important). Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-overlay-tiebreaker*`.
-**Remaining #115:** part 2's twin-ladder registry + `cairn_require_uuid` helper (independent refactors), and #69
-(TEXT-collation of the intermediate `origin`/`value`/`display` comparisons). **PR-review follow-on filed
-([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)):** a genuine HLC-triple collision between two
-distinct `content_address`es is proof of a broken/hostile signer; the tiebreaker resolves it to a deterministic
-winner but *silently* — surface it as an advisory signal (§5.13 duplicate sweep / human worklist), never gating
-the apply path. Enhancement, out of scope for part 1.
+**This session (2026-07-10) — the Byzantine HLC-collision advisory signal
+([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) done; no ADR/spec change).** Direct follow-on to
+#115: the tiebreaker resolves a Byzantine/broken-signer HLC-triple collision (two **distinct**
+`content_address`es sharing one `(hlc_wall, hlc_counter, origin)` triple — an honest signer never reuses its
+triple) to a deterministic winner, but did so **silently**. Now the collision is also **surfaced** for later
+human / §5.13-sweep review (matters most for `chart_dispute` open↔resolved and `patient_link` merge↔un-merge).
+New `db/029_hlc_collision_log.sql`: (1) a shared pure `cairn_hlc_triple_collision(...)` predicate — true iff the
+triple is EQUAL and `content_address` DISTINCT, uniformly null-safe (`IS [NOT] DISTINCT FROM`); (2) a **convergent**
+append-only `hlc_collision_log` whose PK is the canonical **unordered** address pair (`LEAST/GREATEST(addr)`), so
+every node that sees both colliding events records **exactly one** row, arrival-order-independent — the anomaly is
+itself a set-union projection (**exactly for the 2-way collision** — see the ≥3-way note below); (3) a
+**structurally** non-gating `cairn_record_hlc_collision(...)` recorder — a single `INSERT ... SELECT` whose null-guard
+`WHERE` drops the row (never a NOT-NULL violation) and whose `ON CONFLICT DO NOTHING` makes re-observation idempotent,
+so **it can never raise → can never gate the apply path** by construction, not by caller convention (availability over
+consistency). Each of the **five** overlay triggers (`db/002`/`018`/`023`/`024`/`025`) gets a minimal detect-and-record
+step **before its byte-for-byte-unchanged upsert** — the #115 resolution is untouched; detection lives in the
+AFTER-INSERT projection trigger so it is **door-agnostic**. **Projection-read-side only** — no wire/event-format/floor-gate
+change, no new event type, no SCHEMA-array/ADR/spec bump. **Future seam (documented, not built):** the Python §5.13
+duplicate/anomaly-sweep (or a human worklist) consumes `hlc_collision_log`. **Accepted limits (db/029 caveats):** a
+rare *concurrent* apply of the exact pair can miss the signal, and a **≥3-way collision** records an arrival-order-dependent
+pairwise *chain* (event-vs-running-winner), not the full pair set — both advisory-only degradation, §5.13 sweep is the
+backstop; the #115 resolution stays correct regardless. TDD, **DB-gated tests**: `hlc_collision_signal.rs` (predicate
+truth-table incl. null-current + recorder swapped-arg dedup + a **null-arg silent-skip** never-gating test) + one
+convergent-signal assertion folded into each of the five `overlay_tiebreaker.rs` convergence tests (both arrival orders →
+exactly one identical row) + a `distinct_triples_record_no_collision` negative test + a `three_way_collision_records_a_pairwise_chain`
+limit test. Full workspace green; fmt + clippy clean; mkdocs builds. brainstorm→design→plan→**subagent-driven TDD**, then
+a PR-review hardening pass (recorder made structurally non-gating; ≥3-way non-convergence documented + pinned by test).
+Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-collision-advisory-signal*`.
+
+**Prior session (2026-07-09, evening) — deterministic HLC-overlay tiebreaker
+([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change).** A silent cross-node
+divergence: standing-state overlays folded a new event in with a strict-`>` guard on `(hlc_wall, hlc_counter,
+origin)`, so two **distinct** events sharing one triple (a Byzantine/broken signer) settled by **arrival order**.
+Fix: a shared pure `cairn_hlc_overlay_wins()` predicate (in `db/002`) appends the event **`content_address`** (BYTEA
+multihash — canonical, `UNIQUE`, collation-free) as the deterministic final tiebreaker, applied to the five uniform
+state overlays (`patient_chart`/`patient_link`/`chart_dispute`/`chart_identity_state`/`name_repudiation`).
+Projection-read-side only; no wire/floor/ADR/spec change. Mechanism now in ROADMAP Phase 2. **Remaining #115:**
+part 2's twin-ladder registry + `cairn_require_uuid` helper (independent refactors), and #69 (TEXT-collation of the
+intermediate `origin`/`value`/`display` comparisons — the predicate compares `origin` before `content_address`, so
+only **same-origin** collisions are made deterministic; a cross-origin `(wall,counter)` tie stays #69's remit). The
+PR-review follow-on [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) is **done** — see the top block.
 
 **Prior session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
 ([#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) CLOSED; ADR-0044; spec v0.44→0.45).** The SECOND

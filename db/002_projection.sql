@@ -30,6 +30,7 @@ BEGIN;
 -- sort below any real event, and an empty bytea sorts below any real \x1220… address, so a
 -- real event always beats an absent one. Only the CURRENT side is COALESCEd — the NEW side is
 -- always a real, fully-populated event.
+-- Its #157 collision-detection sibling (cairn_hlc_triple_collision + hlc_collision_log) lives in db/029.
 CREATE OR REPLACE FUNCTION cairn_hlc_overlay_wins(
     new_wall bigint, new_counter int, new_origin text, new_addr bytea,
     cur_wall bigint, cur_counter int, cur_origin text, cur_addr bytea
@@ -62,8 +63,27 @@ CREATE TABLE IF NOT EXISTS patient_chart (
 -- edit to the log (principle #2): superseded versions remain in event_log.
 CREATE OR REPLACE FUNCTION patient_chart_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_cur record;  -- current demographic winner, for #157 collision detection
 BEGIN
     IF NEW.event_type IN ('patient.created', 'patient.amended') THEN
+        -- #157: before overlaying, detect a Byzantine HLC-triple collision against the current
+        -- demographic winner and record an advisory signal. Reads the demo_* provenance columns
+        -- aliased to the predicate's parameter names; a note-only row has null demo_* → the
+        -- null-safe predicate returns false (no false signal).
+        SELECT demo_hlc_wall AS hlc_wall, demo_hlc_count AS hlc_counter,
+               demo_origin AS origin, demo_content_address AS content_address
+          INTO v_cur
+          FROM patient_chart WHERE patient_id = NEW.patient_id;
+        IF FOUND AND cairn_hlc_triple_collision(
+                NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
+            PERFORM cairn_record_hlc_collision(
+                'patient_chart', NEW.patient_id::text,
+                NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+                NEW.content_address, v_cur.content_address);
+        END IF;
+
         INSERT INTO patient_chart AS pc (
             patient_id, name, dob, sex,
             demo_hlc_wall, demo_hlc_count, demo_origin, demo_content_address,

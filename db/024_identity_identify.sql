@@ -166,7 +166,22 @@ DECLARE
     -- overlay row is self-describing without a misleading column name.
     v_detail text  := CASE WHEN NEW.event_type = 'identity.identify.asserted'
                            THEN p ->> 'method' ELSE p ->> 'basis' END;
+    v_cur    record;
 BEGIN
+    -- #157: detect a Byzantine HLC-triple collision against the current identity state and record
+    -- an advisory signal before overlaying pending-vs-identified.
+    SELECT hlc_wall, hlc_counter, origin, content_address
+      INTO v_cur
+      FROM chart_identity_state WHERE subject = (p ->> 'subject')::uuid;
+    IF FOUND AND cairn_hlc_triple_collision(
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
+        PERFORM cairn_record_hlc_collision(
+            'chart_identity_state', p ->> 'subject',
+            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
+            NEW.content_address, v_cur.content_address);
+    END IF;
+
     INSERT INTO chart_identity_state
         (subject, state, detail, hlc_wall, hlc_counter, origin, content_address)
     VALUES

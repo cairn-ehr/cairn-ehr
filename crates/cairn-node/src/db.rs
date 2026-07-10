@@ -134,6 +134,15 @@ const SCHEMA: &[(&str, &str)] = &[
         "028_identity_evidence",
         include_str!("../../../db/028_identity_evidence.sql"),
     ),
+    // #157: the Byzantine HLC-triple collision advisory signal. Defines the shared
+    // cairn_hlc_triple_collision predicate + the convergent hlc_collision_log + the never-gating
+    // recorder; the five overlay triggers (db/002/018/023/024/025) call the recorder. PL/pgSQL is
+    // late-bound, so those triggers may reference this file's functions before it loads — all
+    // migrations load before any event is applied.
+    (
+        "029_hlc_collision_log",
+        include_str!("../../../db/029_hlc_collision_log.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
