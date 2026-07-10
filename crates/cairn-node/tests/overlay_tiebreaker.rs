@@ -882,3 +882,37 @@ async fn three_way_collision_records_a_pairwise_chain() {
         "a 3-way collision records a pairwise chain (event vs running winner), not all pairs (#157)"
     );
 }
+
+/// #69: the origin tiebreak must be collation-INDEPENDENT. Construct a cross-origin
+/// (wall, counter) tie whose two origins order OPPOSITELY under "C" vs a locale (ICU)
+/// collation ('B' vs 'a'). The predicate compares origin under COLLATE "C", so the
+/// winner follows byte order ('a' > 'B') on every node regardless of its default collation.
+#[tokio::test]
+async fn overlay_origin_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Sanity: a real locale collation orders the pair the OTHER way — this is why #69 matters.
+    let unicode_flips: bool = c
+        .query_one("SELECT 'B' COLLATE \"unicode\" > 'a' COLLATE \"unicode\"", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(unicode_flips, "'B' > 'a' should hold under a locale collation");
+
+    // Same (wall, counter); origins 'B' (new) vs 'a' (current); content_address never consulted
+    // because the origins differ. Under COLLATE "C", 'a' > 'B', so new='B' does NOT outrank cur='a'.
+    assert!(
+        !wins(&c, 7, 0, "B", vec![9], Some(7), Some(0), Some("a"), Some(vec![1])).await,
+        "new origin 'B' must LOSE to current origin 'a' under C byte order"
+    );
+    // Symmetric: new='a' outranks cur='B'.
+    assert!(
+        wins(&c, 7, 0, "a", vec![1], Some(7), Some(0), Some("B"), Some(vec![9])).await,
+        "new origin 'a' must WIN over current origin 'B' under C byte order"
+    );
+}

@@ -21,11 +21,15 @@ BEGIN;
 -- strict-`>` guard is then false in both directions, so the winner would be decided by
 -- ARRIVAL ORDER and two honest nodes could converge to different standing state — a silent
 -- cross-node divergence in the safety-critical projection layer, exactly what "sync = safe
--- set-union" must not allow. The event's content_address (the BYTEA multihash of its signed
--- bytes) is the deterministic final tiebreaker: canonical, UNIQUE, byte-compared (so it is
--- immune to the TEXT-collation concern that #69 tracks for the `origin` comparison), and
--- never shared by two distinct events. Appending it makes the overlay pick the SAME winner
--- on every node even under an HLC collision. COALESCE encodes "no current winner yet" (an
+-- set-union" must not allow. The `origin` comparison is itself collation-safe: it is compared
+-- under COLLATE "C" (byte order) so every node picks the same winner regardless of its default
+-- TEXT collation — the origin string can otherwise sort differently under an ICU/locale
+-- collation than under "C", which would silently re-diverge the ranking across nodes with
+-- different locales (ADR-0045, #69). The event's content_address (the BYTEA multihash of its
+-- signed bytes) remains the deterministic final Byzantine same-origin tiebreaker: canonical,
+-- UNIQUE, byte-compared (collation-free — BYTEA has no collation), and never shared by two
+-- distinct events. Appending it makes the overlay pick the SAME winner on every node even
+-- under an HLC collision. COALESCE encodes "no current winner yet" (an
 -- overlay's first insert, e.g. patient_chart's note-only row): -1 wall/counter and '' origin
 -- sort below any real event, and an empty bytea sorts below any real \x1220… address, so a
 -- real event always beats an absent one. Only the CURRENT side is COALESCEd — the NEW side is
@@ -35,9 +39,9 @@ CREATE OR REPLACE FUNCTION cairn_hlc_overlay_wins(
     new_wall bigint, new_counter int, new_origin text, new_addr bytea,
     cur_wall bigint, cur_counter int, cur_origin text, cur_addr bytea
 ) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-    SELECT (new_wall, new_counter, new_origin, new_addr)
+    SELECT (new_wall, new_counter, new_origin COLLATE "C", new_addr)
          > (COALESCE(cur_wall, -1), COALESCE(cur_counter, -1),
-            COALESCE(cur_origin, ''), COALESCE(cur_addr, '\x'::bytea));
+            COALESCE(cur_origin, '') COLLATE "C", COALESCE(cur_addr, '\x'::bytea));
 $$;
 
 -- The projection Bet B times: one row per patient, kept current by overlay.
