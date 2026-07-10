@@ -62,5 +62,14 @@ projection layer needs.
 - **Scope:** `content_address` (BYTEA) remains the final Byzantine tiebreak for the standing-state
   overlays; this ADR only makes the `origin` step *ahead of it* collation-safe. Projection-read-side
   only — no wire/event-format/floor-gate change, no new event type, no on-wire SCHEMA change.
+- **Scope of the codebase audit (what was *not* touched, and why):** the change was audited
+  codebase-wide for TEXT tiebreak keys. `min UUID` person-canonicalization (`db/018`) uses the
+  `uuid` `<` operator, already collation-free. The `actor_current` (`db/004`) and `trust_peer`
+  (`db/007`) VIEWs were excluded because they carry **no TEXT winner tiebreak** — they resolve on
+  `(recorded_at, seq)` / local ingest order, not on a collated string. That local-clock tiebreak is
+  a *deliberate, documented* design (single-author for `trust_peer`; intentional local ordering for
+  `actor_current`) and its convergence properties are a **distinct question from collation**, out of
+  scope here. This audit closed the collation hazard specifically; it is not a full projection-layer
+  convergence audit.
 
 **Canonical home:** [sync §6.1](../sync.md#61-mechanism).
