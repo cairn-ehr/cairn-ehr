@@ -376,3 +376,70 @@ async fn backfill_value_tiebreak_is_collation_independent() {
         );
     }
 }
+
+/// #69 review: `patient_name_apply()`'s `ON CONFLICT ... WHERE` tiebreak on `asserted_origin`
+/// has NO direct test — `name_display_value_tiebreak_is_collation_independent` above submits
+/// two DIFFERENT `value`s, so they land as separate PK rows `(patient_id, use_key, value)` and
+/// `ON CONFLICT` never fires; that test only exercises the `patient_name_current` VIEW's own
+/// `ORDER BY ... COLLATE "C"`. This test isolates the TRIGGER's conflict path instead: two
+/// events share the SAME (patient, use, value) — so the second submit collides on the retained
+/// set's PK — with equal (wall, counter, provenance) so only `asserted_origin COLLATE "C"`
+/// decides which row's assertion is retained. Reads `patient_name` (the retained-set TABLE)
+/// directly, not the VIEW, so the VIEW's own tiebreak can't mask a regression in the trigger's.
+#[tokio::test]
+async fn name_trigger_origin_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    for (first, second) in [("B", "a"), ("a", "B")] {
+        let (sk, kid) = setup(&c).await;
+        let p = Uuid::now_v7();
+        // Same value+use+provenance+(wall,counter) → same retained-set PK, equal rank/HLC;
+        // only origin differs → the second submit's ON CONFLICT WHERE decides the winner.
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            7,
+            0,
+            first,
+            name_payload("Smith", "legal", "patient-stated"),
+            &format!("name Smith ({first})"),
+        )
+        .await;
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            7,
+            0,
+            second,
+            name_payload("Smith", "legal", "patient-stated"),
+            &format!("name Smith ({second})"),
+        )
+        .await;
+
+        let origin: String = c
+            .query_one(
+                "SELECT asserted_origin FROM patient_name \
+                 WHERE patient_id = $1::text::uuid AND value = 'Smith'",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            origin, "a",
+            "trigger ON CONFLICT WHERE: C byte-order winner for {first}->{second}"
+        );
+    }
+}
