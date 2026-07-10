@@ -114,9 +114,9 @@ BEGIN
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin
     WHERE (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-           EXCLUDED.asserted_origin, EXCLUDED.value)
+           EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
         > (patient_identifier.asserted_hlc_wall, patient_identifier.asserted_hlc_count,
-           patient_identifier.asserted_origin, patient_identifier.value);
+           patient_identifier.asserted_origin COLLATE "C", patient_identifier.value COLLATE "C");
     RETURN NULL;
 END;
 $$;
