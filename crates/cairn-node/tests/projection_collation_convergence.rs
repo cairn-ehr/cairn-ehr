@@ -236,6 +236,71 @@ async fn demographic_value_tiebreak_is_collation_independent_both_branches() {
     }
 }
 
+/// A demographic.field.asserted name payload (§4.2). `use` selects the legal tier.
+fn name_payload(value: &str, name_use: &str, provenance: &str) -> serde_json::Value {
+    json!({"field": "name", "value": value, "provenance": provenance,
+           "facets": {"use": name_use}})
+}
+
+/// #69: patient_name_current picks its DISPLAY name across equal-(rank,wall,counter,origin)
+/// members by `value` under COLLATE "C". Values 'B'/'a' flip vs a locale collation; the
+/// displayed name must be the byte-order winner ('a').
+#[tokio::test]
+async fn name_display_value_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    for (first, second) in [("B", "a"), ("a", "B")] {
+        let (sk, kid) = setup(&c).await;
+        let p = Uuid::now_v7();
+        // Two legal names, equal (wall,counter,provenance,origin); values differ → VIEW tiebreak.
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            3,
+            0,
+            "n",
+            name_payload(first, "legal", "patient-stated"),
+            &format!("name {first}"),
+        )
+        .await;
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            3,
+            0,
+            "n",
+            name_payload(second, "legal", "patient-stated"),
+            &format!("name {second}"),
+        )
+        .await;
+
+        let value: String = c
+            .query_one(
+                "SELECT value FROM patient_name_current WHERE patient_id = $1::text::uuid",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            value, "a",
+            "displayed name is the C byte-order winner for {first}->{second}"
+        );
+    }
+}
+
 /// #69 review: `cairn_demographic_backfill()` (db/013) re-projects `demographic.field.asserted`
 /// events straight from `event_log` — a SEPARATE code path from the `patient_demographic_apply()`
 /// trigger exercised above, used for one-time catch-up when a node gains projection capability
