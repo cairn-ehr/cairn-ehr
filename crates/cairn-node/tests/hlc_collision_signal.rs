@@ -176,3 +176,41 @@ async fn recorder_canonicalizes_and_dedups_the_unordered_pair() {
     assert_eq!(lo, a, "addr_lo is the byte-lesser address");
     assert_eq!(hi, b, "addr_hi is the byte-greater address");
 }
+
+#[tokio::test]
+async fn recorder_skips_silently_on_null_arg_never_gating() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE hlc_collision_log").await.unwrap();
+
+    // The recorder is STRUCTURALLY non-gating (#157): a null in any NOT-NULL target column must
+    // degrade to a silently-skipped row, NEVER a NOT-NULL violation that would roll back (and thus
+    // gate) the safety-critical apply path — availability over consistency. A null subject_key is
+    // the realistic future-miswiring case (an overlay whose conflict key is an optional JSON field).
+    let a: Vec<u8> = vec![0x11, 0x20, 0x01];
+    let b: Vec<u8> = vec![0x11, 0x20, 0x02];
+    let null_key: Option<String> = None;
+    c.execute(
+        "SELECT cairn_record_hlc_collision('t', $1, 5, 3, 'peer', $2, $3)",
+        &[&null_key, &a, &b],
+    )
+    .await
+    .expect("a null-arg call must NOT raise (never gates the apply path)");
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM hlc_collision_log WHERE overlay = 't'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "a null required argument records no row (silently skipped, not raised)"
+    );
+}

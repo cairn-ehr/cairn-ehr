@@ -36,19 +36,24 @@ New `db/029_hlc_collision_log.sql`: (1) a shared pure `cairn_hlc_triple_collisio
 triple is EQUAL and `content_address` DISTINCT, uniformly null-safe (`IS [NOT] DISTINCT FROM`); (2) a **convergent**
 append-only `hlc_collision_log` whose PK is the canonical **unordered** address pair (`LEAST/GREATEST(addr)`), so
 every node that sees both colliding events records **exactly one** row, arrival-order-independent — the anomaly is
-itself a set-union projection; (3) a never-raising `cairn_record_hlc_collision(...)` recorder (`ON CONFLICT DO
-NOTHING` → **can't gate the apply path**, availability over consistency). Each of the **five** overlay triggers
-(`db/002`/`018`/`023`/`024`/`025`) gets a minimal detect-and-record step **before its byte-for-byte-unchanged
-upsert** — the #115 resolution is untouched; detection lives in the AFTER-INSERT projection trigger so it is
-**door-agnostic**. **Projection-read-side only** — no wire/event-format/floor-gate change, no new event type, no
-SCHEMA-array/ADR/spec bump. **Future seam (documented, not built):** the Python §5.13 duplicate/anomaly-sweep (or a
-human worklist) consumes `hlc_collision_log`; **3-way collisions** record pairwise (accepted limit). TDD, **DB-gated
-tests**: `hlc_collision_signal.rs` (predicate truth-table incl. null-current + recorder swapped-arg dedup) + one
-convergent-signal assertion folded into each of the five `overlay_tiebreaker.rs` convergence tests (both arrival
-orders → exactly one identical row) + a `distinct_triples_record_no_collision` negative test. Full workspace green
-(**454 passed, 0 failed**); fmt + clippy clean; mkdocs builds. brainstorm→design→plan→**subagent-driven TDD**
-(per-task spec+quality reviews clean; one Task-1 review loop hardened the predicate's null-totality). Design+plan
-under `docs/superpowers/{specs,plans}/2026-07-09-hlc-collision-advisory-signal*`.
+itself a set-union projection (**exactly for the 2-way collision** — see the ≥3-way note below); (3) a
+**structurally** non-gating `cairn_record_hlc_collision(...)` recorder — a single `INSERT ... SELECT` whose null-guard
+`WHERE` drops the row (never a NOT-NULL violation) and whose `ON CONFLICT DO NOTHING` makes re-observation idempotent,
+so **it can never raise → can never gate the apply path** by construction, not by caller convention (availability over
+consistency). Each of the **five** overlay triggers (`db/002`/`018`/`023`/`024`/`025`) gets a minimal detect-and-record
+step **before its byte-for-byte-unchanged upsert** — the #115 resolution is untouched; detection lives in the
+AFTER-INSERT projection trigger so it is **door-agnostic**. **Projection-read-side only** — no wire/event-format/floor-gate
+change, no new event type, no SCHEMA-array/ADR/spec bump. **Future seam (documented, not built):** the Python §5.13
+duplicate/anomaly-sweep (or a human worklist) consumes `hlc_collision_log`. **Accepted limits (db/029 caveats):** a
+rare *concurrent* apply of the exact pair can miss the signal, and a **≥3-way collision** records an arrival-order-dependent
+pairwise *chain* (event-vs-running-winner), not the full pair set — both advisory-only degradation, §5.13 sweep is the
+backstop; the #115 resolution stays correct regardless. TDD, **DB-gated tests**: `hlc_collision_signal.rs` (predicate
+truth-table incl. null-current + recorder swapped-arg dedup + a **null-arg silent-skip** never-gating test) + one
+convergent-signal assertion folded into each of the five `overlay_tiebreaker.rs` convergence tests (both arrival orders →
+exactly one identical row) + a `distinct_triples_record_no_collision` negative test + a `three_way_collision_records_a_pairwise_chain`
+limit test. Full workspace green; fmt + clippy clean; mkdocs builds. brainstorm→design→plan→**subagent-driven TDD**, then
+a PR-review hardening pass (recorder made structurally non-gating; ≥3-way non-convergence documented + pinned by test).
+Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-collision-advisory-signal*`.
 
 **Prior session (2026-07-09, evening) — deterministic HLC-overlay tiebreaker
 ([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change).** A silent cross-node

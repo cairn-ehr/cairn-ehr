@@ -49,12 +49,20 @@ $$;
 -- detected_at is deliberately NOT part of the key — it is node-local observation metadata (when
 -- THIS node first noticed), intentionally non-convergent.
 --
--- CONVERGENCE CAVEAT: this "exactly one row per node" guarantee holds for SEQUENTIAL apply of
--- the two colliding events. Because detection is a SELECT-then-upsert in the AFTER-INSERT
--- trigger under READ COMMITTED and the clinical apply door takes no apply-serializing lock, two
--- CONCURRENT applies of the colliding pair could each miss the other's not-yet-committed winner
--- and record zero rows. This is advisory-only degradation — the #115 RESOLUTION stays correct
--- regardless — and the §5.13 background duplicate/anomaly sweep is the intended miss backstop.
+-- CONVERGENCE CAVEAT 1 (concurrent apply): this "exactly one row per node" guarantee holds for
+-- SEQUENTIAL apply of the two colliding events. Because detection is a SELECT-then-upsert in the
+-- AFTER-INSERT trigger under READ COMMITTED and the clinical apply door takes no apply-serializing
+-- lock, two CONCURRENT applies of the colliding pair could each miss the other's not-yet-committed
+-- winner and record zero rows. This is advisory-only degradation — the #115 RESOLUTION stays
+-- correct regardless — and the §5.13 background duplicate/anomaly sweep is the intended backstop.
+--
+-- CONVERGENCE CAVEAT 2 (≥3-way collision): the "exactly one row per node" guarantee is specifically
+-- for a TWO-way collision (a single pair of colliding events). If THREE OR MORE distinct events
+-- share one triple, detection compares each arriving event only against the CURRENT overlay winner,
+-- so a node records a pairwise CHAIN (event-vs-running-winner), not the full C(n,2) set of pairs —
+-- and which pairs land is arrival-order-dependent, so the ≥3-way signal is NOT guaranteed convergent
+-- across nodes. Advisory-only degradation again; the §5.13 sweep is the backstop. (Two honest nodes
+-- can still legitimately hold different ≥3-way pair sets; a human/sweep sees the anomaly either way.)
 CREATE TABLE IF NOT EXISTS hlc_collision_log (
     overlay      TEXT        NOT NULL,   -- 'patient_chart' | 'patient_link' | 'chart_dispute' | ...
     subject_key  TEXT        NOT NULL,   -- text rendering of the overlay's conflict key
@@ -70,12 +78,19 @@ CREATE TABLE IF NOT EXISTS hlc_collision_log (
 -- ── The recorder ─────────────────────────────────────────────────────────────────────────────
 -- Called from an overlay trigger ONLY when cairn_hlc_triple_collision is true. Canonicalizes the
 -- unordered pair via LEAST/GREATEST so arrival order does not matter, then appends idempotently.
--- ON CONFLICT DO NOTHING guarantees it can never raise on a re-observation — so it can never gate
--- the apply path (availability over consistency). SQL (not plpgsql): a single INSERT, no control flow.
--- Caller invariant: this relies on non-null arguments (every hlc_collision_log column is NOT NULL)
--- — it is called only when cairn_hlc_triple_collision is TRUE, which requires a non-null current
--- side, and each overlay passes non-null NEW.* fields, so a NULL-arg NOT-NULL violation cannot
--- arise from the wiring.
+--
+-- STRUCTURALLY non-gating (availability over consistency — the load-bearing property): a single
+-- INSERT ... SELECT, so it can NEVER raise and thus can NEVER roll back / gate the safety-critical
+-- apply path. Two ways it stays silent instead of raising:
+--   * the WHERE guard drops the row if ANY NOT-NULL target column would be null, so a future
+--     mis-wired caller passing a null argument degrades to a silently-skipped advisory signal —
+--     never a NOT-NULL violation. (Every current caller already passes non-null NEW.* fields and
+--     only calls after cairn_hlc_triple_collision is TRUE, which needs a non-null current side; the
+--     guard is defense-in-depth so the "can't gate the apply path" guarantee holds by CONSTRUCTION,
+--     not by caller convention.)
+--   * ON CONFLICT DO NOTHING makes a re-observation of the same pair idempotent, never a unique
+--     violation.
+-- SQL (not plpgsql): a single statement, no control flow.
 CREATE OR REPLACE FUNCTION cairn_record_hlc_collision(
     p_overlay text, p_subject_key text,
     p_wall bigint, p_counter int, p_origin text,
@@ -83,9 +98,16 @@ CREATE OR REPLACE FUNCTION cairn_record_hlc_collision(
 ) RETURNS void LANGUAGE sql AS $$
     INSERT INTO hlc_collision_log
         (overlay, subject_key, hlc_wall, hlc_counter, origin, addr_lo, addr_hi)
-    VALUES (
+    SELECT
         p_overlay, p_subject_key, p_wall, p_counter, p_origin,
-        LEAST(p_addr_a, p_addr_b), GREATEST(p_addr_a, p_addr_b))
+        LEAST(p_addr_a, p_addr_b), GREATEST(p_addr_a, p_addr_b)
+    WHERE p_overlay     IS NOT NULL
+      AND p_subject_key IS NOT NULL
+      AND p_wall        IS NOT NULL
+      AND p_counter     IS NOT NULL
+      AND p_origin      IS NOT NULL
+      AND p_addr_a      IS NOT NULL
+      AND p_addr_b      IS NOT NULL
     ON CONFLICT (overlay, addr_lo, addr_hi) DO NOTHING;
 $$;
 

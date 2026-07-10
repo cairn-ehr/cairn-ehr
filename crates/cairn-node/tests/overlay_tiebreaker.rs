@@ -844,3 +844,41 @@ async fn distinct_triples_record_no_collision() {
         "distinct HLC triples are normal overlay, not a Byzantine collision (#157)"
     );
 }
+
+#[tokio::test]
+async fn three_way_collision_records_a_pairwise_chain() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _sk_h, _kid_h) = setup(&c).await;
+
+    // Three DISTINCT events sharing ONE (wall, counter, origin) triple — a 3-way Byzantine
+    // collision. Detection compares each arriving event only against the CURRENT overlay winner,
+    // so the node records a pairwise CHAIN (event-vs-running-winner), NOT all C(3,2)=3 pairs: the
+    // 2nd apply records {A, B}, the 3rd records {winner(A,B), C} → exactly two rows. This pins the
+    // documented ≥3-way accepted limit (db/029 CONVERGENCE CAVEAT 2): the ≥3-way signal is
+    // arrival-order-dependent and NOT guaranteed convergent — the §5.13 sweep is the backstop. The
+    // exactly-one-convergent-row guarantee is the TWO-way case (the five per-overlay tests above).
+    let p = Uuid::now_v7();
+    let e_a = sign(&amended_event(&kid, p, "Alice A", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_b = sign(&amended_event(&kid, p, "Bob B", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    let e_c = sign(&amended_event(&kid, p, "Carol C", 5000, 7), &sk)
+        .unwrap()
+        .signed_bytes;
+    apply(&c, &e_a).await.expect("amend A applies");
+    apply(&c, &e_b).await.expect("amend B applies");
+    apply(&c, &e_c).await.expect("amend C applies");
+
+    assert_eq!(
+        collision_rows(&c, "patient_chart").await.len(),
+        2,
+        "a 3-way collision records a pairwise chain (event vs running winner), not all pairs (#157)"
+    );
+}
