@@ -192,10 +192,32 @@ async fn demographic_value_tiebreak_is_collation_independent_both_branches() {
             let (sk, kid) = setup(&c).await;
             let p = Uuid::now_v7();
             // Same field+provenance (→ equal rank), same (wall,counter,origin); value differs.
-            submit_generic(&c, &sk, &kid, p, "demographic.field.asserted", 9, 0, "n",
-                field_payload(field, first, "patient-stated"), &format!("{field} {first}")).await;
-            submit_generic(&c, &sk, &kid, p, "demographic.field.asserted", 9, 0, "n",
-                field_payload(field, second, "patient-stated"), &format!("{field} {second}")).await;
+            submit_generic(
+                &c,
+                &sk,
+                &kid,
+                p,
+                "demographic.field.asserted",
+                9,
+                0,
+                "n",
+                field_payload(field, first, "patient-stated"),
+                &format!("{field} {first}"),
+            )
+            .await;
+            submit_generic(
+                &c,
+                &sk,
+                &kid,
+                p,
+                "demographic.field.asserted",
+                9,
+                0,
+                "n",
+                field_payload(field, second, "patient-stated"),
+                &format!("{field} {second}"),
+            )
+            .await;
 
             let value: String = c
                 .query_one(
@@ -206,7 +228,86 @@ async fn demographic_value_tiebreak_is_collation_independent_both_branches() {
                 .await
                 .unwrap()
                 .get(0);
-            assert_eq!(value, "a", "{field}: C byte-order winner for {first}->{second}");
+            assert_eq!(
+                value, "a",
+                "{field}: C byte-order winner for {first}->{second}"
+            );
         }
+    }
+}
+
+/// #69 review: `cairn_demographic_backfill()` (db/013) re-projects `demographic.field.asserted`
+/// events straight from `event_log` — a SEPARATE code path from the `patient_demographic_apply()`
+/// trigger exercised above, used for one-time catch-up when a node gains projection capability
+/// for a field it previously only carried. It got the identical `COLLATE "C"` fix in its
+/// `DISTINCT ON ... ORDER BY node_origin COLLATE "C" DESC, value COLLATE "C" DESC` and in both
+/// branches of its `ON CONFLICT ... WHERE` CASE, but shipped without a test — this closes that
+/// gap. We truncate `patient_demographic` after the trigger has already populated it (from the
+/// same two submitted events) so that the read-back value can ONLY have come from the backfill
+/// re-projection, never a trigger leftover, isolating the path under test.
+#[tokio::test]
+async fn backfill_value_tiebreak_is_collation_independent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    for (first, second) in [("B", "a"), ("a", "B")] {
+        let (sk, kid) = setup(&c).await;
+        let p = Uuid::now_v7();
+        // Same field+provenance (→ equal rank), same (wall,counter,origin); value differs.
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            9,
+            0,
+            "n",
+            field_payload("dob", first, "patient-stated"),
+            &format!("dob {first}"),
+        )
+        .await;
+        submit_generic(
+            &c,
+            &sk,
+            &kid,
+            p,
+            "demographic.field.asserted",
+            9,
+            0,
+            "n",
+            field_payload("dob", second, "patient-stated"),
+            &format!("dob {second}"),
+        )
+        .await;
+
+        // Clear what the trigger just projected so only the backfill re-projection below
+        // can repopulate the row — proving the assertion exercises cairn_demographic_backfill(),
+        // not a trigger leftover.
+        c.execute("TRUNCATE patient_demographic", &[])
+            .await
+            .unwrap();
+        c.execute("SELECT cairn_demographic_backfill()", &[])
+            .await
+            .unwrap();
+
+        let value: String = c
+            .query_one(
+                "SELECT value FROM patient_demographic \
+                 WHERE patient_id = $1::text::uuid AND field = 'dob'",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            value, "a",
+            "backfill: C byte-order winner for {first}->{second}"
+        );
     }
 }
