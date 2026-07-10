@@ -26,6 +26,26 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
+**This session (2026-07-10, later) — the `patient_name_current` ORDER BY drift guard
+([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159) CLOSED; no ADR/spec change).** The #69
+follow-up: the winner `ORDER BY` of `patient_name_current` is written TWICE — db/012 and db/025's
+repudiation anti-join re-definition (which, loading last, is the **live** one) — with nothing keeping
+the two `COLLATE "C"` tiebreak clauses in lockstep, so a future edit to one that missed the other would
+silently re-open the #69 cross-node display-winner divergence. A true SQL single-source is infeasible
+(`DISTINCT ON` forces each view to carry its own ORDER BY, and db/025 must anti-join struck names
+*before* the winner is picked, so the ordering can't be factored into a shared base view/window). Fix:
+a **no-DB source-level drift guard** — the migration SQL is `include_str!`-embedded, so
+**`crates/cairn-node/tests/name_winner_order_drift.rs`** reads both clauses and asserts they are
+byte-identical (whitespace-normalized, via a pure `winner_order_by` extractor), catching drift in EITHER
+direction (incl. db/012's otherwise-inert copy) in every `cargo test`/CI pass — no cluster needed. Plus
+cross-reference `DRIFT` comments on both migrations naming the guard. TDD (extractor unit test RED→GREEN;
+guard RED-confirmed by a temporary db/025 COLLATE-drop, reverted). Full workspace green; fmt + clippy clean.
+**Post-review polish (this PR):** the extractor now strips `--` comments (string-literal-aware) before
+scanning, so a future `-- …order by…` comment between the view header and the real clause can't be
+mis-read as the winner ordering (two added regression tests); and the case-handling docstring is
+corrected — keyword *location* is case-insensitive but the compared slice preserves case on purpose
+(`COLLATE "C"` is a case-sensitive quoted identifier), so the guard errs strict by design.
+
 **This session (2026-07-10) — codebase-wide collation-independent projection winner tiebreaks
 ([#69](https://github.com/cairn-ehr/cairn-ehr/issues/69) CLOSED; ADR-0045; spec v0.45→0.46).** The residual #115
 explicitly deferred: every trigger-maintained projection broke a `(rank, hlc_wall, hlc_counter)` winner tie on
@@ -51,9 +71,9 @@ orders them oppositely), covering both the trigger ON-CONFLICT origin path and t
 per projection; the backfill fix RED-confirmed via temporary revert. Full workspace green (cairn-node all DB-gated
 pass · cairn-event 86 · cairn-sync 18); fmt + clippy + mkdocs clean. brainstorm→design→plan→**subagent-driven TDD**
 (per-task spec+quality review; caught + fixed: db/025 VIEW shadow, the backfill 2nd-copy, an fmt-gate slip, two
-untested-trigger-path gaps). **Follow-up filed ([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159)):** the
-`patient_name_current` ORDER BY is duplicated across db/012 and db/025 with nothing enforcing lockstep — a drift
-trap. Design+plan under `docs/superpowers/{specs,plans}/2026-07-10-collation-independent-projection-tiebreaks*`.
+untested-trigger-path gaps). **Follow-up ([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159)) — now CLOSED (see top block):** the
+`patient_name_current` ORDER BY duplicated across db/012 and db/025 with nothing enforcing lockstep — a drift
+trap; guarded by `name_winner_order_drift.rs`. Design+plan under `docs/superpowers/{specs,plans}/2026-07-10-collation-independent-projection-tiebreaks*`.
 
 **Earlier this session (2026-07-10) — the Byzantine HLC-collision advisory signal
 ([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) done, PR #158; no ADR/spec change; full detail in git +
@@ -102,15 +122,10 @@ future `rotate-key` door produces internally), making the #99 test more honest. 
 (`actor_enroll_collision.rs`: collision refused via distinct key; idempotent same-key allowed; distinct pinned
 sets don't collide; immortality after revoke; same-key re-enroll after revoke refused) + a SQL mirror in
 `db/tests/004_actors_test.sql`. Full cairn-node DB-gated workspace green; fmt + clippy clean; mkdocs builds.
-Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-actor-id-collision-floor*`. **Post-review polish
-(this PR):** (1) `enroll_actor` now takes a txn-scoped `pg_advisory_xact_lock` on the `actor_id` before the
-conflict check, closing the check-then-insert (TOCTOU) race under READ COMMITTED; (2) the predicate's
-intentional catch of keyless `revoke`/`supersede` rows — which also refuses a same-key re-enroll onto a
-revoked `actor_id`, preventing **resurrection** (a post-revoke enroll would outrank the revoke in
-`actor_current`) — is now documented and pinned by a test (Rust + SQL), with a warning against an `IS NOT
-NULL` "tidy-up"; (3) the RAISE message and ADR-0044 consequences record the resurrection edge, the operational
-note (losing a per-epoch agent/device key file within an epoch now fails loud → bump the epoch until
-`rotate-key` exists), and the race closure.
+Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-actor-id-collision-floor*`. Post-review polish
+(detail in git/ADR-0044): a txn-scoped `pg_advisory_xact_lock` closes the check-then-insert TOCTOU race; the
+predicate deliberately also refuses a same-key re-enroll onto a **revoked** `actor_id` (anti-resurrection),
+documented + test-pinned.
 
 **This session (2026-07-09) — the suppression owner-gate: self-only, disagreement is additive (ADR-0043; spec
 v0.43→0.44; closes the last open sub-item of [#99](https://github.com/cairn-ehr/cairn-ehr/issues/99)).** The
@@ -137,13 +152,11 @@ cross-human suppress of a human-*attested* advisory refused — the attester-bra
 (cairn-node DB-gated all pass · cairn-event 86 · cairn-sync 18); clippy + fmt clean; mkdocs builds. **Follow-ups
 filed (house rule 5):** (1) [#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) — `enroll_actor`/`actor_current`
 collide two humans with identical pinned JSON into one `actor_id` (`cairn_actor_id` hashes the pinned set only, not
-the signing key), a latent identity-merge footgun on the `db/004` actor floor, surfaced by this task's tests; (2)
-[#154](https://github.com/cairn-ehr/cairn-ehr/issues/154) — the apply-door gate inherits the node-local-registry
-limitation: a **plain-signed** human note (no stored `attester_key`) is protected at a remote node only once that
-node has learned the author's `kind='human'` enrolment (attested targets are registry-independent — the key
-travels); the origin always refuses, and it closes with registry federation. ADR-0042 index row (previously missing)
-also added. **Post-review polish (this PR):** ADR-0043 prose corrected from `actor_current` → `actor_event` history
-(matching the shipped helper) and its principle-12 apply-door claim qualified with the #154 caveat.
+the signing key), a latent identity-merge footgun on the `db/004` actor floor (now fixed — #152/ADR-0044 above); (2)
+**[#154](https://github.com/cairn-ehr/cairn-ehr/issues/154) (OPEN)** — the apply-door gate inherits the
+node-local-registry limitation: a **plain-signed** human note (no stored `attester_key`) is protected at a remote
+node only once that node has learned the author's `kind='human'` enrolment (attested targets are registry-independent);
+the origin always refuses; closes with registry federation.
 
 **Merged 2026-07-08 (condensed — full detail in git + the PRs + ROADMAP Phase 1).** A dense build+hardening day,
 all on `main`:
