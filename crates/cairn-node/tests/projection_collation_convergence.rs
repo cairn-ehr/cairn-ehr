@@ -58,11 +58,19 @@ async fn submit_generic(
     payload: serde_json::Value,
     twin: &str,
 ) {
+    // schema_version tracks event_type, not the other way round: identifier and field
+    // events version independently, so the helper (shared by both) must derive it here
+    // rather than hardcode one — else identifier events would carry the field schema's tag.
+    let schema_version = if event_type == "demographic.identifier.asserted" {
+        "demographic.identifier/1"
+    } else {
+        "demographic.field/1"
+    };
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: patient.to_string(),
         event_type: event_type.into(),
-        schema_version: "demographic.field/1".into(),
+        schema_version: schema_version.into(),
         hlc: Hlc {
             wall,
             counter,
