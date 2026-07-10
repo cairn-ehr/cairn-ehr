@@ -48,39 +48,45 @@ A new migration `db/030_john_doe_local_ordinal.sql` adds one VIEW. It reads the 
 ```sql
 CREATE OR REPLACE VIEW john_doe_local_ordinal AS
 SELECT patient_id,
+       node_origin,
        body->>'value' AS callsign,
-       row_number() OVER (ORDER BY hlc_wall, hlc_counter, content_address) AS ordinal
+       row_number() OVER (PARTITION BY node_origin
+                          ORDER BY hlc_wall, hlc_counter, content_address) AS ordinal
 FROM event_log
 WHERE event_type = 'demographic.field.asserted'
   AND body->>'field' = 'name'
   AND body->'facets'->>'use' = 'callsign'
-  AND body->>'provenance' = 'system:john-doe-registration'
-  AND node_origin = (SELECT encode(node_id,'hex') FROM local_node WHERE id);
+  AND body->>'provenance' = 'system:john-doe-registration';
 ```
 
 Design properties:
 
-- **Node-local by construction.** The `node_origin = <local node hex>` filter means each node numbers
-  only the John Does *it* first recorded. The callsign events themselves replicate everywhere (they are
-  ordinary clinical events), but a John Doe registered on another node has a different `node_origin` and
-  never perturbs this node's sequence. On an un-provisioned node the subquery is NULL, so the VIEW is
-  empty — honest.
+- **Per-node-origin by construction; no `local_node` coupling.** `row_number()` is `PARTITION BY
+  node_origin`, so each row's ordinal is its rank *within the set of John Does its own recording node
+  first authored*. The callsign events replicate everywhere (they are ordinary clinical events), but a
+  John Doe first recorded on another node lands in that node's partition and never perturbs this node's
+  sequence. The consumer selects its own row `WHERE patient_id = <id>`; at registration time that row's
+  `node_origin` *is* this node, so the ordinal is exactly "this node's John Doe #N". (Deliberately not
+  filtered to `local_node`: that would couple the VIEW to provisioning and make it empty in the existing
+  test harness, which registers with a literal `node_origin` and no `local_node` row. Exposing every
+  node's partition is also a free worklist input — a foreign row reads honestly as "node X's #3".)
 - **Selects exactly John-Doe registrations.** The four body predicates match the callsign name authored
   by `register_john_doe` (`field=name`, `facets.use=callsign`, `provenance=system:john-doe-registration`)
   — not an ordinary name, not the pending marker.
-- **Stable & deterministic.** Ordered by `(hlc_wall, hlc_counter, content_address)` — the same
-  collation-free tiebreak spine as #115/#69 (`content_address` is a BYTEA multihash, byte-ordered,
-  identical on every node). On a single authoring node the HLC is monotonic, so ranks never renumber;
-  `content_address` breaks any degenerate tie deterministically.
+- **Stable & deterministic.** Within a partition, ordered by `(hlc_wall, hlc_counter, content_address)`
+  — the same collation-free tiebreak spine as #115/#69 (`content_address` is a BYTEA multihash,
+  byte-ordered, identical on every node). On a single authoring node the HLC is monotonic, so ranks never
+  renumber; `content_address` breaks any degenerate tie deterministically.
 - **No new wire / floor / event / SCHEMA surface.** Pure read-side projection. Because the callsign
   identity string is untouched, this cannot regress partition-safety.
 
 ### Surfacing it at registration
 
-`register_john_doe` currently returns `(Uuid, String)` = `(patient_id, callsign)`. It gains a query of
-`john_doe_local_ordinal` for the just-registered `patient_id`, **inside its existing transaction** (the
-callsign row it just inserted is visible in-txn, so the ordinal already counts it), and returns
-`(Uuid, String, i64)` = `(patient_id, callsign, ordinal)`.
+`register_john_doe` currently returns `(Uuid, String)` = `(patient_id, callsign)`. After committing its
+two events it queries `john_doe_local_ordinal WHERE patient_id = <new id>` and returns
+`(Uuid, String, i64)` = `(patient_id, callsign, ordinal)`. (Queried post-commit against the same client:
+the callsign row is durably present, and post-commit avoids threading the read through the borrowed
+transaction handle.)
 
 The CLI (`Cmd::RegisterJohnDoe` handler) prints:
 
@@ -95,10 +101,10 @@ this slice — the VIEW is the deliverable; a lookup command can be added later 
 
 ### TDD
 
-- **DB-gated** (`crates/cairn-node/tests/john_doe.rs` or a sibling): register two John Does on the node
-  → ordinals `1` then `2`; assert `register_john_doe` returns the same ordinal the VIEW reports; inject a
-  callsign-shaped `event_log` row with a **foreign** `node_origin` → this node's ordinals are unchanged
-  (node-local proof); a non-callsign name event on this node does not count.
+- **DB-gated** (`crates/cairn-node/tests/john_doe.rs`): register two John Does on the node (same
+  `node_origin`) → `register_john_doe` returns ordinals `1` then `2`, matching the VIEW; a foreign
+  `node_origin`'s callsign registrations form their **own** partition and do not shift this node's
+  ordinals (partition proof); a non-callsign name event does not appear in the VIEW at all.
 
 ## Finisher 2 — `--observed-year` override
 
