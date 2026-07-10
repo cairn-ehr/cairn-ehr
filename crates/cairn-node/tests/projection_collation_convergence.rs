@@ -310,6 +310,14 @@ async fn name_display_value_tiebreak_is_collation_independent() {
 /// gap. We truncate `patient_demographic` after the trigger has already populated it (from the
 /// same two submitted events) so that the read-back value can ONLY have come from the backfill
 /// re-projection, never a trigger leftover, isolating the path under test.
+///
+/// Scope note: with `patient_demographic` truncated first, the backfill INSERT lands into an
+/// empty table, so this exercises the backfill's `DISTINCT ON ... ORDER BY ... COLLATE "C"`
+/// winner-selection — NOT its `ON CONFLICT ... WHERE` branch (which fires only on an idempotent
+/// re-run against already-projected rows). That WHERE tuple is byte-identical to the trigger's
+/// `ON CONFLICT ... WHERE` (both CASE branches), which IS covered by
+/// `demographic_value_tiebreak_is_collation_independent_both_branches` above, so the logic is
+/// under test even though the backfill's specific call-site is not.
 #[tokio::test]
 async fn backfill_value_tiebreak_is_collation_independent() {
     let Some(base) = cs() else {
