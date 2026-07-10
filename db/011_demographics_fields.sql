@@ -153,10 +153,11 @@ BEGIN
     -- event only while nodes stamp distinct HLC tuples; a buggy node minting a duplicate
     -- HLC would otherwise leave the winner apply-order-dependent (cross-node divergence).
     -- With value appended the projected winner is display-convergent unconditionally.
+    -- COLLATE "C" tiebreak per ADR-0045 (#69); this body is superseded by db/013.
     WHERE (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
+           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
         > (pd.provenance_rank, pd.asserted_hlc_wall,
-           pd.asserted_hlc_count, pd.asserted_origin, pd.value);
+           pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C");
     RETURN NULL;
 END;
 $$;

@@ -230,8 +230,11 @@ CREATE TRIGGER name_repudiation_apply_trg
     EXECUTE FUNCTION name_repudiation_apply();
 
 -- 5. patient_name_current: rework db/012's display winner to ANTI-JOIN the overlay. Column
---    list + ORDER BY are copied VERBATIM from db/012 so the CREATE OR REPLACE keeps the
---    exact column contract (reload-idempotent across connect_and_load_schema; any dependent
+--    list + ORDER BY are copied VERBATIM from db/012 (including its ADR-0045 (#69) COLLATE
+--    "C" tiebreak fix — this CREATE OR REPLACE runs AFTER db/012's in schema load order, so
+--    it must carry the same collation pins or it would silently re-introduce the collation-
+--    dependent divergence db/012 just closed) so the CREATE OR REPLACE keeps the exact
+--    column contract (reload-idempotent across connect_and_load_schema; any dependent
 --    stays valid); the ONLY change is the NOT EXISTS filter excluding repudiated members.
 --    The anti-join is deliberately HLC-BLIND: a standing repudiation strikes its (subject,
 --    value) regardless of any name assertion's HLC — INCLUDING a strictly-newer re-assertion
@@ -257,8 +260,8 @@ WHERE NOT EXISTS (
 ORDER BY patient_id,
          (use_key = 'legal') DESC,
          last_hlc_wall DESC, last_hlc_count DESC,
-         provenance_rank DESC, asserted_origin DESC,
-         use_key DESC, value DESC;
+         provenance_rank DESC, asserted_origin COLLATE "C" DESC,
+         use_key COLLATE "C" DESC, value COLLATE "C" DESC;
 
 -- 6. patient_alias_pool: the §5.2 matcher's known-alias pool — the struck names, retained
 --    and reusable (a fabricated persona returns under the same false name). Grain is

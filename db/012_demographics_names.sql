@@ -83,9 +83,9 @@ BEGIN
         asserted_origin = EXCLUDED.asserted_origin,
         updated_at      = clock_timestamp()
     WHERE (EXCLUDED.last_hlc_wall, EXCLUDED.last_hlc_count,
-           EXCLUDED.provenance_rank, EXCLUDED.asserted_origin)
+           EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C")
         > (pn.last_hlc_wall, pn.last_hlc_count,
-           pn.provenance_rank, pn.asserted_origin);
+           pn.provenance_rank, pn.asserted_origin COLLATE "C");
     RETURN NULL;
 END;
 $$;
@@ -111,10 +111,13 @@ CREATE TRIGGER patient_name_apply_trg
 --      two nodes to display DIFFERENT names from the SAME event set (a silent set-union
 --      divergence in the field this project most obsesses about). Appending the retained
 --      set's remaining PK columns (use_key, value) makes the order total over rows, so
---      the displayed name converges regardless of client HLC hygiene. (These appended keys
---      are text, so like node_origin they share the collation-sensitivity tracked in #69 —
---      convergence holds across nodes that share a DB collation; the codebase-wide COLLATE
---      "C" fix for the origin/text comparisons is #69's remit, not re-litigated here.)
+--      the displayed name converges regardless of client HLC hygiene. These appended keys
+--      are TEXT, so — like node_origin — they are collation-sensitive: two nodes running
+--      with different default collations (e.g. "C" vs an ICU locale) could order the SAME
+--      byte strings differently and diverge on the display winner. Per ADR-0045 (#69) this
+--      is now fixed here: the trigger's ON CONFLICT WHERE tiebreak and this VIEW's ORDER BY
+--      both pin every TEXT tiebreak key to COLLATE "C", so convergence holds regardless of
+--      each node's default collation.
 -- When no legal name exists, the newest name of ANY use wins (the unidentified-patient
 -- fallback) — paper-parity: the chart header always shows something.
 CREATE OR REPLACE VIEW patient_name_current AS
@@ -125,8 +128,8 @@ FROM patient_name
 ORDER BY patient_id,
          (use_key = 'legal') DESC,
          last_hlc_wall DESC, last_hlc_count DESC,
-         provenance_rank DESC, asserted_origin DESC,
-         use_key DESC, value DESC;
+         provenance_rank DESC, asserted_origin COLLATE "C" DESC,
+         use_key COLLATE "C" DESC, value COLLATE "C" DESC;
 
 GRANT SELECT ON patient_name, patient_name_current TO cairn_agent;
 

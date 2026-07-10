@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-10 · **Spec/ADRs:** v0.45 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-10 · **Spec/ADRs:** v0.46 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -26,47 +26,56 @@ the §3.14 day-one attachment-reference shape)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-10) — the Byzantine HLC-collision advisory signal
-([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) done; no ADR/spec change).** Direct follow-on to
-#115: the tiebreaker resolves a Byzantine/broken-signer HLC-triple collision (two **distinct**
-`content_address`es sharing one `(hlc_wall, hlc_counter, origin)` triple — an honest signer never reuses its
-triple) to a deterministic winner, but did so **silently**. Now the collision is also **surfaced** for later
-human / §5.13-sweep review (matters most for `chart_dispute` open↔resolved and `patient_link` merge↔un-merge).
-New `db/029_hlc_collision_log.sql`: (1) a shared pure `cairn_hlc_triple_collision(...)` predicate — true iff the
-triple is EQUAL and `content_address` DISTINCT, uniformly null-safe (`IS [NOT] DISTINCT FROM`); (2) a **convergent**
-append-only `hlc_collision_log` whose PK is the canonical **unordered** address pair (`LEAST/GREATEST(addr)`), so
-every node that sees both colliding events records **exactly one** row, arrival-order-independent — the anomaly is
-itself a set-union projection (**exactly for the 2-way collision** — see the ≥3-way note below); (3) a
-**structurally** non-gating `cairn_record_hlc_collision(...)` recorder — a single `INSERT ... SELECT` whose null-guard
-`WHERE` drops the row (never a NOT-NULL violation) and whose `ON CONFLICT DO NOTHING` makes re-observation idempotent,
-so **it can never raise → can never gate the apply path** by construction, not by caller convention (availability over
-consistency). Each of the **five** overlay triggers (`db/002`/`018`/`023`/`024`/`025`) gets a minimal detect-and-record
-step **before its byte-for-byte-unchanged upsert** — the #115 resolution is untouched; detection lives in the
-AFTER-INSERT projection trigger so it is **door-agnostic**. **Projection-read-side only** — no wire/event-format/floor-gate
-change, no new event type, no SCHEMA-array/ADR/spec bump. **Future seam (documented, not built):** the Python §5.13
-duplicate/anomaly-sweep (or a human worklist) consumes `hlc_collision_log`. **Accepted limits (db/029 caveats):** a
-rare *concurrent* apply of the exact pair can miss the signal, and a **≥3-way collision** records an arrival-order-dependent
-pairwise *chain* (event-vs-running-winner), not the full pair set — both advisory-only degradation, §5.13 sweep is the
-backstop; the #115 resolution stays correct regardless. TDD, **DB-gated tests**: `hlc_collision_signal.rs` (predicate
-truth-table incl. null-current + recorder swapped-arg dedup + a **null-arg silent-skip** never-gating test) + one
-convergent-signal assertion folded into each of the five `overlay_tiebreaker.rs` convergence tests (both arrival orders →
-exactly one identical row) + a `distinct_triples_record_no_collision` negative test + a `three_way_collision_records_a_pairwise_chain`
-limit test. Full workspace green; fmt + clippy clean; mkdocs builds. brainstorm→design→plan→**subagent-driven TDD**, then
-a PR-review hardening pass (recorder made structurally non-gating; ≥3-way non-convergence documented + pinned by test).
-Design+plan under `docs/superpowers/{specs,plans}/2026-07-09-hlc-collision-advisory-signal*`.
+**This session (2026-07-10) — codebase-wide collation-independent projection winner tiebreaks
+([#69](https://github.com/cairn-ehr/cairn-ehr/issues/69) CLOSED; ADR-0045; spec v0.45→0.46).** The residual #115
+explicitly deferred: every trigger-maintained projection broke a `(rank, hlc_wall, hlc_counter)` winner tie on
+TEXT keys (`node_origin`/`asserted_origin` and the final `value`/`display`/`use_key`) compared under the
+**node-local default collation** — so two nodes with different default collations could replay the identical
+event set and pick **different display winners** for a tie (a silent set-union convergence violation, principle 1;
+not data loss — full history stays in `event_log`). The **cross-origin** `(wall,counter)` tie needs no misbehavior,
+just two honest nodes coinciding on wall+counter, and was decided *before* #115's collation-free `content_address`
+was reached. Fix: every projection winner tiebreak over a TEXT key now compares under **`COLLATE "C"`** (byte order
+of the identical-on-every-node UTF-8 bytes) — **[ADR-0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md)**
+records the invariant (binds all future projection slices). One shared predicate fix `cairn_hlc_overlay_wins`
+(`db/002`) covers the **five standing-state overlays**; inline `COLLATE "C"` on the demographic projections +
+display VIEWs: `patient_identifier` (db/010), `patient_demographic` (db/011 superseded + **db/013 both CASE
+branches + `cairn_demographic_backfill`**), `patient_name` (db/012 trigger + `patient_name_current` VIEW, **plus its
+db/025 re-definition** — the identity-repudiate migration `CREATE OR REPLACE`s the VIEW *after* db/012, so the
+db/012-only fix was inert until db/025's copy was fixed too), `patient_address` (db/014 trigger +
+`patient_address_current` VIEW). **Scope audited codebase-wide:** the db/018 person-canonical `min UUID` uses the
+uuid `<` operator (not text — already collation-free); the identity aggregation VIEWs have no text winner tiebreak.
+**Projection-read-side only** — no wire/event-format/floor-gate/SCHEMA change. TDD, **new
+`projection_collation_convergence.rs`** (7 tests) + a collation case in `overlay_tiebreaker.rs`: each proves the
+winner follows `"C"` byte order in **both arrival orders** via the `'B'`/`'a'` locale-flip pair (a locale collation
+orders them oppositely), covering both the trigger ON-CONFLICT origin path and the VIEW/DISTINCT-ON display path
+per projection; the backfill fix RED-confirmed via temporary revert. Full workspace green (cairn-node all DB-gated
+pass · cairn-event 86 · cairn-sync 18); fmt + clippy + mkdocs clean. brainstorm→design→plan→**subagent-driven TDD**
+(per-task spec+quality review; caught + fixed: db/025 VIEW shadow, the backfill 2nd-copy, an fmt-gate slip, two
+untested-trigger-path gaps). **Follow-up filed ([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159)):** the
+`patient_name_current` ORDER BY is duplicated across db/012 and db/025 with nothing enforcing lockstep — a drift
+trap. Design+plan under `docs/superpowers/{specs,plans}/2026-07-10-collation-independent-projection-tiebreaks*`.
+
+**Earlier this session (2026-07-10) — the Byzantine HLC-collision advisory signal
+([#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) done, PR #158; no ADR/spec change; full detail in git +
+ROADMAP Phase 2).** #115's tiebreaker resolved a Byzantine/broken-signer HLC-triple collision (two **distinct**
+`content_address`es sharing one `(hlc_wall,hlc_counter,origin)` triple) *silently*; now it is also **surfaced**.
+New `db/029_hlc_collision_log.sql`: a shared pure `cairn_hlc_triple_collision()` predicate (null-safe) + a
+**convergent** append-only `hlc_collision_log` (canonical unordered `content_address` pair as PK → one row per 2-way
+collision per node) + a **structurally** non-gating `cairn_record_hlc_collision()` recorder (`INSERT ... SELECT` with
+a null-guard `WHERE` + `ON CONFLICT DO NOTHING` → can never raise → cannot gate the apply path by construction). Each
+of the five overlay triggers records the signal before its unchanged upsert (#115 resolution untouched; AFTER-INSERT
+trigger → door-agnostic). Projection-read-side only. Accepted limits: a concurrent apply may miss the signal; a
+≥3-way collision records a non-convergent pairwise chain — §5.13 sweep is the backstop, the resolution stays correct.
+The Python §5.13-sweep / human-worklist consumer is a documented future seam. TDD/subagent-driven; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-09-hlc-collision-advisory-signal*`.
 
 **Prior session (2026-07-09, evening) — deterministic HLC-overlay tiebreaker
-([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change).** A silent cross-node
-divergence: standing-state overlays folded a new event in with a strict-`>` guard on `(hlc_wall, hlc_counter,
-origin)`, so two **distinct** events sharing one triple (a Byzantine/broken signer) settled by **arrival order**.
-Fix: a shared pure `cairn_hlc_overlay_wins()` predicate (in `db/002`) appends the event **`content_address`** (BYTEA
-multihash — canonical, `UNIQUE`, collation-free) as the deterministic final tiebreaker, applied to the five uniform
-state overlays (`patient_chart`/`patient_link`/`chart_dispute`/`chart_identity_state`/`name_repudiation`).
-Projection-read-side only; no wire/floor/ADR/spec change. Mechanism now in ROADMAP Phase 2. **Remaining #115:**
-part 2's twin-ladder registry + `cairn_require_uuid` helper (independent refactors), and #69 (TEXT-collation of the
-intermediate `origin`/`value`/`display` comparisons — the predicate compares `origin` before `content_address`, so
-only **same-origin** collisions are made deterministic; a cross-origin `(wall,counter)` tie stays #69's remit). The
-PR-review follow-on [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) is **done** — see the top block.
+([#115](https://github.com/cairn-ehr/cairn-ehr/issues/115) part 1 done; no ADR/spec change; detail in git + ROADMAP
+Phase 2).** A shared pure `cairn_hlc_overlay_wins()` predicate (`db/002`) appends the event `content_address` (BYTEA,
+collation-free) as the deterministic final tiebreaker for the five standing-state overlays, fixing an arrival-order
+divergence when two distinct events shared one `(wall,counter,origin)` triple. **Remaining #115:** part 2's twin-ladder
+registry + `cairn_require_uuid` helper (independent refactors). Its #69 residual (cross-origin/`value`/`display`
+TEXT-collation) and its #157 collision-signal follow-on are both **done** — see the top blocks.
 
 **Prior session (2026-07-09, later) — the actor `actor_id` collision floor: enroll fails closed
 ([#152](https://github.com/cairn-ehr/cairn-ehr/issues/152) CLOSED; ADR-0044; spec v0.44→0.45).** The SECOND
