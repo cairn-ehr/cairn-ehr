@@ -118,6 +118,13 @@ CREATE TRIGGER patient_name_apply_trg
 --      is now fixed here: the trigger's ON CONFLICT WHERE tiebreak and this VIEW's ORDER BY
 --      both pin every TEXT tiebreak key to COLLATE "C", so convergence holds regardless of
 --      each node's default collation.
+-- DRIFT WARNING (#159): this exact ORDER BY is DUPLICATED in db/025 — the identity-repudiate
+--      migration CREATE-OR-REPLACEs patient_name_current to anti-join struck names, and (loading
+--      LAST) ITS copy is the live one. The two clauses must stay byte-identical or the live db/025
+--      view silently diverges from this template. Nothing in SQL enforces that: DISTINCT ON forces
+--      each view to carry its own ORDER BY, and db/025 must anti-join BEFORE picking the winner, so
+--      the ordering can't be factored into a shared base view. Lockstep is guarded by the no-DB
+--      test crates/cairn-node/tests/name_winner_order_drift.rs — edit BOTH clauses together.
 -- When no legal name exists, the newest name of ANY use wins (the unidentified-patient
 -- fallback) — paper-parity: the chart header always shows something.
 CREATE OR REPLACE VIEW patient_name_current AS

@@ -236,6 +236,11 @@ CREATE TRIGGER name_repudiation_apply_trg
 --    dependent divergence db/012 just closed) so the CREATE OR REPLACE keeps the exact
 --    column contract (reload-idempotent across connect_and_load_schema; any dependent
 --    stays valid); the ONLY change is the NOT EXISTS filter excluding repudiated members.
+--    DRIFT GUARD (#159): because this copy is live (loads after db/012) and its ORDER BY is a
+--    verbatim duplicate, the no-DB test crates/cairn-node/tests/name_winner_order_drift.rs asserts
+--    the two clauses are byte-identical — edit BOTH together or the build fails. Nothing in SQL can
+--    enforce it (DISTINCT ON forces a per-view ORDER BY, and the anti-join must run BEFORE the
+--    winner is picked, so the ordering can't be factored into a shared base view).
 --    The anti-join is deliberately HLC-BLIND: a standing repudiation strikes its (subject,
 --    value) regardless of any name assertion's HLC — INCLUDING a strictly-newer re-assertion
 --    of the same string. This is the safety-preserving choice: re-typing a known-false name
