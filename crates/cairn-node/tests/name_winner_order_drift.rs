@@ -25,16 +25,67 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Strip `--` line comments from SQL so the extractor scans only executable text. Without this a
+/// future comment containing the words `order by` (or the view name) placed BETWEEN the view
+/// header and its real ORDER BY — e.g. an inline `-- legal name orders first` in the column list —
+/// could be mis-read as the winner clause, silently defeating the guard. Single-quoted string
+/// literals are respected (a `--` or `'` inside `'…'` is preserved; `''` is the SQL escape) so the
+/// stripper never truncates real DDL. Newlines survive, keeping line structure intact. Block
+/// comments (`/* … */`) are not used in these migrations, so are intentionally left untouched.
+fn strip_sql_line_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if c == '\'' {
+                // A doubled '' is an escaped quote — consume it and stay inside the string.
+                if chars.peek() == Some(&'\'') {
+                    out.push(chars.next().unwrap());
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_string = true;
+                out.push(c);
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                // Drop from `--` to end-of-line; push the newline so following lines still parse.
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Extract the winner `ORDER BY` clause of the `patient_name_current` view from a migration's
 /// SQL source, whitespace-normalized. Returns `None` if the view (or its ORDER BY) is absent.
 ///
-/// Pure and deterministic: locate the `CREATE OR REPLACE VIEW patient_name_current` statement,
-/// take the first `ORDER BY` after it (the winner ordering — there is no other ORDER BY between
-/// the view header and its statement terminator; the db/025 anti-join subquery has none), and cut
-/// at the terminating `;`. Matching is case-insensitive on the SQL keywords so the guard survives
-/// a future re-casing, while the compared clause keeps its real content (column names, `COLLATE
-/// "C"` pins) verbatim under the whitespace fold.
+/// Pure and deterministic: strip `--` comments (so only executable text is scanned), locate the
+/// `CREATE OR REPLACE VIEW patient_name_current` statement, take the first `ORDER BY` after it
+/// (the winner ordering — there is no other ORDER BY between the view header and its statement
+/// terminator; the db/025 anti-join subquery has none), and cut at the terminating `;`.
+///
+/// Keyword *location* is case-insensitive, so the guard still finds the clause if a future edit
+/// re-cases `CREATE OR REPLACE VIEW` / `ORDER BY`. The *compared* slice, however, is taken from
+/// the original-cased source and so preserves case — which is deliberate: `COLLATE "C"` is a
+/// quoted (case-sensitive) identifier in Postgres, and `"c"` is a *different* collation, so case
+/// must count as content. A consequence is that re-casing the `ORDER BY` keyword in only one of
+/// the two files will trip the guard; that is acceptable — a lockstep guard erring strict is safe,
+/// and the fix (match the casing in both files) is obvious from the diff.
 fn winner_order_by(sql: &str) -> Option<String> {
+    let sql = strip_sql_line_comments(sql);
     let lower = sql.to_ascii_lowercase();
     let header = lower.find("create or replace view patient_name_current")?;
     // Search only from the view header onward, so an unrelated ORDER BY in an earlier statement
@@ -84,6 +135,31 @@ ORDER BY patient_id,
         winner_order_by(&de_collated).unwrap(),
         got,
         "a dropped COLLATE \"C\" pin must read as drift",
+    );
+
+    // A `-- … order by …` comment slipped BETWEEN the view header and the real ORDER BY must be
+    // stripped, not mistaken for the winner clause (the comment-blindness gap this guard closes).
+    let with_comment_decoy = canonical.replace(
+        "FROM patient_name\n",
+        "FROM patient_name  -- fallback: order by nothing else\n",
+    );
+    assert_eq!(
+        winner_order_by(&with_comment_decoy).unwrap(),
+        got,
+        "a comment containing 'order by' must not be read as the winner clause",
+    );
+
+    // A `--` inside a single-quoted literal is NOT a comment and must survive the stripper.
+    let with_literal_dashes = "\
+CREATE OR REPLACE VIEW patient_name_current AS
+SELECT DISTINCT ON (patient_id) patient_id, value
+FROM patient_name
+ORDER BY patient_id, (note = 'a--b') DESC, value COLLATE \"C\" DESC;
+";
+    assert_eq!(
+        winner_order_by(with_literal_dashes).unwrap(),
+        "ORDER BY patient_id, (note = 'a--b') DESC, value COLLATE \"C\" DESC",
+        "a '--' inside a string literal must be preserved, not stripped as a comment",
     );
 
     assert_eq!(winner_order_by("-- no view here").as_deref(), None);

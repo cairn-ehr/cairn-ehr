@@ -40,6 +40,11 @@ byte-identical (whitespace-normalized, via a pure `winner_order_by` extractor), 
 direction (incl. db/012's otherwise-inert copy) in every `cargo test`/CI pass — no cluster needed. Plus
 cross-reference `DRIFT` comments on both migrations naming the guard. TDD (extractor unit test RED→GREEN;
 guard RED-confirmed by a temporary db/025 COLLATE-drop, reverted). Full workspace green; fmt + clippy clean.
+**Post-review polish (this PR):** the extractor now strips `--` comments (string-literal-aware) before
+scanning, so a future `-- …order by…` comment between the view header and the real clause can't be
+mis-read as the winner ordering (two added regression tests); and the case-handling docstring is
+corrected — keyword *location* is case-insensitive but the compared slice preserves case on purpose
+(`COLLATE "C"` is a case-sensitive quoted identifier), so the guard errs strict by design.
 
 **This session (2026-07-10) — codebase-wide collation-independent projection winner tiebreaks
 ([#69](https://github.com/cairn-ehr/cairn-ehr/issues/69) CLOSED; ADR-0045; spec v0.45→0.46).** The residual #115
