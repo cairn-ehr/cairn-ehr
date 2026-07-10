@@ -72,17 +72,21 @@ BEGIN
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
         updated_at         = clock_timestamp()
+    -- COLLATE "C" tiebreak per ADR-0045 (#69): the origin/value keys must order by raw byte
+    -- value, not the database's default (possibly locale-dependent, e.g. ICU) collation —
+    -- else two nodes with different locale settings could pick different winners for the
+    -- same tied event pair, breaking cross-node convergence. Applies in both policy branches.
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin, EXCLUDED.value)
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin, pd.value)
+             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin, pd.value)
+             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
     END;
     RETURN NULL;
 END;
@@ -141,10 +145,12 @@ RETURNS void LANGUAGE sql AS $$
         (CASE WHEN policy = 'recency-first' THEN hlc_wall        ELSE provenance_rank END) DESC,
         (CASE WHEN policy = 'recency-first' THEN hlc_counter     ELSE hlc_wall END)        DESC,
         (CASE WHEN policy = 'recency-first' THEN provenance_rank ELSE hlc_counter END)     DESC,
-        node_origin DESC,
+        -- COLLATE "C" per ADR-0045 (#69): must match the trigger's byte-order tiebreak
+        -- (below) so DISTINCT ON picks the SAME row the trigger would have converged on.
+        node_origin COLLATE "C" DESC,
         -- `value` is the final total-order tiebreak (see 011): guarantees a
         -- display-convergent winner even if a buggy node minted a duplicate HLC tuple.
-        value DESC
+        value COLLATE "C" DESC
     ON CONFLICT (patient_id, field) DO UPDATE SET
         value              = EXCLUDED.value,
         facets             = EXCLUDED.facets,
@@ -154,17 +160,20 @@ RETURNS void LANGUAGE sql AS $$
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
         updated_at         = clock_timestamp()
+    -- COLLATE "C" tiebreak per ADR-0045 (#69) — same rationale as the trigger above: the
+    -- origin/value keys must order by raw byte value so this one-time catch-up converges
+    -- on the identical winner the trigger would have picked, regardless of node locale.
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin, EXCLUDED.value)
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin, pd.value)
+             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin, EXCLUDED.value)
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin, pd.value)
+             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
     END;
 $$;
 

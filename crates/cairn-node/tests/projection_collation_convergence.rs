@@ -163,3 +163,50 @@ async fn identifier_origin_tiebreak_is_collation_independent() {
         );
     }
 }
+
+/// A demographic.field.asserted payload (§4.2). `facets` carries dob precision when needed.
+fn field_payload(field: &str, value: &str, provenance: &str) -> serde_json::Value {
+    let mut p = json!({"field": field, "value": value, "provenance": provenance});
+    if field == "dob" {
+        p["facets"] = json!({"precision": "day"});
+    }
+    p
+}
+
+/// #69: patient_demographic breaks an equal-(rank,wall,counter,origin) tie on `value` under
+/// COLLATE "C", in BOTH winner-policy branches. Values 'B'/'a' flip between "C" and a locale
+/// collation; the projected winner must be the byte-order winner ('a') regardless of arrival order.
+#[tokio::test]
+async fn demographic_value_tiebreak_is_collation_independent_both_branches() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert!(locale_flips(&c, "B", "a").await);
+
+    // ("dob", ...) exercises the provenance-first branch; ("gender-identity", ...) the recency-first.
+    for field in ["dob", "gender-identity"] {
+        for (first, second) in [("B", "a"), ("a", "B")] {
+            let (sk, kid) = setup(&c).await;
+            let p = Uuid::now_v7();
+            // Same field+provenance (→ equal rank), same (wall,counter,origin); value differs.
+            submit_generic(&c, &sk, &kid, p, "demographic.field.asserted", 9, 0, "n",
+                field_payload(field, first, "patient-stated"), &format!("{field} {first}")).await;
+            submit_generic(&c, &sk, &kid, p, "demographic.field.asserted", 9, 0, "n",
+                field_payload(field, second, "patient-stated"), &format!("{field} {second}")).await;
+
+            let value: String = c
+                .query_one(
+                    "SELECT value FROM patient_demographic \
+                     WHERE patient_id = $1::text::uuid AND field = $2",
+                    &[&p.to_string(), &field],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(value, "a", "{field}: C byte-order winner for {first}->{second}");
+        }
+    }
+}
