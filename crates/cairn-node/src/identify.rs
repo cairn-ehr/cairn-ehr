@@ -54,6 +54,18 @@ pub fn build_identify_body(
     }
 }
 
+/// Validate the CLI-supplied identification `method` before any I/O. §5.7 requires a
+/// recorded method and the db/024 floor rejects it empty; this pure check lets the CLI
+/// refuse a blank (or whitespace-only) `--method` with a clear, pre-authoring message
+/// instead of surfacing a floor error after the node key is unsealed and the DB opened.
+/// It is a legibility aid, not the enforcement — the db/024 floor is the real gate.
+pub fn validate_identify_method(method: &str) -> anyhow::Result<()> {
+    if method.trim().is_empty() {
+        anyhow::bail!("--method must not be empty: record HOW identity was established");
+    }
+    Ok(())
+}
+
 /// Compose the §4.1 provenance for a link authored while resolving a John-Doe chart.
 /// Non-empty by construction (the db/018 floor requires it) and legible: it records that
 /// this link came from a John-Doe identification and names the vouching human.
@@ -237,5 +249,14 @@ mod tests {
             !p.trim().is_empty(),
             "the db/018 floor requires a non-empty provenance"
         );
+    }
+
+    #[test]
+    fn validate_method_accepts_real_text_and_rejects_blank() {
+        assert!(validate_identify_method("driver's licence").is_ok());
+        // Empty and whitespace-only are both rejected — §5.7 requires a recorded method,
+        // and a whitespace-only string is a blank the db/024 non-empty check might let slip.
+        assert!(validate_identify_method("").is_err());
+        assert!(validate_identify_method("   ").is_err());
     }
 }

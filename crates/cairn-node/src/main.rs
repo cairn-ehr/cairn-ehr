@@ -1154,9 +1154,17 @@ async fn main() -> anyhow::Result<()> {
             attester_key,
             attester_passphrase,
         } => {
+            // §5.7 requires a recorded identification method; the db/024 floor rejects an
+            // empty `method` too, but validate here (before any I/O) so a blank `--method`
+            // gets the same clean, pre-authoring message as the cross-flag checks below —
+            // not a floor error after the node key has been unsealed and the DB opened.
+            cairn_node::identify::validate_identify_method(&method)?;
+
             // Cross-flag validation (clap cannot express "attester-key iff link"). Reject
             // both mismatches loudly — an attester with nothing to attest is a mistake worth
-            // surfacing, not silently ignoring.
+            // surfacing, not silently ignoring. After this block the only surviving states
+            // are (link, attester_key) = (Some, Some) or (None, None) — the matches below
+            // rely on that invariant, so their `_ => None` arm is only ever the (None, None) case.
             match (&link, &attester_key) {
                 (Some(_), None) => anyhow::bail!(
                     "--link requires --attester-key: linking to a prior chart is a human \
