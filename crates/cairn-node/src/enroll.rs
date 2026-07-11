@@ -4,11 +4,15 @@
 //! floor (`db/004`); this module only shapes the pinned set (pure) and guards the one way a
 //! second enrollment could corrupt attribution (the async orchestrator, Task 2).
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use serde_json::{json, Value};
 
 /// Outcome of `enroll_human_actor`: a fresh enrollment vs an idempotent no-op (the same key,
 /// same determinant, already enrolled as a human — re-runnable provisioning).
+///
+/// `Debug` is required so `Result<EnrollHumanOutcome, _>::unwrap_err()` compiles in tests (the
+/// panic message on the non-error branch prints the `Ok` value).
+#[derive(Debug)]
 pub enum EnrollHumanOutcome {
     Enrolled,
     AlreadyEnrolled,
@@ -59,6 +63,81 @@ pub fn build_human_pinned(
         obj.insert("handle".into(), json!(h));
     }
     Ok(Value::Object(obj))
+}
+
+/// Enroll `kid` as a `kind='human'` actor with `pinned`, reusing the in-DB `enroll_actor`
+/// floor (`db/004`). Two guards wrap the floor call:
+///
+/// 1. **Dual-mapping guard.** `submit_event` resolves a signer to an actor purely by
+///    `signing_key_id`; if one key maps to MORE than one `actor_current` row it sets
+///    `actor_id = NULL` for EVERY event that key authors node-wide (`db/005`,
+///    `array_length(v_actor_ids,1)=1`) — a silent, irreversible attribution loss. So a key
+///    already bound to an actor must not be re-bound: we refuse, EXCEPT the idempotent case
+///    (same key, same `actor_id`, already a human) which is a re-runnable no-op.
+/// 2. **Advisory ADR-0044 collision pre-check.** `cairn_actor_id_key_conflict` tells us up front
+///    whether this determinant set already identifies another actor under a different key, so we
+///    can name the remedy (add a distinguishing determinant) instead of surfacing a raw floor
+///    error. The floor re-checks regardless — this is legibility, not the enforcement (the same
+///    advisory-mirrors-the-floor pattern as `attester_is_enrolled_human`).
+pub async fn enroll_human_actor(
+    db: &tokio_postgres::Client,
+    kid: &str,
+    pinned: &Value,
+) -> anyhow::Result<EnrollHumanOutcome> {
+    let pinned_str = pinned.to_string();
+    // The actor_id this determinant set will compute to (content-address of the pinned set).
+    let new_actor_id: Vec<u8> = db
+        .query_one("SELECT cairn_actor_id($1::text::jsonb)", &[&pinned_str])
+        .await
+        .context("computing cairn_actor_id for the human pinned set")?
+        .get(0);
+
+    // Guard 1 — is this key already an actor?
+    let rows = db
+        .query(
+            "SELECT actor_id, kind FROM actor_current WHERE signing_key_id = $1",
+            &[&kid],
+        )
+        .await?;
+    if !rows.is_empty() {
+        let idempotent = rows.len() == 1
+            && rows[0].get::<_, Vec<u8>>(0) == new_actor_id
+            && rows[0].get::<_, String>(1) == "human";
+        if idempotent {
+            return Ok(EnrollHumanOutcome::AlreadyEnrolled);
+        }
+        bail!(
+            "enroll-human: key {kid} is already enrolled as an actor; enrolling it again would \
+             map one key to two actors and silently NULL its authorship node-wide (db/005). \
+             Use a fresh key for this human."
+        );
+    }
+
+    // Guard 2 — advisory determinant-collision hint (the floor is the real enforcement).
+    let conflict: bool = db
+        .query_one(
+            "SELECT cairn_actor_id_key_conflict($1, $2)",
+            &[&new_actor_id, &kid],
+        )
+        .await?
+        .get(0);
+    if conflict {
+        bail!(
+            "enroll-human: this determinant set already identifies another actor under a \
+             different key — two people must not share one actor_id (ADR-0044). Add a \
+             distinguishing --registration-id or --handle."
+        );
+    }
+
+    // The real floor. Re-checks the collision itself and fails closed if a concurrent enroll
+    // slipped in between guard 2 and here.
+    db.execute(
+        "SELECT enroll_actor('human', $1::text::jsonb, $2)",
+        &[&pinned_str, &kid],
+    )
+    .await
+    .context("enroll_actor('human', …) refused the enrollment")?;
+    Ok(EnrollHumanOutcome::Enrolled)
 }
 
 #[cfg(test)]
