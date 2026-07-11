@@ -92,7 +92,16 @@ pub async fn enroll_human_actor(
         .context("computing cairn_actor_id for the human pinned set")?
         .get(0);
 
-    // Guard 1 — is this key already an actor?
+    // Guard 1 — is this key already an actor? This is a best-effort read-then-write, NOT
+    // serialized against a concurrent enrollment of the SAME key under a DIFFERENT actor_id: the
+    // floor's `pg_advisory_xact_lock` (enroll_actor, db/004) is keyed on the actor_id being
+    // enrolled, so it closes two *different* keys racing for the *same* actor_id (guard 2's
+    // hazard) but not *one* key racing across two *different* actor_ids (this guard's hazard).
+    // Accepted for now: enrollment is a rare, owner-gated ceremony, and the failure mode is
+    // graceful, not silent — db/005 degrades a dual-mapped key to actor_id=NULL ("attribution
+    // honestly unknown", principle 4), never a misattribution, the same proportionality ADR-0044
+    // applies to its own advisory lock. Durable fix: a floor-level (db/004) per-signing-key guard,
+    // tracked in issue #166.
     let rows = db
         .query(
             "SELECT actor_id, kind FROM actor_current WHERE signing_key_id = $1",
@@ -123,9 +132,11 @@ pub async fn enroll_human_actor(
         .get(0);
     if conflict {
         bail!(
-            "enroll-human: this determinant set already identifies another actor under a \
-             different key — two people must not share one actor_id (ADR-0044). Add a \
-             distinguishing --registration-id or --handle."
+            "enroll-human: this determinant set is already claimed — either it identifies \
+             another actor under a different key (two people must not share one actor_id, \
+             ADR-0044), or it belongs to a retired/revoked actor_id that a fresh enroll must not \
+             resurrect (db/004). If this is genuinely a new person, add a distinguishing \
+             --registration-id or --handle."
         );
     }
 
