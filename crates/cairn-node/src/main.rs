@@ -341,6 +341,31 @@ enum Cmd {
         basis: String,
     },
 
+    /// Enroll a clinician's signing key as a `kind='human'` actor so it may sign+attest an
+    /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
+    /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
+    /// a person-distinguishing field (`--registration-id` and/or `--handle`, ADR-0044) and NEVER
+    /// the key (so `rotate-key` keeps the actor_id stable). If `--key` does not exist it is
+    /// minted: sealed under a shown-once recovery code, or unsealed with `--insecure-plaintext`
+    /// (test nodes only). No local-state `.lsk` escrow is attached — a personal key has none.
+    EnrollHuman {
+        /// A professional licence/registration number (preferred person-distinguishing determinant).
+        #[arg(long)]
+        registration_id: Option<String>,
+        /// A node-local human-chosen handle (use when there is no registration number).
+        #[arg(long)]
+        handle: Option<String>,
+        /// The actor's role tag in the pinned set.
+        #[arg(long, default_value = "clinician")]
+        role: String,
+        /// Passphrase to seal a newly-minted key (else CAIRN_KEY_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
+        /// Mint the key UNSEALED if it does not exist (test nodes only).
+        #[arg(long)]
+        insecure_plaintext: bool,
+    },
+
     /// Record clinician-observed identity evidence on an existing chart (§5.4): an
     /// estimated age (-> a year-range dob) and/or an observed sex (-> administrative-sex),
     /// both provenance `clinician-observed`. Supply at least one of --age / --sex.
@@ -1015,6 +1040,63 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
+        }
+        Cmd::EnrollHuman {
+            registration_id,
+            handle,
+            role,
+            passphrase,
+            insecure_plaintext,
+        } => {
+            // Validate the determinant BEFORE any key or DB I/O (pre-I/O validation, mirroring
+            // identify-patient): refuse an enrollment that would compute a non-distinguishing
+            // actor_id, before minting a key or opening a connection.
+            let pinned = cairn_node::enroll::build_human_pinned(
+                &role,
+                registration_id.as_deref(),
+                handle.as_deref(),
+            )?;
+
+            // Load the human's personal key, or mint one if the file is absent.
+            use cairn_node::keystore::{key_at_rest_state, KeyAtRest};
+            let (sk, kid) = match key_at_rest_state(&cli.key) {
+                KeyAtRest::Missing => {
+                    if insecure_plaintext {
+                        eprintln!(
+                            "WARNING: --insecure-plaintext: human signing key written UNSEALED \
+                             (test use only)"
+                        );
+                        cairn_node::keystore::generate_plaintext(&cli.key)?
+                    } else {
+                        let op = resolve_passphrase(passphrase)?;
+                        // The recovery code is a key-recovering secret — Zeroizing so it is
+                        // wiped on drop (issue #46). Printed BEFORE persist so a crash can never
+                        // seal under a code no human saw. No local-state escrow: a personal key
+                        // has no node-scoped local state to wrap (design D2).
+                        let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
+                        print_recovery_code(&code);
+                        cairn_node::keystore::generate_sealed(&cli.key, &op, &code)?
+                    }
+                }
+                _ => {
+                    let sk = load_signing_key(&cli.key, true)?; // may prompt to unseal
+                    let kid = hex::encode(sk.verifying_key().to_bytes());
+                    (sk, kid)
+                }
+            };
+            // `sk` is not used again (enrollment binds only the public kid), but is held so the
+            // sealed secret's lifetime matches the ceremony; drop it explicitly for clarity.
+            drop(sk);
+
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            match cairn_node::enroll::enroll_human_actor(&db, &kid, &pinned).await? {
+                cairn_node::enroll::EnrollHumanOutcome::Enrolled => {
+                    println!("enrolled human actor {kid}");
+                }
+                cairn_node::enroll::EnrollHumanOutcome::AlreadyEnrolled => {
+                    println!("human actor {kid} already enrolled (no change)");
+                }
+            }
         }
         Cmd::AssertObservedEvidence {
             patient,
