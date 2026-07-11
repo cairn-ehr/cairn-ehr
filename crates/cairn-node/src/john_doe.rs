@@ -165,6 +165,14 @@ pub async fn register_john_doe(
     // post-commit avoids threading the read through the just-consumed transaction handle.
     // The VIEW partitions by node_origin, so this row's ordinal is its rank within THIS
     // node's John-Doe registrations — i.e. "this node's John Doe #N".
+    //
+    // INVARIANT (why `query_one` is exactly-one-row correct): each `register_john_doe`
+    // authors EXACTLY ONE callsign name event per patient, and there is no path that
+    // re-authors a callsign for an existing chart — so the VIEW holds one row per
+    // patient_id. If a future feature ever re-callsigns a chart, `query_one` would see
+    // two rows and error (loud, not silent — the registration itself has already
+    // committed); revisit this read then (add `ORDER BY ordinal LIMIT 1` to pick the
+    // registration ordinal) rather than letting a display read fail a real registration.
     let ordinal: i64 = client
         .query_one(
             "SELECT ordinal FROM john_doe_local_ordinal WHERE patient_id = $1::text::uuid",
