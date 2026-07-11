@@ -17,6 +17,26 @@ use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+/// Resolve the year an age estimate was observed. `None` ⇒ default to `current_year`
+/// (today, supplied by the caller from the node's DB clock). A supplied year must be
+/// plausible: not in the future (you cannot have observed a patient in a year that has not
+/// happened yet) and not absurdly historical (which would make the downstream
+/// `observed_year − age` birth-range arithmetic nonsensical). Honest reject rather than
+/// compute a garbage range (principle 4). Pure and DB-free so it is fully unit-tested.
+pub fn resolve_observed_year(provided: Option<i32>, current_year: i32) -> anyhow::Result<i32> {
+    const MIN_OBSERVED_YEAR: i32 = 1900;
+    match provided {
+        None => Ok(current_year),
+        Some(y) if y < MIN_OBSERVED_YEAR => {
+            anyhow::bail!("--observed-year must be >= {MIN_OBSERVED_YEAR} (implausibly historical)")
+        }
+        Some(y) if y > current_year => {
+            anyhow::bail!("--observed-year {y} is in the future (current year is {current_year})")
+        }
+        Some(y) => Ok(y),
+    }
+}
+
 /// schema_version for a demographic field assertion (mirrors `john_doe.rs`).
 const DEMOGRAPHIC_FIELD_SCHEMA_VERSION: &str = "demographic.field/1";
 
@@ -207,5 +227,32 @@ mod tests {
         assert_eq!(body.payload["facets"]["basis"], "external genitalia");
         assert_eq!(body.payload["provenance"], "clinician-observed");
         assert!(!body.plaintext_twin.as_deref().unwrap().trim().is_empty());
+    }
+
+    #[test]
+    fn resolve_observed_year_defaults_to_current_when_absent() {
+        assert_eq!(resolve_observed_year(None, 2026).unwrap(), 2026);
+    }
+
+    #[test]
+    fn resolve_observed_year_passes_a_plausible_past_year() {
+        assert_eq!(resolve_observed_year(Some(2010), 2026).unwrap(), 2010);
+    }
+
+    #[test]
+    fn resolve_observed_year_accepts_the_boundaries() {
+        assert_eq!(resolve_observed_year(Some(1900), 2026).unwrap(), 1900);
+        assert_eq!(resolve_observed_year(Some(2026), 2026).unwrap(), 2026);
+    }
+
+    #[test]
+    fn resolve_observed_year_rejects_the_future() {
+        // You cannot have observed a patient in a year that has not happened.
+        assert!(resolve_observed_year(Some(2027), 2026).is_err());
+    }
+
+    #[test]
+    fn resolve_observed_year_rejects_absurdly_historical() {
+        assert!(resolve_observed_year(Some(1899), 2026).is_err());
     }
 }
