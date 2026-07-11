@@ -381,8 +381,9 @@ empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e + CLI s
 `assert-identity-evidence --kind photo|mark|belongings|ems-context …` behind a new pure, unit-tested
 `route_identity_evidence` flag gate. **Honest limits:** free-text description only; no projection/worklist/matcher signal.
 **Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
-funnel (§5.3/§5.8, UI/API tier); ~~a readable callsign suffix~~ + ~~`--observed-year`~~ done in slice 28 below;
-`identify`→optional-link (its own spec/PR — needs an `identify` authoring surface + attestation-from-CLI).
+funnel (§5.3/§5.8, UI/API tier); an `enroll-human` ceremony CLI (prerequisite for `identify --link` end-to-end);
+~~a readable callsign suffix~~ + ~~`--observed-year`~~ done in slice 28 below; ~~`identify`→optional-link~~ **done —
+slice 29 below**.
 
 **Slice 28 — §5.4 finishers PR#1: node-local John-Doe ordinal + `--observed-year`** (2026-07-11; design+plan under
 `docs/superpowers/{specs,plans}/2026-07-11-john-doe-ordinal-and-observed-year*`; **no new event type / migration-floor /
@@ -398,7 +399,27 @@ CLI prints `local ref: John Doe #N (this node)`. All-time (no daily reset → no
 (reject future/absurdly-historical; principle 4), defaults to today; feeds the already-parameterized
 `assert_observed_evidence(...)` — computed DOB range only, **not** `t_effective` (deliberate scope boundary).
 Subagent-driven TDD (new DB-gated partition/callsign-only test + 5 pure tests); full workspace green; fmt+clippy clean.
-**Finisher 3 (`identify`→optional-link) deferred** to its own spec/PR.
+**Finisher 3 (`identify`→optional-link) done in slice 29 below.**
+
+**Slice 29 — §5.4 finisher 3: `identify` → optional link** (2026-07-11; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-11-john-doe-identify-optional-link*`; **no new event type / migration / floor /
+SCHEMA / ADR / spec change** — additive Rust only). The last **structural** finisher of the §5.4 subsystem: the node
+authoring surface that RESOLVES a John-Doe chart. The `identity.identify.asserted` type, its db/024 floor, the
+`chart_identity_state` overlay, and the `cairn-event::identity` identify builders all already existed — this slice adds
+only the missing Rust path. New `cairn-node::identify`: pure `build_identify_body` (**device-additive** — node key,
+`recorded`/no-responsibility contributor, no attestation; flips the chart *unconfirmed*→*confirmed*) +
+`compose_identify_link_provenance`; the async `identify_patient` orchestrator authors the identify and, when `--link
+<prior>` is given, an OPTIONAL **human-attested** `identity.link.asserted` joining the prior chart — reusing
+`apply_proposal::build_attested_link_body` verbatim (`confidence:None`), signed+attested by a separate human
+`--attester-key` — **both in ONE transaction (atomic: a link rejection rolls the identify back).** Accountability:
+identify is device-additive (like `register-john-doe`); the link MERGES charts so the human vouches (principle 10).
+`attester_is_enrolled_human` is an advisory CLI pre-check on **`actor_current`** — mirroring the db/005 attestation floor
+(a revoked human is refused by both); the floor is the real enforcement. New `identify-patient` CLI (`--method` required;
+`--link`+`--attester-key`/`--attester-passphrase` required together, validated before any I/O). No cross-existence
+pre-check (offline-first; db/018 rejects only self-link + empty provenance). Subagent-driven TDD (5 DB-gated
+`tests/identify.rs` + 2 pure builder tests); whole-branch review (opus) **Ready = YES** (one Important pre-check-source
+fix + two Minor tests applied). Full workspace green; fmt + clippy --workspace + mkdocs clean. **The §5.4 structural
+finishers 1–3 are all done.**
 
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
@@ -417,7 +438,9 @@ are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `au
 trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract, and **C5** —
 `repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
 **C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
-a clinical-note surface) + the full §5.4 John-Doe registration subsystem. **Other deferred:** a veto-aware
+a clinical-note surface). The §5.4 John-Doe subsystem's structural finishers are now all built (slices 20–29); the
+non-structural remainder is the §5.12 push-alert, the §5.3/§5.8 search-before-create funnel, and an `enroll-human` CLI.
+**Other deferred:** a veto-aware
 scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
 `compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).

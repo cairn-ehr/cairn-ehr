@@ -22,14 +22,47 @@ the §3.14 day-one attachment-reference shape)
 + the **§5.4 marks/belongings/EMS-context text-evidence slice** (three text `kind` values on the same
 `identity.evidence.asserted` event type — **done this session**)
 + the **§5.4 finishers PR#1** (a node-local "this node's John Doe #N" display ordinal + an `--observed-year`
-evidence override — **done this session**)
+evidence override)
++ the **§5.4 finisher 3** (`identify`→optional link — the John-Doe *resolution* front door: a device-additive
+`identify` flips the chart *confirmed*, plus an OPTIONAL human-attested link to a prior chart, atomic —
+**done this session**; the structural finishers 1–3 are now all built)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
-(finisher 3 `identify`→optional-link — its own spec/PR next; the "prior history now available" push-alert;
-the search-before-create funnel).
+(the "prior history now available" push-alert; the search-before-create funnel; an `enroll-human` ceremony CLI).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-11) — §5.4 finishers PR#1: the node-local John-Doe ordinal + `--observed-year`
+**This session (2026-07-11, later) — §5.4 finisher 3: `identify`→optional link (no issue; branch
+`feat/john-doe-identify-optional-link`; no event type / migration / floor / SCHEMA / ADR / spec change —
+additive Rust only).** The last **structural** finisher of the §5.4 John-Doe subsystem: the node authoring
+surface + CLI that RESOLVES a John-Doe chart. The `identity.identify.asserted` type, its db/024 floor, the
+`chart_identity_state` overlay, and the `cairn-event::identity` identify builders all already existed — this
+slice adds only the missing Rust authoring path. brainstorm→spec→plan→subagent-driven TDD (design+plan under
+`docs/superpowers/{specs,plans}/2026-07-11-john-doe-identify-optional-link*`). New `cairn-node::identify`:
+pure `build_identify_body` (**device-additive** — node key, `recorded` contributor, no responsibility → no
+attestation; flips the chart *unconfirmed*→*confirmed*) + `compose_identify_link_provenance`; the async
+`identify_patient` orchestrator authors the identify and, when `--link <prior>` is given, an OPTIONAL
+**human-attested** `identity.link.asserted` joining the prior chart — reusing `apply_proposal::build_attested_link_body`
+verbatim (`confidence: None`), signed+attested by a separate human `--attester-key` — **both events in ONE
+transaction (atomic: a link rejection rolls the identify back too, so a caller who meant to link is never
+left confirmed-but-unlinked).** Accountability: identify is device-additive (like `register-john-doe`); the
+link MERGES charts so the human vouches for it (principle 10 compositional authorship). `attester_is_enrolled_human`
+is an advisory CLI pre-check querying **`actor_current`** — mirroring the db/005 attestation floor exactly (a
+revoked human is refused by both); the floor is the real, unbypassable enforcement. New `identify-patient` CLI
+(`--method` required; `--link` + `--attester-key`/`--attester-passphrase` required together; validated before
+any I/O). No cross-existence pre-check on `patient`/`prior` (offline-first; the db/018 floor rejects only
+self-link + empty provenance). TDD, **5 DB-gated `tests/identify.rs`** (identify-only flips to confirmed; link
+joins the prior chart into one `person_of` component + confirms; non-human attester rolls back atomically;
+self-link rolls back; the human/device/unenrolled pre-check) + 2 pure builder tests. Whole-branch review
+(opus): **Ready to merge = YES**; one Important (pre-check had queried `actor_event` history not `actor_current`)
++ two Minor (self-link test, positive control) all fixed. Full workspace green (cairn-node DB-gated incl.
+identify 5/5 · cairn-event · cairn-sync 18); fmt + clippy --workspace + mkdocs clean. **§5.4 finisher 3 is
+BUILT — the John-Doe subsystem's structural finishers 1–3 are all done.** Remaining §5.4: the "prior history
+now available" push-alert on link (§5.12, no notification tier yet); the search-before-create registration
+funnel (§5.3/§5.8, UI/API tier); and an **`enroll-human` ceremony CLI** — a recorded prerequisite for using
+`identify --link` end-to-end (ADR-0044 person-distinguishing determinant; tests enroll the human via raw SQL
+for now).
+
+**Prior session (2026-07-11, earlier) — §5.4 finishers PR#1: the node-local John-Doe ordinal + `--observed-year`
 (no issue; branch `feat/john-doe-ordinal-and-observed-year`; no ADR/spec/SCHEMA/floor/wire change).** Two
 small self-contained §5.4 finishers, brainstorm→spec→plan→subagent-driven TDD (design+plan under
 `docs/superpowers/{specs,plans}/2026-07-11-john-doe-ordinal-and-observed-year*`). **Finisher 1 — a
@@ -48,9 +81,8 @@ TZ semantics). **Finisher 2 — `--observed-year` override** for `assert-observe
 range), defaulting to today; parameterizes the computed DOB range only, **not** `t_effective` (deliberate
 scope boundary; the library fn was already `observed_year`-parameterized). TDD (new DB-gated per-node
 partition/callsign-only test + 5 pure `resolve_observed_year` tests); full workspace green (cairn-node
-DB-gated all pass · cairn-event · cairn-sync); fmt + clippy clean. **Finisher 3 (`identify`→optional-link)
-deliberately deferred** to its own spec/PR — `identify` has no authoring surface/CLI yet and the optional
-link needs attestation-from-CLI (new ground).
+DB-gated all pass · cairn-event · cairn-sync); fmt + clippy clean. (Finisher 3 `identify`→optional-link was
+deferred here to its own spec/PR — **now done**, see the block above.)
 
 **Prior session (2026-07-10, later) — the `patient_name_current` ORDER BY drift guard
 ([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159) CLOSED; no ADR/spec change).** The #69
@@ -412,8 +444,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   node-local **display ordinal** — `db/030_john_doe_local_ordinal` VIEW, "this node's John Doe #N"; the callsign
   identity string stays UUID-suffixed/partition-safe, a per-day counter deliberately NOT used) and
   ~~a `--observed-year` CLI override~~ (DONE this session — pure `resolve_observed_year`, bounded
-  `1900..=current`); and **`identify`→optional-link** wired into one resolution flow (finisher 3 — its own
-  spec/PR: `identify` needs an authoring surface/CLI built from scratch + attestation-from-CLI). Reattribute composes one more *under-review*
+  `1900..=current`); ~~and **`identify`→optional-link** wired into one resolution flow~~ (finisher 3 — DONE
+  this session: `cairn-node::identify` + `identify-patient` CLI; device-additive identify + optional
+  human-attested link, atomic; the advisory `actor_current` human-ness pre-check). Still open: the
+  "prior history now available" push-alert on link (§5.12); the search-before-create funnel (§5.3/§5.8);
+  an `enroll-human` ceremony CLI (prerequisite for `identify --link` end-to-end). Reattribute composes one more *under-review*
   source into the `chart_trust` VIEW when it lands (note: a pending+disputed Doe already reads `'under-review'` —
   severity-max — so the slice-D forcing rule deliberately stands down while a dispute is open). Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; fuzzy alias recognition + a dedicated `alias` blocking pass.
