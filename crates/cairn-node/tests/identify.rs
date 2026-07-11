@@ -148,7 +148,7 @@ async fn person_of(c: &Client, p: Uuid) -> Option<Uuid> {
 async fn identify_count(c: &Client, p: Uuid) -> i64 {
     c.query_one(
         "SELECT count(*) FROM event_log WHERE event_type = 'identity.identify.asserted' \
-         AND body -> 'payload' ->> 'subject' = $1",
+         AND body ->> 'subject' = $1",
         &[&p.to_string()],
     )
     .await
