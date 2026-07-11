@@ -41,7 +41,7 @@ async fn mark_evidence_lands_with_kind_description_provenance_and_legible_twin()
     let id = cairn_node::identity::load_local(&c).await.unwrap();
 
     // A realistic §5.4 flow: register the unidentified patient, then record a mark.
-    let (patient, _callsign) = cairn_node::john_doe::register_john_doe(
+    let (patient, _callsign, _ord) = cairn_node::john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -113,7 +113,7 @@ async fn assert_text_evidence_rejects_bad_kind_and_empty_description_without_wri
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let id = cairn_node::identity::load_local(&c).await.unwrap();
-    let (patient, _callsign) = cairn_node::john_doe::register_john_doe(
+    let (patient, _callsign, _ord) = cairn_node::john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,

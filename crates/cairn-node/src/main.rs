@@ -957,7 +957,7 @@ async fn main() -> anyhow::Result<()> {
             // Owner ceremony: make the signing key an enrolled actor so it may author the
             // additive registration events (idempotent — enrolls only on first use).
             ensure_registration_actor(&db, &kid).await?;
-            let (pid, call) = cairn_node::john_doe::register_john_doe(
+            let (pid, call, ordinal) = cairn_node::john_doe::register_john_doe(
                 &mut db,
                 &sk,
                 &kid,
@@ -968,7 +968,7 @@ async fn main() -> anyhow::Result<()> {
                 &basis,
             )
             .await?;
-            println!("registered John Doe {pid}\ncallsign {call}");
+            println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
         }
         Cmd::AssertObservedEvidence {
             patient,
