@@ -156,8 +156,10 @@ pub async fn identify_patient(
 }
 
 /// Advisory CLI pre-check: does `attester_kid` resolve to a `kind='human'` actor? Human-ness
-/// is read from the append-only `actor_event` HISTORY (per ADR-0043), so a human whose key was
-/// later rotated/revoked still counts as ever-enrolled-human — the same source the floor uses.
+/// is read from the append-only `actor_event` HISTORY — applying the ADR-0043 discipline (the
+/// db/005 suppression-author gate resolves human-ness from history, not `actor_current`) — so a
+/// human whose key was later rotated/revoked still counts as ever-enrolled-human, the same
+/// source the floor uses.
 ///
 /// This is a LEGIBILITY aid only: it lets the CLI reject a wrong `--attester-key` with a clear
 /// message BEFORE authoring anything. The real, unbypassable enforcement is the db/005
