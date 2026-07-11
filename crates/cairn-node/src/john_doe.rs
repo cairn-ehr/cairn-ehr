@@ -120,7 +120,7 @@ pub fn build_pending_body(
 
 /// Register an unidentified ("John Doe") patient: mint a UUID, derive a callsign, and
 /// author the callsign name + the identity-pending marker in ONE transaction (atomic —
-/// a chart is never half-registered). Returns the minted `(patient_id, callsign)`.
+/// a chart is never half-registered). Returns the minted `(patient_id, callsign, node-local ordinal)`.
 ///
 /// `class` is the care context (`ED`, `ward`, …), `site` the registering location, `date`
 /// an already-formatted date string (the CLI edge owns the clock and format), and `basis`
@@ -136,7 +136,7 @@ pub async fn register_john_doe(
     site: &str,
     date: &str,
     basis: &str,
-) -> anyhow::Result<(Uuid, String)> {
+) -> anyhow::Result<(Uuid, String, i64)> {
     let patient_id = Uuid::now_v7();
     let suffix = suffix_from_uuid(patient_id);
     let call = callsign(class, site, date, &suffix);
@@ -160,7 +160,28 @@ pub async fn register_john_doe(
         .await?;
     tx.commit().await?;
 
-    Ok((patient_id, call))
+    // Read the node-local friendly ordinal for this registration (finisher 1). Queried
+    // post-commit against the same client: the callsign row is durably present, and
+    // post-commit avoids threading the read through the just-consumed transaction handle.
+    // The VIEW partitions by node_origin, so this row's ordinal is its rank within THIS
+    // node's John-Doe registrations — i.e. "this node's John Doe #N".
+    //
+    // INVARIANT (why `query_one` is exactly-one-row correct): each `register_john_doe`
+    // authors EXACTLY ONE callsign name event per patient, and there is no path that
+    // re-authors a callsign for an existing chart — so the VIEW holds one row per
+    // patient_id. If a future feature ever re-callsigns a chart, `query_one` would see
+    // two rows and error (loud, not silent — the registration itself has already
+    // committed); revisit this read then (add `ORDER BY ordinal LIMIT 1` to pick the
+    // registration ordinal) rather than letting a display read fail a real registration.
+    let ordinal: i64 = client
+        .query_one(
+            "SELECT ordinal FROM john_doe_local_ordinal WHERE patient_id = $1::text::uuid",
+            &[&patient_id.to_string()],
+        )
+        .await?
+        .get("ordinal");
+
+    Ok((patient_id, call, ordinal))
 }
 
 #[cfg(test)]

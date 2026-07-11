@@ -97,7 +97,7 @@ async fn register_john_doe_creates_an_unconfirmed_chart() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
 
-    let (pid, _call) = john_doe::register_john_doe(
+    let (pid, _call, _ord) = john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -122,7 +122,7 @@ async fn callsign_is_stored_as_a_placeholder_use_name_and_is_the_display_winner(
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
 
-    let (pid, call) = john_doe::register_john_doe(
+    let (pid, call, _ord) = john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -156,7 +156,7 @@ async fn two_john_does_coexist_as_distinct_pending_charts_with_distinct_callsign
     let (sk, kid) = setup(&c).await;
 
     // Same site, same day — the partition-safe suffix must still keep them apart.
-    let (p1, c1) = john_doe::register_john_doe(
+    let (p1, c1, _ord) = john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -168,7 +168,7 @@ async fn two_john_does_coexist_as_distinct_pending_charts_with_distinct_callsign
     )
     .await
     .unwrap();
-    let (p2, c2) = john_doe::register_john_doe(
+    let (p2, c2, _ord) = john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -188,4 +188,62 @@ async fn two_john_does_coexist_as_distinct_pending_charts_with_distinct_callsign
     );
     assert_eq!(trust_of(&c, p1).await.as_deref(), Some("unconfirmed"));
     assert_eq!(trust_of(&c, p2).await.as_deref(), Some("unconfirmed"));
+}
+
+// --- finisher 1: node-local friendly ordinal ---
+
+/// Registration returns a per-node_origin ordinal (1, 2, …) and a foreign node_origin's
+/// registrations form their OWN partition, never shifting this node's numbers. Proves the
+/// VIEW is node-scoped without any `local_node` dependency, and that only callsign
+/// registrations count (the count equals the number of John Does, not their events).
+#[tokio::test]
+async fn ordinal_numbers_registrations_per_node_origin() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c).await;
+
+    // Two John Does first-recorded on node "n" → ordinals 1 then 2, in registration order.
+    let (_p1, _c1, o1) =
+        john_doe::register_john_doe(&mut c, &sk, &kid, "n", "ED", "s", "2026-07-11", "b")
+            .await
+            .unwrap();
+    let (p2, _c2, o2) =
+        john_doe::register_john_doe(&mut c, &sk, &kid, "n", "ED", "s", "2026-07-11", "b")
+            .await
+            .unwrap();
+    assert_eq!(o1, 1);
+    assert_eq!(o2, 2);
+
+    // A registration first-recorded on a DIFFERENT node_origin starts its own sequence at
+    // 1 and does not shift node "n"'s ordinals.
+    let (_p3, _c3, o3) =
+        john_doe::register_john_doe(&mut c, &sk, &kid, "m", "ED", "s", "2026-07-11", "b")
+            .await
+            .unwrap();
+    assert_eq!(o3, 1, "a different node_origin is a separate partition");
+
+    // node "n"'s second John Doe still reads ordinal 2 via the VIEW.
+    let n2: i64 = c
+        .query_one(
+            "SELECT ordinal FROM john_doe_local_ordinal WHERE patient_id = $1::text::uuid",
+            &[&p2.to_string()],
+        )
+        .await
+        .unwrap()
+        .get("ordinal");
+    assert_eq!(n2, 2);
+
+    // Only callsign registrations are counted (each register authors ONE callsign name +
+    // one pending marker; the pending marker is not a name → excluded). Three John Does
+    // total across both partitions.
+    let total: i64 = c
+        .query_one("SELECT count(*) FROM john_doe_local_ordinal", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        total, 3,
+        "only callsign name registrations appear in the VIEW"
+    );
 }

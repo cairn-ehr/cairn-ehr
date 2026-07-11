@@ -342,6 +342,10 @@ enum Cmd {
         /// How the sex was observed (optional).
         #[arg(long)]
         sex_basis: Option<String>,
+        /// The year the age was observed (defaults to the node's current year). Lets a
+        /// clinician record evidence about a PAST observation. Bounded 1900..=current year.
+        #[arg(long)]
+        observed_year: Option<i32>,
     },
 
     /// Record clinician-observed §5.4 identity evidence on an existing chart. One command for
@@ -957,7 +961,7 @@ async fn main() -> anyhow::Result<()> {
             // Owner ceremony: make the signing key an enrolled actor so it may author the
             // additive registration events (idempotent — enrolls only on first use).
             ensure_registration_actor(&db, &kid).await?;
-            let (pid, call) = cairn_node::john_doe::register_john_doe(
+            let (pid, call, ordinal) = cairn_node::john_doe::register_john_doe(
                 &mut db,
                 &sk,
                 &kid,
@@ -968,7 +972,7 @@ async fn main() -> anyhow::Result<()> {
                 &basis,
             )
             .await?;
-            println!("registered John Doe {pid}\ncallsign {call}");
+            println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
         }
         Cmd::AssertObservedEvidence {
             patient,
@@ -977,16 +981,21 @@ async fn main() -> anyhow::Result<()> {
             age_basis,
             sex,
             sex_basis,
+            observed_year,
         } => {
             let sk = load_signing_key(&cli.key, true)?;
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            // Observation year comes from the node's own DB clock (the DB is the clock).
-            let observed_year: i32 = db
+            // Default the observation year to the node's own DB clock (the DB is the
+            // clock), but let --observed-year override it for a past observation. The
+            // pure validator rejects a future or absurdly-historical year (principle 4).
+            let current_year: i32 = db
                 .query_one("SELECT extract(year FROM current_date)::int", &[])
                 .await?
                 .get(0);
+            let observed_year =
+                cairn_node::evidence::resolve_observed_year(observed_year, current_year)?;
             ensure_registration_actor(&db, &kid).await?;
 
             // Clinical sanity bound on the human-entered estimate: a real apparent age and

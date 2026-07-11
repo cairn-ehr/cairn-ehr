@@ -49,7 +49,7 @@ async fn photo_evidence_stores_a_verified_blob_and_references_it() {
     let id = cairn_node::identity::load_local(&c).await.unwrap();
 
     // A realistic §5.4 flow: register the unidentified patient, then attach a photo.
-    let (patient, _callsign) = cairn_node::john_doe::register_john_doe(
+    let (patient, _callsign, _ord) = cairn_node::john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,
@@ -137,7 +137,7 @@ async fn photo_evidence_fills_a_preexisting_reference_only_placeholder() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let id = cairn_node::identity::load_local(&c).await.unwrap();
-    let (patient, _callsign) = cairn_node::john_doe::register_john_doe(
+    let (patient, _callsign, _ord) = cairn_node::john_doe::register_john_doe(
         &mut c,
         &sk,
         &kid,

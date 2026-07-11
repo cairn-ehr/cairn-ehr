@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-10 · **Spec/ADRs:** v0.46 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-11 · **Spec/ADRs:** v0.46 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -21,12 +21,38 @@ hub-tier aggressive duplicate sweep)
 the §3.14 day-one attachment-reference shape)
 + the **§5.4 marks/belongings/EMS-context text-evidence slice** (three text `kind` values on the same
 `identity.evidence.asserted` event type — **done this session**)
++ the **§5.4 finishers PR#1** (a node-local "this node's John Doe #N" display ordinal + an `--observed-year`
+evidence override — **done this session**)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
-(the "prior history now available" push-alert, the search-before-create funnel).
+(finisher 3 `identify`→optional-link — its own spec/PR next; the "prior history now available" push-alert;
+the search-before-create funnel).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-10, later) — the `patient_name_current` ORDER BY drift guard
+**This session (2026-07-11) — §5.4 finishers PR#1: the node-local John-Doe ordinal + `--observed-year`
+(no issue; branch `feat/john-doe-ordinal-and-observed-year`; no ADR/spec/SCHEMA/floor/wire change).** Two
+small self-contained §5.4 finishers, brainstorm→spec→plan→subagent-driven TDD (design+plan under
+`docs/superpowers/{specs,plans}/2026-07-11-john-doe-ordinal-and-observed-year*`). **Finisher 1 — a
+node-local friendly John-Doe ordinal.** The callsign identity string stays UUID-suffixed (partition-safe;
+the code deliberately rejected a partition-racing per-day counter), so instead a new **read-only VIEW**
+`db/030_john_doe_local_ordinal.sql` derives "this node's John Doe #N" from `event_log`: `row_number()`
+**PARTITION BY `node_origin`** over the callsign registrations each node first recorded (exact predicate:
+`demographic.field.asserted` + `field=name` + `facets.use=callsign` + `provenance=system:john-doe-registration`),
+ordered by the collation-free `(hlc_wall,hlc_counter,content_address)` spine (#115/#69). Node-local by
+construction (a replicated foreign registration lands in its own partition, never shifts this node's
+sequence); never signed, never on the wire, never an identity/merge key. `register_john_doe` now returns
+`(Uuid,String,i64)` and the CLI prints `local ref: John Doe #N (this node)`. All-time (no daily reset → no
+TZ semantics). **Finisher 2 — `--observed-year` override** for `assert-observed-evidence`: a pure
+`resolve_observed_year(Option<i32>, current_year) -> Result<i32>` bounds a supplied year to
+`1900..=current_year` (reject future / absurdly-historical; principle 4 — honest reject, never a garbage
+range), defaulting to today; parameterizes the computed DOB range only, **not** `t_effective` (deliberate
+scope boundary; the library fn was already `observed_year`-parameterized). TDD (new DB-gated per-node
+partition/callsign-only test + 5 pure `resolve_observed_year` tests); full workspace green (cairn-node
+DB-gated all pass · cairn-event · cairn-sync); fmt + clippy clean. **Finisher 3 (`identify`→optional-link)
+deliberately deferred** to its own spec/PR — `identify` has no authoring surface/CLI yet and the optional
+link needs attestation-from-CLI (new ground).
+
+**Prior session (2026-07-10, later) — the `patient_name_current` ORDER BY drift guard
 ([#159](https://github.com/cairn-ehr/cairn-ehr/issues/159) CLOSED; no ADR/spec change).** The #69
 follow-up: the winner `ORDER BY` of `patient_name_current` is written TWICE — db/012 and db/025's
 repudiation anti-join re-definition (which, loading last, is the **live** one) — with nothing keeping
@@ -382,8 +408,12 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   ~~marks/belongings/EMS-context evidence~~ (DONE this session — three text `kind` values on the same event type,
   `cairn-node::identity_evidence` + `assert-identity-evidence` CLI, zero wire change), the
   "prior history now available" push-alert on link (§5.12, no notification tier yet), the search-before-create
-  registration-class funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix (partition-safe per-day
-  count), a `--observed-year` CLI override, and `identify`→optional-link wired into one resolution flow. Reattribute composes one more *under-review*
+  registration-class funnel (§5.3/§5.8, UI/API tier); ~~a readable callsign suffix~~ (DONE this session as a
+  node-local **display ordinal** — `db/030_john_doe_local_ordinal` VIEW, "this node's John Doe #N"; the callsign
+  identity string stays UUID-suffixed/partition-safe, a per-day counter deliberately NOT used) and
+  ~~a `--observed-year` CLI override~~ (DONE this session — pure `resolve_observed_year`, bounded
+  `1900..=current`); and **`identify`→optional-link** wired into one resolution flow (finisher 3 — its own
+  spec/PR: `identify` needs an authoring surface/CLI built from scratch + attestation-from-CLI). Reattribute composes one more *under-review*
   source into the `chart_trust` VIEW when it lands (note: a pending+disputed Doe already reads `'under-review'` —
   severity-max — so the slice-D forcing rule deliberately stands down while a dispute is open). Deferred (repudiate): a **reversal / de-repudiation** event (overlay HLC-versioned, composes without rewrite);
   a **chart-history VIEW** rendering struck names; fuzzy alias recognition + a dedicated `alias` blocking pass.

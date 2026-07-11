@@ -189,6 +189,42 @@ async fn observed_sex_lands_on_administrative_sex() {
     assert!(demographic_of(&db, patient, "sex-at-birth").await.is_none());
 }
 
+/// End-to-end loop between the pure `resolve_observed_year` validator and the DB projection:
+/// a `--observed-year 2000` override resolves to 2000 (not "now"), and an age-40±5 estimate
+/// authored against that override lands as the 1960-centred year-range (1955/1965), not a
+/// range computed off the current year. Closes the design-doc-named DB-gated test gap.
+#[tokio::test]
+async fn observed_year_override_sets_the_birth_year_range() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut db = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&db).await;
+    let patient = Uuid::now_v7();
+
+    // The CLI edge resolves the observed year via the real validator, same as production.
+    let oy = cairn_node::evidence::resolve_observed_year(Some(2000), 2026).unwrap();
+    assert_eq!(oy, 2000);
+
+    let ev = ObservedEvidence {
+        age: Some(AgeObservation {
+            age_years: 40,
+            tolerance_years: 5,
+            basis: "dentition, greying".into(),
+        }),
+        sex: None,
+    };
+    evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, oy)
+        .await
+        .unwrap();
+
+    let (value, facets, prov) = demographic_of(&db, patient, "dob")
+        .await
+        .expect("dob projected");
+    assert_eq!(value, "1955/1965");
+    assert_eq!(facets["precision"], "year-range");
+    assert_eq!(prov, "clinician-observed");
+}
+
 #[tokio::test]
 async fn age_and_sex_are_authored_atomically() {
     let Some(base) = cs() else { return };

@@ -381,7 +381,24 @@ empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e + CLI s
 `assert-identity-evidence --kind photo|mark|belongings|ems-context …` behind a new pure, unit-tested
 `route_identity_evidence` flag gate. **Honest limits:** free-text description only; no projection/worklist/matcher signal.
 **Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
-funnel (§5.3/§5.8, UI/API tier), a readable sequential callsign suffix.
+funnel (§5.3/§5.8, UI/API tier); ~~a readable callsign suffix~~ + ~~`--observed-year`~~ done in slice 28 below;
+`identify`→optional-link (its own spec/PR — needs an `identify` authoring surface + attestation-from-CLI).
+
+**Slice 28 — §5.4 finishers PR#1: node-local John-Doe ordinal + `--observed-year`** (2026-07-11; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-11-john-doe-ordinal-and-observed-year*`; **no new event type / migration-floor /
+SCHEMA / ADR / spec change** beyond one read-only VIEW). **Finisher 1 — node-local friendly ordinal:** the callsign
+identity string stays UUID-suffixed (partition-safe — a per-day counter was deliberately NOT used, it races on a
+partition), so a new read-only `db/030_john_doe_local_ordinal.sql` VIEW derives "this node's John Doe #N" from
+`event_log` — `row_number()` **PARTITION BY `node_origin`** over each node's own callsign registrations
+(`demographic.field.asserted` + `field=name` + `facets.use=callsign` + `provenance=system:john-doe-registration`),
+ordered by the collation-free `(hlc_wall,hlc_counter,content_address)` spine. Node-local by construction (foreign
+registrations land in their own partition); never signed/on-the-wire/an-identity. `register_john_doe → (Uuid,String,i64)`;
+CLI prints `local ref: John Doe #N (this node)`. All-time (no daily reset → no TZ semantics). **Finisher 2 —
+`--observed-year`:** pure `resolve_observed_year(Option<i32>,current_year)` bounds a supplied year to `1900..=current`
+(reject future/absurdly-historical; principle 4), defaults to today; feeds the already-parameterized
+`assert_observed_evidence(...)` — computed DOB range only, **not** `t_effective` (deliberate scope boundary).
+Subagent-driven TDD (new DB-gated partition/callsign-only test + 5 pure tests); full workspace green; fmt+clippy clean.
+**Finisher 3 (`identify`→optional-link) deferred** to its own spec/PR.
 
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**

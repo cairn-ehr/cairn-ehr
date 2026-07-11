@@ -143,6 +143,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "029_hlc_collision_log",
         include_str!("../../../db/029_hlc_collision_log.sql"),
     ),
+    // §5.4 node-local friendly John-Doe ordinal (display aid): a read-only VIEW ranking
+    // each node's own callsign registrations, surfaced as "this node's John Doe #N" at
+    // registration. The callsign identity string is untouched (partition-safety unchanged);
+    // pure read-side, no floor/wire/event change.
+    (
+        "030_john_doe_local_ordinal",
+        include_str!("../../../db/030_john_doe_local_ordinal.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
