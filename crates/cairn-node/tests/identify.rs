@@ -4,12 +4,7 @@
 //! (there is no enroll-human CLI yet — a separate future slice).
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
-use cairn_node::identify::{identify_patient, IdentifyOutcome};
-// `LinkParams` is not yet exercised in this file: this test only covers the identify-only
-// (`link: None`) path (Task 2). Task 3 adds the link-arm test to this same file and will
-// use it there.
-#[allow(unused_imports)]
-use cairn_node::identify::LinkParams;
+use cairn_node::identify::{identify_patient, IdentifyOutcome, LinkParams};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -111,4 +106,130 @@ async fn identify_alone_flips_chart_to_confirmed() {
     assert!(out.link_event_id.is_none());
     assert_eq!(identity_state(&c, pid).await.as_deref(), Some("identified"));
     assert_eq!(trust_state(&c, pid).await, "confirmed");
+}
+
+/// Enroll a second key as a `human` actor (the attester), via raw SQL — there is no
+/// enroll-human CLI yet. Returns (human sk, human kid).
+async fn enroll_human(c: &Client) -> (SigningKey, String) {
+    let (sk, kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"handle\":\"dr-a\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+    (sk, kid)
+}
+
+/// Enroll a second key as a NON-human `agent` actor (for the atomicity/rejection test).
+async fn enroll_agent(c: &Client) -> (SigningKey, String) {
+    let (sk, kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('agent', '{\"model\":\"m\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+    (sk, kid)
+}
+
+/// The person (connected-component) id for a chart, or None if it is in no link.
+async fn person_of(c: &Client, p: Uuid) -> Option<Uuid> {
+    c.query_opt(
+        "SELECT person_id::text FROM person_member WHERE patient_id = $1::text::uuid",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get::<_, String>(0).parse().unwrap())
+}
+
+/// Count identify events on a subject (to prove atomicity rollback).
+async fn identify_count(c: &Client, p: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM event_log WHERE event_type = 'identity.identify.asserted' \
+         AND body -> 'payload' ->> 'subject' = $1",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+#[tokio::test]
+async fn identify_with_link_joins_prior_chart_and_confirms() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (h_sk, h_kid) = enroll_human(&c).await;
+    let node_origin = "test-node";
+
+    let doe = register_pending(&mut c, &sk, &kid, node_origin).await;
+    let prior = Uuid::now_v7(); // a prior chart (need not pre-exist; offline-first)
+
+    let out = identify_patient(
+        &mut c,
+        &sk,
+        &kid,
+        node_origin,
+        doe,
+        "family confirmation",
+        Some(LinkParams {
+            prior,
+            human_sk: &h_sk,
+            human_kid: &h_kid,
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(out.link_event_id.is_some(), "a link was requested");
+    assert_eq!(identity_state(&c, doe).await.as_deref(), Some("identified"));
+    assert_eq!(trust_state(&c, doe).await, "confirmed");
+    // Both charts now sit in ONE person component (min-uuid canonical person).
+    let expected = doe.min(prior);
+    assert_eq!(person_of(&c, doe).await, Some(expected));
+    assert_eq!(person_of(&c, prior).await, Some(expected));
+}
+
+#[tokio::test]
+async fn link_with_non_human_attester_rolls_back_the_whole_op() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (a_sk, a_kid) = enroll_agent(&c).await; // NOT a human → attestation gate refuses
+    let node_origin = "test-node";
+
+    let doe = register_pending(&mut c, &sk, &kid, node_origin).await;
+    let prior = Uuid::now_v7();
+
+    let r = identify_patient(
+        &mut c,
+        &sk,
+        &kid,
+        node_origin,
+        doe,
+        "family confirmation",
+        Some(LinkParams {
+            prior,
+            human_sk: &a_sk,
+            human_kid: &a_kid,
+        }),
+    )
+    .await;
+
+    assert!(
+        r.is_err(),
+        "a non-human attester must be refused by the floor"
+    );
+    // Atomicity: the identify must NOT have committed — the chart stays *pending*.
+    assert_eq!(identity_state(&c, doe).await.as_deref(), Some("pending"));
+    assert_eq!(
+        identify_count(&c, doe).await,
+        0,
+        "no identify event may survive the rollback"
+    );
+    assert_eq!(trust_state(&c, doe).await, "unconfirmed");
 }
