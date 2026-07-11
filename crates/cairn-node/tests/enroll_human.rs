@@ -1,10 +1,13 @@
 //! §5.4 — the human-actor enrollment ceremony library path. DB-gated on $CAIRN_TEST_PG,
 //! serialized cluster-wide via db::test_serial_guard (shared-DB + TRUNCATE pattern, like
 //! identify.rs / attestation.rs). Proves the dual-mapping guard, the ADR-0044 collision
-//! refusal, and idempotency — the guarantees that keep the actor trust-anchor sound.
+//! refusal, idempotency, and the CLI's pre-mint claim predicate — the guarantees that keep the
+//! actor trust-anchor sound.
 use cairn_event::generate_key;
 use cairn_node::db;
-use cairn_node::enroll::{build_human_pinned, enroll_human_actor, EnrollHumanOutcome};
+use cairn_node::enroll::{
+    build_human_pinned, determinant_already_claimed, enroll_human_actor, EnrollHumanOutcome,
+};
 use cairn_node::identify::attester_is_enrolled_human;
 use tokio_postgres::Client;
 
@@ -174,5 +177,30 @@ async fn key_already_enrolled_under_another_kind_is_refused() {
     assert!(
         err.to_string().contains("already enrolled"),
         "a key already mapped to an actor cannot be re-mapped to a human: {err}"
+    );
+}
+
+#[tokio::test]
+async fn determinant_already_claimed_tracks_prior_enrollment() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+
+    // The CLI's fresh-key pre-mint check (the enroll-human handler's Missing branch). A
+    // determinant nobody has enrolled reads as unclaimed; once a DIFFERENT key enrolls under it,
+    // it reads as claimed — so a brand-new key minted for that same determinant is refused BEFORE
+    // any key material or recovery code is generated.
+    let pinned = build_human_pinned("clinician", Some("MED-777"), None).unwrap();
+    assert!(
+        !determinant_already_claimed(&c, &pinned).await.unwrap(),
+        "an unclaimed determinant reads as not-yet-claimed (mint may proceed)"
+    );
+
+    let (_sk, kid) = generate_key().unwrap();
+    enroll_human_actor(&c, &kid, &pinned).await.unwrap();
+    assert!(
+        determinant_already_claimed(&c, &pinned).await.unwrap(),
+        "after another key enrolls under it, the determinant reads as claimed (pre-mint refusal)"
     );
 }

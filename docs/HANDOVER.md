@@ -45,16 +45,23 @@ ADR-0011 §5); async `enroll_human_actor` — a **dual-mapping guard** (one key 
 db/005 NULL that key's authorship node-wide) + an advisory ADR-0044 collision pre-check, over the `enroll_actor`
 floor (the real enforcement). New `enroll-human` CLI: pre-I/O determinant validation, mint-if-absent personal
 key (sealed + shown-once recovery code, or `--insecure-plaintext`; **no `.lsk` node-escrow** on a personal key)
-+ a **pre-mint** collision check so a rejected ceremony leaves no stray key/code. TDD: 6 pure builder tests + **6
++ a **pre-mint** collision check so a rejected ceremony leaves no stray key/code (best-effort — the accepted #166
+race window remains). TDD: 6 pure builder tests + **7
 DB-gated `tests/enroll_human.rs`** (resolvable human; distinct determinants→distinct actor_ids; identical
 determinant+distinct keys→refused; idempotent same-key re-enroll asserts no 2nd actor_event row; dual-mapping
-refused; same-key-different-determinant refused). Whole-branch review (opus): **Ready to merge = YES**, 0
-Critical/Important; 3 Minor all fixed. Full workspace green (cairn-node lib 117 + all DB-gated incl. enroll_human
-6/6 & identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace + mkdocs clean. **Follow-up filed
+refused; same-key-different-determinant refused; pre-mint claim predicate). Whole-branch review (opus): **Ready to
+merge = YES**, 0 Critical/Important; 3 Minor all fixed. A post-PR `/review` pass then fixed 4 further Minors
+(role-is-identity docs for the (entity, role) model; extracted + DB-gated the pre-mint predicate; softened the
+stray-key claim to best-effort; load-branch unseal rationale). Full workspace green (cairn-node lib 117 + all
+DB-gated incl. enroll_human 7/7 & identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace + mkdocs
+clean. **Follow-up filed
 (house rule 5): [#166](https://github.com/cairn-ehr/cairn-ehr/issues/166)** — the dual-mapping guard has an
 accepted TOCTOU (concurrent enroll of the SAME key under DIFFERENT actor_ids; the floor's advisory lock is keyed
 on actor_id, not the key); documented inline as accepted (rare owner ceremony, graceful NULL degradation, not
-corruption), durable fix is a floor-level per-signing-key guard in db/004. **Remaining §5.4:** the "prior history
+corruption), durable fix is a floor-level per-signing-key guard in db/004. **Also filed
+[#168](https://github.com/cairn-ehr/cairn-ehr/issues/168)** — make the entity→role-actor (1:many) relationship
+first-class (today `role` is part of `actor_id` by design, so one person holds several role-actors linked
+implicitly by a shared `registration_id`). **Remaining §5.4:** the "prior history
 now available" push-alert on link (§5.12, no notification tier); the search-before-create funnel (§5.3/§5.8,
 UI/API tier).
 

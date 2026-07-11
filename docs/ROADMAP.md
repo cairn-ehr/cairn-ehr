@@ -421,12 +421,17 @@ human enrollment from `identify.rs` tests (house rule 5). New `cairn-node::enrol
 (rotate-key stability, ADR-0011 §5); async `enroll_human_actor` — a **dual-mapping guard** (one key→>1 `actor_current`
 row makes db/005 NULL that key's authorship node-wide) + an advisory ADR-0044 collision pre-check over the floor. New
 `enroll-human` CLI: pre-I/O + pre-mint validation, mint-if-absent personal key (sealed + recovery code, or
-`--insecure-plaintext`; no `.lsk` node-escrow). Subagent-driven TDD (6 pure + 6 DB-gated `tests/enroll_human.rs`);
-whole-branch review (opus) **Ready = YES**, 0 Critical/Important, 3 Minor fixed. Full workspace green (cairn-node lib
-117 + all DB-gated incl. enroll_human 6/6 & identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace +
-mkdocs clean. **Follow-up [#166](https://github.com/cairn-ehr/cairn-ehr/issues/166):** the dual-mapping guard's
+`--insecure-plaintext`; no `.lsk` node-escrow). Subagent-driven TDD (6 pure + 7 DB-gated `tests/enroll_human.rs`);
+whole-branch review (opus) **Ready = YES**, 0 Critical/Important, 3 Minor fixed; a post-PR `/review` pass then fixed 4
+further Minors (documented the (entity, role) actor model so `--role` splits are understood as intended not a bug;
+extracted the pre-mint collision check to a DB-gated library fn; softened the "no stray key" claim to best-effort;
+documented the load-branch unseal). Full workspace green (cairn-node lib 117 + all DB-gated incl. enroll_human 7/7 &
+identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace + mkdocs clean. **Follow-ups:
+[#166](https://github.com/cairn-ehr/cairn-ehr/issues/166):** the dual-mapping guard's
 accepted TOCTOU (concurrent enroll of the SAME key under DIFFERENT actor_ids — floor lock is actor_id-keyed, not
-key-keyed); documented as accepted, durable fix is a floor-level per-key guard in db/004.
+key-keyed); documented as accepted, durable fix is a floor-level per-key guard in db/004. **[#168](https://github.com/cairn-ehr/cairn-ehr/issues/168):**
+make the entity→role-actor (1:many) relationship first-class (today implicit via a shared `registration_id` pinned
+into each role-actor).
 
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**

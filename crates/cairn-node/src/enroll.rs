@@ -29,6 +29,17 @@ pub enum EnrollHumanOutcome {
 /// `handle`. At least one MUST be present: a determinant is a real field, never fabricated
 /// (principle 4), and we do not lean on the floor's loud collision-refusal as the only guard.
 /// Blank inputs are treated as absent.
+///
+/// `role` is pinned too, so it is part of `actor_id` BY DESIGN: the actor is the **(entity, role)**
+/// pair, not the bare person. One clinician deliberately holds several role-actors (e.g. `clinician`
+/// and `registrar`) — each a distinct `actor_id` under its own signing key — because authorship and
+/// attestation attach to what someone did *in a role*, so the person↔actor relationship is 1:many.
+/// Those role-actors are recognised as one underlying person by their **shared `registration_id`**
+/// (the entity anchor carried in every one of them). A consequence, NOT a bug: a mistyped `--role`
+/// mints an *unintended* role-actor rather than being rejected — at enroll time it is
+/// indistinguishable from a genuine new role — but it is never a silent *merge*, stays linkable via
+/// the shared `registration_id`, and is correctable later by supersede/rotate (ADR-0011 §5). Making
+/// that entity→role-actor (1:many) relationship first-class is a tracked design thread (issue #168).
 pub fn build_human_pinned(
     role: &str,
     registration_id: Option<&str>,
@@ -63,6 +74,37 @@ pub fn build_human_pinned(
         obj.insert("handle".into(), json!(h));
     }
     Ok(Value::Object(obj))
+}
+
+/// Advisory pre-mint collision check for the CLI's fresh-key path: does `pinned` already compute
+/// to an `actor_id` that some existing `actor_event` row claims?
+///
+/// This exists so the `enroll-human` handler can refuse a doomed ceremony BEFORE minting a key
+/// (and, on the sealed path, printing a shown-once recovery code) — a brand-new random key can
+/// never be the idempotent case, so if the determinant's `actor_id` is already claimed it must
+/// belong to a DIFFERENT, already-enrolled key, and `enroll_human_actor`'s guard 2 would reject
+/// the ceremony a moment later anyway. Checking here avoids minting a stray key + recovery code.
+///
+/// On that fresh-key path this is exactly `cairn_actor_id_key_conflict(cairn_actor_id(pinned), kid)`
+/// with a never-seen `kid` (which `IS DISTINCT FROM` every stored `signing_key_id`), so it reduces
+/// to "does ANY actor_event carry this actor_id". It is ADVISORY only — `enroll_human_actor` and the
+/// in-DB floor remain the real, unbypassable enforcement (the same advisory-mirrors-the-floor
+/// pattern as guard 2). Split out of the handler so the DB-gated tests exercise it directly, not
+/// only through the binary.
+pub async fn determinant_already_claimed(
+    db: &tokio_postgres::Client,
+    pinned: &Value,
+) -> anyhow::Result<bool> {
+    let claimed: bool = db
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM actor_event WHERE actor_id = \
+             cairn_actor_id($1::text::jsonb))",
+            &[&pinned.to_string()],
+        )
+        .await
+        .context("pre-mint determinant-collision check")?
+        .get(0);
+    Ok(claimed)
 }
 
 /// Enroll `kid` as a `kind='human'` actor with `pinned`, reusing the in-DB `enroll_actor`

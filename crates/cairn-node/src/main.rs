@@ -345,9 +345,14 @@ enum Cmd {
     /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
     /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
     /// a person-distinguishing field (`--registration-id` and/or `--handle`, ADR-0044) and NEVER
-    /// the key (so `rotate-key` keeps the actor_id stable). If `--key` does not exist it is
-    /// minted: sealed under a shown-once recovery code, or unsealed with `--insecure-plaintext`
-    /// (test nodes only). No local-state `.lsk` escrow is attached — a personal key has none.
+    /// the key (so `rotate-key` keeps the actor_id stable). `--role` is ALSO part of the actor's
+    /// identity: the actor is the (entity, role) pair, so one clinician may hold several
+    /// role-actors (e.g. clinician + registrar), each a distinct actor_id linked as one person by
+    /// their shared `--registration-id`. Keep `--role` consistent for a given role — a differing
+    /// or mistyped role mints a SEPARATE (still linkable) actor, never a silent merge (issue #168).
+    /// If `--key` does not exist it is minted: sealed under a shown-once recovery code, or unsealed
+    /// with `--insecure-plaintext` (test nodes only). No local-state `.lsk` escrow is attached — a
+    /// personal key has none.
     EnrollHuman {
         /// A professional licence/registration number (preferred person-distinguishing determinant).
         #[arg(long)]
@@ -355,7 +360,8 @@ enum Cmd {
         /// A node-local human-chosen handle (use when there is no registration number).
         #[arg(long)]
         handle: Option<String>,
-        /// The actor's role tag in the pinned set.
+        /// The actor's role tag — part of the (entity, role) actor identity, not just a label
+        /// (one person holds one role-actor per role; keep it consistent, issue #168).
         #[arg(long, default_value = "clinician")]
         role: String,
         /// Passphrase to seal a newly-minted key (else CAIRN_KEY_PASSPHRASE, else prompt).
@@ -1071,23 +1077,19 @@ async fn main() -> anyhow::Result<()> {
                     // Pre-mint collision check. Safe/correct ONLY on this branch: the key is
                     // about to be freshly minted, so it cannot be the same key that is already
                     // bound to this determinant's actor_id — a fresh key can never be the
-                    // idempotent case. So if `cairn_actor_id(pinned)` already names an actor,
-                    // that actor_id necessarily belongs to some OTHER (already-enrolled) key,
-                    // and minting + sealing a new key here would only be discarded a moment
-                    // later by `enroll_human_actor`'s guard 2. Refuse before minting so no key
-                    // material or recovery code is ever generated for a ceremony that cannot
-                    // succeed. `enroll_human_actor` remains the real guard for the load branch
-                    // below, and re-checks this collision itself as the floor-backed re-check
-                    // (this is legibility, not the enforcement — same pattern as guard 2 there).
-                    let claimed: bool = db
-                        .query_one(
-                            "SELECT EXISTS(SELECT 1 FROM actor_event WHERE actor_id = \
-                             cairn_actor_id($1::text::jsonb))",
-                            &[&pinned.to_string()],
-                        )
-                        .await?
-                        .get(0);
-                    if claimed {
+                    // idempotent case. So if the determinant is already claimed, its actor_id
+                    // necessarily belongs to some OTHER (already-enrolled) key, and minting +
+                    // sealing a new key here would only be discarded a moment later by
+                    // `enroll_human_actor`'s guard 2. Refusing first means that, in the common
+                    // (uncontended) case, no key material or recovery code is generated for a
+                    // ceremony that cannot succeed. This is a best-effort narrowing, NOT a hard
+                    // guarantee: under the accepted TOCTOU (#166) a concurrent enroll can still
+                    // slip in between this check and the floor call and fail the ceremony after a
+                    // key was minted — recoverable by re-running (the load branch then completes
+                    // it idempotently). `enroll_human_actor` remains the real guard for the load
+                    // branch below, and re-checks this collision itself as the floor-backed
+                    // re-check (legibility, not enforcement — same pattern as guard 2 there).
+                    if cairn_node::enroll::determinant_already_claimed(&db, &pinned).await? {
                         anyhow::bail!(
                             "enroll-human: this determinant set is already claimed by an \
                              existing actor — a brand-new key cannot be the idempotent case, so \
@@ -1113,13 +1115,19 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 _ => {
+                    // An existing key file. We must fully load (and, if sealed, UNSEAL) it even
+                    // though enrollment binds only the public `kid`: the kid is the ed25519 public
+                    // key derived FROM the secret seed, and the sealed-at-rest format stores no
+                    // separate cleartext public key to read without unsealing. The unseal doubles
+                    // as a possession proof — you cannot enrol a key you cannot open — so it is
+                    // not wasted work.
                     let sk = load_signing_key(&cli.key, true)?; // may prompt to unseal
                     let kid = hex::encode(sk.verifying_key().to_bytes());
                     (sk, kid)
                 }
             };
-            // `sk` is not used again (enrollment binds only the public kid), but is held so the
-            // sealed secret's lifetime matches the ceremony; drop it explicitly for clarity.
+            // `sk` is not used again (enrollment binds only the public kid) but was needed to
+            // derive it above; drop it explicitly so the secret's lifetime ends here.
             drop(sk);
 
             match cairn_node::enroll::enroll_human_actor(&db, &kid, &pinned).await? {
