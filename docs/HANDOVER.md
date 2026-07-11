@@ -432,6 +432,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   pytest`. The pure matcher suite is dependency-free: `cd matcher && uv run pytest` (uv, never venv/pip).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
+  The record now lives in [`docs/case-studies/`](case-studies/README.md). First entry
+  ([Case 0001](case-studies/0001-improving-practice-software-column.md), 2026-07-11): 16 Australian GP-software
+  failure modes from Dr Oliver Frank's magazine column — all absorbed, **0 new architecture**, but three action
+  items surfaced: **① re-affirmation-without-change currency** (two timestamps on one fact —
+  `asserted-since` vs `confirmed-current-as-of`) — **checked against code → [issue #163](https://github.com/cairn-ehr/cairn-ehr/issues/163)**:
+  the envelope already records a re-affirmation (append-only, distinct `content_address`), so no can't-retrofit
+  gap; the gap is that every `patient_*` projection (`db/010`–`db/014`) collapses both timestamps into one
+  overwrite-on-reaffirm winner-HLC triple, and `first_seen`/`updated_at` are local non-convergent
+  `clock_timestamp()` stamps; **② open-loop/obligation** (order/recall/referral with no closing ack) may warrant a named
+  projection, and must be surfaced by salience not a modal (paper-parity); **③ impossible-vs-uncertain** constraint
+  rule for the in-DB floor (reject only the physically/type-impossible, advisorily flag the merely improbable).
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
   hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
