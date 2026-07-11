@@ -111,6 +111,45 @@ async fn same_key_reenroll_is_idempotent() {
         matches!(again, EnrollHumanOutcome::AlreadyEnrolled),
         "re-running the same enrollment is a no-op, not a second actor_event row"
     );
+    // The comment above claims "not a second actor_event row" — assert it directly. The
+    // idempotent branch (guard 1) must return BEFORE calling the enroll_actor floor, so
+    // exactly one actor_event row exists for this key after both calls.
+    let count: i64 = c
+        .query_one(
+            "SELECT count(*) FROM actor_event WHERE signing_key_id = $1",
+            &[&kid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        count, 1,
+        "the idempotent re-enroll must not append a second actor_event row"
+    );
+}
+
+#[tokio::test]
+async fn same_key_different_determinant_is_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+
+    // Enroll a key as a human under one determinant, then try to re-enroll the SAME key
+    // under a DIFFERENT determinant. This computes a different actor_id (guard 1's
+    // non-idempotent branch: same key, existing actor_id != new actor_id) — a genuinely
+    // different person needs a fresh key; changing this human's OWN determinant is not a
+    // re-enroll (it would be a future supersede/rotate operation, ADR-0011 §5).
+    let (_sk, kid) = generate_key().unwrap();
+    let first = build_human_pinned("clinician", None, Some("dr-a")).unwrap();
+    enroll_human_actor(&c, &kid, &first).await.unwrap();
+
+    let second = build_human_pinned("clinician", Some("MED-777"), None).unwrap();
+    let err = enroll_human_actor(&c, &kid, &second).await.unwrap_err();
+    assert!(
+        err.to_string().contains("already enrolled"),
+        "re-enrolling the same key under a different determinant is refused: {err}"
+    );
 }
 
 #[tokio::test]

@@ -117,8 +117,10 @@ pub async fn enroll_human_actor(
         }
         bail!(
             "enroll-human: key {kid} is already enrolled as an actor; enrolling it again would \
-             map one key to two actors and silently NULL its authorship node-wide (db/005). \
-             Use a fresh key for this human."
+             map one key to two actors and silently NULL its authorship node-wide (db/005). A \
+             genuinely different person needs a fresh key; if this is the SAME human's own \
+             determinant changing, that is not a re-enroll — it is a future supersede/rotate \
+             operation (ADR-0011 §5), which has no door yet."
         );
     }
 

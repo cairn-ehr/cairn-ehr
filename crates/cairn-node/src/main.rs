@@ -1057,10 +1057,44 @@ async fn main() -> anyhow::Result<()> {
                 handle.as_deref(),
             )?;
 
+            // Open the DB connection BEFORE any key-minting I/O, so the fresh-key branch below
+            // can run a pre-mint collision check (finding 3): without this, a fresh key (and,
+            // on the sealed path, its shown-once recovery code) would already be minted before
+            // a collision on the determinant could be detected, leaving a stray key + a
+            // recovery code for a ceremony that then fails.
+            let db = cairn_node::db::connect(&cli.conn).await?;
+
             // Load the human's personal key, or mint one if the file is absent.
             use cairn_node::keystore::{key_at_rest_state, KeyAtRest};
             let (sk, kid) = match key_at_rest_state(&cli.key) {
                 KeyAtRest::Missing => {
+                    // Pre-mint collision check. Safe/correct ONLY on this branch: the key is
+                    // about to be freshly minted, so it cannot be the same key that is already
+                    // bound to this determinant's actor_id — a fresh key can never be the
+                    // idempotent case. So if `cairn_actor_id(pinned)` already names an actor,
+                    // that actor_id necessarily belongs to some OTHER (already-enrolled) key,
+                    // and minting + sealing a new key here would only be discarded a moment
+                    // later by `enroll_human_actor`'s guard 2. Refuse before minting so no key
+                    // material or recovery code is ever generated for a ceremony that cannot
+                    // succeed. `enroll_human_actor` remains the real guard for the load branch
+                    // below, and re-checks this collision itself as the floor-backed re-check
+                    // (this is legibility, not the enforcement — same pattern as guard 2 there).
+                    let claimed: bool = db
+                        .query_one(
+                            "SELECT EXISTS(SELECT 1 FROM actor_event WHERE actor_id = \
+                             cairn_actor_id($1::text::jsonb))",
+                            &[&pinned.to_string()],
+                        )
+                        .await?
+                        .get(0);
+                    if claimed {
+                        anyhow::bail!(
+                            "enroll-human: this determinant set is already claimed by an \
+                             existing actor — a brand-new key cannot be the idempotent case, so \
+                             refusing before minting one. If this is genuinely a new person, add \
+                             a distinguishing --registration-id or --handle."
+                        );
+                    }
                     if insecure_plaintext {
                         eprintln!(
                             "WARNING: --insecure-plaintext: human signing key written UNSEALED \
@@ -1088,7 +1122,6 @@ async fn main() -> anyhow::Result<()> {
             // sealed secret's lifetime matches the ceremony; drop it explicitly for clarity.
             drop(sk);
 
-            let db = cairn_node::db::connect(&cli.conn).await?;
             match cairn_node::enroll::enroll_human_actor(&db, &kid, &pinned).await? {
                 cairn_node::enroll::EnrollHumanOutcome::Enrolled => {
                     println!("enrolled human actor {kid}");
