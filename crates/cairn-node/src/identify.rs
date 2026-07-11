@@ -155,6 +155,29 @@ pub async fn identify_patient(
     })
 }
 
+/// Advisory CLI pre-check: does `attester_kid` resolve to a `kind='human'` actor? Human-ness
+/// is read from the append-only `actor_event` HISTORY (per ADR-0043), so a human whose key was
+/// later rotated/revoked still counts as ever-enrolled-human — the same source the floor uses.
+///
+/// This is a LEGIBILITY aid only: it lets the CLI reject a wrong `--attester-key` with a clear
+/// message BEFORE authoring anything. The real, unbypassable enforcement is the db/005
+/// attestation gate inside `submit_event` (defense in depth); never rely on this check for
+/// safety — a raw-SQL client that skips it still cannot attest a link with a non-human key.
+pub async fn attester_is_enrolled_human(
+    client: &tokio_postgres::Client,
+    attester_kid: &str,
+) -> anyhow::Result<bool> {
+    let ok: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM actor_event \
+             WHERE signing_key_id = $1 AND kind = 'human')",
+            &[&attester_kid],
+        )
+        .await?
+        .get(0);
+    Ok(ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

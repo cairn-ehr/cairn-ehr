@@ -4,7 +4,9 @@
 //! (there is no enroll-human CLI yet — a separate future slice).
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
-use cairn_node::identify::{identify_patient, IdentifyOutcome, LinkParams};
+use cairn_node::identify::{
+    attester_is_enrolled_human, identify_patient, IdentifyOutcome, LinkParams,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -232,4 +234,20 @@ async fn link_with_non_human_attester_rolls_back_the_whole_op() {
         "no identify event may survive the rollback"
     );
     assert_eq!(trust_state(&c, doe).await, "unconfirmed");
+}
+
+#[tokio::test]
+async fn human_precheck_distinguishes_human_from_device_and_unenrolled() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk, device_kid) = setup_node(&c).await; // enrolled as `device`
+    let (_h_sk, human_kid) = enroll_human(&c).await;
+    let (_u_sk, unenrolled_kid) = generate_key().unwrap();
+
+    assert!(attester_is_enrolled_human(&c, &human_kid).await.unwrap());
+    assert!(!attester_is_enrolled_human(&c, &device_kid).await.unwrap());
+    assert!(!attester_is_enrolled_human(&c, &unenrolled_kid)
+        .await
+        .unwrap());
 }
