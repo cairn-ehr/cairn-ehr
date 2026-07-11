@@ -73,6 +73,26 @@ fn load_signing_key(
     }
 }
 
+/// Load the human attester key for `identify-patient --link`. Mirrors `load_signing_key`
+/// but keyed on the SEPARATE attester passphrase (flag / CAIRN_ATTESTER_PASSPHRASE / prompt)
+/// so the attester key is distinct from the node's own operational key.
+fn load_attester_key(
+    path: &std::path::Path,
+    passphrase: Option<String>,
+) -> anyhow::Result<cairn_event::SigningKey> {
+    use cairn_node::keystore::{load, KeystoreError};
+    // Hold the secret in Zeroizing so it is wiped on drop (issue #46).
+    let secret = passphrase.filter(|s| !s.is_empty()).map(Zeroizing::new);
+    match load(path, secret.as_ref().map(|s| s.as_str())) {
+        Ok(sk) => Ok(sk),
+        Err(KeystoreError::Sealed) => {
+            let p = prompt_passphrase()?;
+            Ok(load(path, Some(p.as_str()))?)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Print a freshly-minted recovery code exactly once, with the honest loss warning.
 fn print_recovery_code(code: &str) {
     eprintln!();
@@ -382,6 +402,28 @@ enum Cmd {
         /// How/why it was observed; for ems-context, note the relayed source here (optional).
         #[arg(long)]
         basis: Option<String>,
+    },
+
+    /// Resolve a John-Doe chart (§5.4 finisher 3): record WHO the patient is
+    /// (`identity.identify.asserted`, flipping the chart to *confirmed*) and OPTIONALLY
+    /// link it to a prior chart so their history joins. The identify is device-additive
+    /// (node key). The link MERGES charts — a human attribution — so it requires a
+    /// separate human `--attester-key` that signs+attests it; identify + link are atomic.
+    IdentifyPatient {
+        /// The John-Doe patient UUID being identified.
+        patient: Uuid,
+        /// §5.7 "method recorded": how identity was established (non-empty).
+        #[arg(long)]
+        method: String,
+        /// Optional prior chart UUID to link this now-identified chart to.
+        #[arg(long)]
+        link: Option<Uuid>,
+        /// Human signing key that vouches for the link. Required when --link is given.
+        #[arg(long)]
+        attester_key: Option<PathBuf>,
+        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        attester_passphrase: Option<String>,
     },
 }
 
@@ -1103,6 +1145,86 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
                     println!("recorded {kind} identity evidence {event_id} on {patient}");
                 }
+            }
+        }
+        Cmd::IdentifyPatient {
+            patient,
+            method,
+            link,
+            attester_key,
+            attester_passphrase,
+        } => {
+            // §5.7 requires a recorded identification method; the db/024 floor rejects an
+            // empty `method` too, but validate here (before any I/O) so a blank `--method`
+            // gets the same clean, pre-authoring message as the cross-flag checks below —
+            // not a floor error after the node key has been unsealed and the DB opened.
+            cairn_node::identify::validate_identify_method(&method)?;
+
+            // Cross-flag validation (clap cannot express "attester-key iff link"). Reject
+            // both mismatches loudly — an attester with nothing to attest is a mistake worth
+            // surfacing, not silently ignoring. After this block the only surviving states
+            // are (link, attester_key) = (Some, Some) or (None, None) — the matches below
+            // rely on that invariant, so their `_ => None` arm is only ever the (None, None) case.
+            match (&link, &attester_key) {
+                (Some(_), None) => anyhow::bail!(
+                    "--link requires --attester-key: linking to a prior chart is a human \
+                     attribution that must be attested"
+                ),
+                (None, Some(_)) => {
+                    anyhow::bail!("--attester-key was given without --link: nothing to attest")
+                }
+                _ => {}
+            }
+
+            let node_sk = load_signing_key(&cli.key, true)?; // may prompt to unseal
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // Owner ceremony: the node key must be an enrolled actor to author the additive
+            // identify (idempotent — enrolls a `device` actor only on first use).
+            ensure_registration_actor(&db, &node_kid).await?;
+
+            // Load the human attester key + pre-check human-ness (legibility; the db/005 gate
+            // is the real enforcement). Held so the borrows live across identify_patient.
+            let attester = match (&link, &attester_key) {
+                (Some(_), Some(path)) => {
+                    let sk = load_attester_key(path, attester_passphrase)?;
+                    let kid = hex::encode(sk.verifying_key().to_bytes());
+                    if !cairn_node::identify::attester_is_enrolled_human(&db, &kid).await? {
+                        anyhow::bail!(
+                            "--attester-key ({kid}) is not an enrolled human actor; a link \
+                             must be attested by a human (enroll the clinician first)"
+                        );
+                    }
+                    Some((sk, kid))
+                }
+                _ => None,
+            };
+            let link_params = match (&link, &attester) {
+                (Some(prior), Some((sk, kid))) => Some(cairn_node::identify::LinkParams {
+                    prior: *prior,
+                    human_sk: sk,
+                    human_kid: kid,
+                }),
+                _ => None,
+            };
+
+            let out = cairn_node::identify::identify_patient(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                &method,
+                link_params,
+            )
+            .await?;
+            println!(
+                "identified {patient} (chart now confirmed); event {}",
+                out.identify_event_id
+            );
+            if let (Some(prior), Some(link_eid)) = (link, out.link_event_id) {
+                println!("linked to {prior}; link event {link_eid}");
             }
         }
     }
