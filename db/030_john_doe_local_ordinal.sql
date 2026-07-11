@@ -21,6 +21,14 @@
 -- name assertion whose `use` facet is 'callsign' and whose provenance is the system
 -- john-doe-registration marker. Never an ordinary name; never the pending marker (a
 -- different event_type). event_log.body holds the event payload (see db/005 submit_event).
+--
+-- CAVEAT — local vs. foreign partitions: THIS node's own partition is always stable, because
+-- every event it authors is already present locally at authoring time and the single-node HLC
+-- only moves forward (append-only ranks never renumber). A FOREIGN node's partition is only
+-- eventually-consistent: during partial sync, a lower-HLC foreign event can still arrive late
+-- and land ahead of already-replicated rows in ORDER BY, shifting that foreign partition's
+-- numbers after the fact. A future worklist consumer must treat foreign ("node X's #N")
+-- ordinals as eventually-consistent; the bedside "#N (this node)" handle is unaffected.
 CREATE OR REPLACE VIEW john_doe_local_ordinal AS
 SELECT patient_id,
        node_origin,

@@ -120,7 +120,7 @@ pub fn build_pending_body(
 
 /// Register an unidentified ("John Doe") patient: mint a UUID, derive a callsign, and
 /// author the callsign name + the identity-pending marker in ONE transaction (atomic —
-/// a chart is never half-registered). Returns the minted (patient_id, callsign, node-local ordinal).
+/// a chart is never half-registered). Returns the minted `(patient_id, callsign, node-local ordinal)`.
 ///
 /// `class` is the care context (`ED`, `ward`, …), `site` the registering location, `date`
 /// an already-formatted date string (the CLI edge owns the clock and format), and `basis`
