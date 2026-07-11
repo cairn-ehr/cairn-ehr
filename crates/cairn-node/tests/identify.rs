@@ -1,7 +1,7 @@
 //! §5.4 finisher 3 — `identify` → optional link. DB-gated on $CAIRN_TEST_PG, serialized
 //! cluster-wide via db::test_serial_guard (shared-DB + TRUNCATE pattern, like
-//! attestation.rs / identity_linkage.rs). The human attester is enrolled via raw SQL here
-//! (there is no enroll-human CLI yet — a separate future slice).
+//! attestation.rs / identity_linkage.rs). The human attester is enrolled via the real
+//! `cairn_node::enroll` ceremony (the enroll-human CLI's library path), not raw SQL.
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::identify::{
@@ -115,16 +115,15 @@ async fn identify_alone_flips_chart_to_confirmed() {
     );
 }
 
-/// Enroll a second key as a `human` actor (the attester), via raw SQL — there is no
-/// enroll-human CLI yet. Returns (human sk, human kid).
+/// Enroll a second key as a `human` actor (the attester) via the real enrollment ceremony
+/// (`cairn_node::enroll`), the same path the `enroll-human` CLI uses — no raw SQL. Returns
+/// (human sk, human kid).
 async fn enroll_human(c: &Client) -> (SigningKey, String) {
     let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"handle\":\"dr-a\"}', $1)",
-        &[&kid],
-    )
-    .await
-    .unwrap();
+    let pinned = cairn_node::enroll::build_human_pinned("clinician", None, Some("dr-a")).unwrap();
+    cairn_node::enroll::enroll_human_actor(c, &kid, &pinned)
+        .await
+        .unwrap();
     (sk, kid)
 }
 
