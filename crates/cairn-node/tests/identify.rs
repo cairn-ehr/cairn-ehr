@@ -108,6 +108,11 @@ async fn identify_alone_flips_chart_to_confirmed() {
     assert!(out.link_event_id.is_none());
     assert_eq!(identity_state(&c, pid).await.as_deref(), Some("identified"));
     assert_eq!(trust_state(&c, pid).await, "confirmed");
+    assert_eq!(
+        identify_count(&c, pid).await,
+        1,
+        "exactly one identify event was written"
+    );
 }
 
 /// Enroll a second key as a `human` actor (the attester), via raw SQL — there is no
@@ -234,6 +239,45 @@ async fn link_with_non_human_attester_rolls_back_the_whole_op() {
         "no identify event may survive the rollback"
     );
     assert_eq!(trust_state(&c, doe).await, "unconfirmed");
+}
+
+#[tokio::test]
+async fn link_to_self_is_rejected_and_rolls_back() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    // ENROLLED HUMAN attester, so rejection is unambiguously the self-link, not the attester.
+    let (h_sk, h_kid) = enroll_human(&c).await;
+    let node_origin = "test-node";
+
+    let doe = register_pending(&mut c, &sk, &kid, node_origin).await;
+
+    // prior == doe itself: the db/018 floor's cairn_check_link_assertion rejects
+    // subject_a == subject_b, so the whole txn (identify + link) must roll back.
+    let r = identify_patient(
+        &mut c,
+        &sk,
+        &kid,
+        node_origin,
+        doe,
+        "family confirmation",
+        Some(LinkParams {
+            prior: doe,
+            human_sk: &h_sk,
+            human_kid: &h_kid,
+        }),
+    )
+    .await;
+
+    assert!(r.is_err(), "a self-link must be refused by the floor");
+    // Atomicity: the identify must NOT have committed — the chart stays *pending*.
+    assert_eq!(identity_state(&c, doe).await.as_deref(), Some("pending"));
+    assert_eq!(
+        identify_count(&c, doe).await,
+        0,
+        "no identify event may survive the rollback"
+    );
 }
 
 #[tokio::test]

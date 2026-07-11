@@ -156,10 +156,12 @@ pub async fn identify_patient(
 }
 
 /// Advisory CLI pre-check: does `attester_kid` resolve to a `kind='human'` actor? Human-ness
-/// is read from the append-only `actor_event` HISTORY — applying the ADR-0043 discipline (the
-/// db/005 suppression-author gate resolves human-ness from history, not `actor_current`) — so a
-/// human whose key was later rotated/revoked still counts as ever-enrolled-human, the same
-/// source the floor uses.
+/// is read from the `actor_current` VIEW — mirroring the db/005 attestation gate itself (see
+/// `db/005_submit.sql`'s `actor_current WHERE signing_key_id = ... AND kind = 'human'` check),
+/// so a revoked/superseded human key is refused by BOTH this pre-check and the floor: a
+/// faithful preview, not a confusing pass-then-refuse. (The ADR-0043 history-vs-current
+/// discipline governs a DIFFERENT gate — the suppression-author check — and does not apply
+/// here.)
 ///
 /// This is a LEGIBILITY aid only: it lets the CLI reject a wrong `--attester-key` with a clear
 /// message BEFORE authoring anything. The real, unbypassable enforcement is the db/005
@@ -171,7 +173,7 @@ pub async fn attester_is_enrolled_human(
 ) -> anyhow::Result<bool> {
     let ok: bool = client
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM actor_event \
+            "SELECT EXISTS(SELECT 1 FROM actor_current \
              WHERE signing_key_id = $1 AND kind = 'human')",
             &[&attester_kid],
         )
