@@ -4,6 +4,7 @@ pub mod backup;
 pub mod db;
 pub mod evidence;
 pub mod fsio;
+pub mod identify;
 pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
