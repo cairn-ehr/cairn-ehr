@@ -153,6 +153,9 @@ nav:
       - Spike 0002 · Advisory-actor write contract — kastellan ↔ Cairn: spikes/0002-advisory-actor-write-contract.md
       - Spike 0003 · A Cairn node on an Android phone — native bionic PostgreSQL 18 + pgrx: spikes/0003-postgres-on-android-bionic-node.md
       - Spike 0004 · iced as the reference-UI framework — against an EHR's hard bars: spikes/0004-iced-reference-ui-viability.md
+  - Case studies (clinical case-mining):
+      - case-studies/README.md
+      - Case 0001 · 16 GP-software failure modes vs. the primitives: case-studies/0001-improving-practice-software-column.md
   - Ecosystem (plugin evaluations):
       - ecosystem/README.md
       - Eval 0001 · Agent & messaging plugins — kastellan & localmail: ecosystem/0001-agent-and-messaging-plugins-kastellan-localmail.md
