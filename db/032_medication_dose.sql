@@ -48,12 +48,24 @@ BEGIN
             RAISE EXCEPTION 'medication dose-change: info_source must be a non-empty string';
         END IF;
         -- Not a pure no-op: it must state a dose, an effective date, or a reason.
-        -- COALESCE(..., FALSE) is load-bearing: when 'reason' is absent,
-        -- jsonb_typeof(p -> 'reason') = 'string' is NULL (not FALSE), and
-        -- FALSE OR FALSE OR NULL is NULL under three-valued logic — PL/pgSQL's
-        -- `IF NULL THEN` silently skips, so a bare OR chain here would never fire.
-        IF NOT (p ? 'dose' OR p ? 'effective'
-                OR COALESCE(jsonb_typeof(p -> 'reason') = 'string' AND length(btrim(p ->> 'reason')) > 0, FALSE)) THEN
+        -- This is a CONTENT check, not a key-presence check: a raw-SQL client can
+        -- submit a present-but-empty `"dose":{}` (or `"effective":{}`), which would
+        -- satisfy `p ? 'dose'` while carrying nothing — the no-op floor must not be
+        -- bypassable that way. The first three disjuncts are 3VL-safe by
+        -- construction: `->> ... IS NOT NULL` always yields a definite TRUE/FALSE,
+        -- never NULL, regardless of whether the key or its parent object exists.
+        -- The `reason` disjunct is NOT of that shape (it's a bare
+        -- `typeof(...) = 'string' AND length(...) > 0`, which itself evaluates to
+        -- SQL NULL when 'reason' is absent) — so it is wrapped in
+        -- COALESCE(..., FALSE), same as pre-fix, to keep it solid. Without that
+        -- COALESCE, "FALSE OR FALSE OR FALSE OR NULL" is NULL (not FALSE) under
+        -- three-valued logic, and PL/pgSQL's `IF NULL THEN` silently skips —
+        -- exactly the bug this guard exists to close.
+        IF NOT (
+            (p -> 'dose' ->> 'amount') IS NOT NULL OR (p -> 'dose' ->> 'unit') IS NOT NULL
+            OR (p -> 'effective' ->> 'value') IS NOT NULL
+            OR COALESCE(jsonb_typeof(p -> 'reason') = 'string' AND length(btrim(p ->> 'reason')) > 0, FALSE)
+        ) THEN
             RAISE EXCEPTION 'medication dose-change: must carry a dose, an effective date, or a reason (principle 4 floor)';
         END IF;
     ELSIF p_type = 'clinical.medication-dose-correction.asserted' THEN

@@ -113,9 +113,43 @@ async fn floor_rejects_empty_dose_change_noop() {
         .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await;
     let err = db_msg(&res.unwrap_err());
+    assert!(err.contains("must carry a dose"), "got: {err}");
+}
+
+#[tokio::test]
+async fn floor_rejects_empty_dose_object_noop() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // A raw-SQL client could submit `{"dose":{}}` — present key, empty content.
+    // The floor's no-op guard must reject on CONTENT, not mere key-presence.
+    let input = ChangeDoseInput {
+        dose_amount: None,
+        dose_unit: None,
+        effective: None,
+        effective_precision: None,
+        info_source: "clinician-observed",
+        reason: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut body: EventBody =
+        build_dose_change_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
+    body.payload
+        .as_object_mut()
+        .unwrap()
+        .insert("dose".into(), serde_json::json!({})); // empty dose object — the raw-client bypass
+                                                       // re-render the twin is unnecessary; submit as-is
+    let signed = sign(&body, &sk).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
     assert!(
-        err.contains("dose") || err.contains("no-op") || err.contains("effective"),
-        "got: {err}"
+        err.contains("must carry a dose"),
+        "empty dose object must be rejected, got: {err}"
     );
 }
 
