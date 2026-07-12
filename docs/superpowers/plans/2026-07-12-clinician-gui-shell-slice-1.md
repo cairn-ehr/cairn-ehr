@@ -289,8 +289,8 @@ git commit -m "feat(gui): accessibility/semantic contract with CI-checked comple
   - `Capabilities { granted: HashSet<Capability> }` with `allows(&self, Capability) -> bool` and `clinician_all() -> Capabilities` (the stub resolver).
   - `PatientRef { uuid: String, display_name: String }`, `UserRef { actor_id: String, display_name: String }`.
   - `Context { patient: Option<PatientRef>, user: UserRef, capabilities: Capabilities }`.
-  - `Intent` enum: `OpenTab(TabId)` (open a tab, resolving to the opposite pane).
-  - `Outcome<M> { pub follow_up: Option<M>, pub intents: Vec<Intent> }` with `Outcome::none()`, `Outcome::message(M)`, `Outcome::intent(Intent)`.
+
+  (Note: `Intent`/`Outcome` from spec §4 are deferred to the slice that makes tabs independent TEA sub-apps with their own `Message` types. Slice 1 collapses tab messages into the shell's own enum and routes cross-references through `Workspace::open_in_opposite` (Task 6), so a routing-vocabulary enum would be unused YAGNI here.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -391,10 +391,12 @@ pub struct Context {
 - [ ] **Step 4: Write `tab.rs` (the trait + routing types, no test needed yet — exercised in Task 6/7)**
 
 ```rust
-//! The Tab contract. A tab is a self-contained view that declares its
-//! accessibility contract, lazily loads its own data, and may ask the shell to
-//! route (open something in the other pane). The Message/Task/Element associated
-//! types are the ONLY iced surface — deliberately small (spec §4).
+//! The iced-free part of the Tab contract: a stable addressable id and the
+//! accessibility-contract accessor every tab implements. The full Tab trait with
+//! iced view()/update() lives in the shell crate behind the `gui` feature (Task
+//! 7/8), keeping this crate iced-free. Cross-pane routing in slice 1 goes through
+//! the shell's own message + Workspace::open_in_opposite (Task 6); the spec §4
+//! Intent/Outcome vocabulary arrives when tabs become independent TEA sub-apps.
 use crate::context::Context;
 use crate::semantics::SemanticNode;
 
@@ -402,36 +404,8 @@ use crate::semantics::SemanticNode;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TabId(pub String);
 
-/// A shell routing request emitted by a tab's update().
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Intent {
-    /// Open this tab; the shell resolves it into the OPPOSITE pane (spec §5).
-    OpenTab(TabId),
-}
-
-/// What a tab's update() returns: an optional follow-up message and/or shell intents.
-#[derive(Debug, Clone)]
-pub struct Outcome<M> {
-    pub follow_up: Option<M>,
-    pub intents: Vec<Intent>,
-}
-
-impl<M> Outcome<M> {
-    pub fn none() -> Self {
-        Self { follow_up: None, intents: Vec::new() }
-    }
-    pub fn message(m: M) -> Self {
-        Self { follow_up: Some(m), intents: Vec::new() }
-    }
-    pub fn intent(i: Intent) -> Self {
-        Self { follow_up: None, intents: vec![i] }
-    }
-}
-
 /// The accessibility contract accessor every tab must implement, iced-free so it
-/// is CI-testable. (The full Tab trait with iced view()/update() lives in the
-/// shell crate behind the `gui` feature — see Task 7/8 — to keep this crate
-/// iced-free.)
+/// is CI-testable.
 pub trait Semantic {
     fn tab_id(&self) -> TabId;
     fn title(&self) -> String;
@@ -447,7 +421,7 @@ pub mod context;
 pub mod tab;
 pub use semantics::{Field, Role, SemanticNode};
 pub use context::{Capabilities, Capability, Context, PatientRef, UserRef};
-pub use tab::{Intent, Outcome, Semantic, TabId};
+pub use tab::{Semantic, TabId};
 ```
 
 - [ ] **Step 6: Run tests and commit**
@@ -1391,7 +1365,7 @@ required-features = ["gui"]
 #![cfg(feature = "gui")]
 use cairn_gui_data::{ClinicalData, MockData};
 use cairn_gui_manifest::{merge, EffectiveManifest, SiteManifest, UserPrefs};
-use cairn_gui_tab::{Capabilities, Context, Intent, PatientRef, Semantic, TabId, UserRef};
+use cairn_gui_tab::{Capabilities, Context, PatientRef, Semantic, TabId, UserRef};
 use cairn_gui_tab_demographics::DemographicsTab;
 use cairn_gui_tab_note::NoteTab;
 use crate::workspace::{Side, Workspace};
@@ -1473,14 +1447,12 @@ impl App {
             Message::Activate(side, tab) => self.ws.activate(side, &tab),
             Message::SelectTab(side, tab) => self.ws.activate(side, &tab),
             Message::OpenRef(from, target_id) => {
-                // The cross-reference: open the referenced view in the OTHER pane.
-                // Slice 1 has one referenceable kind; map its id to a tab.
-                let tab = TabId("demographics".into()); // placeholder mapping for slice 1
+                // Cross-reference routing (spec §5): open the referenced view in the
+                // OTHER pane, leaving the originating pane (the note) in place. Slice
+                // 1 has a single reference target; a real reference registry mapping
+                // ids → tabs arrives with the results/imaging tabs.
                 let _ = target_id;
-                let intent = Intent::OpenTab(tab);
-                if let Intent::OpenTab(t) = intent {
-                    self.ws.open_in_opposite(from, t);
-                }
+                self.ws.open_in_opposite(from, TabId("demographics".into()));
             }
         }
         Task::none()
@@ -1515,9 +1487,9 @@ impl App {
                 "demographics" => self.demographics.title(),
                 other => other.to_string(),
             };
-            let is_active = self.ws.active(side) == t;
-            let b = button(text(title)).on_press(Message::SelectTab(side, t.clone()));
-            strip = strip.push(if is_active { b } else { b });
+            // Active-tab visual styling is later polish; the pane already tracks its
+            // active tab in Workspace. Slice 1 renders the strip functionally.
+            strip = strip.push(button(text(title)).on_press(Message::SelectTab(side, t.clone())));
         }
         let body = self.tab_view(side, self.ws.active(side));
         column![strip, body].spacing(8).padding(8).into()
