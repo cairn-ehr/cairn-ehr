@@ -558,6 +558,40 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Reconcile two medication threads as the same real drug
+    /// (clinical.medication-reconciliation.asserted). Symmetric, reversible, additive —
+    /// both threads' histories are preserved; the current list collapses to one row.
+    /// Offline-first: neither thread need be present locally.
+    MedicationReconcile {
+        /// The patient UUID both threads belong to.
+        patient: Uuid,
+        /// The first medication thread id.
+        thread_a: Uuid,
+        /// The second medication thread id (must differ from thread_a).
+        thread_b: Uuid,
+        /// Provenance of the judgment (§4.1). Defaults to "clinician-judgment".
+        #[arg(long, default_value = "clinician-judgment")]
+        provenance: String,
+        /// Optional free-text reason ("brand vs generic", "duplicate on transfer").
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Separate two previously-reconciled threads — "actually two different drugs"
+    /// (clinical.medication-separation.asserted). The never-erase reversal.
+    MedicationSeparate {
+        /// The patient UUID both threads belong to.
+        patient: Uuid,
+        /// The first medication thread id.
+        thread_a: Uuid,
+        /// The second medication thread id (must differ from thread_a).
+        thread_b: Uuid,
+        /// Provenance of the judgment (§4.1). Defaults to "clinician-judgment".
+        #[arg(long, default_value = "clinician-judgment")]
+        provenance: String,
+        /// Optional free-text reason.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1591,6 +1625,66 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("dose correction recorded for thread {medication_id} (target {corrects}); event {event_id}");
+        }
+        Cmd::MedicationReconcile {
+            patient,
+            thread_a,
+            thread_b,
+            provenance,
+            reason,
+        } => {
+            cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::ReconcileInput {
+                provenance: &provenance,
+                reason: reason.as_deref(),
+            };
+            let event_id = cairn_node::medication::reconcile_medications(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                thread_a,
+                thread_b,
+                &input,
+            )
+            .await?;
+            println!("reconciled threads {thread_a} + {thread_b}; event {event_id}");
+        }
+        Cmd::MedicationSeparate {
+            patient,
+            thread_a,
+            thread_b,
+            provenance,
+            reason,
+        } => {
+            cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::ReconcileInput {
+                provenance: &provenance,
+                reason: reason.as_deref(),
+            };
+            let event_id = cairn_node::medication::separate_medications(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                thread_a,
+                thread_b,
+                &input,
+            )
+            .await?;
+            println!("separated threads {thread_a} + {thread_b}; event {event_id}");
         }
     }
     Ok(())
