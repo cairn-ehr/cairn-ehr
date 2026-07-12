@@ -32,51 +32,56 @@ evidence override)
 (the "prior history now available" push-alert; the search-before-create funnel).
 + the **first clinical-content event stream, `clinical.medication` slice 1 — BUILT** (assert/cease verbs,
 db/031 floor, `medication_statement`/`medication_cessation` projections, `patient_medication{,_current,_past}`
-views + the E1 reconciliation flag, orchestrators + CLI — **done this session**; distinct from the
-identity/demographics surfaces above — the first stream carrying actual clinical content).
+views + the E1 reconciliation flag, orchestrators + CLI; distinct from the identity/demographics surfaces
+above — the first stream carrying actual clinical content; PR #171, on main)
++ the **medication dose overlay, slice 2 — BUILT this session** (`clinical.medication-dose-change`/`-dose-correction`
+verbs, `db/032` floor + a bitemporal dose timeline [point-0 seed + change + HLC-wins correction overlay] +
+`patient_medication_dose_history`, current/past reworked to the timeline dose, `change_dose`/`correct_dose`
+orchestrators + CLI; db/031 untouched).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-12) — the first clinical-content event stream: `clinical.medication` slice 1
-(branch `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
-graduates data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code).**
-Distinct from every prior slice on this branch: everything above (demographics, the §5.2 matcher, the
-§5.7 identity core, the §5.4 John-Doe subsystem) is *administrative/identity* data about the patient;
-this is the first stream of *clinical content* — what medication the patient is actually on. Two
-append-only verbs over an immortal `medication_id` thread: `clinical.medication.asserted` (schema
-`clinical.medication/1`) + `clinical.medication-cessation.asserted` (`clinical.medication-cessation/1`).
-brainstorm→spec→plan→subagent-driven TDD (design at
-`docs/superpowers/specs/2026-07-11-medication-recording-design.md`, plan at
-`docs/superpowers/plans/2026-07-11-medication-recording-slice-1.md`). New `cairn-event::medication` pure
-builders: substance ref is mandatory `term` + nullable `inn_code` + formulation (principle-4 uncertainty
-floor — only `term` is mandatory, everything else honest-unknown, never fabricated to satisfy a required
-field); `DoseUnit` is free-text with a recommended vocab (not yet a closed Tier-A dictionary); `info_source`
-carries provenance-of-claim (patient-reported / clinician-observed / document, etc.). New
-`db/031_medication.sql`: the structural floor via `cairn_check_medication_assertion` + the shared
-`cairn_event_twin` hook (non-empty `term` + `info_source`; valid `medication_id`); `medication_statement` +
-`medication_cessation` projections kept as **separate tables** so they are arrival-order-independent — an
-**orphan cessation** renders nothing until its assert arrives, then correctly surfaces the medication in
-`patient_medication_past`; the `patient_medication{,_current,_past}` views union across sources with
-staleness visible via the assert date; and the **E1 deterministic advisory reconciliation flag**
-(view `patient_medication_reconciliation_flag`; `coalesce(inn_code, normalized term)` — advisory-only,
-cleared by ceasing a duplicate; fuzzy brand↔generic matching deliberately deferred). New `cairn-node::medication` orchestrators (`assert_medication` /
-`cease_medication`, both device-additive — slice 1 carries no human-attested clinical responsibility) +
-`medication-assert` / `medication-cease` CLI verbs; full end-to-end CLI smoke passed live. Cessation is
-offline-first by design — no requirement that the local node has already seen the corresponding assert
-(set-union sync may deliver either event first). TDD, subagent-driven (6 tasks); full workspace green —
-fmt clean (one drift-fix needed: the CLI call sites weren't rustfmt-reflowed, fixed mechanically, no
-semantic change), clippy `--workspace -D warnings` clean, all tests pass including the new **DB-gated
-`tests/medication.rs` 9/9** alongside the full existing cairn-node/cairn-event/cairn-sync suite. **Post-review
-fix (this branch):** `patient_medication.asserted_at` now derives from the assert event's convergent
-`hlc_wall` (t_recorded) rather than the local-clock `updated_at` fold marker — so the §9-B staleness signal
-stays honest and node-independent (a freshly-synced old med no longer looks new); regression-tested. **Deferred
-(later slice or Tier-A tier):** dose-correction/change overlay; fuzzy reconciliation (brand↔generic, typos,
-salts); reconciliation *resolution* as a first-class event; a `delete` rendering-suppression visibility
-overlay; structured sig/frequency (lands with prescriptions); the Tier-A dictionary + autocomplete + DDI;
-a separate `route` field; active review / last-confirmed staleness; the
-[#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-triple collision advisory extended onto the
-medication projections (consistency follow-on to match db/024); and human-attested clinical responsibility
-on a medication statement (slice 1 is device-additive throughout).
+**This session (2026-07-12) — medication dose overlay, slice 2 of `clinical.medication`
+(branch `feat/medication-dose-overlay-slice-2`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
+graduates the slice-1 §8 deferral into product code).** Two new **additive** verbs over the existing
+`medication_id` thread: `clinical.medication-dose-change.asserted` (titration — both doses true over effective
+time) + `clinical.medication-dose-correction.asserted` (a recorded dose was wrong; references the dose event it
+fixes via a plain `corrects` UUID, **not** the existence-forcing `target_event_id` — offline-first). New
+`db/032_medication_dose.sql` (**db/031 UNTOUCHED**): the structural floor (`cairn_check_medication_dose` + two
+twin-dispatch branches; both types `additive`/`targets_other_author=FALSE` — a correction is additive, **not** a
+suppression, so ADR-0043's owner-gate does not apply and cross-author dose correction is ungated with the original
+preserved); a **dose timeline** — `medication_dose_event` (point-0 seeded from the assert by a 2nd additive trigger
++ one row per change) + `medication_dose_correction` (HLC-wins overlay keyed by the target dose event);
+`medication_current_dose` picks the **latest-EFFECTIVE** point (bitemporal §5.1: `cairn_dose_effective_sort_key`
+ISO-lexical string, null→recording-time, `COLLATE "C"` — fully node-convergent; a backdated change never overrides
+a real later one); `patient_medication_dose_history` (the titration trail); and `patient_medication_current`/`_past`
+reworked to source the dose from the timeline **without widening** (same column set as db/031 — a `CREATE OR REPLACE`
+that widened would break `connect_and_load_schema`'s every-connect db/031 replay with "cannot drop columns from
+view"). `cairn-event::medication` split into an `assert`/`cessation`/`dose` module; pure dose builders (honest-unknown
+— an unquantified change and a correct-to-unknown are first-class); `cairn-node::medication` `change_dose`/`correct_dose`
+orchestrators (device-additive) + `resolve_correction_target` (defaults to the current dose point) +
+`medication-change-dose`/`medication-correct-dose` CLI. **correct-to-unknown shows unknown, not the stale original**
+(views key on correction-row presence, not `COALESCE`). TDD, subagent-driven (8 tasks); full workspace green
+(fmt + clippy --workspace + `cargo test --workspace` 0 failures / 31 binaries incl. DB-gated `medication_dose` 12/12
+and slice-1 `medication` 10/10 across many reconnects; mkdocs). Whole-branch review (opus): **Ready to merge, 0
+Critical/Important**; 3 Minors (2 applied as review polish — a shared `dose_object` DRY helper + info_source in the
+correction twin; 1 cosmetic SQL-whitespace skipped). **Two floor findings caught + fixed in-build:** a 3VL NULL hole
+in the no-op guard (content-check + `COALESCE(...,FALSE)`), and an empty-`{"dose":{}}` raw-SQL bypass (the guard now
+checks dose/effective CONTENT, not key presence — proven by a hand-injected hostile-client test). **Deferred (slice
+3+):** cross-thread **reconciliation resolution** (link two threads as the same real med — never-merge); correcting a
+dose event's *effective date*/*reason* (slice 2 corrects the value only); the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
+twin-dispatch registry refactor (2 more verbatim branches added the old way); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
+HLC-collision advisory onto the dose projections; human-attested clinical responsibility on a dose event.
+
+**Prior session (2026-07-12, now on main — PR #171) — `clinical.medication` slice 1, the first
+clinical-content event stream** (`feat/medication-recording-slice-1`; no ADR/spec/SCHEMA/floor/wire change).
+Two append-only verbs over an immortal `medication_id` thread — `clinical.medication.asserted` (mandatory
+`term` only, everything else principle-4 honest-unknown) + `clinical.medication-cessation.asserted`
+(offline-first, separate arrival-order-independent projection). `db/031_medication.sql` floor +
+`medication_statement`/`medication_cessation` projections + `patient_medication{,_current,_past}` views + the
+E1 deterministic advisory `patient_medication_reconciliation_flag`; device-additive orchestrators + CLI;
+`asserted_at` derives from the convergent `hlc_wall`. **Full detail: ROADMAP Slice 30 + git.** (Dose
+change/correction — the biggest §8 deferral — is now slice 2 above.)
 
 **Prior session (2026-07-12, now on main — PR #170) — the enroll dual-mapping floor guard: the B-direction complement of ADR-0044
 ([#166](https://github.com/cairn-ehr/cairn-ehr/issues/166) CLOSED; ADR-0046; spec v0.46→0.47; branch
@@ -475,7 +480,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
+- **`clinical.medication` — next slice** (the live clinical build front). Slices 1 (assert/cease) + 2 (dose
+  change/correction overlay + bitemporal dose timeline) are DONE. **Next = slice 3: cross-thread reconciliation
+  *resolution*** — "these two threads are the same real medication" as a first-class link/supersede event
+  (never-merge-always-link), so clearing a reconciliation flag no longer means falsely *ceasing* a thread (the
+  slice-1 wart). Reuse the `db/031`+`db/032` spine + `cairn-event::medication` module. Other deferred: correcting a
+  dose event's *effective date*/*reason*; fuzzy reconciliation + the Tier-A drug dictionary (brand↔generic/DDI);
+  structured sig/frequency (lands with prescriptions); human-attested clinical responsibility on a medication/dose
+  event; the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) `cairn_event_twin` dispatch→registry refactor
+  (every clinical slice adds another verbatim branch); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
+  HLC-collision advisory onto the medication/dose projections.
+- **Demographics build — next slices** (reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
   **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`), B1 (advisory **Python** scoring core), B2 (veto-gated

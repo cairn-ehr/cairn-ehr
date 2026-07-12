@@ -466,6 +466,38 @@ review/last-confirmed staleness; the [#157](https://github.com/cairn-ehr/cairn-e
 collision advisory extended onto the medication projections; human-attested clinical responsibility on a
 medication statement (slice 1 is device-additive throughout).
 
+**Slice 31 — medication dose overlay (slice 2 of `clinical.medication`)** (2026-07-12; branch
+`feat/medication-dose-overlay-slice-2`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates the
+slice-30 §8 deferral into product code; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-12-medication-dose-overlay-*`). Two new **additive** verbs over the
+existing `medication_id` thread: `clinical.medication-dose-change.asserted` (titration — both doses true over
+effective time) + `clinical.medication-dose-correction.asserted` (a recorded dose was wrong; references the dose
+event it fixes via a plain `corrects` UUID — **not** the existence-forcing `target_event_id`, so it stays
+offline-first). New `db/032_medication_dose.sql` (**db/031 UNTOUCHED**): the structural floor
+(`cairn_check_medication_dose` + two `cairn_event_twin` branches reproduced verbatim; both types
+`additive`/`targets_other_author=FALSE` — a correction is additive, **not** suppressing, so the ADR-0043
+owner-gate does not apply and cross-author correction is ungated with the original preserved). A **dose timeline**:
+`medication_dose_event` (point-0 seeded from the assert by a 2nd additive trigger + one row per change,
+`ON CONFLICT DO NOTHING` idempotent) + `medication_dose_correction` (HLC-wins overlay keyed by the **target** dose
+event, offline-first orphan convergence). `medication_current_dose` picks the **latest-EFFECTIVE** point (bitemporal
+§5.1: `cairn_dose_effective_sort_key` — ISO-lexical string, null→recording-time; then HLC/`content_address`, all
+`COLLATE "C"` → fully node-convergent, a backdated change never overrides a real later one).
+`patient_medication_dose_history` = the titration trail; `patient_medication_current`/`_past` reworked to source the
+dose from the timeline **without widening** (same column set as db/031 — a widening `CREATE OR REPLACE` breaks
+`connect_and_load_schema`'s every-connect db/031 replay: "cannot drop columns from view"). **correct-to-unknown shows
+unknown, not the stale original** (views key on correction-row presence, not `COALESCE`). `cairn-event::medication`
+split into `assert`/`cessation`/`dose`; device-additive `change_dose`/`correct_dose` orchestrators +
+`resolve_correction_target` (defaults to the current dose point) + `medication-change-dose`/`medication-correct-dose`
+CLI. Subagent-driven TDD (8 tasks); full workspace green — fmt + clippy `--workspace -D warnings`,
+`cargo test --workspace` 0 failures / 31 binaries (DB-gated `medication_dose` **12/12** + slice-1 `medication` 10/10
+across many reconnects), mkdocs. Whole-branch review (opus): **Ready to merge, 0 Critical/Important**; 2 floor
+findings caught + fixed in-build (a 3VL NULL hole in the no-op guard → content-check + `COALESCE(...,FALSE)`; an
+empty-`{"dose":{}}` raw-SQL bypass → the guard checks dose/effective CONTENT not key-presence, proven by a hostile
+hand-injected test). **Deferred (slice 3+):** cross-thread **reconciliation resolution** (link two threads as the
+same real med — never-merge); correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only);
+the #173 twin-dispatch registry refactor; the #157 collision advisory onto the dose projections; human-attested
+clinical responsibility on a dose event.
+
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
 (PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no
