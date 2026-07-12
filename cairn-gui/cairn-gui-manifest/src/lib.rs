@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod model;
+pub mod merge;
+pub use model::{EffectiveManifest, SiteManifest, UserPrefs};
+pub use merge::{merge, repair_ratio};
