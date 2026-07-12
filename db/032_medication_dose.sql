@@ -254,6 +254,11 @@ GRANT SELECT ON medication_current_dose TO cairn_agent;
 
 -- 10. The full titration trail, chronological by effective time. Exposes dose_event_id
 --     (so a correction can target a point) and the corrected flag.
+--     NOTE: the ORDER BY below is a DISPLAY CONVENIENCE ONLY. SQL does not guarantee a
+--     view's internal ordering survives when the view is wrapped in an outer query (e.g.
+--     filtered by a WHERE clause or joined). Any consumer that requires a guaranteed
+--     chronological trail MUST add its own outer ORDER BY (e.g.
+--     ORDER BY recorded_at, dose_event_id).
 CREATE OR REPLACE VIEW patient_medication_dose_history AS
 SELECT de.medication_id, de.patient_id, de.dose_event_id, de.is_initial,
        CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.amount ELSE de.amount END AS amount,

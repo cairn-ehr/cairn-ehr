@@ -231,7 +231,7 @@ async fn current_dose(c: &Client, med_id: Uuid) -> (Option<String>, Option<Strin
 async fn history_amounts(c: &Client, med_id: Uuid) -> Vec<Option<String>> {
     c.query(
         "SELECT amount FROM patient_medication_dose_history \
-         WHERE medication_id = $1::text::uuid",
+         WHERE medication_id = $1::text::uuid ORDER BY recorded_at, dose_event_id",
         &[&med_id.to_string()],
     )
     .await
