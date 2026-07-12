@@ -7,8 +7,8 @@
   Accessibility Inspector (Cairn controls expose no accessible elements — menu-bar-only hierarchy). **Bet I1
   (complex-script shaping) PASSED** on the real surface (Latin/Arabic/Devanagari/Han, no tofu); I2/I3/L2 not
   reached (moot for the decision). Per the exit criteria, **A FAIL → the reference desktop UI tips to a
-  webview/Tauri L3** — recorded in [eco-eval 0004 §6](../ecosystem/0004-reference-ui-framework-iced-vs-tauri.md#6-outcome-2026-07-12--iced-fails-the-accessibility-bar--tauri).
-  Results: [`cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`](../../cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md).
+  webview/Tauri L3** — recorded in [eco-eval 0004 §6](../ecosystem/0004-reference-ui-framework-iced-vs-tauri.md).
+  Results in `cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`.
   Original editable-field harness kit at [`poc/iced-ui-spike/`](../../poc/iced-ui-spike/).
 
   > [!NOTE]

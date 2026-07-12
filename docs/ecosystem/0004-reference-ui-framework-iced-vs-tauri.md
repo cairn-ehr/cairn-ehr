@@ -3,7 +3,7 @@
 - **Status:** **Resolved — reference desktop UI is Tauri 2 (for now).** The evaluation recommended
   **iced** *conditional* on [Spike 0004](../spikes/0004-iced-reference-ui-viability.md) retiring the
   accessibility bar. **The spike ran (2026-07-12) and iced FAILED that bar** — released iced 0.14 ships
-  **no AccessKit / no accessibility tree at all** (empirically confirmed, [§6](#6-outcome-2026-07-12--iced-fails-the-accessibility-bar--tauri)).
+  **no AccessKit / no accessibility tree at all** (empirically confirmed — see §6 below).
   Per this eval's own contingency ("A FAIL on (A) tips the reference UI back to a webview/Tauri L3"), the
   steward's reference desktop UI **adopts Tauri 2**. This is the eco-eval's job done, not a design defect —
   **L3 is plural** and the wire core, `ClinicalData` port, and policy layer are UI-agnostic, so the swap is
@@ -146,7 +146,7 @@ constrained *all* deployments' UI tech, which the layering explicitly forbids.
 ## 6. Outcome (2026-07-12) — iced fails the accessibility bar → Tauri
 
 The spike was run against the real reference shell (`cairn-gui/cairn-gui-shell`, a two-pane walking skeleton
-on a mock port; results in [`cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`](../../cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md)).
+on a mock port; results recorded in `cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`).
 
 **What passed.** **I1 complex-script shaping PASSED** on the real product surface — a single fixture name
 `Amina أمينة अमीना 阿明娜` rendered Latin + Arabic (RTL) + Devanagari + Han with **zero tofu**. Cross-pane
