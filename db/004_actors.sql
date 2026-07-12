@@ -99,6 +99,35 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     );
 $$;
 
+-- issue #166: the B-direction mirror of cairn_actor_id_key_conflict. submit_event (db/005)
+-- resolves a signer to an actor purely by signing_key_id; if one key maps to MORE than one
+-- actor_id it stamps actor_id = NULL for EVERY event that key authors node-wide (a silent,
+-- irreversible attribution loss). So enroll must fail closed when p_key already binds a
+-- DIFFERENT actor_id. This pure predicate is TRUE iff some existing enroll/supersede row
+-- carries p_key under an actor_id other than p_actor_id.
+--
+-- WHOLE-HISTORY, deliberately (the guard-scope decision): a key that ever bound a different
+-- actor can never enroll a new one, even after that actor is revoked/superseded — the same
+-- anti-reuse posture cairn_actor_id_key_conflict takes in the A-direction (principle 2, a
+-- key is one lifelong actor identity). `op IN ('enroll','supersede')` restricts to the
+-- key-bearing ops; revoke rows carry a NULL signing_key_id and are excluded by the equality
+-- anyway. STABLE + pure so it is independently testable and reusable at the future
+-- actor-sync apply door (ADR-0044 §3) and a future rotate-key/supersede door.
+--
+-- Note the argument order is (key, actor_id) — the MIRROR of
+-- cairn_actor_id_key_conflict(actor_id, key) above; each predicate's arguments follow its
+-- own name. A future door that calls both must pass them in each function's own order (the
+-- disjoint bytea/text types make a swapped call fail loudly at plan time, never silently).
+CREATE OR REPLACE FUNCTION cairn_key_actor_id_conflict(p_key TEXT, p_actor_id BYTEA)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM actor_event
+        WHERE signing_key_id = p_key
+          AND actor_id IS DISTINCT FROM p_actor_id
+          AND op IN ('enroll','supersede')
+    );
+$$;
+
 -- Enroll an actor; its identity is derived in-DB from the pinned set (cairn_pgx),
 -- so "identity = hash of what is pinned" is enforced, not asserted. Because the
 -- signing key is deliberately NOT part of that hash (rotate-key preserves actor_id,
@@ -123,6 +152,15 @@ BEGIN
     -- serializes only same-actor_id enrolls (never distinct actors) and is released at
     -- COMMIT/ROLLBACK; under the default READ COMMITTED isolation the loser then re-reads
     -- the winner's committed row and is refused. (hashtextextended → the bigint lock key.)
+    -- issue #166: serialize concurrent enrolls of the SAME KEY (this guard) as well as of
+    -- the same actor_id (the #152 guard). Key lock FIRST, then actor_id lock — one global
+    -- acquire order across the single enroll door, so no deadlock is possible. Both locks
+    -- live in Postgres's single advisory-lock keyspace; the distinct seed ((…, 1) vs (…, 0))
+    -- keeps the two hash VALUES from colliding, so a key string that happens to equal an
+    -- actor_id hex string cannot map onto the same lock. Under READ COMMITTED the loser
+    -- blocks on the key lock, then re-reads the winner's committed row and is refused by the
+    -- B-check below.
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 1));
     PERFORM pg_advisory_xact_lock(hashtextextended(encode(aid, 'hex'), 0));
     IF cairn_actor_id_key_conflict(aid, p_key) THEN
         RAISE EXCEPTION
@@ -130,6 +168,16 @@ BEGIN
             encode(aid, 'hex')
         USING HINT =
             'Give this actor a distinguishing pinned determinant (e.g. a person handle / registration id), or use rotate-key to add a key to the SAME actor.';
+    END IF;
+    -- issue #166 (B-direction): refuse if this signing key already binds a DIFFERENT
+    -- actor_id anywhere in history — otherwise db/005 would NULL this key's authorship
+    -- node-wide (whole-history / anti-key-reuse; see cairn_key_actor_id_conflict).
+    IF cairn_key_actor_id_conflict(p_key, aid) THEN
+        RAISE EXCEPTION
+            'enroll_actor: signing key % already binds a different actor_id — a fresh enroll is refused: one key mapping to two actors silently NULLs that key''s authorship node-wide (db/005; issue #166)',
+            p_key
+        USING HINT =
+            'A genuinely different entity needs its own key. To add a key to the SAME actor, use rotate-key/supersede (no door yet). A retired key never becomes a new actor (whole-history, anti-key-reuse).';
     END IF;
     INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id)
     VALUES (aid, 'enroll', p_kind, p_pinned, p_key);
@@ -160,5 +208,6 @@ REVOKE EXECUTE ON FUNCTION enroll_actor(text, jsonb, text) FROM PUBLIC;
 -- Defense in depth: the collision predicate reads the trust-anchor table; keep it off
 -- PUBLIC too (STABLE + read-only makes it low-risk, but the floor stays explicit).
 REVOKE EXECUTE ON FUNCTION cairn_actor_id_key_conflict(bytea, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_key_actor_id_conflict(text, bytea) FROM PUBLIC;
 
 COMMIT;

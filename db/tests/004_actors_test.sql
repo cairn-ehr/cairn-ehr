@@ -8,10 +8,13 @@ SELECT enroll_actor('agent',
     'deadbeef') AS aid \gset
 SELECT count(*) = 1 AS enrolled_one FROM actor_current WHERE actor_id = :'aid'::bytea;
 
--- Bumping skill_epoch mints a DIFFERENT actor_id (the supersede trigger for C4).
+-- Bumping skill_epoch mints a DIFFERENT actor_id (the supersede trigger for C4). A fresh
+-- key per epoch matches the real matcher (matcher_actor.rs) and the issue #166 floor guard
+-- (one key binds at most one actor_id); the actor_id derives from the pinned set alone, so
+-- the distinct key does not affect what this asserts.
 SELECT enroll_actor('agent',
     '{"model":"triage-stub","version":"1","skill_epoch":"epoch-b"}'::jsonb,
-    'deadbeef') AS aid2 \gset
+    'deadbee2') AS aid2 \gset
 SELECT (:'aid'::bytea <> :'aid2'::bytea) AS epoch_bump_is_new_actor;
 
 -- Monotonic tiebreak (issue #99): registry rows landing in the SAME microsecond
@@ -95,6 +98,27 @@ BEGIN
             RAISE NOTICE 'post-revoke resurrection refusal OK';
         ELSE RAISE; END IF;
     END;
+END $$;
+
+-- issue #166 (B-direction): one signing key must not bind two actor_ids. A fresh enroll
+-- under a distinct pinned set with an already-bound key is refused (else db/005 NULLs that
+-- key's authorship node-wide). The mirror of the #152 A-direction guard above.
+DO $$
+DECLARE ok boolean := false;
+BEGIN
+    PERFORM enroll_actor('agent', '{"model":"m","skill_epoch":"dm-a"}'::jsonb, 'dualkey');
+    BEGIN
+        PERFORM enroll_actor('agent', '{"model":"m","skill_epoch":"dm-b"}'::jsonb, 'dualkey');
+    EXCEPTION WHEN others THEN
+        ok := (SQLERRM LIKE '%different actor_id%');
+        IF NOT ok THEN
+            RAISE EXCEPTION 'wrong error for #166 dual-mapping: %', SQLERRM;
+        END IF;
+    END;
+    IF NOT ok THEN
+        RAISE EXCEPTION 'FAILED: #166 dual-mapping enroll (one key, two actor_ids) was allowed';
+    END IF;
+    RAISE NOTICE 'issue #166 dual-mapping refusal OK';
 END $$;
 
 ROLLBACK;
