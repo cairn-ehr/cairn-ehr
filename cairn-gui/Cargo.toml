@@ -1,0 +1,17 @@
+# Standalone workspace: iced/winit/cosmic-text must never enter the cairn-node
+# dependency tree (ADR-0021 / §9.5). Detached from the root /Cargo.toml, which
+# lists this dir in its `exclude`.
+[workspace]
+resolver = "2"
+members = [
+    "cairn-gui-tab",
+    "cairn-gui-data",
+    "cairn-gui-manifest",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.96"
+license = "AGPL-3.0-only"
+repository = "https://github.com/cairn-ehr/cairn-ehr"
+publish = false
