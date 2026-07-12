@@ -421,6 +421,36 @@ pre-check (offline-first; db/018 rejects only self-link + empty provenance). Sub
 fix + two Minor tests applied). Full workspace green; fmt + clippy --workspace + mkdocs clean. **The §5.4 structural
 finishers 1–3 are all done.**
 
+**Slice 30 — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
+`feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates
+data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code; design+plan under
+`docs/superpowers/{specs,plans}/2026-07-11-medication-recording-*`). Distinct from slices 1–29 above: those
+are all *administrative/identity* data about the patient (demographics, matcher, identity algebra,
+John-Doe); this is the first event stream carrying actual *clinical content* — what medication the patient
+is on. Two append-only verbs over an immortal `medication_id` thread: `clinical.medication.asserted`
+(schema `clinical.medication/1`) + `clinical.medication-cessation.asserted`
+(`clinical.medication-cessation/1`). `cairn-event::medication` pure builders — substance ref is mandatory
+`term` + nullable `inn_code` + formulation (principle-4 uncertainty floor: only `term` mandatory, all else
+honest-unknown); free-text `DoseUnit` with a recommended vocab; `info_source` provenance-of-claim. New
+`db/031_medication.sql`: the structural floor (`cairn_check_medication_assertion` + the shared
+`cairn_event_twin` hook — non-empty `term` + `info_source`, valid `medication_id`); `medication_statement` /
+`medication_cessation` kept as **separate projections** so they're arrival-order-independent (an orphan
+cessation renders nothing until its assert arrives, then surfaces in `patient_medication_past`); the
+`patient_medication{,_current,_past}` views union across sources with staleness visible via assert date;
+the **E1 deterministic advisory reconciliation flag** (`coalesce(inn_code, normalized term)` — advisory
+only, cleared by ceasing a duplicate; fuzzy brand↔generic deferred). `cairn-node::medication` orchestrators
+(`assert_medication` / `cease_medication`, both device-additive) + `medication-assert` / `medication-cease`
+CLI verbs; end-to-end CLI smoke passed live. Cessation is offline-first (no requirement that the local node
+has already seen the corresponding assert). Subagent-driven TDD (6 tasks); full workspace green — fmt +
+clippy `--workspace -D warnings` clean, all tests pass incl. **DB-gated `tests/medication.rs` 8/8**
+alongside the existing cairn-node/cairn-event/cairn-sync suite. **Deferred:** dose-correction/change
+overlay; fuzzy reconciliation (brand↔generic, typos, salts); reconciliation *resolution* as a first-class
+event; a `delete` rendering-suppression visibility overlay; structured sig/frequency (lands with
+prescriptions); the Tier-A dictionary + autocomplete + DDI; a separate `route` field; active
+review/last-confirmed staleness; the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-triple
+collision advisory extended onto the medication projections; human-attested clinical responsibility on a
+medication statement (slice 1 is device-additive throughout).
+
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
 (PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no
