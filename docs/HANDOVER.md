@@ -32,12 +32,58 @@ evidence override)
 (the "prior history now available" push-alert; the search-before-create funnel).
 + the **first clinical-content event stream, `clinical.medication` slice 1 — BUILT** (assert/cease verbs,
 db/031 floor, `medication_statement`/`medication_cessation` projections, `patient_medication{,_current,_past}`
-views + the E1 reconciliation flag, orchestrators + CLI — **done this session**; distinct from the
-identity/demographics surfaces above — the first stream carrying actual clinical content).
+views + the E1 reconciliation flag, orchestrators + CLI; distinct from the identity/demographics surfaces
+above — the first stream carrying actual clinical content; PR #171, on main)
++ the **medication dose overlay, slice 2 — BUILT this session** (`clinical.medication-dose-change`/`-dose-correction`
+verbs, `db/032` floor + a bitemporal dose timeline [point-0 seed + change + HLC-wins correction overlay] +
+`patient_medication_dose_history`, current/past reworked to the timeline dose, `change_dose`/`correct_dose`
+orchestrators + CLI; db/031 untouched).
++ the **L3 clinician reference-UI shell, slice 1 — BUILT** (a standalone `cairn-gui/` workspace with a
+framework-agnostic contract/port/manifest/routing core; **Spike 0004 resolved — iced FAILS the accessibility bar**,
+so the reference desktop UI **pivots to Tauri 2**, an L3 framework choice *below* the compatibility boundary — no
+ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-12, GUI/L3 thread) — the reference-UI framework question, SETTLED: pivot to Tauri 2
+**This session (2026-07-12) — medication dose overlay, slice 2 of `clinical.medication`
+(branch `feat/medication-dose-overlay-slice-2`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
+graduates the slice-1 §8 deferral into product code).** Two new **additive** verbs over the existing
+`medication_id` thread: `clinical.medication-dose-change.asserted` (titration — both doses true over effective
+time) + `clinical.medication-dose-correction.asserted` (a recorded dose was wrong; references the dose event it
+fixes via a plain `corrects` UUID, **not** the existence-forcing `target_event_id` — offline-first). New
+`db/032_medication_dose.sql` (**db/031 UNTOUCHED**): the structural floor (`cairn_check_medication_dose` + two
+twin-dispatch branches; both types `additive`/`targets_other_author=FALSE` — a correction is additive, **not** a
+suppression, so ADR-0043's owner-gate does not apply and cross-author dose correction is ungated with the original
+preserved); a **dose timeline** — `medication_dose_event` (point-0 seeded from the assert by a 2nd additive trigger
++ one row per change) + `medication_dose_correction` (HLC-wins overlay keyed by the target dose event);
+`medication_current_dose` picks the **latest-EFFECTIVE** point (bitemporal §5.1: `cairn_dose_effective_sort_key`
+ISO-lexical string, null→recording-time, `COLLATE "C"` — fully node-convergent; a backdated change never overrides
+a real later one); `patient_medication_dose_history` (the titration trail); and `patient_medication_current`/`_past`
+reworked to source the dose from the timeline **without widening** (same column set as db/031 — a `CREATE OR REPLACE`
+that widened would break `connect_and_load_schema`'s every-connect db/031 replay with "cannot drop columns from
+view"). `cairn-event::medication` split into an `assert`/`cessation`/`dose` module; pure dose builders (honest-unknown
+— an unquantified change and a correct-to-unknown are first-class); `cairn-node::medication` `change_dose`/`correct_dose`
+orchestrators (device-additive) + `resolve_correction_target` (defaults to the current dose point) +
+`medication-change-dose`/`medication-correct-dose` CLI. **correct-to-unknown shows unknown, not the stale original**
+(views key on correction-row presence, not `COALESCE`). TDD, subagent-driven (8 tasks); full workspace green
+(fmt + clippy --workspace + `cargo test --workspace` 0 failures / 31 binaries incl. DB-gated `medication_dose` 14/14
+and slice-1 `medication` 10/10 across many reconnects; mkdocs). Whole-branch review (opus): **Ready to merge, 0
+Critical/Important**; 3 Minors (2 applied as review polish — a shared `dose_object` DRY helper + info_source in the
+correction twin; 1 cosmetic SQL-whitespace skipped). **Two floor findings caught + fixed in-build:** a 3VL NULL hole
+in the no-op guard (content-check + `COALESCE(...,FALSE)`), and an empty-`{"dose":{}}` raw-SQL bypass (the guard now
+checks dose/effective CONTENT, not key presence — proven by a hand-injected hostile-client test). **Post-review fix
+(PR #175):** the correction projection join is now **thread-scoped** (`corr.medication_id = de.medication_id` in both
+`medication_current_dose` and `patient_medication_dose_history`) — a mistargeted `--target` (or hostile raw-SQL client)
+that names thread X while `corrects` points at a point of thread Y no longer silently overlays Y's displayed dose;
+such a cross-thread correction is now a fail-safe no-op on the projection (still auditable in `event_log`),
+regression-tested (`cross_thread_correction_does_not_overlay_wrong_thread`, negative-control verified) alongside a
+`correcting_older_point_leaves_current_unchanged` coverage test. **Deferred (slice
+3+):** cross-thread **reconciliation resolution** (link two threads as the same real med — never-merge); correcting a
+dose event's *effective date*/*reason* (slice 2 corrects the value only); the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
+twin-dispatch registry refactor (2 more verbatim branches added the old way); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
+HLC-collision advisory onto the dose projections; human-attested clinical responsibility on a dose event.
+
+**Session (2026-07-12, GUI/L3 thread) — the reference-UI framework question, SETTLED: pivot to Tauri 2
 (branch `claude/gui-iced-plugin-arch-8e75db`, PR #174; NO ADR/spec/wire change — an L3 framework choice
 *below* the compatibility boundary).** First work on the L3 reference-UI layer (distinct from every block
 below, which is `cairn-node` clinical-surface work). brainstorm→spec→plan→subagent-driven-TDD built the
@@ -507,7 +553,17 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **Demographics build — next slices** (the live build front; reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
+- **`clinical.medication` — next slice** (the live clinical build front). Slices 1 (assert/cease) + 2 (dose
+  change/correction overlay + bitemporal dose timeline) are DONE. **Next = slice 3: cross-thread reconciliation
+  *resolution*** — "these two threads are the same real medication" as a first-class link/supersede event
+  (never-merge-always-link), so clearing a reconciliation flag no longer means falsely *ceasing* a thread (the
+  slice-1 wart). Reuse the `db/031`+`db/032` spine + `cairn-event::medication` module. Other deferred: correcting a
+  dose event's *effective date*/*reason*; fuzzy reconciliation + the Tier-A drug dictionary (brand↔generic/DDI);
+  structured sig/frequency (lands with prescriptions); human-attested clinical responsibility on a medication/dose
+  event; the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) `cairn_event_twin` dispatch→registry refactor
+  (every clinical slice adds another verbatim branch); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
+  HLC-collision advisory onto the medication/dose projections.
+- **Demographics build — next slices** (reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
   **§5.2 matcher:** piece A (in-DB hard-veto floor, `db/016`), B1 (advisory **Python** scoring core), B2 (veto-gated
