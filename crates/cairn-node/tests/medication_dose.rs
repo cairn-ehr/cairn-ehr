@@ -399,3 +399,205 @@ async fn undated_change_becomes_current_over_older_effective() {
         "current dose is honestly unknown after an unquantified increase"
     );
 }
+
+#[tokio::test]
+async fn correction_overlays_current_and_sets_flag() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap(); // point 0 = 40 mg, current
+                   // Correct the CURRENT dose (target defaults to point 0) to 20 mg.
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: Some("20"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: Some("mis-keyed"),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (amt, _u, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt.as_deref(),
+        Some("20"),
+        "current dose reflects the correction"
+    );
+    assert!(corrected, "corrected flag is set");
+}
+
+#[tokio::test]
+async fn correct_to_unknown_shows_unknown_not_original() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap(); // 40 mg
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+    // "the 40 was a guess — strike it, unknown."
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            info_source: None,
+            reason: Some("was a guess"),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (amt, unit, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt, None,
+        "correct-to-unknown must NOT fall back to the original 40"
+    );
+    assert_eq!(unit, None);
+    assert!(corrected);
+}
+
+#[tokio::test]
+async fn orphan_correction_converges_when_target_arrives() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = Uuid::now_v7();
+
+    // Pick a target dose_event_id that does not exist locally yet.
+    let future_target = Uuid::now_v7();
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        future_target,
+        &CorrectDoseInput {
+            dose_amount: Some("15"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: Some("early correction"),
+        },
+    )
+    .await
+    .unwrap();
+    // The correction row exists but no dose point references it yet → no current row.
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_current_dose WHERE medication_id = $1::text::uuid",
+            &[&med_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "orphan correction renders nothing until its target arrives"
+    );
+
+    // Now inject the assert whose event_id == future_target (build+sign directly to
+    // choose the event_id), seeding point 0 that the correction targets.
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body: EventBody = cairn_node::medication::build_assert_body(
+        future_target,
+        med_id,
+        patient,
+        &sample_assert(),
+        &kid,
+        hlc,
+    );
+    let signed = sign(&body, &sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .unwrap();
+
+    let (amt, _u, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt.as_deref(),
+        Some("15"),
+        "the pre-arrived correction now overlays point 0"
+    );
+    assert!(corrected);
+}
+
+#[tokio::test]
+async fn later_correction_of_same_point_wins() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: Some("20"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: None,
+        },
+    )
+    .await
+    .unwrap();
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: Some("25"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: Some("re-corrected"),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (amt, _u, _de, _c) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt.as_deref(),
+        Some("25"),
+        "the later (higher-HLC) correction of the same point wins"
+    );
+}

@@ -303,4 +303,42 @@ LEFT JOIN medication_current_dose cd USING (medication_id)
 WHERE pm.ceased;
 GRANT SELECT ON patient_medication_past TO cairn_agent;
 
+-- 12. Fold a correction as an HLC-winning overlay keyed by the TARGET dose event.
+--     Offline-first: no check that the target exists locally (it may replicate later).
+CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p jsonb := NEW.body;
+BEGIN
+    INSERT INTO medication_dose_correction
+        (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, info_source,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        (p ->> 'corrects')::uuid, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit', p ->> 'reason', p ->> 'info_source',
+        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+    ON CONFLICT (corrected_dose_event_id) DO UPDATE SET
+        medication_id   = EXCLUDED.medication_id,
+        patient_id      = EXCLUDED.patient_id,
+        amount          = EXCLUDED.amount,
+        unit            = EXCLUDED.unit,
+        reason          = EXCLUDED.reason,
+        info_source     = EXCLUDED.info_source,
+        hlc_wall        = EXCLUDED.hlc_wall,
+        hlc_counter     = EXCLUDED.hlc_counter,
+        origin          = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
+        updated_at      = clock_timestamp()
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        medication_dose_correction.hlc_wall, medication_dose_correction.hlc_counter,
+        medication_dose_correction.origin, medication_dose_correction.content_address);
+    RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS medication_dose_correction_apply_trg ON event_log;
+CREATE TRIGGER medication_dose_correction_apply_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-dose-correction.asserted')
+    EXECUTE FUNCTION medication_dose_correction_apply();
+
 COMMIT;
