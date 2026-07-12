@@ -238,6 +238,14 @@ CREATE TRIGGER medication_dose_change_apply_trg
 -- 9. Effective per-point value = the correction's value IF a correction row exists,
 --    ELSE the event's value. Keyed on PRESENCE (not COALESCE) so a correct-to-unknown
 --    (correction row with NULL amount) shows unknown, not the stale original.
+--    THREAD-SCOPED JOIN: a correction only overlays a point when it also names the SAME
+--    medication_id thread. `corrects` (the target dose_event_id) is a plain uuid the floor
+--    cannot bind to a thread (offline-first: the target may not be local at submit time),
+--    so a mistargeted --target (or a hostile raw-SQL client) could otherwise carry
+--    medication_id = thread X while `corrects` points at a point of thread Y — silently
+--    overlaying Y's dose with X's correction. Joining on medication_id makes such a
+--    cross-thread correction a no-op on the projection (fail-safe: it never corrupts the
+--    wrong thread's displayed dose), while the signed event stays auditable in event_log.
 CREATE OR REPLACE VIEW medication_current_dose AS
 SELECT DISTINCT ON (de.medication_id)
     de.medication_id, de.patient_id, de.dose_event_id,
@@ -246,7 +254,9 @@ SELECT DISTINCT ON (de.medication_id)
     de.effective_value, de.effective_precision,
     (corr.corrected_dose_event_id IS NOT NULL) AS corrected
 FROM medication_dose_event de
-LEFT JOIN medication_dose_correction corr ON corr.corrected_dose_event_id = de.dose_event_id
+LEFT JOIN medication_dose_correction corr
+    ON corr.corrected_dose_event_id = de.dose_event_id
+   AND corr.medication_id = de.medication_id
 ORDER BY de.medication_id,
          cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" DESC,
          de.hlc_wall DESC, de.hlc_counter DESC, de.origin COLLATE "C" DESC, de.content_address DESC;
@@ -267,7 +277,9 @@ SELECT de.medication_id, de.patient_id, de.dose_event_id, de.is_initial,
        (corr.corrected_dose_event_id IS NOT NULL) AS corrected,
        to_timestamp(de.hlc_wall / 1000.0) AS recorded_at
 FROM medication_dose_event de
-LEFT JOIN medication_dose_correction corr ON corr.corrected_dose_event_id = de.dose_event_id
+LEFT JOIN medication_dose_correction corr
+    ON corr.corrected_dose_event_id = de.dose_event_id
+   AND corr.medication_id = de.medication_id  -- thread-scoped (see medication_current_dose)
 ORDER BY de.medication_id,
          cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" ASC,
          de.hlc_wall ASC, de.hlc_counter ASC, de.origin COLLATE "C" ASC, de.content_address ASC;

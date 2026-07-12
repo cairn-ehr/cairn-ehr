@@ -489,11 +489,14 @@ unknown, not the stale original** (views key on correction-row presence, not `CO
 split into `assert`/`cessation`/`dose`; device-additive `change_dose`/`correct_dose` orchestrators +
 `resolve_correction_target` (defaults to the current dose point) + `medication-change-dose`/`medication-correct-dose`
 CLI. Subagent-driven TDD (8 tasks); full workspace green — fmt + clippy `--workspace -D warnings`,
-`cargo test --workspace` 0 failures / 31 binaries (DB-gated `medication_dose` **12/12** + slice-1 `medication` 10/10
+`cargo test --workspace` 0 failures / 31 binaries (DB-gated `medication_dose` **14/14** + slice-1 `medication` 10/10
 across many reconnects), mkdocs. Whole-branch review (opus): **Ready to merge, 0 Critical/Important**; 2 floor
 findings caught + fixed in-build (a 3VL NULL hole in the no-op guard → content-check + `COALESCE(...,FALSE)`; an
 empty-`{"dose":{}}` raw-SQL bypass → the guard checks dose/effective CONTENT not key-presence, proven by a hostile
-hand-injected test). **Deferred (slice 3+):** cross-thread **reconciliation resolution** (link two threads as the
+hand-injected test). **Post-review fix (PR #175):** the correction projection join is now **thread-scoped**
+(`corr.medication_id = de.medication_id`) so a mistargeted correction (names thread X, `corrects` a point of thread Y)
+is a fail-safe no-op on the projection instead of silently overlaying Y's displayed dose — regression-tested
+(negative-control verified). **Deferred (slice 3+):** cross-thread **reconciliation resolution** (link two threads as the
 same real med — never-merge); correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only);
 the #173 twin-dispatch registry refactor; the #157 collision advisory onto the dose projections; human-attested
 clinical responsibility on a dose event.

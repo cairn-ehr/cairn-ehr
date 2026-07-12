@@ -62,12 +62,18 @@ view"). `cairn-event::medication` split into an `assert`/`cessation`/`dose` modu
 orchestrators (device-additive) + `resolve_correction_target` (defaults to the current dose point) +
 `medication-change-dose`/`medication-correct-dose` CLI. **correct-to-unknown shows unknown, not the stale original**
 (views key on correction-row presence, not `COALESCE`). TDD, subagent-driven (8 tasks); full workspace green
-(fmt + clippy --workspace + `cargo test --workspace` 0 failures / 31 binaries incl. DB-gated `medication_dose` 12/12
+(fmt + clippy --workspace + `cargo test --workspace` 0 failures / 31 binaries incl. DB-gated `medication_dose` 14/14
 and slice-1 `medication` 10/10 across many reconnects; mkdocs). Whole-branch review (opus): **Ready to merge, 0
 Critical/Important**; 3 Minors (2 applied as review polish — a shared `dose_object` DRY helper + info_source in the
 correction twin; 1 cosmetic SQL-whitespace skipped). **Two floor findings caught + fixed in-build:** a 3VL NULL hole
 in the no-op guard (content-check + `COALESCE(...,FALSE)`), and an empty-`{"dose":{}}` raw-SQL bypass (the guard now
-checks dose/effective CONTENT, not key presence — proven by a hand-injected hostile-client test). **Deferred (slice
+checks dose/effective CONTENT, not key presence — proven by a hand-injected hostile-client test). **Post-review fix
+(PR #175):** the correction projection join is now **thread-scoped** (`corr.medication_id = de.medication_id` in both
+`medication_current_dose` and `patient_medication_dose_history`) — a mistargeted `--target` (or hostile raw-SQL client)
+that names thread X while `corrects` points at a point of thread Y no longer silently overlays Y's displayed dose;
+such a cross-thread correction is now a fail-safe no-op on the projection (still auditable in `event_log`),
+regression-tested (`cross_thread_correction_does_not_overlay_wrong_thread`, negative-control verified) alongside a
+`correcting_older_point_leaves_current_unchanged` coverage test. **Deferred (slice
 3+):** cross-thread **reconciliation resolution** (link two threads as the same real med — never-merge); correcting a
 dose event's *effective date*/*reason* (slice 2 corrects the value only); the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
 twin-dispatch registry refactor (2 more verbatim branches added the old way); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)

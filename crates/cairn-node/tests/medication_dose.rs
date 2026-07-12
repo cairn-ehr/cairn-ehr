@@ -601,3 +601,152 @@ async fn later_correction_of_same_point_wins() {
         "the later (higher-HLC) correction of the same point wins"
     );
 }
+
+/// Regression (review Finding 1): a correction that NAMES one thread but `corrects` a
+/// dose point belonging to a DIFFERENT thread (a mistargeted --target, or a hostile
+/// raw-SQL client) must NOT overlay the wrong thread's dose. `corrects` is a plain uuid
+/// the floor cannot bind to a thread offline, so the projection join is thread-scoped
+/// (corr.medication_id = de.medication_id) — such a correction is a no-op on every
+/// thread's displayed dose while staying auditable in event_log. Without the join fix
+/// thread Y below would read the bogus 999.
+#[tokio::test]
+async fn cross_thread_correction_does_not_overlay_wrong_thread() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Thread Y (the victim): point 0 = 40 mg.
+    let med_y = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    let y_point = resolve_correction_target(&c, med_y, None).await.unwrap();
+
+    // Thread X (a second, unrelated thread — also 40 mg at point 0).
+    let med_x = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+
+    // A correction that NAMES thread X but TARGETS thread Y's point 0 (the mistarget).
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_x,   // names thread X ...
+        y_point, // ... but `corrects` a point of thread Y
+        &CorrectDoseInput {
+            dose_amount: Some("999"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: Some("mistargeted"),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Y is UNCHANGED (still the asserted 40, not the bogus 999) and not flagged corrected.
+    let (amt_y, _u, _de, corrected_y) = current_dose(&c, med_y).await;
+    assert_eq!(
+        amt_y.as_deref(),
+        Some("40"),
+        "cross-thread correction must NOT overlay thread Y (would be 999 without the fix)"
+    );
+    assert!(!corrected_y, "thread Y must not be flagged corrected");
+
+    // X (which the correction NAMED) is likewise unaffected: `corrects` points at a
+    // dose_event that is not in X's timeline, so nothing overlays X either.
+    let (amt_x, _u, _de, corrected_x) = current_dose(&c, med_x).await;
+    assert_eq!(amt_x.as_deref(), Some("40"));
+    assert!(!corrected_x);
+}
+
+/// Coverage (review Finding 2): correcting a NON-current (older) dose point must leave
+/// the current dose untouched — a correction is scoped to its target point, not to "the
+/// thread's current value". Proves the older point IS corrected (not silently dropped)
+/// while the current point stays put.
+#[tokio::test]
+async fn correcting_older_point_leaves_current_unchanged() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Point 0 = 40 mg @2024 (from sample_assert), then a change to 80 mg @2025-06 (current).
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    change_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: Some("titration"),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The OLDER point (point 0, is_initial) — NOT the current 2025-06 change point.
+    let old_point: Uuid = c
+        .query_one(
+            "SELECT dose_event_id::text FROM medication_dose_event \
+             WHERE medication_id = $1::text::uuid AND is_initial",
+            &[&med_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get::<_, String>(0)
+        .parse()
+        .unwrap();
+
+    // Correct the 2024 point 0 from 40 → 45. The current (2025-06) point is untouched.
+    correct_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        old_point,
+        &CorrectDoseInput {
+            dose_amount: Some("45"),
+            dose_unit: Some("mg"),
+            info_source: None,
+            reason: Some("point-0 mis-keyed"),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Current dose is still the 2025-06 point's 80 mg, and NOT flagged corrected.
+    let (amt, _u, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt.as_deref(),
+        Some("80"),
+        "correcting the older point must not disturb the current dose"
+    );
+    assert!(
+        !corrected,
+        "the current point carries no correction — the correction landed on point 0"
+    );
+
+    // The correction DID land on point 0 (not silently dropped): the history trail shows
+    // the corrected 45 at the initial point, then 80 at the change.
+    assert_eq!(
+        history_amounts(&c, med_id).await,
+        vec![Some("45".to_string()), Some("80".to_string())],
+        "point 0 shows the corrected 45; the current point still shows 80"
+    );
+}
