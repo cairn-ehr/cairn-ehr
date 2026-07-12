@@ -1061,7 +1061,7 @@ git commit -m "feat(db): medication dose floor — classification + structural c
 - Modify: `crates/cairn-node/tests/medication_dose.rs` (add timeline tests)
 
 **Interfaces:**
-- Produces: tables `medication_dose_event`, `medication_dose_correction` (empty, no trigger yet); function `cairn_dose_effective_sort_key`; views `medication_current_dose`, `patient_medication_dose_history`; reworked `patient_medication_current` / `patient_medication_past` (dose sourced from the timeline, `dose_event_id` + `dose_corrected` exposed).
+- Produces: tables `medication_dose_event`, `medication_dose_correction` (empty, no trigger yet); function `cairn_dose_effective_sort_key`; views `medication_current_dose` (exposes `dose_event_id`, `corrected`), `patient_medication_dose_history`; reworked `patient_medication_current` / `patient_medication_past` (dose SOURCE changed to the timeline winner, SAME column set as db/031 — NOT widened; `dose_event_id`/`dose_corrected` are read from `medication_current_dose`, not these views).
 
 > **TDD order:** per the Task-4 note, write the Step-2 tests first and run them — RED because `medication_current_dose` / the dose triggers don't exist yet (the `current_dose` helper errors on the missing relation). Then insert the Step-1 SQL and re-run → GREEN.
 
