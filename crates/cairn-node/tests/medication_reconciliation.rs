@@ -4,8 +4,9 @@
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_reconcile_body, reconcile_medications, separate_medications,
-    AssertMedicationInput, ReconcileInput,
+    assert_medication, build_reconcile_body, cease_medication, change_dose, reconcile_medications,
+    separate_medications, AssertMedicationInput, CeaseMedicationInput, ChangeDoseInput,
+    ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -382,4 +383,330 @@ async fn oversize_group_at_cap_is_accepted() {
         expected,
         "a component of exactly cap members is accepted"
     );
+}
+
+/// Rows in patient_medication_current for a patient (medication_id, term, dose).
+async fn current_rows(c: &Client, patient: Uuid) -> Vec<(Uuid, String, Option<String>)> {
+    c.query(
+        "SELECT medication_id::text, term, dose_amount \
+         FROM patient_medication_current WHERE patient_id = $1::text::uuid \
+         ORDER BY term, medication_id",
+        &[&patient.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| {
+        (
+            r.get::<_, String>(0).parse().unwrap(),
+            r.get::<_, String>(1),
+            r.get::<_, Option<String>>(2),
+        )
+    })
+    .collect()
+}
+
+async fn flag_count(c: &Client, patient: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM patient_medication_reconciliation_flag WHERE patient_id = $1::text::uuid",
+        &[&patient.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+#[tokio::test]
+async fn reconcile_collapses_to_one_row_and_clears_flag() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    // Two active same-term threads: flagged, two rows.
+    assert_eq!(current_rows(&c, patient).await.len(), 2);
+    assert_eq!(flag_count(&c, patient).await, 1);
+    // Reconcile: one row, flag clears.
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(rows.len(), 1, "collapsed to one row");
+    assert_eq!(
+        rows[0].0,
+        std::cmp::min(a, b),
+        "keyed by the min-UUID group"
+    );
+    assert_eq!(
+        flag_count(&c, patient).await,
+        0,
+        "flag cleared without a cessation"
+    );
+    // Separate: re-splits, flag returns.
+    separate_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+    assert_eq!(current_rows(&c, patient).await.len(), 2);
+    assert_eq!(flag_count(&c, patient).await, 1);
+}
+
+#[tokio::test]
+async fn brand_generic_collapse_without_shared_key() {
+    // No shared dup_key (never flagged) — human judgment still collapses them.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("Lipitor"),
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        flag_count(&c, patient).await,
+        0,
+        "different terms are never flagged"
+    );
+    assert_eq!(current_rows(&c, patient).await.len(), 2);
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: Some("brand vs generic"),
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+    assert_eq!(
+        current_rows(&c, patient).await.len(),
+        1,
+        "collapsed by human judgment"
+    );
+}
+
+#[tokio::test]
+async fn group_current_dose_is_latest_effective_across_members() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    // Thread B gets a later-effective dose change to 80.
+    let ch = ChangeDoseInput {
+        dose_amount: Some("80"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: Some("titration"),
+    };
+    change_dose(&c, &sk, &kid, "test-node", patient, b, &ch)
+        .await
+        .unwrap();
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].2.as_deref(),
+        Some("80"),
+        "group current dose = latest-effective across members"
+    );
+}
+
+#[tokio::test]
+async fn mixed_status_resolves_latest_effective() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    // A active (dose change effective 2025-06); B ceased effective 2024-01 (earlier).
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+    )
+    .await
+    .unwrap();
+    let ch = ChangeDoseInput {
+        dose_amount: Some("1000"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: None,
+    };
+    change_dose(&c, &sk, &kid, "test-node", patient, a, &ch)
+        .await
+        .unwrap();
+    let cease = CeaseMedicationInput {
+        stopped: Some("2024-01"),
+        stopped_precision: Some("month"),
+        reason: None,
+    };
+    cease_medication(&c, &sk, &kid, "test-node", patient, b, &cease)
+        .await
+        .unwrap();
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+    // The later-effective standing statement (A's 2025-06 dose) wins → ACTIVE.
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "mixed group resolves ACTIVE (later dose beats earlier cessation)"
+    );
+    assert_eq!(rows[0].2.as_deref(), Some("1000"));
+
+    // Now cease A effective 2026 (later than the dose change) → group flips CEASED.
+    let cease_a = CeaseMedicationInput {
+        stopped: Some("2026"),
+        stopped_precision: Some("year"),
+        reason: None,
+    };
+    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease_a)
+        .await
+        .unwrap();
+    assert_eq!(
+        current_rows(&c, patient).await.len(),
+        0,
+        "all members ceased → group ceased"
+    );
+    let past: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_past WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(past, 1, "the ceased group shows as one past row");
+}
+
+#[tokio::test]
+async fn single_thread_semantics_unchanged() {
+    // Regression: a lone active thread and a lone ceased thread render exactly as slices 1/2.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("aspirin"),
+    )
+    .await
+    .unwrap();
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, a, "un-reconciled thread keys by its own id");
+    assert_eq!(rows[0].2.as_deref(), Some("40"), "as-asserted dose shows");
+    let cease = CeaseMedicationInput {
+        stopped: Some("2025"),
+        stopped_precision: Some("year"),
+        reason: Some("done"),
+    };
+    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease)
+        .await
+        .unwrap();
+    assert_eq!(
+        current_rows(&c, patient).await.len(),
+        0,
+        "ceased → not current (slice-1 semantics)"
+    );
+    let past: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_past WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(past, 1);
 }

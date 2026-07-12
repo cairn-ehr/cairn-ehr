@@ -256,3 +256,167 @@ CREATE TRIGGER medication_reconciliation_apply_trg
     EXECUTE FUNCTION medication_reconciliation_apply();
 
 COMMIT;
+
+BEGIN;
+
+-- 6. Helper: every asserted thread -> (patient_id, group_id). A thread with no
+--    group_member row collapses to itself (COALESCE).
+CREATE OR REPLACE VIEW medication_thread_group AS
+SELECT s.medication_id,
+       s.patient_id,
+       COALESCE(gm.group_id, s.medication_id) AS group_id
+FROM medication_statement s
+LEFT JOIN medication_group_member gm ON gm.medication_id = s.medication_id;
+GRANT SELECT ON medication_thread_group TO cairn_agent;
+
+-- 7. Group status by LATEST-EFFECTIVE WINS (ADR-0047 ruling 3). Compare the max
+--    effective sort key across active members' dose points vs ceased members'
+--    cessations. Ties (equal effective keys) resolve to 'active' (documented
+--    tiebreak — keep the drug visible). A single-member group can never be "mixed"
+--    (all-active or all-ceased), so this reduces EXACTLY to slice-1/2 semantics.
+--    MAX(... COLLATE "C") forces byte-order max (ADR-0045).
+CREATE OR REPLACE VIEW medication_group_status AS
+WITH active_eff AS (
+    SELECT g.group_id,
+           MAX(cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C") AS eff
+    FROM medication_dose_event de
+    JOIN medication_thread_group g ON g.medication_id = de.medication_id
+    WHERE NOT EXISTS (SELECT 1 FROM medication_cessation cc WHERE cc.medication_id = de.medication_id)
+    GROUP BY g.group_id
+),
+ceased_eff AS (
+    SELECT g.group_id,
+           MAX(cairn_dose_effective_sort_key(c.stopped_value, c.hlc_wall) COLLATE "C") AS eff
+    FROM medication_cessation c
+    JOIN medication_thread_group g ON g.medication_id = c.medication_id
+    GROUP BY g.group_id
+)
+SELECT grp.group_id, grp.patient_id,
+       CASE WHEN ce.eff IS NULL THEN 'active'
+            WHEN ae.eff IS NULL THEN 'ceased'
+            WHEN ae.eff >= ce.eff THEN 'active'
+            ELSE 'ceased' END AS status
+FROM (SELECT DISTINCT group_id, patient_id FROM medication_thread_group) grp
+LEFT JOIN active_eff ae ON ae.group_id = grp.group_id
+LEFT JOIN ceased_eff ce ON ce.group_id = grp.group_id;
+GRANT SELECT ON medication_group_status TO cairn_agent;
+
+-- 8. Group current dose = latest-EFFECTIVE dose point across ACTIVE members only
+--    (a ceased member's doses are not "current"). Correction overlay applied per
+--    point (thread-scoped join, as in db/032). One row per group.
+CREATE OR REPLACE VIEW medication_group_current_dose AS
+SELECT DISTINCT ON (g.group_id)
+    g.group_id, g.patient_id, de.dose_event_id,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.amount ELSE de.amount END AS amount,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.unit   ELSE de.unit   END AS unit,
+    de.effective_value, de.effective_precision
+FROM medication_dose_event de
+JOIN medication_thread_group g ON g.medication_id = de.medication_id
+LEFT JOIN medication_dose_correction corr
+    ON corr.corrected_dose_event_id = de.dose_event_id AND corr.medication_id = de.medication_id
+WHERE NOT EXISTS (SELECT 1 FROM medication_cessation cc WHERE cc.medication_id = de.medication_id)
+ORDER BY g.group_id,
+         cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" DESC,
+         de.hlc_wall DESC, de.hlc_counter DESC, de.origin COLLATE "C" DESC, de.content_address DESC;
+GRANT SELECT ON medication_group_current_dose TO cairn_agent;
+
+-- 9. Group last dose = latest-EFFECTIVE dose point across ALL members (for the past
+--    view — the last recorded dose before stopping, incl. now-ceased members).
+CREATE OR REPLACE VIEW medication_group_last_dose AS
+SELECT DISTINCT ON (g.group_id)
+    g.group_id, g.patient_id,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.amount ELSE de.amount END AS amount,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.unit   ELSE de.unit   END AS unit
+FROM medication_dose_event de
+JOIN medication_thread_group g ON g.medication_id = de.medication_id
+LEFT JOIN medication_dose_correction corr
+    ON corr.corrected_dose_event_id = de.dose_event_id AND corr.medication_id = de.medication_id
+ORDER BY g.group_id,
+         cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" DESC,
+         de.hlc_wall DESC, de.hlc_counter DESC, de.origin COLLATE "C" DESC, de.content_address DESC;
+GRANT SELECT ON medication_group_last_dose TO cairn_agent;
+
+-- 10. Group's latest cessation (stopped info for the past view). One row per group.
+CREATE OR REPLACE VIEW medication_group_cessation AS
+SELECT DISTINCT ON (g.group_id)
+    g.group_id, g.patient_id, c.stopped_value, c.stopped_precision, c.reason
+FROM medication_cessation c
+JOIN medication_thread_group g ON g.medication_id = c.medication_id
+ORDER BY g.group_id,
+         cairn_dose_effective_sort_key(c.stopped_value, c.hlc_wall) COLLATE "C" DESC,
+         c.hlc_wall DESC, c.hlc_counter DESC, c.origin COLLATE "C" DESC, c.content_address DESC;
+GRANT SELECT ON medication_group_cessation TO cairn_agent;
+
+-- 11. Group display fields from the canonical member's statement: prefer the exact
+--     group_id member if its assert is local, else the min-UUID member present.
+CREATE OR REPLACE VIEW medication_group_display AS
+SELECT DISTINCT ON (g.group_id)
+    g.group_id, g.patient_id, s.term, s.inn_code, s.formulation, s.sig, s.info_source,
+    s.started_value, s.started_precision,
+    to_timestamp(s.hlc_wall / 1000.0) AS asserted_at
+FROM medication_statement s
+JOIN medication_thread_group g ON g.medication_id = s.medication_id
+ORDER BY g.group_id, (s.medication_id = g.group_id) DESC, s.medication_id;
+GRANT SELECT ON medication_group_display TO cairn_agent;
+
+-- 12. Rework the current/past views to emit ONE row per group. CRITICAL: keep the
+--     EXACT SAME COLUMN SET as db/032 (replay safety — db/031/032 replay on every
+--     connect; widening/renaming breaks reconnect). Only rows + dose/status source
+--     change. medication_id = group_id (the stable group key; = the thread itself
+--     for an un-reconciled thread, so slice-1/2 behavior is preserved).
+CREATE OR REPLACE VIEW patient_medication_current AS
+SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
+       cd.amount AS dose_amount, cd.unit AS dose_unit,
+       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at
+FROM medication_group_display d
+JOIN medication_group_status st ON st.group_id = d.group_id
+LEFT JOIN medication_group_current_dose cd ON cd.group_id = d.group_id
+WHERE st.status = 'active';
+GRANT SELECT ON patient_medication_current TO cairn_agent;
+
+CREATE OR REPLACE VIEW patient_medication_past AS
+SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
+       ld.amount AS dose_amount, ld.unit AS dose_unit,
+       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
+       gc.stopped_value, gc.stopped_precision, gc.reason
+FROM medication_group_display d
+JOIN medication_group_status st ON st.group_id = d.group_id
+LEFT JOIN medication_group_last_dose ld ON ld.group_id = d.group_id
+LEFT JOIN medication_group_cessation gc ON gc.group_id = d.group_id
+WHERE st.status = 'ceased';
+GRANT SELECT ON patient_medication_past TO cairn_agent;
+
+-- 13. Rework the reconciliation flag: fire only when ACTIVE threads sharing a dup_key
+--     span MORE THAN ONE distinct group (un-reconciled duplicates). Reconciling
+--     collapses them to one group -> no flag; separating re-splits -> flag returns.
+--     DEVIATION FROM THE DRAFT PLAN: the original plan was to RENAME `thread_count`
+--     to `group_count` via DROP+CREATE, reasoning that db/033 loading after db/031
+--     within one connect makes it replay-safe. Verified empirically (direct psql
+--     repro) that this is FALSE: connect_and_load_schema replays over the SAME live
+--     schema on every connect (never a fresh DB), and db/031 replays FIRST and
+--     unconditionally re-issues `CREATE OR REPLACE VIEW ... thread_count ...`
+--     against whatever the view currently is. Once a prior connect's db/033 step has
+--     renamed the live column to `group_count`, db/031's OWN replay then fails with
+--     "cannot change name of view column" on the very next connect — before db/033
+--     ever gets a chance to run. Since db/031 is out of scope for this task, the
+--     column keeps its ORIGINAL name `thread_count` (same name/type/position as
+--     db/031 — the identical same-column-set replay rule already applied to
+--     current/past above); only the COUNTING SEMANTICS move from per-thread to
+--     per-group, via a plain CREATE OR REPLACE (no DROP needed).
+CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
+SELECT patient_id,
+       coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,
+       count(DISTINCT group_id)                           AS thread_count,
+       array_agg(DISTINCT medication_id ORDER BY medication_id) AS medication_ids
+FROM (
+    SELECT s.patient_id, s.medication_id, s.inn_code, s.term,
+           COALESCE(gm.group_id, s.medication_id) AS group_id
+    FROM medication_statement s
+    LEFT JOIN medication_group_member gm ON gm.medication_id = s.medication_id
+    WHERE NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = s.medication_id)
+) t
+GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
+HAVING count(DISTINCT group_id) > 1;
+GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
+
+COMMIT;
