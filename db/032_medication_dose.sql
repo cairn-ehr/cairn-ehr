@@ -130,4 +130,172 @@ BEGIN
 END;
 $$;
 
+-- 4. Deterministic effective sort key: the ISO-ish effective string sorts
+--    chronologically as bytes; a NULL effective falls back to the recording time
+--    (hlc_wall → ISO string), an honest lower bound. Format mask is numeric-only so
+--    it is locale-independent and identical on every node (§5.1). STABLE (to_char).
+CREATE OR REPLACE FUNCTION cairn_dose_effective_sort_key(p_effective text, p_hlc_wall bigint)
+RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+        p_effective,
+        to_char(to_timestamp(p_hlc_wall / 1000.0) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS'));
+$$;
+
+-- 5. One row per dose POINT: point 0 (seeded from the assert) + one per change. PK =
+--    the event's own event_id (immutable content), so a replayed event is idempotent.
+CREATE TABLE IF NOT EXISTS medication_dose_event (
+    dose_event_id       UUID PRIMARY KEY,
+    medication_id       UUID NOT NULL,
+    patient_id          UUID NOT NULL,
+    amount               TEXT,
+    unit                TEXT,
+    effective_value     TEXT,
+    effective_precision TEXT,
+    is_initial          BOOLEAN NOT NULL,
+    info_source         TEXT,
+    reason               TEXT,
+    hlc_wall            BIGINT NOT NULL,
+    hlc_counter         INTEGER NOT NULL,
+    origin               TEXT NOT NULL,
+    content_address      BYTEA NOT NULL,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_dose_event TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_dose_event_med_idx ON medication_dose_event (medication_id);
+
+-- 6. Corrections, keyed by the TARGET dose event they fix (a correction overlays a
+--    specific point). HLC-wins if one point is corrected twice; converges if the
+--    correction arrives before its target (orphan). Correction TABLE only here; its
+--    trigger is added in the correction task.
+CREATE TABLE IF NOT EXISTS medication_dose_correction (
+    corrected_dose_event_id UUID PRIMARY KEY,
+    medication_id           UUID NOT NULL,
+    patient_id              UUID NOT NULL,
+    amount                  TEXT,
+    unit                    TEXT,
+    reason                  TEXT,
+    info_source             TEXT,
+    hlc_wall                BIGINT NOT NULL,
+    hlc_counter             INTEGER NOT NULL,
+    origin                  TEXT NOT NULL,
+    content_address         BYTEA NOT NULL,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_dose_correction TO cairn_agent;
+
+-- 7. Seed point 0 from the assert (a SECOND, additive trigger on the assert type; the
+--    slice-1 statement/cessation triggers are untouched). dose_event_id = the assert's
+--    event_id; effective = the assert's `started`.
+CREATE OR REPLACE FUNCTION medication_dose_seed_initial()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p jsonb := NEW.body;
+BEGIN
+    INSERT INTO medication_dose_event
+        (dose_event_id, medication_id, patient_id, amount, unit,
+         effective_value, effective_precision, is_initial, info_source, reason,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        NEW.event_id, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit',
+        p -> 'started' ->> 'value', p -> 'started' ->> 'precision',
+        TRUE, p ->> 'info_source', NULL,
+        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+    ON CONFLICT (dose_event_id) DO NOTHING;
+    RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS medication_dose_seed_initial_trg ON event_log;
+CREATE TRIGGER medication_dose_seed_initial_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication.asserted')
+    EXECUTE FUNCTION medication_dose_seed_initial();
+
+-- 8. Fold a dose change into a new timeline point.
+CREATE OR REPLACE FUNCTION medication_dose_change_apply()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE p jsonb := NEW.body;
+BEGIN
+    INSERT INTO medication_dose_event
+        (dose_event_id, medication_id, patient_id, amount, unit,
+         effective_value, effective_precision, is_initial, info_source, reason,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        NEW.event_id, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit',
+        p -> 'effective' ->> 'value', p -> 'effective' ->> 'precision',
+        FALSE, p ->> 'info_source', p ->> 'reason',
+        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+    ON CONFLICT (dose_event_id) DO NOTHING;
+    RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS medication_dose_change_apply_trg ON event_log;
+CREATE TRIGGER medication_dose_change_apply_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-dose-change.asserted')
+    EXECUTE FUNCTION medication_dose_change_apply();
+
+-- 9. Effective per-point value = the correction's value IF a correction row exists,
+--    ELSE the event's value. Keyed on PRESENCE (not COALESCE) so a correct-to-unknown
+--    (correction row with NULL amount) shows unknown, not the stale original.
+CREATE OR REPLACE VIEW medication_current_dose AS
+SELECT DISTINCT ON (de.medication_id)
+    de.medication_id, de.patient_id, de.dose_event_id,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.amount ELSE de.amount END AS amount,
+    CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.unit   ELSE de.unit   END AS unit,
+    de.effective_value, de.effective_precision,
+    (corr.corrected_dose_event_id IS NOT NULL) AS corrected
+FROM medication_dose_event de
+LEFT JOIN medication_dose_correction corr ON corr.corrected_dose_event_id = de.dose_event_id
+ORDER BY de.medication_id,
+         cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" DESC,
+         de.hlc_wall DESC, de.hlc_counter DESC, de.origin COLLATE "C" DESC, de.content_address DESC;
+GRANT SELECT ON medication_current_dose TO cairn_agent;
+
+-- 10. The full titration trail, chronological by effective time. Exposes dose_event_id
+--     (so a correction can target a point) and the corrected flag.
+CREATE OR REPLACE VIEW patient_medication_dose_history AS
+SELECT de.medication_id, de.patient_id, de.dose_event_id, de.is_initial,
+       CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.amount ELSE de.amount END AS amount,
+       CASE WHEN corr.corrected_dose_event_id IS NOT NULL THEN corr.unit   ELSE de.unit   END AS unit,
+       de.effective_value, de.effective_precision, de.info_source, de.reason,
+       (corr.corrected_dose_event_id IS NOT NULL) AS corrected,
+       to_timestamp(de.hlc_wall / 1000.0) AS recorded_at
+FROM medication_dose_event de
+LEFT JOIN medication_dose_correction corr ON corr.corrected_dose_event_id = de.dose_event_id
+ORDER BY de.medication_id,
+         cairn_dose_effective_sort_key(de.effective_value, de.hlc_wall) COLLATE "C" ASC,
+         de.hlc_wall ASC, de.hlc_counter ASC, de.origin COLLATE "C" ASC, de.content_address ASC;
+GRANT SELECT ON patient_medication_dose_history TO cairn_agent;
+
+-- 11. Rework the current/past views to source the dose from the timeline winner.
+--     CRITICAL: keep the EXACT SAME COLUMN SET as db/031 (do NOT append columns).
+--     connect_and_load_schema REPLAYS db/031 on every connect, so if db/032 WIDENED these
+--     views, db/031's narrower CREATE OR REPLACE would then fail on the next connect with
+--     "cannot drop columns from view". Changing only the dose SOURCE (same names/types/order)
+--     is a legal CREATE OR REPLACE both directions, so replay is safe. dose_event_id /
+--     corrected are exposed via the separate medication_current_dose view (created above),
+--     not here. A thread with NO timeline row (a pre-slice-2 assert) falls back to the
+--     as-asserted statement dose (CASE on cd presence — self-healing, no data migration).
+CREATE OR REPLACE VIEW patient_medication_current AS
+SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
+       CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
+       CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
+       pm.sig, pm.info_source, pm.started_value, pm.started_precision, pm.asserted_at
+FROM patient_medication pm
+LEFT JOIN medication_current_dose cd USING (medication_id)
+WHERE NOT pm.ceased;
+GRANT SELECT ON patient_medication_current TO cairn_agent;
+
+CREATE OR REPLACE VIEW patient_medication_past AS
+SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
+       CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
+       CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
+       pm.sig, pm.info_source, pm.started_value, pm.started_precision,
+       pm.asserted_at, pm.stopped_value, pm.stopped_precision, pm.reason
+FROM patient_medication pm
+LEFT JOIN medication_current_dose cd USING (medication_id)
+WHERE pm.ceased;
+GRANT SELECT ON patient_medication_past TO cairn_agent;
+
 COMMIT;

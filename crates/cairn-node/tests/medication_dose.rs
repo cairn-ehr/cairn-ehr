@@ -201,3 +201,201 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
         .get(0);
     assert_eq!(n, 2, "both dose events landed in the log");
 }
+
+// helper: the current dose (amount, unit, dose_event_id, corrected) for a thread.
+// dose_amount/dose_unit come from patient_medication_current (proving the reworked
+// view shows the TIMELINE dose, not the frozen assert dose); dose_event_id/corrected
+// come from the separate medication_current_dose view (patient_medication_current is
+// deliberately NOT widened — see the CRITICAL note above). NOTE: this project's
+// tokio-postgres has NO uuid FromSql — a uuid column must be SELECTed as ::text and
+// parsed (see crates/cairn-node/tests/apply_proposal.rs:61).
+async fn current_dose(c: &Client, med_id: Uuid) -> (Option<String>, Option<String>, Uuid, bool) {
+    let r = c
+        .query_one(
+            "SELECT pmc.dose_amount, pmc.dose_unit, mcd.dose_event_id::text, mcd.corrected \
+             FROM patient_medication_current pmc \
+             JOIN medication_current_dose mcd USING (medication_id) \
+             WHERE pmc.medication_id = $1::text::uuid",
+            &[&med_id.to_string()],
+        )
+        .await
+        .unwrap();
+    (
+        r.get::<_, Option<String>>(0),
+        r.get::<_, Option<String>>(1),
+        r.get::<_, String>(2).parse::<Uuid>().unwrap(),
+        r.get::<_, bool>(3),
+    )
+}
+
+async fn history_amounts(c: &Client, med_id: Uuid) -> Vec<Option<String>> {
+    c.query(
+        "SELECT amount FROM patient_medication_dose_history \
+         WHERE medication_id = $1::text::uuid",
+        &[&med_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<_, Option<String>>(0))
+    .collect()
+}
+
+#[tokio::test]
+async fn assert_seeds_point0_and_it_is_current() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    let (amt, unit, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(amt.as_deref(), Some("40"));
+    assert_eq!(unit.as_deref(), Some("mg"));
+    assert!(!corrected);
+    // history has exactly the initial point.
+    assert_eq!(
+        history_amounts(&c, med_id).await,
+        vec![Some("40".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn change_moves_current_and_keeps_history() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    change_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: Some("titration"),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (amt, _u, _de, _corr) = current_dose(&c, med_id).await;
+    assert_eq!(amt.as_deref(), Some("80"), "latest effective is current");
+    // Both points present, chronological (40 @2024, then 80 @2025-06).
+    assert_eq!(
+        history_amounts(&c, med_id).await,
+        vec![Some("40".to_string()), Some("80".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn backdated_change_does_not_override_later_effective() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // assert dose 40 @2024 (point 0), then a real increase to 80 @2025-06.
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap();
+    change_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: None,
+        },
+    )
+    .await
+    .unwrap();
+    // A later-RECORDED but EARLIER-effective backfill ("was 50 back in 2023").
+    change_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("50"),
+            dose_unit: Some("mg"),
+            effective: Some("2023"),
+            effective_precision: Some("year"),
+            info_source: "patient-reported",
+            reason: Some("historical backfill"),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (amt, _u, _de, _c) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt.as_deref(),
+        Some("80"),
+        "latest EFFECTIVE (2025-06) stays current, not the last recorded"
+    );
+}
+
+#[tokio::test]
+async fn undated_change_becomes_current_over_older_effective() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
+        .await
+        .unwrap(); // 40 @2024
+                   // "they upped it, don't know to what or when" — no effective, no amount.
+    change_dose(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            info_source: "patient-reported",
+            reason: Some("patient says increased"),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The undated change's effective key derives from its (later) recording time, so it
+    // wins over the 2024 point. Its amount is unknown (NULL) — honestly current.
+    let (amt, _u, _de, _c) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt, None,
+        "current dose is honestly unknown after an unquantified increase"
+    );
+}
