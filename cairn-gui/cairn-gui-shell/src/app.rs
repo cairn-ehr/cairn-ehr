@@ -1,11 +1,10 @@
 //! The iced application: two panes via pane_grid (resizable divider = the user
 //! splitter), per-pane tab strips, a pinned identity card, and OpenTab routing
 //! into the opposite pane. All non-iced decisions delegate to the pure Workspace.
-#![cfg(feature = "gui")]
 use crate::workspace::{Side, Workspace};
 use cairn_gui_data::MockData;
 use cairn_gui_manifest::{merge, EffectiveManifest, SiteManifest, UserPrefs};
-use cairn_gui_tab::{Capabilities, Context, PatientRef, Semantic, TabId, UserRef};
+use cairn_gui_tab::{Capabilities, Context, Field, PatientRef, Role, Semantic, SemanticNode, TabId, UserRef};
 use cairn_gui_tab_demographics::DemographicsTab;
 use cairn_gui_tab_note::NoteTab;
 
@@ -125,7 +124,24 @@ impl App {
         let semantic = match active.0.as_str() {
             "note" => self.note.semantics(&self.ctx),
             "demographics" => self.demographics.semantics(&self.ctx),
-            _ => self.demographics.semantics(&self.ctx),
+            _ => {
+                // An unknown TabId must never silently fall through to whatever tab
+                // happens to be last in this match (that would render the WRONG
+                // CHART — principle 3, paper-parity: a confirmation dialog is not an
+                // acceptable substitute for this being loud). Dev/test builds abort
+                // via debug_assert; release builds render a visible placeholder so
+                // the clinician sees "something is wrong" instead of another
+                // patient's data.
+                debug_assert!(false, "unknown TabId in tab_view: {}", active.0);
+                SemanticNode {
+                    title: "Unknown tab".into(),
+                    fields: vec![Field {
+                        id: "unknown".into(),
+                        role: Role::Heading,
+                        label: format!("Unknown tab: {}", active.0),
+                    }],
+                }
+            }
         };
         let mut col = column![text(semantic.title).size(18)].spacing(6);
         for f in semantic.fields {

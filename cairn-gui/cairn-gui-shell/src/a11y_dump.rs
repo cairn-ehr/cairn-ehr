@@ -1,7 +1,15 @@
-//! The EXPECTED accessibility tree for the whole shell — chrome (panes, tab
-//! strips, the resizable divider) plus each tab's fields. `--dump-a11y` prints
-//! this; the operator diffs it against what Orca/NVDA actually announces. This is
+//! The accessibility tree for the whole shell — chrome (panes, tab strips, the
+//! resizable divider) plus each tab's fields. `--dump-a11y` prints this. This is
 //! the widened Spike 0004 A-claim: shell-level a11y, not just a single form.
+//!
+//! The TAB BODY nodes (note, demographics) are read directly off each tab's
+//! `semantics()`, the same call `app.rs` renders from — so they cannot drift
+//! from what's on screen. The CHROME node (`shell_chrome`) is different: it is
+//! the INTENDED/TARGET tree for panes, tab strips and the divider, hand-written
+//! to match what `app.rs` renders today. The operator diffs the whole dump
+//! against what Orca/NVDA actually announces to find where iced's current
+//! rendering falls short of the target — a gap there is expected spike
+//! feedback, not a bug in this file.
 use cairn_gui_data::MockData;
 use cairn_gui_tab::{Capabilities, Context, Field, PatientRef, Role, SemanticNode, Semantic, UserRef};
 use cairn_gui_tab_demographics::DemographicsTab;
@@ -18,15 +26,22 @@ pub fn sample_ctx() -> Context {
     }
 }
 
-fn shell_chrome() -> SemanticNode {
+fn shell_chrome(patient_name: &str) -> SemanticNode {
     SemanticNode {
         title: "Shell chrome".into(),
         fields: vec![
-            Field { id: "chrome.identity".into(), role: Role::Heading, label: "Patient identity band".into() },
+            // Matches app.rs's `text(format!("Patient: {name}"))` identity card.
+            Field { id: "chrome.identity".into(), role: Role::Heading, label: format!("Patient: {}", patient_name) },
+            // Panes and the divider: iced's `pane_grid` does not currently expose
+            // these as accessible labels, so today's operator run will record them
+            // as gaps against this target tree — that is intended spike feedback
+            // (the whole point of the diff), not a claim that they are announced
+            // by the shell as it stands.
             Field { id: "chrome.pane.left".into(), role: Role::Pane, label: "Left pane".into() },
             Field { id: "chrome.pane.right".into(), role: Role::Pane, label: "Right pane".into() },
-            Field { id: "chrome.tab.left.note".into(), role: Role::Tab, label: "Current note tab".into() },
-            Field { id: "chrome.tab.right.demographics".into(), role: Role::Tab, label: "Demographics tab".into() },
+            // Labels match `title()` as rendered by app.rs's tab-strip buttons.
+            Field { id: "chrome.tab.left.note".into(), role: Role::Tab, label: "Current note".into() },
+            Field { id: "chrome.tab.right.demographics".into(), role: Role::Tab, label: "Demographics".into() },
             Field { id: "chrome.divider".into(), role: Role::Divider, label: "Resize panes".into() },
         ],
     }
@@ -38,7 +53,8 @@ pub fn expected_tree(ctx: &Context) -> Vec<SemanticNode> {
     note.load(ctx, &data);
     let mut demo = DemographicsTab::new();
     demo.load(ctx, &data);
-    vec![shell_chrome(), note.semantics(ctx), demo.semantics(ctx)]
+    let patient_name = ctx.patient.as_ref().map(|p| p.display_name.as_str()).unwrap_or("");
+    vec![shell_chrome(patient_name), note.semantics(ctx), demo.semantics(ctx)]
 }
 
 pub fn print_expected_tree() {
