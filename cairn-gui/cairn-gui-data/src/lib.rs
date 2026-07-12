@@ -1,7 +1,4 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod port;
+pub mod mock;
+pub use port::{ClinicalData, DataError, Demographics, NoteRef};
+pub use mock::MockData;
