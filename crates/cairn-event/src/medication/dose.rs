@@ -6,6 +6,22 @@
 //! are both first-class.
 use serde_json::{json, Value};
 
+/// Build the `dose` sub-object from optional amount/unit; None when both absent
+/// (so the key is omitted entirely — honest-unknown, never serialized as null).
+fn dose_object(amount: Option<&str>, unit: Option<&str>) -> Option<Value> {
+    if amount.is_none() && unit.is_none() {
+        return None;
+    }
+    let mut d = serde_json::Map::new();
+    if let Some(a) = amount {
+        d.insert("amount".into(), json!(a));
+    }
+    if let Some(u) = unit {
+        d.insert("unit".into(), json!(u));
+    }
+    Some(Value::Object(d))
+}
+
 pub struct DoseChange<'a> {
     pub medication_id: &'a str,
     pub dose_amount: Option<&'a str>,
@@ -33,15 +49,7 @@ pub fn dose_change_body(d: &DoseChange) -> Value {
         "info_source": d.info_source,
     });
     let obj = p.as_object_mut().expect("json! built an object");
-    if d.dose_amount.is_some() || d.dose_unit.is_some() {
-        let mut dose = json!({});
-        let o = dose.as_object_mut().expect("json! built an object");
-        if let Some(a) = d.dose_amount {
-            o.insert("amount".into(), json!(a));
-        }
-        if let Some(u) = d.dose_unit {
-            o.insert("unit".into(), json!(u));
-        }
+    if let Some(dose) = dose_object(d.dose_amount, d.dose_unit) {
         obj.insert("dose".into(), dose);
     }
     if let Some(v) = d.effective {
@@ -86,15 +94,7 @@ pub fn dose_correction_body(d: &DoseCorrection) -> Value {
         "corrects": d.corrects,
     });
     let obj = p.as_object_mut().expect("json! built an object");
-    if d.dose_amount.is_some() || d.dose_unit.is_some() {
-        let mut dose = json!({});
-        let o = dose.as_object_mut().expect("json! built an object");
-        if let Some(a) = d.dose_amount {
-            o.insert("amount".into(), json!(a));
-        }
-        if let Some(u) = d.dose_unit {
-            o.insert("unit".into(), json!(u));
-        }
+    if let Some(dose) = dose_object(d.dose_amount, d.dose_unit) {
         obj.insert("dose".into(), dose);
     }
     if let Some(src) = d.info_source {
@@ -118,6 +118,9 @@ pub fn render_dose_correction_twin(d: &DoseCorrection) -> String {
     }
     if let Some(r) = d.reason {
         s.push_str(&format!(" — {r}"));
+    }
+    if let Some(src) = d.info_source {
+        s.push_str(&format!(" ({src})"));
     }
     s
 }
@@ -255,5 +258,23 @@ mod tests {
             reason: None,
         };
         assert!(!render_dose_correction_twin(&unknown).trim().is_empty());
+    }
+
+    #[test]
+    fn correction_twin_surfaces_info_source_when_present() {
+        let c = DoseCorrection {
+            medication_id: "11111111-1111-7111-8111-111111111111",
+            corrects: "33333333-3333-7333-8333-333333333333",
+            dose_amount: Some("20"),
+            dose_unit: Some("mg"),
+            info_source: Some("clinician-observed"),
+            reason: None,
+        };
+        let s = render_dose_correction_twin(&c);
+        assert!(s.contains("20 mg"));
+        assert!(
+            s.contains("clinician-observed"),
+            "correction twin must surface info_source, got: {s}"
+        );
     }
 }
