@@ -254,3 +254,103 @@ async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
         "thread now surfaces in past, arrival-order-independent"
     );
 }
+
+async fn flag_rows(c: &Client, patient: Uuid) -> Vec<(String, i64)> {
+    c.query(
+        "SELECT dup_key, thread_count FROM patient_medication_reconciliation_flag \
+         WHERE patient_id = $1::text::uuid ORDER BY dup_key",
+        &[&patient.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+    .collect()
+}
+
+#[tokio::test]
+async fn two_active_same_term_are_flagged() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Same drug, asserted twice (two clinicians) — differing case/whitespace must still collide.
+    let mut a1 = sample_input();
+    a1.term = "Atorvastatin";
+    let mut a2 = sample_input();
+    a2.term = "atorvastatin ";
+    assert_medication(&c, &sk, &kid, "test-node", patient, &a1)
+        .await
+        .unwrap();
+    assert_medication(&c, &sk, &kid, "test-node", patient, &a2)
+        .await
+        .unwrap();
+
+    let flags = flag_rows(&c, patient).await;
+    assert_eq!(flags.len(), 1, "one reconciliation candidate");
+    assert_eq!(flags[0].1, 2, "two threads share the key");
+}
+
+#[tokio::test]
+async fn ceasing_one_clears_the_flag() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let m1 = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
+        .await
+        .unwrap();
+    let _m2 = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
+        .await
+        .unwrap();
+    assert_eq!(flag_rows(&c, patient).await.len(), 1);
+
+    // Resolution needs no new event type — cease the redundant thread.
+    cease_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        m1,
+        &CeaseMedicationInput {
+            stopped: None,
+            stopped_precision: None,
+            reason: Some("duplicate"),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        flag_rows(&c, patient).await.is_empty(),
+        "flag clears once only one active thread remains"
+    );
+}
+
+#[tokio::test]
+async fn distinct_terms_are_not_flagged() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let mut a1 = sample_input();
+    a1.term = "atorvastatin";
+    let mut a2 = sample_input();
+    a2.term = "metformin";
+    assert_medication(&c, &sk, &kid, "test-node", patient, &a1)
+        .await
+        .unwrap();
+    assert_medication(&c, &sk, &kid, "test-node", patient, &a2)
+        .await
+        .unwrap();
+    assert!(
+        flag_rows(&c, patient).await.is_empty(),
+        "unrelated drugs never collide"
+    );
+}

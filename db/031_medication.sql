@@ -256,4 +256,19 @@ SELECT medication_id, patient_id, term, inn_code, formulation,
 FROM patient_medication WHERE ceased;
 GRANT SELECT ON patient_medication_past TO cairn_agent;
 
+-- 9. E1 reconciliation flag (advisory, never auto-merges). >=2 ACTIVE threads for
+--    one patient sharing coalesce(inn_code, normalized term). Deterministic — no
+--    fuzzy matching (brand<->generic/typos are deferred to the Tier-A drug matcher).
+--    COLLATE "C" pins the normalized-term key for cross-node determinism (ADR-0045).
+--    Resolution is ceasing the redundant thread (no new event type).
+CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
+SELECT patient_id,
+       coalesce(inn_code, lower(btrim(term)) COLLATE "C") AS dup_key,
+       count(*)                                           AS thread_count,
+       array_agg(medication_id ORDER BY medication_id)    AS medication_ids
+FROM patient_medication_current
+GROUP BY patient_id, coalesce(inn_code, lower(btrim(term)) COLLATE "C")
+HAVING count(*) > 1;
+GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
+
 COMMIT;
