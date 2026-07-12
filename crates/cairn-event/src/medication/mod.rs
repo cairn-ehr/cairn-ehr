@@ -12,6 +12,7 @@
 pub mod assert;
 pub mod cessation;
 pub mod dose;
+pub mod reconciliation;
 
 pub use assert::{medication_assertion_body, render_medication_twin, MedicationAssertion};
 pub use cessation::{
@@ -20,4 +21,8 @@ pub use cessation::{
 pub use dose::{
     dose_change_body, dose_correction_body, render_dose_change_twin, render_dose_correction_twin,
     DoseChange, DoseCorrection,
+};
+pub use reconciliation::{
+    reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,
+    ReconciliationAssertion,
 };
