@@ -1206,16 +1206,20 @@ ORDER BY de.medication_id,
          de.hlc_wall ASC, de.hlc_counter ASC, de.origin COLLATE "C" ASC, de.content_address ASC;
 GRANT SELECT ON patient_medication_dose_history TO cairn_agent;
 
--- 11. Rework the current/past views to source the dose from the timeline winner and
---     expose dose_event_id + dose_corrected (appended columns — CREATE OR REPLACE VIEW
---     safe). A thread with NO timeline row (e.g. a pre-slice-2 assert) falls back to the
+-- 11. Rework the current/past views to source the dose from the timeline winner.
+--     CRITICAL: keep the EXACT SAME COLUMN SET as db/031 (do NOT append columns).
+--     connect_and_load_schema REPLAYS db/031 on every connect, so if db/032 WIDENED these
+--     views, db/031's narrower CREATE OR REPLACE would then fail on the next connect with
+--     "cannot drop columns from view". Changing only the dose SOURCE (same names/types/order)
+--     is a legal CREATE OR REPLACE both directions, so replay is safe. dose_event_id /
+--     corrected are exposed via the separate medication_current_dose view (created above),
+--     not here. A thread with NO timeline row (a pre-slice-2 assert) falls back to the
 --     as-asserted statement dose (CASE on cd presence — self-healing, no data migration).
 CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
-       pm.sig, pm.info_source, pm.started_value, pm.started_precision, pm.asserted_at,
-       cd.dose_event_id, cd.corrected AS dose_corrected
+       pm.sig, pm.info_source, pm.started_value, pm.started_precision, pm.asserted_at
 FROM patient_medication pm
 LEFT JOIN medication_current_dose cd USING (medication_id)
 WHERE NOT pm.ceased;
@@ -1226,28 +1230,38 @@ SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
        pm.sig, pm.info_source, pm.started_value, pm.started_precision,
-       pm.asserted_at, pm.stopped_value, pm.stopped_precision, pm.reason,
-       cd.dose_event_id, cd.corrected AS dose_corrected
+       pm.asserted_at, pm.stopped_value, pm.stopped_precision, pm.reason
 FROM patient_medication pm
 LEFT JOIN medication_current_dose cd USING (medication_id)
 WHERE pm.ceased;
 GRANT SELECT ON patient_medication_past TO cairn_agent;
 ```
 
-> Note: `patient_medication_current` / `patient_medication_past` are defined in db/031 in the SAME column
-> order for columns 1–12 (current) / 1–14 (past). Keep those leading columns identical (names + types);
-> only the *source* of `dose_amount`/`dose_unit` changes and the trailing `dose_event_id`/`dose_corrected`
-> are appended, which `CREATE OR REPLACE VIEW` permits. Verify against db/031 before editing if unsure.
+> **CRITICAL — do NOT widen these views.** `patient_medication_current` (12 cols) and
+> `patient_medication_past` (15 cols) are defined in db/031 and REPLAYED on every `connect_and_load_schema`.
+> `CREATE OR REPLACE VIEW` cannot drop columns, so if db/032 appended columns, db/031's next replay would
+> fail (`cannot drop columns from view`) and break every reconnect. Keep the EXACT db/031 column
+> names/types/order and change ONLY the `dose_amount`/`dose_unit` source expression.
+> `dose_event_id` / `dose_corrected` are read from the separate `medication_current_dose` view
+> (`resolve_correction_target` already does this), not from these views.
 
 - [ ] **Step 2: Write failing timeline tests** — append to `crates/cairn-node/tests/medication_dose.rs`:
 
 ```rust
 // helper: the current dose (amount, unit, dose_event_id, corrected) for a thread.
+// dose_amount/dose_unit come from patient_medication_current (proving the reworked
+// view shows the TIMELINE dose, not the frozen assert dose); dose_event_id/corrected
+// come from the separate medication_current_dose view (patient_medication_current is
+// deliberately NOT widened — see the CRITICAL note above). NOTE: this project's
+// tokio-postgres has NO uuid FromSql — a uuid column must be SELECTed as ::text and
+// parsed (see crates/cairn-node/tests/apply_proposal.rs:61).
 async fn current_dose(c: &Client, med_id: Uuid) -> (Option<String>, Option<String>, Uuid, bool) {
     let r = c
         .query_one(
-            "SELECT dose_amount, dose_unit, dose_event_id, dose_corrected \
-             FROM patient_medication_current WHERE medication_id = $1::text::uuid",
+            "SELECT pmc.dose_amount, pmc.dose_unit, mcd.dose_event_id::text, mcd.corrected \
+             FROM patient_medication_current pmc \
+             JOIN medication_current_dose mcd USING (medication_id) \
+             WHERE pmc.medication_id = $1::text::uuid",
             &[&med_id.to_string()],
         )
         .await
@@ -1255,7 +1269,7 @@ async fn current_dose(c: &Client, med_id: Uuid) -> (Option<String>, Option<Strin
     (
         r.get::<_, Option<String>>(0),
         r.get::<_, Option<String>>(1),
-        r.get::<_, Uuid>(2),
+        r.get::<_, String>(2).parse::<Uuid>().unwrap(),
         r.get::<_, bool>(3),
     )
 }
