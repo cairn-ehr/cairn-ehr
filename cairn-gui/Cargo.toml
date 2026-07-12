@@ -8,6 +8,8 @@ members = [
     "cairn-gui-data",
     "cairn-gui-manifest",
     "cairn-gui-shell",
+    "cairn-gui-tabs/cairn-gui-tab-demographics",
+    "cairn-gui-tabs/cairn-gui-tab-note",
 ]
 
 [workspace.package]

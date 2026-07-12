@@ -28,3 +28,19 @@ dependencies = [
 [[package]]
 name = "cairn-gui-tab"
 version = "0.1.0"
+
+[[package]]
+name = "cairn-gui-tab-demographics"
+version = "0.1.0"
+dependencies = [
+ "cairn-gui-data",
+ "cairn-gui-tab",
+]
+
+[[package]]
+name = "cairn-gui-tab-note"
+version = "0.1.0"
+dependencies = [
+ "cairn-gui-data",
+ "cairn-gui-tab",
+]
