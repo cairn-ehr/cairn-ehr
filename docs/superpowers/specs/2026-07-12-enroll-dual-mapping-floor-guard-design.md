@@ -154,6 +154,34 @@ convention — no nondeterministic concurrency test).
 **RED discipline:** confirm test 1 and test 4 fail before the `db/004` guard is added, then
 add the predicate + `enroll_actor` change to turn them GREEN.
 
+### 5.1 Existing tests that lean on dual-mapping-via-`enroll_actor` (must migrate)
+
+The new guard forbids what three existing tests deliberately do — enroll **one key** under
+**several `actor_id`s** through `enroll_actor`. Each migrates by *intent* (the same
+distinction the #152 side-fix drew: a test that leaned on the bug being fixed is corrected,
+not deleted). No other test reuses a key across actors (all others enroll distinct
+`kid_a`/`kid_h`/… per actor — verified).
+
+- **`db/tests/004_actors_test.sql`** — enrolls key `'deadbeef'` under `epoch-a` **and**
+  `epoch-b`. Intent: prove *bumping `skill_epoch` mints a different `actor_id`* (a
+  **pinned → actor_id** property). Fix: give `epoch-b` a **distinct key** (what the real
+  matcher does — a fresh key per epoch). The property still holds; the key reuse was
+  incidental.
+- **`db/tests/006_recall_test.sql`** (`histkey` × `hist-a`/`hist-b`/`hist-c`) and
+  **`crates/cairn-node/tests/recall_epoch.rs`** (`kid` × `epoch-a`/`epoch-b`, via the
+  `enroll_epoch` helper) — the **contamination-cascade recall** suites. Their coverage
+  *depends* on the dual mapping: it forces `db/005` to stamp `actor_id = NULL`, which is the
+  only way to exercise the `el.actor_id IS NULL` → `'unattributed'` fallback branch of
+  `events_by_actor_epoch` (db/006). Distinct keys would stamp every event and **delete that
+  coverage**. Fix: stage the multi-epoch mapping via a **raw `INSERT INTO actor_event`**
+  (computing `actor_id := cairn_actor_id(pinned)` exactly as `enroll_actor` would, so the
+  recall query's `epoch_regs` join still matches), **bypassing** the guarded door — the
+  established `suppression_owner_gate.rs:288` precedent ("raw INSERT, NOT `enroll_actor` —
+  since #152 the door refuses this"). A short comment on each records *why*: the dual mapping
+  is a state the enroll door no longer produces but the recall projection must still handle
+  (historical rows / a future sync-apply door that has not yet mirrored the guard / raw
+  paths), so the test stages it directly.
+
 ## 6. Docs
 
 - **ADR-0046** (refines ADR-0044): the B-direction whole-history key→actor invariant, the
@@ -171,4 +199,6 @@ add the predicate + `enroll_actor` change to turn them GREEN.
 - No wire / event-format / SCHEMA / projection change (floor-authorization only).
 - The A-direction guard, `actor_current`, and `db/005`'s NULL-on-ambiguity degradation are
   unchanged — this makes the ambiguity *unreachable via the enroll door*, it does not
-  change how `db/005` copes if it ever arose by another path.
+  change how `db/005` copes if it ever arose by another path. `events_by_actor_epoch`
+  (db/006) and its `actor_id IS NULL` fallback are unchanged and still tested (see §5.1):
+  the guard narrows *how the state arises*, not the projection's duty to cope with it.
