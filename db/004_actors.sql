@@ -113,6 +113,11 @@ $$;
 -- key-bearing ops; revoke rows carry a NULL signing_key_id and are excluded by the equality
 -- anyway. STABLE + pure so it is independently testable and reusable at the future
 -- actor-sync apply door (ADR-0044 §3) and a future rotate-key/supersede door.
+--
+-- Note the argument order is (key, actor_id) — the MIRROR of
+-- cairn_actor_id_key_conflict(actor_id, key) above; each predicate's arguments follow its
+-- own name. A future door that calls both must pass them in each function's own order (the
+-- disjoint bytea/text types make a swapped call fail loudly at plan time, never silently).
 CREATE OR REPLACE FUNCTION cairn_key_actor_id_conflict(p_key TEXT, p_actor_id BYTEA)
 RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     SELECT EXISTS (
@@ -149,10 +154,12 @@ BEGIN
     -- the winner's committed row and is refused. (hashtextextended → the bigint lock key.)
     -- issue #166: serialize concurrent enrolls of the SAME KEY (this guard) as well as of
     -- the same actor_id (the #152 guard). Key lock FIRST, then actor_id lock — one global
-    -- acquire order across the single enroll door, so no deadlock is possible. A distinct
-    -- seed (…, 1) keeps the key-lock namespace from aliasing the actor_id-lock namespace
-    -- (…, 0). Under READ COMMITTED the loser blocks on the key lock, then re-reads the
-    -- winner's committed row and is refused by the B-check below.
+    -- acquire order across the single enroll door, so no deadlock is possible. Both locks
+    -- live in Postgres's single advisory-lock keyspace; the distinct seed ((…, 1) vs (…, 0))
+    -- keeps the two hash VALUES from colliding, so a key string that happens to equal an
+    -- actor_id hex string cannot map onto the same lock. Under READ COMMITTED the loser
+    -- blocks on the key lock, then re-reads the winner's committed row and is refused by the
+    -- B-check below.
     PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 1));
     PERFORM pg_advisory_xact_lock(hashtextextended(encode(aid, 'hex'), 0));
     IF cairn_actor_id_key_conflict(aid, p_key) THEN
