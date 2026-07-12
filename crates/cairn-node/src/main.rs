@@ -508,6 +508,56 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Record a dose change on an existing medication thread
+    /// (clinical.medication-dose-change.asserted). Additive — the prior dose stays in
+    /// the history. Offline-first: does not require the thread to be present locally.
+    MedicationChangeDose {
+        /// The patient UUID the thread belongs to.
+        patient: Uuid,
+        /// The medication thread id (printed by `medication-assert`).
+        medication_id: Uuid,
+        /// New dose magnitude (decimal). Omit if unknown ("upped it, dunno to what").
+        #[arg(long)]
+        dose_amount: Option<String>,
+        /// New dose unit (mg, mcg, mL, …, or free-text).
+        #[arg(long)]
+        dose_unit: Option<String>,
+        /// When the dose changed (value, e.g. "2025-06").
+        #[arg(long)]
+        effective: Option<String>,
+        /// Precision token for --effective (year|month|day|year-range).
+        #[arg(long)]
+        effective_precision: Option<String>,
+        /// Who the claim came from: patient-reported | clinician-observed | external-record | unknown.
+        #[arg(long, default_value = "unknown")]
+        info_source: String,
+        /// Optional free-text reason ("titration", "renal dosing").
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Correct a wrongly-recorded dose (clinical.medication-dose-correction.asserted).
+    /// The prior value stays in the record (audit); this only wins the current dose.
+    MedicationCorrectDose {
+        /// The patient UUID the thread belongs to.
+        patient: Uuid,
+        /// The medication thread id.
+        medication_id: Uuid,
+        /// The dose event to correct. Defaults to the current dose point of the thread.
+        #[arg(long)]
+        target: Option<Uuid>,
+        /// The corrected dose magnitude. Omit to correct to *unknown* (strike a false precision).
+        #[arg(long)]
+        dose_amount: Option<String>,
+        /// The corrected dose unit.
+        #[arg(long)]
+        dose_unit: Option<String>,
+        /// Optional provenance of the correction claim.
+        #[arg(long)]
+        info_source: Option<String>,
+        /// Optional free-text reason ("mis-keyed").
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1470,6 +1520,77 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
+        }
+        Cmd::MedicationChangeDose {
+            patient,
+            medication_id,
+            dose_amount,
+            dose_unit,
+            effective,
+            effective_precision,
+            info_source,
+            reason,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::ChangeDoseInput {
+                dose_amount: dose_amount.as_deref(),
+                dose_unit: dose_unit.as_deref(),
+                effective: effective.as_deref(),
+                effective_precision: effective_precision.as_deref(),
+                info_source: &info_source,
+                reason: reason.as_deref(),
+            };
+            let event_id = cairn_node::medication::change_dose(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &input,
+            )
+            .await?;
+            println!("dose change recorded for thread {medication_id}; event {event_id}");
+        }
+        Cmd::MedicationCorrectDose {
+            patient,
+            medication_id,
+            target,
+            dose_amount,
+            dose_unit,
+            info_source,
+            reason,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let corrects =
+                cairn_node::medication::resolve_correction_target(&db, medication_id, target)
+                    .await?;
+            let input = cairn_node::medication::CorrectDoseInput {
+                dose_amount: dose_amount.as_deref(),
+                dose_unit: dose_unit.as_deref(),
+                info_source: info_source.as_deref(),
+                reason: reason.as_deref(),
+            };
+            let event_id = cairn_node::medication::correct_dose(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                corrects,
+                &input,
+            )
+            .await?;
+            println!("dose correction recorded for thread {medication_id} (target {corrects}); event {event_id}");
         }
     }
     Ok(())
