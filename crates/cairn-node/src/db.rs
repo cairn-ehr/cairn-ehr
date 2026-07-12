@@ -157,6 +157,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "031_medication",
         include_str!("../../../db/031_medication.sql"),
     ),
+    // §3.15 slice 2: medication dose change/correction floor + dose-timeline projection.
+    (
+        "032_medication_dose",
+        include_str!("../../../db/032_medication_dose.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
