@@ -59,9 +59,12 @@ So **A1 and A2 cannot be cleared on released iced 0.14 at all** — this is a *f
 our slice. This is the make-or-break signal the spike existed to find, obtained from dependency facts before any
 styling investment.
 
-### Optional empirical confirmation
-Run **Accessibility Inspector** (macOS) or Orca (Linux) against the running window — expect it to announce
-essentially nothing (a blank/generic window). This confirms the dependency-level finding by observation.
+### Empirical confirmation — DONE (2026-07-12, macOS Accessibility Inspector)
+Ran Accessibility Inspector against the live window. **Confirmed:** none of the Cairn controls
+(Demographics button, Chest-X-ray button, name, MRN) surface as accessible elements. The inspected element's
+**`Children: Empty array`**, and the only navigable accessibility hierarchy is the standard AppKit **menu bar**
+(Apple / File / Edit / View / Window) — the window's *content* is an accessibility black box. A screen reader
+gets an app menu bar and an empty window. Observation matches the dependency-level finding exactly.
 
 ## Decision this forces (for the steward)
 
