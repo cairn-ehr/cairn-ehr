@@ -72,8 +72,8 @@ cairn-gui/                 (workspace)
 ├─ cairn-gui-shell/        binary: bands, panes, divider, routing, manifest loader, context provider
 ├─ cairn-gui-tab/          Tab trait + semantic/a11y contract + Context + shared load/error scaffolding
 ├─ cairn-gui-data/         ClinicalData port (trait) + real (native-API-client) impl + mock (fixtures) impl
-├─ cairn-gui-tabs/         Tab implementations: note, timeline, results, meds, demographics… (one crate,
-│                          or split per tab as it grows)
+├─ cairn-gui-tabs/         Tab implementations, ONE CRATE PER TAB: note, timeline, results, meds,
+│                          demographics… (each independently buildable/testable)
 └─ cairn-gui-manifest/     manifest schema + loader (which tabs live, rail entries, default layout)
 ```
 
@@ -163,11 +163,16 @@ shell run with **no node** (§9).
 
 **Lazy loading, freshness, and fairness — the clinical caveats:**
 - Visible tab → `load()` immediately. Hidden tabs → a **background scheduler** calls `load()` at low
-  priority so switching is instant.
-- **Stale-prefetch safety.** Prefetched data carries a `loaded_at`. On becoming visible/focused, a
-  **pinned or safety-relevant tab revalidates before its data is trusted**, showing an explicit
-  "refreshing" state rather than a confident stale number (meds/allergies must never silently display
-  20-minute-old safety data). Cosmetic/static content (an old X-ray) may trust the cache.
+  priority so switching is instant. Prefetched data carries a `loaded_at`.
+- **On-screen data is NEVER silently auto-refreshed.** A visible display is never mutated under the
+  clinician's eyes. A silent swap — e.g. an allergy changing while the clinician looks away — can go
+  **unnoticed**, which is more dangerous than visible staleness and can defeat the purpose of the
+  display. Instead, when on-screen content is known stale (underlying data changed, or an age
+  threshold passed), it is **visually flagged stale and offered an explicit "Refresh" button**. The
+  clinician chooses when to pull the change in, and the flag *forces* awareness that something changed.
+- **A display never *starts* stale.** Refresh applies to **hidden** data on becoming visible: a
+  background tab is refreshed as it transitions to visible, so what the clinician first sees is current.
+  Net rule: **fresh on open, explicitly flagged if it later ages, never silently changed.**
 - **Fairness / availability floor.** The background scheduler is **preemptible and budget-limited**;
   the visible tab's `load()` always wins. Background prefetch must never starve the active view or
   hammer the node (same instinct as the byte-tier availability floor).
@@ -175,17 +180,32 @@ shell run with **no node** (§9).
   fetch protected data — prefetch consults `ctx.capabilities` too. This is *soft* policy (the hard gate
   is the DB floor), but it stops the UI holding data it shouldn't even have in memory.
 
-## 7. The manifest (runtime tab-set selection)
+## 7. The manifest & preference store (runtime tab-set selection)
 
-A **signed config** the shell loads at startup (reloadable per site/role) declaring:
-- which compiled tabs are **live**,
-- their **rail entries**,
-- the **default pane layout** (e.g. "note left, timeline right").
+The manifest declares which compiled tabs are **live**, their **rail entries**, and the **default pane
+layout** (e.g. "note left, demographics right"). Switching GP→ED is a manifest change — no rebuild. The
+manifest is **soft policy** (what is *offered*); the DB floor remains the **hard gate** (what is
+*permitted*). One mechanism serves both "this site's tab-set" and (via B) "this role's tab-set."
 
-Switching GP→ED is a manifest swap — no rebuild. The manifest is **soft policy** (what is *offered*);
-the DB floor remains the **hard gate** (what is *permitted*). One mechanism serves both "this site's
-tab-set" and (via B) "this role's tab-set." One artifact to build, sign, and distribute — fits the
-single signed distribution plane ([§3.13](../../spec/language-substrate.md)).
+**Storage — node-local database, in two merged layers.** Kept in the node's Postgres as **node-local
+preference config**, loaded through a **validating, self-repairing loader**: a missing or invalid entry
+falls back to documented defaults and is never a hard failure — robust against a user (or admin)
+setting it wrong. DB storage resists casual corruption better than a hand-editable file.
+
+> [!IMPORTANT]
+> UI layout config is **node-local preference, not clinical data.** It lives in a preference table and
+> **must never ride the append-only signed clinical event stream** — mixing UI state into the wire core
+> is a category error (the event core is clinical events only). This is why "in the database" here means
+> a local preference table, not the event log.
+
+Two layers, merged into an **effective manifest per user**:
+- **Site/role layer** — which tabs are *offered* for a setting/role (admin-set). This is the seam to
+  subsystem **B**: a role's row selects its tab-set.
+- **User layer** — personal layout, **per user, remember-last-state**: divider ratio, last-open tabs
+  per pane, active tab, tab order.
+- **Effective = site/role overlaid with user prefs.** The user layer may only *arrange/choose among*
+  what the site/role layer offers — it can never grant a tab the role doesn't offer (soft policy stays
+  within soft policy; the hard gate is still the DB floor).
 
 ## 8. First slice
 
@@ -212,8 +232,10 @@ Because the shell runs on the **mock port with zero node**, it **is** the Spike 
 IME / Pi-latency get measured against the **real shell + real tabs on fixtures**, not a throwaway form.
 
 - **Headless CI (iced-free):** semantic-contract completeness for every tab **and shell chrome**;
-  manifest loading; `ClinicalData` port contract; cross-pane routing logic; lazy-scheduler + freshness
-  rules; capability-gated prefetch.
+  manifest loading + self-repair (invalid/missing entry → defaults); the site/role⊕user merge into the
+  effective manifest; `ClinicalData` port contract; cross-pane routing logic; the lazy scheduler and
+  freshness rules (never-silently-swap on-screen; refresh-hidden-on-reveal; stale-flag threshold);
+  capability-gated prefetch.
 - **Operator runs (widened Spike 0004):**
   - **Accessibility** — screen-reader (Orca/NVDA) traversal of **pane / tab-strip / rail / divider +
     fields**, not just a single form. (Approved widening — see risk below.)
@@ -234,8 +256,9 @@ IME / Pi-latency get measured against the **real shell + real tabs on fixtures**
   separately.
 - **iced pre-1.0 churn.** Contained to the shell + tab `view()` bodies (§3); contract and data layers
   stay iced-free.
-- **Stale prefetch of safety data.** Addressed by the revalidate-on-focus rule for pinned/safety tabs
-  (§6).
+- **Stale data misleading the clinician.** Addressed by the §6 rule: hidden data refreshes on reveal
+  (a display never *starts* stale), and on-screen data is **never silently swapped** — only flagged
+  stale with an explicit Refresh, so a change can never happen invisibly under the clinician's eyes.
 - **Background prefetch starving the active view.** Addressed by the preemptible, budget-limited
   scheduler (§6).
 - **UI tab-hiding mistaken for a security boundary.** It is **soft** policy only; the **hard** gate is
@@ -245,10 +268,17 @@ IME / Pi-latency get measured against the **real shell + real tabs on fixtures**
   available out of the box); a true WYSIWYG editor is a later optional custom-widget investment. This
   also aligns with principle 11 (the plaintext *is* the legibility twin).
 
-## 11. Open items for the plan
+## 11. Resolved since first draft
+
+- **Divider size / layout persistence:** per **user**, remember-last-state (user layer of §7).
+- **Tab crates:** **one crate per tab** (§3).
+- **Manifest storage:** node-local **Postgres preference tables** (never the event log), validating
+  self-repairing loader, site/role ⊕ user merge (§7).
+- **On-screen refresh:** never silent; stale-flag + explicit Refresh; hidden-refreshes-on-reveal (§6).
+
+## 12. Open items for the plan
 
 - Exact `Outcome`/`Intent` enum shape and the routing table the shell keeps.
-- Manifest file format (TOML/JSON) and signing/verification path.
-- Divider size-persistence (per session vs per user) location.
-- Whether `cairn-gui-tabs` starts as one crate or one-per-tab.
+- The preference-table schema (site/role table, user-prefs table) and the merge/validation rules.
+- The stale-flag threshold policy — age-based, change-signal-based, or both — and which tabs opt in.
 - The native-API-client crate boundary and how much type-sharing with the node is feasible now.
