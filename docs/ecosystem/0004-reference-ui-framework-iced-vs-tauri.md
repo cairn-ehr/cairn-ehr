@@ -1,12 +1,15 @@
 # Ecosystem eval 0004 — Reference-UI framework: iced vs Tauri (the L3 desktop client)
 
-- **Status:** **Evaluation.** Lands the steward's reference desktop UI as an **L3 citizen**
-  ([ADR-0021](../spec/decisions/0021-layering-the-node-api-and-ui-pluralism.md)); recommends
-  **iced** as the leading candidate **conditional on a de-risking spike**
-  ([Spike 0004](../spikes/0004-iced-reference-ui-viability.md)). **Spec unchanged at v0.40.**
-  No new ADR — an L3 framework choice is below the compatibility boundary and decides nothing
-  about the wire core.
-- **Date:** 2026-06-30
+- **Status:** **Resolved — reference desktop UI is Tauri 2 (for now).** The evaluation recommended
+  **iced** *conditional* on [Spike 0004](../spikes/0004-iced-reference-ui-viability.md) retiring the
+  accessibility bar. **The spike ran (2026-07-12) and iced FAILED that bar** — released iced 0.14 ships
+  **no AccessKit / no accessibility tree at all** (empirically confirmed — see §6 below).
+  Per this eval's own contingency ("A FAIL on (A) tips the reference UI back to a webview/Tauri L3"), the
+  steward's reference desktop UI **adopts Tauri 2**. This is the eco-eval's job done, not a design defect —
+  **L3 is plural** and the wire core, `ClinicalData` port, and policy layer are UI-agnostic, so the swap is
+  bearable by construction. **Spec unchanged; no ADR** — an L3 framework choice is below the compatibility
+  boundary. Reversible: an iced (or libcosmic) client may still ship later if its accessibility matures.
+- **Date:** 2026-06-30 · **Resolved:** 2026-07-12
 - **Subjects:** [iced](https://github.com/iced-rs/iced) (MIT, Rust-native, Elm Architecture,
   wgpu/tiny-skia renderer) · [Tauri 2](https://github.com/tauri-apps/tauri) (MIT/Apache-2.0,
   Rust backend + system-webview frontend).
@@ -139,3 +142,36 @@ constrained *all* deployments' UI tech, which the layering explicitly forbids.
 > (multi-script shaping, latency statistics) are unit-tested headlessly, while the a11y-tree and live-latency
 > passes are scripted for a workstation/Pi operator. The harness is the artifact; the green/red verdict is a
 > human run.
+
+## 6. Outcome (2026-07-12) — iced fails the accessibility bar → Tauri
+
+The spike was run against the real reference shell (`cairn-gui/cairn-gui-shell`, a two-pane walking skeleton
+on a mock port; results recorded in `cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`).
+
+**What passed.** **I1 complex-script shaping PASSED** on the real product surface — a single fixture name
+`Amina أمينة अमीना 阿明娜` rendered Latin + Arabic (RTL) + Devanagari + Han with **zero tofu**. Cross-pane
+routing and the draggable divider worked. So the *text* risk — historically iced's weak spot — is not the
+blocker.
+
+**What failed — the decisive finding.** **Released iced 0.14 has no accessibility support whatsoever.**
+Inspecting the installed crates: only `text_input`/`text_editor` are focusable (`button.rs` has none), and
+**there is no `accesskit` dependency anywhere in the compiled tree** (`iced`, `iced_widget`, `iced_runtime`,
+`iced_winit`, nor the lockfile). Confirmed empirically with macOS **Accessibility Inspector** on the live
+window: the Cairn controls surface **no** accessible elements (`Children: Empty array`; only the AppKit menu
+bar is navigable) — a screen reader gets a menu bar and an empty box. For an EHR with real accessibility
+obligations this is the "potential blocker, not a cosmetic gap" §4.1 named.
+
+**Trajectory (why "wait for iced" is not bankable).** The AccessKit tracking issue
+[iced #552](https://github.com/iced-rs/iced/issues/552) has been **open since 2020**; as of Dec 2025 the thread
+was still debating the approach. There is an active but **draft, unmerged** PR
+([#3111](https://github.com/iced-rs/iced/pull/3111), May 2026); an earlier attempt (#3281) was closed without
+landing. The one iced-family path with a11y *today* is the **libcosmic / plushie-iced fork** (System76,
+actively maintained, ships in COSMIC) — viable but couples to a fork.
+
+**Decision.** The reference desktop UI **pivots to Tauri 2** (webview inherits the browser's mature a11y tree).
+Rationale beyond the bar: Cairn UIs are **thin layers over the DB + extensions**, and the policy layer is
+**GUI-agnostic**, so re-implementation cost is bearable and no wire/contract decision is affected. The slice-1
+work is **not wasted** — its framework-agnostic core (the `Tab`/semantic contract, the `ClinicalData` port, the
+manifest merge, the pane/routing/freshness state machine) is plain Rust reusable behind a Tauri backend; only
+the iced *rendering* layer is superseded. **Reversible:** re-evaluate iced or libcosmic if/when its
+accessibility matures (a small dedicated spike would settle libcosmic's completeness).

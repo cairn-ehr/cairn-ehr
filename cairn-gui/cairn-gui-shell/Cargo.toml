@@ -1,0 +1,26 @@
+[package]
+name = "cairn-gui-shell"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cairn-gui-tab = { path = "../cairn-gui-tab" }
+cairn-gui-data = { path = "../cairn-gui-data" }
+cairn-gui-manifest = { path = "../cairn-gui-manifest" }
+cairn-gui-tab-demographics = { path = "../cairn-gui-tabs/cairn-gui-tab-demographics" }
+cairn-gui-tab-note = { path = "../cairn-gui-tabs/cairn-gui-tab-note" }
+# iced enters the dependency tree ONLY behind the `gui` feature (ADR-0021 / §9.5):
+# `cargo test -p cairn-gui-shell` (default, no gui) must never pull it in.
+iced = { version = "0.14", optional = true, features = ["tiny-skia", "wgpu"] }
+
+[features]
+default = []
+gui = ["dep:iced"]
+
+[[bin]]
+name = "cairn-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
