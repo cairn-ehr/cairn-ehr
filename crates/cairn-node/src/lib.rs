@@ -11,6 +11,7 @@ pub mod john_doe;
 pub mod keystore;
 pub mod localstate;
 pub mod matcher_actor;
+pub mod medication;
 pub mod medium;
 pub mod pairing;
 pub mod photo_evidence;
