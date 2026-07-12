@@ -103,6 +103,42 @@ async fn assert_appears_as_current() {
 }
 
 #[tokio::test]
+async fn asserted_at_is_the_convergent_hlc_wall_not_the_local_fold_clock() {
+    // Regression: the view's `asserted_at` must be derived from the assert event's
+    // HLC wall (t_recorded, convergent across every node holding the event), NOT
+    // from `medication_statement.updated_at` (a local clock_timestamp fold marker
+    // that diverges between nodes and would make a freshly-synced old med look new).
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
+        .await
+        .unwrap();
+
+    // asserted_at == to_timestamp(hlc_wall/1000). Had the view used updated_at
+    // (clock_timestamp at fold time, sub-ms precision, a few ms later), this exact
+    // equality would fail — so this pins the event-derived, node-convergent value.
+    let matches_hlc: bool = c
+        .query_one(
+            "SELECT pm.asserted_at = to_timestamp(s.hlc_wall / 1000.0) \
+             FROM patient_medication pm \
+             JOIN medication_statement s USING (medication_id) \
+             WHERE pm.medication_id = $1::text::uuid",
+            &[&med_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        matches_hlc,
+        "asserted_at must equal the event's HLC wall time (convergent), not the local fold clock"
+    );
+}
+
+#[tokio::test]
 async fn empty_term_is_rejected_by_the_floor() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();

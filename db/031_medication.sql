@@ -235,10 +235,19 @@ CREATE TRIGGER medication_cessation_apply_trg
 --    when the statement arrives, ceased flips true. Combines each statement
 --    with its cessation (if any) into one list; every asserted thread appears
 --    regardless of who asserted it.
+--
+--    `asserted_at` is derived from the assert event's HLC wall component
+--    (`hlc_wall`, t_recorded in ms — db/001), NOT the local `updated_at`. This is
+--    the *convergent* recording time: the same on every node that holds the event,
+--    so the staleness signal (§3.15/§9-B — a med asserted years ago shows its age)
+--    is honest even on a node that only just replicated an old assert. `updated_at`
+--    is a local-clock fold marker (reset on every overlay apply) and would make a
+--    freshly-synced old med look new and diverge between nodes — wrong for display.
 CREATE OR REPLACE VIEW patient_medication AS
 SELECT s.medication_id, s.patient_id, s.term, s.inn_code, s.formulation,
        s.dose_amount, s.dose_unit, s.sig, s.info_source,
-       s.started_value, s.started_precision, s.updated_at AS asserted_at,
+       s.started_value, s.started_precision,
+       to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
        (c.medication_id IS NOT NULL) AS ceased,
        c.stopped_value, c.stopped_precision, c.reason
 FROM medication_statement s
@@ -263,6 +272,10 @@ GRANT SELECT ON patient_medication_past TO cairn_agent;
 --    fuzzy matching (brand<->generic/typos are deferred to the Tier-A drug matcher).
 --    COLLATE "C" pins the normalized-term key for cross-node determinism (ADR-0045).
 --    Resolution is ceasing the redundant thread (no new event type).
+--    Known blind spot (deferred, not a bug): the key prefers inn_code when present,
+--    so the SAME substance asserted once coded and once uncoded lands under two
+--    different keys and is NOT flagged. Cross-coding-state matching waits on the
+--    Tier-A dictionary, same as brand<->generic.
 CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
 SELECT patient_id,
        coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,

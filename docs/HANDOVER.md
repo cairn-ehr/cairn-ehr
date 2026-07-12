@@ -64,7 +64,10 @@ offline-first by design — no requirement that the local node has already seen 
 (set-union sync may deliver either event first). TDD, subagent-driven (6 tasks); full workspace green —
 fmt clean (one drift-fix needed: the CLI call sites weren't rustfmt-reflowed, fixed mechanically, no
 semantic change), clippy `--workspace -D warnings` clean, all tests pass including the new **DB-gated
-`tests/medication.rs` 8/8** alongside the full existing cairn-node/cairn-event/cairn-sync suite. **Deferred
+`tests/medication.rs` 9/9** alongside the full existing cairn-node/cairn-event/cairn-sync suite. **Post-review
+fix (this branch):** `patient_medication.asserted_at` now derives from the assert event's convergent
+`hlc_wall` (t_recorded) rather than the local-clock `updated_at` fold marker — so the §9-B staleness signal
+stays honest and node-independent (a freshly-synced old med no longer looks new); regression-tested. **Deferred
 (later slice or Tier-A tier):** dose-correction/change overlay; fuzzy reconciliation (brand↔generic, typos,
 salts); reconciliation *resolution* as a first-class event; a `delete` rendering-suppression visibility
 overlay; structured sig/frequency (lands with prescriptions); the Tier-A dictionary + autocomplete + DDI;

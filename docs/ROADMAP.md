@@ -443,8 +443,10 @@ deferred). `cairn-node::medication` orchestrators
 (`assert_medication` / `cease_medication`, both device-additive) + `medication-assert` / `medication-cease`
 CLI verbs; end-to-end CLI smoke passed live. Cessation is offline-first (no requirement that the local node
 has already seen the corresponding assert). Subagent-driven TDD (6 tasks); full workspace green — fmt +
-clippy `--workspace -D warnings` clean, all tests pass incl. **DB-gated `tests/medication.rs` 8/8**
-alongside the existing cairn-node/cairn-event/cairn-sync suite. **Deferred:** dose-correction/change
+clippy `--workspace -D warnings` clean, all tests pass incl. **DB-gated `tests/medication.rs` 9/9**
+alongside the existing cairn-node/cairn-event/cairn-sync suite. **Post-review fix:** `asserted_at` derives
+from the convergent `hlc_wall` (t_recorded), not the local `updated_at` fold clock, keeping the staleness
+signal honest and node-independent (regression-tested). **Deferred:** dose-correction/change
 overlay; fuzzy reconciliation (brand↔generic, typos, salts); reconciliation *resolution* as a first-class
 event; a `delete` rendering-suppression visibility overlay; structured sig/frequency (lands with
 prescriptions); the Tier-A dictionary + autocomplete + DDI; a separate `route` field; active
