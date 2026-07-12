@@ -95,7 +95,8 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     match (a.dose_amount, a.dose_unit) {
         (Some(amt), Some(u)) => s.push_str(&format!(" {amt} {u}")),
         (Some(amt), None) => s.push_str(&format!(" {amt}")),
-        _ => {}
+        (None, Some(u)) => s.push_str(&format!(" {u}")), // unit recorded without an amount (e.g. "puffs")
+        (None, None) => {}
     }
     if let Some(f) = a.formulation {
         s.push_str(&format!(" {f}"));
@@ -256,6 +257,20 @@ mod tests {
         let s = render_medication_twin(&a);
         assert!(s.starts_with("little white pill"));
         assert!(!s.trim().is_empty());
+    }
+
+    #[test]
+    fn assertion_twin_renders_unit_without_amount() {
+        // "comes in puffs, don't know how many" — the unit must survive into the twin,
+        // matching that medication_assertion_body keeps dose.unit for this case.
+        let mut a = full_assertion();
+        a.dose_amount = None;
+        let s = render_medication_twin(&a);
+        assert!(
+            s.contains("mg"),
+            "unit must render even without an amount, got: {}",
+            s
+        );
     }
 
     #[test]
