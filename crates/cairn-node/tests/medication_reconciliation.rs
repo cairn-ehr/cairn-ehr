@@ -293,3 +293,93 @@ async fn reconciliation_before_threads_converges() {
     assert_eq!(group_of(&c, a).await, std::cmp::min(a, b));
     assert_eq!(group_of(&c, b).await, std::cmp::min(a, b));
 }
+
+// ---------------------------------------------------------------------------
+// Oversize group guard (review fix, Task 4): mirrors identity_linkage.rs's
+// oversize_component_guard_rejects / component_at_exactly_cap_is_accepted for
+// cairn_recompute_component, one level down over medication threads. A component
+// larger than the cap is a matcher-pathology signature (mass false-merge); on LOCAL
+// authoring cairn_recompute_medication_group must RAISE and refuse wholesale rather
+// than silently truncate the group. The remote clamp-and-flag branch (apply-door,
+// cairn.remote_apply='on') has no medication apply-door test harness yet in slice 3;
+// see the filed follow-up issue for that branch.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn oversize_group_over_cap_is_refused() {
+    // With a tiny cap, the reconcile that would grow the connected component past it
+    // is refused wholesale on LOCAL authoring (fail-loud, never a silent cap/truncate).
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    c.batch_execute("SET cairn.max_medication_group_size = 3")
+        .await
+        .unwrap();
+    let patient = Uuid::now_v7();
+    let (a, b, cc, d) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap(); // {a,b} size 2 — ok
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, b, cc, &input)
+        .await
+        .unwrap(); // {a,b,c} size 3 == cap — ok
+    let err = reconcile_medications(&c, &sk, &kid, "test-node", patient, cc, d, &input)
+        .await
+        .unwrap_err(); // {a,b,c,d} size 4 > cap — refused
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("exceeds max size") && msg.contains("matcher pathology"),
+        "oversize medication group must be refused with a legible reason: {msg}"
+    );
+    // The refused edge must not have landed: c/d stay collapsed to themselves and
+    // a/b/cc keep their pre-refusal group (proves the RAISE rolled back the whole txn,
+    // not just the projection recompute).
+    let expected_abc = std::cmp::min(a, std::cmp::min(b, cc));
+    assert_eq!(group_of(&c, a).await, expected_abc);
+    assert_eq!(group_of(&c, cc).await, expected_abc);
+    assert_eq!(group_of(&c, d).await, d, "d never joined the group");
+}
+
+#[tokio::test]
+async fn oversize_group_at_cap_is_accepted() {
+    // The guard is strictly-greater (`> cap`), so a component of exactly `cap` members
+    // is accepted. Pins the boundary against a future `>=` regression that would wrongly
+    // reject a legitimate at-cap reconciliation.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    c.batch_execute("SET cairn.max_medication_group_size = 3")
+        .await
+        .unwrap();
+    let patient = Uuid::now_v7();
+    let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+        .await
+        .unwrap(); // {a,b} size 2 — ok
+    reconcile_medications(&c, &sk, &kid, "test-node", patient, b, cc, &input)
+        .await
+        .unwrap(); // {a,b,c} size 3 == cap — accepted
+    let expected = std::cmp::min(a, std::cmp::min(b, cc));
+    assert_eq!(group_of(&c, a).await, expected);
+    assert_eq!(group_of(&c, b).await, expected);
+    assert_eq!(
+        group_of(&c, cc).await,
+        expected,
+        "a component of exactly cap members is accepted"
+    );
+}
