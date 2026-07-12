@@ -162,6 +162,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "032_medication_dose",
         include_str!("../../../db/032_medication_dose.sql"),
     ),
+    // §3.15/§3.16 slice 3 part 1: medication reconciliation/separation floor + twin
+    // dispatch. Parts 2/3 (projection + view reworks) append to the SAME db/033 file
+    // as separate BEGIN;/COMMIT; blocks — this include_str! auto-picks them up too.
+    (
+        "033_medication_reconciliation",
+        include_str!("../../../db/033_medication_reconciliation.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
