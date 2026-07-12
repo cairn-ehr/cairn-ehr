@@ -452,7 +452,9 @@ pub async fn reconcile_medications(
     validate_distinct_subjects(subject_a, subject_b)?;
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
-    let body = build_reconcile_body(event_id, subject_a, subject_b, patient, input, node_kid, hlc);
+    let body = build_reconcile_body(
+        event_id, subject_a, subject_b, patient, input, node_kid, hlc,
+    );
     let signed = sign(&body, node_sk)?;
     client
         .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -476,7 +478,9 @@ pub async fn separate_medications(
     validate_distinct_subjects(subject_a, subject_b)?;
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
-    let body = build_separate_body(event_id, subject_a, subject_b, patient, input, node_kid, hlc);
+    let body = build_separate_body(
+        event_id, subject_a, subject_b, patient, input, node_kid, hlc,
+    );
     let signed = sign(&body, node_sk)?;
     client
         .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -570,14 +574,21 @@ mod reconciliation_build_tests {
             reason: Some("brand vs generic"),
         };
         let body = build_reconcile_body(Uuid::now_v7(), a, b, Uuid::now_v7(), &input, "kid", hlc());
-        assert_eq!(body.event_type, "clinical.medication-reconciliation.asserted");
+        assert_eq!(
+            body.event_type,
+            "clinical.medication-reconciliation.asserted"
+        );
         assert_eq!(body.schema_version, "clinical.medication-reconciliation/1");
         assert_eq!(body.payload["subject_a"], a.to_string());
         assert_eq!(body.payload["subject_b"], b.to_string());
         assert_eq!(body.payload["provenance"], "clinician-judgment");
         assert_eq!(body.contributors[0]["role"], "recorded");
         assert!(body.t_effective.is_none());
-        assert!(body.plaintext_twin.as_deref().unwrap().contains("Reconciled"));
+        assert!(body
+            .plaintext_twin
+            .as_deref()
+            .unwrap()
+            .contains("Reconciled"));
     }
 
     #[test]
@@ -591,7 +602,11 @@ mod reconciliation_build_tests {
         let body = build_separate_body(Uuid::now_v7(), a, b, Uuid::now_v7(), &input, "kid", hlc());
         assert_eq!(body.event_type, "clinical.medication-separation.asserted");
         assert_eq!(body.schema_version, "clinical.medication-separation/1");
-        assert!(body.plaintext_twin.as_deref().unwrap().contains("Separated"));
+        assert!(body
+            .plaintext_twin
+            .as_deref()
+            .unwrap()
+            .contains("Separated"));
     }
 
     #[test]
