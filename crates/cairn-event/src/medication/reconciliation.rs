@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 /// threads. `reason` is omitted entirely when absent (never serialized as null),
 /// so the floor's key-presence checks see exactly what the author asserted.
 pub struct ReconciliationAssertion<'a> {
-    pub subject_a: &'a str,  // a medication_id thread (string uuid)
-    pub subject_b: &'a str,  // the other medication_id thread, distinct from subject_a
+    pub subject_a: &'a str,      // a medication_id thread (string uuid)
+    pub subject_b: &'a str,      // the other medication_id thread, distinct from subject_a
     pub provenance: &'a str, // §4.1 ladder — required-present, value-open ("clinician-judgment")
     pub reason: Option<&'a str>, // free-text ("brand vs generic"); omitted when None
 }
@@ -89,7 +89,10 @@ mod tests {
 
     #[test]
     fn reason_omitted_when_absent_not_null() {
-        let a = ReconciliationAssertion { reason: None, ..sample() };
+        let a = ReconciliationAssertion {
+            reason: None,
+            ..sample()
+        };
         let v = separation_body(&a);
         assert!(
             !v.as_object().unwrap().contains_key("reason"),
@@ -114,7 +117,10 @@ mod tests {
         assert!(s.contains("Separated"));
         assert!(!s.trim().is_empty());
         // non-empty even with no reason
-        let bare = ReconciliationAssertion { reason: None, ..sample() };
+        let bare = ReconciliationAssertion {
+            reason: None,
+            ..sample()
+        };
         assert!(!render_reconciliation_twin(&bare).trim().is_empty());
     }
 }
