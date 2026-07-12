@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-11 · **Spec/ADRs:** v0.46 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-12 · **Spec/ADRs:** v0.47 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -33,7 +33,42 @@ evidence override)
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-11, latest) — §5.4 `enroll-human` ceremony CLI (no closing issue; branch
+**This session (2026-07-12) — the enroll dual-mapping floor guard: the B-direction complement of ADR-0044
+([#166](https://github.com/cairn-ehr/cairn-ehr/issues/166) CLOSED; ADR-0046; spec v0.46→0.47; branch
+`fix/enroll-dual-mapping-floor-166`).** The SECOND in-DB **floor authorization** change of the actor registry after
+#152. `submit_event` (db/005) resolves a signer to an actor purely by `signing_key_id`; a key mapping to **>1**
+`actor_id` stamps `actor_id=NULL` for **every** event that key authors node-wide (silent, irreversible attribution
+loss). #152/ADR-0044's `cairn_actor_id_key_conflict` guarded only the **A-direction** (one `actor_id` ← two keys);
+the **B-direction** (one key → two `actor_id`s) was unguarded — allowed even **serially**, and the Rust
+`enroll_human_actor` Guard 1 that caught it was per-caller and racy (the accepted TOCTOU #166 tracked). Fix: a new
+pure `STABLE` `cairn_key_actor_id_conflict(key, actor_id)` (whole-history, `op IN ('enroll','supersede')`,
+`actor_id IS DISTINCT FROM`) + a **per-key advisory lock acquired before the actor_id lock** (one global order →
+deadlock-free; the loser re-reads the committed row under READ COMMITTED and is refused) in `enroll_actor`
+(`db/004` edited in place, the #99/#152 pattern). **Scope = whole-history / anti-key-reuse** (the maintainer's call):
+a key that ever bound a different actor can **never** enroll a new one, even after revoke — symmetric with #152's
+anti-resurrection. Idempotent same-key re-enroll, distinct-key enrolls, and the matcher's fresh-key-per-epoch are
+all unaffected (verified: no production path maps one key to two actors). The Rust Guard 1 is **reframed as advisory
+legibility + the idempotent shortcut** — the floor is now the race-safe enforcement (clears the house-rule-5 debt
+#166 tracked). **Test-staging fix:** the contamination-cascade recall suites (`recall_epoch.rs`,
+`db/tests/006_recall_test.sql`) deliberately dual-map one key to force `actor_id=NULL` and exercise the
+`events_by_actor_epoch` fallback — migrated to a raw `actor_event` INSERT (bypassing the now-guarded door, same rows
+it would write) so the NULL-attribution coverage is preserved; `db/004_actors_test.sql`'s epoch-bump uses a distinct
+key per epoch. **db/005 + db/006 UNCHANGED** — the guard narrows *how* the ambiguous state can arise, not the
+projection's duty to cope with it. brainstorm→design→plan→**subagent-driven TDD** (per-task spec+quality review;
+final whole-branch review opus: **Ready to merge, 0 Critical/Important**, 3 Minors — 2 fixed inline [advisory-lock
+comment accuracy; mirrored-predicate-arg cross-note], 1 filed). TDD: 3 new DB-gated tests
+(`dual_mapping_serial_is_refused`, `key_reuse_after_revoke_is_refused`, and a concurrent-race regression guard
+`concurrent_dual_mapping_yields_exactly_one_success` [two connections; all RED-confirmed before the guard]) + the 004
+SQL mirror; full workspace green (cairn-node all DB-gated · cairn-event · cairn-sync), fmt + clippy --workspace +
+mkdocs clean. Design+plan under `docs/superpowers/{specs,plans}/2026-07-12-enroll-dual-mapping-floor-guard*`.
+A post-PR `/review`→`/fixall` pass added the concurrency regression guard. **Follow-ups filed (house rule 5):**
+[#169](https://github.com/cairn-ehr/cairn-ehr/issues/169) — a pre-existing shared-DB test-isolation gap
+(`recall_epoch.rs` `reset()` truncates before-each not after-last, so cargo residue can collide with the 004 SQL
+mirror; harmless under the serial guard); [#172](https://github.com/cairn-ehr/cairn-ehr/issues/172) — the future
+`rotate-key`/`supersede` + actor-event sync-apply doors must mirror BOTH enroll collision checks (A #152/ADR-0044 +
+B #166/ADR-0046), the actor-registry analogue of #154.
+
+**Prior session (2026-07-11, latest) — §5.4 `enroll-human` ceremony CLI (no closing issue; branch
 `feat/enroll-human-ceremony-cli`; no migration / floor / SCHEMA / ADR / spec change — additive Rust reusing
 the `enroll_actor` db/004 floor).** Enrols a clinician's signing key as a `kind='human'` actor carrying an
 ADR-0044 **person-distinguishing determinant** — the recorded prerequisite that makes `identify --link`
@@ -46,7 +81,7 @@ db/005 NULL that key's authorship node-wide) + an advisory ADR-0044 collision pr
 floor (the real enforcement). New `enroll-human` CLI: pre-I/O determinant validation, mint-if-absent personal
 key (sealed + shown-once recovery code, or `--insecure-plaintext`; **no `.lsk` node-escrow** on a personal key)
 + a **pre-mint** collision check so a rejected ceremony leaves no stray key/code (best-effort — the accepted #166
-race window remains). TDD: 6 pure builder tests + **7
+race window remains, now **CLOSED** this session — see top block). TDD: 6 pure builder tests + **7
 DB-gated `tests/enroll_human.rs`** (resolvable human; distinct determinants→distinct actor_ids; identical
 determinant+distinct keys→refused; idempotent same-key re-enroll asserts no 2nd actor_event row; dual-mapping
 refused; same-key-different-determinant refused; pre-mint claim predicate). Whole-branch review (opus): **Ready to
@@ -55,10 +90,10 @@ merge = YES**, 0 Critical/Important; 3 Minor all fixed. A post-PR `/review` pass
 stray-key claim to best-effort; load-branch unseal rationale). Full workspace green (cairn-node lib 117 + all
 DB-gated incl. enroll_human 7/7 & identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace + mkdocs
 clean. **Follow-up filed
-(house rule 5): [#166](https://github.com/cairn-ehr/cairn-ehr/issues/166)** — the dual-mapping guard has an
-accepted TOCTOU (concurrent enroll of the SAME key under DIFFERENT actor_ids; the floor's advisory lock is keyed
-on actor_id, not the key); documented inline as accepted (rare owner ceremony, graceful NULL degradation, not
-corruption), durable fix is a floor-level per-signing-key guard in db/004. **Also filed
+(house rule 5): [#166](https://github.com/cairn-ehr/cairn-ehr/issues/166) — now CLOSED (see top block, ADR-0046):**
+the dual-mapping guard had an accepted TOCTOU (concurrent enroll of the SAME key under DIFFERENT actor_ids; the
+floor's advisory lock was keyed on actor_id, not the key); the durable floor-level per-key guard in db/004 (the
+per-key advisory lock + `cairn_key_actor_id_conflict`) now closes it. **Also filed
 [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168)** — make the entity→role-actor (1:many) relationship
 first-class (today `role` is part of `actor_id` by design, so one person holds several role-actors linked
 implicitly by a shared `registration_id`). **Remaining §5.4:** the "prior history
@@ -599,6 +634,8 @@ ADR before reopening any of these.
 | [0042](spec/decisions/0042-concrete-attachment-reference-shape.md) | Concrete attachment-reference shape (Attachment/Rendition/SealRef; frozen field order) | §3.14 (refines 0013, reconciles 0041) |
 | [0043](spec/decisions/0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | §9.6/§3.9 (refines 0010/0022) |
 | [0044](spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md) | Enroll fails closed on `actor_id` collision with a distinct key; humans carry a person-distinguishing determinant | §7.5 (refines 0011/0029) |
+| [0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md) | Collation-independent projection winner tiebreaks (`COLLATE "C"`) | §5.7/§4 (refines principle 1) |
+| [0046](spec/decisions/0046-enroll-fail-closed-on-key-actor-dual-mapping.md) | Enroll fails closed on key→actor dual mapping (B-direction whole-history guard) | §7.5 (refines 0044/0011) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

@@ -66,6 +66,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0043](0043-suppression-self-only-disagreement-is-additive.md) | Suppression is self-only (human-authored content); disagreement is additive; agent advisories dismissable | Accepted (refines 0010, 0022) | 2026-07-09 |
 | [0044](0044-enroll-fail-closed-on-actor-id-collision.md) | Enroll fails closed on `actor_id` collision; human actors carry a person-distinguishing determinant | Accepted (refines 0011, 0029) | 2026-07-09 |
 | [0045](0045-collation-independent-projection-tiebreaks.md) | Collation-independent projection winner tiebreaks | Accepted (refines principle 1; relates to 0031, #115) | 2026-07-10 |
+| [0046](0046-enroll-fail-closed-on-key-actor-dual-mapping.md) | Enroll fails closed on key→actor dual mapping (the B-direction whole-history guard) | Accepted (refines 0044, 0011) | 2026-07-12 |
 
 ## Template
 

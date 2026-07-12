@@ -110,12 +110,14 @@ pub async fn determinant_already_claimed(
 /// Enroll `kid` as a `kind='human'` actor with `pinned`, reusing the in-DB `enroll_actor`
 /// floor (`db/004`). Two guards wrap the floor call:
 ///
-/// 1. **Dual-mapping guard.** `submit_event` resolves a signer to an actor purely by
-///    `signing_key_id`; if one key maps to MORE than one `actor_current` row it sets
-///    `actor_id = NULL` for EVERY event that key authors node-wide (`db/005`,
-///    `array_length(v_actor_ids,1)=1`) — a silent, irreversible attribution loss. So a key
-///    already bound to an actor must not be re-bound: we refuse, EXCEPT the idempotent case
-///    (same key, same `actor_id`, already a human) which is a re-runnable no-op.
+/// 1. **Dual-mapping shortcut (advisory).** `submit_event` resolves a signer to an actor
+///    purely by `signing_key_id`; if one key maps to MORE than one `actor_current` row it
+///    sets `actor_id = NULL` for EVERY event that key authors node-wide (`db/005`). Since
+///    issue #166 the `enroll_actor` FLOOR enforces "one key binds at most one actor_id"
+///    race-safely (`cairn_key_actor_id_conflict` + a per-key advisory lock), so this check
+///    is no longer the enforcement — it is advisory legibility plus the idempotent
+///    shortcut: same key, same `actor_id`, already human is a re-runnable no-op we can
+///    answer without a floor round-trip (and without inserting a duplicate `enroll` row).
 /// 2. **Advisory ADR-0044 collision pre-check.** `cairn_actor_id_key_conflict` tells us up front
 ///    whether this determinant set already identifies another actor under a different key, so we
 ///    can name the remedy (add a distinguishing determinant) instead of surfacing a raw floor
@@ -134,16 +136,14 @@ pub async fn enroll_human_actor(
         .context("computing cairn_actor_id for the human pinned set")?
         .get(0);
 
-    // Guard 1 — is this key already an actor? This is a best-effort read-then-write, NOT
-    // serialized against a concurrent enrollment of the SAME key under a DIFFERENT actor_id: the
-    // floor's `pg_advisory_xact_lock` (enroll_actor, db/004) is keyed on the actor_id being
-    // enrolled, so it closes two *different* keys racing for the *same* actor_id (guard 2's
-    // hazard) but not *one* key racing across two *different* actor_ids (this guard's hazard).
-    // Accepted for now: enrollment is a rare, owner-gated ceremony, and the failure mode is
-    // graceful, not silent — db/005 degrades a dual-mapped key to actor_id=NULL ("attribution
-    // honestly unknown", principle 4), never a misattribution, the same proportionality ADR-0044
-    // applies to its own advisory lock. Durable fix: a floor-level (db/004) per-signing-key guard,
-    // tracked in issue #166.
+    // Guard 1 — is this key already an actor? The db/004 FLOOR is the enforcement now
+    // (issue #166): enroll_actor refuses a fresh enroll of an already-bound key under a
+    // different actor_id, serialized by a per-key advisory lock, so the concurrent
+    // same-key/different-actor race is closed at the floor. This read is advisory: it lets
+    // us return the idempotent AlreadyEnrolled outcome (same key, same actor, already human)
+    // without a floor round-trip or a duplicate enroll row, and surface a friendly message
+    // for the non-idempotent case before the floor's own RAISE — the same
+    // advisory-mirrors-the-floor pattern as Guard 2 (attester_is_enrolled_human).
     let rows = db
         .query(
             "SELECT actor_id, kind FROM actor_current WHERE signing_key_id = $1",
