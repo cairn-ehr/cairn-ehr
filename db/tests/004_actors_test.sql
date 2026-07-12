@@ -8,10 +8,13 @@ SELECT enroll_actor('agent',
     'deadbeef') AS aid \gset
 SELECT count(*) = 1 AS enrolled_one FROM actor_current WHERE actor_id = :'aid'::bytea;
 
--- Bumping skill_epoch mints a DIFFERENT actor_id (the supersede trigger for C4).
+-- Bumping skill_epoch mints a DIFFERENT actor_id (the supersede trigger for C4). A fresh
+-- key per epoch matches the real matcher (matcher_actor.rs) and the issue #166 floor guard
+-- (one key binds at most one actor_id); the actor_id derives from the pinned set alone, so
+-- the distinct key does not affect what this asserts.
 SELECT enroll_actor('agent',
     '{"model":"triage-stub","version":"1","skill_epoch":"epoch-b"}'::jsonb,
-    'deadbeef') AS aid2 \gset
+    'deadbee2') AS aid2 \gset
 SELECT (:'aid'::bytea <> :'aid2'::bytea) AS epoch_bump_is_new_actor;
 
 -- Monotonic tiebreak (issue #99): registry rows landing in the SAME microsecond

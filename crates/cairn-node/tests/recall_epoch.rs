@@ -34,13 +34,24 @@ async fn reset(c: &Client) {
         .unwrap();
 }
 
-/// Enroll `kid` as an agent pinned to `epoch`; returns the minted actor_id.
+/// Stage an agent enrollment for `kid` pinned to `epoch`; returns the minted actor_id.
+///
+/// This suite deliberately maps ONE key across SEVERAL epochs (=> several actor_ids) to
+/// force `submit_event` (db/005) to stamp `actor_id = NULL`, the only way to exercise the
+/// `events_by_actor_epoch` NULL-attribution fallback (db/006). Since issue #166 the
+/// `enroll_actor` FLOOR refuses that dual mapping (a fresh enroll of an already-bound key),
+/// so we stage it via a raw `actor_event` INSERT: the state still arises from non-enroll
+/// paths (historical rows, a future actor-sync apply door that has not yet mirrored the
+/// guard), and the recall projection must still cope. `actor_id` is computed exactly as the
+/// door would (`cairn_actor_id(pinned)`) so the recall query's `epoch_regs` join matches.
 async fn enroll_epoch(c: &Client, kid: &str, epoch: &str) -> Vec<u8> {
     let pinned =
         format!("{{\"model\":\"triage-stub\",\"version\":\"1\",\"skill_epoch\":\"{epoch}\"}}");
     c.query_one(
-        &format!("SELECT enroll_actor('agent', '{pinned}', $1)"),
-        &[&kid],
+        "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id) \
+         VALUES (cairn_actor_id($1::text::jsonb), 'enroll', 'agent', $1::text::jsonb, $2) \
+         RETURNING actor_id",
+        &[&pinned, &kid],
     )
     .await
     .unwrap()

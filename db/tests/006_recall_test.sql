@@ -36,9 +36,20 @@ DECLARE
     aid_a bytea; aid_b bytea;
     e_a uuid := gen_random_uuid(); e_b uuid := gen_random_uuid(); e_null uuid := gen_random_uuid();
 BEGIN
-    aid_a := enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-a"}'::jsonb, 'histkey');
+    -- issue #166: this suite maps ONE key ('histkey') across THREE epochs to force
+    -- actor_id=NULL and exercise the events_by_actor_epoch NULL-attribution fallback.
+    -- enroll_actor now refuses that dual mapping, so stage it via a raw INSERT (the state
+    -- still arises from non-enroll paths; the recall projection must still cope). actor_id
+    -- is computed as the door would, so the epoch_regs join matches.
+    INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id)
+    VALUES (cairn_actor_id('{"model":"m","version":"1","skill_epoch":"hist-a"}'::jsonb),
+            'enroll', 'agent', '{"model":"m","version":"1","skill_epoch":"hist-a"}'::jsonb, 'histkey')
+    RETURNING actor_id INTO aid_a;
     INSERT INTO actor_event (actor_id, op) VALUES (aid_a, 'revoke');
-    aid_b := enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-b"}'::jsonb, 'histkey');
+    INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id)
+    VALUES (cairn_actor_id('{"model":"m","version":"1","skill_epoch":"hist-b"}'::jsonb),
+            'enroll', 'agent', '{"model":"m","version":"1","skill_epoch":"hist-b"}'::jsonb, 'histkey')
+    RETURNING actor_id INTO aid_b;
 
     -- Owner-path rows (bypassing the doors) with explicit attribution stamps: one
     -- per epoch, plus one honestly-unattributed (NULL) row for the same key.
@@ -72,7 +83,9 @@ BEGIN
     -- knew the epoch existed (the origin may have authored under it all along). The
     -- earlier events must over-select into the late epoch, flagged
     -- 'pre-registration'; NULL-stamped rows stay 'unattributed'.
-    PERFORM enroll_actor('agent', '{"model":"m","version":"1","skill_epoch":"hist-c"}'::jsonb, 'histkey');
+    INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id)
+    VALUES (cairn_actor_id('{"model":"m","version":"1","skill_epoch":"hist-c"}'::jsonb),
+            'enroll', 'agent', '{"model":"m","version":"1","skill_epoch":"hist-c"}'::jsonb, 'histkey');
     IF NOT EXISTS (SELECT 1 FROM events_by_actor_epoch('histkey','hist-c') x
                    WHERE x.event_id = e_a AND x.attribution = 'pre-registration') THEN
         RAISE EXCEPTION 'registry-lag FAILED: pre-registration event missing from late epoch''s recall set';
