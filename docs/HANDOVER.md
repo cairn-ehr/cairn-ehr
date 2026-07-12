@@ -30,10 +30,55 @@ evidence override)
 `identify --link` prerequisite; **done this session**)
 + identity **C5+** (`reattribute` — waits on a clinical-note surface) + the **rest of the §5.4 subsystem**
 (the "prior history now available" push-alert; the search-before-create funnel).
++ the **first clinical-content event stream, `clinical.medication` slice 1 — BUILT** (assert/cease verbs,
+db/031 floor, `medication_statement`/`medication_cessation` projections, `patient_medication{,_current,_past}`
+views + the E1 reconciliation flag, orchestrators + CLI — **done this session**; distinct from the
+identity/demographics surfaces above — the first stream carrying actual clinical content).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-12) — the enroll dual-mapping floor guard: the B-direction complement of ADR-0044
+**This session (2026-07-12) — the first clinical-content event stream: `clinical.medication` slice 1
+(branch `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
+graduates data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code).**
+Distinct from every prior slice on this branch: everything above (demographics, the §5.2 matcher, the
+§5.7 identity core, the §5.4 John-Doe subsystem) is *administrative/identity* data about the patient;
+this is the first stream of *clinical content* — what medication the patient is actually on. Two
+append-only verbs over an immortal `medication_id` thread: `clinical.medication.asserted` (schema
+`clinical.medication/1`) + `clinical.medication-cessation.asserted` (`clinical.medication-cessation/1`).
+brainstorm→spec→plan→subagent-driven TDD (design at
+`docs/superpowers/specs/2026-07-11-medication-recording-design.md`, plan at
+`docs/superpowers/plans/2026-07-11-medication-recording-slice-1.md`). New `cairn-event::medication` pure
+builders: substance ref is mandatory `term` + nullable `inn_code` + formulation (principle-4 uncertainty
+floor — only `term` is mandatory, everything else honest-unknown, never fabricated to satisfy a required
+field); `DoseUnit` is free-text with a recommended vocab (not yet a closed Tier-A dictionary); `info_source`
+carries provenance-of-claim (patient-reported / clinician-observed / document, etc.). New
+`db/031_medication.sql`: the structural floor via `cairn_check_medication_assertion` + the shared
+`cairn_event_twin` hook (non-empty `term` + `info_source`; valid `medication_id`); `medication_statement` +
+`medication_cessation` projections kept as **separate tables** so they are arrival-order-independent — an
+**orphan cessation** renders nothing until its assert arrives, then correctly surfaces the medication in
+`patient_medication_past`; the `patient_medication{,_current,_past}` views union across sources with
+staleness visible via the assert date; and the **E1 deterministic advisory reconciliation flag**
+(view `patient_medication_reconciliation_flag`; `coalesce(inn_code, normalized term)` — advisory-only,
+cleared by ceasing a duplicate; fuzzy brand↔generic matching deliberately deferred). New `cairn-node::medication` orchestrators (`assert_medication` /
+`cease_medication`, both device-additive — slice 1 carries no human-attested clinical responsibility) +
+`medication-assert` / `medication-cease` CLI verbs; full end-to-end CLI smoke passed live. Cessation is
+offline-first by design — no requirement that the local node has already seen the corresponding assert
+(set-union sync may deliver either event first). TDD, subagent-driven (6 tasks); full workspace green —
+fmt clean (one drift-fix needed: the CLI call sites weren't rustfmt-reflowed, fixed mechanically, no
+semantic change), clippy `--workspace -D warnings` clean, all tests pass including the new **DB-gated
+`tests/medication.rs` 9/9** alongside the full existing cairn-node/cairn-event/cairn-sync suite. **Post-review
+fix (this branch):** `patient_medication.asserted_at` now derives from the assert event's convergent
+`hlc_wall` (t_recorded) rather than the local-clock `updated_at` fold marker — so the §9-B staleness signal
+stays honest and node-independent (a freshly-synced old med no longer looks new); regression-tested. **Deferred
+(later slice or Tier-A tier):** dose-correction/change overlay; fuzzy reconciliation (brand↔generic, typos,
+salts); reconciliation *resolution* as a first-class event; a `delete` rendering-suppression visibility
+overlay; structured sig/frequency (lands with prescriptions); the Tier-A dictionary + autocomplete + DDI;
+a separate `route` field; active review / last-confirmed staleness; the
+[#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-triple collision advisory extended onto the
+medication projections (consistency follow-on to match db/024); and human-attested clinical responsibility
+on a medication statement (slice 1 is device-additive throughout).
+
+**Prior session (2026-07-12, now on main — PR #170) — the enroll dual-mapping floor guard: the B-direction complement of ADR-0044
 ([#166](https://github.com/cairn-ehr/cairn-ehr/issues/166) CLOSED; ADR-0046; spec v0.46→0.47; branch
 `fix/enroll-dual-mapping-floor-166`).** The SECOND in-DB **floor authorization** change of the actor registry after
 #152. `submit_event` (db/005) resolves a signer to an actor purely by `signing_key_id`; a key mapping to **>1**

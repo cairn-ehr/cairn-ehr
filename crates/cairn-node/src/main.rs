@@ -456,6 +456,58 @@ enum Cmd {
         #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
         attester_passphrase: Option<String>,
     },
+
+    /// Record a medication the patient takes/took (clinical.medication.asserted).
+    /// Mints a medication thread id. Only --term is required; it may be vague
+    /// ("little white pill"). Everything else is an honest unknown when omitted.
+    MedicationAssert {
+        /// The patient UUID this medication is recorded against.
+        patient: Uuid,
+        /// As-asserted substance term (required, may be vague).
+        #[arg(long)]
+        term: String,
+        /// Stable INN code, if known (usually absent in slice 1 — no dictionary yet).
+        #[arg(long)]
+        inn_code: Option<String>,
+        /// Formulation (tablet, capsule, liquid, patch, …).
+        #[arg(long)]
+        formulation: Option<String>,
+        /// Dose magnitude (decimal, e.g. "40").
+        #[arg(long)]
+        dose_amount: Option<String>,
+        /// Dose unit (mg, mcg, g, mL, units, puffs, drops, %, or a free-text long-tail).
+        #[arg(long)]
+        dose_unit: Option<String>,
+        /// Free-text directions ("one BD", "PRN").
+        #[arg(long)]
+        sig: Option<String>,
+        /// Who the claim came from: patient-reported | clinician-observed | external-record | unknown.
+        #[arg(long, default_value = "unknown")]
+        info_source: String,
+        /// When the patient began taking it (value, e.g. "2024" or a "2020/2024" range).
+        #[arg(long)]
+        started: Option<String>,
+        /// Precision token for --started (year|month|day|year-range).
+        #[arg(long)]
+        started_precision: Option<String>,
+    },
+    /// Cease a medication thread (clinical.medication-cessation.asserted) — makes it
+    /// past. Offline-first: does not require the assert to be present locally.
+    MedicationCease {
+        /// The patient UUID the thread belongs to.
+        patient: Uuid,
+        /// The medication thread id (printed by `medication-assert`).
+        medication_id: Uuid,
+        /// When it was stopped (value).
+        #[arg(long)]
+        stopped: Option<String>,
+        /// Precision token for --stopped.
+        #[arg(long)]
+        stopped_precision: Option<String>,
+        /// Optional free-text reason.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1349,6 +1401,75 @@ async fn main() -> anyhow::Result<()> {
             if let (Some(prior), Some(link_eid)) = (link, out.link_event_id) {
                 println!("linked to {prior}; link event {link_eid}");
             }
+        }
+        Cmd::MedicationAssert {
+            patient,
+            term,
+            inn_code,
+            formulation,
+            dose_amount,
+            dose_unit,
+            sig,
+            info_source,
+            started,
+            started_precision,
+        } => {
+            cairn_node::medication::validate_term(&term)?;
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::AssertMedicationInput {
+                term: &term,
+                inn_code: inn_code.as_deref(),
+                formulation: formulation.as_deref(),
+                dose_amount: dose_amount.as_deref(),
+                dose_unit: dose_unit.as_deref(),
+                sig: sig.as_deref(),
+                info_source: &info_source,
+                started: started.as_deref(),
+                started_precision: started_precision.as_deref(),
+            };
+            let med_id = cairn_node::medication::assert_medication(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                &input,
+            )
+            .await?;
+            println!("recorded medication for {patient}; thread {med_id}");
+        }
+        Cmd::MedicationCease {
+            patient,
+            medication_id,
+            stopped,
+            stopped_precision,
+            reason,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            let input = cairn_node::medication::CeaseMedicationInput {
+                stopped: stopped.as_deref(),
+                stopped_precision: stopped_precision.as_deref(),
+                reason: reason.as_deref(),
+            };
+            let event_id = cairn_node::medication::cease_medication(
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &input,
+            )
+            .await?;
+            println!("ceased medication thread {medication_id}; event {event_id}");
         }
     }
     Ok(())

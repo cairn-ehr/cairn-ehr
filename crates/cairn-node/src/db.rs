@@ -151,6 +151,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "030_john_doe_local_ordinal",
         include_str!("../../../db/030_john_doe_local_ordinal.sql"),
     ),
+    // §3.15/§3.16 the first clinical-content surface: medication assert + cessation
+    // floor, the medication_statement projection, and the assert-only current view.
+    (
+        "031_medication",
+        include_str!("../../../db/031_medication.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
