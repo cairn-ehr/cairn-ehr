@@ -100,4 +100,25 @@ BEGIN
     END;
 END $$;
 
+-- issue #166 (B-direction): one signing key must not bind two actor_ids. A fresh enroll
+-- under a distinct pinned set with an already-bound key is refused (else db/005 NULLs that
+-- key's authorship node-wide). The mirror of the #152 A-direction guard above.
+DO $$
+DECLARE ok boolean := false;
+BEGIN
+    PERFORM enroll_actor('agent', '{"model":"m","skill_epoch":"dm-a"}'::jsonb, 'dualkey');
+    BEGIN
+        PERFORM enroll_actor('agent', '{"model":"m","skill_epoch":"dm-b"}'::jsonb, 'dualkey');
+    EXCEPTION WHEN others THEN
+        ok := (SQLERRM LIKE '%different actor_id%');
+        IF NOT ok THEN
+            RAISE EXCEPTION 'wrong error for #166 dual-mapping: %', SQLERRM;
+        END IF;
+    END;
+    IF NOT ok THEN
+        RAISE EXCEPTION 'FAILED: #166 dual-mapping enroll (one key, two actor_ids) was allowed';
+    END IF;
+    RAISE NOTICE 'issue #166 dual-mapping refusal OK';
+END $$;
+
 ROLLBACK;

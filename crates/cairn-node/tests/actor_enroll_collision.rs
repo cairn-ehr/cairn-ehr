@@ -166,3 +166,88 @@ async fn same_key_re_enroll_after_revoke_is_refused() {
         db_msg(&err)
     );
 }
+
+#[tokio::test]
+async fn dual_mapping_serial_is_refused() {
+    // issue #166: one signing key binding TWO actor_ids makes db/005 stamp actor_id=NULL
+    // for every event that key authors node-wide (silent attribution loss). The floor now
+    // refuses a fresh enroll of an already-bound key under a different pinned set.
+    let Some(cs) = cs() else { return };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let c = db::connect_and_load_schema(&cs).await.unwrap();
+    reset(&c).await;
+    let (_sk, kid) = generate_key().unwrap();
+    // Same key, first pinned set -> actor A1 (fine).
+    c.execute(
+        "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"a\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+    // Same key, DIFFERENT pinned set -> a distinct actor_id A2 -> refused (would dual-map).
+    let err = c
+        .execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"b\"}', $1)",
+            &[&kid],
+        )
+        .await
+        .expect_err("a second actor_id for the same key must be refused");
+    assert!(
+        db_msg(&err).contains("already binds a different actor_id"),
+        "expected the #166 dual-mapping RAISE, got: {}",
+        db_msg(&err)
+    );
+    // The key still resolves to exactly ONE live actor (no NULL-attribution trap opened).
+    let n: i64 = c
+        .query_one(
+            "SELECT count(DISTINCT actor_id) FROM actor_current WHERE signing_key_id = $1",
+            &[&kid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "key must map to exactly one live actor after the refusal"
+    );
+}
+
+#[tokio::test]
+async fn key_reuse_after_revoke_is_refused() {
+    // issue #166 whole-history / anti-key-reuse (the B-direction mirror of #152's
+    // anti-resurrection): a key that ever bound a different actor can NEVER enroll a new
+    // one, even after that actor is revoked. This is the deliberate guard-scope choice.
+    let Some(cs) = cs() else { return };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let c = db::connect_and_load_schema(&cs).await.unwrap();
+    reset(&c).await;
+    let (_sk, kid) = generate_key().unwrap();
+    let aid: Vec<u8> = c
+        .query_one(
+            "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"a\"}', $1)",
+            &[&kid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    // Revoke actor A (raw INSERT — the registry has no runtime revoke door yet).
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op) VALUES ($1, 'revoke')",
+        &[&aid],
+    )
+    .await
+    .unwrap();
+    // Same key onto a NEW actor, even though A is no longer live -> still refused.
+    let err = c
+        .execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"b\"}', $1)",
+            &[&kid],
+        )
+        .await
+        .expect_err("key-reuse onto a new actor after revoke must be refused (whole-history)");
+    assert!(
+        db_msg(&err).contains("already binds a different actor_id"),
+        "expected the #166 whole-history RAISE, got: {}",
+        db_msg(&err)
+    );
+}
