@@ -5,7 +5,7 @@ members = [
     "crates/cairn-sync",
     "crates/cairn-node", # cairn-node added in Task 6
 ]
-exclude = ["extensions/cairn_pgx"]
+exclude = ["extensions/cairn_pgx", "cairn-gui"]
 
 [workspace.package]
 edition = "2021"

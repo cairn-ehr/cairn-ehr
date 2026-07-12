@@ -37,7 +37,39 @@ identity/demographics surfaces above — the first stream carrying actual clinic
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-12) — the first clinical-content event stream: `clinical.medication` slice 1
+**This session (2026-07-12, GUI/L3 thread) — the reference-UI framework question, SETTLED: pivot to Tauri 2
+(branch `claude/gui-iced-plugin-arch-8e75db`, PR #174; NO ADR/spec/wire change — an L3 framework choice
+*below* the compatibility boundary).** First work on the L3 reference-UI layer (distinct from every block
+below, which is `cairn-node` clinical-surface work). brainstorm→spec→plan→subagent-driven-TDD built the
+**clinician reference GUI shell, slice 1** — a standalone `cairn-gui/` workspace (detached from the node tree;
+iced/wgpu/cosmic-text never enter `cairn-node`) rendering an iced two-pane splittable shell over a **mock**
+`ClinicalData` port: the semantic/a11y contract (`cairn-gui-tab`), the port + fixture mock (`cairn-gui-data`),
+the self-repairing site/role⊕user manifest merge (`cairn-gui-manifest`), a pure pane/routing/freshness state
+machine + iced `pane_grid` shell + `--dump-a11y` (`cairn-gui-shell`), and one crate per tab (demographics,
+note). 23/23 tests, iced-free core headless; design/plan/results under
+`docs/superpowers/{specs,plans}/2026-07-12-clinician-*gui-shell*` +
+`cairn-gui/cairn-gui-shell/results/`. The slice **doubled as the Spike 0004 vehicle.**
+**Spike 0004 RESOLVED — verdict: iced FAILS the accessibility bar.** Released **iced 0.14 ships no AccessKit /
+no accessibility tree at all** (only `text_input`/`text_editor` focusable; no `accesskit` anywhere in the
+compiled tree), **empirically confirmed** with macOS Accessibility Inspector on the live window (Cairn controls
+expose no accessible elements — `Children: Empty array`, menu-bar-only hierarchy; a screen reader gets an empty
+box). **I1 complex-script shaping PASSED** on the real surface (Latin/Arabic/Devanagari/Han, no tofu);
+cross-pane routing + the draggable divider work. Trajectory (why "wait for iced" isn't bankable): a11y issue
+[#552](https://github.com/iced-rs/iced/issues/552) open since 2020, draft-unmerged PR
+[#3111](https://github.com/iced-rs/iced/pull/3111); the **libcosmic/plushie-iced fork** is the only iced-family
+a11y path today. Per eco-eval 0004's own contingency (A FAIL → webview/Tauri L3), the **reference desktop UI
+adopts Tauri 2** — recorded in **[eco-eval 0004 §6](ecosystem/0004-reference-ui-framework-iced-vs-tauri.md)** +
+the **[Spike 0004](spikes/0004-iced-reference-ui-viability.md)** status. Rationale (the maintainer's call): Cairn
+UIs are **thin layers over the DB + extensions** and the **policy layer is GUI-agnostic**, so re-implementation
+cost is bearable; the **framework-agnostic slice-1 core (contract/port/manifest/routing) is reusable behind a
+Tauri backend** — only the iced *rendering* is superseded. **No ADR, spec unchanged; reversible** if
+iced/libcosmic a11y matures. **PR #174** = the spike + reusable core + the documented decision (merge-as-record).
+**Follow-up (separate session, chip):** extend the `cargo-deny` supply-chain CI gate to `cairn-gui` (a manual
+`cargo deny check licenses` on the iced tree passed — no live violation; the automated gate is the gap).
+**Next:** the **Tauri reference client** — a fresh brainstorm→spec→plan reusing the contract/port/manifest, with
+accessibility inherited from the browser.
+
+**Prior session (2026-07-12, clinical) — the first clinical-content event stream: `clinical.medication` slice 1
 (branch `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
 graduates data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code).**
 Distinct from every prior slice on this branch: everything above (demographics, the §5.2 matcher, the
