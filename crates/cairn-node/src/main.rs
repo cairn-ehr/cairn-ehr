@@ -1309,7 +1309,12 @@ async fn main() -> anyhow::Result<()> {
                 started_precision: started_precision.as_deref(),
             };
             let med_id = cairn_node::medication::assert_medication(
-                &db, &node_sk, &node_kid, &id.node_id_hex, patient, &input,
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                &input,
             )
             .await?;
             println!("recorded medication for {patient}; thread {med_id}");
@@ -1332,7 +1337,13 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let event_id = cairn_node::medication::cease_medication(
-                &db, &node_sk, &node_kid, &id.node_id_hex, patient, medication_id, &input,
+                &db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &input,
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
