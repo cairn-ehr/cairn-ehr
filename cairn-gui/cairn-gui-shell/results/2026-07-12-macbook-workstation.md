@@ -46,13 +46,39 @@ The live render diverges from the `--dump-a11y` expected tree in exactly the way
   before A can be judged. Only *after* wiring keyboard focus AND running Accessibility Inspector / VoiceOver do
   we learn whether iced exposes focus + roles/labels to the AT tree — which is the real tip-to-webview question.
 
-## Follow-up actions (house rule #5)
+## UPDATE — root cause found: released iced 0.14 ships NO accessibility (AccessKit)
 
-1. **Wire keyboard focus** in `cairn-gui-shell` — a `keyboard::on_key_press` subscription mapping Tab /
-   Shift-Tab to `iced::widget::focus_next` / `focus_previous`, so A2 can actually be tested. (Small change;
-   blocks the whole A pass.)
-2. **Run Accessibility Inspector + VoiceOver** on macOS (and Orca on Linux) once (1) lands — verify each focused
-   control is announced with a correct role + label; record where the live tree still diverges from the dump.
-3. **Draw + label the divider and tab strip** (styling slice) so the render matches the intended a11y tree
-   rather than the dump chasing the render.
-4. Run **I2/I3/instrumented-L2** on `poc/iced-ui-spike`; run **L2** on a Pi with the software renderer.
+Before wiring keyboard focus, inspected the installed iced 0.14 source. Decisive findings:
+
+- **Only `text_input` and `text_editor` implement the focusable operation** (`iced_widget-0.14.2/src/{text_input,text_editor}.rs`); **`button.rs` has no focus support at all.** The shell is entirely buttons + static text → `focus_next` has nothing to focus, which is why **Tab does nothing**. Not a missing-wiring bug we can fix by adding a subscription — the widgets themselves aren't focus participants.
+- **There is no `accesskit` dependency anywhere in the compiled tree** — absent from `iced`, `iced_widget`, `iced_runtime`, `iced_winit`, and from `cairn-gui/Cargo.lock`. AccessKit is the crate that bridges a Rust GUI to NSAccessibility / AT-SPI2 / UIA. **Without it, no accessibility tree is emitted — a screen reader sees a generic blank window.**
+
+**Conclusion: the crates.io iced 0.14 has essentially no accessibility support.** The AccessKit the eco-eval
+called "partial in mainline" lives on iced's **git main / the plushie-iced fork**, not in the released crate.
+So **A1 and A2 cannot be cleared on released iced 0.14 at all** — this is a *framework* limit, not a defect in
+our slice. This is the make-or-break signal the spike existed to find, obtained from dependency facts before any
+styling investment.
+
+### Optional empirical confirmation
+Run **Accessibility Inspector** (macOS) or Orca (Linux) against the running window — expect it to announce
+essentially nothing (a blank/generic window). This confirms the dependency-level finding by observation.
+
+## Decision this forces (for the steward)
+
+Per the four-layer model, the wire core + `ClinicalData` port + manifest we built **survive whichever way this
+goes** (*many front-ends, one record*) — the choice is only which framework renders the reference UI:
+
+1. **Depend on iced `git main` / plushie-iced fork** — gets *partial* AccessKit, but rides unreleased,
+   churning code (a supply-chain + stability cost on a decades horizon). Would need its own spike to see how
+   partial.
+2. **Tip the reference desktop UI to a webview/Tauri L3** — inherits the browser's mature a11y tree for free;
+   the eco-eval's stated fallback if the A bar fails. The contract/port/manifest port over unchanged.
+3. **Proceed on iced now, accept a11y debt, revisit when iced releases AccessKit** — only viable if the reference
+   client is explicitly not-yet-for-a11y-critical deployment; risky to bank on an unreleased timeline for an EHR.
+
+## Remaining passes (unchanged)
+
+- Run **I2/I3/instrumented-L2** on `poc/iced-ui-spike` (editable fields). NOTE: I2/I3 shaping/IME may work, but
+  those fields **also** won't be announced by a screen reader (same no-AccessKit reason) — so the poc harness
+  measures *shaping/IME correctness*, not AT exposure.
+- Run **L2** on a Pi with the tiny-skia software renderer.
