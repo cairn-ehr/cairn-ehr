@@ -1,7 +1,2 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod semantics;
+pub use semantics::{Field, Role, SemanticNode};
