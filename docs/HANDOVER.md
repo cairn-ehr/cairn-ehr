@@ -56,8 +56,8 @@ carries provenance-of-claim (patient-reported / clinician-observed / document, e
 **orphan cessation** renders nothing until its assert arrives, then correctly surfaces the medication in
 `patient_medication_past`; the `patient_medication{,_current,_past}` views union across sources with
 staleness visible via the assert date; and the **E1 deterministic advisory reconciliation flag**
-(`coalesce(inn_code, normalized term)` — advisory-only, cleared by ceasing a duplicate; fuzzy brand↔generic
-matching deliberately deferred). New `cairn-node::medication` orchestrators (`assert_medication` /
+(view `patient_medication_reconciliation_flag`; `coalesce(inn_code, normalized term)` — advisory-only,
+cleared by ceasing a duplicate; fuzzy brand↔generic matching deliberately deferred). New `cairn-node::medication` orchestrators (`assert_medication` /
 `cease_medication`, both device-additive — slice 1 carries no human-attested clinical responsibility) +
 `medication-assert` / `medication-cease` CLI verbs; full end-to-end CLI smoke passed live. Cessation is
 offline-first by design — no requirement that the local node has already seen the corresponding assert

@@ -437,8 +437,9 @@ honest-unknown); free-text `DoseUnit` with a recommended vocab; `info_source` pr
 `medication_cessation` kept as **separate projections** so they're arrival-order-independent (an orphan
 cessation renders nothing until its assert arrives, then surfaces in `patient_medication_past`); the
 `patient_medication{,_current,_past}` views union across sources with staleness visible via assert date;
-the **E1 deterministic advisory reconciliation flag** (`coalesce(inn_code, normalized term)` — advisory
-only, cleared by ceasing a duplicate; fuzzy brand↔generic deferred). `cairn-node::medication` orchestrators
+the **E1 deterministic advisory reconciliation flag** (view `patient_medication_reconciliation_flag`;
+`coalesce(inn_code, normalized term)` — advisory only, cleared by ceasing a duplicate; fuzzy brand↔generic
+deferred). `cairn-node::medication` orchestrators
 (`assert_medication` / `cease_medication`, both device-additive) + `medication-assert` / `medication-cease`
 CLI verbs; end-to-end CLI smoke passed live. Cessation is offline-first (no requirement that the local node
 has already seen the corresponding assert). Subagent-driven TDD (6 tasks); full workspace green — fmt +
