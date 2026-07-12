@@ -1,12 +1,18 @@
 # Spike 0004 — iced as the reference-UI framework: viability against an EHR's hard bars
 
-- **Status:** **Harness built, awaiting human runs.** The pure core (multi-script shaping +
-  latency statistics) is unit-tested headlessly in CI; the **A11y-tree**, **live-IME**, and
-  **Pi input-to-paint** passes are scripted for a workstation/Pi operator (no screen reader or
-  Pi in CI). Kit at [`poc/iced-ui-spike/`](../../poc/iced-ui-spike/).
-  
+- **Status:** **RUN — verdict reached: iced FAILS the accessibility bar (A).** The widened spike ran
+  against the real reference shell (`cairn-gui/cairn-gui-shell`, mock port) on 2026-07-12.
+  **Bet A (accessibility) FAILED:** released **iced 0.14 ships no AccessKit / no accessibility tree** (only
+  `text_input`/`text_editor` focusable; no `accesskit` in the compiled tree), empirically confirmed with macOS
+  Accessibility Inspector (Cairn controls expose no accessible elements — menu-bar-only hierarchy). **Bet I1
+  (complex-script shaping) PASSED** on the real surface (Latin/Arabic/Devanagari/Han, no tofu); I2/I3/L2 not
+  reached (moot for the decision). Per the exit criteria, **A FAIL → the reference desktop UI tips to a
+  webview/Tauri L3** — recorded in [eco-eval 0004 §6](../ecosystem/0004-reference-ui-framework-iced-vs-tauri.md#6-outcome-2026-07-12--iced-fails-the-accessibility-bar--tauri).
+  Results: [`cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md`](../../cairn-gui/cairn-gui-shell/results/2026-07-12-macbook-workstation.md).
+  Original editable-field harness kit at [`poc/iced-ui-spike/`](../../poc/iced-ui-spike/).
+
   > [!NOTE]
-  > **2026-07-12:** A11y scope widened to shell-level (pane/tab-strip/divider traversal, not just a single form) and now runs against the **reference shell** (`cairn-gui/cairn-gui-shell`, mock port), per the approved GUI shell design. Headless a11y dump implemented via `--dump-a11y` flag (Task 9).
+  > **2026-07-12:** A11y scope widened to shell-level (pane/tab-strip/divider traversal, not just a single form) and run against the **reference shell** (`cairn-gui/cairn-gui-shell`, mock port), per the approved GUI shell design. Headless a11y dump implemented via `--dump-a11y` flag (Task 9).
 - **Date:** 2026-06-30
 - **Motivation:** [Ecosystem eval 0004](../ecosystem/0004-reference-ui-framework-iced-vs-tauri.md)
   concluded that **iced** is the more mission-aligned L3 reference-UI framework
