@@ -251,3 +251,68 @@ async fn key_reuse_after_revoke_is_refused() {
         db_msg(&err)
     );
 }
+
+/// The load-bearing NEW behaviour of #166 is closing the *concurrent* race, not merely the
+/// serial case: two enrolls of the SAME key under DIFFERENT pinned sets, running at once,
+/// must never BOTH succeed (that would dual-map the key and NULL its authorship node-wide,
+/// db/005). The per-key advisory lock serializes them — one acquires the lock, enrolls, and
+/// commits; the other blocks, then re-reads the committed row and is refused by the B-check.
+///
+/// Two independent connections give genuine server-side concurrency. The outcome is
+/// DETERMINISTIC (the exclusive lock admits exactly one at a time), so this is a real
+/// regression guard, not a flaky timing test: with the lock removed both would insert and
+/// the count assertion below would read 2.
+#[tokio::test]
+async fn concurrent_dual_mapping_yields_exactly_one_success() {
+    let Some(cs) = cs() else { return };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let c1 = db::connect_and_load_schema(&cs).await.unwrap();
+    reset(&c1).await;
+    // A second, independent connection (schema already loaded on c1) so the two enrolls run
+    // on separate backends and truly contend for the per-key advisory lock.
+    let c2 = db::connect(&cs).await.unwrap();
+    let (_sk, kid) = generate_key().unwrap();
+
+    // Fire both concurrently: same key, distinct pinned sets => distinct actor_ids. The
+    // params array is a named binding so it outlives the joined futures (both borrow it).
+    let params: [&(dyn tokio_postgres::types::ToSql + Sync); 1] = [&kid];
+    let (r1, r2) = tokio::join!(
+        c1.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"a\"}', $1)",
+            &params,
+        ),
+        c2.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"m\",\"skill_epoch\":\"b\"}', $1)",
+            &params,
+        ),
+    );
+
+    // Exactly one succeeds; the other is refused with the #166 message.
+    let successes = r1.is_ok() as u8 + r2.is_ok() as u8;
+    assert_eq!(
+        successes, 1,
+        "exactly one concurrent enroll must succeed (r1={r1:?}, r2={r2:?})"
+    );
+    let refusal = match (&r1, &r2) {
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => db_msg(e),
+        _ => unreachable!("exactly one Ok asserted above"),
+    };
+    assert!(
+        refusal.contains("already binds a different actor_id"),
+        "the refused enroll must be the #166 dual-mapping refusal, got: {refusal}"
+    );
+
+    // The key resolves to exactly ONE live actor — the NULL-attribution trap never opened.
+    let n: i64 = c1
+        .query_one(
+            "SELECT count(DISTINCT actor_id) FROM actor_current WHERE signing_key_id = $1",
+            &[&kid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "key must map to exactly one live actor after the race"
+    );
+}

@@ -56,12 +56,17 @@ it would write) so the NULL-attribution coverage is preserved; `db/004_actors_te
 key per epoch. **db/005 + db/006 UNCHANGED** — the guard narrows *how* the ambiguous state can arise, not the
 projection's duty to cope with it. brainstorm→design→plan→**subagent-driven TDD** (per-task spec+quality review;
 final whole-branch review opus: **Ready to merge, 0 Critical/Important**, 3 Minors — 2 fixed inline [advisory-lock
-comment accuracy; mirrored-predicate-arg cross-note], 1 filed). TDD: 2 new DB-gated tests
-(`dual_mapping_serial_is_refused`, `key_reuse_after_revoke_is_refused`; RED confirmed before the guard) + the 004 SQL
-mirror; full workspace green (cairn-node all DB-gated · cairn-event · cairn-sync), fmt + clippy --workspace + mkdocs
-clean. Design+plan under `docs/superpowers/{specs,plans}/2026-07-12-enroll-dual-mapping-floor-guard*`. **Follow-up
-filed (house rule 5):** a pre-existing shared-DB test-isolation gap (`recall_epoch.rs` `reset()` truncates
-before-each not after-last, so cargo residue can collide with the 004 SQL mirror; harmless under the serial guard).
+comment accuracy; mirrored-predicate-arg cross-note], 1 filed). TDD: 3 new DB-gated tests
+(`dual_mapping_serial_is_refused`, `key_reuse_after_revoke_is_refused`, and a concurrent-race regression guard
+`concurrent_dual_mapping_yields_exactly_one_success` [two connections; all RED-confirmed before the guard]) + the 004
+SQL mirror; full workspace green (cairn-node all DB-gated · cairn-event · cairn-sync), fmt + clippy --workspace +
+mkdocs clean. Design+plan under `docs/superpowers/{specs,plans}/2026-07-12-enroll-dual-mapping-floor-guard*`.
+A post-PR `/review`→`/fixall` pass added the concurrency regression guard. **Follow-ups filed (house rule 5):**
+[#169](https://github.com/cairn-ehr/cairn-ehr/issues/169) — a pre-existing shared-DB test-isolation gap
+(`recall_epoch.rs` `reset()` truncates before-each not after-last, so cargo residue can collide with the 004 SQL
+mirror; harmless under the serial guard); [#172](https://github.com/cairn-ehr/cairn-ehr/issues/172) — the future
+`rotate-key`/`supersede` + actor-event sync-apply doors must mirror BOTH enroll collision checks (A #152/ADR-0044 +
+B #166/ADR-0046), the actor-registry analogue of #154.
 
 **Prior session (2026-07-11, latest) — §5.4 `enroll-human` ceremony CLI (no closing issue; branch
 `feat/enroll-human-ceremony-cli`; no migration / floor / SCHEMA / ADR / spec change — additive Rust reusing
