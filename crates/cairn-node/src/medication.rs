@@ -315,7 +315,7 @@ pub async fn resolve_correction_target(
     }
     let row = client
         .query_opt(
-            "SELECT dose_event_id FROM medication_current_dose WHERE medication_id = $1::text::uuid",
+            "SELECT dose_event_id::text FROM medication_current_dose WHERE medication_id = $1::text::uuid",
             &[&medication_id.to_string()],
         )
         .await?;
