@@ -1,0 +1,17 @@
+[package]
+name = "cairn-gui-shell"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cairn-gui-tab = { path = "../cairn-gui-tab" }
+cairn-gui-data = { path = "../cairn-gui-data" }
+cairn-gui-manifest = { path = "../cairn-gui-manifest" }
+# iced is added behind the `gui` feature in Task 8.
+
+[features]
+default = []
+gui = []

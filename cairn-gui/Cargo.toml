@@ -7,6 +7,7 @@ members = [
     "cairn-gui-tab",
     "cairn-gui-data",
     "cairn-gui-manifest",
+    "cairn-gui-shell",
 ]
 
 [workspace.package]

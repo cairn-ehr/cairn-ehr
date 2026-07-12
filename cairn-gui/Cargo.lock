@@ -12,6 +12,18 @@ dependencies = [
 [[package]]
 name = "cairn-gui-manifest"
 version = "0.1.0"
+dependencies = [
+ "cairn-gui-tab",
+]
+
+[[package]]
+name = "cairn-gui-shell"
+version = "0.1.0"
+dependencies = [
+ "cairn-gui-data",
+ "cairn-gui-manifest",
+ "cairn-gui-tab",
+]
 
 [[package]]
 name = "cairn-gui-tab"
