@@ -176,12 +176,84 @@ CREATE TRIGGER medication_statement_apply_trg
     FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication.asserted')
     EXECUTE FUNCTION medication_statement_apply();
 
--- 6. Assert-only current view (Task 3 replaces this with the cessation join).
+-- 7. Cessation projection. A SEPARATE table (not an UPDATE of medication_statement)
+--    makes the fold arrival-order-independent: an orphan cessation (assert not yet
+--    local) lands here and the join lights up as 'past' only once the assert arrives.
+CREATE TABLE IF NOT EXISTS medication_cessation (
+    medication_id     UUID PRIMARY KEY,
+    patient_id        UUID NOT NULL,
+    stopped_value     TEXT,
+    stopped_precision TEXT,
+    reason            TEXT,
+    hlc_wall          BIGINT NOT NULL,
+    hlc_counter       INTEGER NOT NULL,
+    origin            TEXT NOT NULL,
+    content_address   BYTEA NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_cessation TO cairn_agent;
+
+CREATE OR REPLACE FUNCTION medication_cessation_apply()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := NEW.body;
+BEGIN
+    INSERT INTO medication_cessation
+        (medication_id, patient_id, stopped_value, stopped_precision, reason,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        (p ->> 'medication_id')::uuid, NEW.patient_id,
+        p -> 'stopped' ->> 'value',
+        p -> 'stopped' ->> 'precision',
+        p ->> 'reason',
+        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+    ON CONFLICT (medication_id) DO UPDATE SET
+        patient_id        = EXCLUDED.patient_id,
+        stopped_value     = EXCLUDED.stopped_value,
+        stopped_precision = EXCLUDED.stopped_precision,
+        reason            = EXCLUDED.reason,
+        hlc_wall          = EXCLUDED.hlc_wall,
+        hlc_counter       = EXCLUDED.hlc_counter,
+        origin            = EXCLUDED.origin,
+        content_address   = EXCLUDED.content_address,
+        updated_at        = clock_timestamp()
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        medication_cessation.hlc_wall, medication_cessation.hlc_counter,
+        medication_cessation.origin, medication_cessation.content_address);
+    RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS medication_cessation_apply_trg ON event_log;
+CREATE TRIGGER medication_cessation_apply_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-cessation.asserted')
+    EXECUTE FUNCTION medication_cessation_apply();
+
+-- 8. Unified list: statement LEFT JOIN cessation → status derived. An orphan
+--    cessation (no matching statement) yields NO row here (nothing to render);
+--    when the statement arrives, ceased flips true. Union across all sources.
+CREATE OR REPLACE VIEW patient_medication AS
+SELECT s.medication_id, s.patient_id, s.term, s.inn_code, s.formulation,
+       s.dose_amount, s.dose_unit, s.sig, s.info_source,
+       s.started_value, s.started_precision, s.updated_at AS asserted_at,
+       (c.medication_id IS NOT NULL) AS ceased,
+       c.stopped_value, c.stopped_precision, c.reason
+FROM medication_statement s
+LEFT JOIN medication_cessation c USING (medication_id);
+GRANT SELECT ON patient_medication TO cairn_agent;
+
 CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT medication_id, patient_id, term, inn_code, formulation,
-       dose_amount, dose_unit, sig, info_source, started_value, started_precision,
-       updated_at AS asserted_at
-FROM medication_statement;
+       dose_amount, dose_unit, sig, info_source, started_value, started_precision, asserted_at
+FROM patient_medication WHERE NOT ceased;
 GRANT SELECT ON patient_medication_current TO cairn_agent;
+
+CREATE OR REPLACE VIEW patient_medication_past AS
+SELECT medication_id, patient_id, term, inn_code, formulation,
+       dose_amount, dose_unit, sig, info_source, started_value, started_precision,
+       asserted_at, stopped_value, stopped_precision, reason
+FROM patient_medication WHERE ceased;
+GRANT SELECT ON patient_medication_past TO cairn_agent;
 
 COMMIT;

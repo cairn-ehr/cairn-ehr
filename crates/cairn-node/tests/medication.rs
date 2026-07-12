@@ -4,7 +4,10 @@
 //! bare Uuid as the patient. Key material is derived at runtime (generate_key).
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
-use cairn_node::medication::{assert_medication, build_assert_body, AssertMedicationInput};
+use cairn_node::medication::{
+    assert_medication, build_assert_body, cease_medication, AssertMedicationInput,
+    CeaseMedicationInput,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -133,4 +136,121 @@ async fn validate_term_rejects_blank() {
     // Pure guard test — no DB needed.
     assert!(cairn_node::medication::validate_term("  ").is_err());
     assert!(cairn_node::medication::validate_term("aspirin").is_ok());
+}
+
+async fn past_terms(c: &Client, patient: Uuid) -> Vec<String> {
+    c.query(
+        "SELECT term FROM patient_medication_past WHERE patient_id = $1::text::uuid ORDER BY term",
+        &[&patient.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.get::<_, String>(0))
+    .collect()
+}
+
+/// Inject an assert with a CHOSEN medication_id (the orchestrator mints its own,
+/// so tests that need a specific thread id build+sign+submit directly).
+async fn inject_assert(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    patient: Uuid,
+    medication_id: Uuid,
+    input: &AssertMedicationInput<'_>,
+) {
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let body: EventBody =
+        build_assert_body(Uuid::now_v7(), medication_id, patient, input, kid, hlc);
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cease_flips_current_to_past() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
+        .await
+        .unwrap();
+    assert_eq!(
+        current_terms(&c, patient).await,
+        vec!["atorvastatin".to_string()]
+    );
+
+    cease_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &CeaseMedicationInput {
+            stopped: Some("2025"),
+            stopped_precision: Some("year"),
+            reason: Some("switched"),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        current_terms(&c, patient).await.is_empty(),
+        "ceased med leaves current"
+    );
+    assert_eq!(
+        past_terms(&c, patient).await,
+        vec!["atorvastatin".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = Uuid::now_v7();
+
+    // Cessation authored BEFORE its assert exists locally (offline-first).
+    cease_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &CeaseMedicationInput {
+            stopped: None,
+            stopped_precision: None,
+            reason: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(current_terms(&c, patient).await.is_empty());
+    assert!(
+        past_terms(&c, patient).await.is_empty(),
+        "orphan cessation shows no renderable row"
+    );
+
+    // The assert for that same thread now replicates in.
+    inject_assert(&c, &sk, &kid, patient, med_id, &sample_input()).await;
+    assert!(
+        current_terms(&c, patient).await.is_empty(),
+        "still ceased — not current"
+    );
+    assert_eq!(
+        past_terms(&c, patient).await,
+        vec!["atorvastatin".to_string()],
+        "thread now surfaces in past, arrival-order-independent"
+    );
 }
