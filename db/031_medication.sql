@@ -232,7 +232,9 @@ CREATE TRIGGER medication_cessation_apply_trg
 
 -- 8. Unified list: statement LEFT JOIN cessation → status derived. An orphan
 --    cessation (no matching statement) yields NO row here (nothing to render);
---    when the statement arrives, ceased flips true. Union across all sources.
+--    when the statement arrives, ceased flips true. Combines each statement
+--    with its cessation (if any) into one list; every asserted thread appears
+--    regardless of who asserted it.
 CREATE OR REPLACE VIEW patient_medication AS
 SELECT s.medication_id, s.patient_id, s.term, s.inn_code, s.formulation,
        s.dose_amount, s.dose_unit, s.sig, s.info_source,
@@ -263,11 +265,11 @@ GRANT SELECT ON patient_medication_past TO cairn_agent;
 --    Resolution is ceasing the redundant thread (no new event type).
 CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
 SELECT patient_id,
-       coalesce(inn_code, lower(btrim(term)) COLLATE "C") AS dup_key,
+       coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,
        count(*)                                           AS thread_count,
        array_agg(medication_id ORDER BY medication_id)    AS medication_ids
 FROM patient_medication_current
-GROUP BY patient_id, coalesce(inn_code, lower(btrim(term)) COLLATE "C")
+GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
 HAVING count(*) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 

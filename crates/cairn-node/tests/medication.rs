@@ -132,6 +132,36 @@ async fn empty_term_is_rejected_by_the_floor() {
 }
 
 #[tokio::test]
+async fn empty_info_source_is_rejected_by_the_floor() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Bypass the Rust guard: hand-build a whitespace-only-info_source event (term
+    // stays valid) and submit it directly, proving the DB FLOOR rejects it (defense
+    // in depth).
+    let mut input = sample_input();
+    input.info_source = "   ";
+    // Use a real HLC tick so the ONLY rejection reason is the empty info_source (not
+    // an HLC regression against node state).
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body: EventBody =
+        build_assert_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
+    let signed = sign(&body, &sk).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("info_source"),
+        "floor must reject empty info_source, got: {err}"
+    );
+    assert!(current_terms(&c, patient).await.is_empty());
+}
+
+#[tokio::test]
 async fn validate_term_rejects_blank() {
     // Pure guard test — no DB needed.
     assert!(cairn_node::medication::validate_term("  ").is_err());
