@@ -11,8 +11,13 @@
 //! (`dose`, slice 2) overlays the dose over time.
 pub mod assert;
 pub mod cessation;
+pub mod dose;
 
 pub use assert::{medication_assertion_body, render_medication_twin, MedicationAssertion};
 pub use cessation::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
+};
+pub use dose::{
+    dose_change_body, dose_correction_body, render_dose_change_twin, render_dose_correction_twin,
+    DoseChange, DoseCorrection,
 };
