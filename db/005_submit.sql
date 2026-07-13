@@ -24,6 +24,46 @@ INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('visibility.suppress','suppressing', TRUE)
 ON CONFLICT (event_type) DO NOTHING;
 
+-- Per-type twin/floor-check registry (#173, ADR-0048). Sibling of event_type_class:
+-- a new event type registers its structural check + twin requirement by INSERTing ONE
+-- row here (additive), instead of copying the whole cairn_event_twin dispatch chain into
+-- a new migration. The single stable dispatcher (below) reads this table. Columns are
+-- independent: check_fn NULL ⇒ no structural floor for this type; twin_required_msg NULL
+-- ⇒ an absent authored twin degrades honestly to a skeleton (ADR-0039) rather than raising.
+CREATE TABLE IF NOT EXISTS cairn_event_twin_check (
+    event_type         TEXT PRIMARY KEY,
+    check_fn           TEXT,
+    twin_required_msg  TEXT
+);
+
+-- Fail-closed at REGISTRATION time (not first-call): a registered check_fn must exist with
+-- the unified (text, jsonb) signature. A slice that registers a typo'd or not-yet-created
+-- check fn fails loudly on schema load, for this migration and every future one, with
+-- nothing to remember. (to_regprocedure returns NULL for an absent function; valid type
+-- names never raise.) Residual: this validates registration, not later function mutation —
+-- a migration that broke a check fn's signature afterwards would surface at runtime
+-- (the dispatcher's EXECUTE raises, still fail-closed).
+CREATE OR REPLACE FUNCTION cairn_check_twin_registry_fn()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.check_fn IS NOT NULL
+       AND to_regprocedure(NEW.check_fn || '(text, jsonb)') IS NULL THEN
+        RAISE EXCEPTION 'cairn_event_twin_check: check_fn %(text, jsonb) does not exist (fail closed)', NEW.check_fn;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cairn_event_twin_check_validate ON cairn_event_twin_check;
+CREATE TRIGGER cairn_event_twin_check_validate
+    BEFORE INSERT OR UPDATE ON cairn_event_twin_check
+    FOR EACH ROW EXECUTE FUNCTION cairn_check_twin_registry_fn();
+
+-- Safety surface (like event_type_class): a row pointing a type's check at a no-op would
+-- drop its floor. Lock it down; submit_event reads it as its SECURITY DEFINER owner, so
+-- cairn_agent needs no grant.
+REVOKE INSERT, UPDATE, DELETE ON cairn_event_twin_check FROM PUBLIC;
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
