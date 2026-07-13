@@ -8,7 +8,9 @@
 //!
 //! Verbs over an immortal `medication_id` thread: an *assertion* (`assert`) mints
 //! the thread; a *cessation* (`cessation`) ends it; a *dose change / correction*
-//! (`dose`, slice 2) overlays the dose over time.
+//! (`dose`, slice 2) overlays the dose over time. A *reconciliation / separation*
+//! (`reconciliation`, slice 3) is the one verb about TWO threads — it links (or
+//! splits) two threads declared to be the same real drug (never-merge-always-link).
 pub mod assert;
 pub mod cessation;
 pub mod dose;

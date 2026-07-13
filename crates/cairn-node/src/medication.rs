@@ -1,9 +1,12 @@
-//! §3.15 medication recording — the node authoring surface (the first clinical
+//! §3.15/§3.16 medication recording — the node authoring surface (the first clinical
 //! content written on this node). Device-additive: signed by the node/clinician
-//! key with a `recorded` contributor and NO responsibility attestation in slice 1
-//! (mirrors identify.rs). Two orchestrators — assert (mints a thread) and cease
-//! (references it). Offline-first: cease does NOT require the assert to be present
-//! locally (a cessation may legitimately be authored before its assert replicates).
+//! key with a `recorded` contributor and NO responsibility attestation
+//! (mirrors identify.rs). Orchestrators over an immortal `medication_id` thread —
+//! assert (mints a thread) / cease (references it) / change-dose / correct-dose
+//! (slice 2) — plus reconcile / separate (slice 3), which link or split TWO threads
+//! declared to be the same real drug (never-merge-always-link). Offline-first
+//! throughout: none of these require the referenced thread(s) to be present locally
+//! (an event may legitimately be authored before its target replicates).
 use cairn_event::medication::{
     dose_change_body, dose_correction_body, medication_assertion_body, medication_cessation_body,
     reconciliation_body, render_dose_change_twin, render_dose_correction_twin,
