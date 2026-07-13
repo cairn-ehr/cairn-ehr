@@ -501,6 +501,41 @@ same real med — never-merge); correcting a dose event's *effective date*/*reas
 the #173 twin-dispatch registry refactor; the #157 collision advisory onto the dose projections; human-attested
 clinical responsibility on a dose event.
 
+**Slice 32 — medication cross-thread reconciliation resolution (slice 3 of `clinical.medication`)** (2026-07-13;
+branch `feat/medication-reconciliation-slice-3`, PR #178; **[ADR-0047](spec/decisions/0047-medication-reconciliation-resolution.md)**,
+spec v0.47→v0.48; design+plan under `docs/superpowers/{specs,plans}/2026-07-13-medication-reconciliation-*`).
+Removes the **slice-30 wart**: clearing a duplicate `patient_medication_reconciliation_flag` no longer requires a
+**false cessation**. Two additive verbs over a canonical `(low,high)` `medication_id` thread pair —
+`clinical.medication-reconciliation.asserted` (state `reconciled`) + `clinical.medication-separation.asserted` (state
+`separated`, the never-erase reversal); both `additive`/`targets_other_author=FALSE` (a reconciliation forecloses
+nothing → ADR-0043 owner-gate N/A → **cross-author reconciliation allowed**). New `db/033_medication_reconciliation.sql`
+(**db/031 + db/032 UNTOUCHED**): structural floor (`cairn_check_medication_reconciliation` — two DISTINCT valid UUID
+subjects + valid patient + non-empty provenance; self-reconcile refused; **offline-first**, no subject existence check)
++ 2 `cairn_event_twin` branches reproduced verbatim; an HLC-overlay `medication_reconciliation` edge table + a
+connected-component `medication_group_member` projection (min-UUID canonical, `cairn_recompute_medication_group`,
+advisory lock `CARNMR` distinct from db/018's `CARNLK`, oversize guard RAISE-local/clamp-flag-remote) **mirroring
+db/018 `patient_link`/`person_member`** one level down; collapsed group views — `patient_medication_current`/`_past`
+emit **one row per reconciled group** (SAME column set as db/032, replay-safe) with group status by
+**latest-EFFECTIVE-wins** (all-active→active; all-ceased→ceased; mixed→later-effective decides; **provably reduces to
+slice-30/31 for singletons**) and current dose = latest-effective across ACTIVE members. The flag fires on
+`count(DISTINCT group_id)>1` (reconciling clears it, separating re-fires it) — `thread_count` **kept its name for
+replay-safety** (renaming is replay-UNSAFE: db/031 re-issues `CREATE OR REPLACE ... thread_count` every connect before
+db/033). `cairn-event::medication::reconciliation` pure builders/twins; device-additive `reconcile_medications`/
+`separate_medications` orchestrators + `medication-reconcile`/`medication-separate` CLI (live e2e smoke passed).
+Subagent-driven TDD (8 tasks, per-task review); full workspace green — fmt + clippy `--workspace -D warnings`,
+`cargo test --workspace` **560 passed / 0 failed** (58 binaries; `medication_reconciliation` all + slice-30 `medication`
+10/10 + slice-31 `medication_dose` 14/14), mkdocs. Whole-branch review (opus): **Ready to merge, 0 Critical/0 Important.**
+Two in-build catches: an untested oversize-guard (+ a FALSE "db/018 leaves it untested" rationale) → added a
+walk-to-cap RAISE+txn-rollback test; the plan's `thread_count`→`group_count` rename was replay-unsafe → kept the name.
+**PR-review fix:** restored db/032's as-asserted dose fallback in the collapsed current/past views (dropping it would
+NULL a slice-1-only med's dose on reconnect — a principle-11 regression, since db/032's seed trigger never backfills
+pre-existing asserts) + COLLATE "C"-pinned the status latest-effective comparison (ADR-0045); +1 regression test.
+**Filed:** [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize **remote** clamp-and-flag test — needs a
+medication apply-door harness); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation
+guard — needs a design decision**). **Deferred:** correcting a dose event's *effective date*/*reason*; fuzzy/automatic
+reconciliation + Tier-A dictionary (the human-driven *resolution* now exists, automated *detection* is the gap); a
+prefer-INN display term for groups; human-attested reconciliation (composes additively, zero floor change); #173/#157.
+
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
 (PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no
