@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-13 · **Spec/ADRs:** v0.48 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-13 · **Spec/ADRs:** v0.49 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -50,7 +50,36 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-13) — `clinical.medication` slice 3: cross-thread reconciliation resolution
+**This session (2026-07-13, later) — the `cairn_event_twin` twin-check registry refactor
+([#173](https://github.com/cairn-ehr/cairn-ehr/issues/173); **ADR-0048**, spec v0.48→v0.49; branch
+`refactor/twin-check-registry-173`; **ZERO behaviour change** — pure de-risking of the safety floor).**
+Kills the verbatim-copy hazard: the per-type structural-floor + legibility-twin dispatcher
+`cairn_event_twin` was re-declared in **11 migrations**, each COPYING the whole growing IF/ELSIF chain +
+appending one branch, so a stale copy could **silently DROP a floor check** for other event types (a
+safety-floor regression with no error; db/031's header warned about it). Replaced with: a locked
+**registry table** `cairn_event_twin_check(event_type, check_fn, twin_required_msg)` (sibling of
+`event_type_class`, db/005) + a fail-closed `BEFORE INSERT/UPDATE` **validation trigger** (a registered
+check_fn must exist as `(text,jsonb)` → typo/missing fn fails **at load time**, not first call); **ONE
+stable dispatcher** declared only in db/005, dispatching dynamically via
+`EXECUTE format('SELECT %I($1,$2)', check_fn)`; **all 9 per-type check fns unified** to
+`(p_type text, b jsonb) RETURNS void` (4 legacy `(b jsonb)` migrated with `DROP FUNCTION IF EXISTS`); the
+copied chain **removed from 10 migrations**; **15 seed rows** transcribed verbatim from db/033's winning
+chain (behaviour byte-identical). A new event type now registers ONE additive row in its own migration and
+**never touches the dispatcher**. First dynamic SQL in the floor — bounded/safe (locked migration-only
+table, `%I` quoting, fail-closed, load-time validation, both doors `SECURITY DEFINER SET search_path=public`).
+`event_type_class` deliberately **NOT merged** (future convergence). **Invariants (ADR-0048, binds future
+slices):** dispatcher declared exactly once (enforced by no-DB guard `twin_dispatch_single_source.rs`, RED
+11→GREEN 1); every check fn `(p_type,b) RETURNS void`; missing/mis-signed fn fails closed at load. TDD,
+subagent-driven (4 tasks, per-task spec+quality review; final whole-branch review **opus: Ready to merge,
+0 Critical/0 Important**). Full workspace green (fmt + clippy --workspace + `cargo test --workspace`; mkdocs).
+Two implementer catches on plan bugs: registry INSERT must sit AFTER each migration's check-fn CREATE (not
+"after event_type_class") or the trigger rolls back a FRESH load; and the contract test's `$1::jsonb` param
+cast fails client-side (tokio-postgres `WrongType`) → false-green, fixed to `$1::text::jsonb`. No wire /
+projection / behaviour / spec-prose change (ADR-0048 sits below the spec line). **Cross-cutting debt paid:**
+every future clinical slice (diagnoses, progress notes, prescriptions, referrals, pathology…) is now a
+one-row registration, not a copied dispatch branch.
+
+**Prior session (2026-07-13, clinical) — `clinical.medication` slice 3: cross-thread reconciliation resolution
 (branch `feat/medication-reconciliation-slice-3`, PR #178; **ADR-0047**, spec v0.47→v0.48; the only
 floor-contract change is registering 2 additive verbs).** Removes the **slice-1 wart**: clearing a duplicate
 `patient_medication_reconciliation_flag` no longer requires a **false cessation** (which would fabricate a stop
@@ -91,8 +120,8 @@ regression test; the status latest-effective comparison is now COLLATE "C"-pinne
 [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation guard — needs a DESIGN
 DECISION, not a trivial guard**; offline-first floor can't cheaply check both threads' patients). **Deferred (later
 slices):** correcting a dose event's *effective date*/*reason*; fuzzy/automatic reconciliation + the Tier-A drug
-dictionary; human-attested clinical responsibility on a reconciliation (composes additively, zero floor change); the
-[#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) twin-dispatch registry refactor (2 more verbatim branches);
+dictionary; human-attested clinical responsibility on a reconciliation (composes additively, zero floor change);
+([#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) twin-dispatch registry refactor — **since DONE, ADR-0048**);
 [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the new projections; a
 prefer-INN display term for reconciled groups.
 
@@ -562,8 +591,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   for reconciled groups; **fuzzy/automatic reconciliation** + the Tier-A drug dictionary (brand↔generic/DDI) — the
   human-driven resolution now exists, automated *detection* is the gap; structured sig/frequency (lands with
   prescriptions); human-attested clinical responsibility on a medication/dose/reconciliation event (composes
-  additively, zero floor change). **Cross-cutting debt:** the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
-  `cairn_event_twin` dispatch→registry refactor (every clinical slice adds verbatim branches — slice 3 added 2 more);
+  additively, zero floor change). **Cross-cutting debt:** ~~the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
+  `cairn_event_twin` dispatch→registry refactor~~ **DONE this session (ADR-0048)** — a new event type now registers ONE
+  `cairn_event_twin_check` row, never a copied dispatch branch;
   the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
   reconciliation projections; [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize-guard remote-apply
   test); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation — needs a design
