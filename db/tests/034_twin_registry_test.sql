@@ -36,6 +36,13 @@ BEGIN
     RAISE EXCEPTION 'FAIL: self-link was not refused';
 EXCEPTION WHEN others THEN
     IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;  -- re-raise our own failure
+    -- The raise must come from the dispatched link check, not a spurious error (e.g. a
+    -- broken/missing dispatcher would raise "function does not exist" — which is NOT proof
+    -- that the check ran). Assert the caught message names the link check, so this block
+    -- cannot false-green on any-old-error the way a bare `WHEN others` swallow would.
+    IF position('link assertion' in SQLERRM) = 0 THEN
+        RAISE EXCEPTION 'FAIL: dispatch did not reach the link check; got: %', SQLERRM;
+    END IF;
 END $$;
 
 ROLLBACK;

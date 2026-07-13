@@ -22,6 +22,17 @@ async fn registry_trigger_rejects_missing_check_fn() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
+    // Defensive cleanup: clear any `test.*` residue an earlier interrupted run may have
+    // leaked into the shared registry (rows are otherwise deleted per-insert below), so this
+    // test and the count assertion in registry_is_seeded_with_the_expected_mapping stay
+    // robust regardless of prior-run state.
+    c.execute(
+        "DELETE FROM cairn_event_twin_check WHERE event_type LIKE 'test.%'",
+        &[],
+    )
+    .await
+    .unwrap();
+
     // A registry row naming a function that does not exist is refused at insert time.
     let err = c
         .execute(
@@ -73,6 +84,15 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Robustness: ignore any `test.*` residue a prior interrupted run may have leaked, so the
+    // count reflects only the migration-seeded rows.
+    c.execute(
+        "DELETE FROM cairn_event_twin_check WHERE event_type LIKE 'test.%'",
+        &[],
+    )
+    .await
+    .unwrap();
 
     // Assert the full 15-row mapping is present so a dropped registration is caught.
     let n: i64 = c
