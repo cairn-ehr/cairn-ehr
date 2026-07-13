@@ -24,6 +24,46 @@ INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
     ('visibility.suppress','suppressing', TRUE)
 ON CONFLICT (event_type) DO NOTHING;
 
+-- Per-type twin/floor-check registry (#173, ADR-0048). Sibling of event_type_class:
+-- a new event type registers its structural check + twin requirement by INSERTing ONE
+-- row here (additive), instead of copying the whole cairn_event_twin dispatch chain into
+-- a new migration. The single stable dispatcher (below) reads this table. Columns are
+-- independent: check_fn NULL ⇒ no structural floor for this type; twin_required_msg NULL
+-- ⇒ an absent authored twin degrades honestly to a skeleton (ADR-0039) rather than raising.
+CREATE TABLE IF NOT EXISTS cairn_event_twin_check (
+    event_type         TEXT PRIMARY KEY,
+    check_fn           TEXT,
+    twin_required_msg  TEXT
+);
+
+-- Fail-closed at REGISTRATION time (not first-call): a registered check_fn must exist with
+-- the unified (text, jsonb) signature. A slice that registers a typo'd or not-yet-created
+-- check fn fails loudly on schema load, for this migration and every future one, with
+-- nothing to remember. (to_regprocedure returns NULL for an absent function; valid type
+-- names never raise.) Residual: this validates registration, not later function mutation —
+-- a migration that broke a check fn's signature afterwards would surface at runtime
+-- (the dispatcher's EXECUTE raises, still fail-closed).
+CREATE OR REPLACE FUNCTION cairn_check_twin_registry_fn()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.check_fn IS NOT NULL
+       AND to_regprocedure(NEW.check_fn || '(text, jsonb)') IS NULL THEN
+        RAISE EXCEPTION 'cairn_event_twin_check: check_fn %(text, jsonb) does not exist (fail closed)', NEW.check_fn;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cairn_event_twin_check_validate ON cairn_event_twin_check;
+CREATE TRIGGER cairn_event_twin_check_validate
+    BEFORE INSERT OR UPDATE ON cairn_event_twin_check
+    FOR EACH ROW EXECUTE FUNCTION cairn_check_twin_registry_fn();
+
+-- Safety surface (like event_type_class): a row pointing a type's check at a no-op would
+-- drop its floor. Lock it down; submit_event reads it as its SECURITY DEFINER owner, so
+-- cairn_agent needs no grant.
+REVOKE INSERT, UPDATE, DELETE ON cairn_event_twin_check FROM PUBLIC;
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
@@ -32,14 +72,50 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
     SELECT format('[%s] %s for patient %s', p_type, b ->> 'schema_version', b ->> 'patient_id');
 $$;
 
--- Per-event-type twin hook (§3.13/§4.5). Returns the plaintext legibility twin for an
--- event and, for a type that has one, enforces its structural floor (raising on
--- violation). The DEFAULT delegates every type to the skeleton; a later migration
--- CREATE OR REPLACEs this to add its own branch WITHOUT re-declaring the whole
--- validated submit_event door (so the safety-critical surface stays single-source).
+-- The single, stable per-event-type twin hook (§3.13/§4.5, #173/ADR-0048). Declared ONCE
+-- here and never re-declared — a new event type registers a cairn_event_twin_check row in
+-- its own migration (additive), so no slice ever copies this dispatch body (the prior
+-- copy-a-stale-chain floor-regression hazard is designed out). Returns the plaintext twin
+-- and, for a registered type, runs its structural floor (raising on violation).
+--
+-- Dispatch is dynamic: the check_fn name comes from the LOCKED, migration-only registry
+-- table (never user input) and %I quotes it; a missing/mis-signed fn RAISES (fail-closed),
+-- though the registry trigger already refused an unregistered fn at load time. The
+-- EXECUTE 'SELECT fn($1,$2)' form is the dynamic equivalent of PERFORM fn(...) (every
+-- check fn RETURNS void and works by RAISE-on-violation).
+--
+-- `SET search_path = public` is pinned on THIS function (not only on the SECURITY DEFINER
+-- doors that call it), so the %I identifier can never be resolved into an attacker-shadowed
+-- schema regardless of who invokes the hook — the dynamic-dispatch safety argument is
+-- self-contained here, not dependent on the caller's search_path (defense in depth: today
+-- the only callers are submit_event/apply_remote_event, which already pin it).
+--
+-- Twin policy (ADR-0039): an authored twin is carried verbatim for EVERY type; if absent,
+-- a type with twin_required_msg RAISES (demographics + identity + medication hard-require
+-- it), and every other type degrades honestly to a mechanical skeleton.
 CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
+RETURNS text LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+    v_twin     text    := b ->> 'plaintext_twin';
+    v_authored boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
+    v_fn       text;
+    v_msg      text;
 BEGIN
+    SELECT check_fn, twin_required_msg INTO v_fn, v_msg
+        FROM cairn_event_twin_check WHERE event_type = p_type;
+
+    IF v_fn IS NOT NULL THEN
+        EXECUTE format('SELECT %I($1, $2)', v_fn) USING p_type, b;
+    END IF;
+
+    IF v_authored THEN
+        RETURN v_twin;
+    END IF;
+    IF v_msg IS NOT NULL THEN
+        RAISE EXCEPTION 'submit_event: %', v_msg;
+    END IF;
     RETURN cairn_twin_skeleton(p_type, b);
 END;
 $$;

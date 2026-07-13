@@ -70,52 +70,14 @@ BEGIN
 END;
 $$;
 
--- 3. Extend the per-type twin hook. Dispute: run the floor + HARD-require an authored
---    twin (identity events are legible-critical, like link and demographics). This
---    CREATE OR REPLACE PRESERVES db/010's demographic branches, db/018's identity-link
---    branch, and db/015's honest-degrade fallback for every other type — it only adds
---    the dispute branch (submit_event itself is NEVER re-declared).
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin        text    := b ->> 'plaintext_twin';
-    v_authored    boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    v_demographic boolean := false;
-    v_identity    boolean := false;
-    v_dispute     boolean := false;
-BEGIN
-    -- Per-type structural floor.
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_demographic := true;
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_demographic := true;
-    ELSIF p_type IN ('identity.link.asserted', 'identity.unlink.asserted') THEN
-        PERFORM cairn_check_link_assertion(b);
-        v_identity := true;
-    ELSIF p_type IN ('identity.dispute.asserted', 'identity.dispute.resolved') THEN
-        PERFORM cairn_check_dispute_assertion(p_type, b);
-        v_dispute := true;
-    END IF;
-
-    -- Authored twin present → carry it verbatim (principle 11; the conformant path).
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-
-    -- Absent/blank twin: demographic, identity-link, AND dispute types HARD-require it;
-    -- every other type degrades honestly to a flagged derived skeleton (ADR-0039).
-    IF v_demographic THEN
-        RAISE EXCEPTION 'submit_event: demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF v_identity THEN
-        RAISE EXCEPTION 'submit_event: identity linkage assertion requires a non-empty authored twin (§5.7)';
-    ELSIF v_dispute THEN
-        RAISE EXCEPTION 'submit_event: identity dispute assertion requires a non-empty authored twin (§5.7)';
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- 3. Register both dispute verbs' structural floor + hard twin requirement in the #173
+--    registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
+--    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
+--    registry trigger (db/005) sees cairn_check_dispute_assertion(text, jsonb) declared.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('identity.dispute.asserted', 'cairn_check_dispute_assertion', 'identity dispute assertion requires a non-empty authored twin (§5.7)'),
+    ('identity.dispute.resolved', 'cairn_check_dispute_assertion', 'identity dispute assertion requires a non-empty authored twin (§5.7)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- 4. chart_dispute: the standing-dispute overlay (same overlay discipline as db/018's
 --    patient_link, but keyed by the dispute's own id). One row per dispute_id; the

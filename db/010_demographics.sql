@@ -17,7 +17,11 @@ ON CONFLICT (event_type) DO NOTHING;
 -- The §4.4 structural floor. Enforces ONLY culture-neutral invariants; never holds a
 -- profile, runs a checksum, or validates a format (those flag-not-reject above the
 -- floor — principle 12 / §4.4). Each violation is a distinct legible exception.
-CREATE OR REPLACE FUNCTION cairn_check_identifier_assertion(b jsonb)
+-- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch; p_type is
+-- unused here (this check validates the body). DROP clears any stale (jsonb) overload on
+-- an upgraded-in-place dev DB.
+DROP FUNCTION IF EXISTS cairn_check_identifier_assertion(jsonb);
+CREATE OR REPLACE FUNCTION cairn_check_identifier_assertion(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := b -> 'payload';
@@ -58,6 +62,15 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- Register this type's structural floor + hard twin requirement in the #173 registry
+-- (replaces the copied cairn_event_twin dispatch chain; the single db/005 dispatcher reads
+-- this row). Placed after the floor fn above so the fail-closed registry trigger (db/005)
+-- sees cairn_check_identifier_assertion(text, jsonb) already declared at load time.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('demographic.identifier.asserted', 'cairn_check_identifier_assertion',
+     'demographic assertion requires a non-empty authored twin (§4.5)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- The §4.2 set-union projection: one row per (patient, system, match_key). Identifiers
 -- are set-union: same-system / different-normalized keeps BOTH rows (the veto SIGNAL
@@ -128,30 +141,5 @@ CREATE TRIGGER patient_identifier_apply_trg
     EXECUTE FUNCTION patient_identifier_apply();
 
 GRANT SELECT ON patient_identifier TO cairn_agent;
-
--- Demographics' ONLY change to the write path: extend the twin hook (NOT submit_event)
--- for the identifier assertion. submit_event (db/005) is reused verbatim — never
--- re-declared — so the validated door stays single-source and cannot drift. This
--- CREATE OR REPLACE runs after db/005's default, adding the demographic branch and
--- falling back to the skeleton (via cairn_twin_skeleton) for every other type.
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin text;
-BEGIN
-    IF p_type = 'demographic.identifier.asserted' THEN
-        -- §4.4 structural floor + §4.5 authored twin: a demographic assertion carries
-        -- its own legibility twin (never derived) and must pass the culture-neutral
-        -- floor. An empty authored twin is refused (§4.5).
-        PERFORM cairn_check_identifier_assertion(b);
-        v_twin := b ->> 'plaintext_twin';
-        IF v_twin IS NULL OR length(trim(v_twin)) = 0 THEN
-            RAISE EXCEPTION 'submit_event: demographic assertion requires a non-empty authored twin (§4.5)';
-        END IF;
-        RETURN v_twin;
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
 
 COMMIT;

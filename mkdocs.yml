@@ -151,6 +151,7 @@ nav:
       - ADR-0045 · Collation-independent projection tiebreaks: spec/decisions/0045-collation-independent-projection-tiebreaks.md
       - ADR-0046 · Enroll fails closed on key→actor dual mapping: spec/decisions/0046-enroll-fail-closed-on-key-actor-dual-mapping.md
       - ADR-0047 · Medication reconciliation is a link, not a cessation: spec/decisions/0047-medication-reconciliation-resolution.md
+      - ADR-0048 · Twin-check registry dispatch: spec/decisions/0048-twin-check-registry-dispatch.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

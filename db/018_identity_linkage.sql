@@ -26,7 +26,11 @@ ON CONFLICT (event_type) DO NOTHING;
 -- 2. The §5.7 structural floor. Culture-neutral: validates STRUCTURE only — two
 --    distinct valid UUID subjects and a non-empty provenance. Each violation is a
 --    distinct legible exception (the cairn_check_identifier_assertion pattern).
-CREATE OR REPLACE FUNCTION cairn_check_link_assertion(b jsonb)
+-- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch; p_type is
+-- unused here (this check validates the body). DROP clears any stale (jsonb) overload on
+-- an upgraded-in-place dev DB.
+DROP FUNCTION IF EXISTS cairn_check_link_assertion(jsonb);
+CREATE OR REPLACE FUNCTION cairn_check_link_assertion(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := b -> 'payload';
@@ -68,45 +72,15 @@ BEGIN
 END;
 $$;
 
--- 3. Extend the per-type twin hook. Identity link/unlink: run the floor + HARD-require
---    an authored twin (like demographics). This CREATE OR REPLACE PRESERVES db/010's
---    demographic branches and db/015's honest-degrade fallback for every other type —
---    it only adds the identity branch (submit_event itself is NEVER re-declared).
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin        text    := b ->> 'plaintext_twin';
-    v_authored    boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    v_demographic boolean := false;
-    v_identity    boolean := false;
-BEGIN
-    -- Per-type structural floor.
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_demographic := true;
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_demographic := true;
-    ELSIF p_type IN ('identity.link.asserted', 'identity.unlink.asserted') THEN
-        PERFORM cairn_check_link_assertion(b);
-        v_identity := true;
-    END IF;
-
-    -- Authored twin present → carry it verbatim (principle 11; the conformant path).
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-
-    -- Absent/blank twin: demographic AND identity types HARD-require it; every other
-    -- type degrades honestly to a flagged derived skeleton (ADR-0039).
-    IF v_demographic THEN
-        RAISE EXCEPTION 'submit_event: demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF v_identity THEN
-        RAISE EXCEPTION 'submit_event: identity linkage assertion requires a non-empty authored twin (§5.7)';
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- 3. Register both link verbs' structural floor + hard twin requirement in the #173
+--    registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
+--    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
+--    registry trigger (db/005) sees cairn_check_link_assertion(text, jsonb) already
+--    declared at load time.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('identity.link.asserted',   'cairn_check_link_assertion', 'identity linkage assertion requires a non-empty authored twin (§5.7)'),
+    ('identity.unlink.asserted', 'cairn_check_link_assertion', 'identity linkage assertion requires a non-empty authored twin (§5.7)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- 4. patient_link: the standing-edge overlay (same shape as patient_identifier). One
 --    row per canonical (low, high) pair; the latest-HLC link/unlink assertion wins the

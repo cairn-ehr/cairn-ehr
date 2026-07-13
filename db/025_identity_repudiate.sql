@@ -42,7 +42,11 @@ ON CONFLICT (event_type) DO NOTHING;
 --    uuid, a non-empty known-false `value`, and a non-empty `reason` (why known-false,
 --    §4.1 value-open — "unknown" is honest, "" is fabrication-only). Each violation is a
 --    distinct legible exception (the cairn_check_dispute/identity_state pattern).
-CREATE OR REPLACE FUNCTION cairn_check_repudiation_assertion(b jsonb)
+-- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch; p_type is
+-- unused here (this check validates the body). DROP clears any stale (jsonb) overload on
+-- an upgraded-in-place dev DB.
+DROP FUNCTION IF EXISTS cairn_check_repudiation_assertion(jsonb);
+CREATE OR REPLACE FUNCTION cairn_check_repudiation_assertion(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := b -> 'payload';
@@ -87,48 +91,13 @@ BEGIN
 END;
 $$;
 
--- 3. Extend the per-type twin hook. Repudiation: run the floor + HARD-require an authored
---    twin (identity events are legible-critical, like link/dispute/identify/demographics).
---    This CREATE OR REPLACE PRESERVES every existing branch (db/010 demographics, db/018
---    link, db/023 dispute, db/024 identity-state, db/015 honest-degrade fallback) and only
---    ADDS the repudiate branch — submit_event itself is NEVER re-declared. Floor call +
---    require-twin flag are set together in the one branch (the C4 desync-proof ladder).
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin          text := b ->> 'plaintext_twin';
-    v_authored      boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    v_twin_required text := NULL;
-BEGIN
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type IN ('identity.link.asserted', 'identity.unlink.asserted') THEN
-        PERFORM cairn_check_link_assertion(b);
-        v_twin_required := 'identity linkage assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.dispute.asserted', 'identity.dispute.resolved') THEN
-        PERFORM cairn_check_dispute_assertion(p_type, b);
-        v_twin_required := 'identity dispute assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.pending.asserted', 'identity.identify.asserted') THEN
-        PERFORM cairn_check_identity_state_assertion(p_type, b);
-        v_twin_required := 'identity-state assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type = 'identity.repudiate.asserted' THEN
-        PERFORM cairn_check_repudiation_assertion(b);
-        v_twin_required := 'identity repudiation assertion requires a non-empty authored twin (§5.7)';
-    END IF;
-
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-    IF v_twin_required IS NOT NULL THEN
-        RAISE EXCEPTION 'submit_event: %', v_twin_required;
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- 3. Register the repudiate verb's structural floor + hard twin requirement in the #173
+--    registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
+--    dispatcher reads this row). Placed after the floor fn above so the fail-closed
+--    registry trigger (db/005) sees cairn_check_repudiation_assertion(text, jsonb) declared.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('identity.repudiate.asserted', 'cairn_check_repudiation_assertion', 'identity repudiation assertion requires a non-empty authored twin (§5.7)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- 4. name_repudiation: the standing strike-through overlay. Keyed by (subject, value) —
 --    VALUE-grained, not (subject, use_key, value) and not a target event id:
