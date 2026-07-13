@@ -70,61 +70,15 @@ BEGIN
 END;
 $$;
 
--- 3. Extend the per-type twin hook. Identity-pending / identify: run the floor + HARD-
---    require an authored twin (identity events are legible-critical, like link, dispute,
---    and demographics). This CREATE OR REPLACE PRESERVES db/010's demographic branches,
---    db/018's identity-link branch, db/023's dispute branch, and db/015's honest-degrade
---    fallback for every other type — it only adds the identity-state branch (submit_event
---    itself is NEVER re-declared).
---
---    Structure: ONE dispatch decides, per type, both (a) which structural floor runs and
---    (b) whether a missing twin is HARD-rejected — the latter carried as the *message* of
---    the rejection in `v_twin_required` (NULL ⇒ this type honestly degrades to a derived
---    skeleton, ADR-0039). Folding the require-twin decision into the same branch as the
---    floor call is deliberate: a future slice that adds a floor branch but forgets to mark
---    it twin-required can no longer silently fail OPEN on the legibility floor (the earlier
---    parallel-boolean form let the two ELSIF ladders desync). A new twin-required type is
---    now ONE line — set `v_twin_required` in its dispatch branch.
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin          text := b ->> 'plaintext_twin';
-    v_authored      boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    -- The legible message raised when a twin-REQUIRED type arrives with no authored twin;
-    -- NULL means this type degrades honestly to a derived skeleton instead (ADR-0039).
-    v_twin_required text := NULL;
-BEGIN
-    -- Per-type structural floor + require-twin decision (set together, never apart).
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type IN ('identity.link.asserted', 'identity.unlink.asserted') THEN
-        PERFORM cairn_check_link_assertion(b);
-        v_twin_required := 'identity linkage assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.dispute.asserted', 'identity.dispute.resolved') THEN
-        PERFORM cairn_check_dispute_assertion(p_type, b);
-        v_twin_required := 'identity dispute assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.pending.asserted', 'identity.identify.asserted') THEN
-        PERFORM cairn_check_identity_state_assertion(p_type, b);
-        v_twin_required := 'identity-state assertion requires a non-empty authored twin (§5.7)';
-    END IF;
-
-    -- Authored twin present → carry it verbatim (principle 11; the conformant path).
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-
-    -- Absent/blank twin: a twin-required type raises its specific legible exception; every
-    -- other type degrades honestly to a flagged derived skeleton (ADR-0039).
-    IF v_twin_required IS NOT NULL THEN
-        RAISE EXCEPTION 'submit_event: %', v_twin_required;
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- 3. Register both identity-state verbs' structural floor + hard twin requirement in the
+--    #173 registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
+--    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
+--    registry trigger (db/005) sees cairn_check_identity_state_assertion(text, jsonb)
+--    declared at load time.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('identity.pending.asserted',  'cairn_check_identity_state_assertion', 'identity-state assertion requires a non-empty authored twin (§5.7)'),
+    ('identity.identify.asserted', 'cairn_check_identity_state_assertion', 'identity-state assertion requires a non-empty authored twin (§5.7)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- 4. chart_identity_state: the standing identity-status overlay (same overlay discipline
 --    as db/023's chart_dispute, but keyed by the SUBJECT itself — a chart carries exactly

@@ -42,7 +42,12 @@ $$;
 -- to fields THIS node knows — an unknown field passes the generic checks (it is still
 -- stored in event_log and legible via its twin; the PROJECTION, not the floor, is what
 -- is gated to known fields). Each violation is a distinct legible exception.
-CREATE OR REPLACE FUNCTION cairn_check_demographic_field(b jsonb)
+-- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch; p_type is
+-- unused here (this check validates the body). DROP clears any stale (jsonb) overload on
+-- an upgraded-in-place dev DB (this is the EARLIEST declaration; db/014 re-declares the
+-- unified signature without re-dropping).
+DROP FUNCTION IF EXISTS cairn_check_demographic_field(jsonb);
+CREATE OR REPLACE FUNCTION cairn_check_demographic_field(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p   jsonb := b -> 'payload';
@@ -89,6 +94,15 @@ BEGIN
     -- unknown field: generic checks only — carried, legible, not projected.
 END;
 $$;
+
+-- Register this type's structural floor + hard twin requirement in the #173 registry
+-- (replaces the copied cairn_event_twin dispatch chain; the single db/005 dispatcher reads
+-- this row). Placed after the floor fn above so the fail-closed registry trigger (db/005)
+-- sees cairn_check_demographic_field(text, jsonb) already declared at load time.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('demographic.field.asserted', 'cairn_check_demographic_field',
+     'demographic assertion requires a non-empty authored twin (§4.5)')
+ON CONFLICT (event_type) DO NOTHING;
 
 -- The §4.2 provenance-precedence projection: one row per (patient, field) holding the
 -- current DISPLAY winner. Full assertion history (the matching evidence) stays in
@@ -169,33 +183,5 @@ CREATE TRIGGER patient_demographic_apply_trg
     EXECUTE FUNCTION patient_demographic_apply();
 
 GRANT SELECT ON patient_demographic TO cairn_agent;
-
--- Demographics' ONLY change to the write path: extend the twin hook (NOT submit_event)
--- to dispatch BOTH demographic event types through their structural floor, then a
--- single shared §4.5 authored-twin enforcement. This supersedes db/010's definition
--- (latest-loaded wins — the standard additive-migration pattern); the identifier
--- branch behaves identically. Legacy types fall back to the derived skeleton twin.
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin text;
-BEGIN
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-    ELSE
-        RETURN cairn_twin_skeleton(p_type, b);
-    END IF;
-    -- Shared §4.5 authored-twin enforcement for every demographic assertion (written
-    -- once, not duplicated per branch): the twin is materialised at authoring, so an
-    -- empty/absent twin on a demographic event is refused.
-    v_twin := b ->> 'plaintext_twin';
-    IF v_twin IS NULL OR length(trim(v_twin)) = 0 THEN
-        RAISE EXCEPTION 'submit_event: demographic assertion requires a non-empty authored twin (§4.5)';
-    END IF;
-    RETURN v_twin;
-END;
-$$;
 
 COMMIT;

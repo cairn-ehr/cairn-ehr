@@ -63,54 +63,15 @@ BEGIN
 END;
 $$;
 
--- 3. Extend the shared twin hook. PRESERVES every existing branch from db/032
---    verbatim and adds ONLY the two reconciliation branches. submit_event itself is
---    never re-declared. Identity-critical linkage -> HARD-require an authored twin.
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin          text := b ->> 'plaintext_twin';
-    v_authored      boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    v_twin_required text := NULL;
-BEGIN
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_twin_required := 'demographic assertion requires a non-empty authored twin (§4.5)';
-    ELSIF p_type IN ('identity.link.asserted', 'identity.unlink.asserted') THEN
-        PERFORM cairn_check_link_assertion(b);
-        v_twin_required := 'identity linkage assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.dispute.asserted', 'identity.dispute.resolved') THEN
-        PERFORM cairn_check_dispute_assertion(p_type, b);
-        v_twin_required := 'identity dispute assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('identity.pending.asserted', 'identity.identify.asserted') THEN
-        PERFORM cairn_check_identity_state_assertion(p_type, b);
-        v_twin_required := 'identity-state assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type = 'identity.repudiate.asserted' THEN
-        PERFORM cairn_check_repudiation_assertion(b);
-        v_twin_required := 'identity repudiation assertion requires a non-empty authored twin (§5.7)';
-    ELSIF p_type IN ('clinical.medication.asserted', 'clinical.medication-cessation.asserted') THEN
-        PERFORM cairn_check_medication_assertion(p_type, b);
-        v_twin_required := 'medication assertion requires a non-empty authored twin (§3.13/§3.15)';
-    ELSIF p_type IN ('clinical.medication-dose-change.asserted', 'clinical.medication-dose-correction.asserted') THEN
-        PERFORM cairn_check_medication_dose(p_type, b);
-        v_twin_required := 'medication dose assertion requires a non-empty authored twin (§3.13/§3.15)';
-    ELSIF p_type IN ('clinical.medication-reconciliation.asserted', 'clinical.medication-separation.asserted') THEN
-        PERFORM cairn_check_medication_reconciliation(p_type, b);
-        v_twin_required := 'medication reconciliation requires a non-empty authored twin (§3.13/§3.15)';
-    END IF;
-
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-    IF v_twin_required IS NOT NULL THEN
-        RAISE EXCEPTION 'submit_event: %', v_twin_required;
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- 3. Register both reconciliation verbs' structural floor + hard twin requirement in the
+--    #173 registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
+--    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
+--    registry trigger (db/005) sees cairn_check_medication_reconciliation(text, jsonb)
+--    declared at load time.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('clinical.medication-reconciliation.asserted', 'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.15)'),
+    ('clinical.medication-separation.asserted',     'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.15)')
+ON CONFLICT (event_type) DO NOTHING;
 
 COMMIT;
 

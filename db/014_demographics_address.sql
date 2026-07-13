@@ -19,7 +19,10 @@ BEGIN;
 -- (payload/field/provenance/value all present and non-empty) are unchanged. The address
 -- branch enforces ONLY culture-neutral structural shape: it never interprets a part name,
 -- never holds a profile, never validates geo semantics (lat/lon bounds are advisory).
-CREATE OR REPLACE FUNCTION cairn_check_demographic_field(b jsonb)
+-- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch (p_type unused;
+-- this check validates the body). No DROP here — db/011 already dropped the stale (jsonb)
+-- overload earlier in load order; this is a plain CREATE OR REPLACE of the unified signature.
+CREATE OR REPLACE FUNCTION cairn_check_demographic_field(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p     jsonb := b -> 'payload';

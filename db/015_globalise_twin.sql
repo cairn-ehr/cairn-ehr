@@ -22,41 +22,8 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
                        ELSE E'\n' || jsonb_pretty(b -> 'payload') END);
 $$;
 
--- The generalised per-type twin hook. Demographic types: structural floor + HARD authored-twin
--- requirement (ADR-0034). Every other type: prefer the authored twin; derive+flag if absent
--- (ADR-0039 honest degradation). The authored-vs-derived flag is NOT stored here — it is
--- recoverable from signed_bytes via cairn_twin_is_authored below.
-CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
-DECLARE
-    v_twin        text    := b ->> 'plaintext_twin';
-    v_authored    boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
-    v_demographic boolean := false;
-BEGIN
-    -- Per-type structural floor (demographics only, for now).
-    IF p_type = 'demographic.identifier.asserted' THEN
-        PERFORM cairn_check_identifier_assertion(b);
-        v_demographic := true;
-    ELSIF p_type = 'demographic.field.asserted' THEN
-        PERFORM cairn_check_demographic_field(b);
-        v_demographic := true;
-    END IF;
-
-    -- Authored twin present → carry it verbatim (principle 11; the conformant path, EVERY type).
-    IF v_authored THEN
-        RETURN v_twin;
-    END IF;
-
-    -- Absent/blank twin:
-    --   demographic types HARD-require it (ADR-0034 — a twin-less demographic event is a
-    --     same-version bug; an older node rejects the unknown type at classification).
-    --   every other type degrades honestly to a flagged derived skeleton (ADR-0039).
-    IF v_demographic THEN
-        RAISE EXCEPTION 'submit_event: demographic assertion requires a non-empty authored twin (§4.5)';
-    END IF;
-    RETURN cairn_twin_skeleton(p_type, b);
-END;
-$$;
+-- (The per-type twin dispatch moved to the db/005 registry dispatcher — #173/ADR-0048.
+--  This migration keeps the improved skeleton + the twin-provenance read surfaces below.)
 
 -- Read-time provenance: was the twin author-materialised, or derived by the floor? Recovered
 -- from the immutable signed body (the author either signed a non-empty plaintext_twin or did
