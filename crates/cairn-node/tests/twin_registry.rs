@@ -67,3 +67,92 @@ async fn registry_trigger_rejects_missing_check_fn() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn registry_is_seeded_with_the_expected_mapping() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Assert the full 15-row mapping is present so a dropped registration is caught.
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 15, "expected 15 seeded twin-check rows");
+
+    // Spot-check a representative mapping.
+    let row = c
+        .query_one(
+            "SELECT check_fn, twin_required_msg FROM cairn_event_twin_check \
+             WHERE event_type = 'identity.link.asserted'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let fn_name: String = row.get(0);
+    let msg: String = row.get(1);
+    assert_eq!(fn_name, "cairn_check_link_assertion");
+    assert!(msg.contains("§5.7"));
+}
+
+#[tokio::test]
+async fn dispatch_runs_the_registered_structural_check() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Call the dispatcher directly with a structurally-invalid link body (empty payload →
+    // no subjects). cairn_check_link_assertion must fire and RAISE — proof the registry
+    // dispatched to a check, not the skeleton. (An authored twin is present, so a raise can
+    // only come from the structural check running BEFORE the authored-twin return.)
+    let body = r#"{"schema_version":"identity.link/1",
+                   "patient_id":"00000000-0000-0000-0000-000000000001",
+                   "plaintext_twin":"linked","payload":{}}"#;
+    // NOTE: cast as $1::text::jsonb, not $1::jsonb — with a bare ::jsonb cast, Postgres's
+    // parameter-type inference reports OID jsonb for $1, and tokio-postgres's `ToSql` for
+    // `&str` only accepts TEXT/VARCHAR/NAME/UNKNOWN, so binding fails client-side with a
+    // `WrongType` error *before* the query ever reaches the server. Because that client-side
+    // error also satisfies `.expect_err(...)`, the bare-cast form is a false green: it never
+    // proves dispatch reached the check. `$1::text::jsonb` matches the established codebase
+    // idiom (see recall_epoch.rs) — parameter type resolves to text, cast to jsonb happens
+    // server-side after binding.
+    let err = c
+        .query_one(
+            "SELECT cairn_event_twin('identity.link.asserted', $1::text::jsonb)",
+            &[&body],
+        )
+        .await
+        .expect_err("an invalid link body must be refused by the dispatched check");
+    let msg = db_msg(&err);
+    assert!(!msg.is_empty());
+    assert!(
+        msg.contains("§5.7") || msg.contains("link assertion"),
+        "expected a link-assertion structural-check message, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn unregistered_type_gets_skeleton_no_raise() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // A type with no registry row and no authored twin returns the mechanical skeleton and
+    // does NOT raise (honest degradation, ADR-0039) — matches note.added behaviour today.
+    let body = r#"{"schema_version":"note/1",
+                   "patient_id":"00000000-0000-0000-0000-000000000001",
+                   "payload":{"text":"hi"}}"#;
+    // $1::text::jsonb — see the comment in dispatch_runs_the_registered_structural_check for
+    // why a bare $1::jsonb cast fails client-side under tokio-postgres.
+    let twin: String = c
+        .query_one(
+            "SELECT cairn_event_twin('note.added', $1::text::jsonb)",
+            &[&body],
+        )
+        .await
+        .expect("unregistered type must not raise")
+        .get(0);
+    assert!(twin.contains("[note.added]"));
+}
