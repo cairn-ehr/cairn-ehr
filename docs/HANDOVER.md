@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-12 · **Spec/ADRs:** v0.47 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-13 · **Spec/ADRs:** v0.48 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
@@ -38,6 +38,11 @@ above — the first stream carrying actual clinical content; PR #171, on main)
 verbs, `db/032` floor + a bitemporal dose timeline [point-0 seed + change + HLC-wins correction overlay] +
 `patient_medication_dose_history`, current/past reworked to the timeline dose, `change_dose`/`correct_dose`
 orchestrators + CLI; db/031 untouched).
++ the **medication cross-thread reconciliation resolution, slice 3 — BUILT this session** (ADR-0047;
+`clinical.medication-reconciliation`/`-separation` verbs, `db/033` — a symmetric reversible LINK between two
+`medication_id` threads [never a false cessation] with min-UUID connected-component collapse to one current-list
+row [mirrors identity `patient_link`/`person_member`], latest-effective group status, flag clears without a
+cessation; PR #178).
 + the **L3 clinician reference-UI shell, slice 1 — BUILT** (a standalone `cairn-gui/` workspace with a
 framework-agnostic contract/port/manifest/routing core; **Spike 0004 resolved — iced FAILS the accessibility bar**,
 so the reference desktop UI **pivots to Tauri 2**, an L3 framework choice *below* the compatibility boundary — no
@@ -45,75 +50,67 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-12) — medication dose overlay, slice 2 of `clinical.medication`
-(branch `feat/medication-dose-overlay-slice-2`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
-graduates the slice-1 §8 deferral into product code).** Two new **additive** verbs over the existing
-`medication_id` thread: `clinical.medication-dose-change.asserted` (titration — both doses true over effective
-time) + `clinical.medication-dose-correction.asserted` (a recorded dose was wrong; references the dose event it
-fixes via a plain `corrects` UUID, **not** the existence-forcing `target_event_id` — offline-first). New
-`db/032_medication_dose.sql` (**db/031 UNTOUCHED**): the structural floor (`cairn_check_medication_dose` + two
-twin-dispatch branches; both types `additive`/`targets_other_author=FALSE` — a correction is additive, **not** a
-suppression, so ADR-0043's owner-gate does not apply and cross-author dose correction is ungated with the original
-preserved); a **dose timeline** — `medication_dose_event` (point-0 seeded from the assert by a 2nd additive trigger
-+ one row per change) + `medication_dose_correction` (HLC-wins overlay keyed by the target dose event);
-`medication_current_dose` picks the **latest-EFFECTIVE** point (bitemporal §5.1: `cairn_dose_effective_sort_key`
-ISO-lexical string, null→recording-time, `COLLATE "C"` — fully node-convergent; a backdated change never overrides
-a real later one); `patient_medication_dose_history` (the titration trail); and `patient_medication_current`/`_past`
-reworked to source the dose from the timeline **without widening** (same column set as db/031 — a `CREATE OR REPLACE`
-that widened would break `connect_and_load_schema`'s every-connect db/031 replay with "cannot drop columns from
-view"). `cairn-event::medication` split into an `assert`/`cessation`/`dose` module; pure dose builders (honest-unknown
-— an unquantified change and a correct-to-unknown are first-class); `cairn-node::medication` `change_dose`/`correct_dose`
-orchestrators (device-additive) + `resolve_correction_target` (defaults to the current dose point) +
-`medication-change-dose`/`medication-correct-dose` CLI. **correct-to-unknown shows unknown, not the stale original**
-(views key on correction-row presence, not `COALESCE`). TDD, subagent-driven (8 tasks); full workspace green
-(fmt + clippy --workspace + `cargo test --workspace` 0 failures / 31 binaries incl. DB-gated `medication_dose` 14/14
-and slice-1 `medication` 10/10 across many reconnects; mkdocs). Whole-branch review (opus): **Ready to merge, 0
-Critical/Important**; 3 Minors (2 applied as review polish — a shared `dose_object` DRY helper + info_source in the
-correction twin; 1 cosmetic SQL-whitespace skipped). **Two floor findings caught + fixed in-build:** a 3VL NULL hole
-in the no-op guard (content-check + `COALESCE(...,FALSE)`), and an empty-`{"dose":{}}` raw-SQL bypass (the guard now
-checks dose/effective CONTENT, not key presence — proven by a hand-injected hostile-client test). **Post-review fix
-(PR #175):** the correction projection join is now **thread-scoped** (`corr.medication_id = de.medication_id` in both
-`medication_current_dose` and `patient_medication_dose_history`) — a mistargeted `--target` (or hostile raw-SQL client)
-that names thread X while `corrects` points at a point of thread Y no longer silently overlays Y's displayed dose;
-such a cross-thread correction is now a fail-safe no-op on the projection (still auditable in `event_log`),
-regression-tested (`cross_thread_correction_does_not_overlay_wrong_thread`, negative-control verified) alongside a
-`correcting_older_point_leaves_current_unchanged` coverage test. **Deferred (slice
-3+):** cross-thread **reconciliation resolution** (link two threads as the same real med — never-merge); correcting a
-dose event's *effective date*/*reason* (slice 2 corrects the value only); the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
-twin-dispatch registry refactor (2 more verbatim branches added the old way); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
-HLC-collision advisory onto the dose projections; human-attested clinical responsibility on a dose event.
+**This session (2026-07-13) — `clinical.medication` slice 3: cross-thread reconciliation resolution
+(branch `feat/medication-reconciliation-slice-3`, PR #178; **ADR-0047**, spec v0.47→v0.48; the only
+floor-contract change is registering 2 additive verbs).** Removes the **slice-1 wart**: clearing a duplicate
+`patient_medication_reconciliation_flag` no longer requires a **false cessation** (which would fabricate a stop
+event for a drug the patient is still on). Two additive verbs over a canonical `(low,high)` `medication_id` thread
+pair — `clinical.medication-reconciliation.asserted` (state `reconciled`) + `clinical.medication-separation.asserted`
+(state `separated`, the never-erase reversal); both `additive`/`targets_other_author=FALSE`, so ADR-0043's owner-gate
+doesn't apply and **cross-author reconciliation is allowed**. Reconciliation is permitted between **any** two threads
+(the only path today for human brand↔generic reconciliation the deterministic flag can't detect). New
+`db/033_medication_reconciliation.sql` (**db/031 + db/032 UNTOUCHED**): structural floor
+(`cairn_check_medication_reconciliation` — two DISTINCT valid UUID subjects + valid patient + non-empty provenance;
+self-reconcile refused; **offline-first, no subject existence check**) + 2 twin branches; an HLC-overlay
+`medication_reconciliation` edge table + a connected-component `medication_group_member` projection (min-UUID
+canonical, `cairn_recompute_medication_group`, advisory lock `CARNMR`, oversize guard RAISE-local/clamp-flag-remote)
+**mirroring db/018 `patient_link`/`person_member`**; and collapsed group views — `patient_medication_current`/`_past`
+now emit **one row per reconciled group** (SAME column set as db/032, replay-safe) with group status by
+**latest-EFFECTIVE-wins** (all-active→active; all-ceased→ceased; mixed→later-effective decides; **provably reduces to
+slice-1/2 for singletons** — shipped behavior unchanged) and current dose = latest-effective across ACTIVE members.
+The flag now fires on `count(DISTINCT group_id)>1` (reconciling clears it, separating re-fires it) — the
+`thread_count` column **kept its name for replay-safety** (renaming is replay-UNSAFE: db/031 re-issues
+`CREATE OR REPLACE ... thread_count` every connect before db/033), now counts groups. `cairn-event::medication::reconciliation`
+pure builders/twins; `cairn-node` `reconcile_medications`/`separate_medications` orchestrators (device-additive) +
+`medication-reconcile`/`medication-separate` CLI (live e2e smoke: 2 dup → reconcile → 1 row + flag clears → separate
+→ 2 rows + flag returns). **ADR-0047** records symmetric-link-collapse + latest-effective status (principle 2). TDD,
+subagent-driven (8 tasks, per-task spec+quality review); full workspace green (fmt + clippy --workspace +
+`cargo test --workspace` **559 passed / 0 failed** incl. `medication_reconciliation` all + slice-1 `medication` 10/10 +
+slice-2 `medication_dose` 14/14; mkdocs). Whole-branch review (opus): **Ready to merge, 0 Critical/0 Important.** Two
+in-build catches: the oversize-guard was untested + the implementer's "matches db/018 precedent" claim was FALSE
+(db/018 DOES test it) → added a walk-to-cap RAISE+txn-rollback test; the plan's `thread_count`→`group_count` rename
+was replay-unsafe → kept the name (the reviewer confirmed the fix from first principles). Review polish (comment-only):
+documented why current/past source dose ONLY from the timeline with no as-asserted fallback (db/032's seed trigger
+guarantees a point-0 dose event on every assert). **Filed:** [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176)
+(oversize **remote** clamp-and-flag test — needs a medication apply-door harness);
+[#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation guard — needs a DESIGN
+DECISION, not a trivial guard**; offline-first floor can't cheaply check both threads' patients). **Deferred (later
+slices):** correcting a dose event's *effective date*/*reason*; fuzzy/automatic reconciliation + the Tier-A drug
+dictionary; human-attested clinical responsibility on a reconciliation (composes additively, zero floor change); the
+[#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) twin-dispatch registry refactor (2 more verbatim branches);
+[#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the new projections; a
+prefer-INN display term for reconciled groups.
 
-**Session (2026-07-12, GUI/L3 thread) — the reference-UI framework question, SETTLED: pivot to Tauri 2
-(branch `claude/gui-iced-plugin-arch-8e75db`, PR #174; NO ADR/spec/wire change — an L3 framework choice
-*below* the compatibility boundary).** First work on the L3 reference-UI layer (distinct from every block
-below, which is `cairn-node` clinical-surface work). brainstorm→spec→plan→subagent-driven-TDD built the
-**clinician reference GUI shell, slice 1** — a standalone `cairn-gui/` workspace (detached from the node tree;
-iced/wgpu/cosmic-text never enter `cairn-node`) rendering an iced two-pane splittable shell over a **mock**
-`ClinicalData` port: the semantic/a11y contract (`cairn-gui-tab`), the port + fixture mock (`cairn-gui-data`),
-the self-repairing site/role⊕user manifest merge (`cairn-gui-manifest`), a pure pane/routing/freshness state
-machine + iced `pane_grid` shell + `--dump-a11y` (`cairn-gui-shell`), and one crate per tab (demographics,
-note). 23/23 tests, iced-free core headless; design/plan/results under
-`docs/superpowers/{specs,plans}/2026-07-12-clinician-*gui-shell*` +
-`cairn-gui/cairn-gui-shell/results/`. The slice **doubled as the Spike 0004 vehicle.**
-**Spike 0004 RESOLVED — verdict: iced FAILS the accessibility bar.** Released **iced 0.14 ships no AccessKit /
-no accessibility tree at all** (only `text_input`/`text_editor` focusable; no `accesskit` anywhere in the
-compiled tree), **empirically confirmed** with macOS Accessibility Inspector on the live window (Cairn controls
-expose no accessible elements — `Children: Empty array`, menu-bar-only hierarchy; a screen reader gets an empty
-box). **I1 complex-script shaping PASSED** on the real surface (Latin/Arabic/Devanagari/Han, no tofu);
-cross-pane routing + the draggable divider work. Trajectory (why "wait for iced" isn't bankable): a11y issue
-[#552](https://github.com/iced-rs/iced/issues/552) open since 2020, draft-unmerged PR
-[#3111](https://github.com/iced-rs/iced/pull/3111); the **libcosmic/plushie-iced fork** is the only iced-family
-a11y path today. Per eco-eval 0004's own contingency (A FAIL → webview/Tauri L3), the **reference desktop UI
-adopts Tauri 2** — recorded in **[eco-eval 0004 §6](ecosystem/0004-reference-ui-framework-iced-vs-tauri.md)** +
-the **[Spike 0004](spikes/0004-iced-reference-ui-viability.md)** status. Rationale (the maintainer's call): Cairn
-UIs are **thin layers over the DB + extensions** and the **policy layer is GUI-agnostic**, so re-implementation
-cost is bearable; the **framework-agnostic slice-1 core (contract/port/manifest/routing) is reusable behind a
-Tauri backend** — only the iced *rendering* is superseded. **No ADR, spec unchanged; reversible** if
-iced/libcosmic a11y matures. **PR #174** = the spike + reusable core + the documented decision (merge-as-record).
-**Follow-up (separate session, chip):** extend the `cargo-deny` supply-chain CI gate to `cairn-gui` (a manual
-`cargo deny check licenses` on the iced tree passed — no live violation; the automated gate is the gap).
-**Next:** the **Tauri reference client** — a fresh brainstorm→spec→plan reusing the contract/port/manifest, with
-accessibility inherited from the browser.
+**Prior session (2026-07-12) — medication dose overlay, slice 2 (PR #175, on main; no ADR/spec/SCHEMA change).**
+Two additive dose verbs over the `medication_id` thread (`-dose-change`/`-dose-correction`, offline-first `corrects`
+UUID not `target_event_id`), `db/032_medication_dose.sql` (db/031 untouched): a bitemporal dose timeline (point-0
+seed + change + HLC-wins correction overlay keyed on the target dose event), `medication_current_dose` = latest-EFFECTIVE
+point (`cairn_dose_effective_sort_key`, `COLLATE "C"`, null→recording-time), `patient_medication_dose_history`,
+current/past reworked to the timeline dose **without widening**; correct-to-unknown shows unknown (correction-row
+presence, not `COALESCE`); the correction join is **thread-scoped** (a mistargeted `--target` is a fail-safe no-op).
+`cairn-event::medication` split into assert/cessation/dose. Whole-branch review clean (opus).
+
+**Session (2026-07-12, GUI/L3 thread) — reference-UI framework SETTLED: pivot to Tauri 2 (PR #174, on main;
+no ADR/spec/wire change — an L3 choice *below* the compatibility boundary).** First L3 reference-UI work: a
+standalone `cairn-gui/` workspace (framework-agnostic contract/port/manifest/routing core + an iced shell over a
+mock `ClinicalData` port; 23/23 tests, iced-free core headless), which doubled as the **Spike 0004** vehicle.
+**Verdict: iced FAILS the accessibility bar** (iced 0.14 ships no AccessKit / no a11y tree — empirically confirmed
+with macOS Accessibility Inspector; a screen reader gets an empty box); I1 complex-script shaping PASSED. Per
+eco-eval 0004's contingency the reference desktop UI **adopts Tauri 2** (a11y inherited from the browser); the
+framework-agnostic slice-1 core is reusable behind a Tauri backend — only iced *rendering* is superseded, reversible
+if iced/libcosmic a11y matures. Recorded in [eco-eval 0004 §6](ecosystem/0004-reference-ui-framework-iced-vs-tauri.md)
++ [Spike 0004](spikes/0004-iced-reference-ui-viability.md). **Follow-up:** extend the `cargo-deny` CI gate to
+`cairn-gui`. **Next:** the **Tauri reference client** — a fresh brainstorm→spec→plan reusing the contract/port/manifest.
 
 **Prior session (2026-07-12, clinical) — the first clinical-content event stream: `clinical.medication` slice 1
 (branch `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** —
@@ -554,15 +551,18 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 
 **Desk-doable now (no external dependency):**
 - **`clinical.medication` — next slice** (the live clinical build front). Slices 1 (assert/cease) + 2 (dose
-  change/correction overlay + bitemporal dose timeline) are DONE. **Next = slice 3: cross-thread reconciliation
-  *resolution*** — "these two threads are the same real medication" as a first-class link/supersede event
-  (never-merge-always-link), so clearing a reconciliation flag no longer means falsely *ceasing* a thread (the
-  slice-1 wart). Reuse the `db/031`+`db/032` spine + `cairn-event::medication` module. Other deferred: correcting a
-  dose event's *effective date*/*reason*; fuzzy reconciliation + the Tier-A drug dictionary (brand↔generic/DDI);
-  structured sig/frequency (lands with prescriptions); human-attested clinical responsibility on a medication/dose
-  event; the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173) `cairn_event_twin` dispatch→registry refactor
-  (every clinical slice adds another verbatim branch); the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157)
-  HLC-collision advisory onto the medication/dose projections.
+  change/correction overlay + bitemporal dose timeline) + **3 (cross-thread reconciliation resolution — ADR-0047,
+  `db/033`; symmetric link/separation + min-UUID group collapse; PR #178)** are DONE. **Next candidates:**
+  correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only); a **prefer-INN display term**
+  for reconciled groups; **fuzzy/automatic reconciliation** + the Tier-A drug dictionary (brand↔generic/DDI) — the
+  human-driven resolution now exists, automated *detection* is the gap; structured sig/frequency (lands with
+  prescriptions); human-attested clinical responsibility on a medication/dose/reconciliation event (composes
+  additively, zero floor change). **Cross-cutting debt:** the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
+  `cairn_event_twin` dispatch→registry refactor (every clinical slice adds verbatim branches — slice 3 added 2 more);
+  the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
+  reconciliation projections; [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize-guard remote-apply
+  test); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation — needs a design
+  decision**). Spine to reuse: `db/031`/`db/032`/`db/033` + `cairn-event::medication`.
 - **Demographics build — next slices** (reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
@@ -769,6 +769,7 @@ ADR before reopening any of these.
 | [0044](spec/decisions/0044-enroll-fail-closed-on-actor-id-collision.md) | Enroll fails closed on `actor_id` collision with a distinct key; humans carry a person-distinguishing determinant | §7.5 (refines 0011/0029) |
 | [0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md) | Collation-independent projection winner tiebreaks (`COLLATE "C"`) | §5.7/§4 (refines principle 1) |
 | [0046](spec/decisions/0046-enroll-fail-closed-on-key-actor-dual-mapping.md) | Enroll fails closed on key→actor dual mapping (B-direction whole-history guard) | §7.5 (refines 0044/0011) |
+| [0047](spec/decisions/0047-medication-reconciliation-resolution.md) | Medication reconciliation is a link, not a cessation; symmetric min-UUID collapse; latest-effective group status | §3.15/§3.16 (principle 2; reuses identity linkage) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
