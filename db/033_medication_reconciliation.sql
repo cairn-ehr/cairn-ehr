@@ -274,7 +274,9 @@ GRANT SELECT ON medication_thread_group TO cairn_agent;
 --    cessations. Ties (equal effective keys) resolve to 'active' (documented
 --    tiebreak — keep the drug visible). A single-member group can never be "mixed"
 --    (all-active or all-ceased), so this reduces EXACTLY to slice-1/2 semantics.
---    MAX(... COLLATE "C") forces byte-order max (ADR-0045).
+--    MAX(... COLLATE "C") forces byte-order max, and the final active-vs-ceased
+--    comparison is likewise pinned with COLLATE "C" (ADR-0045) so the winner never
+--    depends on the node's database collation.
 CREATE OR REPLACE VIEW medication_group_status AS
 WITH active_eff AS (
     SELECT g.group_id,
@@ -294,7 +296,7 @@ ceased_eff AS (
 SELECT grp.group_id, grp.patient_id,
        CASE WHEN ce.eff IS NULL THEN 'active'
             WHEN ae.eff IS NULL THEN 'ceased'
-            WHEN ae.eff >= ce.eff THEN 'active'
+            WHEN ae.eff >= ce.eff COLLATE "C" THEN 'active'
             ELSE 'ceased' END AS status
 FROM (SELECT DISTINCT group_id, patient_id FROM medication_thread_group) grp
 LEFT JOIN active_eff ae ON ae.group_id = grp.group_id
@@ -349,11 +351,19 @@ GRANT SELECT ON medication_group_cessation TO cairn_agent;
 
 -- 11. Group display fields from the canonical member's statement: prefer the exact
 --     group_id member if its assert is local, else the min-UUID member present.
+--     Carries the as-asserted dose (dose_amount/dose_unit) so the current/past views
+--     can fall back to it for a member with a statement but NO dose timeline row
+--     (see the fallback note on patient_medication_current below). The dose columns
+--     are APPENDED at the end of the select list, never inserted mid-list: a later
+--     CREATE OR REPLACE that repositions an existing view column fails ("cannot change
+--     name of view column"), so column additions to this internal view must stay
+--     append-only to survive an in-place upgrade over a prior-shaped view.
 CREATE OR REPLACE VIEW medication_group_display AS
 SELECT DISTINCT ON (g.group_id)
     g.group_id, g.patient_id, s.term, s.inn_code, s.formulation, s.sig, s.info_source,
     s.started_value, s.started_precision,
-    to_timestamp(s.hlc_wall / 1000.0) AS asserted_at
+    to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
+    s.dose_amount, s.dose_unit
 FROM medication_statement s
 JOIN medication_thread_group g ON g.medication_id = s.medication_id
 ORDER BY g.group_id, (s.medication_id = g.group_id) DESC, s.medication_id;
@@ -364,17 +374,23 @@ GRANT SELECT ON medication_group_display TO cairn_agent;
 --     connect; widening/renaming breaks reconnect). Only rows + dose/status source
 --     change. medication_id = group_id (the stable group key; = the thread itself
 --     for an un-reconciled thread, so slice-1/2 behavior is preserved).
---     NOTE (intentional, not an oversight): unlike db/032, the dose here is sourced
---     ONLY from the timeline (medication_group_current_dose / _last_dose), with no
---     COALESCE to the as-asserted statement dose. That fallback is unnecessary because
---     db/032's medication_dose_seed_initial trigger seeds a point-0 dose event on EVERY
---     clinical.medication.asserted (local or replicated), so any thread with a statement
---     has >= 1 dose point — the seedless-assert case db/032's fallback guarded cannot
---     arise once db/032 is loaded (which connect_and_load_schema guarantees before any
---     assert is applied).
+--     DOSE FALLBACK (retained from db/032, legibility across time / principle 11):
+--     the dose prefers the timeline winner (medication_group_current_dose / _last_dose)
+--     but falls back to the canonical member's as-asserted statement dose when the group
+--     has NO timeline row. That case is NOT hypothetical: db/032's medication_dose_seed_initial
+--     trigger only seeds a point-0 dose event for asserts INSERTED after the trigger
+--     exists — a clinical.medication.asserted already in event_log from before this node
+--     first loaded db/032 (a slice-1-only history) has a statement but no dose event, and
+--     re-running db/032 on connect does NOT backfill it. Dropping the fallback would make
+--     such an old, still-current med render with a NULL dose on reconnect. The fallback is
+--     a CASE on timeline-row PRESENCE (cd/ld.group_id IS NOT NULL), NOT a COALESCE on the
+--     amount — a present timeline row with a NULL amount is a legitimate honest-unknown
+--     (a correct-to-unknown / unquantified change, db/032 §9) and must stay NULL, never
+--     silently revert to the stale as-asserted value.
 CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
-       cd.amount AS dose_amount, cd.unit AS dose_unit,
+       CASE WHEN cd.group_id IS NOT NULL THEN cd.amount ELSE d.dose_amount END AS dose_amount,
+       CASE WHEN cd.group_id IS NOT NULL THEN cd.unit   ELSE d.dose_unit   END AS dose_unit,
        d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at
 FROM medication_group_display d
 JOIN medication_group_status st ON st.group_id = d.group_id
@@ -384,7 +400,8 @@ GRANT SELECT ON patient_medication_current TO cairn_agent;
 
 CREATE OR REPLACE VIEW patient_medication_past AS
 SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
-       ld.amount AS dose_amount, ld.unit AS dose_unit,
+       CASE WHEN ld.group_id IS NOT NULL THEN ld.amount ELSE d.dose_amount END AS dose_amount,
+       CASE WHEN ld.group_id IS NOT NULL THEN ld.unit   ELSE d.dose_unit   END AS dose_unit,
        d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
        gc.stopped_value, gc.stopped_precision, gc.reason
 FROM medication_group_display d

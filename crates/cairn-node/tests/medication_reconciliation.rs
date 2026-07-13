@@ -710,3 +710,66 @@ async fn single_thread_semantics_unchanged() {
         .get(0);
     assert_eq!(past, 1);
 }
+
+#[tokio::test]
+async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
+    // Legibility across time (principle 11): a medication asserted BEFORE db/032's
+    // dose-seed trigger existed has a statement but NO dose timeline row — and
+    // re-running db/032 on connect never backfills one. The collapsed group current/past
+    // views must still surface its as-asserted dose, not NULL. We reproduce that
+    // historical shape by deleting the seeded point-0 dose event after asserting.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let a = assert_medication(
+        &c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("warfarin"),
+    )
+    .await
+    .unwrap();
+    // Drop the seeded dose event → the thread now looks like a slice-1-only assert
+    // (statement present, timeline empty).
+    c.execute(
+        "DELETE FROM medication_dose_event WHERE medication_id = $1::text::uuid",
+        &[&a.to_string()],
+    )
+    .await
+    .unwrap();
+    // Current: still one active row, dose falls back to the as-asserted statement dose.
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(rows.len(), 1, "still current with no timeline row");
+    assert_eq!(rows[0].0, a);
+    assert_eq!(
+        rows[0].2.as_deref(),
+        Some("40"),
+        "no timeline row → fall back to the as-asserted statement dose (never NULL)"
+    );
+    // Past: the same fallback holds once the thread is ceased.
+    let cease = CeaseMedicationInput {
+        stopped: Some("2025"),
+        stopped_precision: Some("year"),
+        reason: None,
+    };
+    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease)
+        .await
+        .unwrap();
+    let past_dose: Option<String> = c
+        .query_one(
+            "SELECT dose_amount FROM patient_medication_past WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        past_dose.as_deref(),
+        Some("40"),
+        "past view falls back to the as-asserted dose too"
+    );
+}

@@ -75,13 +75,18 @@ pure builders/twins; `cairn-node` `reconcile_medications`/`separate_medications`
 `medication-reconcile`/`medication-separate` CLI (live e2e smoke: 2 dup → reconcile → 1 row + flag clears → separate
 → 2 rows + flag returns). **ADR-0047** records symmetric-link-collapse + latest-effective status (principle 2). TDD,
 subagent-driven (8 tasks, per-task spec+quality review); full workspace green (fmt + clippy --workspace +
-`cargo test --workspace` **559 passed / 0 failed** incl. `medication_reconciliation` all + slice-1 `medication` 10/10 +
+`cargo test --workspace` **560 passed / 0 failed** incl. `medication_reconciliation` all + slice-1 `medication` 10/10 +
 slice-2 `medication_dose` 14/14; mkdocs). Whole-branch review (opus): **Ready to merge, 0 Critical/0 Important.** Two
 in-build catches: the oversize-guard was untested + the implementer's "matches db/018 precedent" claim was FALSE
 (db/018 DOES test it) → added a walk-to-cap RAISE+txn-rollback test; the plan's `thread_count`→`group_count` rename
-was replay-unsafe → kept the name (the reviewer confirmed the fix from first principles). Review polish (comment-only):
-documented why current/past source dose ONLY from the timeline with no as-asserted fallback (db/032's seed trigger
-guarantees a point-0 dose event on every assert). **Filed:** [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176)
+was replay-unsafe → kept the name (the reviewer confirmed the fix from first principles). **PR-review fix (this
+review round):** the current/past views had DROPPED db/032's as-asserted dose fallback on the flawed rationale that
+db/032's seed trigger makes it unnecessary — but that trigger only seeds a point-0 dose for asserts inserted *after*
+it exists, so a slice-1-only medication assert already in the log (no dose event, never backfilled) would render with
+a NULL dose on reconnect (a principle-11 legibility regression). Fallback **restored** (CASE on timeline-row presence,
+so an honest-unknown corrected dose still shows NULL), `medication_group_display` now carries the as-asserted dose
+(appended at the tail — mid-list add is replay-unsafe), + a `pre_slice2_assert_without_dose_event_falls_back_to_statement_dose`
+regression test; the status latest-effective comparison is now COLLATE "C"-pinned (ADR-0045). **Filed:** [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176)
 (oversize **remote** clamp-and-flag test — needs a medication apply-door harness);
 [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation guard — needs a DESIGN
 DECISION, not a trivial guard**; offline-first floor can't cheaply check both threads' patients). **Deferred (later
