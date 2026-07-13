@@ -80,10 +80,23 @@ dispatch branch.
      is never silently skipped.
 - **New bet — the first dynamic SQL in the in-DB floor.** `cairn_event_twin` now builds and `EXECUTE`s a
   statement, where the rest of the floor is static. This is bounded and safe: the dispatched name comes
-  only from the **locked, migration-only** registry (never user input), is `%I`-quoted, and every failure
+  only from the **locked, migration-only** registry (never user input), is `%I`-quoted, every failure
   mode (unknown name, wrong signature) is **fail-closed** and caught at load time by the validation
-  trigger. The bet fails if a future change lets non-migration input reach `check_fn`, or relaxes the
-  load-time validation — reviewers of registry changes must hold both.
+  trigger, and `cairn_event_twin` **pins its own `SET search_path = public`** so the `%I` identifier
+  cannot be resolved into an attacker-shadowed schema regardless of caller (the safety argument is
+  self-contained in the hook, not merely inherited from the `SECURITY DEFINER` doors). The bet fails if a
+  future change lets non-migration input reach `check_fn`, relaxes the load-time validation, or removes
+  the `search_path` pin — reviewers of registry changes must hold all three.
+- **Residual limits reviewers must also hold** (narrow, and fail-closed, but not caught by the guard test):
+  1. The load-time trigger validates a `check_fn` **exists with the `(text, jsonb)` signature** — it does
+     *not* prove the function is a side-effect-free `RETURNS void` validator. A registered function of the
+     right signature that did real work would be dispatched. This is acceptable because the registry is
+     migration-only and reviewer-gated; it is not a mechanical guarantee.
+  2. The single-source guard catches re-declaration of the *dispatcher*, not a *check-fn rename*. Renaming
+     or dropping a registered check function without updating its registry row leaves a dangling row; the
+     dispatcher's `EXECUTE` then raises at runtime — **fail-closed** (every event of that type is rejected,
+     never silently un-checked), but an availability cliff for that one type until the row is fixed, rather
+     than a load-time failure. The existing per-floor suites surface it because they exercise each floor.
 - **Scope:** floor-wiring refactor only. **No wire / event-format / behaviour / spec-prose change** — the
   same checks run for the same types with the same outcomes (behaviour preservation is carried by the full
   existing suite staying green; the seed rows were transcribed verbatim from the winning chain). This ADR

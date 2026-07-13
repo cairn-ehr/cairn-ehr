@@ -102,19 +102,121 @@ async fn registry_is_seeded_with_the_expected_mapping() {
         .get(0);
     assert_eq!(n, 15, "expected 15 seeded twin-check rows");
 
-    // Spot-check a representative mapping.
-    let row = c
-        .query_one(
-            "SELECT check_fn, twin_required_msg FROM cairn_event_twin_check \
-             WHERE event_type = 'identity.link.asserted'",
+    // Lock the FULL registry contract. This table is now the single source of floor-wiring
+    // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
+    // rather than a count + one spot-check: a future slice that mis-points a check_fn or
+    // mis-transcribes a twin_required_msg is caught here directly, not merely if the broad
+    // behaviour suite happens to exercise that exact negative path. Strings are transcribed
+    // verbatim from the seeding migrations (db/010–033).
+    let mut expected: Vec<(&str, &str, &str)> = vec![
+        (
+            "demographic.identifier.asserted",
+            "cairn_check_identifier_assertion",
+            "demographic assertion requires a non-empty authored twin (§4.5)",
+        ),
+        (
+            "demographic.field.asserted",
+            "cairn_check_demographic_field",
+            "demographic assertion requires a non-empty authored twin (§4.5)",
+        ),
+        (
+            "identity.link.asserted",
+            "cairn_check_link_assertion",
+            "identity linkage assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.unlink.asserted",
+            "cairn_check_link_assertion",
+            "identity linkage assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.dispute.asserted",
+            "cairn_check_dispute_assertion",
+            "identity dispute assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.dispute.resolved",
+            "cairn_check_dispute_assertion",
+            "identity dispute assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.pending.asserted",
+            "cairn_check_identity_state_assertion",
+            "identity-state assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.identify.asserted",
+            "cairn_check_identity_state_assertion",
+            "identity-state assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "identity.repudiate.asserted",
+            "cairn_check_repudiation_assertion",
+            "identity repudiation assertion requires a non-empty authored twin (§5.7)",
+        ),
+        (
+            "clinical.medication.asserted",
+            "cairn_check_medication_assertion",
+            "medication assertion requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
+            "clinical.medication-cessation.asserted",
+            "cairn_check_medication_assertion",
+            "medication assertion requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
+            "clinical.medication-dose-change.asserted",
+            "cairn_check_medication_dose",
+            "medication dose assertion requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
+            "clinical.medication-dose-correction.asserted",
+            "cairn_check_medication_dose",
+            "medication dose assertion requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
+            "clinical.medication-reconciliation.asserted",
+            "cairn_check_medication_reconciliation",
+            "medication reconciliation requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
+            "clinical.medication-separation.asserted",
+            "cairn_check_medication_reconciliation",
+            "medication reconciliation requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+    ];
+    expected.sort();
+
+    // Sort BOTH sides in Rust (byte-lexicographic) so the comparison never depends on the
+    // node's default TEXT collation for ORDER BY. get::<_, String> also asserts non-null:
+    // all 15 seed rows carry both a check_fn and a twin_required_msg.
+    let rows = c
+        .query(
+            "SELECT event_type, check_fn, twin_required_msg FROM cairn_event_twin_check",
             &[],
         )
         .await
         .unwrap();
-    let fn_name: String = row.get(0);
-    let msg: String = row.get(1);
-    assert_eq!(fn_name, "cairn_check_link_assertion");
-    assert!(msg.contains("§5.7"));
+    let mut actual: Vec<(String, String, String)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.get::<_, String>(0),
+                r.get::<_, String>(1),
+                r.get::<_, String>(2),
+            )
+        })
+        .collect();
+    actual.sort();
+    let actual_ref: Vec<(&str, &str, &str)> = actual
+        .iter()
+        .map(|(et, cf, msg)| (et.as_str(), cf.as_str(), msg.as_str()))
+        .collect();
+
+    assert_eq!(
+        actual_ref, expected,
+        "registry mapping drifted from the verbatim seed contract"
+    );
 }
 
 #[tokio::test]
@@ -175,4 +277,38 @@ async fn unregistered_type_gets_skeleton_no_raise() {
         .expect("unregistered type must not raise")
         .get(0);
     assert!(twin.contains("[note.added]"));
+}
+
+#[tokio::test]
+async fn registered_type_absent_twin_raises_required_msg() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // A STRUCTURALLY-VALID link body (distinct valid subjects + non-empty provenance) that
+    // passes the dispatched floor check but carries NO authored twin. This isolates the
+    // twin-REQUIRED path driven by the registry's twin_required_msg column: the structural
+    // check passes, so the only remaining raise is the hard-require branch. Proves the
+    // twin-required policy is sourced from the registry row (ADR-0039 hard-require), not from
+    // any residual per-type dispatch code — a path the structural-check and skeleton tests
+    // above do not exercise.
+    let body = r#"{"schema_version":"identity.link/1",
+                   "patient_id":"00000000-0000-0000-0000-000000000001",
+                   "payload":{"subject_a":"00000000-0000-0000-0000-0000000000aa",
+                              "subject_b":"00000000-0000-0000-0000-0000000000bb",
+                              "provenance":"test"}}"#;
+    // $1::text::jsonb — see dispatch_runs_the_registered_structural_check for why a bare
+    // $1::jsonb cast false-greens under tokio-postgres.
+    let err = c
+        .query_one(
+            "SELECT cairn_event_twin('identity.link.asserted', $1::text::jsonb)",
+            &[&body],
+        )
+        .await
+        .expect_err("a registered twin-required type with no authored twin must raise");
+    let msg = db_msg(&err);
+    assert!(
+        msg.contains("requires a non-empty authored twin") && msg.contains("§5.7"),
+        "expected the registry twin_required_msg for a link assertion, got: {msg}"
+    );
 }

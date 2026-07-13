@@ -66,7 +66,9 @@ stable dispatcher** declared only in db/005, dispatching dynamically via
 copied chain **removed from 10 migrations**; **15 seed rows** transcribed verbatim from db/033's winning
 chain (behaviour byte-identical). A new event type now registers ONE additive row in its own migration and
 **never touches the dispatcher**. First dynamic SQL in the floor — bounded/safe (locked migration-only
-table, `%I` quoting, fail-closed, load-time validation, both doors `SECURITY DEFINER SET search_path=public`).
+table, `%I` quoting, fail-closed, load-time validation, and the hook itself now pins
+`SET search_path = public` so `%I` can't resolve into a shadowed schema — self-contained, not merely
+inherited from the two `SECURITY DEFINER` doors).
 `event_type_class` deliberately **NOT merged** (future convergence). **Invariants (ADR-0048, binds future
 slices):** dispatcher declared exactly once (enforced by no-DB guard `twin_dispatch_single_source.rs`, RED
 11→GREEN 1); every check fn `(p_type,b) RETURNS void`; missing/mis-signed fn fails closed at load. TDD,
@@ -75,7 +77,14 @@ subagent-driven (4 tasks, per-task spec+quality review; final whole-branch revie
 Two implementer catches on plan bugs: registry INSERT must sit AFTER each migration's check-fn CREATE (not
 "after event_type_class") or the trigger rolls back a FRESH load; and the contract test's `$1::jsonb` param
 cast fails client-side (tokio-postgres `WrongType`) → false-green, fixed to `$1::text::jsonb`. No wire /
-projection / behaviour / spec-prose change (ADR-0048 sits below the spec line). **Cross-cutting debt paid:**
+projection / behaviour / spec-prose change (ADR-0048 sits below the spec line). **Post-review hardening
+(follow-up review, all 3 non-blocking items fixed in-branch):** pinned `search_path` on the hook (above);
+the registry-contract test now asserts the **full 15-row `event_type → check_fn/msg` mapping** byte-for-byte
+(was count + one spot-check) plus a new registered-type-absent-twin→`twin_required_msg` raise test; ADR-0048
+gained a residual-limits reviewers-must-hold list (trigger validates signature, not side-effect-freedom;
+a check-fn rename leaving a dangling registry row is a runtime fail-closed reject, not a load-time failure).
+Full workspace re-verified green (fmt + clippy + `cargo test --workspace` 60 suites/0 fail; SQL mirror + mkdocs clean).
+**Cross-cutting debt paid:**
 every future clinical slice (diagnoses, progress notes, prescriptions, referrals, pathology…) is now a
 one-row registration, not a copied dispatch branch.
 

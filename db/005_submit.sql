@@ -84,11 +84,19 @@ $$;
 -- EXECUTE 'SELECT fn($1,$2)' form is the dynamic equivalent of PERFORM fn(...) (every
 -- check fn RETURNS void and works by RAISE-on-violation).
 --
+-- `SET search_path = public` is pinned on THIS function (not only on the SECURITY DEFINER
+-- doors that call it), so the %I identifier can never be resolved into an attacker-shadowed
+-- schema regardless of who invokes the hook — the dynamic-dispatch safety argument is
+-- self-contained here, not dependent on the caller's search_path (defense in depth: today
+-- the only callers are submit_event/apply_remote_event, which already pin it).
+--
 -- Twin policy (ADR-0039): an authored twin is carried verbatim for EVERY type; if absent,
 -- a type with twin_required_msg RAISES (demographics + identity + medication hard-require
 -- it), and every other type degrades honestly to a mechanical skeleton.
 CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
-RETURNS text LANGUAGE plpgsql AS $$
+RETURNS text LANGUAGE plpgsql
+SET search_path = public
+AS $$
 DECLARE
     v_twin     text    := b ->> 'plaintext_twin';
     v_authored boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
