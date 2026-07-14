@@ -37,11 +37,23 @@ BEGIN
     -- trigger's `attester_kid TEXT NOT NULL` with a cryptic "null value violates
     -- not-null constraint". Reject it HERE, legibly, at the floor — the clean
     -- hostile-client rejection point (principle 12, mirroring db/026's blob-verify
-    -- errors). Mirrors the db/005 gate's own predicate (`e ? 'responsibility'`) so the
-    -- floor and the gate agree on what "carries responsibility" means. The type guard
-    -- keeps a non-array/absent `contributors` from raising a cryptic scalar-extract
-    -- error instead of this legible one. The production Rust builder always includes
-    -- the contributor, so no well-formed event is affected.
+    -- errors). The predicate mirrors the db/005 gate's own `e ? 'responsibility'`, so
+    -- the floor and the gate agree on what "carries responsibility" means.
+    --
+    -- Be precise about what the type guard buys (door path vs. direct call): BOTH
+    -- submit doors compute v_bears — EXISTS(SELECT 1 FROM
+    -- jsonb_array_elements(b->'contributors') ...) — BEFORE this floor runs (db/005
+    -- submit_event, db/020 apply_remote_event). So through a door, an array WITHOUT a
+    -- responsibility contributor (and the absent/empty-array cases) make v_bears false
+    -- and reach HERE for the legible rejection — but a *non-array* `contributors` is
+    -- already rejected upstream at the v_bears line with a cryptic "cannot extract
+    -- elements from a scalar" (a pre-existing, all-types legibility gap tracked in
+    -- issue #184, NOT closed by this check). The `jsonb_typeof(...) IS DISTINCT FROM
+    -- 'array'` guard is therefore defense-in-depth for a DIRECT caller of this check fn
+    -- (a future door, or the floor_check_fn_directly_rejects_non_array_contributors
+    -- test): the OR short-circuits so jsonb_array_elements never runs on a non-array,
+    -- yielding this legible message instead of the scalar-extract error. The production
+    -- Rust builder always includes the contributor, so no well-formed event is affected.
     IF jsonb_typeof(b -> 'contributors') IS DISTINCT FROM 'array'
        OR NOT EXISTS (
             SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e

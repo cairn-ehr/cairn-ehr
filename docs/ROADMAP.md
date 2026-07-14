@@ -594,8 +594,12 @@ reconcile/separate attestation rejection **rolls back the first subject's vouch 
 forced via an orphan second thread); the **group-rollup unattested-member** branch and the **singleton
 reduction** (asserting `unattested_members`); the equal-HLC **`content_address DESC` tiebreak** (convergence
 determinism); and the pure builder `note`-without-`basis` permutation. The signer==attester invariant is
-documented at the apply trigger (attester_key vs signer_key_id, principle 10). Cosmetic `reviewed_count`
-`u32`→`int4` note stays on [#181]→ tracked, unreachable.
+documented at the apply trigger (attester_key vs signer_key_id, principle 10). A post-review `/review`→`/fixall`
+pass corrected the M1 comment (the type guard is **defense-in-depth for a direct caller**, not a door-level
+non-array fix — both doors compute `v_bears` before the floor) and added a sixth test covering that live branch.
+**Deferred, both unreachable by well-formed clients:** the cosmetic `reviewed_count` `u32`→`int4` note (#181)
+and the pre-existing all-types **door-level non-array-`contributors` legibility gap**
+([#184](https://github.com/cairn-ehr/cairn-ehr/issues/184)).
 
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**

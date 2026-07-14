@@ -78,9 +78,16 @@ tiebreak** (upgraded from the review's "note it" to a real convergence-determini
 `note`-without-`basis` permutation. The signer==attester invariant (`attester_key` vs `signer_key_id`,
 principle 10) is documented at the apply trigger. **Bonus catch:** `db/tests/034_twin_registry_test.sql`
 asserted **15** registry rows — a PR #182 miss (the Rust mirror was updated to 16, the SQL one wasn't);
-corrected to 16 (verified passing). Full workspace green (fmt + clippy `-D warnings`; `cargo test --workspace`
-**601 passed / 0 failed**; the two SQL mirrors touched pass). **Open (deferred on #181):** the cosmetic
-`reviewed_count` `u32`→`int4` note (unreachable) stays tracked.
+corrected to 16 (verified passing). **Post-review (`/review`→`/fixall`):** the M1 comment overstated its type
+guard — it read as making a non-array `contributors` legible *at the doors*, but both submit doors compute
+`v_bears` (`jsonb_array_elements` over `contributors`) **before** the floor, so a non-array is already rejected
+upstream with a cryptic scalar-extract error; comment corrected to describe the guard as **defense-in-depth for
+a direct caller**, and a sixth test (`floor_check_fn_directly_rejects_non_array_contributors`) now covers that
+genuinely-live branch (the OR short-circuit PostgreSQL does not contractually guarantee). Full workspace green
+(fmt + clippy `-D warnings`; `cargo test --workspace` **602 passed / 0 failed**; the two SQL mirrors touched
+pass). **Open (deferred, both unreachable by well-formed clients):** the cosmetic `reviewed_count` `u32`→`int4`
+note ([#181](https://github.com/cairn-ehr/cairn-ehr/issues/181)) and the pre-existing all-types **door-level
+non-array-`contributors` legibility gap** ([#184](https://github.com/cairn-ehr/cairn-ehr/issues/184)).
 
 **Last session (2026-07-14) — medication attestation slice 4 (condensed; ADR-0049, spec v0.49→v0.50; merged
 PR #182, on main; full detail in git + the ADR + ROADMAP Slice 33).** One new **additive** event type

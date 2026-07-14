@@ -437,6 +437,48 @@ async fn floor_rejects_attestation_without_responsibility_contributor() {
     assert_eq!(n, 0, "the responsibility-less attestation never landed");
 }
 
+/// M1 defense-in-depth (issue #181; door-level gap tracked in #184): the floor check's
+/// `jsonb_typeof(...) IS DISTINCT FROM 'array'` guard, exercised where it is actually
+/// load-bearing — a DIRECT call of `cairn_check_medication_attestation` with a NON-array
+/// `contributors`. Through the two submit doors this branch is unreachable: both compute
+/// v_bears (`jsonb_array_elements` over `contributors`) BEFORE the floor, so a non-array
+/// is rejected upstream with a cryptic "cannot extract elements from a scalar" (the #184
+/// gap). But the check fn is a public SQL function a future door could call first, so the
+/// guard must short-circuit the OR — `jsonb_array_elements` never runs on a non-array —
+/// yielding the legible responsibility message rather than the scalar-extract error. This
+/// pins that short-circuit (which PostgreSQL does not contractually guarantee, so it is
+/// worth a test) and turns the guard from a dead branch into a covered one.
+#[tokio::test]
+async fn floor_check_fn_directly_rejects_non_array_contributors() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // A non-array `contributors` (a bare string). `payload` is present + non-null so the
+    // fn passes its payload-null guard and reaches the contributors check (which runs
+    // before the medication_id/commitment/count checks). No signing needed — this calls
+    // the floor check fn directly, exactly the direct-caller path the guard protects.
+    let body = serde_json::json!({ "payload": {}, "contributors": "not-an-array" }).to_string();
+    let res = c
+        .execute(
+            "SELECT cairn_check_medication_attestation('clinical.medication-attestation.asserted', $1::text::jsonb)",
+            &[&body],
+        )
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("requires a responsibility-bearing contributor"),
+        "the type guard must short-circuit to the legible message, got: {err}"
+    );
+    assert!(
+        !err.contains("cannot extract elements"),
+        "the guard must prevent the cryptic scalar-extract error: {err}"
+    );
+}
+
 /// The responsibility-separation guarantee at THIS event type: only an enrolled
 /// kind='human' actor may vouch. A DEVICE key that self-signs+self-attests an
 /// otherwise-well-formed attestation (real thread, real commitment, valid floor) is
