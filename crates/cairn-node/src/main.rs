@@ -118,22 +118,33 @@ struct AttestFlags {
     note: Option<String>,
 }
 
+/// True when attest CONTEXT flags were given but there is no key to attest with —
+/// the "nothing to attest" case. Deliberately ignores the passphrase: it carries an
+/// `env` fallback and may be set without intent (see `resolve_attester`).
+fn attest_context_without_key(has_attest_as: bool, has_basis: bool, has_note: bool) -> bool {
+    !has_attest_as && (has_basis || has_note)
+}
+
 /// Resolve `--attest-as` into a loaded human key + verified kid, or `None` when the
 /// flag is absent. Runs the `attester_is_enrolled_human` legibility pre-check (the
 /// db/005 gate is the real enforcement — this only gives a clean error before any
-/// event is authored). Errors if a passphrase/basis/note is given with no key
-/// (nothing to attest — refuse loudly, mirroring `identify-patient`'s cross-flag
-/// check for --link/--attester-key).
+/// event is authored). Errors if a basis/note is given with no key (nothing to
+/// attest — refuse loudly, mirroring `identify-patient`'s cross-flag check for
+/// --link/--attester-key). `attest_passphrase` is deliberately EXCLUDED from this
+/// guard: it carries `env = "CAIRN_ATTESTER_PASSPHRASE"` (see `AttestFlags`), so it
+/// can be `Some` purely from a session-wide exported env var with no intent to
+/// attest at all — gating on it would break every plain device-additive verb call
+/// (e.g. `medication-assert` with no `--attest-as`) whenever that env var happens to
+/// be set. `identify-patient`'s own cross-flag check never gates on its passphrase
+/// field either, for the same reason.
 async fn resolve_attester(
     client: &tokio_postgres::Client,
     flags: &AttestFlags,
 ) -> anyhow::Result<Option<(cairn_event::SigningKey, String)>> {
     match &flags.attest_as {
         None => {
-            if flags.attest_passphrase.is_some() || flags.basis.is_some() || flags.note.is_some() {
-                anyhow::bail!(
-                    "--attest-passphrase/--basis/--note require --attest-as: nothing to attest"
-                );
+            if attest_context_without_key(false, flags.basis.is_some(), flags.note.is_some()) {
+                anyhow::bail!("--basis/--note require --attest-as: nothing to attest");
             }
             Ok(None)
         }
@@ -147,6 +158,38 @@ async fn resolve_attester(
             }
             Ok(Some((sk, kid)))
         }
+    }
+}
+
+#[cfg(test)]
+mod attest_context_tests {
+    use super::attest_context_without_key;
+
+    /// --basis with no --attest-as is a genuine "nothing to attest" refusal.
+    #[test]
+    fn basis_without_key_is_refused() {
+        assert!(attest_context_without_key(false, true, false));
+    }
+
+    /// --note with no --attest-as is a genuine "nothing to attest" refusal.
+    #[test]
+    fn note_without_key_is_refused() {
+        assert!(attest_context_without_key(false, false, true));
+    }
+
+    /// No --attest-as, no --basis, no --note: this is the case where ONLY
+    /// CAIRN_ATTESTER_PASSPHRASE happens to be exported in the environment (a
+    /// documented operator convention) — the predicate deliberately does not see
+    /// the passphrase at all, so a plain device-additive verb call must be allowed.
+    #[test]
+    fn env_passphrase_alone_is_allowed() {
+        assert!(!attest_context_without_key(false, false, false));
+    }
+
+    /// --attest-as present with basis and note: a real attestation, never refused.
+    #[test]
+    fn key_present_is_never_refused() {
+        assert!(!attest_context_without_key(true, true, true));
     }
 }
 
