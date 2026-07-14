@@ -49,7 +49,11 @@ floor-regression hazard; a new event type now registers ONE additive row.
 + the **medication attestation slice, slice 4 — BUILT** (ADR-0049; `clinical.medication-attestation.asserted`,
 `db/034` — a separable per-thread human-attested responsibility overlay through the existing db/005 gate;
 staleness by convergent set-commitment compare, not a head-position pin [closes the lower-HLC late-arrival gap];
-supersede-never-retract; `--attest-as` on all six verbs + `medication-attest` CLI; PR pending).
+supersede-never-retract; `--attest-as` on all six verbs + `medication-attest` CLI; PR #182, on main).
++ the **medication-attestation hardening + coverage — done this session** (closes
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181)): one real floor improvement (M1 — a
+responsibility-less attestation body now gets a legible floor rejection, not a cryptic NOT-NULL) + five
+coverage tests + a fixed stale SQL-mirror row count (15→16); no ADR/spec/SCHEMA/event-type change.
 + the **L3 clinician reference-UI shell, slice 1 — BUILT** (a standalone `cairn-gui/` workspace with a
 framework-agnostic contract/port/manifest/routing core; **Spike 0004 resolved — iced FAILS the accessibility bar**,
 so the reference desktop UI **pivots to Tauri 2**, an L3 framework choice *below* the compatibility boundary — no
@@ -57,8 +61,29 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-14) — medication attestation (slice 4, ADR-0049; branch
-`feat/medication-attestation-responsibility`; **PR pending**).** Graduates the slice-30/31/32 §8
+**This session (2026-07-14, later) — medication-attestation hardening + coverage (closes
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); branch `fix/medication-attestation-hardening`; **PR
+pending**; no ADR/spec/SCHEMA change; no new event type — an in-place `cairn_check_medication_attestation`
+edit to db/034).** Pays down the slice-4 whole-branch review's follow-ups (all triaged acceptable, none
+blocking). **M1 (the one real floor improvement, principle 12):** a hostile/raw attestation body with **no
+responsibility-bearing contributor** slipped past the db/005 gate (`v_bears` false → no token → `attester_key`
+NULL) and failed only later at the apply trigger's `attester_kid TEXT NOT NULL` with a cryptic *"null value…"*.
+The floor now rejects it **legibly** (mirrors the db/005 predicate `e ? 'responsibility'` so floor and gate
+agree; db/026 precedent), still fail-closed; the production Rust builder always carries the contributor, so no
+well-formed event is affected. **Five coverage tests (TDD):** the **second-subject** reconcile/separate
+attestation rejection **rolls back the first subject's vouch + the verb event** (forced via an orphan second
+thread — the highest-value cheap gap); the **group-rollup unattested-member** branch + the **singleton
+reduction** (`unattested_members`, computed but previously unchecked); the equal-HLC **`content_address DESC`
+tiebreak** (upgraded from the review's "note it" to a real convergence-determinism test); and the pure builder
+`note`-without-`basis` permutation. The signer==attester invariant (`attester_key` vs `signer_key_id`,
+principle 10) is documented at the apply trigger. **Bonus catch:** `db/tests/034_twin_registry_test.sql`
+asserted **15** registry rows — a PR #182 miss (the Rust mirror was updated to 16, the SQL one wasn't);
+corrected to 16 (verified passing). Full workspace green (fmt + clippy `-D warnings`; `cargo test --workspace`
+**601 passed / 0 failed**; the two SQL mirrors touched pass). **Open (deferred on #181):** the cosmetic
+`reviewed_count` `u32`→`int4` note (unreachable) stays tracked.
+
+**Last session (2026-07-14) — medication attestation (slice 4, ADR-0049; branch
+`feat/medication-attestation-responsibility`; **merged, PR #182, on main**).** Graduates the slice-30/31/32 §8
 deferral ("human-attested clinical responsibility on a medication event") into product code, advancing
 [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163). **One new event type**,
 `clinical.medication-attestation.asserted`, is a **separable per-thread attestation overlay** (principle

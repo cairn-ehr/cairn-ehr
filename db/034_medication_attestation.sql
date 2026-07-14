@@ -29,6 +29,25 @@ BEGIN
     IF p IS NULL THEN
         RAISE EXCEPTION 'medication attestation: missing payload';
     END IF;
+    -- M1 (issue #181): a responsibility-bearing contributor is what this event type
+    -- EXISTS to carry (principle 10 — an attestation confers responsibility). Its
+    -- absence is only reachable by a hostile/buggy raw-SQL client: such a body skips
+    -- the db/005 attestation gate (v_bears is false, no token demanded, attester_key
+    -- stays NULL) and, without this check, would fail only later at the part-2 apply
+    -- trigger's `attester_kid TEXT NOT NULL` with a cryptic "null value violates
+    -- not-null constraint". Reject it HERE, legibly, at the floor — the clean
+    -- hostile-client rejection point (principle 12, mirroring db/026's blob-verify
+    -- errors). Mirrors the db/005 gate's own predicate (`e ? 'responsibility'`) so the
+    -- floor and the gate agree on what "carries responsibility" means. The type guard
+    -- keeps a non-array/absent `contributors` from raising a cryptic scalar-extract
+    -- error instead of this legible one. The production Rust builder always includes
+    -- the contributor, so no well-formed event is affected.
+    IF jsonb_typeof(b -> 'contributors') IS DISTINCT FROM 'array'
+       OR NOT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
+            WHERE e ? 'responsibility') THEN
+        RAISE EXCEPTION 'medication attestation: requires a responsibility-bearing contributor (an attestation confers responsibility; ADR-0049/principle 10)';
+    END IF;
     IF jsonb_typeof(p -> 'medication_id') IS DISTINCT FROM 'string' THEN
         RAISE EXCEPTION 'medication attestation: medication_id must be a uuid string';
     END IF;
@@ -154,7 +173,19 @@ BEGIN
         NEW.event_id,
         (p ->> 'medication_id')::uuid,
         NEW.patient_id,
-        encode(NEW.attester_key, 'hex'),                  -- verified human (db/005 gate)
+        -- attester_kid is read from attester_key (the VERIFIED responsible human the
+        -- db/005 gate stored), NOT signer_key_id. This is deliberate: responsibility is
+        -- SEPARABLE from authorship (principle 10 / ADR-0007) — signature proves origin,
+        -- attestation confers responsibility. Today the two coincide because the
+        -- attestation orchestrator (attestation.rs) has the human key both sign the event
+        -- AND mint the token, so every test uses signer == attester; but a future flow
+        -- could sign with one key and vouch with another, and this projection must key on
+        -- WHO took responsibility (attester_key), never who happened to sign. INVARIANT:
+        -- attester_key is guaranteed non-NULL here — a `-attestation.asserted` event
+        -- always carries a responsibility contributor (enforced by the M1 floor check
+        -- above), which trips the db/005 gate that populates attester_key; the M1 check
+        -- turns a would-be NULL into a legible floor rejection long before this trigger.
+        encode(NEW.attester_key, 'hex'),
         decode(p ->> 'reviewed_commitment', 'hex'),
         (p ->> 'reviewed_count')::integer,
         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)

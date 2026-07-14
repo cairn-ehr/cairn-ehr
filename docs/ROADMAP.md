@@ -582,6 +582,21 @@ on `--basis`/`--note` (mirroring `identify-patient`, which never gates on its pa
 **Deferred:** a partially-attested-group read surface (which member is stale); a whole-list-sign-off summary
 event (composes from N thread attestations today).
 
+**Slice 33 follow-up — attestation hardening + coverage** (2026-07-14, closes
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); no ADR/spec/SCHEMA change; no new event type,
+migration is an in-place `cairn_check_medication_attestation` edit to db/034). One real floor improvement
+(**M1**): a hostile/raw attestation body with **no responsibility-bearing contributor** used to slip past the
+db/005 gate (`v_bears` false → `attester_key` NULL) and fail only later at the apply trigger's `attester_kid
+TEXT NOT NULL` with a cryptic message; the floor now rejects it **legibly** (mirrors the db/005 predicate
+`e ? 'responsibility'`; principle 12, db/026 precedent), still fail-closed, no well-formed event affected.
+Plus five coverage tests closing the review's inspection-verified-correct gaps: the **second-subject**
+reconcile/separate attestation rejection **rolls back the first subject's vouch + the verb event** (atomic-txn,
+forced via an orphan second thread); the **group-rollup unattested-member** branch and the **singleton
+reduction** (asserting `unattested_members`); the equal-HLC **`content_address DESC` tiebreak** (convergence
+determinism); and the pure builder `note`-without-`basis` permutation. The signer==attester invariant is
+documented at the apply trigger (attester_key vs signer_key_id, principle 10). Cosmetic `reviewed_count`
+`u32`→`int4` note stays on [#181]→ tracked, unreachable.
+
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
 (PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no

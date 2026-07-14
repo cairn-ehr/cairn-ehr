@@ -117,4 +117,32 @@ mod tests {
             "note must surface, got: {s}"
         );
     }
+
+    #[test]
+    fn note_present_basis_absent_permutation(/* issue #181 gap 5 */) {
+        // The two optional fields insert independently; the other three permutations are
+        // covered above (both present via sample+twin_surfaces_note, both absent, and
+        // basis-only via sample). This pins the remaining one: note WITHOUT basis, in
+        // both the payload (note key present, basis key absent — never null) and the twin
+        // (the `[note]` marker present, the ` — basis` separator absent).
+        let a = MedicationAttestation {
+            basis: None,
+            note: Some("phoned patient to confirm"),
+            ..sample()
+        };
+        let v = medication_attestation_body(&a);
+        let o = v.as_object().unwrap();
+        assert!(!o.contains_key("basis"), "absent basis omitted, not null");
+        assert_eq!(v["note"], "phoned patient to confirm");
+
+        let s = render_medication_attestation_twin(&a);
+        assert!(
+            s.contains("[phoned patient to confirm]"),
+            "note surfaces: {s}"
+        );
+        assert!(
+            !s.contains(" — "),
+            "no basis separator when basis is absent: {s}"
+        );
+    }
 }
