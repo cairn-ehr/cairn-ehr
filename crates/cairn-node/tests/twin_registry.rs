@@ -94,13 +94,13 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     .await
     .unwrap();
 
-    // Assert the full 15-row mapping is present so a dropped registration is caught.
+    // Assert the full 16-row mapping is present so a dropped registration is caught.
     let n: i64 = c
         .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 15, "expected 15 seeded twin-check rows");
+    assert_eq!(n, 16, "expected 16 seeded twin-check rows");
 
     // Lock the FULL registry contract. This table is now the single source of floor-wiring
     // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
@@ -175,6 +175,11 @@ async fn registry_is_seeded_with_the_expected_mapping() {
             "medication dose assertion requires a non-empty authored twin (§3.13/§3.15)",
         ),
         (
+            "clinical.medication-attestation.asserted",
+            "cairn_check_medication_attestation",
+            "medication attestation requires a non-empty authored twin (§3.13/§3.15)",
+        ),
+        (
             "clinical.medication-reconciliation.asserted",
             "cairn_check_medication_reconciliation",
             "medication reconciliation requires a non-empty authored twin (§3.13/§3.15)",
@@ -189,7 +194,7 @@ async fn registry_is_seeded_with_the_expected_mapping() {
 
     // Sort BOTH sides in Rust (byte-lexicographic) so the comparison never depends on the
     // node's default TEXT collation for ORDER BY. get::<_, String> also asserts non-null:
-    // all 15 seed rows carry both a check_fn and a twin_required_msg.
+    // all 16 seed rows carry both a check_fn and a twin_required_msg.
     let rows = c
         .query(
             "SELECT event_type, check_fn, twin_required_msg FROM cairn_event_twin_check",
