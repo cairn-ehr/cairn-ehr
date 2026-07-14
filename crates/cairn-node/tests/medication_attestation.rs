@@ -340,6 +340,72 @@ async fn floor_rejects_negative_count() {
     );
 }
 
+/// The responsibility-separation guarantee at THIS event type: only an enrolled
+/// kind='human' actor may vouch. A DEVICE key that self-signs+self-attests an
+/// otherwise-well-formed attestation (real thread, real commitment, valid floor) is
+/// refused by the db/005 3-arg human gate — signature proves origin, but attestation
+/// confers responsibility, and a device carries none (principle 10). This guards
+/// against a bespoke client forging a human vouch with a device key. db/005 is the
+/// real, unchanged enforcement; this test locks the guarantee at the
+/// medication-attestation surface (previously only the CLI e2e smoke covered it).
+#[tokio::test]
+async fn device_key_cannot_attest_only_humans_vouch() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // A real thread with genuine content, so the floor + twin all pass and the ONLY
+    // thing that can reject the vouch is the human gate — isolating the guarantee.
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let commitment: Vec<u8> = c
+        .query_one(
+            "SELECT cairn_medication_thread_commitment($1::text::uuid)",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload = serde_json::json!({
+        "medication_id": medication_id.to_string(),
+        "reviewed_commitment": hex::encode(&commitment),
+        "reviewed_count": 1,
+    });
+    // Build + sign + attest with the DEVICE key (kid_d), not a human.
+    let body = build_attestation_body(Uuid::now_v7(), patient, payload, &kid_d, hlc);
+    let res = sign_attest_submit(&c, &body, &sk_d, &kid_d).await;
+
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("not an enrolled human actor"),
+        "a device key must not be able to vouch (only humans confer responsibility); got: {err}"
+    );
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "the forged-human attestation never landed");
+}
+
 #[tokio::test]
 async fn commitment_fn_is_deterministic_and_null_when_absent() {
     let Some(base) = cs() else {

@@ -102,7 +102,11 @@ fn load_attester_key(
 #[derive(clap::Args, Clone)]
 struct AttestFlags {
     /// Take clinical responsibility for the affected thread(s): a human key that
-    /// signs+attests the attestation. Absent ⇒ device-additive (no vouch).
+    /// signs+attests the attestation. Absent ⇒ device-additive (no vouch). Requires
+    /// the affected thread(s) to be present locally — you can only vouch for content
+    /// you can see, so if a thread has no local content events the whole verb is
+    /// refused and rolled back (offline-first still applies to the plain, un-attested
+    /// verb; re-run without --attest-as, or attest post-hoc once the thread has synced).
     #[arg(long)]
     attest_as: Option<std::path::PathBuf>,
     /// Passphrase to unseal --attest-as (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
@@ -159,6 +163,25 @@ async fn resolve_attester(
             Ok(Some((sk, kid)))
         }
     }
+}
+
+/// Borrow a resolved attester (from `resolve_attester`) plus its context flags into
+/// the `AttestParams` the medication orchestrators take, or `None` when no `--attest-as`
+/// was given (device-additive). Extracted so the six verb handlers below share one
+/// construction instead of repeating the same borrow dance — `AttestParams` borrows
+/// from BOTH `resolved` and `flags`, so both must outlive the returned value.
+fn attest_params<'a>(
+    resolved: &'a Option<(cairn_event::SigningKey, String)>,
+    flags: &'a AttestFlags,
+) -> Option<cairn_node::medication::AttestParams<'a>> {
+    resolved
+        .as_ref()
+        .map(|(sk, kid)| cairn_node::medication::AttestParams {
+            human_sk: sk,
+            human_kid: kid,
+            basis: flags.basis.as_deref(),
+            note: flags.note.as_deref(),
+        })
 }
 
 #[cfg(test)]
@@ -1646,14 +1669,7 @@ async fn main() -> anyhow::Result<()> {
                 started_precision: started_precision.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let med_id = cairn_node::medication::assert_medication(
                 &mut db,
                 &node_sk,
@@ -1685,14 +1701,7 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
                 &node_sk,
@@ -1731,14 +1740,7 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let event_id = cairn_node::medication::change_dose(
                 &mut db,
                 &node_sk,
@@ -1777,14 +1779,7 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let event_id = cairn_node::medication::correct_dose(
                 &mut db,
                 &node_sk,
@@ -1818,14 +1813,7 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let event_id = cairn_node::medication::reconcile_medications(
                 &mut db,
                 &node_sk,
@@ -1859,14 +1847,7 @@ async fn main() -> anyhow::Result<()> {
                 reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
-            let params = resolved
-                .as_ref()
-                .map(|(sk, kid)| cairn_node::medication::AttestParams {
-                    human_sk: sk,
-                    human_kid: kid,
-                    basis: attest.basis.as_deref(),
-                    note: attest.note.as_deref(),
-                });
+            let params = attest_params(&resolved, &attest);
             let event_id = cairn_node::medication::separate_medications(
                 &mut db,
                 &node_sk,

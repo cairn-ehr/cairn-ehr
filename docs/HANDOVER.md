@@ -87,6 +87,14 @@ predicate gating only on `--basis`/`--note` (mirroring `identify-patient`, which
 passphrase either). Subagent-driven TDD (7 tasks, per-task review); full workspace green incl. a
 DB-gated test proving the lower-HLC-late-arrival case (the design's load-bearing property); live e2e CLI
 smoke passed. Design+plan under `docs/superpowers/{specs,plans}/2026-07-14-medication-attestation-*`.
+**Post-review cleanup (PR #182 `/review` → `/fixall`):** added a **partial functional index** on
+`event_log ((body->>'medication_id')::uuid)` (the four content-event types) so `cairn_medication_thread_commitment`
+— which reads `event_log` directly rather than a projection table — is a bounded lookup at read time; promoted
+the device-key-cannot-vouch guarantee from CLI-smoke-only to an **automated test**
+(`device_key_cannot_attest_only_humans_vouch`, `medication_attestation.rs` now 20/20); extracted the repeated
+verb-handler `attest_params` borrow into one helper; documented that `--attest-as` requires the affected
+thread(s) present locally. The cosmetic `reviewed_count` `u32`→`int4` note (unreachable) is logged on
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181).
 
 **Prior session (2026-07-13, later) — the `cairn_event_twin` twin-check registry refactor (condensed; [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173); **ADR-0048**, spec v0.48→v0.49; PR #179; **ZERO behaviour change** — pure de-risking of the safety floor; full detail in git + the ADR).** Killed the verbatim-copy hazard: `cairn_event_twin` was re-declared in 11 migrations, each copying the whole growing IF/ELSIF chain — a stale copy could silently DROP a floor check with no error. Replaced with a locked registry table `cairn_event_twin_check(event_type, check_fn, twin_required_msg)` + a fail-closed load-time validation trigger + ONE stable dispatcher (db/005 only, dynamic `EXECUTE %I`); all check fns unified to `(p_type text, b jsonb) RETURNS void`. **Invariants binding all future slices:** dispatcher declared exactly once (guarded by `twin_dispatch_single_source.rs`); a new event type registers ONE additive row and never touches the dispatcher; missing/mis-signed check fn fails closed at load. Post-review hardened: `search_path` pinned on the hook; the registry-contract test asserts the full 15-row mapping byte-for-byte. Whole-branch review: Ready to merge, 0 Critical/Important.
 

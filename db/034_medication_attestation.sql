@@ -96,6 +96,24 @@ RETURNS bytea LANGUAGE sql STABLE AS $$
       AND (body ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
+-- 4b. Read-time support for the set-commitment fn. Unlike the other medication read
+--     views (which read trigger-maintained projection TABLES), the commitment is
+--     re-derived straight from event_log at BOTH author and read time — that direct
+--     read is deliberate (one source, no Rust<->SQL drift), but the thread filter
+--     `(body ->> 'medication_id')::uuid = $1` lands on a jsonb expression no existing
+--     event_log index covers. The staleness view calls the fn once per attested
+--     thread, so without this the projection scans event_log per thread. A PARTIAL
+--     functional index (only the four content-event types the fn sums) makes each
+--     commitment a bounded index lookup. `(body ->> 'medication_id')` is immutable and
+--     the ::uuid cast is immutable, so the expression is indexable.
+CREATE INDEX IF NOT EXISTS event_log_medication_thread_idx
+    ON event_log (((body ->> 'medication_id')::uuid))
+    WHERE event_type IN (
+        'clinical.medication.asserted',
+        'clinical.medication-cessation.asserted',
+        'clinical.medication-dose-change.asserted',
+        'clinical.medication-dose-correction.asserted');
+
 COMMIT;
 
 BEGIN;
