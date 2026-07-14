@@ -63,7 +63,7 @@ Postgres-on-Android).
 
 **This session (2026-07-14, later) — medication-attestation hardening + coverage (closes
 [#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); branch `fix/medication-attestation-hardening`; **PR
-pending**; no ADR/spec/SCHEMA change; no new event type — an in-place `cairn_check_medication_attestation`
+#183**; no ADR/spec/SCHEMA change; no new event type — an in-place `cairn_check_medication_attestation`
 edit to db/034).** Pays down the slice-4 whole-branch review's follow-ups (all triaged acceptable, none
 blocking). **M1 (the one real floor improvement, principle 12):** a hostile/raw attestation body with **no
 responsibility-bearing contributor** slipped past the db/005 gate (`v_bears` false → no token → `attester_key`
