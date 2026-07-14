@@ -1,0 +1,118 @@
+//! Medication assertion — mints the immortal `medication_id` thread (§3.15).
+//! Device-additive: signed by the node/clinician key with a `recorded`
+//! contributor and NO responsibility attestation (mirrors identify.rs).
+use cairn_event::medication::{
+    medication_assertion_body, render_medication_twin, MedicationAssertion,
+};
+use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use uuid::Uuid;
+
+const MEDICATION_SCHEMA_VERSION: &str = "clinical.medication/1";
+
+/// The clinician-supplied fields of a medication statement. `term` is required;
+/// everything else is an honest Option (unknown when None).
+pub struct AssertMedicationInput<'a> {
+    pub term: &'a str,
+    pub inn_code: Option<&'a str>,
+    pub formulation: Option<&'a str>,
+    pub dose_amount: Option<&'a str>,
+    pub dose_unit: Option<&'a str>,
+    pub sig: Option<&'a str>,
+    pub info_source: &'a str,
+    pub started: Option<&'a str>,
+    pub started_precision: Option<&'a str>,
+}
+
+/// Advisory Rust-side guard mirroring the DB floor: refuse a blank term with a
+/// clinical message. The DB floor is the real, unbypassable enforcement.
+pub fn validate_term(term: &str) -> anyhow::Result<()> {
+    if term.trim().is_empty() {
+        anyhow::bail!(
+            "medication term must not be empty: record WHAT the patient takes (even if vague)"
+        );
+    }
+    Ok(())
+}
+
+/// Assemble the signed `clinical.medication.asserted` EventBody. Pure — the caller
+/// mints `event_id`/`medication_id`, supplies the HLC, and signs.
+pub fn build_assert_body(
+    event_id: Uuid,
+    medication_id: Uuid,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    node_kid: &str,
+    hlc: Hlc,
+) -> EventBody {
+    let mid = medication_id.to_string();
+    let a = MedicationAssertion {
+        medication_id: &mid,
+        term: input.term,
+        inn_code: input.inn_code,
+        formulation: input.formulation,
+        dose_amount: input.dose_amount,
+        dose_unit: input.dose_unit,
+        sig: input.sig,
+        info_source: input.info_source,
+        started: input.started,
+        started_precision: input.started_precision,
+    };
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: "clinical.medication.asserted".into(),
+        schema_version: MEDICATION_SCHEMA_VERSION.into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload: medication_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(render_medication_twin(&a)),
+    }
+}
+
+/// Record a medication the patient takes/took. Mints and returns the thread's
+/// `medication_id`. Device-additive when `attest` is `None` (goes through the 1-arg
+/// submit door, auto-commit — unchanged from the pre-attestation path). When `attest`
+/// is `Some`, the assert AND the human's responsibility attestation for the
+/// newly-minted thread run in ONE transaction, so the attestation's commitment sees
+/// the assert event just submitted (mirrors `identify_patient`'s identify+link atomic
+/// shape). A rejected attestation rolls the assert back with it.
+pub async fn assert_medication(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<Uuid> {
+    validate_term(input.term)?;
+    // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
+    // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
+    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
+    let event_id = Uuid::now_v7();
+    let medication_id = Uuid::now_v7();
+    let body = build_assert_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
+    let signed = sign(&body, node_sk)?;
+
+    match attest {
+        None => {
+            // Unchanged device-additive path (1-arg door, auto-commit).
+            client
+                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+        }
+        Some(params) => {
+            let attest_hlc = crate::db::next_hlc(client, node_origin).await?;
+            let tx = client.transaction().await?;
+            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, medication_id, attest_hlc)
+                .await?;
+            tx.commit().await?;
+        }
+    }
+    Ok(medication_id)
+}

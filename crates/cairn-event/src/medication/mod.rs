@@ -12,11 +12,15 @@
 //! (`reconciliation`, slice 3) is the one verb about TWO threads — it links (or
 //! splits) two threads declared to be the same real drug (never-merge-always-link).
 pub mod assert;
+pub mod attestation;
 pub mod cessation;
 pub mod dose;
 pub mod reconciliation;
 
 pub use assert::{medication_assertion_body, render_medication_twin, MedicationAssertion};
+pub use attestation::{
+    medication_attestation_body, render_medication_attestation_twin, MedicationAttestation,
+};
 pub use cessation::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
 };
