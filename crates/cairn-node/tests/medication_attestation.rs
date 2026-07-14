@@ -1,8 +1,10 @@
-//! §3.15/§3.16 slice-4 medication attestation — FLOOR tests only (registration,
-//! structural check, twin registry, set-commitment fn). The overlay/projection and
-//! the Rust orchestrator (`build_attestation_body`) land in later tasks; here the
-//! attestation `EventBody` is hand-built inline, mirroring the exact human
-//! self-sign/self-attest pattern `crates/cairn-node/src/identify.rs` and
+//! §3.15/§3.16 slice-4 medication attestation — FLOOR tests (registration,
+//! structural check, twin registry, set-commitment fn; part 1) plus the overlay/
+//! projection tests (part 2: `medication_attestation`, its apply trigger, and the
+//! `medication_thread_attestation` / `medication_group_attestation` staleness views).
+//! The Rust orchestrator (a `attest_medication_thread` convenience fn) lands in a
+//! later task; here the attestation `EventBody` is hand-built inline, mirroring the
+//! exact human self-sign/self-attest pattern `crates/cairn-node/src/identify.rs` and
 //! `crates/cairn-node/tests/attestation.rs` already use for a responsibility-bearing
 //! event through the 3-arg `submit_event` door.
 //!
@@ -14,7 +16,10 @@ use cairn_event::{
     event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
 };
 use cairn_node::db;
-use cairn_node::medication::{assert_medication, AssertMedicationInput};
+use cairn_node::medication::{
+    assert_medication, build_dose_change_body, change_dose, reconcile_medications,
+    AssertMedicationInput, ChangeDoseInput, ReconcileInput,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -257,9 +262,51 @@ async fn floor_rejects_malformed_commitment() {
     let res = sign_attest_submit(&c, &body, &sk_h, &kid_h).await;
     let err = db_msg(&res.unwrap_err());
     assert!(
-        err.contains("reviewed_commitment must be a non-empty hex string"),
+        err.contains("reviewed_commitment must be a non-empty even-length hex string"),
         "got: {err}"
     );
+}
+
+#[tokio::test]
+async fn floor_rejects_odd_length_commitment() {
+    // Task-3 review Minor: the floor regex accepted ODD-length hex, which the part-2
+    // apply trigger's decode(..., 'hex') would then choke on with a cryptic low-level
+    // error. "abc" is valid hex CHARACTERS but odd length — the floor must reject it
+    // with a legible message BEFORE it ever reaches the trigger (principle 12: the
+    // floor, not the trigger, is the clean hostile-client rejection point).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "reviewed_commitment": "abc",
+        "reviewed_count": 1,
+    });
+    let body = build_attestation_body(Uuid::now_v7(), patient, payload, &kid_h, hlc);
+
+    let res = sign_attest_submit(&c, &body, &sk_h, &kid_h).await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("reviewed_commitment must be a non-empty even-length hex string"),
+        "got: {err}"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "the rejected odd-length-hex attestation never landed");
 }
 
 #[tokio::test]
@@ -347,4 +394,426 @@ async fn commitment_fn_is_deterministic_and_null_when_absent() {
         .unwrap()
         .get(0);
     assert!(absent.is_none(), "an unknown thread's commitment is NULL");
+}
+
+// ---------------------------------------------------------------------------
+// Part 2 (Task 4): the attestation overlay table, its apply trigger, and the
+// medication_thread_attestation / medication_group_attestation staleness views.
+// ---------------------------------------------------------------------------
+
+/// Read `medication_id`'s CURRENT thread-content commitment straight from the same
+/// SQL fn the apply trigger and staleness view both call — the single source of
+/// truth these tests pin their attestations against.
+async fn thread_commitment(c: &Client, medication_id: Uuid) -> Option<Vec<u8>> {
+    c.query_one(
+        "SELECT cairn_medication_thread_commitment($1::text::uuid)",
+        &[&medication_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// Submit a `clinical.medication-attestation.asserted` event pinning an EXPLICIT
+/// (caller-supplied) `reviewed_commitment` hex string — used both by the "vouch for
+/// what's true now" helper below and by the orphan test, which deliberately pins a
+/// commitment for a thread that has no local content at all.
+async fn submit_attestation(
+    c: &Client,
+    patient: Uuid,
+    medication_id: Uuid,
+    reviewed_commitment_hex: &str,
+    reviewed_count: i32,
+    sk_h: &SigningKey,
+    kid_h: &str,
+) -> Result<Uuid, tokio_postgres::Error> {
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let event_id = Uuid::now_v7();
+    let payload = serde_json::json!({
+        "medication_id": medication_id.to_string(),
+        "reviewed_commitment": reviewed_commitment_hex,
+        "reviewed_count": reviewed_count,
+    });
+    let body = build_attestation_body(event_id, patient, payload, kid_h, hlc);
+    sign_attest_submit(c, &body, sk_h, kid_h).await?;
+    Ok(event_id)
+}
+
+/// Attest `medication_id`'s CURRENT commitment (a human vouching for exactly what the
+/// thread contains right now) — the common case most projection tests need. Panics if
+/// the thread has no local content (use `submit_attestation` directly for the orphan
+/// case, which deliberately has none).
+async fn attest_current(
+    c: &Client,
+    patient: Uuid,
+    medication_id: Uuid,
+    reviewed_count: i32,
+    sk_h: &SigningKey,
+    kid_h: &str,
+) -> Uuid {
+    let commitment = thread_commitment(c, medication_id)
+        .await
+        .expect("attest_current requires the thread to already have local content");
+    submit_attestation(
+        c,
+        patient,
+        medication_id,
+        &hex::encode(&commitment),
+        reviewed_count,
+        sk_h,
+        kid_h,
+    )
+    .await
+    .expect("a well-formed human attestation of the current commitment must be accepted")
+}
+
+#[tokio::test]
+async fn post_hoc_attestation_shows_attester_and_not_stale() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Assert a real thread, then have the human attest exactly what it now contains.
+    let medication_id = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    attest_current(&c, patient, medication_id, 1, &sk_h, &kid_h).await;
+
+    let rows = c
+        .query(
+            "SELECT attester_kid, stale FROM medication_thread_attestation \
+             WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "exactly one standing attestation row");
+    let attester_kid: String = rows[0].get(0);
+    let stale: bool = rows[0].get(1);
+    assert_eq!(
+        attester_kid, kid_h,
+        "attester_kid is the verified human who vouched"
+    );
+    assert!(
+        !stale,
+        "the current commitment matches what was just reviewed"
+    );
+}
+
+#[tokio::test]
+async fn later_change_flips_stale_true() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+    )
+    .await
+    .unwrap();
+    attest_current(&c, patient, medication_id, 1, &sk_h, &kid_h).await;
+    let stale_before: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!stale_before, "freshly attested -> not stale");
+
+    // A normal-HLC dose change lands on the thread after the attestation.
+    let ch = ChangeDoseInput {
+        dose_amount: Some("1000"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: Some("titration"),
+    };
+    change_dose(&c, &sk_d, &kid_d, "test-node", patient, medication_id, &ch)
+        .await
+        .unwrap();
+
+    let stale_after: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stale_after,
+        "a later content event changes the thread's commitment -> stale"
+    );
+}
+
+#[tokio::test]
+async fn lower_hlc_late_arrival_flips_stale_true() {
+    // THE LOAD-BEARING TEST. A vouch pins a set-commitment, not a head position. If the
+    // staleness check instead compared the attested HLC to the thread's MAX(hlc), a
+    // content event that arrives LATE but stamped with a LOWER hlc (a device that was
+    // offline for a week, syncing an earlier-wall record) would slip in under the
+    // attested head and stay silently marked "reviewed" — exactly the failure mode a
+    // human-responsibility gate must never allow. The set-commitment catches it because
+    // ANY change to the content-event SET (regardless of hlc order) changes the hash.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("warfarin"),
+    )
+    .await
+    .unwrap();
+    attest_current(&c, patient, medication_id, 1, &sk_h, &kid_h).await;
+    let stale_before: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!stale_before, "freshly attested -> not stale");
+
+    // The lowest hlc_wall currently on the thread's content events (i.e. the assert's
+    // own hlc, the only content event so far) — the floor the late arrival must land
+    // BELOW to prove the point.
+    let min_wall: i64 = c
+        .query_one(
+            "SELECT min(hlc_wall) FROM event_log WHERE event_type IN ( \
+                 'clinical.medication.asserted', \
+                 'clinical.medication-cessation.asserted', \
+                 'clinical.medication-dose-change.asserted', \
+                 'clinical.medication-dose-correction.asserted') \
+               AND (body ->> 'medication_id')::uuid = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    // ~11.5 days earlier — comfortably below anything already on the thread, mirroring
+    // a device that synced a week-old backdated record.
+    let low_hlc = Hlc {
+        wall: min_wall - 1_000_000_000,
+        counter: 0,
+        node_origin: "test-node".into(),
+    };
+    let ch = ChangeDoseInput {
+        dose_amount: Some("5"),
+        dose_unit: Some("mg"),
+        effective: Some("2024-01"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: Some("late-arriving backdated dose change"),
+    };
+    let event_id = Uuid::now_v7();
+    let body = build_dose_change_body(event_id, medication_id, patient, &ch, &kid_d, low_hlc);
+    let signed = sign(&body, &sk_d).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    assert!(
+        res.is_ok(),
+        "a lower-HLC event with a distinct content_address is accepted -- \
+         backdating is legal, only far-FUTURE hlc is rejected: {res:?}"
+    );
+
+    let stale_after: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stale_after,
+        "the content SET changed even though the new event's hlc is BELOW the \
+         attested head -> stale; the set-commitment closes the gap a head-position \
+         pin would miss"
+    );
+}
+
+#[tokio::test]
+async fn group_current_only_when_all_members_current() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let a = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(&c, &sk_d, &kid_d, "test-node", patient, a, b, &input)
+        .await
+        .unwrap();
+
+    // Attest both members' current content.
+    attest_current(&c, patient, a, 1, &sk_h, &kid_h).await;
+    attest_current(&c, patient, b, 1, &sk_h, &kid_h).await;
+
+    let group_id = std::cmp::min(a, b).to_string();
+    let (attested_current, stale_members): (bool, i64) = {
+        let row = c
+            .query_one(
+                "SELECT attested_current, stale_members FROM medication_group_attestation \
+                 WHERE group_id = $1::text::uuid",
+                &[&group_id],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert!(
+        attested_current,
+        "both members attested & current -> group attested_current"
+    );
+    assert_eq!(stale_members, 0);
+
+    // Now dose-change B: only B goes stale, so the group must flip.
+    let ch = ChangeDoseInput {
+        dose_amount: Some("80"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: Some("titration"),
+    };
+    change_dose(&c, &sk_d, &kid_d, "test-node", patient, b, &ch)
+        .await
+        .unwrap();
+
+    let (attested_current2, stale_members2): (bool, i64) = {
+        let row = c
+            .query_one(
+                "SELECT attested_current, stale_members FROM medication_group_attestation \
+                 WHERE group_id = $1::text::uuid",
+                &[&group_id],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert!(
+        !attested_current2,
+        "B's attestation is now stale -> group is no longer attested_current"
+    );
+    assert_eq!(stale_members2, 1, "exactly B is stale");
+}
+
+#[tokio::test]
+async fn orphan_attestation_renders_nothing_until_thread_arrives() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Offline-first: a human attests a medication_id that has NO local content events
+    // at all (set-union sync may deliver the attestation before the thread itself).
+    let medication_id = Uuid::now_v7();
+    submit_attestation(
+        &c,
+        patient,
+        medication_id,
+        &placeholder_commitment_hex(),
+        1,
+        &sk_h,
+        &kid_h,
+    )
+    .await
+    .expect("the floor accepts an attestation for a thread not yet locally present");
+
+    // medication_thread_attestation MAY show a row (stale=true, since the current
+    // commitment is NULL and IS DISTINCT FROM the pinned hex) -- but the thread is not
+    // a member of medication_thread_group (no local assert), so it must not surface in
+    // the group rollup.
+    let stale: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stale,
+        "a NULL current commitment IS DISTINCT FROM any pinned value -> stale"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_group_attestation WHERE group_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "an orphan attestation's thread renders nothing in the group rollup until it arrives"
+    );
 }

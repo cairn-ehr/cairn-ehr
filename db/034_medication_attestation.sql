@@ -45,10 +45,16 @@ BEGIN
     EXCEPTION WHEN others THEN
         RAISE EXCEPTION 'medication attestation: patient_id must be a valid uuid';
     END;
-    -- reviewed_commitment: a non-empty hex string (the pinned set commitment).
+    -- reviewed_commitment: a non-empty, EVEN-length hex string (the pinned set
+    -- commitment). Even length is required because the part-2 apply trigger
+    -- decode()s this value as bytea ('hex') — an odd-length string makes decode()
+    -- raise a cryptic low-level error instead of a legible floor rejection. Reject
+    -- it HERE, at the floor (the clean hostile-client rejection point, principle 12),
+    -- not in the trigger (Task-3 review Minor).
     IF jsonb_typeof(p -> 'reviewed_commitment') IS DISTINCT FROM 'string'
-       OR (p ->> 'reviewed_commitment') !~ '^[0-9a-fA-F]+$' THEN
-        RAISE EXCEPTION 'medication attestation: reviewed_commitment must be a non-empty hex string';
+       OR (p ->> 'reviewed_commitment') !~ '^[0-9a-fA-F]+$'
+       OR length(p ->> 'reviewed_commitment') % 2 <> 0 THEN
+        RAISE EXCEPTION 'medication attestation: reviewed_commitment must be a non-empty even-length hex string';
     END IF;
     -- reviewed_count: a non-negative integer legibility hint.
     IF jsonb_typeof(p -> 'reviewed_count') IS DISTINCT FROM 'number'
@@ -89,5 +95,95 @@ RETURNS bytea LANGUAGE sql STABLE AS $$
             'clinical.medication-dose-correction.asserted')
       AND (body ->> 'medication_id')::uuid = p_medication_id;
 $$;
+
+COMMIT;
+
+BEGIN;
+
+-- 5. The attestation overlay: one row per attestation event (append-only; every
+--    vouch retained for audit). attester_kid is the VERIFIED responsible human,
+--    read from event_log.attester_key (the db/005 gate stored it after checking the
+--    token + kind='human'). reviewed_commitment stored as bytea for a direct compare.
+CREATE TABLE IF NOT EXISTS medication_attestation (
+    event_id            UUID PRIMARY KEY,       -- the attestation event's own id
+    medication_id       UUID NOT NULL,
+    patient_id          UUID NOT NULL,
+    attester_kid        TEXT NOT NULL,          -- hex of the verified human attester key
+    reviewed_commitment BYTEA NOT NULL,
+    reviewed_count      INTEGER NOT NULL,
+    hlc_wall            BIGINT NOT NULL,
+    hlc_counter         INTEGER NOT NULL,
+    origin              TEXT NOT NULL,
+    content_address     BYTEA NOT NULL,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_attestation TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_attestation_thread_idx
+    ON medication_attestation (medication_id);
+
+-- 6. Apply trigger: fold each attestation event into the overlay (door-agnostic —
+--    fires for both the local submit door and the db/020 remote-apply door). Append
+--    a row keyed by the event's own id; a re-delivered event is deduped by the PK.
+CREATE OR REPLACE FUNCTION medication_attestation_apply()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := NEW.body;
+BEGIN
+    INSERT INTO medication_attestation
+        (event_id, medication_id, patient_id, attester_kid, reviewed_commitment,
+         reviewed_count, hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        NEW.event_id,
+        (p ->> 'medication_id')::uuid,
+        NEW.patient_id,
+        encode(NEW.attester_key, 'hex'),                  -- verified human (db/005 gate)
+        decode(p ->> 'reviewed_commitment', 'hex'),
+        (p ->> 'reviewed_count')::integer,
+        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+    ON CONFLICT (event_id) DO NOTHING;                    -- append-only, idempotent
+    RETURN NULL;  -- AFTER trigger
+END;
+$$;
+DROP TRIGGER IF EXISTS medication_attestation_apply_trg ON event_log;
+CREATE TRIGGER medication_attestation_apply_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-attestation.asserted')
+    EXECUTE FUNCTION medication_attestation_apply();
+
+-- 7. Per-thread standing attestation: the LATEST vouch per thread (by its own
+--    convergent position), with the staleness verdict = "the thread's current
+--    content-set commitment differs from what this vouch reviewed". Because thread
+--    content is append-only (grow-only), ANY later content event (higher OR lower
+--    HLC) changes the commitment -> stale. content_address is bytea -> byte-order
+--    tiebreak needs no COLLATE.
+CREATE OR REPLACE VIEW medication_thread_attestation AS
+SELECT DISTINCT ON (a.medication_id)
+       a.medication_id,
+       a.patient_id,
+       a.attester_kid,
+       a.hlc_wall     AS attested_wall,
+       a.hlc_counter  AS attested_counter,
+       a.reviewed_count,
+       (cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
+           AS stale
+FROM medication_attestation a
+ORDER BY a.medication_id, a.hlc_wall DESC, a.hlc_counter DESC, a.content_address DESC;
+GRANT SELECT ON medication_thread_attestation TO cairn_agent;
+
+-- 8. Group rollup (conservative): a reconciled group is "attested & current" iff
+--    EVERY member thread has a non-stale attestation. Singletons (group_id =
+--    medication_id) reduce trivially to their thread. medication_thread_group (db/033)
+--    lists every locally-asserted thread with its group_id, so an orphan attestation
+--    (no local assert) is simply not a member -> renders nothing until it arrives.
+CREATE OR REPLACE VIEW medication_group_attestation AS
+SELECT g.group_id,
+       g.patient_id,
+       bool_and(ta.medication_id IS NOT NULL AND NOT ta.stale)      AS attested_current,
+       count(*) FILTER (WHERE ta.medication_id IS NULL)             AS unattested_members,
+       count(*) FILTER (WHERE ta.stale)                             AS stale_members
+FROM medication_thread_group g
+LEFT JOIN medication_thread_attestation ta ON ta.medication_id = g.medication_id
+GROUP BY g.group_id, g.patient_id;
+GRANT SELECT ON medication_group_attestation TO cairn_agent;
 
 COMMIT;
