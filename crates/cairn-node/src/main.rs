@@ -93,6 +93,63 @@ fn load_attester_key(
     }
 }
 
+/// The `--attest-as` flag set, shared by every medication verb (author-time
+/// convenience) and the standalone `medication-attest` command (post-hoc sign-off).
+/// `--attest-as` present ⇒ a human vouches for the affected thread(s); absent ⇒ the
+/// event stays device-additive (no vouch) — the slice-4 responsibility overlay is
+/// opt-in everywhere except `medication-attest` itself, where a vouch is the whole
+/// point (see `resolve_attester`'s caller-side `.ok_or_else` on that command).
+#[derive(clap::Args, Clone)]
+struct AttestFlags {
+    /// Take clinical responsibility for the affected thread(s): a human key that
+    /// signs+attests the attestation. Absent ⇒ device-additive (no vouch).
+    #[arg(long)]
+    attest_as: Option<std::path::PathBuf>,
+    /// Passphrase to unseal --attest-as (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+    /// Shares the env var with `identify-patient --attester-key`: both unseal a human
+    /// attester key under the same operator convention.
+    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+    attest_passphrase: Option<String>,
+    /// Optional context recorded on the vouch (e.g. "admission reconciliation").
+    #[arg(long)]
+    basis: Option<String>,
+    /// Optional free-text note on the vouch.
+    #[arg(long)]
+    note: Option<String>,
+}
+
+/// Resolve `--attest-as` into a loaded human key + verified kid, or `None` when the
+/// flag is absent. Runs the `attester_is_enrolled_human` legibility pre-check (the
+/// db/005 gate is the real enforcement — this only gives a clean error before any
+/// event is authored). Errors if a passphrase/basis/note is given with no key
+/// (nothing to attest — refuse loudly, mirroring `identify-patient`'s cross-flag
+/// check for --link/--attester-key).
+async fn resolve_attester(
+    client: &tokio_postgres::Client,
+    flags: &AttestFlags,
+) -> anyhow::Result<Option<(cairn_event::SigningKey, String)>> {
+    match &flags.attest_as {
+        None => {
+            if flags.attest_passphrase.is_some() || flags.basis.is_some() || flags.note.is_some() {
+                anyhow::bail!(
+                    "--attest-passphrase/--basis/--note require --attest-as: nothing to attest"
+                );
+            }
+            Ok(None)
+        }
+        Some(path) => {
+            let sk = load_attester_key(path, flags.attest_passphrase.clone())?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            if !cairn_node::identify::attester_is_enrolled_human(client, &kid).await? {
+                anyhow::bail!(
+                    "--attest-as key is not an enrolled human actor; run `enroll-human` first"
+                );
+            }
+            Ok(Some((sk, kid)))
+        }
+    }
+}
+
 /// Print a freshly-minted recovery code exactly once, with the honest loss warning.
 fn print_recovery_code(code: &str) {
     eprintln!();
@@ -490,6 +547,8 @@ enum Cmd {
         /// Precision token for --started (year|month|day|year-range).
         #[arg(long)]
         started_precision: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
     /// Cease a medication thread (clinical.medication-cessation.asserted) — makes it
     /// past. Offline-first: does not require the assert to be present locally.
@@ -507,6 +566,8 @@ enum Cmd {
         /// Optional free-text reason.
         #[arg(long)]
         reason: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
     /// Record a dose change on an existing medication thread
     /// (clinical.medication-dose-change.asserted). Additive — the prior dose stays in
@@ -534,6 +595,8 @@ enum Cmd {
         /// Optional free-text reason ("titration", "renal dosing").
         #[arg(long)]
         reason: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
     /// Correct a wrongly-recorded dose (clinical.medication-dose-correction.asserted).
     /// The prior value stays in the record (audit); this only wins the current dose.
@@ -557,6 +620,8 @@ enum Cmd {
         /// Optional free-text reason ("mis-keyed").
         #[arg(long)]
         reason: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
     /// Reconcile two medication threads as the same real drug
     /// (clinical.medication-reconciliation.asserted). Symmetric, reversible, additive —
@@ -575,6 +640,8 @@ enum Cmd {
         /// Optional free-text reason ("brand vs generic", "duplicate on transfer").
         #[arg(long)]
         reason: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
     /// Separate two previously-reconciled threads — "actually two different drugs"
     /// (clinical.medication-separation.asserted). The never-erase reversal.
@@ -591,6 +658,25 @@ enum Cmd {
         /// Optional free-text reason.
         #[arg(long)]
         reason: Option<String>,
+        #[command(flatten)]
+        attest: AttestFlags,
+    },
+
+    /// Take clinical responsibility for an existing medication thread (post-hoc med-rec
+    /// sign-off): a human vouches for the thread's CURRENT content-event set without
+    /// authoring a new clinical event. Records who vouched and pins the reviewed
+    /// commitment, so a later content change (assert/cease/dose-change/dose-correction)
+    /// flags the vouch as `stale` — a re-attest clears it. Complements the author-time
+    /// `--attest-as` convenience on the six verb subcommands above (same orchestrator
+    /// seam, `cairn_node::medication::attestation`).
+    MedicationAttest {
+        /// The medication_id thread to vouch for.
+        medication_id: Uuid,
+        /// Patient UUID (the chart the thread belongs to).
+        #[arg(long)]
+        patient: Uuid,
+        #[command(flatten)]
+        attest: AttestFlags,
     },
 }
 
@@ -1497,6 +1583,7 @@ async fn main() -> anyhow::Result<()> {
             info_source,
             started,
             started_precision,
+            attest,
         } => {
             cairn_node::medication::validate_term(&term)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1515,8 +1602,15 @@ async fn main() -> anyhow::Result<()> {
                 started: started.as_deref(),
                 started_precision: started_precision.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let med_id = cairn_node::medication::assert_medication(
                 &mut db,
                 &node_sk,
@@ -1524,7 +1618,7 @@ async fn main() -> anyhow::Result<()> {
                 &id.node_id_hex,
                 patient,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("recorded medication for {patient}; thread {med_id}");
@@ -1535,6 +1629,7 @@ async fn main() -> anyhow::Result<()> {
             stopped,
             stopped_precision,
             reason,
+            attest,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1546,8 +1641,15 @@ async fn main() -> anyhow::Result<()> {
                 stopped_precision: stopped_precision.as_deref(),
                 reason: reason.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
                 &node_sk,
@@ -1556,7 +1658,7 @@ async fn main() -> anyhow::Result<()> {
                 patient,
                 medication_id,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
@@ -1570,6 +1672,7 @@ async fn main() -> anyhow::Result<()> {
             effective_precision,
             info_source,
             reason,
+            attest,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1584,8 +1687,15 @@ async fn main() -> anyhow::Result<()> {
                 info_source: &info_source,
                 reason: reason.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let event_id = cairn_node::medication::change_dose(
                 &mut db,
                 &node_sk,
@@ -1594,7 +1704,7 @@ async fn main() -> anyhow::Result<()> {
                 patient,
                 medication_id,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("dose change recorded for thread {medication_id}; event {event_id}");
@@ -1607,6 +1717,7 @@ async fn main() -> anyhow::Result<()> {
             dose_unit,
             info_source,
             reason,
+            attest,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1622,8 +1733,15 @@ async fn main() -> anyhow::Result<()> {
                 info_source: info_source.as_deref(),
                 reason: reason.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let event_id = cairn_node::medication::correct_dose(
                 &mut db,
                 &node_sk,
@@ -1633,7 +1751,7 @@ async fn main() -> anyhow::Result<()> {
                 medication_id,
                 corrects,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("dose correction recorded for thread {medication_id} (target {corrects}); event {event_id}");
@@ -1644,6 +1762,7 @@ async fn main() -> anyhow::Result<()> {
             thread_b,
             provenance,
             reason,
+            attest,
         } => {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1655,8 +1774,15 @@ async fn main() -> anyhow::Result<()> {
                 provenance: &provenance,
                 reason: reason.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let event_id = cairn_node::medication::reconcile_medications(
                 &mut db,
                 &node_sk,
@@ -1666,7 +1792,7 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("reconciled threads {thread_a} + {thread_b}; event {event_id}");
@@ -1677,6 +1803,7 @@ async fn main() -> anyhow::Result<()> {
             thread_b,
             provenance,
             reason,
+            attest,
         } => {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1688,8 +1815,15 @@ async fn main() -> anyhow::Result<()> {
                 provenance: &provenance,
                 reason: reason.as_deref(),
             };
-            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
-            // device-additive path byte-identical until then.
+            let resolved = resolve_attester(&db, &attest).await?;
+            let params = resolved
+                .as_ref()
+                .map(|(sk, kid)| cairn_node::medication::AttestParams {
+                    human_sk: sk,
+                    human_kid: kid,
+                    basis: attest.basis.as_deref(),
+                    note: attest.note.as_deref(),
+                });
             let event_id = cairn_node::medication::separate_medications(
                 &mut db,
                 &node_sk,
@@ -1699,10 +1833,43 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
-                None,
+                params.as_ref(),
             )
             .await?;
             println!("separated threads {thread_a} + {thread_b}; event {event_id}");
+        }
+        Cmd::MedicationAttest {
+            medication_id,
+            patient,
+            attest,
+        } => {
+            // Post-hoc sign-off authors no clinical content event, so — unlike the six
+            // verb handlers above — this needs no node signing key / registration-actor
+            // ceremony: `attest_medication_thread` only needs `node_origin` (to mint the
+            // HLC) and the human attester, matched to its exact signature in
+            // `cairn_node::medication::attestation`.
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            let (human_sk, human_kid) = resolve_attester(&db, &attest).await?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "medication-attest requires --attest-as: a vouch needs a responsible human"
+                )
+            })?;
+            let params = cairn_node::medication::AttestParams {
+                human_sk: &human_sk,
+                human_kid: &human_kid,
+                basis: attest.basis.as_deref(),
+                note: attest.note.as_deref(),
+            };
+            let event_id = cairn_node::medication::attest_medication_thread(
+                &mut db,
+                &id.node_id_hex,
+                &params,
+                patient,
+                medication_id,
+            )
+            .await?;
+            println!("attested medication thread {medication_id} (event {event_id})");
         }
     }
     Ok(())
