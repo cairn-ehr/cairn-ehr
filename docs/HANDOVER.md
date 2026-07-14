@@ -82,44 +82,21 @@ corrected to 16 (verified passing). Full workspace green (fmt + clippy `-D warni
 **601 passed / 0 failed**; the two SQL mirrors touched pass). **Open (deferred on #181):** the cosmetic
 `reviewed_count` `u32`→`int4` note (unreachable) stays tracked.
 
-**Last session (2026-07-14) — medication attestation (slice 4, ADR-0049; branch
-`feat/medication-attestation-responsibility`; **merged, PR #182, on main**).** Graduates the slice-30/31/32 §8
-deferral ("human-attested clinical responsibility on a medication event") into product code, advancing
-[#163](https://github.com/cairn-ehr/cairn-ehr/issues/163). **One new event type**,
-`clinical.medication-attestation.asserted`, is a **separable per-thread attestation overlay** (principle
-10) referencing an existing `medication_id` thread — device-signed medication events are unchanged, a
-*different* human may vouch, possibly later — that trips the **existing** db/005 attestation gate (3-arg
-`submit_event`, enrolled `kind='human'`); no floor special-case. `db/034` adds the structural floor +
-`cairn_medication_thread_commitment` (one SQL function, used at author *and* read time — no Rust↔SQL
-drift risk) + the attestation projection/rollup. **Staleness is a convergent set-commitment compare, not
-a head-position pin**: `stale = current_commitment IS DISTINCT FROM reviewed_commitment`, which closes
-the case a position pin would silently absorb — a **lower-HLC event arriving after the sign-off** (a
-late-synced earlier-wall update) still flips it stale, and a divergent set on another node also reads
-stale (errs toward re-review). **Supersede, never retract** (principles 1/2): there is no de-attestation
-event — a clinician who vouched in error authors a corrective event instead, which flips the prior
-attestation stale and prompts re-review; the erroneous vouch stays in the record. `--attest-as`/
-`--attest-passphrase`/`--basis`/`--note` now thread through all six existing medication verbs (atomic
-verb-then-vouch, one txn; pair verbs `reconcile`/`separate` attest both threads) plus a new
-`medication-attest` CLI for post-hoc sign-off. **Two in-branch catches:** the #173 twin-check registry
-contract test (`twin_registry.rs`) correctly needed a 15→16-row update once `db/034` registered its
-type — an implementer misdiagnosed it as pre-existing and filed
-[#180](https://github.com/cairn-ehr/cairn-ehr/issues/180); a reviewer confirmed it was branch-introduced,
-fixed the contract, and closed #180 as a misfile. **CRITICAL fix:** the CLI's cross-flag "nothing to
-attest" guard originally gated on `--attest-passphrase` being present, but that flag carries
-`env = CAIRN_ATTESTER_PASSPHRASE` — exporting the documented shared env var made every plain
-device-additive verb call fail spuriously; fixed by extracting a pure `attest_context_without_key`
-predicate gating only on `--basis`/`--note` (mirroring `identify-patient`, which never gates on its
-passphrase either). Subagent-driven TDD (7 tasks, per-task review); full workspace green incl. a
-DB-gated test proving the lower-HLC-late-arrival case (the design's load-bearing property); live e2e CLI
-smoke passed. Design+plan under `docs/superpowers/{specs,plans}/2026-07-14-medication-attestation-*`.
-**Post-review cleanup (PR #182 `/review` → `/fixall`):** added a **partial functional index** on
-`event_log ((body->>'medication_id')::uuid)` (the four content-event types) so `cairn_medication_thread_commitment`
-— which reads `event_log` directly rather than a projection table — is a bounded lookup at read time; promoted
-the device-key-cannot-vouch guarantee from CLI-smoke-only to an **automated test**
-(`device_key_cannot_attest_only_humans_vouch`, `medication_attestation.rs` now 20/20); extracted the repeated
-verb-handler `attest_params` borrow into one helper; documented that `--attest-as` requires the affected
-thread(s) present locally. The cosmetic `reviewed_count` `u32`→`int4` note (unreachable) is logged on
-[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181).
+**Last session (2026-07-14) — medication attestation slice 4 (condensed; ADR-0049, spec v0.49→v0.50; merged
+PR #182, on main; full detail in git + the ADR + ROADMAP Slice 33).** One new **additive** event type
+`clinical.medication-attestation.asserted` — a **separable per-thread responsibility overlay** (principle 10)
+over an existing `medication_id` thread that trips the **existing** db/005 attestation gate (3-arg door, enrolled
+`kind='human'`); device-signed medication events unchanged, a *different* human may vouch later. `db/034`
+(db/031–033 untouched): structural floor + `cairn_medication_thread_commitment` (one SQL fn, author *and* read
+time — no drift) + append-only projection/rollup. **Staleness is a convergent set-commitment compare, not a
+head-position pin** (`stale = current_commitment IS DISTINCT FROM reviewed_commitment`) — closes the
+**lower-HLC-late-arrival** gap a position pin would silently absorb. **Supersede, never retract** (no
+de-attestation event; a corrective content event flips the prior vouch stale). `--attest-as`/`--basis`/`--note`
+thread through all six verbs (atomic verb-then-vouch, one txn; `reconcile`/`separate` attest both) + a
+`medication-attest` post-hoc CLI. Post-review (PR #182 `/review`→`/fixall`): a partial functional index on
+`event_log ((body->>'medication_id')::uuid)` bounds the commitment read; the device-key-cannot-vouch guarantee
+promoted to an automated test. The optional slice-4 follow-ups were tracked on
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181) → **done this session** (see above).
 
 **Prior session (2026-07-13, later) — the `cairn_event_twin` twin-check registry refactor (condensed; [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173); **ADR-0048**, spec v0.48→v0.49; PR #179; **ZERO behaviour change** — pure de-risking of the safety floor; full detail in git + the ADR).** Killed the verbatim-copy hazard: `cairn_event_twin` was re-declared in 11 migrations, each copying the whole growing IF/ELSIF chain — a stale copy could silently DROP a floor check with no error. Replaced with a locked registry table `cairn_event_twin_check(event_type, check_fn, twin_required_msg)` + a fail-closed load-time validation trigger + ONE stable dispatcher (db/005 only, dynamic `EXECUTE %I`); all check fns unified to `(p_type text, b jsonb) RETURNS void`. **Invariants binding all future slices:** dispatcher declared exactly once (guarded by `twin_dispatch_single_source.rs`); a new event type registers ONE additive row and never touches the dispatcher; missing/mis-signed check fn fails closed at load. Post-review hardened: `search_path` pinned on the hook; the registry-contract test asserts the full 15-row mapping byte-for-byte. Whole-branch review: Ready to merge, 0 Critical/Important.
 
