@@ -4,11 +4,12 @@
 design, pending implementation plan.
 
 **Scope of change:** additive Rust (`cairn-event::medication::attestation`, a split
-`cairn-node::medication` module + orchestrators + CLI) + one new DB migration
-(`db/034_medication_attestation.sql`: floor + a set-commitment helper + attestation overlay/projection) +
-a **proposed [ADR-0049](../../spec/decisions/)** recording the *commitment-based staleness* (currency-of-a-
-sign-off) precedent + a spec version bump (v0.49 → v0.50, `index.md` only — **only if** the ADR is written).
-Adds one verb to the medication surface opened by [slice 1](2026-07-11-medication-recording-design.md),
+`cairn-node::medication` module + orchestrators + `--attest-as` on **every** existing verb + a new
+`medication-attest` CLI) + one new DB migration (`db/034_medication_attestation.sql`: floor + a set-commitment
+helper + attestation overlay/projection) + **[ADR-0049](../../spec/decisions/)** recording the
+*commitment-based staleness* (currency-of-a-sign-off) precedent + a spec version bump (v0.49 → v0.50,
+`index.md` only). Adds one verb to the medication surface opened by
+[slice 1](2026-07-11-medication-recording-design.md),
 extended by [slice 2](2026-07-12-medication-dose-overlay-design.md) and
 [slice 3](2026-07-13-medication-reconciliation-resolution-design.md). **No new founding principle, no new
 envelope field, no floor bypass, no wire change to existing med events** — this graduates the slices-1–3 §8
@@ -187,27 +188,42 @@ basis?, note? }` → `medication_attestation_body(&a)` (inserts optional fields 
 ### 6.2 `cairn-node::medication::attestation` (new module in the split dir)
 - `build_attestation_body(event_id, medication_id, patient, reviewed_commitment, reviewed_count, basis?,
   note?, human_kid, hlc) -> EventBody` — pure; emits the responsibility-bearing contributor + authored twin.
+- `attest_thread_in_tx(tx, human_sk, human_kid, patient, medication_id, hlc, basis?, note?) -> Uuid` — the
+  shared primitive: computes the commitment via `cairn_medication_thread_commitment` over the thread as
+  visible **inside the caller's transaction** (so it includes any content event the caller just submitted),
+  builds the body, signs with the **human** key, mints the token via `sign_attestation`, submits through the
+  **3-arg** door. Returns the attestation event id. Every author path below is a thin wrapper over this.
 - `attest_medication_thread(client, human_sk, human_kid, node_origin, patient, medication_id, basis?, note?)`
-  — async: computes the commitment via `cairn_medication_thread_commitment` over the **local** thread (bails
-  with a clear message if the thread is not visible locally — "you review what you can see," like
-  `resolve_correction_target`), signs with the **human** key, mints the token via `sign_attestation`, submits
-  through the **3-arg** door. The db/005 gate is the real enforcement.
-- `assert_and_attest_medication(...)` — the author-time atomic compose: one transaction — `submit_event(assert)`
-  (the assert is now visible to the txn) → compute the commitment (it includes the just-inserted assert) →
-  `submit_event(attestation, token, vk)` → commit. Mirrors `identify_patient`; a rejected attestation rolls
-  the assert back.
+  — the **post-hoc** standalone orchestrator: mints an HLC, opens a one-statement txn, calls
+  `attest_thread_in_tx`, commits. Bails with a clear message if the thread is not visible locally (the
+  commitment fn returns null / no content events — "you review what you can see," like
+  `resolve_correction_target`). The db/005 gate is the real enforcement.
+- **Author-time, all verbs.** Each existing verb gains an `attest: Option<AttestParams<'_>>` path
+  (`AttestParams { human_sk, human_kid, basis?, note? }`). When present, the orchestrator runs the verb's
+  own submit **and** the attestation in ONE transaction: mint the verb HLC + one attestation HLC per affected
+  thread up front (self-committing, like `identify_patient`) → open txn → `submit_event(verb_body)` →
+  `attest_thread_in_tx(...)` for each affected thread → commit. A rejected attestation rolls the verb back
+  (never recorded-but-unvouched-when-a-vouch-was-intended).
+  - single-thread verbs (`assert` / `cease` / `dose-change` / `dose-correction`) attest their one
+    `medication_id`;
+  - the **pair** verbs (`reconcile` / `separate`) attest **both** subject threads (two attestation events in
+    the same txn) — taking responsibility for both threads' current content as part of declaring them the
+    same / different drug. (The reconcile/separate event itself stays device-additive; reconciliation edges
+    are excluded from thread content, §3.1, so the two commitments are over each thread's own unchanged
+    content — the group rollup, §5.3, then reads the group as attested-current only when both are.)
 
-### 6.3 CLI
+### 6.3 CLI — `--attest-as` on every verb
 - New **`medication-attest <medication_id>`** — post-hoc per-thread sign-off. Flags: `--attester-key` /
   `--attester-passphrase` (reuse `load_attester_key` — a human key distinct from the node's operational key),
   `--basis`, `--note`. `attester_is_enrolled_human` pre-check (legibility; the db/005 gate is the real gate).
   Clear error if the thread is not local.
-- **`medication-assert --attest-as <attester-key>`** (+ `--attest-passphrase`, `--basis`) — the author-time
-  convenience: atomic assert-then-vouch via `assert_and_attest_medication`. Absent ⇒ unchanged device-additive
-  assert. Cross-flag validation mirrors `identify-patient` (`--attest-as` ⟺ its passphrase; nothing to
-  attest is refused loudly).
-- The other verbs' author-time `--attest-as` is a trivial additive follow-on (same helper) — **deferred**;
-  the standalone `medication-attest` already covers them (attest immediately after).
+- **Every existing verb** (`medication-assert` / `-cease` / `-change-dose` / `-correct-dose` /
+  `-reconcile` / `-separate`) gains **`--attest-as <attester-key>`** (+ `--attest-passphrase`, `--basis`,
+  `--note`) — the author-time convenience: atomic verb-then-vouch via the §6.2 author-time path. Absent ⇒
+  unchanged device-additive behaviour. One shared clap flag group + one shared "resolve attester" helper
+  (loads the key, pre-checks human-ness) keeps the six call sites DRY; cross-flag validation mirrors
+  `identify-patient` (`--attest-as` ⟺ its passphrase; a passphrase with nothing to attest is refused loudly).
+  `-reconcile`/`-separate` vouch for both subject threads.
 
 ### 6.4 Companion refactor — split `crates/cairn-node/src/medication.rs`
 Already 621 lines; this slice adds ~150. Split into a module dir mirroring `cairn-event::medication`:
@@ -233,12 +249,18 @@ Pure first, then DB-gated (`crates/cairn-node/tests/medication_attestation.rs`):
    a position pin — the design's load-bearing property).
 5. **Group rollup** — two threads reconciled; group `attested & current` only when both members are; one
    member stale/unattested → group not current; a singleton reduces to its thread.
-6. **Author-time atomic** — `assert_and_attest_medication` → thread immediately attested-current in one txn;
-   a forced attestation rejection rolls the assert back (nothing written).
-7. **Offline-first / orphan** — the floor accepts an attestation for a not-local thread; it renders nothing
+6. **Author-time atomic, every verb** — the author-time path on `assert` and on one single-thread mutating
+   verb (`dose-change`) → the thread is attested-current in one txn; a forced attestation rejection rolls the
+   verb back (nothing written). Plus the **pair** case: `reconcile --attest-as` → **both** subject threads
+   attested-current in one txn.
+7. **Supersede-not-retract** — attest a thread → author a `dose-correction` ("acted in error, correct is X")
+   → the prior attestation reads `stale=true` (commitment changed), the erroneous vouch is still in the
+   record (retained-set/`medication_attestation` row intact), and a fresh attestation of the corrected state
+   reads `stale=false`. Proves the intended workflow: responsibility is never withdrawn, only superseded.
+8. **Offline-first / orphan** — the floor accepts an attestation for a not-local thread; it renders nothing
    until the thread's events arrive, then computes staleness correctly.
-8. Live e2e CLI smoke: assert → attest (vouched, current) → change dose (stale / re-review) → re-attest
-   (current).
+9. Live e2e CLI smoke: assert → attest (vouched, current) → change dose (stale / re-review) → re-attest
+   (current); a `-reconcile --attest-as` vouches for both threads.
 
 Full workspace green (fmt + clippy `--workspace -D warnings` + `cargo test --workspace`) + mkdocs.
 
@@ -249,26 +271,30 @@ Full workspace green (fmt + clippy `--workspace -D warnings` + `cargo test --wor
 - **Reviewed = the set present on the attester's node at review time.** The commitment cannot cover an event
   that exists on no reachable node yet (reviewing the future). The §5.13 background re-review sweep is the
   backstop. Documented in §5.1, not silently ignored.
-- **Author-time `--attest-as` ships on `medication-assert` only** (proves the atomic pattern). Wiring it into
-  cease/dose/reconcile is a trivial additive follow-on using the same helper.
+- **Responsibility is never retracted, only superseded** (the maintainer's clinical call — principle 1/2).
+  There is **no de-attestation / withdraw-vouch event**, and there deliberately never will be: a clinician who
+  vouched in error does not un-vouch — they author a *corrective* clinical event ("I acted in error doing X;
+  the correct value is Z" — a `dose-correction` / `cessation` / new assertion), which changes the thread's
+  content set → flips the prior attestation **stale** → prompts re-review → they re-vouch for the corrected
+  state. The erroneous vouch stays in the record; the accountability trail is *"Dr X vouched for the wrong
+  value at T1, corrected and re-vouched at T2,"* never an erasure. This is precisely what the commitment-based
+  staleness makes work, and it is *why* no withdraw event is needed.
 - **Group rollup is conservative** (all-active-members-current). A "partially attested group" nuance
   (which member is stale) is a future read-surface refinement.
 - **Whole-list sign-off is composed, not a distinct event** (N thread attestations). A single "list reviewed
   at T" summary event is a future convenience if the worklist wants one.
 - **`reviewed_count` is a legibility hint only** — the commitment is the sole staleness authority (a
   disagreeing count cannot cause unsoundness).
-- **No de-attestation / withdraw-responsibility event** in this slice (a clinician retracting a vouch). The
-  overlay is HLC-versioned, so it composes additively later without rewrite.
 - **Perf:** the commitment view recomputes a SHA-256 per thread per read. Negligible for a patient's list
   (tens of threads, a handful of events each); if a hot path emerges, memoize into the overlay table. Noted,
   not premature-optimized.
 
-## 9. Proposed ADR-0049 (confirm during review)
+## 9. ADR-0049 — commitment-based sign-off currency (confirmed)
 
-The **commitment-based staleness / currency-of-a-sign-off** pattern is a reusable precedent: a point-in-time
-human review binds to the exact set it reviewed, and "still current?" is a convergent set-commitment compare.
-It directly advances [issue #163](https://github.com/cairn-ehr/cairn-ehr/issues/163) (asserted-since vs
-confirmed-current-as-of) and every future clinical stream will want it. **Recommendation: write ADR-0049**
-recording it as binding on future "re-affirmation / sign-off currency" work (spec v0.49 → v0.50, index.md
-only). Open for the maintainer's call — if declined, the slice ships with no ADR/spec bump (it otherwise
-implements settled §3.15/§3.16 + principle 10 + the db/005 gate).
+**Decision (maintainer-confirmed): write ADR-0049.** The **commitment-based staleness / currency-of-a-sign-off**
+pattern is a reusable precedent: a point-in-time human review binds to the exact *set* it reviewed, and "still
+current?" is a convergent set-commitment compare; responsibility is superseded (by correcting the record),
+never retracted. It directly advances [issue #163](https://github.com/cairn-ehr/cairn-ehr/issues/163)
+(asserted-since vs confirmed-current-as-of) and binds every future clinical stream's "re-affirmation /
+sign-off currency" work. Spec bump v0.49 → v0.50 (`index.md` only). ADR home: §3.15/§3.16 (refines ADR-0007
+principle 10; reuses the db/005 gate + ADR-0045 collation-free positions).
