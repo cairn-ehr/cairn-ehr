@@ -1,12 +1,14 @@
 //! §3.15/§3.16 slice-4 medication attestation — FLOOR tests (registration,
 //! structural check, twin registry, set-commitment fn; part 1) plus the overlay/
 //! projection tests (part 2: `medication_attestation`, its apply trigger, and the
-//! `medication_thread_attestation` / `medication_group_attestation` staleness views).
-//! The Rust orchestrator (a `attest_medication_thread` convenience fn) lands in a
-//! later task; here the attestation `EventBody` is hand-built inline, mirroring the
-//! exact human self-sign/self-attest pattern `crates/cairn-node/src/identify.rs` and
-//! `crates/cairn-node/tests/attestation.rs` already use for a responsibility-bearing
-//! event through the 3-arg `submit_event` door.
+//! `medication_thread_attestation` / `medication_group_attestation` staleness views),
+//! plus the Rust orchestrator tests (part 3: the responsibility-gate + the standalone
+//! `attest_medication_thread` happy-path/orphan cases, `crates/cairn-node/src/
+//! medication/attestation.rs`). Parts 1-2 hand-build the attestation `EventBody`
+//! inline, mirroring the exact human self-sign/self-attest pattern
+//! `crates/cairn-node/src/identify.rs` and `crates/cairn-node/tests/attestation.rs`
+//! already use for a responsibility-bearing event through the 3-arg `submit_event`
+//! door; part 3 exercises that same construction through the production orchestrator.
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized cluster-wide via db::test_serial_guard
 //! (shared-DB + TRUNCATE pattern, identical to the other medication test files). Key
@@ -17,8 +19,8 @@ use cairn_event::{
 };
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_dose_change_body, change_dose, reconcile_medications,
-    AssertMedicationInput, ChangeDoseInput, ReconcileInput,
+    assert_medication, attest_medication_thread, build_dose_change_body, change_dose,
+    reconcile_medications, AssertMedicationInput, AttestParams, ChangeDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -816,4 +818,187 @@ async fn orphan_attestation_renders_nothing_until_thread_arrives() {
         n, 0,
         "an orphan attestation's thread renders nothing in the group rollup until it arrives"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Part 3 (Task 5): the Rust orchestrator — `attest_thread_in_tx` /
+// `attest_medication_thread`, `crates/cairn-node/src/medication/attestation.rs`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn attestation_requires_a_valid_human_token() {
+    // The responsibility-bearing contributor is what trips the db/005 gate — proven
+    // here directly against submit_event (not yet through the orchestrator) so the
+    // gate behaviour is pinned independently of `attest_medication_thread`'s plumbing.
+    // Mirrors `identity_repudiate.rs::unattested_repudiation_is_refused` /
+    // `agent_attested_repudiation_is_refused` and `attestation.rs::
+    // rejects_bad_attestations_and_keeps_the_floor` (checks N3), applied here to the
+    // medication-attestation event type.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Case 1: a well-formed, human-signed attestation submitted through the 1-arg
+    // door (no token at all) -> the db/005 gate refuses BEFORE any structural check
+    // (the attestation gate runs ahead of the twin/floor dispatch), so a placeholder
+    // payload is sufficient here.
+    let hlc1 = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload1 = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "reviewed_commitment": placeholder_commitment_hex(),
+        "reviewed_count": 1,
+    });
+    let body1 = build_attestation_body(Uuid::now_v7(), patient, payload1, &kid_h, hlc1);
+    let signed1 = sign(&body1, &sk_h).unwrap();
+    let res1 = c
+        .execute("SELECT submit_event($1)", &[&signed1.signed_bytes])
+        .await;
+    let err1 = db_msg(&res1.unwrap_err());
+    assert!(
+        err1.contains("requires attestation"),
+        "an un-attested responsibility-bearing event must be refused: {err1}"
+    );
+
+    // Case 2: a VALID token, correctly bound, but signed/presented by the enrolled
+    // DEVICE (agent) actor from `setup`, not a human -> the db/005 kind='human' check
+    // refuses it (§5.7 "Human", enforced structurally).
+    let hlc2 = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload2 = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "reviewed_commitment": placeholder_commitment_hex(),
+        "reviewed_count": 1,
+    });
+    let body2 = build_attestation_body(Uuid::now_v7(), patient, payload2, &kid_d, hlc2);
+    let res2 = sign_attest_submit(&c, &body2, &sk_d, &kid_d).await;
+    let err2 = db_msg(&res2.unwrap_err());
+    assert!(
+        err2.contains("attester is not an enrolled human actor"),
+        "an agent-attested medication attestation must be refused: {err2}"
+    );
+
+    // The floor held: neither rejected attempt landed in the log.
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "neither rejected attestation landed");
+}
+
+#[tokio::test]
+async fn attest_medication_thread_end_to_end() {
+    // The standalone post-hoc orchestrator: mint an HLC, open a txn, sign+attest+submit,
+    // commit. Exercises the real production path (not the test-local hand-built body).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // A real thread with one content event, so there is something genuine to vouch for.
+    let medication_id = assert_medication(
+        &c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+    )
+    .await
+    .unwrap();
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("chart review"),
+        note: Some("confirmed dose with patient"),
+    };
+    let event_id = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+        .await
+        .expect("a well-formed post-hoc attestation of a real thread must succeed");
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid \
+             AND event_type = 'clinical.medication-attestation.asserted'",
+            &[&event_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "the orchestrator's event id is the one actually appended"
+    );
+
+    let (attester_kid, stale): (String, bool) = {
+        let row = c
+            .query_one(
+                "SELECT attester_kid, stale FROM medication_thread_attestation \
+                 WHERE medication_id = $1::text::uuid",
+                &[&medication_id.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        attester_kid, kid_h,
+        "attester_kid is the verified human who called attest_medication_thread"
+    );
+    assert!(
+        !stale,
+        "the orchestrator pinned exactly the thread's current commitment"
+    );
+}
+
+#[tokio::test]
+async fn attest_refuses_orphan_thread_with_clear_message() {
+    // Offline-first refusal: a thread with no LOCAL content events has nothing genuine
+    // to vouch for, so the orchestrator must bail with a legible message rather than
+    // author a meaningless attestation (mirrors `attest_thread_in_tx`'s doc comment).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    let medication_id = Uuid::now_v7(); // never asserted -> no local content events
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: None,
+        note: None,
+    };
+    let err = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+        .await
+        .expect_err("an orphan thread must refuse a post-hoc attestation");
+    assert!(
+        err.to_string().contains("nothing to vouch for"),
+        "got: {err}"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "the refused orphan attestation never landed");
 }

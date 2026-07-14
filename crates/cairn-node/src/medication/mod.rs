@@ -6,11 +6,16 @@
 //! thread PAIR. Offline-first throughout (no event requires its target thread to be
 //! present locally). Split by verb to keep each file focused (house rule 4).
 mod assert;
+mod attestation;
 mod cessation;
 mod dose;
 mod reconciliation;
 
 pub use assert::{assert_medication, build_assert_body, validate_term, AssertMedicationInput};
+pub use attestation::{
+    attest_medication_thread, attest_thread_in_tx, build_attestation_body, thread_commitment,
+    AttestParams,
+};
 pub use cessation::{build_cease_body, cease_medication, CeaseMedicationInput};
 pub use dose::{
     build_dose_change_body, build_dose_correction_body, change_dose, correct_dose,
