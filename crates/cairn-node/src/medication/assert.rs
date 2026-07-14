@@ -73,23 +73,46 @@ pub fn build_assert_body(
 }
 
 /// Record a medication the patient takes/took. Mints and returns the thread's
-/// `medication_id`. Device-additive; goes through the 1-arg submit door.
+/// `medication_id`. Device-additive when `attest` is `None` (goes through the 1-arg
+/// submit door, auto-commit — unchanged from the pre-attestation path). When `attest`
+/// is `Some`, the assert AND the human's responsibility attestation for the
+/// newly-minted thread run in ONE transaction, so the attestation's commitment sees
+/// the assert event just submitted (mirrors `identify_patient`'s identify+link atomic
+/// shape). A rejected attestation rolls the assert back with it.
 pub async fn assert_medication(
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
     input: &AssertMedicationInput<'_>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_term(input.term)?;
-    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
+    // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
+    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let medication_id = Uuid::now_v7();
-    let body = build_assert_body(event_id, medication_id, patient, input, node_kid, hlc);
+    let body = build_assert_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     let signed = sign(&body, node_sk)?;
-    client
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+
+    match attest {
+        None => {
+            // Unchanged device-additive path (1-arg door, auto-commit).
+            client
+                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+        }
+        Some(params) => {
+            let attest_hlc = crate::db::next_hlc(client, node_origin).await?;
+            let tx = client.transaction().await?;
+            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, medication_id, attest_hlc)
+                .await?;
+            tx.commit().await?;
+        }
+    }
     Ok(medication_id)
 }

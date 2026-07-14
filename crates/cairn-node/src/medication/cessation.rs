@@ -47,22 +47,41 @@ pub fn build_cease_body(
 }
 
 /// Cease a medication thread — makes it "past". Offline-first: does NOT check the
-/// assert is present locally. Returns the cessation event id.
+/// assert is present locally. Returns the cessation event id. Device-additive when
+/// `attest` is `None` (unchanged 1-arg submit door). When `attest` is `Some`, the
+/// cessation AND the human's responsibility attestation for the thread run in ONE
+/// transaction (same atomic shape as `assert_medication`); a rejected attestation
+/// rolls the cessation back with it.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/attest, mirrors dose orchestrators
 pub async fn cease_medication(
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
     node_kid: &str,
     node_origin: &str,
     patient: Uuid,
     medication_id: Uuid,
     input: &CeaseMedicationInput<'_>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
-    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
-    let body = build_cease_body(event_id, medication_id, patient, input, node_kid, hlc);
+    let body = build_cease_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     let signed = sign(&body, node_sk)?;
-    client
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+    match attest {
+        None => {
+            client
+                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+        }
+        Some(params) => {
+            let attest_hlc = crate::db::next_hlc(client, node_origin).await?;
+            let tx = client.transaction().await?;
+            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, medication_id, attest_hlc)
+                .await?;
+            tx.commit().await?;
+        }
+    }
     Ok(event_id)
 }

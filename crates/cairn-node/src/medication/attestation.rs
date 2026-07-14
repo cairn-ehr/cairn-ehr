@@ -64,11 +64,17 @@ pub fn build_attestation_body(
     }
 }
 
-/// Read the thread's current set commitment (hex) + content-event count from the
-/// single-source SQL fn. `None` when the thread has no LOCAL content events (orphan) —
-/// the caller then refuses to author a meaningless vouch.
-pub async fn thread_commitment(
-    client: &tokio_postgres::Client,
+/// Single-source SQL for a thread's current content-event commitment (hex) + count —
+/// the DRY point behind both `thread_commitment` (post-hoc, runs on a plain `&Client`)
+/// and `attest_thread_in_tx` (author-time, runs on an open `&Transaction` so it reads
+/// through the SAME txn/snapshot as a content event the caller just submitted). Bound
+/// on `GenericClient` (impl'd for both `Client` and `Transaction` in tokio-postgres
+/// 0.7.18) rather than duplicated per call site — a future edit to the content-event-
+/// type list now touches exactly one place. `+ Sync` is required because
+/// `GenericClient` is `#[async_trait]`: its returned future captures `&self`, which
+/// must be `Sync` for the future itself to be `Send`.
+async fn thread_commitment_on(
+    client: &(impl tokio_postgres::GenericClient + Sync),
     medication_id: Uuid,
 ) -> anyhow::Result<Option<(String, u32)>> {
     let row = client
@@ -88,6 +94,22 @@ pub async fn thread_commitment(
     Ok(commitment.map(|c| (c, count as u32)))
 }
 
+/// Read the thread's current set commitment (hex) + content-event count from the
+/// single-source SQL fn. `None` when the thread has no LOCAL content events (orphan) —
+/// the caller then refuses to author a meaningless vouch. No caller inside this crate
+/// needs this standalone `&Client` entry point right now (both production call sites —
+/// post-hoc `attest_medication_thread` and the author-time verb orchestrators — go
+/// through `attest_thread_in_tx`'s txn-scoped read instead); kept `pub` as the
+/// reusable Client-side entry point for any future caller that wants the commitment
+/// without opening a transaction (e.g. a "preview what you'd be vouching for" CLI
+/// command, read-only, ahead of the actual attest call).
+pub async fn thread_commitment(
+    client: &tokio_postgres::Client,
+    medication_id: Uuid,
+) -> anyhow::Result<Option<(String, u32)>> {
+    thread_commitment_on(client, medication_id).await
+}
+
 /// Author one attestation for `medication_id` INSIDE the caller's transaction (so it
 /// sees any content event the caller just submitted in the same txn). Computes the
 /// commitment, signs with the human key, mints the token, submits the 3-arg door.
@@ -100,28 +122,19 @@ pub async fn attest_thread_in_tx(
     medication_id: Uuid,
     hlc: Hlc,
 ) -> anyhow::Result<Uuid> {
-    // thread_commitment takes &Client; a Transaction derefs to a GenericClient — run
-    // the same query directly on the tx to keep one txn/snapshot.
-    let row = tx
-        .query_one(
-            "SELECT encode(cairn_medication_thread_commitment($1::text::uuid), 'hex') AS c, \
-             (SELECT count(*) FROM event_log \
-                WHERE event_type IN ('clinical.medication.asserted', \
-                    'clinical.medication-cessation.asserted', \
-                    'clinical.medication-dose-change.asserted', \
-                    'clinical.medication-dose-correction.asserted') \
-                  AND (body ->> 'medication_id')::uuid = $1::text::uuid) AS n",
-            &[&medication_id.to_string()],
-        )
-        .await?;
-    let commitment: Option<String> = row.get("c");
-    let count: i64 = row.get("n");
-    let commitment = commitment.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no local content for medication thread {medication_id}; nothing to vouch for \
+    // thread_commitment_on is generic over GenericClient (Client OR Transaction) —
+    // called here bound to `tx` so the read runs through the SAME txn/snapshot as any
+    // content event the caller just submitted (the atomic author-time shape depends
+    // on this: it's what lets Task 6's verb orchestrators see their own just-submitted
+    // event before the human's vouch is computed).
+    let (commitment, count) = thread_commitment_on(tx, medication_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no local content for medication thread {medication_id}; nothing to vouch for \
              (author or sync the thread first)"
-        )
-    })?;
+            )
+        })?;
 
     let event_id = Uuid::now_v7();
     let body = build_attestation_body(
@@ -129,7 +142,7 @@ pub async fn attest_thread_in_tx(
         medication_id,
         patient,
         &commitment,
-        count as u32,
+        count,
         params.basis,
         params.note,
         params.human_kid,

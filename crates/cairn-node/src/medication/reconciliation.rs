@@ -115,11 +115,15 @@ pub fn build_separate_body(
     )
 }
 
-/// Assert two medication threads are the same real drug. Device-additive; offline-
-/// first (no local existence check on either thread). Returns the event id.
-#[allow(clippy::too_many_arguments)] // signer + node context + patient/2 subjects/input, mirrors dose orchestrators
+/// Assert two medication threads are the same real drug. Device-additive when
+/// `attest` is `None` (unchanged 1-arg submit door); offline-first (no local
+/// existence check on either thread). Returns the event id. When `attest` is `Some`,
+/// the reconciliation AND a human responsibility attestation for BOTH subject threads
+/// run in ONE transaction (two attestation HLCs, minted up front, one per thread) — a
+/// rejected attestation on either thread rolls the WHOLE reconciliation back.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/2 subjects/input/attest, mirrors dose orchestrators
 pub async fn reconcile_medications(
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
     node_kid: &str,
     node_origin: &str,
@@ -127,25 +131,45 @@ pub async fn reconcile_medications(
     subject_a: Uuid,
     subject_b: Uuid,
     input: &ReconcileInput<'_>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_distinct_subjects(subject_a, subject_b)?;
-    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let body = build_reconcile_body(
-        event_id, subject_a, subject_b, patient, input, node_kid, hlc,
+        event_id, subject_a, subject_b, patient, input, node_kid, verb_hlc,
     );
     let signed = sign(&body, node_sk)?;
-    client
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+    match attest {
+        None => {
+            client
+                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+        }
+        Some(params) => {
+            // Two attestation HLCs (one per subject thread), minted up front.
+            let hlc_a = crate::db::next_hlc(client, node_origin).await?;
+            let hlc_b = crate::db::next_hlc(client, node_origin).await?;
+            let tx = client.transaction().await?;
+            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_b, hlc_b).await?;
+            tx.commit().await?;
+        }
+    }
     Ok(event_id)
 }
 
-/// Reverse a reconciliation ("actually two different drugs"). Device-additive;
-/// offline-first. Returns the event id.
+/// Reverse a reconciliation ("actually two different drugs"). Device-additive when
+/// `attest` is `None` (unchanged 1-arg submit door); offline-first. Returns the event
+/// id. When `attest` is `Some`, the separation AND a human responsibility attestation
+/// for BOTH subject threads run in ONE transaction (same shape as
+/// `reconcile_medications`) — a rejected attestation on either thread rolls the WHOLE
+/// separation back.
 #[allow(clippy::too_many_arguments)]
 pub async fn separate_medications(
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
     node_kid: &str,
     node_origin: &str,
@@ -153,17 +177,32 @@ pub async fn separate_medications(
     subject_a: Uuid,
     subject_b: Uuid,
     input: &ReconcileInput<'_>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_distinct_subjects(subject_a, subject_b)?;
-    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let body = build_separate_body(
-        event_id, subject_a, subject_b, patient, input, node_kid, hlc,
+        event_id, subject_a, subject_b, patient, input, node_kid, verb_hlc,
     );
     let signed = sign(&body, node_sk)?;
-    client
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+    match attest {
+        None => {
+            client
+                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+        }
+        Some(params) => {
+            let hlc_a = crate::db::next_hlc(client, node_origin).await?;
+            let hlc_b = crate::db::next_hlc(client, node_origin).await?;
+            let tx = client.transaction().await?;
+            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+                .await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;
+            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_b, hlc_b).await?;
+            tx.commit().await?;
+        }
+    }
     Ok(event_id)
 }
 

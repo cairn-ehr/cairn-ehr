@@ -78,13 +78,21 @@ async fn current_terms(c: &Client, patient: Uuid) -> Vec<String> {
 async fn assert_appears_as_current() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         current_terms(&c, patient).await,
         vec!["atorvastatin".to_string()]
@@ -110,13 +118,21 @@ async fn asserted_at_is_the_convergent_hlc_wall_not_the_local_fold_clock() {
     // that diverges between nodes and would make a freshly-synced old med look new).
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .unwrap();
 
     // asserted_at == to_timestamp(hlc_wall/1000). Had the view used updated_at
     // (clock_timestamp at fold time, sub-ms precision, a few ms later), this exact
@@ -239,20 +255,28 @@ async fn inject_assert(
 async fn cease_flips_current_to_past() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         current_terms(&c, patient).await,
         vec!["atorvastatin".to_string()]
     );
 
     cease_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -263,6 +287,7 @@ async fn cease_flips_current_to_past() {
             stopped_precision: Some("year"),
             reason: Some("switched"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -281,14 +306,14 @@ async fn cease_flips_current_to_past() {
 async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let med_id = Uuid::now_v7();
 
     // Cessation authored BEFORE its assert exists locally (offline-first).
     cease_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -299,6 +324,7 @@ async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
             stopped_precision: None,
             reason: None,
         },
+        None,
     )
     .await
     .unwrap();
@@ -338,7 +364,7 @@ async fn flag_rows(c: &Client, patient: Uuid) -> Vec<(String, i64)> {
 async fn two_active_same_term_are_flagged() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
@@ -347,10 +373,10 @@ async fn two_active_same_term_are_flagged() {
     a1.term = "Atorvastatin";
     let mut a2 = sample_input();
     a2.term = "atorvastatin ";
-    assert_medication(&c, &sk, &kid, "test-node", patient, &a1)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None)
         .await
         .unwrap();
-    assert_medication(&c, &sk, &kid, "test-node", patient, &a2)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None)
         .await
         .unwrap();
 
@@ -363,21 +389,37 @@ async fn two_active_same_term_are_flagged() {
 async fn ceasing_one_clears_the_flag() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let m1 = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
-        .await
-        .unwrap();
-    let _m2 = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_input())
-        .await
-        .unwrap();
+    let m1 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .unwrap();
+    let _m2 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(flag_rows(&c, patient).await.len(), 1);
 
     // Resolution needs no new event type — cease the redundant thread.
     cease_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -388,6 +430,7 @@ async fn ceasing_one_clears_the_flag() {
             stopped_precision: None,
             reason: Some("duplicate"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -401,7 +444,7 @@ async fn ceasing_one_clears_the_flag() {
 async fn distinct_terms_are_not_flagged() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
@@ -409,10 +452,10 @@ async fn distinct_terms_are_not_flagged() {
     a1.term = "atorvastatin";
     let mut a2 = sample_input();
     a2.term = "metformin";
-    assert_medication(&c, &sk, &kid, "test-node", patient, &a1)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None)
         .await
         .unwrap();
-    assert_medication(&c, &sk, &kid, "test-node", patient, &a2)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None)
         .await
         .unwrap();
     assert!(

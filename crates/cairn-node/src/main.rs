@@ -1501,7 +1501,7 @@ async fn main() -> anyhow::Result<()> {
             cairn_node::medication::validate_term(&term)?;
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::AssertMedicationInput {
@@ -1515,13 +1515,16 @@ async fn main() -> anyhow::Result<()> {
                 started: started.as_deref(),
                 started_precision: started_precision.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let med_id = cairn_node::medication::assert_medication(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
                 patient,
                 &input,
+                None,
             )
             .await?;
             println!("recorded medication for {patient}; thread {med_id}");
@@ -1535,7 +1538,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::CeaseMedicationInput {
@@ -1543,14 +1546,17 @@ async fn main() -> anyhow::Result<()> {
                 stopped_precision: stopped_precision.as_deref(),
                 reason: reason.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let event_id = cairn_node::medication::cease_medication(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
                 patient,
                 medication_id,
                 &input,
+                None,
             )
             .await?;
             println!("ceased medication thread {medication_id}; event {event_id}");
@@ -1567,7 +1573,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ChangeDoseInput {
@@ -1578,14 +1584,17 @@ async fn main() -> anyhow::Result<()> {
                 info_source: &info_source,
                 reason: reason.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let event_id = cairn_node::medication::change_dose(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
                 patient,
                 medication_id,
                 &input,
+                None,
             )
             .await?;
             println!("dose change recorded for thread {medication_id}; event {event_id}");
@@ -1601,7 +1610,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let corrects =
@@ -1613,8 +1622,10 @@ async fn main() -> anyhow::Result<()> {
                 info_source: info_source.as_deref(),
                 reason: reason.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let event_id = cairn_node::medication::correct_dose(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
@@ -1622,6 +1633,7 @@ async fn main() -> anyhow::Result<()> {
                 medication_id,
                 corrects,
                 &input,
+                None,
             )
             .await?;
             println!("dose correction recorded for thread {medication_id} (target {corrects}); event {event_id}");
@@ -1636,15 +1648,17 @@ async fn main() -> anyhow::Result<()> {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ReconcileInput {
                 provenance: &provenance,
                 reason: reason.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let event_id = cairn_node::medication::reconcile_medications(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
@@ -1652,6 +1666,7 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
+                None,
             )
             .await?;
             println!("reconciled threads {thread_a} + {thread_b}; event {event_id}");
@@ -1666,15 +1681,17 @@ async fn main() -> anyhow::Result<()> {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
-            let db = cairn_node::db::connect(&cli.conn).await?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ReconcileInput {
                 provenance: &provenance,
                 reason: reason.as_deref(),
             };
+            // Task 7 wires the real --attest-as CLI flag through here; None keeps the
+            // device-additive path byte-identical until then.
             let event_id = cairn_node::medication::separate_medications(
-                &db,
+                &mut db,
                 &node_sk,
                 &node_kid,
                 &id.node_id_hex,
@@ -1682,6 +1699,7 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
+                None,
             )
             .await?;
             println!("separated threads {thread_a} + {thread_b}; event {event_id}");

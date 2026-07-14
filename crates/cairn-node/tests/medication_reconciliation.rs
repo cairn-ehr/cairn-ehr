@@ -69,7 +69,7 @@ fn sample_assert(term: &'static str) -> AssertMedicationInput<'static> {
 async fn floor_accepts_valid_reconciliation() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = Uuid::now_v7();
@@ -79,7 +79,7 @@ async fn floor_accepts_valid_reconciliation() {
         reason: Some("brand vs generic"),
     };
     // Offline-first: neither thread need exist locally.
-    let ev = reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    let ev = reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     let n: i64 = c
@@ -167,26 +167,28 @@ async fn group_of(c: &Client, med: Uuid) -> Uuid {
 async fn reconcile_maps_both_threads_to_min_uuid_group() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -194,7 +196,7 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     let expected = std::cmp::min(a, b);
@@ -210,36 +212,39 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
 async fn transitive_component_and_clean_split() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
     let d = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
@@ -247,10 +252,10 @@ async fn transitive_component_and_clean_split() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, b, d, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, d, &input, None)
         .await
         .unwrap();
     let min = std::cmp::min(a, std::cmp::min(b, d));
@@ -261,7 +266,7 @@ async fn transitive_component_and_clean_split() {
         "A-B, B-C transitively one group"
     );
     // Separating B-D splits D back out; A-B stays together.
-    separate_medications(&c, &sk, &kid, "test-node", patient, b, d, &input)
+    separate_medications(&mut c, &sk, &kid, "test-node", patient, b, d, &input, None)
         .await
         .unwrap();
     assert_eq!(group_of(&c, a).await, std::cmp::min(a, b));
@@ -278,7 +283,7 @@ async fn reconciliation_before_threads_converges() {
     // Offline-first: the reconciliation applies before either assert is local.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = Uuid::now_v7();
@@ -287,7 +292,7 @@ async fn reconciliation_before_threads_converges() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     // The edge stands and the group is computed even with no statements yet.
@@ -312,7 +317,7 @@ async fn oversize_group_over_cap_is_refused() {
     // is refused wholesale on LOCAL authoring (fail-loud, never a silent cap/truncate).
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     c.batch_execute("SET cairn.max_medication_group_size = 3")
         .await
@@ -328,13 +333,13 @@ async fn oversize_group_over_cap_is_refused() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap(); // {a,b} size 2 — ok
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, b, cc, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, cc, &input, None)
         .await
         .unwrap(); // {a,b,c} size 3 == cap — ok
-    let err = reconcile_medications(&c, &sk, &kid, "test-node", patient, cc, d, &input)
+    let err = reconcile_medications(&mut c, &sk, &kid, "test-node", patient, cc, d, &input, None)
         .await
         .unwrap_err(); // {a,b,c,d} size 4 > cap — refused
     let msg = format!("{err:#}");
@@ -358,7 +363,7 @@ async fn oversize_group_at_cap_is_accepted() {
     // reject a legitimate at-cap reconciliation.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     c.batch_execute("SET cairn.max_medication_group_size = 3")
         .await
@@ -369,10 +374,10 @@ async fn oversize_group_at_cap_is_accepted() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap(); // {a,b} size 2 — ok
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, b, cc, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, cc, &input, None)
         .await
         .unwrap(); // {a,b,c} size 3 == cap — accepted
     let expected = std::cmp::min(a, std::cmp::min(b, cc));
@@ -420,26 +425,28 @@ async fn flag_count(c: &Client, patient: Uuid) -> i64 {
 async fn reconcile_collapses_to_one_row_and_clears_flag() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -451,7 +458,7 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     let rows = current_rows(&c, patient).await;
@@ -467,7 +474,7 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         "flag cleared without a cessation"
     );
     // Separate: re-splits, flag returns.
-    separate_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    separate_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     assert_eq!(current_rows(&c, patient).await.len(), 2);
@@ -479,26 +486,28 @@ async fn brand_generic_collapse_without_shared_key() {
     // No shared dup_key (never flagged) — human judgment still collapses them.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("Lipitor"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -512,7 +521,7 @@ async fn brand_generic_collapse_without_shared_key() {
         provenance: "clinician-judgment",
         reason: Some("brand vs generic"),
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     assert_eq!(
@@ -526,26 +535,28 @@ async fn brand_generic_collapse_without_shared_key() {
 async fn group_current_dose_is_latest_effective_across_members() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -558,14 +569,14 @@ async fn group_current_dose_is_latest_effective_across_members() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    change_dose(&c, &sk, &kid, "test-node", patient, b, &ch)
+    change_dose(&mut c, &sk, &kid, "test-node", patient, b, &ch, None)
         .await
         .unwrap();
     let input = ReconcileInput {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     let rows = current_rows(&c, patient).await;
@@ -581,27 +592,29 @@ async fn group_current_dose_is_latest_effective_across_members() {
 async fn mixed_status_resolves_latest_effective() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     // A active (dose change effective 2025-06); B ceased effective 2024-01 (earlier).
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
@@ -613,7 +626,7 @@ async fn mixed_status_resolves_latest_effective() {
         info_source: "clinician-observed",
         reason: None,
     };
-    change_dose(&c, &sk, &kid, "test-node", patient, a, &ch)
+    change_dose(&mut c, &sk, &kid, "test-node", patient, a, &ch, None)
         .await
         .unwrap();
     let cease = CeaseMedicationInput {
@@ -621,14 +634,14 @@ async fn mixed_status_resolves_latest_effective() {
         stopped_precision: Some("month"),
         reason: None,
     };
-    cease_medication(&c, &sk, &kid, "test-node", patient, b, &cease)
+    cease_medication(&mut c, &sk, &kid, "test-node", patient, b, &cease, None)
         .await
         .unwrap();
     let input = ReconcileInput {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk, &kid, "test-node", patient, a, b, &input)
+    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
         .await
         .unwrap();
     // The later-effective standing statement (A's 2025-06 dose) wins → ACTIVE.
@@ -646,7 +659,7 @@ async fn mixed_status_resolves_latest_effective() {
         stopped_precision: Some("year"),
         reason: None,
     };
-    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease_a)
+    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease_a, None)
         .await
         .unwrap();
     assert_eq!(
@@ -670,16 +683,17 @@ async fn single_thread_semantics_unchanged() {
     // Regression: a lone active thread and a lone ceased thread render exactly as slices 1/2.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("aspirin"),
+        None,
     )
     .await
     .unwrap();
@@ -692,7 +706,7 @@ async fn single_thread_semantics_unchanged() {
         stopped_precision: Some("year"),
         reason: Some("done"),
     };
-    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease)
+    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease, None)
         .await
         .unwrap();
     assert_eq!(
@@ -720,16 +734,17 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
     // historical shape by deleting the seeded point-0 dose event after asserting.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
     )
     .await
     .unwrap();
@@ -756,7 +771,7 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
         stopped_precision: Some("year"),
         reason: None,
     };
-    cease_medication(&c, &sk, &kid, "test-node", patient, a, &cease)
+    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease, None)
         .await
         .unwrap();
     let past_dose: Option<String> = c

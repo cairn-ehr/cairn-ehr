@@ -157,13 +157,21 @@ async fn floor_rejects_empty_dose_object_noop() {
 async fn floor_accepts_wellformed_change_and_correction_into_log() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
 
     let ch = ChangeDoseInput {
         dose_amount: Some("80"),
@@ -173,7 +181,7 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    let change_evt = change_dose(&c, &sk, &kid, "test-node", patient, med_id, &ch)
+    let change_evt = change_dose(&mut c, &sk, &kid, "test-node", patient, med_id, &ch, None)
         .await
         .unwrap();
 
@@ -187,9 +195,19 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
     let target = resolve_correction_target(&c, med_id, Some(change_evt))
         .await
         .unwrap();
-    correct_dose(&c, &sk, &kid, "test-node", patient, med_id, target, &corr)
-        .await
-        .unwrap();
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &corr,
+        None,
+    )
+    .await
+    .unwrap();
 
     let n: i64 = c
         .query_one(
@@ -245,13 +263,21 @@ async fn history_amounts(c: &Client, med_id: Uuid) -> Vec<Option<String>> {
 async fn assert_seeds_point0_and_it_is_current() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     let (amt, unit, _de, corrected) = current_dose(&c, med_id).await;
     assert_eq!(amt.as_deref(), Some("40"));
     assert_eq!(unit.as_deref(), Some("mg"));
@@ -267,15 +293,23 @@ async fn assert_seeds_point0_and_it_is_current() {
 async fn change_moves_current_and_keeps_history() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     change_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -289,6 +323,7 @@ async fn change_moves_current_and_keeps_history() {
             info_source: "clinician-observed",
             reason: Some("titration"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -306,16 +341,24 @@ async fn change_moves_current_and_keeps_history() {
 async fn backdated_change_does_not_override_later_effective() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
     // assert dose 40 @2024 (point 0), then a real increase to 80 @2025-06.
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     change_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -329,12 +372,13 @@ async fn backdated_change_does_not_override_later_effective() {
             info_source: "clinician-observed",
             reason: None,
         },
+        None,
     )
     .await
     .unwrap();
     // A later-RECORDED but EARLIER-effective backfill ("was 50 back in 2023").
     change_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -348,6 +392,7 @@ async fn backdated_change_does_not_override_later_effective() {
             info_source: "patient-reported",
             reason: Some("historical backfill"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -364,16 +409,24 @@ async fn backdated_change_does_not_override_later_effective() {
 async fn undated_change_becomes_current_over_older_effective() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap(); // 40 @2024
-                   // "they upped it, don't know to what or when" — no effective, no amount.
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap(); // 40 @2024
+               // "they upped it, don't know to what or when" — no effective, no amount.
     change_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -387,6 +440,7 @@ async fn undated_change_becomes_current_over_older_effective() {
             info_source: "patient-reported",
             reason: Some("patient says increased"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -404,17 +458,25 @@ async fn undated_change_becomes_current_over_older_effective() {
 async fn correction_overlays_current_and_sets_flag() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap(); // point 0 = 40 mg, current
-                   // Correct the CURRENT dose (target defaults to point 0) to 20 mg.
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap(); // point 0 = 40 mg, current
+               // Correct the CURRENT dose (target defaults to point 0) to 20 mg.
     let target = resolve_correction_target(&c, med_id, None).await.unwrap();
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -427,6 +489,7 @@ async fn correction_overlays_current_and_sets_flag() {
             info_source: None,
             reason: Some("mis-keyed"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -444,17 +507,25 @@ async fn correction_overlays_current_and_sets_flag() {
 async fn correct_to_unknown_shows_unknown_not_original() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap(); // 40 mg
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap(); // 40 mg
     let target = resolve_correction_target(&c, med_id, None).await.unwrap();
     // "the 40 was a guess — strike it, unknown."
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -467,6 +538,7 @@ async fn correct_to_unknown_shows_unknown_not_original() {
             info_source: None,
             reason: Some("was a guess"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -484,7 +556,7 @@ async fn correct_to_unknown_shows_unknown_not_original() {
 async fn orphan_correction_converges_when_target_arrives() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
     let med_id = Uuid::now_v7();
@@ -492,7 +564,7 @@ async fn orphan_correction_converges_when_target_arrives() {
     // Pick a target dose_event_id that does not exist locally yet.
     let future_target = Uuid::now_v7();
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -505,6 +577,7 @@ async fn orphan_correction_converges_when_target_arrives() {
             info_source: None,
             reason: Some("early correction"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -551,16 +624,24 @@ async fn orphan_correction_converges_when_target_arrives() {
 async fn later_correction_of_same_point_wins() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     let target = resolve_correction_target(&c, med_id, None).await.unwrap();
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -573,11 +654,12 @@ async fn later_correction_of_same_point_wins() {
             info_source: None,
             reason: None,
         },
+        None,
     )
     .await
     .unwrap();
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -590,6 +672,7 @@ async fn later_correction_of_same_point_wins() {
             info_source: None,
             reason: Some("re-corrected"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -613,24 +696,40 @@ async fn later_correction_of_same_point_wins() {
 async fn cross_thread_correction_does_not_overlay_wrong_thread() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
     // Thread Y (the victim): point 0 = 40 mg.
-    let med_y = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_y = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     let y_point = resolve_correction_target(&c, med_y, None).await.unwrap();
 
     // Thread X (a second, unrelated thread — also 40 mg at point 0).
-    let med_x = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_x = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
 
     // A correction that NAMES thread X but TARGETS thread Y's point 0 (the mistarget).
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -643,6 +742,7 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
             info_source: None,
             reason: Some("mistargeted"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -671,16 +771,24 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
 async fn correcting_older_point_leaves_current_unchanged() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
 
     // Point 0 = 40 mg @2024 (from sample_assert), then a change to 80 mg @2025-06 (current).
-    let med_id = assert_medication(&c, &sk, &kid, "test-node", patient, &sample_assert())
-        .await
-        .unwrap();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
     change_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -694,6 +802,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
             info_source: "clinician-observed",
             reason: Some("titration"),
         },
+        None,
     )
     .await
     .unwrap();
@@ -713,7 +822,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
 
     // Correct the 2024 point 0 from 40 → 45. The current (2025-06) point is untouched.
     correct_dose(
-        &c,
+        &mut c,
         &sk,
         &kid,
         "test-node",
@@ -726,6 +835,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
             info_source: None,
             reason: Some("point-0 mis-keyed"),
         },
+        None,
     )
     .await
     .unwrap();

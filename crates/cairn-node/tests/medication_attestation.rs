@@ -19,8 +19,9 @@ use cairn_event::{
 };
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, attest_medication_thread, build_dose_change_body, change_dose,
-    reconcile_medications, AssertMedicationInput, AttestParams, ChangeDoseInput, ReconcileInput,
+    assert_medication, attest_medication_thread, build_dose_change_body, change_dose, correct_dose,
+    reconcile_medications, resolve_correction_target, AssertMedicationInput, AttestParams,
+    ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -156,18 +157,19 @@ async fn floor_accepts_well_formed_attestation() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     // A real thread with one content event, so the commitment reflects genuine review.
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -345,17 +347,18 @@ async fn commitment_fn_is_deterministic_and_null_when_absent() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
@@ -476,18 +479,19 @@ async fn post_hoc_attestation_shows_attester_and_not_stale() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     // Assert a real thread, then have the human attest exactly what it now contains.
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -521,17 +525,18 @@ async fn later_change_flips_stale_true() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
     )
     .await
     .unwrap();
@@ -555,9 +560,18 @@ async fn later_change_flips_stale_true() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    change_dose(&c, &sk_d, &kid_d, "test-node", patient, medication_id, &ch)
-        .await
-        .unwrap();
+    change_dose(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        medication_id,
+        &ch,
+        None,
+    )
+    .await
+    .unwrap();
 
     let stale_after: bool = c
         .query_one(
@@ -587,17 +601,18 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
     )
     .await
     .unwrap();
@@ -678,27 +693,29 @@ async fn group_current_only_when_all_members_current() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
 
     let a = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
     let b = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -706,9 +723,19 @@ async fn group_current_only_when_all_members_current() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&c, &sk_d, &kid_d, "test-node", patient, a, b, &input)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+    )
+    .await
+    .unwrap();
 
     // Attest both members' current content.
     attest_current(&c, patient, a, 1, &sk_h, &kid_h).await;
@@ -741,7 +768,7 @@ async fn group_current_only_when_all_members_current() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    change_dose(&c, &sk_d, &kid_d, "test-node", patient, b, &ch)
+    change_dose(&mut c, &sk_d, &kid_d, "test-node", patient, b, &ch, None)
         .await
         .unwrap();
 
@@ -908,12 +935,13 @@ async fn attest_medication_thread_end_to_end() {
 
     // A real thread with one content event, so there is something genuine to vouch for.
     let medication_id = assert_medication(
-        &c,
+        &mut c,
         &sk_d,
         &kid_d,
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
     )
     .await
     .unwrap();
@@ -1001,4 +1029,446 @@ async fn attest_refuses_orphan_thread_with_clear_message() {
         .unwrap()
         .get(0);
     assert_eq!(n, 0, "the refused orphan attestation never landed");
+}
+
+// ---------------------------------------------------------------------------
+// Part 4 (Task 6): author-time `--attest-as` on all six verb orchestrators —
+// `assert_medication` / `cease_medication` / `change_dose` / `correct_dose` /
+// `reconcile_medications` / `separate_medications`. Each now takes a trailing
+// `attest: Option<&AttestParams<'_>>`; when `Some`, the verb's submit AND the
+// attestation(s) run in ONE transaction, so the attestation's pinned commitment sees
+// the content event the SAME call just submitted. A rejected attestation rolls the
+// verb back with it (proven directly against `assert_medication` below; the same
+// `attest_thread_in_tx` call inside every other verb shares that guarantee).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn author_time_assert_is_attested_current_in_one_txn() {
+    // assert_medication(..., Some(&params)) mints the thread AND attests it in the
+    // SAME transaction (Task 6 Step 1's atomic shape) -> medication_thread_attestation
+    // shows the new thread with stale=false immediately, and exactly one attestation
+    // row exists for it in the append-only medication_attestation table.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("chart review"),
+        note: Some("confirmed with patient at time of entry"),
+    };
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        Some(&params),
+    )
+    .await
+    .expect("author-time assert+attest must succeed atomically in one txn");
+
+    let (attester_kid, stale): (String, bool) = {
+        let row = c
+            .query_one(
+                "SELECT attester_kid, stale FROM medication_thread_attestation \
+                 WHERE medication_id = $1::text::uuid",
+                &[&medication_id.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        attester_kid, kid_h,
+        "attester_kid is the human named in AttestParams, not the device that signed the assert"
+    );
+    assert!(
+        !stale,
+        "the attestation was minted from the just-submitted assert's OWN commitment, \
+         seen because both ran in the same txn/snapshot"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "exactly one attestation row for the freshly-minted thread"
+    );
+}
+
+#[tokio::test]
+async fn author_time_rejection_rolls_the_verb_back() {
+    // A human key that was NEVER enrolled (mirrors identify.rs's
+    // human_precheck_distinguishes_human_from_device_and_unenrolled and
+    // link_with_non_human_attester_rolls_back_the_whole_op) -> the db/005 gate's
+    // kind='human' check refuses the attestation, and per Task 6's atomic shape that
+    // MUST roll the assert back with it: neither the medication_statement row nor the
+    // attestation row may survive.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let (unenrolled_sk, unenrolled_kid) = generate_key().unwrap();
+    let patient = Uuid::now_v7();
+
+    let params = AttestParams {
+        human_sk: &unenrolled_sk,
+        human_kid: &unenrolled_kid,
+        basis: None,
+        note: None,
+    };
+    let r = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        Some(&params),
+    )
+    .await;
+    assert!(
+        r.is_err(),
+        "an unenrolled attester must be refused by the db/005 gate"
+    );
+
+    // Scope both checks to THIS test's patient: medication_attestation is deliberately
+    // NOT in setup()'s TRUNCATE list (it's append-only/audit-retained across tests, see
+    // the supersede test below), so an unscoped count would pick up other serialized
+    // tests' rows in the same shared DB.
+    let statements: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_statement WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        statements, 0,
+        "the whole txn rolled back: the assert must NOT have committed either"
+    );
+    let attestations: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        attestations, 0,
+        "no attestation row may survive a rolled-back txn"
+    );
+}
+
+#[tokio::test]
+async fn author_time_dose_change_is_attested_current() {
+    // Assert a thread device-additively (attest=None, unchanged path), THEN
+    // change_dose(..., Some(&params)) atomically pins the attestation to the
+    // POST-change commitment (Task 6 Step 2's atomic shape applied to change_dose).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("titration review"),
+        note: None,
+    };
+    let ch = ChangeDoseInput {
+        dose_amount: Some("1000"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician-observed",
+        reason: Some("titration"),
+    };
+    change_dose(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        medication_id,
+        &ch,
+        Some(&params),
+    )
+    .await
+    .expect("author-time dose-change+attest must succeed atomically in one txn");
+
+    let (attester_kid, stale): (String, bool) = {
+        let row = c
+            .query_one(
+                "SELECT attester_kid, stale FROM medication_thread_attestation \
+                 WHERE medication_id = $1::text::uuid",
+                &[&medication_id.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(attester_kid, kid_h);
+    assert!(
+        !stale,
+        "the attestation was minted AFTER the dose change, in the same txn, so it \
+         pins the post-change commitment as current"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_attest_as_vouches_for_both_threads() {
+    // Assert A and B device-additively, then reconcile_medications(A, B, ...,
+    // Some(&params)) attests BOTH subject threads in the SAME transaction as the
+    // reconcile event (Task 6 Step 3) -> medication_thread_attestation shows
+    // non-stale rows for BOTH A and B, and the group rollup is attested_current.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let a = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("reconciliation review"),
+        note: None,
+    };
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        Some(&params),
+    )
+    .await
+    .expect("author-time reconcile+attest-both must succeed atomically in one txn");
+
+    for (label, thread) in [("A", a), ("B", b)] {
+        let stale: bool = c
+            .query_one(
+                "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+                &[&thread.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!stale, "thread {label}'s attestation must be current");
+    }
+
+    let group_id = std::cmp::min(a, b).to_string();
+    let attested_current: bool = c
+        .query_one(
+            "SELECT attested_current FROM medication_group_attestation WHERE group_id = $1::text::uuid",
+            &[&group_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        attested_current,
+        "both members attested & current in the SAME txn as the reconcile -> group attested_current"
+    );
+}
+
+#[tokio::test]
+async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
+    // assert -> attest (stale=false). A dose-correction then changes the thread's
+    // content SET, flipping the standing vouch stale -- but the FIRST attestation row
+    // is never deleted or mutated (medication_attestation is append-only). Attesting
+    // again appends a SECOND row and the standing view flips back to current. This
+    // proves responsibility is SUPERSEDED (a later vouch overrides which one is
+    // "current"), never RETRACTED (the earlier vouch's own record persists intact).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("warfarin"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("initial chart review"),
+        note: None,
+    };
+    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+        .await
+        .expect("the first, post-hoc attestation must succeed");
+
+    let stale_before: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!stale_before, "freshly attested -> not stale");
+
+    // Author a "acted in error, correct is X" dose-correction against the thread's
+    // current point (device-additive; the correction itself carries no attestation).
+    let target = resolve_correction_target(&c, medication_id, None)
+        .await
+        .unwrap();
+    let corr = CorrectDoseInput {
+        dose_amount: Some("5"),
+        dose_unit: Some("mg"),
+        info_source: None,
+        reason: Some("mis-keyed on entry"),
+    };
+    correct_dose(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        medication_id,
+        target,
+        &corr,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // The prior vouch is STILL PRESENT (retained, not deleted) even though the thread
+    // content changed underneath it.
+    let attestations_after_correction: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        attestations_after_correction, 1,
+        "the correction must not delete or mutate the prior attestation row"
+    );
+    let stale_after_correction: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stale_after_correction,
+        "the correction changed the content SET -> the retained prior vouch is now stale"
+    );
+
+    // Attest again: a NEW row is appended (superseding which vouch is "current"),
+    // the old one is untouched.
+    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+        .await
+        .expect("re-attesting the corrected thread must succeed");
+
+    let attestations_after_reattest: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        attestations_after_reattest, 2,
+        "both the original AND the new attestation are retained -- superseded, never retracted"
+    );
+    let stale_after_reattest: bool = c
+        .query_one(
+            "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !stale_after_reattest,
+        "the standing (latest) vouch now pins the corrected commitment -> current again"
+    );
 }
