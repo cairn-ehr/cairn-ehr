@@ -108,7 +108,7 @@ smoke passed. Design+plan under `docs/superpowers/{specs,plans}/2026-07-14-medic
 
 **Prior session (2026-07-10, later) — the `patient_name_current` ORDER BY drift guard (condensed; [#159](https://github.com/cairn-ehr/cairn-ehr/issues/159) CLOSED; no ADR/spec change).** The #69 follow-up: db/012 and db/025's winner `ORDER BY` clauses could drift apart silently. Fix: a no-DB source-level guard (`crates/cairn-node/tests/name_winner_order_drift.rs`) asserting the two `COLLATE "C"` clauses stay byte-identical on every `cargo test`/CI pass.
 
-**Prior session (2026-07-10) — codebase-wide collation-independent projection winner tiebreaks (condensed; [#69](https://github.com/cairn-ehr/cairn-ehr/issues/69) CLOSED; **[ADR-0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md)**; spec v0.45→0.46; full detail in git + ROADMAP Phase 2).** Every projection winner tiebreak on a TEXT key was comparing under the node-local default collation, so two nodes could pick different display winners for an identical tie (a silent set-union convergence violation). Fix: every such tiebreak now compares under **`COLLATE "C"`** (byte order) — one shared predicate fix (`cairn_hlc_overlay_wins`, db/002) covers the five standing-state overlays; inline `COLLATE "C"` on the demographic projections/display VIEWs (identifier, demographic, name, address). ADR-0045 binds the invariant on all future projection slices — **reused directly by ADR-0049** (this session)'s ancillary "last changed" read. Projection-read-side only; full workspace green.
+**Prior session (2026-07-10) — codebase-wide collation-independent projection winner tiebreaks (condensed; [#69](https://github.com/cairn-ehr/cairn-ehr/issues/69) CLOSED; **[ADR-0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md)**; spec v0.45→0.46; full detail in git + ROADMAP Phase 2).** Every projection winner tiebreak on a TEXT key was comparing under the node-local default collation, so two nodes could pick different display winners for an identical tie (a silent set-union convergence violation). Fix: every such tiebreak now compares under **`COLLATE "C"`** (byte order) — one shared predicate fix (`cairn_hlc_overlay_wins`, db/002) covers the five standing-state overlays; inline `COLLATE "C"` on the demographic projections/display VIEWs (identifier, demographic, name, address). ADR-0045 binds the invariant on all future projection slices. Projection-read-side only; full workspace green.
 
 **Prior session (2026-07-10, earlier) — the Byzantine HLC-collision advisory signal (condensed; [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) done, PR #158; no ADR/spec change).** #115's tiebreaker resolved a Byzantine/broken-signer HLC-triple collision silently; `db/029_hlc_collision_log.sql` now also **surfaces** it — a structurally non-gating recorder (can never raise) logs each collision before the unchanged upsert. Advisory/observability only; the §5.13-sweep consumer is a documented future seam.
 
@@ -264,8 +264,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only); a **prefer-INN display term**
   for reconciled groups; **fuzzy/automatic reconciliation** + the Tier-A drug dictionary (brand↔generic/DDI) — the
   human-driven resolution now exists, automated *detection* is the gap; structured sig/frequency (lands with
-  prescriptions); human-attested clinical responsibility on a medication/dose/reconciliation event (composes
-  additively, zero floor change). **Cross-cutting debt:** ~~the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
+  prescriptions); ~~human-attested clinical responsibility on a medication/dose/reconciliation event (composes
+  additively, zero floor change)~~ **DONE this session (ADR-0049, slice 4 — `clinical.medication-attestation.asserted`,
+  `db/034`)**. **Cross-cutting debt:** ~~the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
   `cairn_event_twin` dispatch→registry refactor~~ **DONE this session (ADR-0048)** — a new event type now registers ONE
   `cairn_event_twin_check` row, never a copied dispatch branch;
   the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
@@ -479,6 +480,7 @@ ADR before reopening any of these.
 | [0045](spec/decisions/0045-collation-independent-projection-tiebreaks.md) | Collation-independent projection winner tiebreaks (`COLLATE "C"`) | §5.7/§4 (refines principle 1) |
 | [0046](spec/decisions/0046-enroll-fail-closed-on-key-actor-dual-mapping.md) | Enroll fails closed on key→actor dual mapping (B-direction whole-history guard) | §7.5 (refines 0044/0011) |
 | [0047](spec/decisions/0047-medication-reconciliation-resolution.md) | Medication reconciliation is a link, not a cessation; symmetric min-UUID collapse; latest-effective group status | §3.15/§3.16 (principle 2; reuses identity linkage) |
+| [0048](spec/decisions/0048-twin-check-registry-dispatch.md) | The per-type twin/floor-check registry: one stable dispatcher, register-by-row, unified check-fn signature | §9.6 (refines 0022/0039) |
 | [0049](spec/decisions/0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare, not a position pin; supersede, never retract | §3.15/§3.16 (refines 0007, principle 10) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003

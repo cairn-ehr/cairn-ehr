@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-14
-- **Refines:** principle 10 (authorship is compositional; accountability is separable); [ADR-0007](0007-authorship-and-accountability.md) (authorship and accountability — attestation confers responsibility); [ADR-0022](0022-validated-submit-surface-the-write-path.md) (the validated `submit_event` write path — the db/005 attestation gate this overlay goes through unchanged); [ADR-0045](0045-collation-independent-projection-tiebreaks.md) (collation-independent positions, reused for the ancillary "last changed" read). Advances [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163) (asserted-since vs confirmed-current-as-of).
+- **Refines:** principle 10 (authorship is compositional; accountability is separable); [ADR-0007](0007-authorship-and-accountability.md) (authorship and accountability — attestation confers responsibility); [ADR-0022](0022-validated-submit-surface-the-write-path.md) (the validated `submit_event` write path — the db/005 attestation gate this overlay goes through unchanged). Advances [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163) (asserted-since vs confirmed-current-as-of).
 
 ## Context
 
@@ -65,8 +65,11 @@ cross-node divergent-set case is also closed (errs toward re-review); [#163](htt
 advances with a working mechanism, not just terminology; every future clinical stream's "re-affirmation /
 sign-off currency" need has a reusable precedent to build on instead of each stream inventing (or
 mis-inventing) its own position-based staleness check; a reconciled group ([ADR-0047](0047-medication-reconciliation-resolution.md))
-reads attested-current only when **every** active member thread has its own current attestation — a
-conservative rollup that never reports a false "current" from partial review.
+reads attested-current only when **every** member thread — active or ceased — has its own current
+attestation. There is no active-only filter: the shipped rollup joins every thread the reconciliation
+machinery lists as a group member, regardless of status. This is the deliberately conservative choice —
+even a ceased duplicate member must be vouched for before the group reads "current" — erring toward
+requiring more review, never less.
 
 **Accepted costs / deferred:**
 - **Honest residual:** a commitment cannot cover an event that exists on no reachable node yet — that is
@@ -86,6 +89,9 @@ specific event un-staled a vouch (a diff, not a boolean) badly enough to justify
 
 **Not a new founding principle.** This is principle 10 (authorship is compositional; accountability is
 separable) plus the append-only / grow-only guarantee already load-bearing elsewhere in the architecture,
-applied to the question "is a human review still valid." Reuses the db/005 gate verbatim and
-[ADR-0045](0045-collation-independent-projection-tiebreaks.md)'s collation-independent position discipline
-for the ancillary "last changed" legibility read.
+applied to the question "is a human review still valid." Reuses the db/005 gate verbatim. The overlay's one
+ordering tiebreak (`DISTINCT ON ... ORDER BY ... content_address DESC`) needs no COLLATE and no
+[ADR-0045](0045-collation-independent-projection-tiebreaks.md) discipline: `content_address` is a BYTEA
+multihash, inherently byte-ordered — ADR-0045 governs only TEXT-key tiebreaks, of which this slice has none.
+(`medication_thread_head`, the design's originally-proposed ADR-0045-style position read, was dropped during
+implementation — the commitment compare is the sole staleness authority.)

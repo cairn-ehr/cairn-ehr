@@ -152,9 +152,12 @@ columns from view"* on the next connect. So attestation ships as **separate view
    events aren't present locally (orphan attestation) is also absent — it renders nothing until the thread's
    events arrive (mirrors db/031's orphan-cessation), then computes staleness correctly.
 3. `medication_group_attestation` — per `group_id` (via db/033's `medication_thread_group`): the **conservative
-   rollup** — a group is *attested & current* iff **every active member thread** has a non-stale attestation;
-   any active member unattested-or-stale ⇒ the group is not current. Singletons (`group_id = medication_id`)
-   reduce trivially to their thread's state.
+   rollup** — a group is *attested & current* iff **every member thread** (active or ceased — `medication_thread_group`
+   carries no status filter) has a non-stale attestation; any member unattested-or-stale ⇒ the group is not
+   current. Singletons (`group_id = medication_id`) reduce trivially to their thread's state.
+
+   **Post-implementation correction:** as shipped, this is genuinely every member regardless of active/ceased
+   status, not "every active member" — the conservative direction (a ceased duplicate still gates the group).
 
 A current-list consumer (a future GUI, or a `medication-list` CLI) **LEFT JOINs**
 `patient_medication_current × medication_group_attestation` on `group_id`. Replay-safe.
@@ -297,4 +300,11 @@ current?" is a convergent set-commitment compare; responsibility is superseded (
 never retracted. It directly advances [issue #163](https://github.com/cairn-ehr/cairn-ehr/issues/163)
 (asserted-since vs confirmed-current-as-of) and binds every future clinical stream's "re-affirmation /
 sign-off currency" work. Spec bump v0.49 → v0.50 (`index.md` only). ADR home: §3.15/§3.16 (refines ADR-0007
-principle 10; reuses the db/005 gate + ADR-0045 collation-free positions).
+principle 10; reuses the db/005 gate).
+
+**Post-implementation correction:** the `medication_thread_head` view (§5, item 1 above) — this design's
+proposed ADR-0045-style collation-pinned position read — was **dropped** during implementation; the
+commitment compare is the sole staleness authority and needs no separate head view. As shipped, `db/034`
+contains no `COLLATE` clause at all: its one ordering tiebreak sorts `content_address`, which is BYTEA
+(inherently byte-ordered), so ADR-0045 (a TEXT-key discipline) is not actually reused. See ADR-0049 as
+merged for the corrected Refines/Consequences wording.
