@@ -537,6 +537,51 @@ guard — needs a design decision**). **Deferred:** correcting a dose event's *e
 reconciliation + Tier-A dictionary (the human-driven *resolution* now exists, automated *detection* is the gap); a
 prefer-INN display term for groups; human-attested reconciliation (composes additively, zero floor change); #173/#157.
 
+**Slice 33 — medication attestation: human-attested responsibility (slice 4 of `clinical.medication`)**
+(2026-07-14; branch `feat/medication-attestation-responsibility`; **[ADR-0049](spec/decisions/0049-commitment-based-sign-off-currency.md)**,
+spec v0.49→v0.50; design+plan under `docs/superpowers/{specs,plans}/2026-07-14-medication-attestation-*`).
+Graduates the slice-30/31/32 §8 deferral ("human-attested clinical responsibility on a medication event")
+into product code, advancing [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163). One new **additive**
+verb, `clinical.medication-attestation.asserted`, over an existing `medication_id` thread — a **separable**
+responsibility-bearing overlay (principle 10) that trips the **existing** db/005 attestation gate (3-arg
+`submit_event`, enrolled `kind='human'` actor); the device-signed medication events are unchanged, so a
+*different* human may vouch, possibly later. New `db/034_medication_attestation.sql` (**db/031–033
+UNTOUCHED**): structural floor (`cairn_check_medication_attestation`) + `cairn_medication_thread_commitment`
+(the **single SQL source** for a convergent sorted-concat-hash over the thread's content-event
+`content_address`es, used at both author and read time — no Rust↔SQL byte-identity risk) + the append-only
+`medication_attestation` projection. Staleness is a **set-commitment compare, not a position pin**:
+`medication_thread_attestation.stale = current_commitment IS DISTINCT FROM reviewed_commitment`, which
+closes the case a head-position pin would silently absorb — a **lower-HLC event arriving after the sign-off**
+(a late-synced earlier-wall update) still flips it stale, since the append-only content *set* changed even
+though the new event's HLC is causally below the pinned head; also catches a divergent set on another node
+(errs toward re-review). `medication_group_attestation` is a **conservative rollup** — a reconciled group
+reads attested-current only when every active member thread does. Rust: `cairn-event::medication::attestation`
+(pure builder + twin) + `cairn-node::medication::attestation` (`attest_thread_in_tx` — the shared
+in-caller-txn primitive — + the post-hoc `attest_medication_thread` orchestrator) + **`attest: Option<AttestParams>`
+threaded through all six existing verbs** (atomic verb-then-vouch in one txn; a rejected attestation rolls the
+verb back; the pair verbs `reconcile`/`separate` attest **both** subject threads). Companion refactor: `medication.rs`
+split into a per-verb module dir (`assert`/`cessation`/`dose`/`reconciliation`/`attestation`), zero behaviour
+change. CLI: new `medication-attest <medication_id>` (post-hoc) + **`--attest-as`/`--attest-passphrase`
+(`env: CAIRN_ATTESTER_PASSPHRASE`)/`--basis`/`--note`** on all six existing verbs, one shared `AttestFlags` +
+`resolve_attester`. **Supersede, never retract** (the maintainer's clinical call, principles 1/2): there is
+**no de-attestation event** — a clinician who vouched in error authors a corrective event instead (a
+`dose-correction`, `cessation`, or new assertion), which changes the thread's content set, flips the prior
+attestation stale, and prompts re-review/re-vouch; the erroneous vouch stays in the record. Subagent-driven
+TDD (7 tasks, per-task review); full workspace green (fmt + clippy `--workspace -D warnings`, `cargo test
+--workspace`, incl. a **DB-gated test proving the lower-HLC-late-arrival case flips stale**, the design's
+load-bearing property); live e2e CLI smoke (assert+attest→current; dose-change→stale; re-attest→current;
+`reconcile --attest-as`→both threads current). **In-branch catches:** the #173 twin-check registry contract
+test (`twin_registry.rs`) correctly needed updating from 15→16 rows once db/034 registered its type — an
+implementer misdiagnosed this as a pre-existing/unrelated failure and filed
+[#180](https://github.com/cairn-ehr/cairn-ehr/issues/180); a reviewer confirmed it was branch-introduced,
+fixed the contract to 16 rows, and closed #180 as a misfile. **CRITICAL fix:** the CLI's cross-flag "nothing
+to attest" guard originally gated on `--attest-passphrase` being present, but that flag carries `env =
+CAIRN_ATTESTER_PASSPHRASE` — so exporting the documented shared env var made every plain device-additive
+verb call fail spuriously; fixed by extracting a pure `attest_context_without_key` predicate that gates only
+on `--basis`/`--note` (mirroring `identify-patient`, which never gates on its passphrase field either).
+**Deferred:** a partially-attested-group read surface (which member is stale); a whole-list-sign-off summary
+event (composes from N thread attestations today).
+
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
 (PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no

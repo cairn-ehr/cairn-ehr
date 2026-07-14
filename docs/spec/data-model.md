@@ -28,6 +28,15 @@
 | Problem & medication lists | Union + flagged for clinician reconciliation on conflict |
 | Scheduling / bed management | Authoritative-node ownership (the owning tier wins) |
 
+Two decisions refine the medication-list row above without changing this merge policy. A duplicate
+medication thread is cleared by a reversible **link**, never a fabricated cessation event, with a
+symmetric min-UUID collapse to one current-list row ([ADR-0047](decisions/0047-medication-reconciliation-resolution.md)).
+Separately, a clinician's clinical sign-off on a medication thread is a **separable, per-thread
+attestation overlay** (principle 10) whose "still current?" signal is a convergent set-commitment
+compare over the thread's append-only content — sound against a lower-HLC event arriving after the
+sign-off, where a head-position pin would silently misclassify it as reviewed — and is never
+retracted, only superseded by a corrective event ([ADR-0049](decisions/0049-commitment-based-sign-off-currency.md)).
+
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 
 ## 3.4 Interoperability
