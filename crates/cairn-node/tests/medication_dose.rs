@@ -231,6 +231,17 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
 // deliberately NOT widened — see the CRITICAL note above). NOTE: this project's
 // tokio-postgres has NO uuid FromSql — a uuid column must be SELECTed as ::text and
 // parsed (see crates/cairn-node/tests/apply_proposal.rs:61).
+/// The current-dose winner's effective_value for a thread (None if no timeline).
+async fn current_effective(c: &Client, med_id: Uuid) -> Option<String> {
+    c.query_opt(
+        "SELECT effective_value FROM medication_current_dose WHERE medication_id = $1::text::uuid",
+        &[&med_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .and_then(|r| r.get::<_, Option<String>>(0))
+}
+
 async fn current_dose(c: &Client, med_id: Uuid) -> (Option<String>, Option<String>, Uuid, bool) {
     let r = c
         .query_one(
@@ -890,5 +901,162 @@ async fn correcting_older_point_leaves_current_unchanged() {
         history_amounts(&c, med_id).await,
         vec![Some("45".to_string()), Some("80".to_string())],
         "point 0 shows the corrected 45; the current point still shows 80"
+    );
+}
+
+/// Headline: correcting a point's effective date FORWARD makes a previously-earlier
+/// point win as the current dose (winner selection is by effective date, so the fix is
+/// bitemporal repair, not a label). Assert (2020) → change to 80mg effective 2025-06 →
+/// change to 60mg effective 2024-01. Current = the 2025-06/80mg point. Then correct the
+/// 80mg point's effective back to 2023-01: now the 60mg/2024-01 point is the latest → wins.
+#[tokio::test]
+async fn corrected_effective_flips_current_dose_winner() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let late = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: Some("titration"),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("60"),
+            dose_unit: Some("mg"),
+            effective: Some("2024-01"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (amt0, _u, _de, _c0) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt0.as_deref(),
+        Some("80"),
+        "before correction the 2025-06 point is current"
+    );
+
+    // Correct the 80mg point's effective back to 2023-01 (a date-only patch).
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        late,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: Some("2023-01"),
+            effective_precision: Some("month"),
+            reason: None,
+            strike: &[],
+            note: Some("mis-keyed the date"),
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (amt1, _u, _de, _c1) = current_dose(&c, med_id).await;
+    assert_eq!(
+        amt1.as_deref(),
+        Some("60"),
+        "after the date fix the 2024-01/60mg point is latest and wins"
+    );
+    // And the corrected effective is surfaced on the moved point via history.
+    assert_eq!(
+        current_effective(&c, med_id).await.as_deref(),
+        Some("2024-01")
+    );
+}
+
+/// The floor rejects a no-op correction (touches no group) — under patch semantics a
+/// bare correction is meaningless (slice 2's implicit "omit = strike dose" is gone).
+#[tokio::test]
+async fn floor_rejects_no_op_correction() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+
+    let err = correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: None,
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("must set or strike at least one"),
+        "expected no-op floor rejection, got: {err:#}"
     );
 }

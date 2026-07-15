@@ -176,6 +176,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "034_medication_attestation",
         include_str!("../../../db/034_medication_attestation.sql"),
     ),
+    // §3.15/§3.16 slice 5: dose-correction per-field patch — effective/reason columns,
+    // strike-aware floor + trigger, corrected-effective winner selection (ADR-0050).
+    (
+        "035_medication_dose_effective_correction",
+        include_str!("../../../db/035_medication_dose_effective_correction.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
