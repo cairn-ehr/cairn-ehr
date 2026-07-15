@@ -205,9 +205,16 @@ jobs:
             pg_isready -h 127.0.0.1 -p "${PGPORT}" -U postgres && break
             sleep 1
           done
-          createdb -h 127.0.0.1 -p "${PGPORT}" -U postgres cairn_test
-          psql -h 127.0.0.1 -p "${PGPORT}" -U postgres -d cairn_test \
-            -c "CREATE EXTENSION cairn_pgx;"
+          # Three databases on the one cluster: cairn_test is every single-node
+          # suite; cairn_test2/cairn_test3 are nodes B and C for the multi-node
+          # sync-convergence suites (federation.rs, sync_watermark.rs, the
+          # cairn-sync clinical A→B pull) — without them those tests self-skip
+          # and the flagship set-union guarantee is never checked in CI (#199).
+          for db in cairn_test cairn_test2 cairn_test3; do
+            createdb -h 127.0.0.1 -p "${PGPORT}" -U postgres "$db"
+            psql -h 127.0.0.1 -p "${PGPORT}" -U postgres -d "$db" \
+              -c "CREATE EXTENSION cairn_pgx;"
+          done
           psql -h 127.0.0.1 -p "${PGPORT}" -U postgres -d cairn_test \
             -tAc "SELECT 'cairn_pgx ' || extversion FROM pg_extension WHERE extname='cairn_pgx';"
 
@@ -217,9 +224,14 @@ jobs:
 
       # The DB-gated integration suites self-serialize cluster-wide via a Postgres
       # advisory lock (db::test_serial_guard), so the default parallel run is reliable.
+      # PG2/PG3 are nodes B and C for the multi-node convergence suites (#199): with
+      # all three set, NO Rust test self-skips — CI runs exactly what a fully-rigged
+      # local checkout runs.
       - name: cargo test (workspace, in-DB floor)
         env:
           CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
+          CAIRN_TEST_PG2: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test2
+          CAIRN_TEST_PG3: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test3
         run: cargo test --workspace
 
       # ---- matcher DB-gated integration suite (#145) --------------------------------

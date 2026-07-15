@@ -34,13 +34,15 @@ so a cessation-only thread is not hidden (+1 RED test). Workspace **643/0**. One
 at link-arrival time (a silent vetoed merge if the clashing demographics sync in later; needs a
 re-check hook or background sweep — out of scope for the floor-hardening slice).
 
-**Priority 2 — sync-convergence integrity (the flagship guarantee, currently hand-verified). ⇐ START HERE**
-- **#199 (B4)** — set `CAIRN_TEST_PG2` in `rust.yml`, un-skip `federation.rs`/`sync_watermark.rs`,
-  add medication remote-apply cases (incl. the attestation-token round trip), add one A→B
-  projection-equality test. Closes #176 structurally. **Do this first in P2** — it's the safety net
-  for everything else.
+**Priority 2 — sync-convergence integrity (the flagship guarantee). ⇐ CONTINUE HERE**
+- ~~**#199 (B4)**~~ — ✅ **DONE 2026-07-16** (the P2 opener, PR #221; detail in the session block below):
+  CI provisions `cairn_test2`/`cairn_test3` + exports `CAIRN_TEST_PG2`/`PG3` (federation/watermark
+  suites no longer self-skip anywhere), `medication_remote_apply.rs` drives every medication verb +
+  the attestation-token round trip through db/020 (incl. the #176 oversize clamp-and-flag remote
+  branch), and cairn-sync's `clinical_pull.rs` proves A→B projection equality through the real
+  binary. The safety net for the rest of P2 is in place.
 - **#198 (B3)** — add db/027+029 to cairn-sync's SCHEMA subset + a test that runs both doors
-  against a DB loaded from the subset alone.
+  against a DB loaded from the subset alone. **⇐ next in P2.**
 - **#196 (B1)** — port the #38 seq-cursor + periodic-sweep treatment to the clinical-plane pull
   (or record the decision to rebuild clinical sync on the node-plane model).
 - **#197 (B2)** — copy the `AND NOT acked` predicate into the clinical quarantine quota subqueries.
@@ -92,8 +94,8 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16 (P1 floor-hardening slice; review course above; last full
-regeneration 2026-07-14) ·
+**Session date:** 2026-07-16, later (P2 opener #199 sync-convergence CI; earlier the same day the
+P1 floor-hardening slice; review course above; last full regeneration 2026-07-14) ·
 **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
@@ -155,7 +157,33 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-16) — the P1 floor-hardening slice (issues #187/#207/#194/#191/#192[+#177]/#190/#193/#195;
+**This session (2026-07-16, later) — the P2 opener: sync-convergence CI (issue #199 [B4], covers the #176
+deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change — tests +
+CI wiring only; full detail in ROADMAP Slice 36 + git).** The flagship "author on A, apply on B, identical projections"
+guarantee is now machine-checked: `rust.yml` provisions `cairn_test2`/`cairn_test3` on the CI cluster and exports
+`CAIRN_TEST_PG2`/`PG3`, so `federation.rs` (2 tests, incl. the three-node stranger case) and `sync_watermark.rs`
+(the two 2-DB tests) stop self-skipping — **no Rust test self-skips in CI anymore**. New
+`crates/cairn-node/tests/medication_remote_apply.rs` (10 tests): every medication verb —
+assert/cessation/dose-change/dose-correction/reconciliation/separation — through the db/020 door (projection +
+set-union idempotent re-apply + arrival-order independence: cessation-before-assert, correction-before-target,
+and later-HLC-separation-before-the-reconcile-it-repairs);
+the slice-4 **attestation-token round trip** — a valid human token travels, re-verifies, is STORED for
+re-serving, and the db/034 projection records the VERIFIED attester; refusals for missing token, non-human
+attester (device token), and the #195 unbound-responsibility claim (validly-signed body claiming a different
+human than the token's); and the **#176 oversize-group remote branch** — admitted, recompute skipped,
+`medication_projection_flag` (4,3) row, never a veto. New `crates/cairn-sync/tests/clinical_pull.rs`: the A→B
+clinical-plane pull through the REAL binary (`serve` on A, `pull` on B over TCP), events authored via the
+production medication orchestrators (assert+attested dose change, cessation, reconciled duplicate pair),
+asserting **byte-identical read-state** across event log (incl. stored token bytes), current/past views, group
+collapse, and standing vouches (stale=false on B), quarantine empty; the review's RED check is a STANDING second
+test — a pull whose author B has not enrolled completes but applies nothing, pens nothing (the bytes verify;
+the pen is for unverifiable bytes), FREEZES the watermark at 0 (A1 discipline), and converges on the next pull
+after B enrolls the actors (delayed, never lost). cairn-sync gained dev-deps `cairn-node`/`tokio`/`tokio-postgres`
+(workspace-internal/already-vetted). Local two-node rig: `cairn_test2`/`cairn_test3` created on the Mac cluster
+(:5532). PR #221 review findings all fixed in-branch (the two extra verbs, the standing RED check, per-test serve
+ports, same-group tightening). Workspace **655 passed / 0 failed** + fmt + clippy `-D warnings` clean.
+
+**Prior session (2026-07-16) — the P1 floor-hardening slice (issues #187/#207/#194/#191/#192[+#177]/#190/#193/#195;
 branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/event-type change — every fix is an in-place floor
 hardening or an additive node-local projection/flag; full detail in git, one commit per issue).** The ADR-0030
 threat model re-run against the floor, all eight in the HANDOVER's dependency order, strict TDD (every fix has its
@@ -497,8 +525,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   B2 follow-up Minors (Thresholds `review<auto` guard,
   `band` CHECK, `updated_at` trigger, conftest env read-at-import) → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
   Rust DB-gated tests + the matcher integration tests need `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb
-  dbname=cairn_test"` (PG18+cairn_pgx); matcher integration: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline
-  pytest`. The pure matcher suite is dependency-free: `cd matcher && uv run pytest` (uv, never venv/pip).
+  dbname=cairn_test"` (PG18+cairn_pgx); the multi-node convergence suites additionally need `CAIRN_TEST_PG2`/`PG3`
+  pointing at `cairn_test2`/`cairn_test3` on the same cluster (created + extensioned 2026-07-16; without them those
+  tests self-skip locally — CI sets all three since #199). Matcher integration: `cd matcher && CAIRN_TEST_PG=… uv
+  run --extra pipeline pytest`. The pure matcher suite is dependency-free: `cd matcher && uv run pytest` (uv, never
+  venv/pip).
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
   The record now lives in [`docs/case-studies/`](case-studies/README.md). First entry
