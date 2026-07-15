@@ -61,6 +61,24 @@ BEGIN
             USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
+    -- Clock-drift ceiling (issue #193, mirroring db/007's node door — the THIRD
+    -- signed-bytes admission door gets the same bound). Restore is self-trusting (any
+    -- signed enroll applies; a fresh node has no trust set) and the hlc_state merge
+    -- below is a monotone GREATEST — so ONE attacker-appended event on the sneakernet
+    -- medium carrying an absurd future wall would ratchet the fresh node's clock into
+    -- the far future, and every event it subsequently authors would be rejected by
+    -- every peer's drift ceiling: the node is wedged out of the federation with no
+    -- self-healing path. The "own authored events are exempt" argument does not cover
+    -- restore — the medium can contain OTHER signers' events and is attacker-
+    -- appendable. Measured against clock_timestamp(), never hlc_state, so the bound
+    -- cannot itself be ratcheted. A refusal here fails that one medium event; a
+    -- genuine medium (walls in the past, or honest skew inside the ceiling) restores
+    -- unaffected.
+    IF (b -> 'hlc' ->> 'wall')::bigint
+           > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+        RAISE EXCEPTION 'restore_node_event: HLC wall % ms is more than % ms ahead of local time — clock-drift ceiling (issue #193)',
+            (b -> 'hlc' ->> 'wall')::bigint, cairn_max_hlc_drift_ms();
+    END IF;
     v_type := b ->> 'event_type'; v_eid := (b ->> 'event_id')::uuid;
     v_signer := b ->> 'signer_key_id'; v_payload := b -> 'payload';
     v_ca := '\x1220'::bytea || digest(p_signed, 'sha256');

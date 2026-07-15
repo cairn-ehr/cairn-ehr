@@ -119,9 +119,15 @@ CREATE TABLE IF NOT EXISTS patient_demographic (
     asserted_hlc_wall  BIGINT  NOT NULL,
     asserted_hlc_count INTEGER NOT NULL,
     asserted_origin    TEXT    NOT NULL,
+    content_address    BYTEA,              -- winning event's content address; #194 tiebreak
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (patient_id, field)
 );
+-- Additive widening (issue #194, same discipline as #207): the CREATE above no-ops on an
+-- existing table, so the column must ALSO ship as an idempotent ALTER. Nullable: pre-#194
+-- rows degrade honestly to the first-applied tie behavior; every new upsert writes it.
+-- Guarded by migration_replay_widening.rs.
+ALTER TABLE patient_demographic ADD COLUMN IF NOT EXISTS content_address BYTEA;
 
 -- Incremental maintenance: fold exactly the one new field event into the projection.
 -- event_log.body holds b->'payload' (see db/005 submit_event INSERT).
@@ -143,10 +149,10 @@ BEGIN
 
     INSERT INTO patient_demographic AS pd
         (patient_id, field, value, facets, provenance, provenance_rank,
-         asserted_hlc_wall, asserted_hlc_count, asserted_origin)
+         asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
     VALUES
         (NEW.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
     -- Winner = max (provenance_rank, then HLC recency, then node_origin). Provenance
     -- beats recency (rank leads the tuple), so a later lower-provenance assertion
     -- cannot displace an earlier higher-provenance one ("verified value locks"); a
@@ -162,16 +168,22 @@ BEGIN
         asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
+        content_address    = EXCLUDED.content_address,
         updated_at         = clock_timestamp()
-    -- `value` is the FINAL total-order tiebreak: (rank,wall,counter,origin) is unique per
-    -- event only while nodes stamp distinct HLC tuples; a buggy node minting a duplicate
-    -- HLC would otherwise leave the winner apply-order-dependent (cross-node divergence).
-    -- With value appended the projected winner is display-convergent unconditionally.
-    -- COLLATE "C" tiebreak per ADR-0045 (#69); this body is superseded by db/013.
+    -- `value` then `content_address` are the FINAL total-order tiebreaks:
+    -- (rank,wall,counter,origin) is unique per event only while nodes stamp distinct HLC
+    -- tuples, and `value` alone was not total either (#194/finding A6: two events sharing
+    -- triple AND value but differing in facets compared equal both ways, so first-applied
+    -- won — and the db/016 veto floor reads the winner's facets/provenance_rank, so two
+    -- honest nodes could compute DIFFERENT hard-veto verdicts). content_address is unique
+    -- per distinct event (bytea byte-order, no collation), making the winner convergent
+    -- unconditionally. COLLATE "C" per ADR-0045; this body is superseded by db/013.
     WHERE (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
+           EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
+           EXCLUDED.content_address)
         > (pd.provenance_rank, pd.asserted_hlc_wall,
-           pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C");
+           pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
+           pd.content_address);
     RETURN NULL;
 END;
 $$;

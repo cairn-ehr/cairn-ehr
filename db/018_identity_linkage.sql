@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS patient_link (
     PRIMARY KEY (low, high),
     CHECK (low < high)
 );
+-- Additive widening (#115 → issue #207): the CREATE above no-ops on a pre-widening DB, so
+-- the column must ALSO ship as an idempotent ALTER or the overlay INSERT fails at trigger
+-- depth (write outage). Nullable here — pre-#115 rows carry no recorded winner address and
+-- degrade honestly to the pre-#115 first-applied tiebreak; every new upsert writes it.
+-- Fresh DBs get NOT NULL from the CREATE. Guarded by migration_replay_widening.rs.
+ALTER TABLE patient_link ADD COLUMN IF NOT EXISTS content_address BYTEA;
 GRANT SELECT ON patient_link TO cairn_agent;
 -- The component BFS joins on (pl.low = node OR pl.high = node). The PK indexes the `low`
 -- side; without an index on `high` the walk sequentially scans the edge table, which
@@ -202,6 +208,23 @@ $$;
 -- converges to the highest-HLC assertion. After the edge overlay, recompute the
 -- connected-component projection around both endpoints (see cairn_recompute_component
 -- above).
+-- #190 (finding A2): the standing worklist of UN-ATTESTED links that tripped the
+-- db/016 hard veto at THIS node's door on the sync-apply path. The event itself is
+-- admitted and projected (a node-local veto verdict reads node-local demographic
+-- state — two honest nodes can disagree, so refusing a replicated link would fork
+-- the event set); this table is what keeps the merge from being SILENT: both
+-- subjects read 'under-review' in chart_trust (db/024) until a human resolves the
+-- pair — an unlink, or a human-attested re-link, clears the row. Node-local derived
+-- state, never on the wire.
+CREATE TABLE IF NOT EXISTS link_veto_flag (
+    low             UUID  NOT NULL,
+    high            UUID  NOT NULL,
+    content_address BYTEA NOT NULL,   -- the vetoed link event
+    flagged_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (low, high)
+);
+GRANT SELECT ON link_veto_flag TO cairn_agent;
+
 CREATE OR REPLACE FUNCTION patient_link_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -212,6 +235,11 @@ DECLARE
     hi      uuid  := GREATEST(a, b);
     v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
     v_cur   record;
+    -- The STANDING overlay winner for (lo, hi), read back AFTER the upsert below so the
+    -- #190 flag lifecycle keys on what actually won, not on the arriving event (finding 1).
+    v_win_state    text;
+    v_win_ca       bytea;
+    v_win_attested boolean;
 BEGIN
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
@@ -242,6 +270,24 @@ BEGIN
             NEW.content_address, v_cur.content_address);
     END IF;
 
+    -- #190 hard-veto floor AT THE DOOR (finding A2; principle 12 — the veto was
+    -- previously enforced only in the Rust auto-apply seam, so an enrolled agent with
+    -- raw SQL could merge two hard-vetoed charts through submit_event unflagged).
+    -- Contract: the veto FORCES A HUMAN DECISION, never auto-rejects one — so a
+    -- human-attested link (NEW.attester_key set: the stored, verified vouch) passes;
+    -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door only —
+    -- nothing has been accepted yet, so fail loud at source. On the sync-apply path the
+    -- event is admitted (the verdict reads node-local demographic state, so a remote
+    -- refusal would fork honest nodes) and the merge is caught by the flag lifecycle
+    -- AFTER the overlay below. The Rust auto-apply pre-check stays as the polite early
+    -- skip; this is the floor behind it.
+    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
+       AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION
+            'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
+            lo, hi;
+    END IF;
+
     INSERT INTO patient_link
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,
          content_address)
@@ -263,6 +309,33 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin,
         patient_link.content_address);
+
+    -- #190 flag lifecycle, DERIVED FROM THE STANDING OVERLAY WINNER (PR #219 review,
+    -- finding 1) — never from the arriving event's verb. The upsert above is HLC-guarded,
+    -- so an arriving event can LOSE the overlay; keying the flag on arrival desynced it
+    -- from the standing edge in two exploitable ways: a BACKDATED un-attested unlink that
+    -- loses the overlay would clear the flag while the vetoed merge still stands (a silent
+    -- merge the ADR-0030 writer triggers with one cheap event — unlinks are never veto-
+    -- gated), and a STALE vetoed link losing to a standing unlink would raise a phantom
+    -- flag (arrival-order-dependent trust state across honest nodes — the class of bug
+    -- #194 closes for the demographic projections). Read back who actually won and flag
+    -- iff the standing winner is an UN-ATTESTED link that still trips the veto; otherwise
+    -- clear. The winner's attestation is looked up via its content_address (UNIQUE in
+    -- event_log); patient_link always has a row here (the upsert inserted or kept one).
+    -- Node-local advisory state, so INSERT/DELETE is honest — the events all remain logged.
+    SELECT pl.state, pl.content_address, el.attester_key IS NOT NULL
+      INTO v_win_state, v_win_ca, v_win_attested
+      FROM patient_link pl
+      JOIN event_log el ON el.content_address = pl.content_address
+      WHERE pl.low = lo AND pl.high = hi;
+
+    IF v_win_state = 'link' AND NOT v_win_attested AND cairn_has_hard_veto(lo, hi) THEN
+        INSERT INTO link_veto_flag (low, high, content_address)
+        VALUES (lo, hi, v_win_ca)
+        ON CONFLICT (low, high) DO UPDATE SET content_address = EXCLUDED.content_address;
+    ELSE
+        DELETE FROM link_veto_flag WHERE low = lo AND high = hi;
+    END IF;
 
     -- Recompute the touched component(s). Recomputing BOTH endpoints is always
     -- correct: a link merges (both endpoints reach the same union); an unlink splits
@@ -286,6 +359,26 @@ CREATE TRIGGER patient_link_apply_trg
 --    link graph. Selecting WHERE person_id = X returns all member charts. The REAL
 --    unified-chart read surface (ordering, dedup, trust states) is the API/UI tier,
 --    above the foundation line — deliberately out of scope for C1.
+-- Upgrade heal (issue #207): on a database created before the #115 widening, this view
+-- exists WITHOUT demo_content_address (pc.* expanded at CREATE time, against the then-
+-- narrow patient_chart). db/002's additive ALTER has just re-added the column mid-table,
+-- so the CREATE OR REPLACE below would try to splice a new column into the MIDDLE of the
+-- existing view's column list — which Postgres refuses (a replaced view may only append
+-- columns at the end), aborting node boot. Drop the stale-shaped view ONCE; CASCADE takes
+-- the person_chart_trust composition (db/023) with it, and both are recreated in this same
+-- schema load. Steady-state loads (shape already current) never drop, so any out-of-schema
+-- dependent views are not disturbed.
+DO $$
+BEGIN
+    IF to_regclass('public.person_chart') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'person_chart'
+             AND column_name = 'demo_content_address') THEN
+        DROP VIEW person_chart CASCADE;
+    END IF;
+END $$;
+
 CREATE OR REPLACE VIEW person_chart AS
     SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id, pc.*
     FROM patient_chart pc

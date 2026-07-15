@@ -660,6 +660,24 @@ scorer mode; variable cluster size / an unrecoverable fraction / hard negatives 
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
 
+**Slice 35 — the P1 floor-hardening slice (2026-07-16; the 2026-07-15 review course, Priority 1; issues
+#187/#207/#194/#191/#192[+#177]/#190/#193/#195; branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/
+event-type change; TDD, one commit per issue; full detail in git + HANDOVER).** The ADR-0030 hostile-enrolled-writer
+threat model re-run against the floor: local-door `hlc_wall` drift-ceiling reject (#187); additive ALTERs for all
+#115-widened overlay columns + `pc.*` view upgrade-heal + the `migration_replay_widening.rs` guard (#207);
+`content_address` final tiebreak on `patient_identifier`/`patient_demographic` (#194); fail-closed suppression
+target gate at both doors + registry rows, mirrors 16→18 (#191); medication thread patient-consistency — shared
+guard in all four verb triggers, local fail-loud / sync converge-and-flag (`medication_patient_conflict_flag`),
+cross-patient reconciliation refused when both patients known + `medication_group_cross_patient` read-time surface,
+separation never guarded (#192, resolves #177); un-attested `identity.link` faces the db/016 hard veto at the door,
+sync path flags (`link_veto_flag`) + a new `chart_trust` under-review source (#190); drift ceiling at the restore
+door (#193); responsibility contributor bound to the verified attester via `cairn_responsibility_bound` at both
+attestation gates (#195). A PR #219 review round added two fixes on the same branch: the #190
+`link_veto_flag` lifecycle now derives from the standing overlay winner (closing a backdated-unlink silent
+merge and a stale-link phantom flag), and `medication_group_cross_patient` derives members' patients from
+`cairn_medication_thread_patient` (cessation-only threads no longer hidden); follow-up #220 filed for the
+remaining arrival-time-only veto evaluation. Workspace 643/0 failed.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

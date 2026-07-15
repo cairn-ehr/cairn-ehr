@@ -121,6 +121,10 @@ CREATE TABLE IF NOT EXISTS name_repudiation (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (subject, value)
 );
+-- Additive widening (#115 → issue #207): see db/018's patient_link note — the CREATE
+-- no-ops on a pre-widening DB; nullable ALTER, new upserts always write it.
+-- Guarded by migration_replay_widening.rs.
+ALTER TABLE name_repudiation ADD COLUMN IF NOT EXISTS content_address BYTEA;
 -- NB: no broad GRANT on this base table. `reason` is free-text forensic context ("confessed
 -- fabricated persona to evade a warrant") that must NOT be exposed cross-patient on a
 -- name-searchable surface (ADR-0006: confidentiality lives in visibility/key-custody, not on

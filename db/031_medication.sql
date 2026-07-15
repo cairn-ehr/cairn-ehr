@@ -64,6 +64,71 @@ INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VAL
     ('clinical.medication-cessation.asserted', 'cairn_check_medication_assertion', 'medication assertion requires a non-empty authored twin (§3.13/§3.15)')
 ON CONFLICT (event_type) DO NOTHING;
 
+-- 3b. Thread patient-consistency (issue #192, finding A4). A medication_id thread
+--     belongs to ONE chart for life: medication_statement's PK is medication_id alone
+--     and its overlay does `patient_id = EXCLUDED.patient_id`, so without a guard a
+--     buggy or hostile client re-asserting an existing thread under another patient
+--     silently re-homed the thread — including every dose point, which joins by
+--     medication_id — onto the other chart, convergently, unflagged (a wrong-chart
+--     medication list). The split follows db/023's chart_dispute subject-consistency
+--     pattern: FAIL LOUD on the local door (nothing accepted yet — catch the caller
+--     bug at source), CONVERGE-AND-FLAG on the sync-apply path (peers already hold
+--     the validly-signed event; a node-local veto would fork the event set — the flag
+--     surfaces the contradiction for humans instead). Offline-first is preserved: a
+--     thread whose standing patient is locally UNKNOWN passes (never fabricate
+--     certainty, principle 4).
+
+-- The advisory worklist of observed cross-patient contradictions (sync path only —
+-- the local door refuses instead). Node-local derived state, never on the wire.
+CREATE TABLE IF NOT EXISTS medication_patient_conflict_flag (
+    flag_id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    medication_id    UUID  NOT NULL,
+    standing_patient UUID  NOT NULL,
+    asserted_patient UUID  NOT NULL,
+    content_address  BYTEA NOT NULL,   -- the contradicting event
+    flagged_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_patient_conflict_flag TO cairn_agent;
+
+-- The thread's standing patient claim: the statement's patient when asserted, else an
+-- orphan cessation's (a cessation claims the thread for its chart too), else NULL —
+-- honestly unknown. STABLE (reads the projections). plpgsql, not LANGUAGE sql: the
+-- body references medication_cessation, created later in this file — a sql-language
+-- body is resolved at CREATE time and would break a fresh load; plpgsql resolves at
+-- first execution, by which point the whole file has loaded.
+CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
+RETURNS uuid LANGUAGE plpgsql STABLE AS $$
+BEGIN
+    RETURN COALESCE(
+        (SELECT patient_id FROM medication_statement WHERE medication_id = p_med),
+        (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med));
+END;
+$$;
+
+-- ONE shared guard for every per-thread verb trigger (assert/cease/dose-change/
+-- dose-correction), so the contract cannot drift between verbs (principle 12).
+-- RAISEs on the local door; flags and returns on remote apply (db/020 sets the
+-- transaction-local cairn.remote_apply marker).
+CREATE OR REPLACE FUNCTION cairn_guard_medication_patient(p_med uuid, p_patient uuid, p_ca bytea)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_standing uuid := cairn_medication_thread_patient(p_med);
+BEGIN
+    IF v_standing IS NULL OR v_standing = p_patient THEN
+        RETURN;
+    END IF;
+    IF current_setting('cairn.remote_apply', true) = 'on' THEN
+        INSERT INTO medication_patient_conflict_flag
+            (medication_id, standing_patient, asserted_patient, content_address)
+        VALUES (p_med, v_standing, p_patient, p_ca);
+        RETURN;
+    END IF;
+    RAISE EXCEPTION
+        'medication thread %: patient cannot change — a medication_id belongs to one chart for life (standing %, asserted %; issue #192)',
+        p_med, v_standing, p_patient;
+END;
+$$;
+
 -- 4. Projection table: one row per asserted thread. Overlay columns (hlc/origin/
 --    content_address) let a replayed/duplicate assert converge deterministically.
 CREATE TABLE IF NOT EXISTS medication_statement (
@@ -94,6 +159,12 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := NEW.body;
 BEGIN
+    -- #192 thread patient-consistency: local fail-loud / remote converge-and-flag.
+    -- Guarded HERE (not also in the dose-seed trigger that fires on this same event),
+    -- so a remote contradiction is flagged exactly once per event.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+
     INSERT INTO medication_statement
         (medication_id, patient_id, term, inn_code, formulation,
          dose_amount, dose_unit, sig, info_source, started_value, started_precision,
@@ -161,6 +232,11 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := NEW.body;
 BEGIN
+    -- #192 thread patient-consistency (see the guard's comment above). An ORPHAN
+    -- cessation (no standing claim at all) still passes — offline-first.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+
     INSERT INTO medication_cessation
         (medication_id, patient_id, stopped_value, stopped_precision, reason,
          hlc_wall, hlc_counter, origin, content_address)

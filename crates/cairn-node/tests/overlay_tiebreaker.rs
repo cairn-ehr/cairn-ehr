@@ -944,3 +944,172 @@ async fn overlay_origin_tiebreak_is_collation_independent() {
         "new origin 'a' must WIN over current origin 'B' under C byte order"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #194 (finding A6) — the two SET-UNION demographic projections
+// (patient_identifier, patient_demographic) must ALSO converge under an HLC-triple
+// collision. Their inline winner tuples ended at `value`, so two Byzantine events
+// sharing (wall, counter, origin) AND value — but differing in facets/use/profile —
+// compared equal in both directions: first-applied won, and two honest nodes could
+// diverge in exactly the columns the db/016 hard-veto floor reads
+// (facets ->> 'precision', provenance_rank). content_address is the final tiebreak.
+// ---------------------------------------------------------------------------
+
+/// A signed identifier assertion for the SAME (patient, system, value) at a chosen HLC
+/// triple, varying only `use_` — so the two events share match_key AND value but differ
+/// in signed bytes (⇒ different content_address).
+fn identifier_event(kid: &str, patient: Uuid, use_: &str, wall: i64, counter: i32) -> EventBody {
+    let ia = cairn_event::demographics::IdentifierAssertion {
+        value: "9434765919",
+        system: "urn:example:mrn",
+        provenance: "patient-stated",
+        normalized: None,
+        profile: None,
+        use_: Some(use_),
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "demographic.identifier.asserted".into(),
+        schema_version: "demographic.identifier/1".into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: cairn_event::demographics::identifier_assertion_body(&ia),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::demographics::render_identifier_twin(&ia)),
+    }
+}
+
+/// The projected representative for the one (patient, system, match_key) member.
+async fn identifier_winner(c: &Client, patient: Uuid) -> (String, Vec<u8>) {
+    let r = c
+        .query_one(
+            "SELECT use_type, content_address FROM patient_identifier \
+             WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap();
+    (r.get(0), r.get(1))
+}
+
+#[tokio::test]
+async fn patient_identifier_converges_under_hlc_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    let e1 = identifier_event(&kid_a, patient, "official", 7, 1);
+    let e2 = identifier_event(&kid_a, patient, "temporary", 7, 1); // colliding triple
+    let s1 = sign(&e1, &sk_a).unwrap().signed_bytes;
+    let s2 = sign(&e2, &sk_a).unwrap().signed_bytes;
+
+    // Order A: e1 then e2.
+    apply(&c, &s1).await.unwrap();
+    apply(&c, &s2).await.unwrap();
+    let w_a = identifier_winner(&c, patient).await;
+
+    // Order B: e2 then e1.
+    reset_between_orders(&c).await;
+    apply(&c, &s2).await.unwrap();
+    apply(&c, &s1).await.unwrap();
+    let w_b = identifier_winner(&c, patient).await;
+
+    assert_eq!(
+        w_a, w_b,
+        "patient_identifier winner must be arrival-order independent under an HLC collision (#194)"
+    );
+    // And the winner is the DETERMINISTIC one: the higher content_address.
+    let hi = std::cmp::max(event_address(&s1), event_address(&s2));
+    assert_eq!(w_a.1, hi, "the higher content_address must win the tie");
+}
+
+/// A signed dob assertion for the SAME (patient, value, precision, provenance) at a chosen
+/// HLC triple, varying only the `basis` facet — same `value`, different content_address.
+fn dob_event(kid: &str, patient: Uuid, basis: &str, wall: i64, counter: i32) -> EventBody {
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "demographic.field.asserted".into(),
+        schema_version: "demographic.field/1".into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: cairn_event::demographics::dob_assertion_body(
+            "1980-07-15",
+            "day",
+            Some(basis),
+            "document-verified",
+        ),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::demographics::render_dob_twin(
+            "1980-07-15",
+            "day",
+            "document-verified",
+        )),
+    }
+}
+
+/// The projected (facets basis, content_address) winner for the patient's dob field.
+async fn dob_winner(c: &Client, patient: Uuid) -> (String, Vec<u8>) {
+    let r = c
+        .query_one(
+            "SELECT facets ->> 'basis', content_address FROM patient_demographic \
+             WHERE patient_id = $1::text::uuid AND field = 'dob'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap();
+    (r.get(0), r.get(1))
+}
+
+#[tokio::test]
+async fn patient_demographic_converges_under_hlc_collision() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    let e1 = dob_event(&kid_a, patient, "document", 7, 1);
+    let e2 = dob_event(&kid_a, patient, "maternal-report", 7, 1); // colliding triple
+    let s1 = sign(&e1, &sk_a).unwrap().signed_bytes;
+    let s2 = sign(&e2, &sk_a).unwrap().signed_bytes;
+
+    // Order A: e1 then e2.
+    apply(&c, &s1).await.unwrap();
+    apply(&c, &s2).await.unwrap();
+    let w_a = dob_winner(&c, patient).await;
+
+    // Order B: e2 then e1.
+    reset_between_orders(&c).await;
+    apply(&c, &s2).await.unwrap();
+    apply(&c, &s1).await.unwrap();
+    let w_b = dob_winner(&c, patient).await;
+
+    assert_eq!(
+        w_a, w_b,
+        "patient_demographic winner must be arrival-order independent under an HLC collision (#194)"
+    );
+    let hi = std::cmp::max(event_address(&s1), event_address(&s2));
+    assert_eq!(w_a.1, hi, "the higher content_address must win the tie");
+}

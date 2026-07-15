@@ -167,6 +167,68 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
 $$;
 
+-- Fail-closed suppression target resolution (issue #191, finding A3). The floor contract
+-- for every targets_other_author type: the payload MUST name its target under
+-- `target_event_id`, as a valid UUID. The old gates were key-presence-conditional
+-- (`IF v_targets_other AND payload ? 'target_event_id'`), so ABSENCE — or a target
+-- smuggled under any other key — skipped target validation AND the ADR-0043 owner-gate
+-- entirely: an unowner-gated cross-human suppression path for the first consumer that
+-- resolves targets leniently. ONE shared helper, called by BOTH doors and by the
+-- registry check below, so the refusal is identical everywhere (principle 12).
+-- pg_input_is_valid keeps a malformed UUID legible (names the field) instead of a bare
+-- 22P02 cast error.
+CREATE OR REPLACE FUNCTION cairn_suppression_target_id(b jsonb)
+RETURNS uuid LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    v_raw text := b -> 'payload' ->> 'target_event_id';
+BEGIN
+    IF v_raw IS NULL THEN
+        RAISE EXCEPTION 'suppression overlay: payload.target_event_id is required — a targeting overlay without a valid target fails closed (issue #191)';
+    END IF;
+    IF NOT pg_input_is_valid(v_raw, 'uuid') THEN
+        RAISE EXCEPTION 'suppression overlay: payload.target_event_id (%) is not a valid UUID (issue #191)', v_raw;
+    END IF;
+    RETURN v_raw::uuid;
+END;
+$$;
+
+-- ADR-0048 structural floor for the suppression types: registered so the requirement is
+-- carried by the locked registry (both doors run it via the cairn_event_twin dispatcher),
+-- not only by the door-gate branch above it — a future targets_other type that forgets its
+-- registry row still fails closed at the door gate, and vice versa (defense in depth).
+CREATE OR REPLACE FUNCTION cairn_check_suppression_overlay(p_type text, b jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM cairn_suppression_target_id(b);
+END;
+$$;
+
+-- twin_required_msg stays NULL: a suppression overlay keeps the honest mechanical
+-- skeleton fallback (ADR-0039) — the structural requirement here is the target, not
+-- an authored twin.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('salience.downgrade',   'cairn_check_suppression_overlay', NULL),
+    ('visibility.suppress',  'cairn_check_suppression_overlay', NULL)
+ON CONFLICT (event_type) DO NOTHING;
+
+-- Responsibility↔attester binding (issue #195, finding A7). The attestation token
+-- proves SOME enrolled human vouched for these bytes; without this check the signed,
+-- immutable body could claim `responsibility` for a DIFFERENT actor — permanently
+-- recording an unverified responsibility claim about a person who never touched the
+-- event (projections key on the verified attester_key, so display was safe; the
+-- RECORD was not). Contract: a contributor claiming `responsibility` must name the
+-- verified attester's key. This also (deliberately) limits one event to ONE
+-- responsibility-holder — the door verifies one token; plural/proxy responsibility
+-- shapes are the #203/#96 wire-shape decision and would extend this predicate, not
+-- bypass it. Shared by BOTH doors (principle 12).
+CREATE OR REPLACE FUNCTION cairn_responsibility_bound(b jsonb, p_attester_key bytea)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
+        WHERE e ? 'responsibility'
+          AND e ->> 'actor_id' IS DISTINCT FROM encode(p_attester_key, 'hex'));
+$$;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -218,6 +280,26 @@ BEGIN
     v_type     := b ->> 'event_type';
     -- content_address = sha256 of the signed wire bytes (the COSE envelope), identical to event_address() in cairn-event and the db/001 CHECK. (Distinct from canonical_json_address, which hashes the actor pinned-set body for actor_id.) Attestation tokens bind to THIS value.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
+
+    -- 1a. Clock-drift ceiling at the LOCAL door (issue #187, finding A1): refuse an event
+    --     whose asserted HLC wall is implausibly far in OUR future. Every standing-state
+    --     overlay ranks winners by `ORDER BY hlc_wall DESC`, so one admitted event with a
+    --     wall of ~2^62 would win every projection on every node FOREVER — no honest later
+    --     event could ever outrank it, and in an append-only system the only recovery would
+    --     be operator recall + projection rebuild (a floor violation, not a display concern).
+    --     REJECTION is safe here for the same reason db/007 rejects on the node plane:
+    --     nothing has accepted this event yet (it is being authored, not replicated), so a
+    --     refusal cannot fork the fleet or wedge a sync watermark. The bound is the shared
+    --     cairn_max_hlc_drift_ms() (db/001, 24h) — generous to honest clock skew (an offline
+    --     node's drifted RTC), measured against clock_timestamp() (our own wall clock), never
+    --     the possibly-already-advanced hlc_state, so the bound cannot itself be ratcheted.
+    --     (The clinical REMOTE door, db/020, deliberately clamps-and-admits instead — a
+    --     refused verifiable event would freeze the puller's watermark; see hlc_drift.rs.)
+    IF (b -> 'hlc' ->> 'wall')::bigint
+           > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+        RAISE EXCEPTION 'submit_event: HLC wall % ms is more than % ms ahead of local time — clock-drift ceiling (issue #187)',
+            (b -> 'hlc' ->> 'wall')::bigint, cairn_max_hlc_drift_ms();
+    END IF;
 
     -- 1b. t_effective wire pin (issue #91/H4): parse the asserted claim through the ONE
     --     explicit-offset validator (db/001 cairn_t_effective), so the stored instant is
@@ -275,6 +357,11 @@ BEGIN
                        WHERE signing_key_id = encode(p_attester_key,'hex') AND kind = 'human') THEN
             RAISE EXCEPTION 'submit_event: attester is not an enrolled human actor (forged human author refused)';
         END IF;
+        -- #195: the body's responsibility claim must name the human whose token we
+        -- just verified — never a third party (see cairn_responsibility_bound).
+        IF NOT cairn_responsibility_bound(b, p_attester_key) THEN
+            RAISE EXCEPTION 'submit_event: a contributor claims responsibility for an actor other than the verified attester — unverified responsibility claim refused (issue #195)';
+        END IF;
         -- Store the VERIFIED responsibility proof beside the event (issue #91/M7):
         -- it must keep travelling with the event on the sync wire, or a downstream
         -- node could never re-run this gate at its own apply door.
@@ -282,13 +369,13 @@ BEGIN
         v_att_key := p_attester_key;
     END IF;
 
-    -- 5. Target-existence gate for an overlay on another author's event.
-    --    (The skeleton stores the target in the body as `target_event_id`.)
-    --
-    --    The owner-gate (was DEFERRED here; now closed) is enforced below by
-    --    cairn_suppression_author_ok (ADR-0043 / issue #99).
-    IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
-        v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
+    -- 5. Target gate for an overlay on another author's event — UNCONDITIONAL for every
+    --    targets_other type (issue #191): the old `AND (payload ? 'target_event_id')`
+    --    guard made the whole gate key-presence-conditional, so absence failed OPEN past
+    --    both the existence check and the ADR-0043 owner-gate. cairn_suppression_target_id
+    --    RAISEs legibly on a missing or malformed target (fail closed).
+    IF v_targets_other THEN
+        v_target_id := cairn_suppression_target_id(b);
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'submit_event: overlay targets unknown event %', v_target_id;
         END IF;

@@ -527,3 +527,119 @@ async fn restore_door_rejects_non_enroll_before_its_genesis() {
         "non-enroll before genesis must be rejected, got: {db_msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #193 (finding A5) — the clock-drift ceiling at the restore door.
+//
+// restore_node_event is deliberately self-trusting (any *signed* enroll applies —
+// a fresh node has no trust set yet), and it merges hlc_state forward with GREATEST,
+// unconditionally. So an attacker with access to the sneakernet restore medium could
+// append ONE self-signed node.enrolled event carrying hlc_wall ≈ 2^62: restore admits
+// it, the merge ratchets the fresh node's clock into the far future, and every event
+// the node subsequently authors is rejected by every peer's node-door drift ceiling
+// (db/007) — the node is wedged out of the federation with no self-healing path. The
+// 24h ceiling's "own authored events are exempt" argument does not cover restore: the
+// medium can contain other signers' events and is attacker-appendable. Same ceiling,
+// same rejection, third door.
+// ---------------------------------------------------------------------------
+
+fn synth_enroll_at_wall(sk: &SigningKey, name: &str, wall: i64) -> Vec<u8> {
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    let body = EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.enrolled".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: name.into(),
+        },
+        t_effective: None,
+        signer_key_id: kid,
+        contributors: serde_json::json!([]),
+        payload: serde_json::json!({ "display_name": name, "address": "127.0.0.1:7999" }),
+        attachments: vec![],
+        plaintext_twin: None,
+    };
+    sign(&body, sk).unwrap().signed_bytes
+}
+
+fn wall_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// An attacker-appended far-future event on the medium is refused, and the fresh
+/// node's clock is NOT ratcheted (the statement rolls back whole).
+#[tokio::test]
+async fn restore_door_rejects_insane_future_wall_and_does_not_ratchet() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let a = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&a).await.ok();
+    a.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+        .await
+        .ok();
+
+    let insane = wall_now_ms() + 10 * 365 * 24 * 3_600_000; // ~10 years ahead
+    let other = cairn_event::generate_key().unwrap().0;
+    let ev = synth_enroll_at_wall(&other, "Poison", insane);
+    let err = a
+        .execute("SELECT restore_node_event($1)", &[&ev])
+        .await
+        .expect_err("a far-future wall on the restore medium must be refused");
+    let msg = err
+        .as_db_error()
+        .map(|e| e.message().to_string())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("clock-drift ceiling"),
+        "the refusal must name the drift ceiling, got: {msg}"
+    );
+
+    let (wall, admitted): (i64, i64) = {
+        let r = a
+            .query_one(
+                "SELECT (SELECT hlc_wall FROM hlc_state WHERE id), \
+                        (SELECT count(*) FROM node_event WHERE op='enroll')",
+                &[],
+            )
+            .await
+            .unwrap();
+        (r.get(0), r.get(1))
+    };
+    assert_eq!(
+        wall, 0,
+        "a drift-refused restore must not ratchet hlc_state"
+    );
+    assert_eq!(admitted, 0, "the poison event must never be stored");
+}
+
+/// A modestly-future wall (honest skew on the backed-up node) still restores — the
+/// ceiling must not over-reject a genuine medium.
+#[tokio::test]
+async fn restore_door_admits_within_ceiling_future_wall() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let a = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&a).await.ok();
+    a.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
+        .await
+        .ok();
+
+    let sane_future = wall_now_ms() + 3_600_000; // 1h ahead, inside the 24h ceiling
+    let other = cairn_event::generate_key().unwrap().0;
+    let ev = synth_enroll_at_wall(&other, "Skewed", sane_future);
+    a.execute("SELECT restore_node_event($1)", &[&ev])
+        .await
+        .expect("a within-ceiling future wall must restore (honest skew)");
+}

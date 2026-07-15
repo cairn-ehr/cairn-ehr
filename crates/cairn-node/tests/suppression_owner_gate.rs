@@ -66,18 +66,22 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String, SigningKe
 }
 
 /// Minimal EventBody. `signer_kid` sets signer_key_id; `target` becomes
-/// payload.target_event_id; `responsibility` adds a responsibility-bearing contributor.
+/// payload.target_event_id; `resp_kid` (if Some) adds a responsibility-bearing
+/// contributor for THAT key — since #195 the responsibility-holder must be the
+/// verified attester, so callers pass the vouching human's kid.
 fn body(
     event_type: &str,
     patient: Uuid,
     signer_kid: &str,
-    responsibility: bool,
+    resp_kid: Option<&str>,
     target: Option<&str>,
 ) -> EventBody {
-    let contrib = if responsibility {
-        serde_json::json!([{"actor_id": signer_kid, "role": "attested", "responsibility": "attested"}])
-    } else {
-        serde_json::json!([{"actor_id": signer_kid, "role": "author"}])
+    let contrib = match resp_kid {
+        Some(rk) => serde_json::json!([
+            {"actor_id": signer_kid, "role": "author"},
+            {"actor_id": rk, "role": "attested", "responsibility": "attested"}
+        ]),
+        None => serde_json::json!([{"actor_id": signer_kid, "role": "author"}]),
     };
     let payload = match target {
         Some(t) => serde_json::json!({ "target_event_id": t }),
@@ -104,7 +108,7 @@ fn body(
 
 /// Author a plain additive note (no attestation) and return its event_id.
 async fn author_note(c: &Client, patient: Uuid, signer_kid: &str, sk: &SigningKey) -> String {
-    let b = body("note.added", patient, signer_kid, false, None);
+    let b = body("note.added", patient, signer_kid, None, None);
     let s = sign(&b, sk).unwrap();
     c.execute(SUBMIT1, &[&s.signed_bytes]).await.unwrap();
     b.event_id
@@ -122,7 +126,7 @@ async fn try_suppress(
     actor_sk: &SigningKey,
     target: &str,
 ) -> Result<(), String> {
-    let supp = body(event_type, patient, actor_kid, false, Some(target));
+    let supp = body(event_type, patient, actor_kid, None, Some(target));
     let signed = sign(&supp, actor_sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, actor_kid, "attested", actor_sk).unwrap();
@@ -203,7 +207,7 @@ async fn self_suppression_by_human_attester_accepted() {
     let p = Uuid::now_v7();
     // Target: an AGENT-signed note that human A vouches for (responsibility) — so the
     // target's ONLY human author is the attester A (attester_key = A, signer = agent).
-    let b = body("note.added", p, &kid_ag, true, None);
+    let b = body("note.added", p, &kid_ag, Some(&kid_a), None);
     let signed = sign(&b, &sk_ag).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
@@ -236,7 +240,7 @@ async fn cross_human_suppress_refused_at_apply_door() {
     // REMOTE-APPLY door (apply_remote_event) exactly as a synced event would arrive:
     // signed bytes + attestation token + attester key travel together (call shape
     // copied verbatim from apply_remote_event.rs::attested_suppress_applies_and_stores_the_token).
-    let supp = body("salience.downgrade", p, &kid_b, false, Some(&tgt));
+    let supp = body("salience.downgrade", p, &kid_b, None, Some(&tgt));
     let signed = sign(&supp, &sk_b).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, &kid_b, "attested", &sk_b).unwrap();
@@ -356,7 +360,7 @@ async fn cross_human_suppress_of_human_attested_advisory_refused() {
     let (sk_ag, kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
     // Agent signs a note; human A vouches for it (responsibility) — attester_key = A.
-    let b = body("note.added", p, &kid_ag, true, None);
+    let b = body("note.added", p, &kid_ag, Some(&kid_a), None);
     let signed = sign(&b, &sk_ag).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
@@ -396,5 +400,157 @@ async fn self_visibility_suppress_by_human_signer_accepted() {
     assert!(
         r.is_ok(),
         "an author hiding their own event must be accepted: {r:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #191 (finding A3) — the target gate must fail CLOSED. The whole
+// target-existence + ADR-0043 owner-gate block was wrapped in
+// `IF v_targets_other AND (payload ? 'target_event_id')`, so a suppression that
+// OMITS the field (or names its target under any other key) skipped the entire
+// gate: admitted with zero target validation and zero owner-gate. The floor
+// contract is: targets_other_author = TRUE ⇒ target_event_id present AND valid.
+// ---------------------------------------------------------------------------
+
+/// Submit a human-attested suppress carrying an ARBITRARY payload (the hostile-client
+/// shapes: no target, a misnamed target key, a malformed UUID).
+async fn try_suppress_payload(
+    c: &Client,
+    patient: Uuid,
+    event_type: &str,
+    actor_kid: &str,
+    actor_sk: &SigningKey,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let mut supp = body(event_type, patient, actor_kid, None, None);
+    supp.payload = payload;
+    let signed = sign(&supp, actor_sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, actor_kid, "attested", actor_sk).unwrap();
+    let vk = actor_sk.verifying_key().to_bytes().to_vec();
+    c.execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk])
+        .await
+        .map(|_| ())
+        .map_err(|e| db_msg(&e))
+}
+
+#[tokio::test]
+async fn suppression_without_target_refused_fail_closed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let r = try_suppress_payload(
+        &c,
+        p,
+        "visibility.suppress",
+        &kid_a,
+        &sk_a,
+        serde_json::json!({ "text": "no target named at all" }),
+    )
+    .await;
+    assert!(
+        r.is_err(),
+        "a suppression with no target_event_id must be refused (fail closed), not admitted"
+    );
+    assert!(
+        r.unwrap_err().contains("target_event_id"),
+        "the refusal must name the missing field legibly"
+    );
+}
+
+#[tokio::test]
+async fn suppression_with_misnamed_target_key_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    // A real target authored by ANOTHER human — the exact cross-human shape the
+    // owner-gate exists for, smuggled under the wrong key name.
+    let tgt = author_note(&c, p, &kid_b, &sk_b).await;
+    let r = try_suppress_payload(
+        &c,
+        p,
+        "visibility.suppress",
+        &kid_a,
+        &sk_a,
+        serde_json::json!({ "target": tgt }),
+    )
+    .await;
+    assert!(
+        r.is_err(),
+        "a suppression naming its target under a different key must be refused"
+    );
+    assert!(
+        r.unwrap_err().contains("target_event_id"),
+        "the refusal must name the required field legibly"
+    );
+}
+
+#[tokio::test]
+async fn suppression_with_malformed_target_refused_legibly() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let r = try_suppress_payload(
+        &c,
+        p,
+        "salience.downgrade",
+        &kid_a,
+        &sk_a,
+        serde_json::json!({ "target_event_id": "not-a-uuid" }),
+    )
+    .await;
+    assert!(r.is_err(), "a malformed target_event_id must be refused");
+    assert!(
+        r.unwrap_err().contains("target_event_id"),
+        "the refusal must be legible (name the field), not a bare uuid cast error"
+    );
+}
+
+/// The SAME fail-closed contract at the remote apply door (principle 12: one floor,
+/// both doors) — a replicated no-target suppress must be refused, not admitted.
+#[tokio::test]
+async fn remote_apply_suppression_without_target_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let mut supp = body("visibility.suppress", p, &kid_a, None, None);
+    supp.payload = serde_json::json!({ "text": "no target named at all" });
+    let signed = sign(&supp, &sk_a).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_a, "attested", &sk_a).unwrap();
+    let vk = sk_a.verifying_key().to_bytes().to_vec();
+    let r = c
+        .execute(
+            "SELECT apply_remote_event($1,$2,$3)",
+            &[&signed.signed_bytes, &token, &vk],
+        )
+        .await;
+    assert!(
+        r.is_err(),
+        "the apply door must refuse a no-target suppression identically to submit"
+    );
+    assert!(
+        db_msg(&r.unwrap_err()).contains("target_event_id"),
+        "legible refusal at the apply door too"
     );
 }

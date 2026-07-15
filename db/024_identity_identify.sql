@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS chart_identity_state (
     content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+-- Additive widening (#115 → issue #207): see db/018's patient_link note — the CREATE
+-- no-ops on a pre-widening DB; nullable ALTER, new upserts always write it.
+-- Guarded by migration_replay_widening.rs.
+ALTER TABLE chart_identity_state ADD COLUMN IF NOT EXISTS content_address BYTEA;
 GRANT SELECT ON chart_identity_state TO cairn_agent;
 -- The chart_trust VIEW's unconfirmed source AND the "still-John-Doe" worklist are both
 -- "standing PENDING charts"; index exactly that partial set so neither cliffs as the
@@ -197,6 +201,13 @@ CREATE OR REPLACE VIEW chart_trust AS
         UNION ALL
         -- unconfirmed  (1): a standing identity-pending chart         (C4, §5.4)  <-- THIS slice
         SELECT subject, 1 FROM chart_identity_state WHERE state = 'pending'
+        UNION ALL
+        -- under-review (2): an un-attested link admitted on sync that trips the local
+        -- db/016 hard veto (#190) — the merge converges, but BOTH charts read
+        -- under-review until a human resolves the pair (unlink / attested re-link)
+        SELECT low,  2 FROM link_veto_flag
+        UNION ALL
+        SELECT high, 2 FROM link_veto_flag
         -- future sources ADD a branch here (both a SELECT and, for a new label, a WHEN):
         --   under-review (2) <- pending reattribution                 (§5.5 — future)
         --   under-review (2) <- coherence-check demoted link          (§5.2 feedback — future)

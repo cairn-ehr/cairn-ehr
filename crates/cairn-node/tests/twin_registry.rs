@@ -94,107 +94,119 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     .await
     .unwrap();
 
-    // Assert the full 16-row mapping is present so a dropped registration is caught.
+    // Assert the full 18-row mapping is present so a dropped registration is caught.
     let n: i64 = c
         .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 16, "expected 16 seeded twin-check rows");
+    assert_eq!(n, 18, "expected 18 seeded twin-check rows");
 
     // Lock the FULL registry contract. This table is now the single source of floor-wiring
     // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
     // rather than a count + one spot-check: a future slice that mis-points a check_fn or
     // mis-transcribes a twin_required_msg is caught here directly, not merely if the broad
     // behaviour suite happens to exercise that exact negative path. Strings are transcribed
-    // verbatim from the seeding migrations (db/010–033).
-    let mut expected: Vec<(&str, &str, &str)> = vec![
+    // verbatim from the seeding migrations (db/005, db/010–033). twin_required_msg is an
+    // Option: the #191 suppression rows carry a structural check but NO twin requirement
+    // (a suppression keeps the honest ADR-0039 skeleton fallback).
+    let mut expected: Vec<(&str, &str, Option<&str>)> = vec![
+        (
+            "salience.downgrade",
+            "cairn_check_suppression_overlay",
+            None,
+        ),
+        (
+            "visibility.suppress",
+            "cairn_check_suppression_overlay",
+            None,
+        ),
         (
             "demographic.identifier.asserted",
             "cairn_check_identifier_assertion",
-            "demographic assertion requires a non-empty authored twin (§4.5)",
+            Some("demographic assertion requires a non-empty authored twin (§4.5)"),
         ),
         (
             "demographic.field.asserted",
             "cairn_check_demographic_field",
-            "demographic assertion requires a non-empty authored twin (§4.5)",
+            Some("demographic assertion requires a non-empty authored twin (§4.5)"),
         ),
         (
             "identity.link.asserted",
             "cairn_check_link_assertion",
-            "identity linkage assertion requires a non-empty authored twin (§5.7)",
+            Some("identity linkage assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.unlink.asserted",
             "cairn_check_link_assertion",
-            "identity linkage assertion requires a non-empty authored twin (§5.7)",
+            Some("identity linkage assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.dispute.asserted",
             "cairn_check_dispute_assertion",
-            "identity dispute assertion requires a non-empty authored twin (§5.7)",
+            Some("identity dispute assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.dispute.resolved",
             "cairn_check_dispute_assertion",
-            "identity dispute assertion requires a non-empty authored twin (§5.7)",
+            Some("identity dispute assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.pending.asserted",
             "cairn_check_identity_state_assertion",
-            "identity-state assertion requires a non-empty authored twin (§5.7)",
+            Some("identity-state assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.identify.asserted",
             "cairn_check_identity_state_assertion",
-            "identity-state assertion requires a non-empty authored twin (§5.7)",
+            Some("identity-state assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "identity.repudiate.asserted",
             "cairn_check_repudiation_assertion",
-            "identity repudiation assertion requires a non-empty authored twin (§5.7)",
+            Some("identity repudiation assertion requires a non-empty authored twin (§5.7)"),
         ),
         (
             "clinical.medication.asserted",
             "cairn_check_medication_assertion",
-            "medication assertion requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication assertion requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-cessation.asserted",
             "cairn_check_medication_assertion",
-            "medication assertion requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication assertion requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-dose-change.asserted",
             "cairn_check_medication_dose",
-            "medication dose assertion requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-dose-correction.asserted",
             "cairn_check_medication_dose",
-            "medication dose assertion requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-attestation.asserted",
             "cairn_check_medication_attestation",
-            "medication attestation requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication attestation requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-reconciliation.asserted",
             "cairn_check_medication_reconciliation",
-            "medication reconciliation requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.15)"),
         ),
         (
             "clinical.medication-separation.asserted",
             "cairn_check_medication_reconciliation",
-            "medication reconciliation requires a non-empty authored twin (§3.13/§3.15)",
+            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.15)"),
         ),
     ];
     expected.sort();
 
     // Sort BOTH sides in Rust (byte-lexicographic) so the comparison never depends on the
-    // node's default TEXT collation for ORDER BY. get::<_, String> also asserts non-null:
-    // all 16 seed rows carry both a check_fn and a twin_required_msg.
+    // node's default TEXT collation for ORDER BY. get::<_, String> on check_fn asserts
+    // non-null; twin_required_msg is an Option (the #191 suppression rows carry NULL).
     let rows = c
         .query(
             "SELECT event_type, check_fn, twin_required_msg FROM cairn_event_twin_check",
@@ -202,20 +214,20 @@ async fn registry_is_seeded_with_the_expected_mapping() {
         )
         .await
         .unwrap();
-    let mut actual: Vec<(String, String, String)> = rows
+    let mut actual: Vec<(String, String, Option<String>)> = rows
         .iter()
         .map(|r| {
             (
                 r.get::<_, String>(0),
                 r.get::<_, String>(1),
-                r.get::<_, String>(2),
+                r.get::<_, Option<String>>(2),
             )
         })
         .collect();
     actual.sort();
-    let actual_ref: Vec<(&str, &str, &str)> = actual
+    let actual_ref: Vec<(&str, &str, Option<&str>)> = actual
         .iter()
-        .map(|(et, cf, msg)| (et.as_str(), cf.as_str(), msg.as_str()))
+        .map(|(et, cf, msg)| (et.as_str(), cf.as_str(), msg.as_deref()))
         .collect();
 
     assert_eq!(
