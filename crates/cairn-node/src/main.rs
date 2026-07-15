@@ -674,18 +674,36 @@ enum Cmd {
         /// The dose event to correct. Defaults to the current dose point of the thread.
         #[arg(long)]
         target: Option<Uuid>,
-        /// The corrected dose magnitude. Omit to correct to *unknown* (strike a false precision).
+        /// Set the corrected dose magnitude (with --dose-unit). Omit to leave the dose
+        /// unchanged; use --strike dose to set it unknown.
         #[arg(long)]
         dose_amount: Option<String>,
-        /// The corrected dose unit.
+        /// Set the corrected dose unit.
         #[arg(long)]
         dose_unit: Option<String>,
+        /// Set the corrected effective date (e.g. 2024-01). Omit to leave it unchanged;
+        /// use --strike effective to set it unknown.
+        #[arg(long)]
+        effective: Option<String>,
+        /// Precision token for --effective (year|month|day|year-range).
+        #[arg(long)]
+        effective_precision: Option<String>,
+        /// Set the corrected clinical reason for the dose (e.g. "titration"). Omit to
+        /// leave it unchanged; use --strike reason to set it unknown.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Group(s) to set unknown: dose | effective | reason (repeatable).
+        #[arg(long)]
+        strike: Vec<String>,
+        /// Why this correction was made (audit note, e.g. "mis-keyed the date").
+        // Named `correction_note`/--correction-note rather than `note`/--note: the
+        // flattened AttestFlags below already owns --note (the vouch note on
+        // --attest-as), and clap requires unique argument ids within one command.
+        #[arg(long)]
+        correction_note: Option<String>,
         /// Optional provenance of the correction claim.
         #[arg(long)]
         info_source: Option<String>,
-        /// Optional free-text reason ("mis-keyed").
-        #[arg(long)]
-        reason: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
     },
@@ -1760,8 +1778,12 @@ async fn main() -> anyhow::Result<()> {
             target,
             dose_amount,
             dose_unit,
-            info_source,
+            effective,
+            effective_precision,
             reason,
+            strike,
+            correction_note,
+            info_source,
             attest,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1772,14 +1794,15 @@ async fn main() -> anyhow::Result<()> {
             let corrects =
                 cairn_node::medication::resolve_correction_target(&db, medication_id, target)
                     .await?;
+            let strike_refs: Vec<&str> = strike.iter().map(String::as_str).collect();
             let input = cairn_node::medication::CorrectDoseInput {
                 dose_amount: dose_amount.as_deref(),
                 dose_unit: dose_unit.as_deref(),
-                effective: None,
-                effective_precision: None,
-                reason: None,
-                strike: &[],
-                note: reason.as_deref(),
+                effective: effective.as_deref(),
+                effective_precision: effective_precision.as_deref(),
+                reason: reason.as_deref(),
+                strike: &strike_refs,
+                note: correction_note.as_deref(),
                 info_source: info_source.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
