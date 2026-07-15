@@ -113,7 +113,10 @@ async fn reassert_at_door(
 
 #[tokio::test]
 async fn local_reassert_under_different_patient_refused() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -160,7 +163,10 @@ async fn local_reassert_under_different_patient_refused() {
 
 #[tokio::test]
 async fn local_cessation_under_different_patient_refused() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -201,7 +207,10 @@ async fn local_cessation_under_different_patient_refused() {
 
 #[tokio::test]
 async fn local_dose_change_under_different_patient_refused() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -243,7 +252,10 @@ async fn local_dose_change_under_different_patient_refused() {
 /// still passes the local door — the standing patient is honestly unknown.
 #[tokio::test]
 async fn local_orphan_cessation_still_accepted() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -272,7 +284,10 @@ async fn local_orphan_cessation_still_accepted() {
 /// contradiction is FLAGGED for humans (the 'unflagged' half of finding A4).
 #[tokio::test]
 async fn remote_reassert_converges_and_flags() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -330,7 +345,10 @@ async fn remote_reassert_converges_and_flags() {
 
 #[tokio::test]
 async fn local_cross_patient_reconcile_refused() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -385,7 +403,10 @@ async fn local_cross_patient_reconcile_refused() {
 /// surfaced by the read-time view once the statements land, whatever the arrival order.
 #[tokio::test]
 async fn cross_patient_group_surfaced_by_view() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
@@ -434,11 +455,89 @@ async fn cross_patient_group_surfaced_by_view() {
     );
 }
 
+/// Finding 3 (this-PR review) — the cross-patient view must derive a thread's patient
+/// from the SAME source as the write-guard (`cairn_medication_thread_patient`: statement
+/// OR orphan cessation), not statements alone. A thread known locally only via an orphan
+/// cessation contributes a real patient the guard sees, so a group spanning it is a real
+/// cross-patient hazard — but a statement-only join makes it invisible on exactly the
+/// read-time surface meant to catch the late-arriving case.
+#[tokio::test]
+async fn cross_patient_group_via_cessation_only_thread_surfaced() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let m1 = Uuid::now_v7();
+    let m2 = Uuid::now_v7();
+
+    // Reconcile FIRST (both threads unknown locally — passes the local door honestly).
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .expect("offline-first: unknown subjects must pass the local door");
+
+    // m1 lands as a STATEMENT on chart A; m2 is known only via an ORPHAN CESSATION on
+    // chart B (no statement ever synced) — exactly what the guard reads through the
+    // cessation branch of cairn_medication_thread_patient.
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m1, patient_a)
+        .await
+        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_b,
+        m2,
+        &CeaseMedicationInput {
+            stopped: Some("2025"),
+            stopped_precision: Some("year"),
+            reason: Some("stopped elsewhere"),
+        },
+        None,
+    )
+    .await
+    .expect("an orphan cessation is accepted offline-first");
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_group_cross_patient WHERE group_id = $1::text::uuid",
+            &[&std::cmp::min(m1, m2).to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "a cross-patient group whose second thread is known only via a cessation must still surface"
+    );
+}
+
 /// Separation is the REPAIR primitive for a bad cross-patient link — it must never be
 /// blocked by the very inconsistency it exists to fix.
 #[tokio::test]
 async fn separation_of_cross_patient_group_still_accepted() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;

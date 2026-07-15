@@ -235,6 +235,11 @@ DECLARE
     hi      uuid  := GREATEST(a, b);
     v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
     v_cur   record;
+    -- The STANDING overlay winner for (lo, hi), read back AFTER the upsert below so the
+    -- #190 flag lifecycle keys on what actually won, not on the arriving event (finding 1).
+    v_win_state    text;
+    v_win_ca       bytea;
+    v_win_attested boolean;
 BEGIN
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
@@ -270,30 +275,17 @@ BEGIN
     -- raw SQL could merge two hard-vetoed charts through submit_event unflagged).
     -- Contract: the veto FORCES A HUMAN DECISION, never auto-rejects one — so a
     -- human-attested link (NEW.attester_key set: the stored, verified vouch) passes;
-    -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door (nothing
-    -- accepted yet, fail loud at source) and admitted-but-flagged on the sync path
-    -- (the verdict reads node-local demographic state, so a remote refusal would fork
-    -- honest nodes; the flag makes both charts read under-review — never a silent
-    -- merge). The Rust auto-apply pre-check stays as the polite early skip; this is
-    -- the floor behind it.
-    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi) THEN
-        IF current_setting('cairn.remote_apply', true) = 'on' THEN
-            INSERT INTO link_veto_flag (low, high, content_address)
-            VALUES (lo, hi, NEW.content_address)
-            ON CONFLICT (low, high) DO NOTHING;
-        ELSE
-            RAISE EXCEPTION
-                'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
-                lo, hi;
-        END IF;
-    END IF;
-
-    -- Flag lifecycle: the pair's standing veto flag is resolved by the two human-
-    -- reachable outcomes — an unlink (the never-erase reversal: the hazard is gone)
-    -- or a human-attested link (the vouch IS the forced human decision). Node-local
-    -- advisory state, so a DELETE is honest (the events all remain in the log).
-    IF v_state = 'unlink' OR (v_state = 'link' AND NEW.attester_key IS NOT NULL) THEN
-        DELETE FROM link_veto_flag WHERE low = lo AND high = hi;
+    -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door only —
+    -- nothing has been accepted yet, so fail loud at source. On the sync-apply path the
+    -- event is admitted (the verdict reads node-local demographic state, so a remote
+    -- refusal would fork honest nodes) and the merge is caught by the flag lifecycle
+    -- AFTER the overlay below. The Rust auto-apply pre-check stays as the polite early
+    -- skip; this is the floor behind it.
+    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
+       AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION
+            'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
+            lo, hi;
     END IF;
 
     INSERT INTO patient_link
@@ -317,6 +309,33 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin,
         patient_link.content_address);
+
+    -- #190 flag lifecycle, DERIVED FROM THE STANDING OVERLAY WINNER (PR #219 review,
+    -- finding 1) — never from the arriving event's verb. The upsert above is HLC-guarded,
+    -- so an arriving event can LOSE the overlay; keying the flag on arrival desynced it
+    -- from the standing edge in two exploitable ways: a BACKDATED un-attested unlink that
+    -- loses the overlay would clear the flag while the vetoed merge still stands (a silent
+    -- merge the ADR-0030 writer triggers with one cheap event — unlinks are never veto-
+    -- gated), and a STALE vetoed link losing to a standing unlink would raise a phantom
+    -- flag (arrival-order-dependent trust state across honest nodes — the class of bug
+    -- #194 closes for the demographic projections). Read back who actually won and flag
+    -- iff the standing winner is an UN-ATTESTED link that still trips the veto; otherwise
+    -- clear. The winner's attestation is looked up via its content_address (UNIQUE in
+    -- event_log); patient_link always has a row here (the upsert inserted or kept one).
+    -- Node-local advisory state, so INSERT/DELETE is honest — the events all remain logged.
+    SELECT pl.state, pl.content_address, el.attester_key IS NOT NULL
+      INTO v_win_state, v_win_ca, v_win_attested
+      FROM patient_link pl
+      JOIN event_log el ON el.content_address = pl.content_address
+      WHERE pl.low = lo AND pl.high = hi;
+
+    IF v_win_state = 'link' AND NOT v_win_attested AND cairn_has_hard_veto(lo, hi) THEN
+        INSERT INTO link_veto_flag (low, high, content_address)
+        VALUES (lo, hi, v_win_ca)
+        ON CONFLICT (low, high) DO UPDATE SET content_address = EXCLUDED.content_address;
+    ELSE
+        DELETE FROM link_veto_flag WHERE low = lo AND high = hi;
+    END IF;
 
     -- Recompute the touched component(s). Recomputing BOTH endpoints is always
     -- correct: a link merges (both endpoints reach the same union); an unlink splits

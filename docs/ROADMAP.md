@@ -672,7 +672,11 @@ cross-patient reconciliation refused when both patients known + `medication_grou
 separation never guarded (#192, resolves #177); un-attested `identity.link` faces the db/016 hard veto at the door,
 sync path flags (`link_veto_flag`) + a new `chart_trust` under-review source (#190); drift ceiling at the restore
 door (#193); responsibility contributor bound to the verified attester via `cairn_responsibility_bound` at both
-attestation gates (#195). Workspace 640/0 failed.
+attestation gates (#195). A PR #219 review round added two fixes on the same branch: the #190
+`link_veto_flag` lifecycle now derives from the standing overlay winner (closing a backdated-unlink silent
+merge and a stale-link phantom flag), and `medication_group_cross_patient` derives members' patients from
+`cairn_medication_thread_patient` (cessation-only threads no longer hidden); follow-up #220 filed for the
+remaining arrival-time-only veto evaluation. Workspace 643/0 failed.
 
 ## Phase 5 — Security & compliance core
 

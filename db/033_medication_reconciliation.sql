@@ -437,15 +437,25 @@ GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 --    is still in flight — this view lights up whenever the contradiction lands,
 --    whichever door and order it arrived by, and clears when a separation repairs
 --    it). Advisory worklist: surface, never auto-separate (flag-never-suppress).
+-- A member's patient is derived through cairn_medication_thread_patient — the SAME
+-- source the write-guard reads (statement, else orphan cessation), NOT a bare join to
+-- medication_statement (PR #219 review, finding 3): a thread known locally only via a
+-- cessation carries a real patient the guard sees, so a group spanning it is a genuine
+-- cross-patient hazard that a statement-only join would hide on the very read-time
+-- surface meant to catch the late-arriving case. A thread whose patient is still
+-- unknown (NULL) contributes nothing — it cannot yet evidence a contradiction.
 CREATE OR REPLACE VIEW medication_group_cross_patient AS
 SELECT gm.group_id,
-       array_agg(DISTINCT ms.patient_id ORDER BY ms.patient_id) AS patients,
-       count(DISTINCT ms.patient_id)                            AS patient_count,
+       array_agg(DISTINCT tp.patient_id ORDER BY tp.patient_id) AS patients,
+       count(DISTINCT tp.patient_id)                            AS patient_count,
        count(DISTINCT gm.medication_id)                         AS member_count
 FROM medication_group_member gm
-JOIN medication_statement ms ON ms.medication_id = gm.medication_id
+CROSS JOIN LATERAL (
+    SELECT cairn_medication_thread_patient(gm.medication_id) AS patient_id
+) tp
+WHERE tp.patient_id IS NOT NULL
 GROUP BY gm.group_id
-HAVING count(DISTINCT ms.patient_id) > 1;
+HAVING count(DISTINCT tp.patient_id) > 1;
 GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
 
 COMMIT;

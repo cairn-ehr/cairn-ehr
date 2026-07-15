@@ -25,6 +25,14 @@ both doors + registry rows) · ~~#192~~ (medication thread patient-consistency, 
 `under-review`) · ~~#193~~ (drift ceiling at the restore door) · ~~#195~~ (responsibility
 contributor bound to the verified attester). The #187 remote-door policy for genuinely-broken
 peers stays the deliberate db/020 clamp-and-admit (documented in `hlc_drift.rs`).
+**PR #219 code-review round (2026-07-16, same branch):** fixed two review findings — the #190
+`link_veto_flag` lifecycle now derives from the STANDING overlay winner, not bare event arrival
+(closes a backdated-unlink silent-merge + a stale-link phantom flag; +2 RED tests), and
+`medication_group_cross_patient` now derives a member's patient from `cairn_medication_thread_patient`
+so a cessation-only thread is not hidden (+1 RED test). Workspace **643/0**. One follow-up filed:
+[#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) — the #190 hard veto is still evaluated only
+at link-arrival time (a silent vetoed merge if the clashing demographics sync in later; needs a
+re-check hook or background sweep — out of scope for the floor-hardening slice).
 
 **Priority 2 — sync-convergence integrity (the flagship guarantee, currently hand-verified). ⇐ START HERE**
 - **#199 (B4)** — set `CAIRN_TEST_PG2` in `rust.yml`, un-skip `federation.rs`/`sync_watermark.rs`,
@@ -169,8 +177,13 @@ is refused at the local door (human-attested passes — the veto forces a human 
 `link_veto_flag` + a new `chart_trust` under-review source (unlink or attested re-link clears); **#193** the
 restore door got the same drift ceiling (tampered-medium ratchet-out-of-federation closed); **#195** resolved as
 BIND: `cairn_responsibility_bound` at both attestation gates (responsibility contributor must name the verified
-attester; two test fixtures that encoded the A7 decoupling corrected to their stated intent). Full workspace
-**640 passed / 0 failed** + fmt + clippy `-D warnings` clean; SQL twin-registry mirror updated in lockstep.
+attester; two test fixtures that encoded the A7 decoupling corrected to their stated intent). A PR #219
+review round then landed two more fixes on the same branch: the #190 `link_veto_flag` lifecycle now derives
+from the standing overlay winner (closing a backdated-unlink silent merge and a stale-link phantom flag), and
+`medication_group_cross_patient` derives its members' patients from `cairn_medication_thread_patient` (a
+cessation-only thread is no longer hidden) — follow-up [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
+filed for the remaining arrival-time-only veto evaluation. Full workspace **643 passed / 0 failed** + fmt +
+clippy `-D warnings` clean; SQL twin-registry mirror updated in lockstep.
 
 **Prior session (2026-07-15) — medication dose effective-date/reason correction, slice 5 (ADR-0050, spec
 v0.50→v0.51; branch `feat/medication-dose-effective-correction`; merged PR #186; full detail in git + the ADR

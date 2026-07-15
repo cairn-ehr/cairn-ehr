@@ -172,6 +172,23 @@ fn link_body(
     }
 }
 
+/// Are a and b in the SAME linkage component (a real merge)? A recompute over a
+/// pure-unlink seed still writes a self-row (patient_id = person_id), so counting
+/// person_member rows can't distinguish "merged" from "recomputed-but-separate" —
+/// compare the two charts' person_id representatives instead.
+async fn same_person(c: &Client, a: Uuid, b: Uuid) -> bool {
+    let r: Option<bool> = c
+        .query_one(
+            "SELECT (SELECT person_id FROM person_member WHERE patient_id = $1::text::uuid)
+                  = (SELECT person_id FROM person_member WHERE patient_id = $2::text::uuid)",
+            &[&a.to_string(), &b.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    r.unwrap_or(false)
+}
+
 async fn trust_state(c: &Client, p: Uuid) -> Option<String> {
     c.query_opt(
         "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid",
@@ -184,7 +201,10 @@ async fn trust_state(c: &Client, p: Uuid) -> Option<String> {
 
 #[tokio::test]
 async fn agent_link_with_hard_veto_refused_at_local_door() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
@@ -216,7 +236,10 @@ async fn agent_link_with_hard_veto_refused_at_local_door() {
 
 #[tokio::test]
 async fn human_attested_link_with_hard_veto_still_passes() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
@@ -245,7 +268,10 @@ async fn human_attested_link_with_hard_veto_still_passes() {
 
 #[tokio::test]
 async fn remote_vetoed_link_admitted_flagged_and_under_review() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
@@ -280,7 +306,10 @@ async fn remote_vetoed_link_admitted_flagged_and_under_review() {
 
 #[tokio::test]
 async fn unlink_clears_the_veto_flag() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
@@ -310,9 +339,106 @@ async fn unlink_clears_the_veto_flag() {
     );
 }
 
+/// Finding 1 (this-PR review) — the flag lifecycle must key on the STANDING overlay
+/// winner, not on the arriving event's verb. A backdated un-attested unlink that LOSES
+/// the HLC overlay must NOT clear a still-standing vetoed merge: the charts are still
+/// merged (the losing unlink changed no standing edge), so silently dropping the flag
+/// would restore the exact silent hard-vetoed merge #190 exists to prevent — and it is
+/// reachable by the ADR-0030 hostile enrolled writer with one cheap backdated event.
+#[tokio::test]
+async fn backdated_unlink_losing_overlay_keeps_the_flag() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+
+    // The vetoed link (wall 10) syncs in: merged, flagged, both charts under-review.
+    let link = sign(&link_body(&kid_a, a, b, true, 10, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&link.signed_bytes])
+        .await
+        .unwrap();
+
+    // A BACKDATED un-attested unlink (wall 9) arrives — it LOSES the overlay (9 < 10),
+    // so the standing edge stays the merged link. The flag must survive.
+    let unlink = sign(&link_body(&kid_a, a, b, false, 9, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&unlink.signed_bytes])
+        .await
+        .expect("a losing unlink still applies (it just doesn't win the overlay)");
+
+    // The charts are STILL merged (the unlink changed no standing edge)...
+    assert!(
+        same_person(&c, a, b).await,
+        "the losing unlink must not have split the charts"
+    );
+
+    // ...so the veto flag must NOT have been cleared (else: silent vetoed merge).
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 1,
+        "a backdated unlink that loses the overlay must not clear the standing veto flag"
+    );
+    assert_eq!(trust_state(&c, a).await.as_deref(), Some("under-review"));
+    assert_eq!(trust_state(&c, b).await.as_deref(), Some("under-review"));
+}
+
+/// Finding 1, converse — a stale un-attested vetoed link that LOSES to a standing unlink
+/// must NOT raise a phantom flag. The pair is not merged (the link lost the overlay), so
+/// flagging it would leave both charts under-review forever for a pair that isn't linked,
+/// and make two honest nodes with the same event set disagree by arrival order.
+#[tokio::test]
+async fn stale_link_losing_to_standing_unlink_raises_no_phantom_flag() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+
+    // A standing unlink (wall 11) is the winner for the pair.
+    let unlink = sign(&link_body(&kid_a, a, b, false, 11, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&unlink.signed_bytes])
+        .await
+        .unwrap();
+
+    // A stale, lower-HLC vetoed link (wall 10) arrives afterwards — it LOSES the overlay.
+    let link = sign(&link_body(&kid_a, a, b, true, 10, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&link.signed_bytes])
+        .await
+        .expect("a losing link still applies (it just doesn't win the overlay)");
+
+    // Not merged, and NOT flagged (the standing winner is the unlink).
+    assert!(
+        !same_person(&c, a, b).await,
+        "the losing link must not merge the charts"
+    );
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 0,
+        "a link that loses to a standing unlink must not raise a phantom veto flag"
+    );
+    assert_eq!(trust_state(&c, a).await, None, "chart reads confirmed");
+}
+
 #[tokio::test]
 async fn human_attested_relink_clears_the_veto_flag() {
-    let Some(base) = cs() else { return };
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
