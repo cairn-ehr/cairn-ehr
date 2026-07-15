@@ -698,6 +698,21 @@ refuse-and-recover test (unenrolled author: pull completes, nothing applies or p
 A1 contiguous-applied prefix; converges on the first pull after enrollment). PR #221 review findings fixed
 in-branch. Workspace 655/0 failed.
 
+**Slice 37 — the cairn-sync SCHEMA subset stands alone (2026-07-16; the review course, Priority 2; issue #198 [B3];
+branch `fix/sync-schema-subset-198`; no ADR/spec/SCHEMA/event-type change — a loader-list fix + its drift guard).**
+cairn-sync's embedded migration subset omitted `db/027` (+`db/029`), but both write doors PERFORM
+`cairn_learn_attachment_refs` unconditionally and the db/002 `patient_chart` trigger calls the #157 collision
+predicate/recorder on every `patient.created` — PL/pgSQL late binding loads the subset cleanly and fails only at
+the **first write** (a total write outage on a fresh `cairn-sync init` DB; invisible in CI because every suite ran
+against a database cairn-node's full 35-file loader had already visited). Fix: 027+029 added to `SCHEMA`, plus the
+standing drift guard the review demanded — `schema_subset_tests` (in `main.rs`, where the private `SCHEMA` const
+lives) wipes `cairn_test2`, loads ONLY the subset, honesty-checks that no full-schema residue survived, and drives
+**both doors**: `submit_event` with a by-reference attachment (the lazy blob reference must land in `blob_store`),
+`apply_remote_event` overlaying the same patient (executes the db/029 predicate with a standing winner), and a
+genuine Byzantine HLC-triple pair (same triple, different bodies) whose advisory `hlc_collision_log` row must land.
+A future door→function edge into an unlisted migration now fails this test with the exact production error instead
+of shipping a first-write outage. Workspace 656/0 failed.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
