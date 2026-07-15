@@ -219,6 +219,26 @@ BEGIN
     -- content_address = sha256 of the signed wire bytes (the COSE envelope), identical to event_address() in cairn-event and the db/001 CHECK. (Distinct from canonical_json_address, which hashes the actor pinned-set body for actor_id.) Attestation tokens bind to THIS value.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
 
+    -- 1a. Clock-drift ceiling at the LOCAL door (issue #187, finding A1): refuse an event
+    --     whose asserted HLC wall is implausibly far in OUR future. Every standing-state
+    --     overlay ranks winners by `ORDER BY hlc_wall DESC`, so one admitted event with a
+    --     wall of ~2^62 would win every projection on every node FOREVER — no honest later
+    --     event could ever outrank it, and in an append-only system the only recovery would
+    --     be operator recall + projection rebuild (a floor violation, not a display concern).
+    --     REJECTION is safe here for the same reason db/007 rejects on the node plane:
+    --     nothing has accepted this event yet (it is being authored, not replicated), so a
+    --     refusal cannot fork the fleet or wedge a sync watermark. The bound is the shared
+    --     cairn_max_hlc_drift_ms() (db/001, 24h) — generous to honest clock skew (an offline
+    --     node's drifted RTC), measured against clock_timestamp() (our own wall clock), never
+    --     the possibly-already-advanced hlc_state, so the bound cannot itself be ratcheted.
+    --     (The clinical REMOTE door, db/020, deliberately clamps-and-admits instead — a
+    --     refused verifiable event would freeze the puller's watermark; see hlc_drift.rs.)
+    IF (b -> 'hlc' ->> 'wall')::bigint
+           > (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms() THEN
+        RAISE EXCEPTION 'submit_event: HLC wall % ms is more than % ms ahead of local time — clock-drift ceiling (issue #187)',
+            (b -> 'hlc' ->> 'wall')::bigint, cairn_max_hlc_drift_ms();
+    END IF;
+
     -- 1b. t_effective wire pin (issue #91/H4): parse the asserted claim through the ONE
     --     explicit-offset validator (db/001 cairn_t_effective), so the stored instant is
     --     identical on every node regardless of session TimeZone/DateStyle.

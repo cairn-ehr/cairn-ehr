@@ -325,6 +325,87 @@ async fn clinical_plane_admits_but_clamps_the_clock() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Local door (db/005 submit_event): REJECT a too-future event (issue #187).
+// ---------------------------------------------------------------------------
+//
+// The local door is where a hostile-but-enrolled writer (the Spike-0002 / ADR-0030
+// threat actor) authors NEW events. Unlike the clinical REMOTE door — which must
+// clamp-and-admit because refusing a verifiable event wedges the puller's watermark —
+// nothing has accepted a locally-submitted event yet, so rejection here cannot fork
+// the fleet or wedge anything (the same argument db/007 uses for the node plane).
+// Without this guard, one event with hlc_wall ≈ 2^62 wins every
+// `ORDER BY hlc_wall DESC` overlay on every node forever (finding A1, issue #187).
+
+/// An insane-future wall at the LOCAL door is refused with a legible drift message,
+/// and the poison event never enters event_log.
+#[tokio::test]
+async fn local_door_rejects_insane_future_hlc_wall() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = clinical_setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    let insane = now_ms() + 10 * 365 * 24 * 3_600_000; // ~10 years ahead
+    let e = note(&kid, patient, insane);
+    let signed = sign(&e, &sk).unwrap().signed_bytes;
+
+    let err = c
+        .execute("SELECT submit_event($1)", &[&signed])
+        .await
+        .expect_err("an insane-future wall must be refused at the local door");
+    let m = db_msg(&err);
+    assert!(
+        m.contains("clock-drift ceiling"),
+        "the rejection must name the drift ceiling legibly, got: {m}"
+    );
+
+    let admitted: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&e.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(admitted, 0, "the poison event must never be stored");
+}
+
+/// A modestly-future wall (honest clock skew, within the ceiling) is still admitted at
+/// the local door — the guard must not over-reject.
+#[tokio::test]
+async fn local_door_admits_within_ceiling_future_wall() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = clinical_setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    let sane_future = now_ms() + 3_600_000; // 1h ahead, inside the 24h ceiling
+    let e = note(&kid, patient, sane_future);
+    let signed = sign(&e, &sk).unwrap().signed_bytes;
+    c.execute("SELECT submit_event($1)", &[&signed])
+        .await
+        .expect("a within-ceiling future wall must be admitted (honest skew)");
+
+    let stored: i64 = c
+        .query_one(
+            "SELECT hlc_wall FROM event_log WHERE event_id = $1::text::uuid",
+            &[&e.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stored, sane_future, "the admitted event keeps its asserted wall");
+}
+
 /// A within-ceiling clinical event merges the clock forward UNCLAMPED — the clamp must not
 /// touch honest, modestly-future events.
 #[tokio::test]
