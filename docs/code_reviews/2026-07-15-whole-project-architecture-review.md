@@ -385,3 +385,43 @@ Deprioritized with reasons: further matcher B3 refinements and medication slices
 additive, well-drilled, and can resume any time — items 1–4 above get more expensive with every
 slice stacked on top of them. E1/E2 (matcher) are real but advisory-tier; fold them into the next
 matcher session.
+
+---
+
+## Finding → issue map
+
+Every finding was filed on GitHub on 2026-07-15. Pre-existing related issues noted in parentheses.
+
+| Finding | Severity | Issue |
+|---|---|---|
+| A1 future-HLC wall projection capture | Critical | #187 |
+| D1 silent floor-downgrade on replay (schema-version guard) | Critical | #188 |
+| C1 seal-by-default decision + seal slice | Critical (window) | #189 (rel. #92) |
+| A2 hard-veto floor is L2-only | Important | #190 |
+| A3 suppression target fails open | Important | #191 |
+| A4 medication thread re-homing | Important | #192 (rel. #177) |
+| A5 restore-door drift ceiling | Important | #193 (rel. #102) |
+| A6 value-tiebreak divergence feeds veto | Important | #194 (rel. #115) |
+| A7 attestation responsibility not bound to attester | Minor | #195 |
+| B1 clinical watermark can skip events | Important | #196 (rel. #38) |
+| B2 acked rows count against quarantine quota | Important | #197 |
+| B3 cairn-sync schema subset missing 027/029 | Important | #198 |
+| B4 two-node E2E skipped in CI + no med remote-apply | Important | #199 (rel. #176) |
+| B5 unknown event types refused; no code plane | Important | #200 (rel. #98) |
+| B6 node.superseded cannot replicate | Minor | #201 |
+| B7 framing/fingerprint/byte-tier hygiene | Minor | #202 |
+| C2 role:"recorded" not in enum; flat responsibility | Important (window) | #203 (rel. #96) |
+| C3 first clinical stream lacks human authorship | Important | #204 |
+| C4 actor-registry federation semantics unspecified | Important | #205 (rel. #172/#154/#94) |
+| C5 single steward key as distribution trust root | Important | #206 |
+| D2 five overlay tables widened without additive ALTER | Important | #207 |
+| D3 no reprojection story; backfill scans every connect | Important | #208 |
+| E1 learner threshold loses safety anchor | Important | #209 |
+| E2 stale pending proposals never retracted | Important | #210 |
+| E3 matcher minors (alias/thresholds/casefold/repair) | Minor | #211 |
+| F test-infra: db/tests unrun, drift pairs, verb copy | Process | #212 |
+| F Rust hygiene batch (zeroize/rule-6/lock/recovery) | Minor | #213 |
+| §3.3 medication mislabel (systemic) | Important | #214 |
+| G spec prose honesty batch | Minor/Important | #215 |
+| t_effective ceiling vs graded interval | Important | #216 (rel. #97) |
+| paper-parity benchmark as required slice section | Important (process) | #217 |
