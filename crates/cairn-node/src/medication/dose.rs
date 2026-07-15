@@ -122,8 +122,12 @@ pub fn build_dose_correction_body(
         corrects: &corrects_s,
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,
-        info_source: input.info_source,
+        effective: None,
+        effective_precision: None,
         reason: input.reason,
+        strike: &[],
+        note: None,
+        info_source: input.info_source,
     };
     EventBody {
         event_id: event_id.to_string(),
