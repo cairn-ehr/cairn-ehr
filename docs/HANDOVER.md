@@ -41,10 +41,14 @@ re-check hook or background sweep — out of scope for the floor-hardening slice
   the attestation-token round trip through db/020 (incl. the #176 oversize clamp-and-flag remote
   branch), and cairn-sync's `clinical_pull.rs` proves A→B projection equality through the real
   binary. The safety net for the rest of P2 is in place.
-- **#198 (B3)** — add db/027+029 to cairn-sync's SCHEMA subset + a test that runs both doors
-  against a DB loaded from the subset alone. **⇐ next in P2.**
+- ~~**#198 (B3)**~~ — ✅ **DONE 2026-07-16** (branch `fix/sync-schema-subset-198`; detail in the session
+  block below + ROADMAP Slice 37): db/027+029 added to cairn-sync's SCHEMA subset, plus the standing
+  `schema_subset_tests` drift guard — a wiped `cairn_test2` loaded from the subset ALONE must satisfy
+  both write doors (attachment-ref learning, the db/029 collision predicate AND recorder via a real
+  Byzantine pair). A future door→function edge into an unlisted migration fails the test with the
+  production error instead of shipping a first-write outage.
 - **#196 (B1)** — port the #38 seq-cursor + periodic-sweep treatment to the clinical-plane pull
-  (or record the decision to rebuild clinical sync on the node-plane model).
+  (or record the decision to rebuild clinical sync on the node-plane model). **⇐ next in P2.**
 - **#197 (B2)** — copy the `AND NOT acked` predicate into the clinical quarantine quota subqueries.
 - **#202/#201 (B7/B6)** — cairn-sync framing cap + COLLATE "C" fingerprint + byte-tier logging;
   the node.superseded apply arm (or a lineage-stays-local comment).
@@ -94,8 +98,9 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16, later (P2 opener #199 sync-convergence CI; earlier the same day the
-P1 floor-hardening slice; review course above; last full regeneration 2026-07-14) ·
+**Session date:** 2026-07-16, latest (#198 — the cairn-sync SCHEMA subset stands alone; earlier the
+same day the P2 opener #199 and the P1 floor-hardening slice; review course above; last full
+regeneration 2026-07-14) ·
 **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
@@ -157,7 +162,27 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-16, later) — the P2 opener: sync-convergence CI (issue #199 [B4], covers the #176
+**This session (2026-07-16, latest) — #198 [B3]: the cairn-sync SCHEMA subset stands alone (branch
+`fix/sync-schema-subset-198`; no ADR/spec/SCHEMA/event-type change — a loader-list fix + its standing drift
+guard; full detail in ROADMAP Slice 37 + git).** cairn-sync's embedded migration subset omitted db/027+029,
+which both write doors and the db/002 `patient.created` trigger call — PL/pgSQL late binding meant the subset
+loaded cleanly and a fresh `cairn-sync init` database suffered a **total write outage on the first
+`submit_event`/`apply_remote_event`** (invisible in CI: every suite ran against a database cairn-node's full
+loader had already visited). TDD: the RED test reproduced the exact production error
+(`cairn_hlc_triple_collision ... does not exist`, tripped by db/029 at trigger depth even before db/027's
+learn-refs call). Fix = 027+029 appended to `SCHEMA` + the standing guard `schema_subset_tests` in
+`cairn-sync/src/main.rs` (the private `SCHEMA` const lives there): under the cluster-wide advisory lock it
+wipes `cairn_test2` (one atomic batch — schema drop + `CREATE EXTENSION cairn_pgx` land together; safe
+because every suite sharing PG2 reloads its full schema on connect), loads ONLY the subset, honesty-checks no
+full-schema residue survived, then drives both doors — `submit_event` with a by-reference attachment (lazy
+blob reference lands in `blob_store`), `apply_remote_event` overlaying the same patient, and a genuine
+Byzantine HLC-triple pair whose advisory `hlc_collision_log` row must land (db/029's recorder EXECUTED, not
+just parsed). PR #222 review findings fixed in-branch: the db/006 recall doors (`recall_event`,
+`events_by_actor_epoch`) driven too — every caller-facing entry point the subset ships is now executed — and
+the honesty guard grew to three canaries across three non-subset migrations. Workspace **656/0 failed** +
+fmt + clippy `-D warnings` clean.
+
+**Prior session (2026-07-16, later) — the P2 opener: sync-convergence CI (issue #199 [B4], covers the #176
 deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change — tests +
 CI wiring only; full detail in ROADMAP Slice 36 + git).** The flagship "author on A, apply on B, identical projections"
 guarantee is now machine-checked: `rust.yml` provisions `cairn_test2`/`cairn_test3` on the CI cluster and exports
