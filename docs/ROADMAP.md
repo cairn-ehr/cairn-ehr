@@ -612,8 +612,8 @@ fixing one field never wipes the rest (principle 4); an explicit `strike` sentin
 **The corrected effective date drives current-dose winner selection** (bitemporal repair, not a display label).
 New `db/035` (db/031–034 UNTOUCHED): `ALTER`-extends the db/032 correction overlay (+`effective_value`/`_precision`/
 `note` + three touched-flags disambiguating struck-NULL from untouched), idempotent guarded backfill, the correction
-floor (strike-array/set-strike-conflict/set-group-must-carry-value/no-op + a **non-string-reason** guard hardened
-beyond the plan, principle 12), the apply trigger, and **five** reworked views kept column-identical (replay-safe):
+floor (strike-array/set-strike-conflict/set-group-must-carry-value/no-op + **non-string reason/note/info_source**
+guards hardened beyond the plan, principle 12), the apply trigger, and **five** reworked views kept column-identical (replay-safe):
 the two db/032 dose views + db/033's three group-rollup views (a mid-build discovery — `patient_medication_current`/
 `_past` route through the group rollup, so the corrected effective must be threaded there too or the headline is
 invisible). `reason` repurposed to the point's clinical reason; the correction rationale is a separate `note`
@@ -623,14 +623,16 @@ builder/twin), `cairn-node::medication::dose` (`CorrectDoseInput` + orchestrator
 verb: **no new event type, no floor bypass, no SCHEMA-counter bump, twin-registry unchanged.** Convergence stays
 **one row per point, HLC-wins WHOLESALE** — a later correction of the same point supersedes an earlier one, not
 field-merged (documented boundary; field-merge would need per-field HLC tracking). Subagent-driven build (6 tasks);
-opus whole-branch review **READY TO MERGE, 0 Critical/0 Important-in-scope**; full workspace green (`cargo test
---workspace` 0 failed; medication_dose 23, reconciliation 14, attestation 27). **Filed
+opus whole-branch review **READY TO MERGE, 0 Critical/0 Important-in-scope**; a post-review `/fixall` pass then
+extended the floor's type-guards from `reason` to `note`/`info_source` (principle 12, uniform annotation guard)
+and added the cross-cessation-boundary status test; full workspace green (`cargo test --workspace` 0 failed;
+medication_dose 25, reconciliation 15, attestation 27). **Filed
 [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (OPEN):** a **pre-existing** (db/032) cross-thread
 correction **suppression** vector — the overlay's single-column PK lets an authenticated hostile node evict a legit
 correction via `ON CONFLICT` (bounded: reverts to original, event auditable); needs a PK/design decision.
 **Deferred (documented boundaries):** the statement-level `started`-date correction (slice 5 covers the
-dose-timeline effective only); per-field merge across corrections of the same point; a `medication_group_status`
-cross-cessation-boundary test (reviewer-verified-correct).
+dose-timeline effective only); per-field merge across corrections of the same point. (The `medication_group_status`
+cross-cessation-boundary test, deferred at build time, was added in the post-review `/fixall` pass.)
 
 **Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
 ~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**

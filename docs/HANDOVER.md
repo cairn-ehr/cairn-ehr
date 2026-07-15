@@ -71,7 +71,7 @@ brainstormed decision was patch-not-restatement so fixing one field never wipes 
 explicit `strike` sentinel keeping set-to-unknown first-class. **The corrected effective date drives current-dose
 winner selection** (bitemporal repair, not a display label). New `db/035` (db/031–034 untouched):
 `ALTER`-extends the db/032 overlay (+`effective_value`/`_precision`/`note` + three touched-flags), idempotent
-backfill, the correction floor (strike/conflict/no-op + a **non-string-reason** guard hardened beyond the plan),
+backfill, the correction floor (strike/conflict/no-op + **non-string reason/note/info_source** guards hardened beyond the plan),
 the apply trigger, and **five** reworked views — the two db/032 dose views **and** db/033's three group-rollup
 views (a mid-build discovery: `patient_medication_current`/`_past` route through the group rollup, so the 2-view
 plan would have shipped an invisible headline; all five kept column-identical, replay-safe). `reason` repurposed
@@ -80,8 +80,12 @@ to avoid the flattened attest `--note` clash). `schema_version` /1→/2. Reuses 
 type, no floor bypass, twin-registry unchanged. Convergence stays **one row per point, HLC-wins wholesale** — a
 later correction of the same point supersedes an earlier one (not field-merged; field-merge deferred, needs
 per-field HLC). Full workspace green (fmt + clippy `-D warnings`; `cargo test --workspace` **0 failed**;
-medication_dose 23, reconciliation 14, attestation 27). Subagent-driven build (6 tasks) + opus whole-branch review
-= **READY TO MERGE, 0 Critical/Important-in-scope**. **Filed [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185)
+medication_dose 25, reconciliation 15, attestation 27). Subagent-driven build (6 tasks) + opus whole-branch review
+= **READY TO MERGE, 0 Critical/Important-in-scope**. A post-review `/fixall` pass then extended the floor's
+type-guards from `reason` to `note`/`info_source` (principle 12 — uniform annotation guard, closes the same
+`->>`-stringifies-a-non-scalar gap) and added the previously-deferred `medication_group_status`
+cross-cessation-boundary test (a corrected dose-point effective flips the group's active/ceased classification);
++3 tests, all green. **Filed [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185)
 (OPEN):** a **pre-existing** (db/032) cross-thread correction **suppression** vector — the overlay's single-column
 PK lets an authenticated hostile node evict a legit correction via `ON CONFLICT` (bounded: reverts to original,
 event auditable); needs a PK/design decision, not a regression here.

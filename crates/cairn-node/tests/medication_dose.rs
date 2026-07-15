@@ -1559,3 +1559,107 @@ async fn floor_rejects_non_string_correction_reason() {
         "a non-string reason must be rejected by the floor, got: {err}"
     );
 }
+
+/// Floor-hardening (post-slice-5 review, principle 12): `note` and `info_source` are
+/// audit annotations, but `->>` on a non-scalar jsonb value returns its stringified
+/// text — so a raw-SQL client (bypassing the Rust builder, which only ever offers a
+/// `&str`) could land `"note": {...}`'s JSON text verbatim in the column, exactly the
+/// gap already closed for `reason`. Both must be rejected by the in-DB floor, not merely
+/// by the Rust path. Same raw-client bypass shape as `floor_rejects_non_string_correction_reason`:
+/// build a well-formed correction (a set dose keeps it off the no-op floor) and hand-mutate
+/// the annotation to a JSON object before signing.
+#[tokio::test]
+async fn floor_rejects_non_string_correction_note() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+
+    let input = CorrectDoseInput {
+        dose_amount: Some("20"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: Some("placeholder — overwritten below"),
+        info_source: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut body: EventBody =
+        build_dose_correction_body(Uuid::now_v7(), med_id, patient, target, &input, &kid, hlc);
+    body.payload
+        .as_object_mut()
+        .unwrap()
+        .insert("note".into(), serde_json::json!({"foo": "bar"}));
+    let signed = sign(&body, &sk).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("note, when present, must be a non-empty string"),
+        "a non-string note must be rejected by the floor, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn floor_rejects_non_string_correction_info_source() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+
+    let input = CorrectDoseInput {
+        dose_amount: Some("20"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: None,
+        info_source: Some("placeholder — overwritten below"),
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut body: EventBody =
+        build_dose_correction_body(Uuid::now_v7(), med_id, patient, target, &input, &kid, hlc);
+    body.payload.as_object_mut().unwrap().insert(
+        "info_source".into(),
+        serde_json::json!(["not", "a", "string"]),
+    );
+    let signed = sign(&body, &sk).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("info_source, when present, must be a non-empty string"),
+        "a non-string info_source must be rejected by the floor, got: {err}"
+    );
+}

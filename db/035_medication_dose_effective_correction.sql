@@ -113,6 +113,22 @@ BEGIN
                              OR length(btrim(p ->> 'reason')) = 0) THEN
             RAISE EXCEPTION 'medication dose-correction: a set reason must be a non-empty string (use strike to set unknown)';
         END IF;
+        -- `note` and `info_source` are audit annotations, but the SAME non-scalar
+        -- stringification trap the reason guard closes applies: `->>` on a jsonb
+        -- object/array/number returns its non-empty stringified text, so a length-only
+        -- check would let a raw-SQL client (bypassing the Rust builder, which only ever
+        -- offers a &str) land e.g. `"note": {...}`'s JSON text verbatim in the column.
+        -- Guarded here too so the in-DB floor is the COMPLETE defense (principle 12),
+        -- uniform with reason. Both are honest-omit: absent is fine, present ⇒ non-empty
+        -- string (omit rather than send an empty annotation).
+        IF p ? 'note' AND (jsonb_typeof(p -> 'note') IS DISTINCT FROM 'string'
+                           OR length(btrim(p ->> 'note')) = 0) THEN
+            RAISE EXCEPTION 'medication dose-correction: note, when present, must be a non-empty string';
+        END IF;
+        IF p ? 'info_source' AND (jsonb_typeof(p -> 'info_source') IS DISTINCT FROM 'string'
+                                  OR length(btrim(p ->> 'info_source')) = 0) THEN
+            RAISE EXCEPTION 'medication dose-correction: info_source, when present, must be a non-empty string';
+        END IF;
         -- Not a no-op: must set or strike at least one group.
         IF NOT (
             p ? 'dose' OR p ? 'effective' OR p ? 'reason'
