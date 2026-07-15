@@ -1403,8 +1403,13 @@ async fn later_correction_supersedes_earlier_wholesale() {
     )
     .await
     .unwrap();
-    let (amt, _u, _de, _c) = current_dose(&c, med_id).await;
+    let (amt, unit, _de, _c) = current_dose(&c, med_id).await;
     assert_eq!(amt.as_deref(), Some("40"), "B's dose wins");
+    assert_eq!(
+        unit.as_deref(),
+        Some("mg"),
+        "B's dose unit wins with it (wholesale — the dose group is B's set value)"
+    );
     assert_eq!(
         current_effective(&c, med_id).await.as_deref(),
         Some("2025-06"),
@@ -1412,55 +1417,86 @@ async fn later_correction_supersedes_earlier_wholesale() {
     );
 }
 
-// Backfill: a pre-035-shaped row (flags NULL, reason = correction-why) is normalized to
-// dose_corrected=TRUE / note=reason / reason=NULL, and the backfill is idempotent.
+/// Read the single legacy row's normalized shape:
+/// (dose_corrected, effective_corrected, reason_corrected, note, reason).
+async fn legacy_correction_row(c: &Client) -> (bool, bool, bool, Option<String>, Option<String>) {
+    let row = c
+        .query_one(
+            "SELECT dose_corrected, effective_corrected, reason_corrected, note, reason \
+             FROM medication_dose_correction",
+            &[],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4))
+}
+
+/// Backfill: a pre-035-shaped row (all touched-flags NULL, `reason` = the old
+/// correction-why, `note` NULL) is normalized to dose_corrected=TRUE /
+/// effective_corrected=FALSE / reason_corrected=FALSE / note=<old reason> /
+/// reason=NULL — and the migration's backfill is idempotent.
+///
+/// This exercises the REAL backfill shipped in db/035, NOT a hand-copied duplicate: the
+/// project's reconnect-replay pattern means `connect_and_load_schema` re-runs every
+/// db/*.sql on each connect, so opening a fresh connection replays db/035's
+/// `UPDATE ... WHERE dose_corrected IS NULL` against whatever rows already exist. So a
+/// legacy row inserted on connection A is normalized by the schema replay on connection
+/// B, and a third replay on connection C (touching nothing new) proves idempotency.
+/// A future edit that breaks the shipped backfill therefore fails THIS test — which a
+/// hand-copied literal UPDATE could never catch (Task 4 review finding).
 #[tokio::test]
 async fn backfill_normalizes_legacy_row_idempotently() {
     let Some(base) = cs() else { return };
+    // One guard (its own connection) held across all three data connects below.
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
-    c.batch_execute(
+
+    // Connection A: schema is loaded (the backfill is a no-op on the empty table).
+    // Seed a legacy-shaped row: value columns set, all three touched-flags NULL,
+    // note NULL — exactly how a pre-035 correction row looked before this migration.
+    let a = db::connect_and_load_schema(&base).await.unwrap();
+    a.batch_execute(
         "DO $$ BEGIN IF to_regclass('public.medication_dose_correction') IS NOT NULL \
            THEN TRUNCATE medication_dose_correction; END IF; END $$;",
     )
     .await
     .unwrap();
-    // Simulate a legacy row: value columns set, all touched-flags NULL, reason=why.
-    c.execute(
+    a.execute(
         "INSERT INTO medication_dose_correction \
-           (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, \
+           (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, note, \
             dose_corrected, effective_corrected, reason_corrected, \
             hlc_wall, hlc_counter, origin, content_address) \
-         VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), '20', 'mg', 'mis-keyed', \
+         VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), '20', 'mg', 'mis-keyed', NULL, \
             NULL, NULL, NULL, 1, 0, 'legacy', '\\x00')",
         &[],
     )
     .await
     .unwrap();
-    let backfill = "UPDATE medication_dose_correction \
-        SET dose_corrected = TRUE, effective_corrected = FALSE, reason_corrected = FALSE, \
-            note = reason, reason = NULL \
-        WHERE dose_corrected IS NULL";
-    c.execute(backfill, &[]).await.unwrap();
-    let row = c
-        .query_one(
-            "SELECT dose_corrected, effective_corrected, reason_corrected, note, reason \
-         FROM medication_dose_correction",
-            &[],
-        )
-        .await
-        .unwrap();
-    assert_eq!(row.get::<_, bool>(0), true);
-    assert_eq!(row.get::<_, bool>(1), false);
-    assert_eq!(row.get::<_, bool>(2), false);
+    drop(a);
+
+    // Connection B: reconnecting REPLAYS db/035, running the REAL backfill against the
+    // legacy row seeded on A. The row must now be normalized.
+    let b = db::connect_and_load_schema(&base).await.unwrap();
+    let (dose_c, eff_c, reason_c, note, reason) = legacy_correction_row(&b).await;
+    assert!(dose_c, "legacy whole-row correction → dose_corrected TRUE");
+    assert!(!eff_c, "legacy row did not touch effective");
+    assert!(!reason_c, "legacy row did not touch the point's reason");
     assert_eq!(
-        row.get::<_, Option<String>>(3).as_deref(),
-        Some("mis-keyed")
+        note.as_deref(),
+        Some("mis-keyed"),
+        "the old correction-why moves into note"
     );
-    assert_eq!(row.get::<_, Option<String>>(4), None);
-    // Idempotent: a second run touches nothing (all flags now non-NULL).
-    let n = c.execute(backfill, &[]).await.unwrap();
-    assert_eq!(n, 0, "backfill must be idempotent");
+    assert_eq!(reason, None, "reason is cleared (now a point-reason slot)");
+    drop(b);
+
+    // Connection C: a THIRD replay makes NO further change (the `WHERE dose_corrected
+    // IS NULL` guard now matches nothing) — the row is untouched, not re-clobbered.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let after = legacy_correction_row(&c).await;
+    assert_eq!(
+        after,
+        (true, false, false, Some("mis-keyed".to_string()), None),
+        "backfill is idempotent — a second replay leaves the normalized row unchanged"
+    );
 }
 
 /// Floor-hardening (Task 3 review finding): the dose-CHANGE branch of
