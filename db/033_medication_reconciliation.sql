@@ -181,8 +181,31 @@ DECLARE
     hi      uuid  := GREATEST(a, b);
     v_state text  := CASE WHEN NEW.event_type = 'clinical.medication-reconciliation.asserted'
                           THEN 'reconciled' ELSE 'separated' END;
+    v_pa    uuid;
+    v_pb    uuid;
 BEGIN
     PERFORM pg_advisory_xact_lock(x'4341524E4D52'::bigint);  -- 'CARNMR'
+
+    -- Cross-patient reconciliation guard (#192 scenario B, resolving the #177 design
+    -- decision): when BOTH subject threads' patients are KNOWN locally and differ, a
+    -- reconciliation is refused at the LOCAL door — the caller is linking two charts'
+    -- medications, almost certainly a wrong-chart click, and nothing has accepted the
+    -- event yet. Offline-first is preserved: an unknown thread passes honestly
+    -- (principle 4), and the late-arriving contradiction is surfaced read-time by the
+    -- medication_group_cross_patient view below, whatever the arrival order. The
+    -- sync-apply path never raises (a node-local veto would fork the event set) — the
+    -- view is its surface too. SEPARATION is never guarded: it is the repair primitive
+    -- for exactly this inconsistency and must always pass (never block the fix).
+    IF v_state = 'reconciled'
+       AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        v_pa := cairn_medication_thread_patient(lo);
+        v_pb := cairn_medication_thread_patient(hi);
+        IF v_pa IS NOT NULL AND v_pb IS NOT NULL AND v_pa <> v_pb THEN
+            RAISE EXCEPTION
+                'medication reconciliation: threads % and % belong to different patients (% vs %) — cross-patient reconciliation refused; separate/re-assert on the right chart instead (issues #192/#177)',
+                lo, hi, v_pa, v_pb;
+        END IF;
+    END IF;
 
     INSERT INTO medication_reconciliation
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, content_address)
@@ -404,5 +427,25 @@ FROM (
 GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
 HAVING count(DISTINCT group_id) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
+
+-- 9. Cross-patient group surface (#192 scenario B / #177). A reconciled group whose
+--    member threads' statements span MORE THAN ONE patient is a standing wrong-chart
+--    hazard: medication_group_status emits one row per (group, patient), so
+--    patient_medication_current shows the group under both charts with mixed
+--    attribution. Read-time and arrival-order independent (the whole point: a
+--    reconciliation may legitimately pass the local door while a subject's statement
+--    is still in flight — this view lights up whenever the contradiction lands,
+--    whichever door and order it arrived by, and clears when a separation repairs
+--    it). Advisory worklist: surface, never auto-separate (flag-never-suppress).
+CREATE OR REPLACE VIEW medication_group_cross_patient AS
+SELECT gm.group_id,
+       array_agg(DISTINCT ms.patient_id ORDER BY ms.patient_id) AS patients,
+       count(DISTINCT ms.patient_id)                            AS patient_count,
+       count(DISTINCT gm.medication_id)                         AS member_count
+FROM medication_group_member gm
+JOIN medication_statement ms ON ms.medication_id = gm.medication_id
+GROUP BY gm.group_id
+HAVING count(DISTINCT ms.patient_id) > 1;
+GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
 
 COMMIT;

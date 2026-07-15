@@ -178,6 +178,12 @@ CREATE OR REPLACE FUNCTION medication_dose_change_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE p jsonb := NEW.body;
 BEGIN
+    -- #192 thread patient-consistency (shared guard, db/031): a dose row carries its
+    -- own patient_id, so a wrong-patient dose event would mis-attribute the dose
+    -- history. Local fail-loud / remote converge-and-flag / unknown passes.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+
     INSERT INTO medication_dose_event
         (dose_event_id, medication_id, patient_id, amount, unit,
          effective_value, effective_precision, is_initial, info_source, reason,
@@ -284,6 +290,11 @@ CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE p jsonb := NEW.body;
 BEGIN
+    -- #192 thread patient-consistency (shared guard, db/031) — same contract as the
+    -- dose-change trigger above.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+
     INSERT INTO medication_dose_correction
         (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, info_source,
          hlc_wall, hlc_counter, origin, content_address)

@@ -1,0 +1,484 @@
+//! Issue #192 (2026-07-15 review, finding A4) + the #177 design decision —
+//! medication threads belong to ONE chart for life.
+//!
+//! Scenario A (rebind): `medication_statement`'s PK is `medication_id` alone and its
+//! overlay does `patient_id = EXCLUDED.patient_id`, so a buggy or hostile client
+//! re-asserting an existing `medication_id` under another patient silently re-homed the
+//! whole thread — including every accumulated dose point, which joins by
+//! `medication_id` — onto the other chart, convergently, on every node, unflagged.
+//!
+//! Scenario B (#177): nothing required a reconciliation's two subject threads to belong
+//! to the same patient, so a cross-patient group made `medication_group_status` emit one
+//! row per (group, patient) and `patient_medication_current` showed mixed attribution.
+//!
+//! The fix follows the `chart_dispute` subject-consistency pattern (db/023): FAIL LOUD
+//! at the LOCAL door (nothing accepted yet — catch the caller bug at source, lose no
+//! data), CONVERGE-AND-FLAG on the sync-apply path (peers already hold the signed
+//! event; a node-local veto would fork the event set — the flag surfaces the
+//! contradiction for humans instead). Offline-first is preserved: a thread whose
+//! standing patient is UNKNOWN locally passes the local door, and the cross-patient
+//! read-time view catches the late-arriving contradiction whichever order it lands in.
+//!
+//! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
+use cairn_event::{generate_key, sign, SigningKey};
+use cairn_node::db;
+use cairn_node::medication::{
+    assert_medication, build_assert_body, build_dose_change_body, cease_medication,
+    reconcile_medications, separate_medications, AssertMedicationInput, CeaseMedicationInput,
+    ChangeDoseInput, ReconcileInput,
+};
+use tokio_postgres::Client;
+use uuid::Uuid;
+
+fn cs() -> Option<String> {
+    std::env::var("CAIRN_TEST_PG").ok()
+}
+
+fn db_msg(e: &tokio_postgres::Error) -> String {
+    e.as_db_error()
+        .map(|d| d.message().to_string())
+        .unwrap_or_else(|| e.to_string())
+}
+
+/// Truncate the log + every medication projection and enroll a fresh device actor.
+async fn setup_node(c: &Client) -> (SigningKey, String) {
+    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
+        .await
+        .unwrap();
+    c.batch_execute(
+        "DO $$ BEGIN \
+           IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
+           IF to_regclass('public.medication_cessation') IS NOT NULL THEN TRUNCATE medication_cessation; END IF; \
+           IF to_regclass('public.medication_dose_event') IS NOT NULL THEN TRUNCATE medication_dose_event; END IF; \
+           IF to_regclass('public.medication_dose_correction') IS NOT NULL THEN TRUNCATE medication_dose_correction; END IF; \
+           IF to_regclass('public.medication_reconciliation') IS NOT NULL THEN TRUNCATE medication_reconciliation; END IF; \
+           IF to_regclass('public.medication_group_member') IS NOT NULL THEN TRUNCATE medication_group_member; END IF; \
+           IF to_regclass('public.medication_projection_flag') IS NOT NULL THEN TRUNCATE medication_projection_flag; END IF; \
+           IF to_regclass('public.medication_patient_conflict_flag') IS NOT NULL THEN TRUNCATE medication_patient_conflict_flag; END IF; \
+         END $$;",
+    )
+    .await
+    .unwrap();
+    let (sk, kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('device', '{\"role\":\"registration-desk\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+    (sk, kid)
+}
+
+fn sample_assert(term: &'static str) -> AssertMedicationInput<'static> {
+    AssertMedicationInput {
+        term,
+        inn_code: None,
+        formulation: Some("tablet"),
+        dose_amount: Some("40"),
+        dose_unit: Some("mg"),
+        sig: Some("one BD"),
+        info_source: "patient-reported",
+        started: Some("2024"),
+        started_precision: Some("year"),
+    }
+}
+
+/// Sign a re-assert of an EXISTING medication_id under a chosen patient and submit it
+/// at the chosen door ('submit_event' or 'apply_remote_event').
+async fn reassert_at_door(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    door: &str,
+    medication_id: Uuid,
+    patient: Uuid,
+) -> Result<u64, tokio_postgres::Error> {
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let body = build_assert_body(
+        Uuid::now_v7(),
+        medication_id,
+        patient,
+        &sample_assert("metoprolol"),
+        kid,
+        hlc,
+    );
+    let signed = sign(&body, sk).unwrap();
+    c.execute(&format!("SELECT {door}($1)")[..], &[&signed.signed_bytes])
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Scenario A — the rebind hazard on the assert/cease/dose paths.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn local_reassert_under_different_patient_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let r = reassert_at_door(&c, &sk, &kid, "submit_event", med, patient_b).await;
+    assert!(
+        r.is_err(),
+        "re-asserting an existing thread under another patient must be refused locally"
+    );
+    let m = db_msg(&r.unwrap_err());
+    assert!(
+        m.contains("patient"),
+        "the refusal must name the patient-consistency contract, got: {m}"
+    );
+
+    // The thread is untouched — still patient A's.
+    let p: String = c
+        .query_one(
+            "SELECT patient_id::text FROM medication_statement WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(p, patient_a.to_string(), "the standing thread must be unchanged");
+}
+
+#[tokio::test]
+async fn local_cessation_under_different_patient_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let r = cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_b,
+        med,
+        &CeaseMedicationInput {
+            stopped: Some("2025"),
+            stopped_precision: Some("year"),
+            reason: Some("wrong chart"),
+        },
+        None,
+    )
+    .await;
+    assert!(
+        r.is_err(),
+        "ceasing another patient's thread must be refused locally"
+    );
+}
+
+#[tokio::test]
+async fn local_dose_change_under_different_patient_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let input = ChangeDoseInput {
+        dose_amount: Some("80"),
+        dose_unit: Some("mg"),
+        effective: Some("2025-06"),
+        effective_precision: Some("month"),
+        info_source: "clinician",
+        reason: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body = build_dose_change_body(Uuid::now_v7(), med, patient_b, &input, &kid, hlc);
+    let signed = sign(&body, &sk).unwrap();
+    let r = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    assert!(
+        r.is_err(),
+        "a dose change naming another patient for the thread must be refused locally"
+    );
+}
+
+/// Offline-first must survive the guard: an orphan cessation (no local statement)
+/// still passes the local door — the standing patient is honestly unknown.
+#[tokio::test]
+async fn local_orphan_cessation_still_accepted() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let unknown_thread = Uuid::now_v7();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        unknown_thread,
+        &CeaseMedicationInput {
+            stopped: Some("2025"),
+            stopped_precision: Some("year"),
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .expect("an orphan cessation must still be accepted (offline-first)");
+}
+
+/// The sync-apply path must NOT raise (a node-local veto of a validly-signed event
+/// peers already hold would fork the event set): the thread converges by HLC — and the
+/// contradiction is FLAGGED for humans (the 'unflagged' half of finding A4).
+#[tokio::test]
+async fn remote_reassert_converges_and_flags() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", med, patient_b)
+        .await
+        .expect("the apply door must admit the replicated event (converge, never fork)");
+
+    // Converged to the HLC-later claim...
+    let p: String = c
+        .query_one(
+            "SELECT patient_id::text FROM medication_statement WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(p, patient_b.to_string(), "sync must converge to the HLC winner");
+
+    // ...and the contradiction is on the advisory worklist.
+    let flags: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_patient_conflict_flag WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(flags, 1, "the cross-patient rebind must be flagged, never silent");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario B (#177) — cross-patient reconciliation.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn local_cross_patient_reconcile_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let m1 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+    )
+    .await
+    .unwrap();
+    let m2 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_b,
+        &sample_assert("betaloc"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let r = reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: Some("looks same"),
+        },
+        None,
+    )
+    .await;
+    assert!(
+        r.is_err(),
+        "reconciling two threads with KNOWN different patients must be refused locally (#177)"
+    );
+}
+
+/// Offline-first: when the subjects' patients are unknown at submit time the local door
+/// passes (never fabricate certainty) — and the standing cross-patient group is then
+/// surfaced by the read-time view once the statements land, whatever the arrival order.
+#[tokio::test]
+async fn cross_patient_group_surfaced_by_view() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let m1 = Uuid::now_v7();
+    let m2 = Uuid::now_v7();
+
+    // Reconcile FIRST (both threads unknown locally — passes the local door honestly).
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .expect("offline-first: unknown subjects must pass the local door");
+
+    // The statements arrive afterwards, on different charts.
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m1, patient_a)
+        .await
+        .unwrap();
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m2, patient_b)
+        .await
+        .unwrap();
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_group_cross_patient WHERE group_id = $1::text::uuid",
+            &[&std::cmp::min(m1, m2).to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "a standing cross-patient group must be surfaced by the advisory view"
+    );
+}
+
+/// Separation is the REPAIR primitive for a bad cross-patient link — it must never be
+/// blocked by the very inconsistency it exists to fix.
+#[tokio::test]
+async fn separation_of_cross_patient_group_still_accepted() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let m1 = Uuid::now_v7();
+    let m2 = Uuid::now_v7();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m1, patient_a)
+        .await
+        .unwrap();
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m2, patient_b)
+        .await
+        .unwrap();
+
+    separate_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: Some("wrong chart — undoing"),
+        },
+        None,
+    )
+    .await
+    .expect("separation (the repair) must always pass, even on a cross-patient group");
+
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_group_cross_patient", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "after separation the cross-patient flag view is clear");
+}
