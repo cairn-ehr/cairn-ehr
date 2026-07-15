@@ -4,8 +4,9 @@
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_dose_change_body, change_dose, correct_dose,
-    resolve_correction_target, AssertMedicationInput, ChangeDoseInput, CorrectDoseInput,
+    assert_medication, build_dose_change_body, build_dose_correction_body, change_dose,
+    correct_dose, resolve_correction_target, AssertMedicationInput, ChangeDoseInput,
+    CorrectDoseInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -271,6 +272,24 @@ async fn history_amounts(c: &Client, med_id: Uuid) -> Vec<Option<String>> {
     .unwrap()
     .iter()
     .map(|r| r.get::<_, Option<String>>(0))
+    .collect()
+}
+
+/// (amount, effective_value, reason) rows of a thread's dose history, effective-ASC.
+async fn dose_history(
+    c: &Client,
+    med_id: Uuid,
+) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+    c.query(
+        "SELECT amount, effective_value, reason FROM patient_medication_dose_history \
+         WHERE medication_id = $1::text::uuid \
+         ORDER BY cairn_dose_effective_sort_key(effective_value, extract(epoch FROM recorded_at)::bigint*1000) COLLATE \"C\" ASC, dose_event_id",
+        &[&med_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1), r.get(2)))
     .collect()
 }
 
@@ -1058,5 +1077,449 @@ async fn floor_rejects_no_op_correction() {
     assert!(
         format!("{err:#}").contains("must set or strike at least one"),
         "expected no-op floor rejection, got: {err:#}"
+    );
+}
+
+// Floor: an unknown strike token is rejected legibly (closed group set).
+#[tokio::test]
+async fn floor_rejects_unknown_strike_token() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+    let err = correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &["bogus"],
+            note: None,
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("strike may only contain"),
+        "got: {err:#}"
+    );
+}
+
+// Floor: a group set AND struck in the same correction is a contradiction.
+#[tokio::test]
+async fn floor_rejects_set_and_struck_same_group() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+    let err = correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        target,
+        &CorrectDoseInput {
+            dose_amount: Some("20"),
+            dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &["dose"],
+            note: None,
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("both set and struck"),
+        "got: {err:#}"
+    );
+}
+
+// Projection: correcting a point's reason surfaces the corrected reason (closes the
+// slice-2 dead-column gap) and leaves the dose + effective untouched (per-field keep).
+#[tokio::test]
+async fn corrected_reason_surfaces_and_other_groups_kept() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let pt = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: Some("titration"),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        pt,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            reason: Some("dose reduction, not titration"),
+            strike: &[],
+            note: Some("wrong reason keyed"),
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let hist = dose_history(&c, med_id).await;
+    // The corrected point keeps 80mg + 2025-06 but shows the corrected reason.
+    assert!(
+        hist.iter().any(|(a, e, r)| a.as_deref() == Some("80")
+            && e.as_deref() == Some("2025-06")
+            && r.as_deref() == Some("dose reduction, not titration")),
+        "corrected reason must surface with dose/effective kept, got: {hist:?}"
+    );
+}
+
+// Projection: strike dose → unknown, while effective/reason on the same point are kept.
+#[tokio::test]
+async fn strike_dose_reads_unknown_others_kept() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let pt = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: Some("titration"),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        pt,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &["dose"],
+            note: Some("was a guess"),
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let (amt, unit, _de, corrected) = current_dose(&c, med_id).await;
+    assert_eq!(amt, None, "struck dose reads unknown");
+    assert_eq!(unit, None);
+    assert!(corrected);
+    assert_eq!(
+        current_effective(&c, med_id).await.as_deref(),
+        Some("2025-06"),
+        "effective kept"
+    );
+}
+
+// Convergence: a later (higher-HLC) correction of the SAME point supersedes the earlier
+// one WHOLESALE (documented boundary — not field-merged).
+#[tokio::test]
+async fn later_correction_supersedes_earlier_wholesale() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let pt = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ChangeDoseInput {
+            dose_amount: Some("80"),
+            dose_unit: Some("mg"),
+            effective: Some("2025-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    // Correction A: fix the effective only.
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        pt,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: Some("2024-01"),
+            effective_precision: Some("month"),
+            reason: None,
+            strike: &[],
+            note: None,
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    // Correction B (later HLC): fix the dose only — supersedes A wholesale.
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        pt,
+        &CorrectDoseInput {
+            dose_amount: Some("40"),
+            dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: None,
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let (amt, _u, _de, _c) = current_dose(&c, med_id).await;
+    assert_eq!(amt.as_deref(), Some("40"), "B's dose wins");
+    assert_eq!(
+        current_effective(&c, med_id).await.as_deref(),
+        Some("2025-06"),
+        "B did not touch effective → reverts to the original (wholesale supersede, documented boundary)"
+    );
+}
+
+// Backfill: a pre-035-shaped row (flags NULL, reason = correction-why) is normalized to
+// dose_corrected=TRUE / note=reason / reason=NULL, and the backfill is idempotent.
+#[tokio::test]
+async fn backfill_normalizes_legacy_row_idempotently() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute(
+        "DO $$ BEGIN IF to_regclass('public.medication_dose_correction') IS NOT NULL \
+           THEN TRUNCATE medication_dose_correction; END IF; END $$;",
+    )
+    .await
+    .unwrap();
+    // Simulate a legacy row: value columns set, all touched-flags NULL, reason=why.
+    c.execute(
+        "INSERT INTO medication_dose_correction \
+           (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, \
+            dose_corrected, effective_corrected, reason_corrected, \
+            hlc_wall, hlc_counter, origin, content_address) \
+         VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), '20', 'mg', 'mis-keyed', \
+            NULL, NULL, NULL, 1, 0, 'legacy', '\\x00')",
+        &[],
+    )
+    .await
+    .unwrap();
+    let backfill = "UPDATE medication_dose_correction \
+        SET dose_corrected = TRUE, effective_corrected = FALSE, reason_corrected = FALSE, \
+            note = reason, reason = NULL \
+        WHERE dose_corrected IS NULL";
+    c.execute(backfill, &[]).await.unwrap();
+    let row = c
+        .query_one(
+            "SELECT dose_corrected, effective_corrected, reason_corrected, note, reason \
+         FROM medication_dose_correction",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, bool>(0), true);
+    assert_eq!(row.get::<_, bool>(1), false);
+    assert_eq!(row.get::<_, bool>(2), false);
+    assert_eq!(
+        row.get::<_, Option<String>>(3).as_deref(),
+        Some("mis-keyed")
+    );
+    assert_eq!(row.get::<_, Option<String>>(4), None);
+    // Idempotent: a second run touches nothing (all flags now non-NULL).
+    let n = c.execute(backfill, &[]).await.unwrap();
+    assert_eq!(n, 0, "backfill must be idempotent");
+}
+
+/// Floor-hardening (Task 3 review finding): the dose-CHANGE branch of
+/// `cairn_check_medication_dose` requires `jsonb_typeof(reason) = 'string'`, but the
+/// dose-CORRECTION branch's set-reason guard only checked non-emptiness after `->>` —
+/// so a raw-SQL client (bypassing the Rust builder entirely, which only ever offers a
+/// `&str`) could submit `"reason": {...}` on a correction. `->>` on a jsonb object
+/// returns its stringified text (non-null, non-empty), so the old guard let it through
+/// and the object's JSON text landed verbatim in the `reason` text column — a floor
+/// gap, since principle 12 requires the in-DB floor to be the complete defense, not
+/// just the Rust path. This builds a well-formed correction via the same builder the
+/// orchestrator uses, then hand-mutates `payload.reason` to a JSON object before
+/// signing — the exact raw-SQL-client bypass shape used by the sibling
+/// `floor_rejects_empty_dose_object_noop` test above.
+#[tokio::test]
+async fn floor_rejects_non_string_correction_reason() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med_id = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert(),
+        None,
+    )
+    .await
+    .unwrap();
+    let target = resolve_correction_target(&c, med_id, None).await.unwrap();
+
+    let input = CorrectDoseInput {
+        dose_amount: None,
+        dose_unit: None,
+        effective: None,
+        effective_precision: None,
+        reason: Some("placeholder — overwritten below"),
+        strike: &[],
+        note: None,
+        info_source: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let mut body: EventBody =
+        build_dose_correction_body(Uuid::now_v7(), med_id, patient, target, &input, &kid, hlc);
+    // The raw-client bypass: swap the well-formed string reason for a JSON object.
+    body.payload
+        .as_object_mut()
+        .unwrap()
+        .insert("reason".into(), serde_json::json!({"foo": "bar"}));
+    let signed = sign(&body, &sk).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("a set reason must be a non-empty string"),
+        "a non-string reason must be rejected by the floor, got: {err}"
     );
 }

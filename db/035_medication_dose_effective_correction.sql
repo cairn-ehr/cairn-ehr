@@ -102,7 +102,15 @@ BEGIN
         IF p ? 'effective' AND (p -> 'effective' ->> 'value') IS NULL THEN
             RAISE EXCEPTION 'medication dose-correction: a set effective must carry a value (use strike to set unknown)';
         END IF;
-        IF p ? 'reason' AND COALESCE(length(btrim(p ->> 'reason')), 0) = 0 THEN
+        -- A set reason must be a STRING, not merely non-empty after ->> — a raw-SQL
+        -- client could submit `"reason": {...}` or a number, and `->>` on a non-scalar
+        -- jsonb value returns its non-empty stringified text, silently passing a
+        -- length-only check. The dose-CHANGE branch above already gates on
+        -- jsonb_typeof = 'string'; this closes the same gap on the correction branch
+        -- (Task 3 review finding; principle 12 — the in-DB floor is the complete
+        -- defense, not just the Rust path, which only ever offers a &str).
+        IF p ? 'reason' AND (jsonb_typeof(p -> 'reason') IS DISTINCT FROM 'string'
+                             OR length(btrim(p ->> 'reason')) = 0) THEN
             RAISE EXCEPTION 'medication dose-correction: a set reason must be a non-empty string (use strike to set unknown)';
         END IF;
         -- Not a no-op: must set or strike at least one group.
