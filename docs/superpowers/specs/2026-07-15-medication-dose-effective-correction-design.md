@@ -246,4 +246,10 @@ commit.
 - **Structured effective-date validation** — the effective `value` stays an uncertainty-capable free string
   (matching `-dose-change`); the floor checks structure/type only, never parses the date (locale-neutral,
   §5.1).
+- **Field-merge across multiple corrections of the *same* point.** The overlay keeps the existing db/032 shape:
+  one row per corrected point, highest-HLC-wins **wholesale** (`cairn_hlc_overlay_wins`), so set-union sync stays
+  convergent. Per-field patch therefore applies *within* one correction (against the original point), but a later
+  correction of the same point **supersedes** an earlier one rather than field-merging with it — to keep an
+  earlier field-fix, restate it. True per-field merge would need per-field HLC tracking (multiple rows or per-field
+  overlay guards) to remain convergent; that is a deliberate future refinement, noted in ADR-0050.
 - No change to attestation, reconciliation, cessation, or the assert verb.
