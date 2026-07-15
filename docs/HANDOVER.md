@@ -1,14 +1,10 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-14 · **Spec/ADRs:** v0.50 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-15 · **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
-(piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
-blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
-synthetic volume generator · B3 eval mirror (range-DOB + administrative-sex) · B3 weight-learning: supervised
-Fellegi–Sunter estimation · **B3 further compound blocking keys `dob+first-initial`/`name+sex` — done this session**
-· consumes `patient_alias_pool` known-alias evidence · range-aware, positive-only
-`compare_dob` for clinician-observed estimated ages · anchored birth-year-range blocking passes (`dob-range` /
-`dob-range+sex`) + the A/B pass-toggle · composite `sex` scoring + the unconfirmed-chart REVIEW rule) +
+(advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
+harness/compound-keys/volume-generator/weight-learning + clinician-observed range-DOB evidence + composite-sex
+scoring & the unconfirmed-chart REVIEW rule; full detail in ROADMAP slices 6–25) +
 the **§5.7 identity core: C1 linkage · C2 human-accepted apply seam · C2b auto-apply of the `auto_candidate` band · C3
 `dispute` + the chart trust-state projection · C4 `identify` + the *unconfirmed* trust state · C5 `repudiate` + the
 known-alias pool** (the §5.7 confirmed/unconfirmed/under-review contract is COMPLETE) + the
@@ -54,6 +50,10 @@ supersede-never-retract; `--attest-as` on all six verbs + `medication-attest` CL
 [#181](https://github.com/cairn-ehr/cairn-ehr/issues/181)): one real floor improvement (M1 — a
 responsibility-less attestation body now gets a legible floor rejection, not a cryptic NOT-NULL) + five
 coverage tests + a fixed stale SQL-mirror row count (15→16); no ADR/spec/SCHEMA/event-type change.
++ the **medication dose effective-date/reason correction, slice 5 — BUILT this session** (ADR-0050; `db/035`
+— the `-dose-correction` verb becomes a **per-field patch** [dose/effective/reason each set|strike|keep], the
+corrected effective date drives current-dose winner selection [bitemporal repair], `schema_version` /1→/2; no
+new event type; PR forthcoming).
 + the **L3 clinician reference-UI shell, slice 1 — BUILT** (a standalone `cairn-gui/` workspace with a
 framework-agnostic contract/port/manifest/routing core; **Spike 0004 resolved — iced FAILS the accessibility bar**,
 so the reference desktop UI **pivots to Tauri 2**, an L3 framework choice *below* the compatibility boundary — no
@@ -61,33 +61,40 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-14, later) — medication-attestation hardening + coverage (closes
-[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); branch `fix/medication-attestation-hardening`; **PR
-#183**; no ADR/spec/SCHEMA change; no new event type — an in-place `cairn_check_medication_attestation`
-edit to db/034).** Pays down the slice-4 whole-branch review's follow-ups (all triaged acceptable, none
-blocking). **M1 (the one real floor improvement, principle 12):** a hostile/raw attestation body with **no
-responsibility-bearing contributor** slipped past the db/005 gate (`v_bears` false → no token → `attester_key`
-NULL) and failed only later at the apply trigger's `attester_kid TEXT NOT NULL` with a cryptic *"null value…"*.
-The floor now rejects it **legibly** (mirrors the db/005 predicate `e ? 'responsibility'` so floor and gate
-agree; db/026 precedent), still fail-closed; the production Rust builder always carries the contributor, so no
-well-formed event is affected. **Five coverage tests (TDD):** the **second-subject** reconcile/separate
-attestation rejection **rolls back the first subject's vouch + the verb event** (forced via an orphan second
-thread — the highest-value cheap gap); the **group-rollup unattested-member** branch + the **singleton
-reduction** (`unattested_members`, computed but previously unchecked); the equal-HLC **`content_address DESC`
-tiebreak** (upgraded from the review's "note it" to a real convergence-determinism test); and the pure builder
-`note`-without-`basis` permutation. The signer==attester invariant (`attester_key` vs `signer_key_id`,
-principle 10) is documented at the apply trigger. **Bonus catch:** `db/tests/034_twin_registry_test.sql`
-asserted **15** registry rows — a PR #182 miss (the Rust mirror was updated to 16, the SQL one wasn't);
-corrected to 16 (verified passing). **Post-review (`/review`→`/fixall`):** the M1 comment overstated its type
-guard — it read as making a non-array `contributors` legible *at the doors*, but both submit doors compute
-`v_bears` (`jsonb_array_elements` over `contributors`) **before** the floor, so a non-array is already rejected
-upstream with a cryptic scalar-extract error; comment corrected to describe the guard as **defense-in-depth for
-a direct caller**, and a sixth test (`floor_check_fn_directly_rejects_non_array_contributors`) now covers that
-genuinely-live branch (the OR short-circuit PostgreSQL does not contractually guarantee). Full workspace green
-(fmt + clippy `-D warnings`; `cargo test --workspace` **602 passed / 0 failed**; the two SQL mirrors touched
-pass). **Open (deferred, both unreachable by well-formed clients):** the cosmetic `reviewed_count` `u32`→`int4`
-note ([#181](https://github.com/cairn-ehr/cairn-ehr/issues/181)) and the pre-existing all-types **door-level
-non-array-`contributors` legibility gap** ([#184](https://github.com/cairn-ehr/cairn-ehr/issues/184)).
+**This session (2026-07-15) — medication dose effective-date/reason correction, slice 5 (ADR-0050, spec
+v0.50→v0.51; branch `feat/medication-dose-effective-correction`; PR forthcoming; full detail in git + the ADR
++ ROADMAP Slice 34).** Closes slice 2's honest gap: the `-dose-correction` verb fixed the dose *value* only, so
+a mis-keyed effective date (which drives current-dose winner selection) and clinical reason were uncorrectable.
+The correction is now a **per-field patch** of a targeted dose point — three groups `dose`/`effective`/`reason`,
+each **set** (a value) / **struck** (named in a `strike` array → set-unknown) / **kept** (omitted); the
+brainstormed decision was patch-not-restatement so fixing one field never wipes the rest (principle 4), with an
+explicit `strike` sentinel keeping set-to-unknown first-class. **The corrected effective date drives current-dose
+winner selection** (bitemporal repair, not a display label). New `db/035` (db/031–034 untouched):
+`ALTER`-extends the db/032 overlay (+`effective_value`/`_precision`/`note` + three touched-flags), idempotent
+backfill, the correction floor (strike/conflict/no-op + a **non-string-reason** guard hardened beyond the plan),
+the apply trigger, and **five** reworked views — the two db/032 dose views **and** db/033's three group-rollup
+views (a mid-build discovery: `patient_medication_current`/`_past` route through the group rollup, so the 2-view
+plan would have shipped an invisible headline; all five kept column-identical, replay-safe). `reason` repurposed
+to the point's clinical reason; the correction rationale is a separate `note` (CLI `--correction-note`, renamed
+to avoid the flattened attest `--note` clash). `schema_version` /1→/2. Reuses the existing verb: no new event
+type, no floor bypass, twin-registry unchanged. Convergence stays **one row per point, HLC-wins wholesale** — a
+later correction of the same point supersedes an earlier one (not field-merged; field-merge deferred, needs
+per-field HLC). Full workspace green (fmt + clippy `-D warnings`; `cargo test --workspace` **0 failed**;
+medication_dose 23, reconciliation 14, attestation 27). Subagent-driven build (6 tasks) + opus whole-branch review
+= **READY TO MERGE, 0 Critical/Important-in-scope**. **Filed [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185)
+(OPEN):** a **pre-existing** (db/032) cross-thread correction **suppression** vector — the overlay's single-column
+PK lets an authenticated hostile node evict a legit correction via `ON CONFLICT` (bounded: reverts to original,
+event auditable); needs a PK/design decision, not a regression here.
+
+**Prior session (2026-07-14, later) — medication-attestation hardening + coverage (condensed; PR #183, closes
+[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); no ADR/spec/SCHEMA/event-type change — an in-place
+db/034 floor edit; full detail in git + ROADMAP Slice 33 follow-up).** Paid down the slice-4 review follow-ups:
+M1 = a responsibility-less attestation body now gets a **legible** floor rejection (mirrors the db/005
+`e ? 'responsibility'` predicate, fail-closed; well-formed events unaffected) + 6 coverage tests (second-subject
+rollback, group-rollup unattested-member/singleton, equal-HLC `content_address` tiebreak, builder permutations,
+the direct floor-fn non-array-`contributors` branch) + a fixed stale SQL-mirror row count (15→16). Left open
+(both unreachable by well-formed clients): cosmetic `reviewed_count` `u32`→`int4` (#181) + the door-level
+non-array-`contributors` legibility gap ([#184](https://github.com/cairn-ehr/cairn-ehr/issues/184)).
 
 **Last session (2026-07-14) — medication attestation slice 4 (condensed; ADR-0049, spec v0.49→v0.50; merged
 PR #182, on main; full detail in git + the ADR + ROADMAP Slice 33).** One new **additive** event type
@@ -276,20 +283,19 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
 
 **Desk-doable now (no external dependency):**
 - **`clinical.medication` — next slice** (the live clinical build front). Slices 1 (assert/cease) + 2 (dose
-  change/correction overlay + bitemporal dose timeline) + **3 (cross-thread reconciliation resolution — ADR-0047,
-  `db/033`; symmetric link/separation + min-UUID group collapse; PR #178)** are DONE. **Next candidates:**
-  correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only); a **prefer-INN display term**
-  for reconciled groups; **fuzzy/automatic reconciliation** + the Tier-A drug dictionary (brand↔generic/DDI) — the
-  human-driven resolution now exists, automated *detection* is the gap; structured sig/frequency (lands with
-  prescriptions); ~~human-attested clinical responsibility on a medication/dose/reconciliation event (composes
-  additively, zero floor change)~~ **DONE this session (ADR-0049, slice 4 — `clinical.medication-attestation.asserted`,
-  `db/034`)**. **Cross-cutting debt:** ~~the [#173](https://github.com/cairn-ehr/cairn-ehr/issues/173)
-  `cairn_event_twin` dispatch→registry refactor~~ **DONE this session (ADR-0048)** — a new event type now registers ONE
-  `cairn_event_twin_check` row, never a copied dispatch branch;
-  the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
-  reconciliation projections; [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize-guard remote-apply
-  test); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation — needs a design
-  decision**). Spine to reuse: `db/031`/`db/032`/`db/033` + `cairn-event::medication`.
+  change/correction overlay + bitemporal dose timeline) + 3 (cross-thread reconciliation — ADR-0047, `db/033`;
+  PR #178) + 4 (attestation — ADR-0049, `db/034`; PR #182) + **5 (dose effective/reason per-field correction —
+  ADR-0050, `db/035`; corrected effective drives winner selection; this session)** are DONE. **Next candidates:**
+  a **prefer-INN display term** for reconciled groups; **fuzzy/automatic reconciliation** + the Tier-A drug
+  dictionary (brand↔generic/DDI) — human-driven resolution exists, automated *detection* is the gap; structured
+  sig/frequency (lands with prescriptions); correcting a dose event's *effective date* on the statement-level
+  `started` (slice 5 covers the dose-timeline effective; the assert's `started` is a separate concern).
+  **Cross-cutting debt:** [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (**cross-thread correction
+  *suppression* — single-column PK eviction; pre-existing db/032, needs a PK/design decision**);
+  [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
+  reconciliation projections; [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize-guard
+  remote-apply test); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation
+  — needs a design decision**). Spine to reuse: `db/031`–`db/035` + `cairn-event::medication`.
 - **Demographics build — next slices** (reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
@@ -499,6 +505,7 @@ ADR before reopening any of these.
 | [0047](spec/decisions/0047-medication-reconciliation-resolution.md) | Medication reconciliation is a link, not a cessation; symmetric min-UUID collapse; latest-effective group status | §3.15/§3.16 (principle 2; reuses identity linkage) |
 | [0048](spec/decisions/0048-twin-check-registry-dispatch.md) | The per-type twin/floor-check registry: one stable dispatcher, register-by-row, unified check-fn signature | §9.6 (refines 0022/0039) |
 | [0049](spec/decisions/0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare, not a position pin; supersede, never retract | §3.15/§3.16 (refines 0007, principle 10) |
+| [0050](spec/decisions/0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike sentinel; corrected effective drives current-dose winner selection; correction-note separate from clinical reason | §3.3/§3.6 (refines principle 4) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
