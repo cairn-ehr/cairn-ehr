@@ -1775,8 +1775,12 @@ async fn main() -> anyhow::Result<()> {
             let input = cairn_node::medication::CorrectDoseInput {
                 dose_amount: dose_amount.as_deref(),
                 dose_unit: dose_unit.as_deref(),
+                effective: None,
+                effective_precision: None,
+                reason: None,
+                strike: &[],
+                note: reason.as_deref(),
                 info_source: info_source.as_deref(),
-                reason: reason.as_deref(),
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);

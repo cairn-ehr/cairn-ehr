@@ -189,8 +189,12 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
     let corr = CorrectDoseInput {
         dose_amount: Some("60"),
         dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: Some("mis-keyed"),
         info_source: None,
-        reason: Some("mis-keyed"),
     };
     let target = resolve_correction_target(&c, med_id, Some(change_evt))
         .await
@@ -486,8 +490,12 @@ async fn correction_overlays_current_and_sets_flag() {
         &CorrectDoseInput {
             dose_amount: Some("20"),
             dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("mis-keyed"),
             info_source: None,
-            reason: Some("mis-keyed"),
         },
         None,
     )
@@ -535,8 +543,12 @@ async fn correct_to_unknown_shows_unknown_not_original() {
         &CorrectDoseInput {
             dose_amount: None,
             dose_unit: None,
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &["dose"],
+            note: Some("was a guess"),
             info_source: None,
-            reason: Some("was a guess"),
         },
         None,
     )
@@ -574,8 +586,12 @@ async fn orphan_correction_converges_when_target_arrives() {
         &CorrectDoseInput {
             dose_amount: Some("15"),
             dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("early correction"),
             info_source: None,
-            reason: Some("early correction"),
         },
         None,
     )
@@ -651,8 +667,12 @@ async fn later_correction_of_same_point_wins() {
         &CorrectDoseInput {
             dose_amount: Some("20"),
             dose_unit: Some("mg"),
-            info_source: None,
+            effective: None,
+            effective_precision: None,
             reason: None,
+            strike: &[],
+            note: None,
+            info_source: None,
         },
         None,
     )
@@ -669,8 +689,12 @@ async fn later_correction_of_same_point_wins() {
         &CorrectDoseInput {
             dose_amount: Some("25"),
             dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("re-corrected"),
             info_source: None,
-            reason: Some("re-corrected"),
         },
         None,
     )
@@ -739,8 +763,12 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
         &CorrectDoseInput {
             dose_amount: Some("999"),
             dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("mistargeted"),
             info_source: None,
-            reason: Some("mistargeted"),
         },
         None,
     )
@@ -832,8 +860,12 @@ async fn correcting_older_point_leaves_current_unchanged() {
         &CorrectDoseInput {
             dose_amount: Some("45"),
             dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("point-0 mis-keyed"),
             info_source: None,
-            reason: Some("point-0 mis-keyed"),
         },
         None,
     )

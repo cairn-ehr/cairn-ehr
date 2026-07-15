@@ -1636,8 +1636,12 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
     let corr = CorrectDoseInput {
         dose_amount: Some("5"),
         dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: Some("mis-keyed on entry"),
         info_source: None,
-        reason: Some("mis-keyed on entry"),
     };
     correct_dose(
         &mut c,
