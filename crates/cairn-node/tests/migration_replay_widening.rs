@@ -29,6 +29,9 @@ const WIDENED: &[(&str, &str)] = &[
     ("chart_dispute", "content_address"),
     ("chart_identity_state", "content_address"),
     ("name_repudiation", "content_address"),
+    // #194: the two set-union demographic projections gained the same tiebreak column.
+    ("patient_identifier", "content_address"),
+    ("patient_demographic", "content_address"),
 ];
 
 #[tokio::test]

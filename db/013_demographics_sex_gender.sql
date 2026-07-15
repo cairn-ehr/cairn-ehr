@@ -51,10 +51,10 @@ BEGIN
 
     INSERT INTO patient_demographic AS pd
         (patient_id, field, value, facets, provenance, provenance_rank,
-         asserted_hlc_wall, asserted_hlc_count, asserted_origin)
+         asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
     VALUES
         (NEW.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
     -- Winner ordering by policy. BOTH tuples are TOTAL orders (node_origin is the final
     -- deterministic tiebreak), so every node converges to the same winner regardless of
     -- apply order.
@@ -71,22 +71,33 @@ BEGIN
         asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
+        content_address    = EXCLUDED.content_address,
         updated_at         = clock_timestamp()
     -- COLLATE "C" tiebreak per ADR-0045 (#69): the origin/value keys must order by raw byte
     -- value, not the database's default (possibly locale-dependent, e.g. ICU) collation —
     -- else two nodes with different locale settings could pick different winners for the
     -- same tied event pair, breaking cross-node convergence. Applies in both policy branches.
+    -- content_address is the FINAL tiebreak (#194/finding A6): `value` alone was not a
+    -- total order — two events sharing (triple, value) but differing in facets compared
+    -- equal in both directions, so first-applied won and two honest nodes could diverge in
+    -- exactly the columns the db/016 veto floor reads (facets ->> 'precision',
+    -- provenance_rank). bytea byte-order, unique per distinct event; a NULL incumbent
+    -- (pre-#194 row) keeps the incumbent — legacy ties only, every new write stamps it.
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
+             EXCLUDED.content_address)
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
+             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
+             pd.content_address)
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
+             EXCLUDED.content_address)
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
+             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
+             pd.content_address)
     END;
     RETURN NULL;
 END;
@@ -119,10 +130,10 @@ CREATE OR REPLACE FUNCTION cairn_demographic_backfill()
 RETURNS void LANGUAGE sql AS $$
     INSERT INTO patient_demographic AS pd
         (patient_id, field, value, facets, provenance, provenance_rank,
-         asserted_hlc_wall, asserted_hlc_count, asserted_origin)
+         asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
     SELECT DISTINCT ON (patient_id, field)
         patient_id, field, value, facets, provenance, provenance_rank,
-        hlc_wall, hlc_counter, node_origin
+        hlc_wall, hlc_counter, node_origin, content_address
     FROM (
         SELECT
             e.patient_id,
@@ -131,7 +142,7 @@ RETURNS void LANGUAGE sql AS $$
             e.body -> 'facets'                                 AS facets,
             e.body ->> 'provenance'                            AS provenance,
             cairn_provenance_rank(e.body ->> 'provenance')     AS provenance_rank,
-            e.hlc_wall, e.hlc_counter, e.node_origin,
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
             cairn_demographic_field_policy(e.body ->> 'field') AS policy
         FROM event_log e
         WHERE e.event_type = 'demographic.field.asserted'
@@ -148,9 +159,11 @@ RETURNS void LANGUAGE sql AS $$
         -- COLLATE "C" per ADR-0045 (#69): must match the trigger's byte-order tiebreak
         -- (below) so DISTINCT ON picks the SAME row the trigger would have converged on.
         node_origin COLLATE "C" DESC,
-        -- `value` is the final total-order tiebreak (see 011): guarantees a
-        -- display-convergent winner even if a buggy node minted a duplicate HLC tuple.
-        value COLLATE "C" DESC
+        -- `value` then `content_address` are the final total-order tiebreaks (see 011 /
+        -- #194): guarantee a display-convergent winner even if a buggy node minted a
+        -- duplicate HLC tuple, including two events sharing (triple, value).
+        value COLLATE "C" DESC,
+        content_address DESC
     ON CONFLICT (patient_id, field) DO UPDATE SET
         value              = EXCLUDED.value,
         facets             = EXCLUDED.facets,
@@ -159,21 +172,27 @@ RETURNS void LANGUAGE sql AS $$
         asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
         asserted_hlc_count = EXCLUDED.asserted_hlc_count,
         asserted_origin    = EXCLUDED.asserted_origin,
+        content_address    = EXCLUDED.content_address,
         updated_at         = clock_timestamp()
     -- COLLATE "C" tiebreak per ADR-0045 (#69) — same rationale as the trigger above: the
     -- origin/value keys must order by raw byte value so this one-time catch-up converges
     -- on the identical winner the trigger would have picked, regardless of node locale.
+    -- content_address is the final tiebreak (#194), same as the trigger.
     WHERE CASE cairn_demographic_field_policy(pd.field)
         WHEN 'recency-first' THEN
             (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
+             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
+             EXCLUDED.content_address)
           > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
+             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
+             pd.content_address)
         ELSE
             (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C")
+             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
+             EXCLUDED.content_address)
           > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C")
+             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
+             pd.content_address)
     END;
 $$;
 
