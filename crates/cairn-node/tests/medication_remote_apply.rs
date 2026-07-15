@@ -13,8 +13,8 @@ use cairn_event::{event_address, generate_key, sign, sign_attestation, Hlc, Sign
 use cairn_node::db;
 use cairn_node::medication::{
     build_assert_body, build_attestation_body, build_cease_body, build_dose_change_body,
-    build_reconcile_body, AssertMedicationInput, CeaseMedicationInput, ChangeDoseInput,
-    ReconcileInput,
+    build_dose_correction_body, build_reconcile_body, build_separate_body, AssertMedicationInput,
+    CeaseMedicationInput, ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -609,5 +609,168 @@ async fn responsibility_claim_for_another_actor_is_refused_at_apply() {
         db_msg(&err).contains("attester"),
         "refusal names the unbound claim: {}",
         db_msg(&err)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The remaining verbs through the remote door (PR #221 review, finding 1):
+// dose correction and separation — each with the arrival order REVERSED, the
+// case only the sync door can produce.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn dose_correction_arriving_before_its_target_reads_corrected() {
+    // Offline-first at the apply door: the correction of a dose event can land
+    // BEFORE the dose event it corrects (the peer authored both while we were
+    // partitioned, and a batch can split anywhere). Both must apply, and once
+    // both are here the current view reads the CORRECTED dose — the ADR-0050
+    // per-field patch, independent of arrival order.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    let med = apply_assert(&c, &sk, &kid, patient, WALL_2026).await;
+
+    // The peer's dose change — mis-keyed as 100 mg (meant 1000) — and its
+    // correction, both minted on the peer; the correction targets the change
+    // by event id.
+    let change_id = Uuid::now_v7();
+    let change = build_dose_change_body(
+        change_id,
+        med,
+        patient,
+        &ChangeDoseInput {
+            dose_amount: Some("100"),
+            dose_unit: Some("mg"),
+            effective: Some("2026-06"),
+            effective_precision: Some("month"),
+            info_source: "clinician",
+            reason: Some("HbA1c above target"),
+        },
+        &kid,
+        peer_hlc(WALL_2026 + 50),
+    );
+    let correction = build_dose_correction_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        change_id,
+        &CorrectDoseInput {
+            // The dose GROUP (amount+unit) is set together (ADR-0050: a group is
+            // set, struck, or kept — setting the amount alone would null the unit).
+            dose_amount: Some("1000"),
+            dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            reason: None,
+            strike: &[],
+            note: Some("mis-keyed: 100 for 1000"),
+            info_source: None,
+        },
+        &kid,
+        peer_hlc(WALL_2026 + 60),
+    );
+
+    // Correction FIRST — its target is not here yet.
+    apply(&c, &sign(&correction, &sk).unwrap().signed_bytes)
+        .await
+        .expect("orphan dose correction applies (offline-first: the target need not exist yet)");
+    apply(&c, &sign(&change, &sk).unwrap().signed_bytes)
+        .await
+        .expect("the late target dose change applies");
+
+    // Once both are here, the current view reads the corrected dose, and the
+    // winner is marked corrected.
+    let (amount, unit, corrected): (Option<String>, Option<String>, bool) = {
+        let row = c
+            .query_one(
+                "SELECT pmc.dose_amount, pmc.dose_unit, mcd.corrected \
+                 FROM patient_medication_current pmc \
+                 JOIN medication_current_dose mcd USING (medication_id) \
+                 WHERE pmc.patient_id = $1::text::uuid",
+                &[&patient.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1), row.get(2))
+    };
+    assert_eq!(
+        (amount.as_deref(), unit.as_deref()),
+        (Some("1000"), Some("mg")),
+        "the current dose reads the CORRECTED amount, whatever the arrival order"
+    );
+    assert!(corrected, "the current-dose winner is marked corrected");
+}
+
+#[tokio::test]
+async fn later_separation_wins_the_edge_and_splits_the_group_either_order() {
+    // The never-erase reversal through the sync door, arrival order reversed:
+    // the SEPARATION (later HLC) lands before the reconciliation it repairs.
+    // Set-union admits BOTH events; the edge overlay must converge on the
+    // later-HLC winner (cairn_hlc_overlay_wins), so the threads end SEPARATED
+    // and no group forms — the same read-state a peer that saw them in order
+    // holds (ADR-0045 deterministic winners).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    let a = apply_assert(&c, &sk, &kid, patient, WALL_2026).await;
+    let b = apply_assert(&c, &sk, &kid, patient, WALL_2026 + 1).await;
+
+    // The separation was minted LATER on the peer (wall+20) but arrives first.
+    let sep = build_separate_body(
+        Uuid::now_v7(),
+        a,
+        b,
+        patient,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: Some("distinct drugs on review"),
+        },
+        &kid,
+        peer_hlc(WALL_2026 + 20),
+    );
+    apply(&c, &sign(&sep, &sk).unwrap().signed_bytes)
+        .await
+        .expect("the separation applies");
+    // The OLDER reconciliation it reverses arrives late — still ADMITTED
+    // (set-union), but it must NOT win the edge back.
+    apply_reconcile(&c, &sk, &kid, patient, a, b, WALL_2026 + 10)
+        .await
+        .expect("the late (older) reconciliation is still admitted");
+
+    let (edge_state, events, merged): (String, i64, i64) = {
+        let row = c
+            .query_one(
+                "SELECT (SELECT state FROM medication_reconciliation), \
+                        (SELECT count(*) FROM event_log WHERE event_type IN \
+                          ('clinical.medication-reconciliation.asserted', \
+                           'clinical.medication-separation.asserted')), \
+                        (SELECT count(*) FROM medication_group_member \
+                          WHERE medication_id <> group_id)",
+                &[],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1), row.get(2))
+    };
+    assert_eq!(events, 2, "both events are in the log (set-union held)");
+    assert_eq!(
+        edge_state, "separated",
+        "the later-HLC separation wins the edge, whatever the arrival order"
+    );
+    // The recompute writes a SINGLETON row per seed (group_id = itself); what must
+    // not stand is a merged group, i.e. a member pointing at another thread.
+    assert_eq!(
+        merged, 0,
+        "no reconciled group stands — each thread is its own group"
     );
 }

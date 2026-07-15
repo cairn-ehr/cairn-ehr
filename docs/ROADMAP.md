@@ -684,14 +684,19 @@ tests + CI wiring only).** The flagship set-union guarantee was verified only by
 so `federation.rs`/`sync_watermark.rs` self-skipped on every run, and no `clinical.medication.*` event had ever
 been driven through the db/020 apply door. Now: (a) `rust.yml` provisions `cairn_test2`/`cairn_test3` on the same
 CI cluster and exports all three conn strings — no Rust test self-skips in CI anymore; (b) new
-`medication_remote_apply.rs` (8 tests): assert/cessation/dose/reconciliation through `apply_remote_event`
-(projection + set-union idempotence + arrival-order independence), the slice-4 **attestation-token round trip**
+`medication_remote_apply.rs` (10 tests): every medication verb —
+assert/cessation/dose-change/dose-correction/reconciliation/separation — through `apply_remote_event`
+(projection + set-union idempotence + arrival-order independence, incl. correction-before-target and a
+later-HLC separation arriving before the reconcile it repairs), the slice-4 **attestation-token round trip**
 (valid token applies + projects the VERIFIED attester; missing token, non-human attester, and a #195
 unbound-responsibility claim each refused legibly), and the **#176 oversize-group remote clamp-and-flag branch**
 (admitted, recompute skipped, `medication_projection_flag` row — never a veto); (c) new cairn-sync
 `clinical_pull.rs`: the **A→B clinical-plane pull through the real binary** (`serve` on A, `pull` on B, real TCP)
 authoring via the production orchestrators, asserting **byte-identical medication read-state** on both nodes and
-that the human vouch travelled the wire and re-verified (stale=false on B). Workspace 652/0 failed.
+that the human vouch travelled the wire and re-verified (stale=false on B), plus a standing
+refuse-and-recover test (unenrolled author: pull completes, nothing applies or pens, watermark freezes at the
+A1 contiguous-applied prefix; converges on the first pull after enrollment). PR #221 review findings fixed
+in-branch. Workspace 655/0 failed.
 
 ## Phase 5 — Security & compliance core
 

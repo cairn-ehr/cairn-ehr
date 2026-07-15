@@ -163,8 +163,10 @@ CI wiring only; full detail in ROADMAP Slice 36 + git).** The flagship "author o
 guarantee is now machine-checked: `rust.yml` provisions `cairn_test2`/`cairn_test3` on the CI cluster and exports
 `CAIRN_TEST_PG2`/`PG3`, so `federation.rs` (2 tests, incl. the three-node stranger case) and `sync_watermark.rs`
 (the two 2-DB tests) stop self-skipping — **no Rust test self-skips in CI anymore**. New
-`crates/cairn-node/tests/medication_remote_apply.rs` (8 tests): assert/cessation/dose/reconciliation through the
-db/020 door (projection + set-union idempotent re-apply + cessation-before-assert arrival-order independence);
+`crates/cairn-node/tests/medication_remote_apply.rs` (10 tests): every medication verb —
+assert/cessation/dose-change/dose-correction/reconciliation/separation — through the db/020 door (projection +
+set-union idempotent re-apply + arrival-order independence: cessation-before-assert, correction-before-target,
+and later-HLC-separation-before-the-reconcile-it-repairs);
 the slice-4 **attestation-token round trip** — a valid human token travels, re-verifies, is STORED for
 re-serving, and the db/034 projection records the VERIFIED attester; refusals for missing token, non-human
 attester (device token), and the #195 unbound-responsibility claim (validly-signed body claiming a different
@@ -173,10 +175,13 @@ human than the token's); and the **#176 oversize-group remote branch** — admit
 clinical-plane pull through the REAL binary (`serve` on A, `pull` on B over TCP), events authored via the
 production medication orchestrators (assert+attested dose change, cessation, reconciled duplicate pair),
 asserting **byte-identical read-state** across event log (incl. stored token bytes), current/past views, group
-collapse, and standing vouches (stale=false on B), quarantine empty; a deliberate RED check (drop B's enrollment)
-confirms the test discriminates. cairn-sync gained dev-deps `cairn-node`/`tokio`/`tokio-postgres` (workspace-
-internal/already-vetted). Local two-node rig: `cairn_test2`/`cairn_test3` created on the Mac cluster (:5532).
-Workspace **652 passed / 0 failed** + fmt + clippy `-D warnings` clean.
+collapse, and standing vouches (stale=false on B), quarantine empty; the review's RED check is a STANDING second
+test — a pull whose author B has not enrolled completes but applies nothing, pens nothing (the bytes verify;
+the pen is for unverifiable bytes), FREEZES the watermark at 0 (A1 discipline), and converges on the next pull
+after B enrolls the actors (delayed, never lost). cairn-sync gained dev-deps `cairn-node`/`tokio`/`tokio-postgres`
+(workspace-internal/already-vetted). Local two-node rig: `cairn_test2`/`cairn_test3` created on the Mac cluster
+(:5532). PR #221 review findings all fixed in-branch (the two extra verbs, the standing RED check, per-test serve
+ports, same-group tightening). Workspace **655 passed / 0 failed** + fmt + clippy `-D warnings` clean.
 
 **Prior session (2026-07-16) — the P1 floor-hardening slice (issues #187/#207/#194/#191/#192[+#177]/#190/#193/#195;
 branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/event-type change — every fix is an in-place floor
