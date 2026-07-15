@@ -711,7 +711,10 @@ lives) wipes `cairn_test2`, loads ONLY the subset, honesty-checks that no full-s
 `apply_remote_event` overlaying the same patient (executes the db/029 predicate with a standing winner), and a
 genuine Byzantine HLC-triple pair (same triple, different bodies) whose advisory `hlc_collision_log` row must land.
 A future door→function edge into an unlisted migration now fails this test with the exact production error instead
-of shipping a first-write outage. Workspace 656/0 failed.
+of shipping a first-write outage. PR #222 review findings fixed in-branch: the db/006 recall-ceremony doors
+(`recall_event`, `events_by_actor_epoch`) are driven too — with them every caller-facing entry point the subset
+ships is executed (db/021 ships only a table, no function) — and the honesty guard grew to three canaries across
+three non-subset migrations so one renamed canary can't leave it vacuously green. Workspace 656/0 failed.
 
 ## Phase 5 — Security & compliance core
 

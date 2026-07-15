@@ -177,7 +177,10 @@ because every suite sharing PG2 reloads its full schema on connect), loads ONLY 
 full-schema residue survived, then drives both doors — `submit_event` with a by-reference attachment (lazy
 blob reference lands in `blob_store`), `apply_remote_event` overlaying the same patient, and a genuine
 Byzantine HLC-triple pair whose advisory `hlc_collision_log` row must land (db/029's recorder EXECUTED, not
-just parsed). Workspace **656/0 failed** + fmt + clippy `-D warnings` clean.
+just parsed). PR #222 review findings fixed in-branch: the db/006 recall doors (`recall_event`,
+`events_by_actor_epoch`) driven too — every caller-facing entry point the subset ships is now executed — and
+the honesty guard grew to three canaries across three non-subset migrations. Workspace **656/0 failed** +
+fmt + clippy `-D warnings` clean.
 
 **Prior session (2026-07-16, later) — the P2 opener: sync-convergence CI (issue #199 [B4], covers the #176
 deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change — tests +

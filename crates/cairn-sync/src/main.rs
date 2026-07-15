@@ -32,6 +32,11 @@ use serde::{Deserialize, Serialize};
 
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
+//
+// DRIFT GUARD: the `schema_subset_tests` module at the bottom of this file loads
+// ONLY this list into a wiped database and drives every SQL entry point it ships,
+// so a future door→function edge into an unlisted migration fails a test with the
+// production error message instead of shipping a first-write outage (issue #198).
 const SCHEMA: &[(&str, &str)] = &[
     ("001_envelope", include_str!("../../../db/001_envelope.sql")),
     (
@@ -79,10 +84,6 @@ const SCHEMA: &[(&str, &str)] = &[
         "029_hlc_collision_log",
         include_str!("../../../db/029_hlc_collision_log.sql"),
     ),
-    // The schema_subset_tests module at the bottom of this file is the drift guard
-    // for this list: it loads ONLY this subset into a wiped database and drives both
-    // doors, so a future door→function edge into an unlisted migration fails a test
-    // instead of shipping a first-write outage.
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -3045,8 +3046,8 @@ mod quarantine_tests {
 /// walking-skeleton flow). Every other DB-gated suite in this workspace runs against
 /// a database that cairn-node's FULL 35-file loader has already visited, so the gap
 /// is structurally invisible there: this test is the drift guard. It wipes the
-/// second test database (`$CAIRN_TEST_PG2`), loads ONLY `SCHEMA`, and drives both
-/// doors through the call paths the 2026-07-15 review found dangling:
+/// second test database (`$CAIRN_TEST_PG2`), loads ONLY `SCHEMA`, and drives every
+/// SQL entry point the subset ships — the two the 2026-07-15 review found dangling:
 ///
 ///   * `submit_event` → `cairn_learn_attachment_refs` (db/027) — unconditional on
 ///     EVERY submit, exercised end-to-end here with a by-reference attachment whose
@@ -3054,13 +3055,25 @@ mod quarantine_tests {
 ///   * the db/002 `patient_chart` trigger → `cairn_hlc_triple_collision` +
 ///     `cairn_record_hlc_collision` (db/029) — parsed on the first
 ///     `patient.created`, EXECUTED here by applying a genuine Byzantine pair (two
-///     different signed bodies under one HLC triple) through `apply_remote_event`.
+///     different signed bodies under one HLC triple) through `apply_remote_event`;
 ///
-/// Adding a call from either door to a function in a NOT-yet-listed migration will
-/// fail this test with the exact production error message, instead of shipping a
-/// first-write outage. Serialized cluster-wide via the shared advisory-lock key; the
-/// wipe is safe because every suite that shares `$CAIRN_TEST_PG2` (federation,
-/// sync_watermark, clinical_pull) reloads the full schema on connect.
+/// and the two db/006 recall-ceremony doors (`recall_event`,
+/// `events_by_actor_epoch`), which were loaded-but-undriven in the first cut of
+/// this test — the exact shape the late-binding trap needs (PR #222 review).
+/// db/021 ships only the `sync_quarantine` TABLE (the quarantine writes are
+/// daemon-side SQL, not PL/pgSQL), so there is no quarantine function to drive:
+/// with these four (plus `enroll_actor` in the setup), every caller-facing entry
+/// point the subset ships is executed. Internal helpers are covered transitively
+/// along the driven event shapes only — an edge reachable solely from an event
+/// type this test does not author (e.g. a suppression overlay) still needs its
+/// path added here when such a call is introduced.
+///
+/// Adding a call from any of these doors to a function in a NOT-yet-listed
+/// migration will fail this test with the exact production error message, instead
+/// of shipping a first-write outage. Serialized against every other DB-gated suite
+/// via the shared advisory-lock key; the wipe is safe because every suite that
+/// shares `$CAIRN_TEST_PG2` (federation, sync_watermark, clinical_pull) reloads
+/// the full schema on connect.
 #[cfg(test)]
 mod schema_subset_tests {
     use super::*;
@@ -3101,7 +3114,7 @@ mod schema_subset_tests {
     }
 
     #[test]
-    fn schema_subset_alone_satisfies_both_write_doors() {
+    fn schema_subset_alone_satisfies_every_door() {
         let (Some(base), Some(base2)) = (
             std::env::var("CAIRN_TEST_PG").ok(),
             std::env::var("CAIRN_TEST_PG2").ok(),
@@ -3136,11 +3149,17 @@ mod schema_subset_tests {
         }
 
         // Honesty guard on the fixture itself: if the wipe ever stops working, this
-        // database silently reverts to full-schema and the test proves nothing. A
-        // function the subset does NOT ship (db/016's match veto) must be absent.
+        // database silently reverts to full-schema and the test proves nothing.
+        // Three canaries from three different non-subset migrations must ALL be
+        // absent — one alone could silently vanish from the full schema (renamed or
+        // dropped) and leave this check vacuously green (PR #222 review finding 2):
+        // db/016's match-veto function, db/010's patient_identifier table, db/031's
+        // medication_statement table.
         let residue: i64 = c
             .query_one(
-                "SELECT count(*) FROM pg_proc WHERE proname = 'cairn_match_veto'",
+                "SELECT (SELECT count(*) FROM pg_proc  WHERE proname = 'cairn_match_veto')
+                      + (SELECT count(*) FROM pg_class WHERE relname IN
+                             ('patient_identifier', 'medication_statement'))",
                 &[],
             )
             .unwrap()
@@ -3179,8 +3198,11 @@ mod schema_subset_tests {
                 Rendition::reference("original", photo_bytes, "image/png"),
             )],
         );
-        c.query_one("SELECT submit_event($1)", &[&local])
-            .expect("submit_event must succeed against the subset alone");
+        // (::text — this binary reads UUIDs as text, same as the projection queries.)
+        let local_event_id: String = c
+            .query_one("SELECT submit_event($1)::text", &[&local])
+            .expect("submit_event must succeed against the subset alone")
+            .get(0);
         let (blob_rows, blob_lazy): (i64, i64) = {
             let row = c
                 .query_one(
@@ -3252,6 +3274,40 @@ mod schema_subset_tests {
         assert_eq!(
             collisions, 1,
             "the HLC-triple collision must be recorded as an advisory signal (db/029)"
+        );
+
+        // ── Door 3: the db/006 recall ceremony (PR #222 review finding 1) ─────────
+        // recall_event and events_by_actor_epoch were loaded-but-undriven in the
+        // first cut — the exact shape the late-binding trap needs. Drive both so a
+        // future edge from either into an unlisted migration fails here too. The
+        // connecting role owns recall_overlay (it just ran the migrations), so the
+        // db/006 REVOKE floor does not block this operator-style call.
+        c.query_one(
+            "SELECT recall_event($1::text::uuid, 'subset drift guard: drive the recall door')",
+            &[&local_event_id],
+        )
+        .expect("recall_event must succeed against the subset alone");
+        let recalls: i64 = c
+            .query_one("SELECT count(*) FROM recall_overlay", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            recalls, 1,
+            "the recall must land in the append-only overlay"
+        );
+
+        // The contamination-cascade query: one enrollment of (key, epoch 'e')
+        // preceded all three admissions, so every event is selected, stamped 'pinned'.
+        let cascade: i64 = c
+            .query_one(
+                "SELECT count(*) FROM events_by_actor_epoch($1, 'e') WHERE attribution = 'pinned'",
+                &[&kid],
+            )
+            .expect("events_by_actor_epoch must succeed against the subset alone")
+            .get(0);
+        assert_eq!(
+            cascade, 3,
+            "the cascade must select every event this key/epoch authored"
         );
 
         // Three admitted events total — nothing quarantined, nothing lost.
