@@ -41,20 +41,25 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     (sk_a, kid_a, sk_h, kid_h)
 }
 
-/// Build an agent-authored EventBody. `with_responsibility` adds a contributor
-/// carrying a `responsibility` key (the v_bears attestation trigger on an additive
-/// event). `target` (if Some) is written as payload.target_event_id (suppress target).
+/// Build an agent-authored EventBody. `resp_kid` (if Some) adds a contributor
+/// carrying a `responsibility` key for THAT key (the v_bears attestation trigger on
+/// an additive event) beside the agent's own plain contributor — since #195 the
+/// responsibility-holder must be the verified attester, so accept-path tests pass the
+/// human's kid and the binding-refusal tests pass a different one. `target` (if Some)
+/// is written as payload.target_event_id (suppress target).
 fn body(
     event_type: &str,
     patient: Uuid,
     kid_a: &str,
-    with_responsibility: bool,
+    resp_kid: Option<&str>,
     target: Option<&str>,
 ) -> EventBody {
-    let contrib = if with_responsibility {
-        serde_json::json!([{"actor_id": kid_a, "role": "attested", "responsibility": "attested"}])
-    } else {
-        serde_json::json!([{"actor_id": kid_a, "role": "triaged"}])
+    let contrib = match resp_kid {
+        Some(rk) => serde_json::json!([
+            {"actor_id": kid_a, "role": "triaged"},
+            {"actor_id": rk, "role": "attested", "responsibility": "attested"}
+        ]),
+        None => serde_json::json!([{"actor_id": kid_a, "role": "triaged"}]),
     };
     let payload = match target {
         Some(t) => serde_json::json!({ "target_event_id": t }),
@@ -92,7 +97,7 @@ async fn accepts_responsibility_bearing_additive_event_with_valid_human_token() 
 
     // P1: a note.added carrying `responsibility` triggers the attestation gate on an
     // additive event (no target/provenance machinery) — isolates the accept.
-    let b = body("note.added", patient, &kid_a, true, None);
+    let b = body("note.added", patient, &kid_a, Some(&kid_h), None);
     let signed = sign(&b, &sk_a).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, &kid_h, "attested", &sk_h).unwrap();
@@ -125,7 +130,7 @@ async fn accepts_suppressing_event_with_valid_human_token() {
     let patient = Uuid::now_v7();
 
     // Baseline additive note (no token) to be the suppress target — step-5 needs it.
-    let baseline = body("note.added", patient, &kid_a, false, None);
+    let baseline = body("note.added", patient, &kid_a, None, None);
     let baseline_signed = sign(&baseline, &sk_a).unwrap();
     c.execute("SELECT submit_event($1)", &[&baseline_signed.signed_bytes])
         .await
@@ -136,7 +141,7 @@ async fn accepts_suppressing_event_with_valid_human_token() {
         "salience.downgrade",
         patient,
         &kid_a,
-        false,
+        None,
         Some(&baseline.event_id),
     );
     let supp_signed = sign(&supp, &sk_a).unwrap();
@@ -175,7 +180,7 @@ async fn rejects_bad_attestations_and_keeps_the_floor() {
 
     // One baseline target + one suppress event reused across all rejections (none
     // append, so there is no idempotency interaction).
-    let baseline = body("note.added", patient, &kid_a, false, None);
+    let baseline = body("note.added", patient, &kid_a, None, None);
     let baseline_signed = sign(&baseline, &sk_a).unwrap();
     c.execute("SELECT submit_event($1)", &[&baseline_signed.signed_bytes])
         .await
@@ -184,7 +189,7 @@ async fn rejects_bad_attestations_and_keeps_the_floor() {
         "salience.downgrade",
         patient,
         &kid_a,
-        false,
+        None,
         Some(&baseline.event_id),
     );
     let supp_signed = sign(&supp, &sk_a).unwrap();
@@ -246,4 +251,85 @@ async fn rejects_bad_attestations_and_keeps_the_floor() {
         .unwrap()
         .get(0);
     assert_eq!(n, 0, "no rejected suppress leaked into the log");
+}
+
+// ---------------------------------------------------------------------------
+// Issue #195 (finding A7) — the responsibility claim is BOUND to the attester.
+//
+// The token proves *some* enrolled human vouched for these bytes, but the signed
+// body could name responsibility for a DIFFERENT actor — the immutable record then
+// permanently carries an unverified responsibility claim about a person who never
+// touched the event. Every production flow (apply_proposal, medication attestation,
+// identify --link) already names the attester as the responsibility-bearing
+// contributor, so the gate now enforces it: contributor claims `responsibility` ⇒
+// its actor_id IS the verified attester key.
+// ---------------------------------------------------------------------------
+
+/// A body claiming responsibility for someone OTHER than the verified attester
+/// (here: the agent names ITSELF while the human vouches) is refused legibly.
+#[tokio::test]
+async fn responsibility_claim_not_bound_to_attester_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // The agent signs a body naming the AGENT's own key as responsibility-holder,
+    // while the HUMAN's token accompanies it.
+    let b = body("note.added", patient, &kid_a, Some(&kid_a), None); // responsibility = kid_a
+    let signed = sign(&b, &sk_a).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_h, "attested", &sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+
+    let r = c
+        .execute(SUBMIT3, &[&signed.signed_bytes, &token, &vk_h])
+        .await;
+    assert!(
+        r.is_err(),
+        "a responsibility claim about a non-attester must be refused (kid_a={kid_a}, attester={kid_h})"
+    );
+    let m = r
+        .unwrap_err()
+        .as_db_error()
+        .map(|d| d.message().to_string())
+        .unwrap_or_default();
+    assert!(
+        m.contains("responsibility"),
+        "the refusal must name the unbound responsibility claim, got: {m}"
+    );
+}
+
+/// The SAME binding at the remote apply door (principle 12).
+#[tokio::test]
+async fn remote_apply_responsibility_claim_not_bound_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let b = body("note.added", patient, &kid_a, Some(&kid_a), None); // responsibility = kid_a
+    let signed = sign(&b, &sk_a).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_h, "attested", &sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+
+    let r = c
+        .execute(
+            "SELECT apply_remote_event($1,$2,$3)",
+            &[&signed.signed_bytes, &token, &vk_h],
+        )
+        .await;
+    assert!(
+        r.is_err(),
+        "the apply door must refuse the unbound responsibility claim identically"
+    );
 }

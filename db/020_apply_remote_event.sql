@@ -163,6 +163,11 @@ BEGIN
                        WHERE signing_key_id = encode(p_attester_key,'hex') AND kind = 'human') THEN
             RAISE EXCEPTION 'apply_remote_event: attester is not an enrolled human actor (forged human author refused)';
         END IF;
+        -- #195: the body's responsibility claim must name the human whose token we
+        -- just verified — identical binding to db/005 (shared predicate, principle 12).
+        IF NOT cairn_responsibility_bound(b, p_attester_key) THEN
+            RAISE EXCEPTION 'apply_remote_event: a contributor claims responsibility for an actor other than the verified attester — unverified responsibility claim refused (issue #195)';
+        END IF;
         v_att     := p_attestation;
         v_att_key := p_attester_key;
     END IF;

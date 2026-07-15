@@ -614,7 +614,10 @@ async fn restore_door_rejects_insane_future_wall_and_does_not_ratchet() {
             .unwrap();
         (r.get(0), r.get(1))
     };
-    assert_eq!(wall, 0, "a drift-refused restore must not ratchet hlc_state");
+    assert_eq!(
+        wall, 0,
+        "a drift-refused restore must not ratchet hlc_state"
+    );
     assert_eq!(admitted, 0, "the poison event must never be stored");
 }
 

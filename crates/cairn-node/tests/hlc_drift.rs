@@ -403,7 +403,10 @@ async fn local_door_admits_within_ceiling_future_wall() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(stored, sane_future, "the admitted event keeps its asserted wall");
+    assert_eq!(
+        stored, sane_future,
+        "the admitted event keeps its asserted wall"
+    );
 }
 
 /// A within-ceiling clinical event merges the clock forward UNCLAMPED — the clamp must not

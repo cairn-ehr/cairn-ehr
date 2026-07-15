@@ -151,7 +151,11 @@ async fn local_reassert_under_different_patient_refused() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(p, patient_a.to_string(), "the standing thread must be unchanged");
+    assert_eq!(
+        p,
+        patient_a.to_string(),
+        "the standing thread must be unchanged"
+    );
 }
 
 #[tokio::test]
@@ -299,7 +303,11 @@ async fn remote_reassert_converges_and_flags() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(p, patient_b.to_string(), "sync must converge to the HLC winner");
+    assert_eq!(
+        p,
+        patient_b.to_string(),
+        "sync must converge to the HLC winner"
+    );
 
     // ...and the contradiction is on the advisory worklist.
     let flags: i64 = c
@@ -310,7 +318,10 @@ async fn remote_reassert_converges_and_flags() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(flags, 1, "the cross-patient rebind must be flagged, never silent");
+    assert_eq!(
+        flags, 1,
+        "the cross-patient rebind must be flagged, never silent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -480,5 +491,8 @@ async fn separation_of_cross_patient_group_still_accepted() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 0, "after separation the cross-patient flag view is clear");
+    assert_eq!(
+        n, 0,
+        "after separation the cross-patient flag view is clear"
+    );
 }

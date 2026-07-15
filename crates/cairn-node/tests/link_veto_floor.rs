@@ -19,10 +19,11 @@
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::identity::{
-    link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body,
-    LinkAssertion,
+    link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
 };
-use cairn_event::{event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey};
+use cairn_event::{
+    event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
+};
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -109,7 +110,10 @@ async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
         .await
         .unwrap()
         .get(0);
-    assert!(vetoed, "test precondition: the pair must trip the hard veto");
+    assert!(
+        vetoed,
+        "test precondition: the pair must trip the hard veto"
+    );
     (a, b)
 }
 
@@ -299,7 +303,11 @@ async fn unlink_clears_the_veto_flag() {
         .unwrap()
         .get(0);
     assert_eq!(flags, 0, "an unlink must clear the standing veto flag");
-    assert_eq!(trust_state(&c, a).await, None, "chart reads confirmed again");
+    assert_eq!(
+        trust_state(&c, a).await,
+        None,
+        "chart reads confirmed again"
+    );
 }
 
 #[tokio::test]
@@ -338,5 +346,9 @@ async fn human_attested_relink_clears_the_veto_flag() {
         flags, 0,
         "a human-attested link for the pair resolves the veto flag"
     );
-    assert_eq!(trust_state(&c, a).await, None, "chart reads confirmed again");
+    assert_eq!(
+        trust_state(&c, a).await,
+        None,
+        "chart reads confirmed again"
+    );
 }

@@ -211,6 +211,24 @@ INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VAL
     ('visibility.suppress',  'cairn_check_suppression_overlay', NULL)
 ON CONFLICT (event_type) DO NOTHING;
 
+-- Responsibility↔attester binding (issue #195, finding A7). The attestation token
+-- proves SOME enrolled human vouched for these bytes; without this check the signed,
+-- immutable body could claim `responsibility` for a DIFFERENT actor — permanently
+-- recording an unverified responsibility claim about a person who never touched the
+-- event (projections key on the verified attester_key, so display was safe; the
+-- RECORD was not). Contract: a contributor claiming `responsibility` must name the
+-- verified attester's key. This also (deliberately) limits one event to ONE
+-- responsibility-holder — the door verifies one token; plural/proxy responsibility
+-- shapes are the #203/#96 wire-shape decision and would extend this predicate, not
+-- bypass it. Shared by BOTH doors (principle 12).
+CREATE OR REPLACE FUNCTION cairn_responsibility_bound(b jsonb, p_attester_key bytea)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
+        WHERE e ? 'responsibility'
+          AND e ->> 'actor_id' IS DISTINCT FROM encode(p_attester_key, 'hex'));
+$$;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -338,6 +356,11 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM actor_current
                        WHERE signing_key_id = encode(p_attester_key,'hex') AND kind = 'human') THEN
             RAISE EXCEPTION 'submit_event: attester is not an enrolled human actor (forged human author refused)';
+        END IF;
+        -- #195: the body's responsibility claim must name the human whose token we
+        -- just verified — never a third party (see cairn_responsibility_bound).
+        IF NOT cairn_responsibility_bound(b, p_attester_key) THEN
+            RAISE EXCEPTION 'submit_event: a contributor claims responsibility for an actor other than the verified attester — unverified responsibility claim refused (issue #195)';
         END IF;
         -- Store the VERIFIED responsibility proof beside the event (issue #91/M7):
         -- it must keep travelling with the event on the sync wire, or a downstream
