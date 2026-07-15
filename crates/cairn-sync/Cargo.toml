@@ -22,3 +22,12 @@ serde_json = "1"
 uuid = { version = "1", features = ["v7"] }
 hex = "0.4"
 chacha20poly1305 = "0.10"  # Bet B (B3): DEK-wrap / body-seal keystore-cost microbench
+
+[dev-dependencies]
+# The A→B clinical-plane pull test (#199, review finding B4): provisions both nodes'
+# schemas and authors real medication events through cairn-node's orchestrators, then
+# drives THIS crate's binary (serve on A, pull on B) between them and asserts the two
+# nodes' projections are identical. Both are workspace-internal / already-vetted deps.
+cairn-node = { path = "../cairn-node" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7"
