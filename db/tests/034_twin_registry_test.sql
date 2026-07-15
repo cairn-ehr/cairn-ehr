@@ -14,12 +14,15 @@ EXCEPTION WHEN others THEN
     END IF;
 END $$;
 
--- 2. The registry carries the full 15-row mapping.
+-- 2. The registry carries the full 16-row mapping (15 at #173 + the db/034 slice-4
+--    medication-attestation registration). Kept in lockstep with the Rust mirror
+--    (twin_registry.rs::registry_is_seeded_with_the_expected_mapping, which asserts 16):
+--    this count was left at 15 when db/034 landed (PR #182) and is corrected here.
 DO $$
 DECLARE n int;
 BEGIN
     SELECT count(*) INTO n FROM cairn_event_twin_check;
-    IF n <> 15 THEN RAISE EXCEPTION 'FAIL: expected 15 twin-check rows, got %', n; END IF;
+    IF n <> 16 THEN RAISE EXCEPTION 'FAIL: expected 16 twin-check rows, got %', n; END IF;
 END $$;
 
 -- 3. Dispatch runs the registered check: a self-link raises via the dispatcher.

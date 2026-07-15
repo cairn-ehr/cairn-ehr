@@ -20,8 +20,8 @@ use cairn_event::{
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, attest_medication_thread, build_dose_change_body, change_dose, correct_dose,
-    reconcile_medications, resolve_correction_target, AssertMedicationInput, AttestParams,
-    ChangeDoseInput, CorrectDoseInput, ReconcileInput,
+    reconcile_medications, resolve_correction_target, separate_medications, AssertMedicationInput,
+    AttestParams, ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -103,6 +103,34 @@ fn build_attestation_body(
     human_kid: &str,
     hlc: Hlc,
 ) -> EventBody {
+    // The production contributor shape: one responsibility-bearing entry. This is what
+    // makes the db/005 gate demand a valid human token (v_bears) AND what the db/034
+    // floor's M1 hardening now requires for the type to be structurally valid.
+    let contributors = serde_json::json!([
+        {"actor_id": human_kid, "role": "attested", "responsibility": "attested"}
+    ]);
+    build_attestation_body_with_contributors(
+        event_id,
+        patient,
+        payload,
+        human_kid,
+        contributors,
+        hlc,
+    )
+}
+
+/// Same as `build_attestation_body` but with a CALLER-SUPPLIED contributor set — used
+/// by the M1 hostile-client test to author an attestation with NO responsibility
+/// contributor (which a well-behaved client never does; the production Rust builder
+/// always carries one).
+fn build_attestation_body_with_contributors(
+    event_id: Uuid,
+    patient: Uuid,
+    payload: serde_json::Value,
+    signer_kid: &str,
+    contributors: serde_json::Value,
+    hlc: Hlc,
+) -> EventBody {
     EventBody {
         event_id: event_id.to_string(),
         patient_id: patient.to_string(),
@@ -110,10 +138,8 @@ fn build_attestation_body(
         schema_version: "clinical.medication-attestation/1".into(),
         hlc,
         t_effective: None,
-        signer_key_id: human_kid.into(),
-        contributors: serde_json::json!([
-            {"actor_id": human_kid, "role": "attested", "responsibility": "attested"}
-        ]),
+        signer_key_id: signer_kid.into(),
+        contributors,
         payload,
         attachments: vec![],
         plaintext_twin: Some("reviewed and attested the medication thread".into()),
@@ -340,6 +366,119 @@ async fn floor_rejects_negative_count() {
     );
 }
 
+/// M1 (issue #181): a hostile/buggy raw-SQL client can author an attestation event
+/// with NO responsibility-bearing contributor. Such a body slips past the db/005
+/// attestation gate entirely — `v_bears` is false, so no token is demanded and
+/// `attester_key` stays NULL — and (before this hardening) failed only later, at the
+/// apply trigger's `attester_kid TEXT NOT NULL`, with a cryptic "null value violates
+/// not-null constraint". The db/034 floor now rejects it LEGIBLY at
+/// `cairn_check_medication_attestation`, because a responsibility-bearing contributor
+/// is exactly what this event type exists to carry: its absence is a structural floor
+/// violation (principle 12 — the floor is the clean hostile-client rejection point,
+/// mirroring db/026's legible blob-verify errors), caught BEFORE the trigger. Still
+/// fail-closed either way; this only upgrades the message. The production Rust builder
+/// always carries the contributor, so no legitimate event is affected.
+#[tokio::test]
+async fn floor_rejects_attestation_without_responsibility_contributor() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Otherwise structurally valid (valid uuid, valid even-length hex, non-negative
+    // count), so the ONLY thing wrong is the missing responsibility contributor — this
+    // isolates the M1 floor check. The contributor carries a plain `role` and NO
+    // `responsibility` key, so the db/005 gate never asks for a token.
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "reviewed_commitment": placeholder_commitment_hex(),
+        "reviewed_count": 1,
+    });
+    let contributors = serde_json::json!([{"actor_id": kid_d, "role": "recorded"}]);
+    let body = build_attestation_body_with_contributors(
+        Uuid::now_v7(),
+        patient,
+        payload,
+        &kid_d,
+        contributors,
+        hlc,
+    );
+
+    // Submitted through the 1-arg door (no token) — exactly what a raw client would do,
+    // since with no responsibility marker the gate never demands one. An enrolled DEVICE
+    // key signs it (so it clears the enrolled-actor check and actually reaches the floor).
+    let signed = sign(&body, &sk_d).unwrap();
+    let res = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("requires a responsibility-bearing contributor"),
+        "expected a legible floor rejection, got: {err}"
+    );
+    assert!(
+        !err.contains("null value"),
+        "the floor must reject BEFORE the trigger's cryptic NOT NULL error: {err}"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "the responsibility-less attestation never landed");
+}
+
+/// M1 defense-in-depth (issue #181; door-level gap tracked in #184): the floor check's
+/// `jsonb_typeof(...) IS DISTINCT FROM 'array'` guard, exercised where it is actually
+/// load-bearing — a DIRECT call of `cairn_check_medication_attestation` with a NON-array
+/// `contributors`. Through the two submit doors this branch is unreachable: both compute
+/// v_bears (`jsonb_array_elements` over `contributors`) BEFORE the floor, so a non-array
+/// is rejected upstream with a cryptic "cannot extract elements from a scalar" (the #184
+/// gap). But the check fn is a public SQL function a future door could call first, so the
+/// guard must short-circuit the OR — `jsonb_array_elements` never runs on a non-array —
+/// yielding the legible responsibility message rather than the scalar-extract error. This
+/// pins that short-circuit (which PostgreSQL does not contractually guarantee, so it is
+/// worth a test) and turns the guard from a dead branch into a covered one.
+#[tokio::test]
+async fn floor_check_fn_directly_rejects_non_array_contributors() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // A non-array `contributors` (a bare string). `payload` is present + non-null so the
+    // fn passes its payload-null guard and reaches the contributors check (which runs
+    // before the medication_id/commitment/count checks). No signing needed — this calls
+    // the floor check fn directly, exactly the direct-caller path the guard protects.
+    let body = serde_json::json!({ "payload": {}, "contributors": "not-an-array" }).to_string();
+    let res = c
+        .execute(
+            "SELECT cairn_check_medication_attestation('clinical.medication-attestation.asserted', $1::text::jsonb)",
+            &[&body],
+        )
+        .await;
+    let err = db_msg(&res.unwrap_err());
+    assert!(
+        err.contains("requires a responsibility-bearing contributor"),
+        "the type guard must short-circuit to the legible message, got: {err}"
+    );
+    assert!(
+        !err.contains("cannot extract elements"),
+        "the guard must prevent the cryptic scalar-extract error: {err}"
+    );
+}
+
 /// The responsibility-separation guarantee at THIS event type: only an enrolled
 /// kind='human' actor may vouch. A DEVICE key that self-signs+self-attests an
 /// otherwise-well-formed attestation (real thread, real commitment, valid floor) is
@@ -508,6 +647,40 @@ async fn submit_attestation(
     let body = build_attestation_body(event_id, patient, payload, kid_h, hlc);
     sign_attest_submit(c, &body, sk_h, kid_h).await?;
     Ok(event_id)
+}
+
+/// Build a vouch pinning `reviewed_commitment_hex` with the given `reviewed_count` and
+/// an EXPLICIT `hlc` (so a caller can force an equal-HLC collision), sign+attest+submit
+/// through the 3-arg human door, and return its content_address — the byte-order key the
+/// `medication_thread_attestation` DISTINCT ON tiebreaks on. Used by the equal-HLC test.
+#[allow(clippy::too_many_arguments)] // explicit HLC + commitment + count + human key/kid, mirrors submit_attestation
+async fn submit_vouch_returning_ca(
+    c: &Client,
+    patient: Uuid,
+    medication_id: Uuid,
+    reviewed_commitment_hex: &str,
+    reviewed_count: i32,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    hlc: Hlc,
+) -> Vec<u8> {
+    let payload = serde_json::json!({
+        "medication_id": medication_id.to_string(),
+        "reviewed_commitment": reviewed_commitment_hex,
+        "reviewed_count": reviewed_count,
+    });
+    let body = build_attestation_body(Uuid::now_v7(), patient, payload, kid_h, hlc);
+    let signed = sign(&body, sk_h).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, kid_h, "attested", sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT submit_event($1,$2,$3)",
+        &[&signed.signed_bytes, &token, &vk_h],
+    )
+    .await
+    .expect("an equal-HLC-but-distinct-event vouch is accepted (backdating is legal)");
+    ca
 }
 
 /// Attest `medication_id`'s CURRENT commitment (a human vouching for exactly what the
@@ -1536,5 +1709,448 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
     assert!(
         !stale_after_reattest,
         "the standing (latest) vouch now pins the corrected commitment -> current again"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test gap 1 (issue #181, highest-value): the two-subject verbs (reconcile /
+// separate) attest BOTH threads in ONE transaction after submitting the verb event
+// (reconciliation.rs). The single-thread atomic drop-on-error is already proven
+// (author_time_rejection_rolls_the_verb_back); these prove the SECOND subject's
+// attestation failing rolls back the FIRST subject's already-authored attestation AND
+// the verb event too. Forced cleanly by making the second subject an ORPHAN (no local
+// content), so `attest_thread_in_tx` bails "nothing to vouch for" only on the second
+// leg — after the first subject's vouch has already been written inside the txn.
+// ---------------------------------------------------------------------------
+
+/// Shared assertion for the two verbs: the op errored on the orphan second subject, so
+/// NOTHING from the atomic block survives — no attestation for `patient`, no verb event
+/// of `verb_event_type` — while `real_subject`'s own pre-existing assert (committed in a
+/// separate earlier txn) is untouched, proving the rollback is scoped to the verb txn.
+async fn assert_second_subject_rollback(
+    c: &Client,
+    patient: Uuid,
+    real_subject: Uuid,
+    result: anyhow::Result<Uuid>,
+    verb_event_type: &str,
+) {
+    let err = result.expect_err("the orphan second subject must fail the whole verb");
+    assert!(
+        err.to_string().contains("nothing to vouch for"),
+        "expected the orphan-thread refusal, got: {err}"
+    );
+
+    // medication_attestation is append-only / NOT truncated between serialized tests, so
+    // both counts are scoped to THIS test's fresh patient.
+    let attestations: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        attestations, 0,
+        "the FIRST subject's attestation (authored before the second leg failed) must roll back"
+    );
+
+    let verb_events: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = $1 AND patient_id = $2::text::uuid",
+            &[&verb_event_type, &patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        verb_events, 0,
+        "the verb event rolled back with the attestations"
+    );
+
+    // The real subject's own assert (a separate committed txn) is untouched: exactly one
+    // statement for the patient — the orphan second subject was never asserted at all.
+    let statements: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_statement WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        statements, 1,
+        "the rollback is scoped to the verb txn: {real_subject}'s prior assert survives"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_attest_second_subject_rejection_rolls_back_first() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // subject_a is a real thread (attested FIRST, would succeed); subject_b is an ORPHAN
+    // (never asserted -> attested SECOND, bails "nothing to vouch for"). The reconcile
+    // floor is structure-only/offline-first, so the reconcile event itself submits fine
+    // inside the txn — the failure is purely the second attestation leg.
+    let subject_a = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let subject_b = Uuid::now_v7(); // orphan: no local content events
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("reconciliation review"),
+        note: None,
+    };
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    let r = reconcile_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        subject_a,
+        subject_b,
+        &input,
+        Some(&params),
+    )
+    .await;
+
+    assert_second_subject_rollback(
+        &c,
+        patient,
+        subject_a,
+        r,
+        "clinical.medication-reconciliation.asserted",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn separate_attest_second_subject_rejection_rolls_back_first() {
+    // Same guarantee for the separation verb, which shares reconcile's exact
+    // submit-verb-then-attest-both-in-one-txn shape.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let subject_a = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let subject_b = Uuid::now_v7(); // orphan
+
+    let params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("separation review"),
+        note: None,
+    };
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    let r = separate_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        subject_a,
+        subject_b,
+        &input,
+        Some(&params),
+    )
+    .await;
+
+    assert_second_subject_rollback(
+        &c,
+        patient,
+        subject_a,
+        r,
+        "clinical.medication-separation.asserted",
+    )
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// Test gap 2 (issue #181): medication_group_attestation branches the existing
+// group_current_only_when_all_members_current test never reaches — the
+// `ta.medication_id IS NULL` (unattested member) filter and the plain singleton
+// reduction (group_id = medication_id for a never-reconciled thread). Asserting
+// `unattested_members`, which is computed by the view but was never checked.
+// ---------------------------------------------------------------------------
+
+/// Read the group rollup for a group_id, or None if it does not surface at all.
+async fn group_attestation(c: &Client, group_id: Uuid) -> Option<(bool, i64, i64)> {
+    let rows = c
+        .query(
+            "SELECT attested_current, unattested_members, stale_members \
+             FROM medication_group_attestation WHERE group_id = $1::text::uuid",
+            &[&group_id.to_string()],
+        )
+        .await
+        .unwrap();
+    rows.first().map(|r| (r.get(0), r.get(1), r.get(2)))
+}
+
+#[tokio::test]
+async fn group_rollup_flags_an_unattested_member() {
+    // Reconcile A and B into a group, then attest ONLY A. The `ta.medication_id IS NULL`
+    // branch fires for B: the group is NOT attested_current, and unattested_members = 1
+    // (stale_members stays 0 — B is unattested, not stale). This is the conservative
+    // rollup's "a reconciled group is current only when EVERY member is" in its
+    // partially-attested state, which the all-members-attested test cannot reach.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let a = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let b = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    reconcile_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Attest ONLY member A; B stays unattested.
+    attest_current(&c, patient, a, 1, &sk_h, &kid_h).await;
+
+    let group_id = std::cmp::min(a, b);
+    let (attested_current, unattested_members, stale_members) = group_attestation(&c, group_id)
+        .await
+        .expect("the reconciled group surfaces in the rollup");
+    assert!(
+        !attested_current,
+        "a group with an unattested member is not attested_current"
+    );
+    assert_eq!(unattested_members, 1, "exactly member B is unattested");
+    assert_eq!(
+        stale_members, 0,
+        "B is unattested, not stale — the two branches are distinct"
+    );
+}
+
+#[tokio::test]
+async fn singleton_group_reduces_to_its_thread() {
+    // A never-reconciled thread is its own singleton group (group_id = medication_id via
+    // medication_thread_group's COALESCE, db/033). Before any vouch it surfaces as
+    // unattested (the `ta.medication_id IS NULL` branch, unattested_members = 1); after
+    // one vouch it reduces trivially to attested_current with zero unattested/stale
+    // members. Covers the singleton reduction the group test (which only ever reconciles)
+    // never exercises.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("warfarin"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Unattested singleton: group_id = medication_id, one unattested member, not current.
+    let (attested_current, unattested_members, stale_members) =
+        group_attestation(&c, medication_id)
+            .await
+            .expect("a never-reconciled thread is its own singleton group");
+    assert!(!attested_current, "an unattested singleton is not current");
+    assert_eq!(unattested_members, 1, "the lone member is unattested");
+    assert_eq!(stale_members, 0);
+
+    // Attest it: the singleton reduces trivially to attested & current.
+    attest_current(&c, patient, medication_id, 1, &sk_h, &kid_h).await;
+    let (attested_current2, unattested_members2, stale_members2) =
+        group_attestation(&c, medication_id).await.unwrap();
+    assert!(
+        attested_current2,
+        "an attested singleton reduces to attested_current"
+    );
+    assert_eq!(unattested_members2, 0);
+    assert_eq!(stale_members2, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test gap 4 (issue #181): the `content_address DESC` sub-tiebreak of
+// medication_thread_attestation's DISTINCT ON, for two vouches on one thread sharing
+// an identical (hlc_wall, hlc_counter). Near-impossible on a single node (next_hlc is
+// monotonic) but NATURAL across nodes, and NOT merely cosmetic: it is
+// convergence-load-bearing — without a total, node-independent tiebreak, two nodes
+// could pick DIFFERENT standing vouches for the same thread and silently disagree on
+// attester_kid/stale (the divergence ADR-0045 protects the projection layer from).
+// content_address is the SHA-256 multihash of the signed bytes: identical on every
+// node, and bytea DESC is unsigned-byte order == Rust Vec<u8> order, so the winner is
+// predictable here.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let medication_id = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_assert("atorvastatin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let commitment = thread_commitment(&c, medication_id)
+        .await
+        .expect("the fresh thread has a commitment");
+    let commitment_hex = hex::encode(&commitment);
+
+    // ONE HLC, reused verbatim for BOTH vouches -> an equal-(wall,counter,origin)
+    // collision. Distinct reviewed_count -> distinct payload -> distinct content_address,
+    // the ONLY key the DISTINCT ON can then order by. Both pin the CURRENT commitment, so
+    // both are non-stale; which one stands is decided purely by content_address DESC.
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+
+    let ca1 = submit_vouch_returning_ca(
+        &c,
+        patient,
+        medication_id,
+        &commitment_hex,
+        1,
+        &sk_h,
+        &kid_h,
+        hlc.clone(),
+    )
+    .await;
+    let ca2 = submit_vouch_returning_ca(
+        &c,
+        patient,
+        medication_id,
+        &commitment_hex,
+        2,
+        &sk_h,
+        &kid_h,
+        hlc.clone(),
+    )
+    .await;
+    assert_ne!(
+        ca1, ca2,
+        "distinct payloads must yield distinct content addresses"
+    );
+
+    // Both vouches landed (append-only, keyed by event_id — the equal HLC does not dedup).
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(landed, 2, "both equal-HLC vouches are retained");
+
+    // The standing vouch is the one with the LARGER content_address (bytea DESC).
+    let expected_standing_count: i32 = if ca1 > ca2 { 1 } else { 2 };
+    let (standing_count, stale): (i32, bool) = {
+        let row = c
+            .query_one(
+                "SELECT reviewed_count, stale FROM medication_thread_attestation \
+                 WHERE medication_id = $1::text::uuid",
+                &[&medication_id.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        standing_count, expected_standing_count,
+        "the larger-content_address vouch stands (deterministic DESC tiebreak, convergent across nodes)"
+    );
+    assert!(
+        !stale,
+        "both vouches pinned the current commitment -> standing is not stale"
     );
 }
