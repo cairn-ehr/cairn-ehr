@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 whole-project review course (start here)
+## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 DONE, start at P2
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -14,27 +14,19 @@ any time and is explicitly deprioritized behind them.
 (and the exploit detail now public in #187–#217) make closing P1 and P4 a hard precondition for any
 pilot carrying real data.
 
-**Priority 1 — one floor-hardening slice against the Spike-0002 hostile enrolled writer (TDD, one branch).**
-Re-run the ADR-0030 threat model against today's floor. In rough dependency order:
-- **#187 (Critical)** — reject an arbitrarily future-dated `hlc_wall` at the **local** `submit_event`
-  door (mirror the node-plane rejection `db/007:342`; local-door reject cannot fork the fleet).
-  This is the single worst finding: silent, fleet-wide, unrepairable-by-events. Decide the
-  remote-door policy (clamp-and-flag vs reject) for genuinely-broken peers separately.
-- **#207 (D2)** — add the five `ALTER TABLE … ADD COLUMN IF NOT EXISTS` lines (prerequisite for
-  #194's `content_address` tiebreaks); consider a guard test for widened-CREATE-without-ALTER.
-- **#194 (A6)** — append `content_address` to the `patient_identifier`/`patient_demographic`
-  tiebreak tuples (needs #207 first); closes the divergence that feeds `cairn_field_clash`.
-- **#191 (A3)** — make suppression fail **closed** when `targets_other_author` and no valid
-  `target_event_id`; register a `cairn_event_twin_check` row for the suppression types.
-- **#192 (A4)** — medication patient-consistency (fail-loud-local / converge-and-flag on sync,
-  the `chart_dispute` pattern); folds in the #177 design decision.
-- **#190 (A2)** — agent-signed `identity.link` faces the db/016 veto in the door, or lands
-  `under-review` (human-attested links still pass).
-- **#193 (A5)** — apply the drift ceiling at the `restore_node_event` door.
-- **#195 (A7)** — bind (or document the decoupling of) the body's responsibility contributor to
-  the verified attester key.
+**Priority 1 — ✅ DONE 2026-07-16** (the floor-hardening slice against the Spike-0002 hostile
+enrolled writer; TDD, one branch `feat/floor-hardening-spike0002-p1`, all eight in dependency
+order, one commit each; full workspace 640/0 failed; detail in the session block below):
+~~#187~~ (local-door drift-ceiling reject) · ~~#207~~ (five additive ALTERs + the pc.* view
+upgrade-heal + `migration_replay_widening.rs` guard) · ~~#194~~ (`content_address` tiebreak on
+the two set-union demographic projections) · ~~#191~~ (suppression target gate fails closed at
+both doors + registry rows) · ~~#192~~ (medication thread patient-consistency, **resolves #177**)
+· ~~#190~~ (un-attested `identity.link` faces the db/016 veto at the door; sync path flags +
+`under-review`) · ~~#193~~ (drift ceiling at the restore door) · ~~#195~~ (responsibility
+contributor bound to the verified attester). The #187 remote-door policy for genuinely-broken
+peers stays the deliberate db/020 clamp-and-admit (documented in `hlc_drift.rs`).
 
-**Priority 2 — sync-convergence integrity (the flagship guarantee, currently hand-verified).**
+**Priority 2 — sync-convergence integrity (the flagship guarantee, currently hand-verified). ⇐ START HERE**
 - **#199 (B4)** — set `CAIRN_TEST_PG2` in `rust.yml`, un-skip `federation.rs`/`sync_watermark.rs`,
   add medication remote-apply cases (incl. the attestation-token round trip), add one A→B
   projection-equality test. Closes #176 structurally. **Do this first in P2** — it's the safety net
@@ -92,7 +84,8 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-15 (review course above; last full regeneration 2026-07-14) ·
+**Session date:** 2026-07-16 (P1 floor-hardening slice; review course above; last full
+regeneration 2026-07-14) ·
 **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
@@ -146,7 +139,7 @@ coverage tests + a fixed stale SQL-mirror row count (15→16); no ADR/spec/SCHEM
 + the **medication dose effective-date/reason correction, slice 5 — BUILT this session** (ADR-0050; `db/035`
 — the `-dose-correction` verb becomes a **per-field patch** [dose/effective/reason each set|strike|keep], the
 corrected effective date drives current-dose winner selection [bitemporal repair], `schema_version` /1→/2; no
-new event type; PR forthcoming).
+new event type; PR #186, on main).
 + the **L3 clinician reference-UI shell, slice 1 — BUILT** (a standalone `cairn-gui/` workspace with a
 framework-agnostic contract/port/manifest/routing core; **Spike 0004 resolved — iced FAILS the accessibility bar**,
 so the reference desktop UI **pivots to Tauri 2**, an L3 framework choice *below* the compatibility boundary — no
@@ -154,8 +147,33 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-15) — medication dose effective-date/reason correction, slice 5 (ADR-0050, spec
-v0.50→v0.51; branch `feat/medication-dose-effective-correction`; PR forthcoming; full detail in git + the ADR
+**This session (2026-07-16) — the P1 floor-hardening slice (issues #187/#207/#194/#191/#192[+#177]/#190/#193/#195;
+branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/event-type change — every fix is an in-place floor
+hardening or an additive node-local projection/flag; full detail in git, one commit per issue).** The ADR-0030
+threat model re-run against the floor, all eight in the HANDOVER's dependency order, strict TDD (every fix has its
+RED-first test): **#187** the local `submit_event` door now rejects a future-dated `hlc_wall` past the shared 24h
+ceiling (mirrors db/007; the remote clinical door deliberately keeps clamp-and-admit); **#207** the five
+#115-widened overlay columns now ALSO ship as additive ALTERs + an upgrade-heal for the two `pc.*` views (a
+replayed narrow-shape view otherwise aborts boot — discovered by the new `migration_replay_widening.rs` guard,
+which simulates the upgraded-in-place DB for all seven widened pairs); **#194** `patient_identifier`/
+`patient_demographic` gained a `content_address` column + final tiebreak (trigger + db/013 backfill, both policy
+branches) closing the divergence that fed `cairn_field_clash`; **#191** the suppression target gate is
+unconditional at both doors (one shared `cairn_suppression_target_id`, legible on missing/misnamed/malformed
+targets) + ADR-0048 registry rows for both suppression types (twin msg NULL; both registry mirrors updated 16→18,
+msg now Option-typed); **#192** medication threads got the db/023 patient-consistency split — one shared
+`cairn_guard_medication_patient` in all four per-thread verb triggers (local fail-loud, sync converge +
+`medication_patient_conflict_flag`), cross-patient reconciliation refused locally when both patients known
+(**resolves #177**), standing cross-patient groups surfaced read-time by `medication_group_cross_patient`,
+separation never guarded (repair primitive); **#190** an un-attested `identity.link` tripping `cairn_has_hard_veto`
+is refused at the local door (human-attested passes — the veto forces a human decision), sync path admits +
+`link_veto_flag` + a new `chart_trust` under-review source (unlink or attested re-link clears); **#193** the
+restore door got the same drift ceiling (tampered-medium ratchet-out-of-federation closed); **#195** resolved as
+BIND: `cairn_responsibility_bound` at both attestation gates (responsibility contributor must name the verified
+attester; two test fixtures that encoded the A7 decoupling corrected to their stated intent). Full workspace
+**640 passed / 0 failed** + fmt + clippy `-D warnings` clean; SQL twin-registry mirror updated in lockstep.
+
+**Prior session (2026-07-15) — medication dose effective-date/reason correction, slice 5 (ADR-0050, spec
+v0.50→v0.51; branch `feat/medication-dose-effective-correction`; merged PR #186; full detail in git + the ADR
 + ROADMAP Slice 34).** Closes slice 2's honest gap: the `-dose-correction` verb fixed the dose *value* only, so
 a mis-keyed effective date (which drives current-dose winner selection) and clinical reason were uncorrectable.
 The correction is now a **per-field patch** of a targeted dose point — three groups `dose`/`effective`/`reason`,
@@ -391,8 +409,9 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   *suppression* — single-column PK eviction; pre-existing db/032, needs a PK/design decision**);
   [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-collision advisory onto the medication/dose/
   reconciliation projections; [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize-guard
-  remote-apply test); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation
-  — needs a design decision**). Spine to reuse: `db/031`–`db/035` + `cairn-event::medication`.
+  remote-apply test); ~~#177 (cross-patient reconciliation)~~ — **RESOLVED 2026-07-16** with the #192
+  patient-consistency slice (local refuse when both patients known + the `medication_group_cross_patient`
+  read-time surface). Spine to reuse: `db/031`–`db/035` + `cairn-event::medication`.
 - **Demographics build — next slices** (reuse the spine in `db/010`/`db/011`/`db/013`/`db/014` +
   `cairn-event::demographics`). Slices 1–5 are done (§4.4 identifiers, §4.2 DOB + sex-at-birth, §4.2 names,
   §4.2 administrative-sex + gender-identity, §4.3 address). **Karyotype** is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) — no code yet.
