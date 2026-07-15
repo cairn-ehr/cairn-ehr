@@ -208,6 +208,23 @@ $$;
 -- converges to the highest-HLC assertion. After the edge overlay, recompute the
 -- connected-component projection around both endpoints (see cairn_recompute_component
 -- above).
+-- #190 (finding A2): the standing worklist of UN-ATTESTED links that tripped the
+-- db/016 hard veto at THIS node's door on the sync-apply path. The event itself is
+-- admitted and projected (a node-local veto verdict reads node-local demographic
+-- state — two honest nodes can disagree, so refusing a replicated link would fork
+-- the event set); this table is what keeps the merge from being SILENT: both
+-- subjects read 'under-review' in chart_trust (db/024) until a human resolves the
+-- pair — an unlink, or a human-attested re-link, clears the row. Node-local derived
+-- state, never on the wire.
+CREATE TABLE IF NOT EXISTS link_veto_flag (
+    low             UUID  NOT NULL,
+    high            UUID  NOT NULL,
+    content_address BYTEA NOT NULL,   -- the vetoed link event
+    flagged_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (low, high)
+);
+GRANT SELECT ON link_veto_flag TO cairn_agent;
+
 CREATE OR REPLACE FUNCTION patient_link_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -246,6 +263,37 @@ BEGIN
             'patient_link', lo::text || '|' || hi::text,
             NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
             NEW.content_address, v_cur.content_address);
+    END IF;
+
+    -- #190 hard-veto floor AT THE DOOR (finding A2; principle 12 — the veto was
+    -- previously enforced only in the Rust auto-apply seam, so an enrolled agent with
+    -- raw SQL could merge two hard-vetoed charts through submit_event unflagged).
+    -- Contract: the veto FORCES A HUMAN DECISION, never auto-rejects one — so a
+    -- human-attested link (NEW.attester_key set: the stored, verified vouch) passes;
+    -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door (nothing
+    -- accepted yet, fail loud at source) and admitted-but-flagged on the sync path
+    -- (the verdict reads node-local demographic state, so a remote refusal would fork
+    -- honest nodes; the flag makes both charts read under-review — never a silent
+    -- merge). The Rust auto-apply pre-check stays as the polite early skip; this is
+    -- the floor behind it.
+    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi) THEN
+        IF current_setting('cairn.remote_apply', true) = 'on' THEN
+            INSERT INTO link_veto_flag (low, high, content_address)
+            VALUES (lo, hi, NEW.content_address)
+            ON CONFLICT (low, high) DO NOTHING;
+        ELSE
+            RAISE EXCEPTION
+                'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
+                lo, hi;
+        END IF;
+    END IF;
+
+    -- Flag lifecycle: the pair's standing veto flag is resolved by the two human-
+    -- reachable outcomes — an unlink (the never-erase reversal: the hazard is gone)
+    -- or a human-attested link (the vouch IS the forced human decision). Node-local
+    -- advisory state, so a DELETE is honest (the events all remain in the log).
+    IF v_state = 'unlink' OR (v_state = 'link' AND NEW.attester_key IS NOT NULL) THEN
+        DELETE FROM link_veto_flag WHERE low = lo AND high = hi;
     END IF;
 
     INSERT INTO patient_link
