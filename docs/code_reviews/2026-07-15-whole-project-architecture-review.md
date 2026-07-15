@@ -247,8 +247,9 @@ for the pattern.
 ### D3 (Important) — No reprojection story
 Projections are trigger-populated; a `CREATE OR REPLACE` of projection logic heals only future
 inserts. The only backfill in the tree is the bespoke `cairn_demographic_backfill()` (`db/013`) —
-which also runs a full unindexed `event_log` scan on **every connect** (`db/013:180`; no
-`event_type` index exists), linear in log size on Pi-class nodes. ADR-0045 shipped
+which also runs a full unindexed `event_log` scan on **every connect** (`db/013:180`; the only
+event-typed index is db/034's partial medication-thread index, which does not cover the
+demographic types this scan filters on), linear in log size on Pi-class nodes. ADR-0045 shipped
 "projection-read-side only" while trigger-materialized winner tables settled under the old
 comparison wherever no backfill exists. Needed: a generic `cairn_reproject(...)` (or an ADR-0048
 registry `backfill_fn` column) + the written rule "a projection fix ships with its idempotent,
@@ -308,7 +309,9 @@ parameterized SQL, placeholder-exclusion coverage, both drift canaries.
 - **Keystore zeroization stops one layer above `seal.rs`** (`keystore.rs:64-71,120-124`).
 - **Stale prose**: `docs/spec/index.md:8` still says demographics-only; root CLAUDE.md says "only
   the §4.4 identifier slice exists"; ROADMAP has two "Slice 30" entries (lines 416, 437);
-  HANDOVER (508 lines) + ROADMAP (719) have outgrown "disposable scaffolding".
+  HANDOVER (508 lines) + ROADMAP (719) have outgrown "disposable scaffolding" — and this review's
+  own fix-course lead section adds ~90 more lines to HANDOVER (a deliberate trade: the course is
+  the right lead content now; shrink the tail at the next full regeneration).
 - **§3.15/§3.16 medication mislabel is systemic and self-propagating** — baked into db/031–034
   headers, ~20 Rust comments, ROADMAP:439, and the **error strings of the locked ADR-0048 registry
   rows** (asserted byte-for-byte by the Rust mirror AND the SQL mirror — a three-place lockstep
@@ -421,7 +424,7 @@ Every finding was filed on GitHub on 2026-07-15. Pre-existing related issues not
 | E3 matcher minors (alias/thresholds/casefold/repair) | Minor | #211 |
 | F test-infra: db/tests unrun, drift pairs, verb copy | Process | #212 |
 | F Rust hygiene batch (zeroize/rule-6/lock/recovery) | Minor | #213 |
-| §3.3 medication mislabel (systemic) | Important | #214 |
+| §3.3 medication mislabel (systemic) | Important (process) | #214 |
 | G spec prose honesty batch | Minor/Important | #215 |
 | t_effective ceiling vs graded interval | Important | #216 (rel. #97) |
 | paper-parity benchmark as required slice section | Important (process) | #217 |

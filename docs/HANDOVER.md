@@ -9,6 +9,11 @@ report. **Fix in this order** — the ordering is deliberate: items 1–4 get *m
 every clinical slice stacked on top of them; the matcher/medication feature work is safe to resume
 any time and is explicitly deprioritized behind them.
 
+**Standing gate:** whole-project review cycles like this one repeat periodically, and there will be
+**no release for clinical use before repeated review cycles pass cleanly.** The review findings
+(and the exploit detail now public in #187–#217) make closing P1 and P4 a hard precondition for any
+pilot carrying real data.
+
 **Priority 1 — one floor-hardening slice against the Spike-0002 hostile enrolled writer (TDD, one branch).**
 Re-run the ADR-0030 threat model against today's floor. In rough dependency order:
 - **#187 (Critical)** — reject an arbitrarily future-dated `hlc_wall` at the **local** `submit_event`
@@ -87,7 +92,8 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-14 · **Spec/ADRs:** v0.50 · **Phase:** architecture complete; **first
+**Session date:** 2026-07-15 (review course above; last full regeneration 2026-07-14) ·
+**Spec/ADRs:** v0.50 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (piece A in-DB veto floor · B1 advisory scoring core · B2 veto-gated pairwise pipeline + proposal worklist · B2b
 blocking / candidate-pair generation + batch sweep · B3 eval harness · B3 compound blocking key (`name+year`) · B3
