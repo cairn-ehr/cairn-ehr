@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS chart_dispute (
     content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+-- Additive widening (#115 → issue #207): see db/018's patient_link note — the CREATE
+-- no-ops on a pre-widening DB; nullable ALTER, new upserts always write it.
+-- Guarded by migration_replay_widening.rs.
+ALTER TABLE chart_dispute ADD COLUMN IF NOT EXISTS content_address BYTEA;
 GRANT SELECT ON chart_dispute TO cairn_agent;
 -- The chart_trust VIEW's hot lookup AND the triage worklist are both "standing OPEN
 -- disputes for a subject"; index exactly that partial set so neither cliffs as the
@@ -225,6 +229,23 @@ GRANT SELECT ON chart_trust TO cairn_agent;
 --    A dispute that arrives before the disputed body still reports under-review via
 --    chart_trust (the authoritative identity safety signal, queried directly); this view
 --    is the convenience join for charts that have synced, NOT the complete safety surface.
+-- Upgrade heal (issue #207): symmetric with db/018's person_chart heal — if this view
+-- still has the pre-#115 narrow shape (no demo_content_address, via pc.*), the REPLACE
+-- below would splice a column mid-list and abort boot. Normally db/018's CASCADE already
+-- took this view down in the same load; this guard covers a partially-healed history
+-- (e.g. an earlier load that committed db/018 but failed before this file). Steady-state
+-- loads never drop.
+DO $$
+BEGIN
+    IF to_regclass('public.person_chart_trust') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'person_chart_trust'
+             AND column_name = 'demo_content_address') THEN
+        DROP VIEW person_chart_trust CASCADE;
+    END IF;
+END $$;
+
 CREATE OR REPLACE VIEW person_chart_trust AS
     SELECT pc.*,
            COALESCE(ct.trust_state, 'confirmed') AS trust_state

@@ -60,6 +60,12 @@ CREATE TABLE IF NOT EXISTS patient_chart (
     last_activity  TIMESTAMPTZ,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+-- Additive widening (#115 → issue #207): CREATE TABLE IF NOT EXISTS no-ops on a database
+-- created before the column was added to the body above, so the widening must ALSO ship
+-- as an idempotent ALTER (ADR-0012 additive-migration rule; the db/001 event_log pattern).
+-- Without it, every trigger INSERT naming the column fails on an upgraded-in-place DB —
+-- a total write outage at trigger depth. Guarded by migration_replay_widening.rs.
+ALTER TABLE patient_chart ADD COLUMN IF NOT EXISTS demo_content_address BYTEA;
 
 -- Incremental maintenance: AFTER INSERT on event_log, fold exactly the one new
 -- event into the projection. No full recompute — that is the whole point of the

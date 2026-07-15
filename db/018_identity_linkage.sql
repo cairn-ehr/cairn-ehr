@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS patient_link (
     PRIMARY KEY (low, high),
     CHECK (low < high)
 );
+-- Additive widening (#115 → issue #207): the CREATE above no-ops on a pre-widening DB, so
+-- the column must ALSO ship as an idempotent ALTER or the overlay INSERT fails at trigger
+-- depth (write outage). Nullable here — pre-#115 rows carry no recorded winner address and
+-- degrade honestly to the pre-#115 first-applied tiebreak; every new upsert writes it.
+-- Fresh DBs get NOT NULL from the CREATE. Guarded by migration_replay_widening.rs.
+ALTER TABLE patient_link ADD COLUMN IF NOT EXISTS content_address BYTEA;
 GRANT SELECT ON patient_link TO cairn_agent;
 -- The component BFS joins on (pl.low = node OR pl.high = node). The PK indexes the `low`
 -- side; without an index on `high` the walk sequentially scans the edge table, which
@@ -286,6 +292,26 @@ CREATE TRIGGER patient_link_apply_trg
 --    link graph. Selecting WHERE person_id = X returns all member charts. The REAL
 --    unified-chart read surface (ordering, dedup, trust states) is the API/UI tier,
 --    above the foundation line — deliberately out of scope for C1.
+-- Upgrade heal (issue #207): on a database created before the #115 widening, this view
+-- exists WITHOUT demo_content_address (pc.* expanded at CREATE time, against the then-
+-- narrow patient_chart). db/002's additive ALTER has just re-added the column mid-table,
+-- so the CREATE OR REPLACE below would try to splice a new column into the MIDDLE of the
+-- existing view's column list — which Postgres refuses (a replaced view may only append
+-- columns at the end), aborting node boot. Drop the stale-shaped view ONCE; CASCADE takes
+-- the person_chart_trust composition (db/023) with it, and both are recreated in this same
+-- schema load. Steady-state loads (shape already current) never drop, so any out-of-schema
+-- dependent views are not disturbed.
+DO $$
+BEGIN
+    IF to_regclass('public.person_chart') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'person_chart'
+             AND column_name = 'demo_content_address') THEN
+        DROP VIEW person_chart CASCADE;
+    END IF;
+END $$;
+
 CREATE OR REPLACE VIEW person_chart AS
     SELECT COALESCE(pm.person_id, pc.patient_id) AS person_id, pc.*
     FROM patient_chart pc

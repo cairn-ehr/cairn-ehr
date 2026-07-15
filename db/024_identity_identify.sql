@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS chart_identity_state (
     content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+-- Additive widening (#115 → issue #207): see db/018's patient_link note — the CREATE
+-- no-ops on a pre-widening DB; nullable ALTER, new upserts always write it.
+-- Guarded by migration_replay_widening.rs.
+ALTER TABLE chart_identity_state ADD COLUMN IF NOT EXISTS content_address BYTEA;
 GRANT SELECT ON chart_identity_state TO cairn_agent;
 -- The chart_trust VIEW's unconfirmed source AND the "still-John-Doe" worklist are both
 -- "standing PENDING charts"; index exactly that partial set so neither cliffs as the
