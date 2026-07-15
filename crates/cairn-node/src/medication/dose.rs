@@ -10,7 +10,7 @@ use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
 const DOSE_CHANGE_SCHEMA_VERSION: &str = "clinical.medication-dose-change/1";
-const DOSE_CORRECTION_SCHEMA_VERSION: &str = "clinical.medication-dose-correction/1";
+const DOSE_CORRECTION_SCHEMA_VERSION: &str = "clinical.medication-dose-correction/2";
 
 /// Clinician-supplied fields of a dose change. `info_source` required (a new clinical
 /// claim); dose fields honest-unknown ("upped it, dunno to what").
@@ -97,12 +97,18 @@ pub async fn change_dose(
     Ok(event_id)
 }
 
-/// Clinician-supplied fields of a dose correction. All optional (correct-to-unknown).
+/// Clinician-supplied fields of a dose correction (per-field patch; see ADR-0050).
+/// A group is *set* (Some / value), *struck* (named in `strike` → unknown), or *kept*
+/// (absent). `reason` = the point's clinical reason; `note` = why this correction exists.
 pub struct CorrectDoseInput<'a> {
     pub dose_amount: Option<&'a str>,
     pub dose_unit: Option<&'a str>,
-    pub info_source: Option<&'a str>,
+    pub effective: Option<&'a str>,
+    pub effective_precision: Option<&'a str>,
     pub reason: Option<&'a str>,
+    pub strike: &'a [&'a str],
+    pub note: Option<&'a str>,
+    pub info_source: Option<&'a str>,
 }
 
 /// Assemble the signed `clinical.medication-dose-correction.asserted` EventBody. Pure.
@@ -122,8 +128,12 @@ pub fn build_dose_correction_body(
         corrects: &corrects_s,
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,
-        info_source: input.info_source,
+        effective: input.effective,
+        effective_precision: input.effective_precision,
         reason: input.reason,
+        strike: input.strike,
+        note: input.note,
+        info_source: input.info_source,
     };
     EventBody {
         event_id: event_id.to_string(),
@@ -260,8 +270,12 @@ mod dose_build_tests {
         let input = CorrectDoseInput {
             dose_amount: Some("20"),
             dose_unit: Some("mg"),
+            effective: Some("2024-01"),
+            effective_precision: Some("month"),
+            reason: Some("titration"),
+            strike: &[],
+            note: Some("mis-keyed"),
             info_source: None,
-            reason: Some("mis-keyed"),
         };
         let b = build_dose_correction_body(
             Uuid::now_v7(),
@@ -273,8 +287,10 @@ mod dose_build_tests {
             hlc(),
         );
         assert_eq!(b.event_type, "clinical.medication-dose-correction.asserted");
-        assert_eq!(b.schema_version, "clinical.medication-dose-correction/1");
+        assert_eq!(b.schema_version, "clinical.medication-dose-correction/2");
         assert_eq!(b.payload["corrects"], corrects.to_string());
         assert!(b.plaintext_twin.as_deref().unwrap().contains("20 mg"));
+        assert_eq!(b.payload["effective"]["value"], "2024-01");
+        assert_eq!(b.payload["reason"], "titration");
     }
 }

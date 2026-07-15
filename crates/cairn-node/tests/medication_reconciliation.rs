@@ -4,9 +4,9 @@
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_reconcile_body, cease_medication, change_dose, reconcile_medications,
-    separate_medications, AssertMedicationInput, CeaseMedicationInput, ChangeDoseInput,
-    ReconcileInput,
+    assert_medication, build_reconcile_body, cease_medication, change_dose, correct_dose,
+    reconcile_medications, separate_medications, AssertMedicationInput, CeaseMedicationInput,
+    ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -676,6 +676,144 @@ async fn mixed_status_resolves_latest_effective() {
         .unwrap()
         .get(0);
     assert_eq!(past, 1, "the ceased group shows as one past row");
+}
+
+/// Cross-cessation boundary (slice-5 review coverage): `medication_group_status` compares
+/// the MAX effective across active members' dose points vs ceased members' cessations to
+/// decide active/ceased. Its `active_eff` CTE reads the CORRECTED effective, so a
+/// dose-point effective correction that moves a point across the cessation date must FLIP
+/// the group's classification — otherwise a corrected date would be silently ignored for
+/// the active/ceased decision. Byte-order (`COLLATE "C"`) dates chosen so point-0 ("2024",
+/// from the assert's `started`) never dominates: A's active max is "2024-03" (< B's
+/// cessation "2024-06" ⇒ CEASED); correcting A's dose point to "2025-01" makes the active
+/// max "2025-01" (> "2024-06" ⇒ ACTIVE).
+#[tokio::test]
+async fn corrected_effective_flips_group_status_across_cessation() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    // A: active member with a dose point effective 2024-03 (earlier than B's cessation).
+    let a = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+        None,
+    )
+    .await
+    .unwrap();
+    let pt = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        &ChangeDoseInput {
+            dose_amount: Some("1000"),
+            dose_unit: Some("mg"),
+            effective: Some("2024-03"),
+            effective_precision: Some("month"),
+            info_source: "clinician-observed",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    // B: ceased member, cessation effective 2024-06 (later than A's dose point).
+    let b = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_assert("metformin"),
+        None,
+    )
+    .await
+    .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        &CeaseMedicationInput {
+            stopped: Some("2024-06"),
+            stopped_precision: Some("month"),
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    // Before the correction: A's latest active effective (2024-03) is EARLIER than the
+    // cessation (2024-06) → the group is CEASED, so it shows on the past list, not current.
+    assert_eq!(
+        current_rows(&c, patient).await.len(),
+        0,
+        "active max 2024-03 < cessation 2024-06 ⇒ group ceased"
+    );
+
+    // Correct A's dose point effective forward to 2025-01 (later than the cessation).
+    correct_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        pt,
+        &CorrectDoseInput {
+            dose_amount: None,
+            dose_unit: None,
+            effective: Some("2025-01"),
+            effective_precision: Some("month"),
+            reason: None,
+            strike: &[],
+            note: Some("mis-keyed the date"),
+            info_source: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    // After: the CORRECTED active max (2025-01) beats the cessation (2024-06) → the group
+    // flips ACTIVE and reappears on the current list with its (untouched) 1000 mg dose.
+    let rows = current_rows(&c, patient).await;
+    assert_eq!(
+        rows.len(),
+        1,
+        "corrected active max 2025-01 > cessation 2024-06 ⇒ group active again"
+    );
+    assert_eq!(
+        rows[0].2.as_deref(),
+        Some("1000"),
+        "the correction moved only effective; the dose is kept"
+    );
 }
 
 #[tokio::test]
