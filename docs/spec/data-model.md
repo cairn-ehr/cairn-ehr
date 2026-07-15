@@ -36,6 +36,11 @@ attestation overlay** (principle 10) whose "still current?" signal is a converge
 compare over the thread's append-only content — sound against a lower-HLC event arriving after the
 sign-off, where a head-position pin would silently misclassify it as reviewed — and is never
 retracted, only superseded by a corrective event ([ADR-0049](decisions/0049-commitment-based-sign-off-currency.md)).
+A third decision refines the dose-timeline overlay beneath the medication-list row: a dose
+correction **patches** the targeted point's dose / effective / reason **per-field** (an explicit
+`strike` group sets a field unknown), and a corrected effective date **participates in current-dose
+winner selection** — fixing a mis-keyed date is bitemporal repair, not a display-label edit
+([ADR-0050](decisions/0050-dose-correction-per-field-patch.md)).
 
 (Demographics are not modeled as a mutable record — see [§4](demographics.md).)
 

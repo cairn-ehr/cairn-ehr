@@ -70,6 +70,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0047](0047-medication-reconciliation-resolution.md) | Medication reconciliation is a link, not a cessation; symmetric collapse; latest-effective group status | Accepted (refines principle 2, 0010) | 2026-07-13 |
 | [0048](0048-twin-check-registry-dispatch.md) | The per-type twin/floor-check registry: one stable dispatcher, register-by-row, unified check-fn signature | Accepted (refines 0039/0022) | 2026-07-13 |
 | [0049](0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare; supersede, never retract | Accepted (refines 0007, principle 10) | 2026-07-14 |
+| [0050](0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike, corrected effective drives the winner | Accepted (refines principle 4, §3.6) | 2026-07-15 |
 
 ## Template
 
