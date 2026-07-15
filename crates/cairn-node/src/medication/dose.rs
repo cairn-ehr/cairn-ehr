@@ -10,7 +10,7 @@ use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
 const DOSE_CHANGE_SCHEMA_VERSION: &str = "clinical.medication-dose-change/1";
-const DOSE_CORRECTION_SCHEMA_VERSION: &str = "clinical.medication-dose-correction/1";
+const DOSE_CORRECTION_SCHEMA_VERSION: &str = "clinical.medication-dose-correction/2";
 
 /// Clinician-supplied fields of a dose change. `info_source` required (a new clinical
 /// claim); dose fields honest-unknown ("upped it, dunno to what").
@@ -287,7 +287,7 @@ mod dose_build_tests {
             hlc(),
         );
         assert_eq!(b.event_type, "clinical.medication-dose-correction.asserted");
-        assert_eq!(b.schema_version, "clinical.medication-dose-correction/1");
+        assert_eq!(b.schema_version, "clinical.medication-dose-correction/2");
         assert_eq!(b.payload["corrects"], corrects.to_string());
         assert!(b.plaintext_twin.as_deref().unwrap().contains("20 mg"));
         assert_eq!(b.payload["effective"]["value"], "2024-01");
