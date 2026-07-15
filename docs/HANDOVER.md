@@ -1,6 +1,99 @@
 # HANDOVER — Cairn
 
-**Session date:** 2026-07-15 · **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
+## ⇒ NEXT: the 2026-07-15 whole-project review course (start here)
+
+A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
+matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
+every finding is filed as a GitHub issue (#187–#217) with a finding→issue map at the foot of the
+report. **Fix in this order** — the ordering is deliberate: items 1–4 get *more* expensive with
+every clinical slice stacked on top of them; the matcher/medication feature work is safe to resume
+any time and is explicitly deprioritized behind them.
+
+**Standing gate:** whole-project review cycles like this one repeat periodically, and there will be
+**no release for clinical use before repeated review cycles pass cleanly.** The review findings
+(and the exploit detail now public in #187–#217) make closing P1 and P4 a hard precondition for any
+pilot carrying real data.
+
+**Priority 1 — one floor-hardening slice against the Spike-0002 hostile enrolled writer (TDD, one branch).**
+Re-run the ADR-0030 threat model against today's floor. In rough dependency order:
+- **#187 (Critical)** — reject an arbitrarily future-dated `hlc_wall` at the **local** `submit_event`
+  door (mirror the node-plane rejection `db/007:342`; local-door reject cannot fork the fleet).
+  This is the single worst finding: silent, fleet-wide, unrepairable-by-events. Decide the
+  remote-door policy (clamp-and-flag vs reject) for genuinely-broken peers separately.
+- **#207 (D2)** — add the five `ALTER TABLE … ADD COLUMN IF NOT EXISTS` lines (prerequisite for
+  #194's `content_address` tiebreaks); consider a guard test for widened-CREATE-without-ALTER.
+- **#194 (A6)** — append `content_address` to the `patient_identifier`/`patient_demographic`
+  tiebreak tuples (needs #207 first); closes the divergence that feeds `cairn_field_clash`.
+- **#191 (A3)** — make suppression fail **closed** when `targets_other_author` and no valid
+  `target_event_id`; register a `cairn_event_twin_check` row for the suppression types.
+- **#192 (A4)** — medication patient-consistency (fail-loud-local / converge-and-flag on sync,
+  the `chart_dispute` pattern); folds in the #177 design decision.
+- **#190 (A2)** — agent-signed `identity.link` faces the db/016 veto in the door, or lands
+  `under-review` (human-attested links still pass).
+- **#193 (A5)** — apply the drift ceiling at the `restore_node_event` door.
+- **#195 (A7)** — bind (or document the decoupling of) the body's responsibility contributor to
+  the verified attester key.
+
+**Priority 2 — sync-convergence integrity (the flagship guarantee, currently hand-verified).**
+- **#199 (B4)** — set `CAIRN_TEST_PG2` in `rust.yml`, un-skip `federation.rs`/`sync_watermark.rs`,
+  add medication remote-apply cases (incl. the attestation-token round trip), add one A→B
+  projection-equality test. Closes #176 structurally. **Do this first in P2** — it's the safety net
+  for everything else.
+- **#198 (B3)** — add db/027+029 to cairn-sync's SCHEMA subset + a test that runs both doors
+  against a DB loaded from the subset alone.
+- **#196 (B1)** — port the #38 seq-cursor + periodic-sweep treatment to the clinical-plane pull
+  (or record the decision to rebuild clinical sync on the node-plane model).
+- **#197 (B2)** — copy the `AND NOT acked` predicate into the clinical quarantine quota subqueries.
+- **#202/#201 (B7/B6)** — cairn-sync framing cap + COLLATE "C" fingerprint + byte-tier logging;
+  the node.superseded apply arm (or a lineage-stays-local comment).
+
+**Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be).**
+- **#203 (C2)** + **#96** — one small ADR: ratify-or-rename `role:"recorded"` against the ADR-0028
+  enum, decide the on-wire responsibility shape (`{held_by,on_behalf_of}` vs the shipped flat
+  string), add the enum-membership check to the floor.
+- **#189 (C1)** + **#92** — decide the seal-by-default posture, then a walking-skeleton seal slice
+  (seal-at-write → twin-under-seal → safety-projection sibling → crypto-shred → restore-replays-shred)
+  that surfaces the twin-location / twin-floor / descriptor collisions while they are still prose.
+- **#204 (C3)** — schedule the attribution-token / authoring-human slice (pairs with C2).
+
+**Priority 4 — the schema-version guard (an afternoon; retires a Critical latent hazard).**
+- **#188 (D1)** — `node_schema(version, loaded_at, loader_build)` + a loader refusal when the
+  recorded version exceeds the binary's embedded version + one "old binary, new DB" test. First
+  brick of the ADR-0012 code plane; goes live at the first pilot upgrade.
+
+**Priority 5 — one process-mechanization session (attacks the mechanism that produced #182).**
+- **#212 (F)** — decide the `db/tests/*.sql` question (wire into CI or delete); add drift guards
+  for the three unguarded Rust↔SQL pairs; factor the six-fold verb-then-vouch copy **before**
+  medication slice 5.
+- **#214** — fix the §3.15/§3.16→§3.3 medication mislabel once, across the three-place registry
+  lockstep (registry rows + Rust mirror + SQL mirror together).
+- **#215 (G)** — spec prose honesty batch (index.md/CLAUDE.md staleness, the duplicate Slice 30,
+  quarantine-floor + ADR-0045 caveats).
+- **#213** — Rust hygiene batch (keystore zeroize edges, house-rule-6 bench literals, auto_apply
+  lock leak, recovery-code mapping, gui merge fallback).
+
+**Priority 6 — design sessions (no rush, but settle before the dependent feature work).**
+- **#205 (C4)** — actor-registry sync-apply merge/quarantine/adjudication semantics (#172/#154);
+  settle before clinical federation, not after.
+- **#206 (C5)** — distribution/policy-plane trust-root governance (threshold steward signing / key
+  transparency); no ADR owns it.
+- **#200 (B5)** — an ADR stating "refusal + durable re-offer *is* the sync contract for unknown
+  types"; correct the `sync.md` §6.5 over-promise. Pairs with the code-plane work (#188).
+- **#208 (D3)** — a generic reprojection mechanism + the written "a projection fix ships with its
+  backfill" rule + one measured full-replay number at Bet-B volume.
+- **#216** — decide the `t_effective` ceiling semantics against ADR-0027's graded interval
+  (write-door bound + remote-door quarantine-vs-reject).
+- **#217** — make the §1.2 paper-parity benchmark a required section of every clinical-surface
+  slice plan, starting with the Tauri client.
+
+**Explicitly deprioritized (safe to resume any time, behind 1–6):** matcher #209/#210/#211,
+further medication slices (5+), matcher B3 measurement work. These are additive, advisory-tier or
+well-drilled; nothing above is blocked on them and they get no more expensive by waiting.
+
+---
+
+**Session date:** 2026-07-15 (review course above; last full regeneration 2026-07-14) ·
+**Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
 harness/compound-keys/volume-generator/weight-learning + clinician-observed range-DOB evidence + composite-sex
