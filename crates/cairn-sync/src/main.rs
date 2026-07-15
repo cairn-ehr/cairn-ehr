@@ -64,6 +64,25 @@ const SCHEMA: &[(&str, &str)] = &[
         "026_blob_verify_floor",
         include_str!("../../../db/026_blob_verify_floor.sql"),
     ),
+    // Both write doors PERFORM cairn_learn_attachment_refs unconditionally (db/005
+    // + db/020), and PL/pgSQL late binding means omitting its defining migration
+    // loads cleanly and fails only at the FIRST write — a total write outage on a
+    // fresh `cairn-sync init` database (issue #198, review finding B3).
+    (
+        "027_attachment_rendition_references",
+        include_str!("../../../db/027_attachment_rendition_references.sql"),
+    ),
+    // Same late-binding trap: the db/002 patient_chart trigger calls the #157
+    // Byzantine HLC-collision predicate/recorder on every patient.created — the
+    // first demographic write fails without this file (issue #198 again).
+    (
+        "029_hlc_collision_log",
+        include_str!("../../../db/029_hlc_collision_log.sql"),
+    ),
+    // The schema_subset_tests module at the bottom of this file is the drift guard
+    // for this list: it loads ONLY this subset into a wiped database and drives both
+    // doors, so a future door→function edge into an unlisted migration fails a test
+    // instead of shipping a first-write outage.
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -3013,5 +3032,233 @@ mod quarantine_tests {
         };
         let mut c = locked_client(&base);
         assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
+    }
+}
+
+/// Issue #198 (review finding B3) — the SCHEMA subset must satisfy its own doors,
+/// STANDING ALONE.
+///
+/// `SCHEMA` above is a mirror of a subset of `db/*.sql`, and PL/pgSQL late binding
+/// means an omitted migration does not fail the load — it fails at the first write,
+/// as `function ... does not exist` inside `submit_event`/`apply_remote_event` (a
+/// total write outage on a fresh `cairn-sync init` database, the documented
+/// walking-skeleton flow). Every other DB-gated suite in this workspace runs against
+/// a database that cairn-node's FULL 35-file loader has already visited, so the gap
+/// is structurally invisible there: this test is the drift guard. It wipes the
+/// second test database (`$CAIRN_TEST_PG2`), loads ONLY `SCHEMA`, and drives both
+/// doors through the call paths the 2026-07-15 review found dangling:
+///
+///   * `submit_event` → `cairn_learn_attachment_refs` (db/027) — unconditional on
+///     EVERY submit, exercised end-to-end here with a by-reference attachment whose
+///     lazy blob reference must land in `blob_store`;
+///   * the db/002 `patient_chart` trigger → `cairn_hlc_triple_collision` +
+///     `cairn_record_hlc_collision` (db/029) — parsed on the first
+///     `patient.created`, EXECUTED here by applying a genuine Byzantine pair (two
+///     different signed bodies under one HLC triple) through `apply_remote_event`.
+///
+/// Adding a call from either door to a function in a NOT-yet-listed migration will
+/// fail this test with the exact production error message, instead of shipping a
+/// first-write outage. Serialized cluster-wide via the shared advisory-lock key; the
+/// wipe is safe because every suite that shares `$CAIRN_TEST_PG2` (federation,
+/// sync_watermark, clinical_pull) reloads the full schema on connect.
+#[cfg(test)]
+mod schema_subset_tests {
+    use super::*;
+    use cairn_event::{Attachment, Rendition};
+
+    /// Build + sign one `patient.created` event. The body mirrors what `emit_event`
+    /// authors (payload name/dob/sex is what the db/002 projection reads), with the
+    /// HLC triple caller-chosen so the Byzantine-collision case can be constructed.
+    fn signed_patient_created(
+        sk: &SigningKey,
+        kid: &str,
+        patient_id: &str,
+        name: &str,
+        wall: i64,
+        origin: &str,
+        attachments: Vec<Attachment>,
+    ) -> Vec<u8> {
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: patient_id.to_string(),
+            event_type: "patient.created".into(),
+            schema_version: "patient/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: origin.into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"name": name, "dob": "1980-01-01", "sex": "U"}),
+            attachments,
+            plaintext_twin: None,
+        };
+        // ADR-0039: author the twin into the signed body, as every production author does.
+        let body = materialise_generic_twin(body);
+        sign(&body, sk).unwrap().signed_bytes
+    }
+
+    #[test]
+    fn schema_subset_alone_satisfies_both_write_doors() {
+        let (Some(base), Some(base2)) = (
+            std::env::var("CAIRN_TEST_PG").ok(),
+            std::env::var("CAIRN_TEST_PG2").ok(),
+        ) else {
+            eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+            return;
+        };
+
+        // Serialize against every other DB-gated suite (same 'CARN' advisory-lock key,
+        // taken on the primary database so it serializes cluster-wide regardless of
+        // which database each suite touches). Held until `lock` drops at test end.
+        let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+
+        // Wipe the second database down to a fresh `cairn-sync init` starting point.
+        // One batch = one implicit transaction: the schema drop and the extension
+        // re-create land together, so a failure part-way cannot strand the database
+        // extension-less for the suites that share it.
+        let mut c = postgres::Client::connect(&base2, postgres::NoTls).unwrap();
+        c.batch_execute(
+            "DROP SCHEMA public CASCADE;
+             CREATE SCHEMA public;
+             CREATE EXTENSION cairn_pgx;",
+        )
+        .unwrap();
+
+        // Load ONLY the subset — exactly what `cairn-sync init` installs.
+        for (name, sql) in SCHEMA {
+            c.batch_execute(sql)
+                .unwrap_or_else(|e| panic!("loading {name} from the subset alone: {e}"));
+        }
+
+        // Honesty guard on the fixture itself: if the wipe ever stops working, this
+        // database silently reverts to full-schema and the test proves nothing. A
+        // function the subset does NOT ship (db/016's match veto) must be absent.
+        let residue: i64 = c
+            .query_one(
+                "SELECT count(*) FROM pg_proc WHERE proname = 'cairn_match_veto'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            residue, 0,
+            "wipe failed: full-schema residue present, the subset-only property is gone"
+        );
+
+        // One enrolled signer for all three events (the Byzantine pair below models a
+        // broken/hostile signer REUSING its HLC triple, not a second identity).
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        c.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"subset-test\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+            &[&kid],
+        )
+        .unwrap();
+
+        let patient_id = uuid::Uuid::now_v7().to_string();
+
+        // ── Door 1: the LOCAL door, with a by-reference attachment ────────────────
+        // submit_event PERFORMs cairn_learn_attachment_refs(b) unconditionally
+        // (db/005); with db/027 missing this is the first-write outage the review
+        // predicted. The attachment also proves the 027 path end-to-end: the lazy
+        // blob reference must land in blob_store (reference-eager, byte-lazy).
+        let photo_bytes = b"subset-test-attachment-bytes";
+        let local = signed_patient_created(
+            &sk,
+            &kid,
+            &patient_id,
+            "Subset Alice",
+            now_ms(),
+            "subset-local",
+            vec![Attachment::single(
+                "photo: identifying mark, right forearm",
+                Rendition::reference("original", photo_bytes, "image/png"),
+            )],
+        );
+        c.query_one("SELECT submit_event($1)", &[&local])
+            .expect("submit_event must succeed against the subset alone");
+        let (blob_rows, blob_lazy): (i64, i64) = {
+            let row = c
+                .query_one(
+                    "SELECT count(*), count(*) FILTER (WHERE NOT present) FROM blob_store",
+                    &[],
+                )
+                .unwrap();
+            (row.get(0), row.get(1))
+        };
+        assert_eq!(
+            blob_rows, 1,
+            "the attachment's lazy blob reference must be learned"
+        );
+        assert_eq!(
+            blob_lazy, 1,
+            "reference-eager, byte-lazy: bytes not yet present"
+        );
+
+        // ── Door 2: the REMOTE door, overlaying the same patient ──────────────────
+        // apply_remote_event PERFORMs cairn_learn_attachment_refs too (db/020), and
+        // with a current demographic winner standing, the db/002 trigger now parses
+        // AND executes the db/029 collision predicate (FOUND = true, collision false).
+        let wall_b = now_ms() + 1;
+        let remote = signed_patient_created(
+            &sk,
+            &kid,
+            &patient_id,
+            "Subset Alice (amended at B)",
+            wall_b,
+            "subset-peer",
+            vec![],
+        );
+        c.query_one("SELECT apply_remote_event($1, NULL, NULL)", &[&remote])
+            .expect("apply_remote_event must succeed against the subset alone");
+        let name: String = c
+            .query_one(
+                "SELECT name FROM patient_chart WHERE patient_id = $1::text::uuid",
+                &[&patient_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            name, "Subset Alice (amended at B)",
+            "the HLC-later remote event must win the demographic overlay"
+        );
+
+        // ── The Byzantine pair: EXECUTE the db/029 recorder, not just parse it ─────
+        // A different signed body under the SAME (wall, counter, origin) triple as the
+        // standing winner — provably a broken or hostile signer (#157). The apply must
+        // still converge (content-address tiebreak) AND record the advisory signal.
+        let byzantine = signed_patient_created(
+            &sk,
+            &kid,
+            &patient_id,
+            "Subset Mallory",
+            wall_b,
+            "subset-peer",
+            vec![],
+        );
+        c.query_one("SELECT apply_remote_event($1, NULL, NULL)", &[&byzantine])
+            .expect("the Byzantine twin must still be admitted (availability over consistency)");
+        let collisions: i64 = c
+            .query_one(
+                "SELECT count(*) FROM hlc_collision_log WHERE overlay = 'patient_chart'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            collisions, 1,
+            "the HLC-triple collision must be recorded as an advisory signal (db/029)"
+        );
+
+        // Three admitted events total — nothing quarantined, nothing lost.
+        let events: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(events, 3);
     }
 }
