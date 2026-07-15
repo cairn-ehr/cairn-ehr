@@ -167,13 +167,17 @@ BEGIN
         v_att_key := p_attester_key;
     END IF;
 
-    -- 5. Target-existence gate for an overlay on another author's event. Safe at
-    --    apply because HLC order is causal: a suppress is authored by someone who
-    --    HELD the target, so the target sorts earlier and (on this full-replication
-    --    plane) arrives first; a suppress whose target is still in flight from
-    --    another link freezes the watermark and retries until the target lands.
-    IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
-        v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
+    -- 5. Target gate for an overlay on another author's event — UNCONDITIONAL for every
+    --    targets_other type (issue #191, mirroring db/005: absence must fail CLOSED, not
+    --    skip the existence check and the ADR-0043 owner-gate). A malformed/absent target
+    --    can never become valid, so the refused event sits in durable quarantine and its
+    --    re-offers keep failing — poisoning nothing. Target existence is safe to demand at
+    --    apply because HLC order is causal: a suppress is authored by someone who HELD the
+    --    target, so the target sorts earlier and (on this full-replication plane) arrives
+    --    first; a suppress whose target is still in flight from another link freezes the
+    --    watermark and retries until the target lands.
+    IF v_targets_other THEN
+        v_target_id := cairn_suppression_target_id(b);
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'apply_remote_event: overlay targets unknown event %', v_target_id;
         END IF;

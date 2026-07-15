@@ -167,6 +167,50 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
 $$;
 
+-- Fail-closed suppression target resolution (issue #191, finding A3). The floor contract
+-- for every targets_other_author type: the payload MUST name its target under
+-- `target_event_id`, as a valid UUID. The old gates were key-presence-conditional
+-- (`IF v_targets_other AND payload ? 'target_event_id'`), so ABSENCE — or a target
+-- smuggled under any other key — skipped target validation AND the ADR-0043 owner-gate
+-- entirely: an unowner-gated cross-human suppression path for the first consumer that
+-- resolves targets leniently. ONE shared helper, called by BOTH doors and by the
+-- registry check below, so the refusal is identical everywhere (principle 12).
+-- pg_input_is_valid keeps a malformed UUID legible (names the field) instead of a bare
+-- 22P02 cast error.
+CREATE OR REPLACE FUNCTION cairn_suppression_target_id(b jsonb)
+RETURNS uuid LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    v_raw text := b -> 'payload' ->> 'target_event_id';
+BEGIN
+    IF v_raw IS NULL THEN
+        RAISE EXCEPTION 'suppression overlay: payload.target_event_id is required — a targeting overlay without a valid target fails closed (issue #191)';
+    END IF;
+    IF NOT pg_input_is_valid(v_raw, 'uuid') THEN
+        RAISE EXCEPTION 'suppression overlay: payload.target_event_id (%) is not a valid UUID (issue #191)', v_raw;
+    END IF;
+    RETURN v_raw::uuid;
+END;
+$$;
+
+-- ADR-0048 structural floor for the suppression types: registered so the requirement is
+-- carried by the locked registry (both doors run it via the cairn_event_twin dispatcher),
+-- not only by the door-gate branch above it — a future targets_other type that forgets its
+-- registry row still fails closed at the door gate, and vice versa (defense in depth).
+CREATE OR REPLACE FUNCTION cairn_check_suppression_overlay(p_type text, b jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM cairn_suppression_target_id(b);
+END;
+$$;
+
+-- twin_required_msg stays NULL: a suppression overlay keeps the honest mechanical
+-- skeleton fallback (ADR-0039) — the structural requirement here is the target, not
+-- an authored twin.
+INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
+    ('salience.downgrade',   'cairn_check_suppression_overlay', NULL),
+    ('visibility.suppress',  'cairn_check_suppression_overlay', NULL)
+ON CONFLICT (event_type) DO NOTHING;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -302,13 +346,13 @@ BEGIN
         v_att_key := p_attester_key;
     END IF;
 
-    -- 5. Target-existence gate for an overlay on another author's event.
-    --    (The skeleton stores the target in the body as `target_event_id`.)
-    --
-    --    The owner-gate (was DEFERRED here; now closed) is enforced below by
-    --    cairn_suppression_author_ok (ADR-0043 / issue #99).
-    IF v_targets_other AND (b -> 'payload' ? 'target_event_id') THEN
-        v_target_id := (b -> 'payload' ->> 'target_event_id')::uuid;
+    -- 5. Target gate for an overlay on another author's event — UNCONDITIONAL for every
+    --    targets_other type (issue #191): the old `AND (payload ? 'target_event_id')`
+    --    guard made the whole gate key-presence-conditional, so absence failed OPEN past
+    --    both the existence check and the ADR-0043 owner-gate. cairn_suppression_target_id
+    --    RAISEs legibly on a missing or malformed target (fail closed).
+    IF v_targets_other THEN
+        v_target_id := cairn_suppression_target_id(b);
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'submit_event: overlay targets unknown event %', v_target_id;
         END IF;
