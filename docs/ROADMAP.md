@@ -716,6 +716,30 @@ of shipping a first-write outage. PR #222 review findings fixed in-branch: the d
 ships is executed (db/021 ships only a table, no function) — and the honesty guard grew to three canaries across
 three non-subset migrations so one renamed canary can't leave it vacuously green. Workspace 656/0 failed.
 
+**Slice 38 — the clinical-plane seq cursor + periodic full sweep (2026-07-16; the review course, Priority 2; issue
+#196 [B1]; branch `fix/clinical-sync-seq-cursor-196`; `db/036` additive columns only — no ADR/spec/event-type
+change).** `cairn-sync do_pull` cursored on the HLC watermark and never swept, so an event landing in a peer's
+`event_log` with an HLC BELOW an already-advanced watermark — a multi-hop arrival from a third node, or an L2 agent
+self-stamping an older `hlc_wall` — was never re-fetched: a silent set-union / convergence violation (the flagship
+guarantee). Ports the #38 node-plane treatment. `db/036` (idempotent additive ALTERs, no CREATE-TABLE widening → no
+migration-replay-widening guard entry; registered in BOTH the cairn-sync and cairn-node SCHEMA lists):
+`event_log.seq` (BIGINT IDENTITY, node-LOCAL insertion order — a newly-learned low-HLC event still gets a fresh high
+seq, so it always sorts above the cursor and can't be skipped), `sync_state.last_seq` (per-peer cursor, advance-only
+GREATEST), `sync_state.quarantine_floor_seq` (the seq re-offer floor — a SEPARATE persisted column, NOT derived from
+pen rows, so it self-clears on a clean cycle while the pen row survives as an audit trace; a derive-from-rows floor
+would re-ship from the low seq forever after a transient corruption heals — a discovered regression the user chose
+to avoid), and `sync_quarantine.refused_seq` (forensics). The vestigial HLC watermark/floor columns are kept,
+deprecated-in-place (a DROP is the non-additive move ADR-0012 forbids — an older binary still reads them). Wire
+(additive, principle 12): a new `EventsAfterSeq { after_seq }` request + a parallel `seqs[]` on `EventsResponse`;
+serve `WHERE seq > $1 ORDER BY seq`; the legacy `EventsAfter` stays served. `cmd_run` does a full sweep
+(after_seq=0) every `FULL_SWEEP_EVERY` (10) cycles as the correctness floor for the residual BIGSERIAL
+out-of-order-commit gap; `cmd_pull` gains `--full`. Penned events advance the cursor (handled) while the floor
+re-offers them. TDD: every in-file quarantine test migrated HLC→seq (value-only, behaviour unchanged) + a direct
+seq-bookkeeping test; three real-binary A→B acceptance tests (`clinical_pull.rs`) — the headline
+low-HLC-below-cursor convergence (fails on the old HLC-fetch code), a `--full`-sweep-reconciles-a-forced-skip, and
+re-pull-from-zero idempotence (ADR-0004); `reset()` gained `RESTART IDENTITY` for deterministic seqs. Workspace
+663/0 failed. **P2 continues at #197 (B2).**
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
