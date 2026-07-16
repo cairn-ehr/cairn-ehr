@@ -182,6 +182,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "035_medication_dose_effective_correction",
         include_str!("../../../db/035_medication_dose_effective_correction.sql"),
     ),
+    // The clinical-plane seq cursor (issue #196): event_log.seq +
+    // sync_state.last_seq + sync_quarantine.refused_seq. Loaded here too because a
+    // real node holds event_log; without it the clinical column is missing on a node.
+    (
+        "036_clinical_sync_seq",
+        include_str!("../../../db/036_clinical_sync_seq.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

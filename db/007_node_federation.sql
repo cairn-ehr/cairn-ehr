@@ -219,7 +219,9 @@ BEGIN
     -- supersede (ADR-0026 slice C): a restored node records that it succeeds a dead node.
     -- Authored by THIS node's current (new) key; subject = the superseded (dead) node-id.
     -- A distinct payload field (superseded_node_id_hex, not peer_node_id_hex) keeps the
-    -- intent legible — the superseded node is NOT a peer.
+    -- intent legible — the superseded node is NOT a peer. Lineage REPLICATES: peers
+    -- admit this event through apply_remote_node_event's supersede arm (issue #201),
+    -- so the claim reaches every node holding the restored node's history.
     IF v_op = 'supersede' THEN
         IF v_payload ->> 'superseded_node_id_hex' IS NULL THEN
             RAISE EXCEPTION 'submit_node_event: node.superseded missing superseded_node_id_hex in payload';
@@ -322,7 +324,9 @@ BEGIN
     v_signer := b ->> 'signer_key_id'; v_payload := b -> 'payload';
     v_ca := '\x1220'::bytea || digest(p_signed, 'sha256');
     v_op := CASE v_type WHEN 'node.enrolled' THEN 'enroll' WHEN 'peer.added' THEN 'peer'
-                        WHEN 'peer.revoked' THEN 'revoke' ELSE NULL END;
+                        WHEN 'peer.revoked' THEN 'revoke'
+                        WHEN 'node.superseded' THEN 'supersede'  -- issue #201: lineage replicates
+                        ELSE NULL END;
     IF v_op IS NULL THEN
         RAISE EXCEPTION 'apply_remote_node_event: unknown node event_type % (fail closed)', v_type;
     END IF;
@@ -369,7 +373,7 @@ BEGIN
         RETURN v_eid;
     END IF;
 
-    -- peer/revoke: the author must be a currently-trusted peer (resolved by key).
+    -- peer/revoke/supersede: the author must be a currently-trusted peer (resolved by key).
     SELECT node_id INTO v_author_node FROM node_current WHERE signer_key_id = v_signer;
     IF v_author_node IS NULL THEN
         RAISE EXCEPTION 'apply_remote_node_event: author key % maps to no known node', v_signer;
@@ -377,6 +381,41 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM trust_peer WHERE peer_node_id = v_author_node AND status = 'active') THEN
         RAISE EXCEPTION 'apply_remote_node_event: author % is not an active peer (deny-all)', encode(v_author_node,'hex');
     END IF;
+
+    -- supersede (issue #201, ADR-0026 slice C): a restored node's lineage claim
+    -- REPLICATES like every other node event — the submit door emits it and the
+    -- restore door applies it, so an apply door without this arm left a peer pulling
+    -- a restored node's history refusing the event on every full sweep FOREVER (a
+    -- permanent set-union exclusion on the node plane). Admitting it is trust-bounded
+    -- exactly like peer/revoke: the author must be an active peer (checked above),
+    -- and the claim feeds ONLY the advisory node_lineage view — node_current resolves
+    -- keys from `enroll` rows alone and trust_peer reads only `peer`/`revoke`, so a
+    -- false supersede from a hostile-but-trusted peer can hijack neither key
+    -- resolution nor peer trust; it is an attributable, signed claim (principle 2).
+    IF v_op = 'supersede' THEN
+        -- Mirror the local door's legible guard: name the missing field, never store
+        -- a NULL/garbage subject.
+        IF v_payload ->> 'superseded_node_id_hex' IS NULL THEN
+            RAISE EXCEPTION 'apply_remote_node_event: node.superseded from % missing superseded_node_id_hex in payload', encode(v_author_node,'hex');
+        END IF;
+        INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+            signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+        VALUES (v_eid, 'supersede', v_author_node,
+            decode(v_payload ->> 'superseded_node_id_hex','hex'),
+            v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+            b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+        ON CONFLICT (node_event_id) DO NOTHING;
+        -- Clock never falls behind an event we accepted (HLC invariant A3, mirrors cairn-sync).
+        UPDATE hlc_state SET
+            hlc_wall    = GREATEST(hlc_wall, (b -> 'hlc' ->> 'wall')::bigint),
+            hlc_counter = CASE
+                WHEN (b -> 'hlc' ->> 'wall')::bigint > hlc_wall THEN (b -> 'hlc' ->> 'counter')::int
+                WHEN (b -> 'hlc' ->> 'wall')::bigint = hlc_wall THEN GREATEST(hlc_counter, (b -> 'hlc' ->> 'counter')::int)
+                ELSE hlc_counter END
+            WHERE id;
+        RETURN v_eid;
+    END IF;
+
     -- Mirror the local door's legible guard: a trusted-but-malformed peer event
     -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject.
     IF v_payload ->> 'peer_node_id_hex' IS NULL THEN

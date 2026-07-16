@@ -716,6 +716,91 @@ of shipping a first-write outage. PR #222 review findings fixed in-branch: the d
 ships is executed (db/021 ships only a table, no function) — and the honesty guard grew to three canaries across
 three non-subset migrations so one renamed canary can't leave it vacuously green. Workspace 656/0 failed.
 
+**Slice 38 — the clinical-plane seq cursor + periodic full sweep (2026-07-16; the review course, Priority 2; issue
+#196 [B1]; branch `fix/clinical-sync-seq-cursor-196`; `db/036` additive columns only — no ADR/spec/event-type
+change).** `cairn-sync do_pull` cursored on the HLC watermark and never swept, so an event landing in a peer's
+`event_log` with an HLC BELOW an already-advanced watermark — a multi-hop arrival from a third node, or an L2 agent
+self-stamping an older `hlc_wall` — was never re-fetched: a silent set-union / convergence violation (the flagship
+guarantee). Ports the #38 node-plane treatment. `db/036` (idempotent additive ALTERs, no CREATE-TABLE widening → no
+migration-replay-widening guard entry; registered in BOTH the cairn-sync and cairn-node SCHEMA lists):
+`event_log.seq` (BIGINT IDENTITY, node-LOCAL insertion order — a newly-learned low-HLC event still gets a fresh high
+seq, so it always sorts above the cursor and can't be skipped), `sync_state.last_seq` (per-peer cursor, advance-only
+GREATEST), `sync_state.quarantine_floor_seq` (the seq re-offer floor — a SEPARATE persisted column, NOT derived from
+pen rows, so it self-clears on a clean cycle while the pen row survives as an audit trace; a derive-from-rows floor
+would re-ship from the low seq forever after a transient corruption heals — a discovered regression the user chose
+to avoid), and `sync_quarantine.refused_seq` (forensics). The vestigial HLC watermark/floor columns are kept,
+deprecated-in-place (a DROP is the non-additive move ADR-0012 forbids — an older binary still reads them). Wire
+(additive, principle 12): a new `EventsAfterSeq { after_seq }` request + a parallel `seqs[]` on `EventsResponse`;
+serve `WHERE seq > $1 ORDER BY seq`; the legacy `EventsAfter` stays served. `cmd_run` does a full sweep
+(after_seq=0) every `FULL_SWEEP_EVERY` (10) cycles as the correctness floor for the residual BIGSERIAL
+out-of-order-commit gap; `cmd_pull` gains `--full`. Penned events advance the cursor (handled) while the floor
+re-offers them. TDD: every in-file quarantine test migrated HLC→seq (value-only, behaviour unchanged) + a direct
+seq-bookkeeping test; three real-binary A→B acceptance tests (`clinical_pull.rs`) — the headline
+low-HLC-below-cursor convergence (fails on the old HLC-fetch code), a `--full`-sweep-reconciles-a-forced-skip, and
+re-pull-from-zero idempotence (ADR-0004); `reset()` gained `RESTART IDENTITY` for deterministic seqs. PR #223
+review fixes (same branch, TDD): `seqs[]` validated before any use (strictly ascending + positive — untrusted wire
+values must not poison the persistent cursor/floor; `saturating_sub` on the floor fetch), a no-response transport
+failure on `EventsAfterSeq` now names the likely pre-#196 peer + the remedy (was a bare EOF), the stale
+derive-from-`min(refused_seq)` comment corrected + a superseded-mid-build addendum on the design doc (the floor is
+the separate self-clearing `quarantine_floor_seq` column, NOT derived from pen rows), and #101 pointers restored at
+`FULL_SWEEP_EVERY`/the serve arm (#101 updated: the sweep re-ships the whole log in one frame, so its wedge fires
+periodically by design once history outgrows the read window — pagination's priority raised). Workspace
+665/0 failed.
+
+**Slice 39 — acked rows freed from the clinical quarantine quota (2026-07-16; the review course, Priority 2;
+issue #197 [B2]; branch `fix/quarantine-quota-acked-197`; no ADR/spec/SCHEMA/event-type change).**
+`quarantine_event`'s per-peer quota subqueries counted ALL pen rows, acked included, so the quota error's own
+documented remedy ("fix or ack the held rows") could never unfreeze the cursor — after acking a flood, every new
+refused frame still hit `Err(quota)`; the only real way out was an undocumented manual `DELETE`. Fix mirrors the
+node plane (`cairn-node/src/sync.rs` — its comment records exactly this lesson): `AND NOT acked` on both the
+row-count and byte-sum subqueries; an acked row is a resolved human decision, retained as the record of it, never
+a consumer of the budget. Quota error text made honest ("quota of unacked rows … acked rows stop counting"). TDD:
+two RED-first DB-gated tests (row + byte halves: pen filled to quota with ACKED rows → a fresh corrupt frame must
+be penned as a normal loud unacked refusal, never a pen-quota freeze). Workspace 667/0 failed.
+
+**Slice 40 — the P2 closers: cairn-sync wire hygiene + the node.superseded apply arm (2026-07-16; the review
+course, Priority 2; issues #202 [B7] + #201 [B6]; branch `fix/sync-hygiene-202-node-supersede-201`; no
+ADR/spec/SCHEMA/event-type change — an in-place apply-door arm + three cairn-sync hardenings).**
+**#202:** (1) `read_frame` refuses a length prefix over the new `MAX_FRAME_BYTES` (64 MiB) BEFORE allocating —
+a hostile/corrupt u32 prefix could previously demand a 4 GiB allocation on both the puller (peer response) and
+the server (any client reaching the port; WireGuard is the perimeter, not authentication). The cap is
+batch-scale, NOT the node plane's per-event 8 MiB, because the events response is deliberately unpaginated
+(#101): a log outgrowing it fails the sweep loudly with the cap named in the error; pagination (#101) stays the
+real fix. (2) `do_fingerprint`'s TEXT sort keys pinned with `COLLATE "C"` (the ADR-0045/#69 discipline) — BOTH
+of them: the review's `node_origin` (event_hash) and the same-failure-mode `patient_id::text`
+(projection_hash); two honest nodes with different cluster collations no longer raise a false divergence alarm
+from the very tool meant to prove convergence; the SQL is extracted to consts under a standing drift guard (the
+#159 pattern) and validated against PG18. (3) The byte-tier thread's silent `Err(_) => 0` arm now logs a
+unit-tested line — a permanently failing blobd pass (bad conn string after a DB restart, schema skew) was
+indistinguishable from "no blobs to fetch" for the life of the process. **#201:** `apply_remote_node_event`'s
+op map omitted `node.superseded` while the submit (db/007) and restore (db/009) doors both emit/apply it — a
+peer pulling a restored node's history refused the lineage event on every full sweep FOREVER (busy-loop noise +
+a permanent set-union exclusion on the node plane). Resolved as **REPLICATE**, not lineage-stays-local:
+admission is trust-bounded exactly like peer/revoke (the author must resolve to an active peer), and the claim
+feeds ONLY the advisory `node_lineage` view — `node_current` resolves keys from `enroll` rows alone and
+`trust_peer` reads only `peer`/`revoke`, so a false supersede from a hostile-but-trusted peer hijacks neither
+key resolution nor peer trust (principle 2: an attributable, signed claim). A stays-local comment could not
+have fixed the wedge anyway (the serve stream ships the whole `node_event` set), and ADR-0026's durability
+model ("a backup is just another replication peer") wants peers holding the COMPLETE set. The new arm mirrors
+the submit door: legible missing-field guard, ON CONFLICT idempotence, the A3 HLC merge; a cross-reference now
+sits at the submit site. TDD RED-first throughout (the frame test failed UnexpectedEof-not-InvalidData on the
+doomed-allocation path; the admission test failed with the production "unknown node event_type node.superseded"
+verbatim); the admission test covers admit + lineage row + set-union idempotent re-apply + deny-all stranger +
+legible malformed refusal. A **PR #225 review round** landed on the same branch (TDD RED-first, 3 new tests):
+`write_frame` gained the mirror-image SOURCE-side cap — an over-cap events response previously serialized and
+shipped in full only to die at the peer's read cap, with nothing in the serving node's own log to say why its
+peer stopped converging (the refusal now surfaces there via the serve loop's connection-error line, and the
+>4 GiB u32-prefix truncation becomes unreachable); the projection fingerprint gained `'|'` field separators —
+the RED test proved (name `X`, dob `1980`) vs (name `X1`, dob `980`) hashed EQUAL, a false CONVERGENCE (missed
+divergence), the exact inverse of the collation false alarm; and both fingerprint consts are now EXECUTED
+against the real schema in CI (the drift guard only string-matched them, so a quoting slip would have shipped).
+Follow-ups filed: [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (extract db/007's thrice-copied A3
+HLC-merge block into one guarded helper; the helper must not become a grantable clock-ratchet door) +
+[#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (non-NULL malformed hex in node-event payloads fails
+with an illegible generic decode error across all three doors). Workspace 677/0 failed. **P2 (sync-convergence
+integrity) is COMPLETE — the review course continues at Priority 3 (#203/#96 + #189/#92 + #204, the two closing
+wire windows).**
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
