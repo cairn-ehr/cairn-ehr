@@ -314,7 +314,35 @@ fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
     (found, total_len, &raw[9..])
 }
 
+/// Read-side frame cap (issue #202, porting the cairn-node `MAX_FRAME_BYTES`
+/// discipline). The 4-byte length prefix is attacker-controlled on both wire ends —
+/// the server reads request frames from ANY client that can reach the port (WireGuard
+/// is the assumed perimeter, not authentication), and the puller reads response frames
+/// from its peer — so an unchecked prefix lets one hostile/corrupt u32 demand a 4 GiB
+/// allocation. Unlike the node plane (one frame per event, 8 MiB), the events response
+/// here is deliberately UNPAGINATED (issue #101: a full sweep ships the whole log
+/// suffix as one hex-encoded JSON frame), so the cap is batch-scale: 64 MiB holds
+/// ~20k typical events (~1.5 KiB signed, hex-doubled on the wire) with room to spare.
+/// A log that outgrows it fails the sweep LOUDLY with this cap named in the error —
+/// pagination (#101) is the real fix for that, tracked there.
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
 fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
+    // Refuse at the SOURCE, mirroring read_frame's cap (PR #225 review): an over-cap
+    // frame would cross the wire in full only to be refused by the peer's read cap,
+    // with nothing in the SERVING node's log to say why its peer stopped converging.
+    // Checked before the prefix is written — a bare length prefix with no body would
+    // wedge the reader — and it makes the u32 prefix truncation (> 4 GiB) unreachable.
+    // A log that outgrows the cap needs pagination: issue #101.
+    if b.len() > MAX_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to send a {}-byte frame over the {MAX_FRAME_BYTES}-byte cap (pagination: issue #101)",
+                b.len()
+            ),
+        ));
+    }
     s.write_all(&(b.len() as u32).to_be_bytes())?;
     s.write_all(b)?;
     s.flush()
@@ -324,6 +352,13 @@ fn read_frame(s: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut len = [0u8; 4];
     s.read_exact(&mut len)?;
     let n = u32::from_be_bytes(len) as usize;
+    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES).
+    if n > MAX_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame length {n} exceeds {MAX_FRAME_BYTES}-byte cap"),
+        ));
+    }
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf)?;
     Ok(buf)
@@ -770,27 +805,36 @@ fn cmd_gen(
     Ok(())
 }
 
+/// The two fingerprint aggregation queries, extracted so the collation drift guard
+/// (`fingerprint_orderings_compare_under_collate_c`) can assert their ORDER BY text
+/// sort keys stay pinned to byte order across future edits.
+/// Both orderings pin their TEXT sort keys to byte order with COLLATE "C" (issue
+/// #202, the ADR-0045/#69 discipline): the fingerprint exists to PROVE two nodes
+/// converged, so a locale-dependent sort — under which two honest nodes with
+/// different cluster collations hash identical sets differently — would raise a
+/// false divergence alarm from the very tool meant to rule one out.
+/// The projection hash interposes '|' between fields (PR #225 review): without a
+/// separator, shifting a field boundary — (name 'X', dob '1980') vs (name 'X1',
+/// dob '980') — concatenates identically and hashes EQUAL: a false convergence,
+/// the inverse failure of the collation alarm above. '|' covers the accidental
+/// case; a field embedding '|' itself can still theoretically alias, accepted for
+/// a diagnostic (length-prefixing would be proof-grade but unreadable in psql).
+const FINGERPRINT_EVENT_HASH_SQL: &str = "SELECT md5(string_agg(encode(content_address,'hex'), ','
+     ORDER BY hlc_wall, hlc_counter, node_origin COLLATE \"C\")) FROM event_log";
+const FINGERPRINT_PROJECTION_HASH_SQL: &str = "SELECT md5(string_agg(
+     patient_id::text || '|' || coalesce(name,'') || '|' || coalesce(dob,'') || '|' ||
+     coalesce(sex,'') || '|' || note_count::text, ',' ORDER BY patient_id::text COLLATE \"C\"))
+ FROM patient_chart";
+
 /// Emit a convergence/honest-state fingerprint (A1, A3, A6) as JSON. Two nodes
 /// have converged iff their `event_hash` and `projection_hash` match.
 fn do_fingerprint(client: &mut postgres::Client) -> R<serde_json::Value> {
     let events: i64 = client
         .query_one("SELECT count(*) FROM event_log", &[])?
         .get(0);
-    let event_hash: Option<String> = client
-        .query_one(
-            "SELECT md5(string_agg(encode(content_address,'hex'), ','
-                 ORDER BY hlc_wall, hlc_counter, node_origin)) FROM event_log",
-            &[],
-        )?
-        .get(0);
+    let event_hash: Option<String> = client.query_one(FINGERPRINT_EVENT_HASH_SQL, &[])?.get(0);
     let projection_hash: Option<String> = client
-        .query_one(
-            "SELECT md5(string_agg(
-                 patient_id::text || coalesce(name,'') || coalesce(dob,'') ||
-                 coalesce(sex,'') || note_count::text, ',' ORDER BY patient_id::text))
-             FROM patient_chart",
-            &[],
-        )?
+        .query_one(FINGERPRINT_PROJECTION_HASH_SQL, &[])?
         .get(0);
     let hlc = client.query_one("SELECT hlc_wall, hlc_counter FROM hlc_state", &[])?;
     let (hlc_wall, hlc_counter): (i64, i32) = (hlc.get(0), hlc.get(1));
@@ -1957,6 +2001,13 @@ fn cmd_serve(conn: String, listen: &str, corrupt: bool) -> R<()> {
     Ok(())
 }
 
+/// Format the byte-tier thread's per-pass failure line (issue #202). Pure so the
+/// log contract is unit-testable: the line must name the subsystem, carry the
+/// underlying cause, and say the loop retries.
+fn blobd_error_line(e: &dyn Error) -> String {
+    format!("blobd pass failed (will retry next interval): {e}")
+}
+
 /// Unattended field runner: serve in the background, then every `interval_ms`
 /// pull clinical events, take a blob step, and snapshot a fingerprint — appending
 /// one JSON line per cycle to `log_path`. Survives link drops (each pull/blob
@@ -2010,11 +2061,18 @@ fn cmd_run(
             move || match postgres::Client::connect(&conn, postgres::NoTls) {
                 Ok(mut bclient) => loop {
                     match do_blobd(&mut bclient, &conn, &peers, window, budget_ms) {
-                        Ok(m) => counter.fetch_add(
-                            m["blobs_completed"].as_u64().unwrap_or(0),
-                            Ordering::Relaxed,
-                        ),
-                        Err(_) => 0, // peer unreachable: the next pass retries, never fatal
+                        Ok(m) => {
+                            counter.fetch_add(
+                                m["blobs_completed"].as_u64().unwrap_or(0),
+                                Ordering::Relaxed,
+                            );
+                        }
+                        // Never fatal (the next pass retries) but never SILENT either
+                        // (issue #202): without this line a permanently failing pass —
+                        // bad conn string after a DB restart, schema skew — is
+                        // indistinguishable from "no blobs to fetch" for the life of
+                        // the process. Everything else in the run loop logs; so does this.
+                        Err(e) => eprintln!("{}", blobd_error_line(e.as_ref())),
                     };
                     std::thread::sleep(Duration::from_millis(interval_ms));
                 },
@@ -2499,6 +2557,147 @@ mod tests {
         }
     }
 
+    // ---- issue #202: wire-frame cap + fingerprint collation + byte-tier legibility ----
+
+    #[test]
+    fn read_frame_refuses_an_over_cap_length_prefix() {
+        // A length prefix is attacker-controlled on BOTH sides of the wire: the
+        // server reads request frames from any client that can reach the port
+        // (WireGuard is the assumed perimeter, not authentication), and the puller
+        // reads response frames from its peer. A hostile/corrupt u32 prefix of up
+        // to 4 GiB must be refused BEFORE the read buffer is allocated — as
+        // InvalidData with a legible message, never a doomed multi-GiB allocation
+        // that surfaces as an opaque UnexpectedEof.
+        let mut hostile = std::io::Cursor::new(u32::MAX.to_be_bytes().to_vec());
+        let err = read_frame(&mut hostile).expect_err("an over-cap prefix must be refused");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidData,
+            "cap refusal must be InvalidData, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("cap"),
+            "the refusal names the cap so an operator can tell it from line noise: {err}"
+        );
+
+        // The boundary is exact: one byte over the cap is refused too.
+        let over = (MAX_FRAME_BYTES as u32 + 1).to_be_bytes();
+        let mut s = std::io::Cursor::new(over.to_vec());
+        assert_eq!(
+            read_frame(&mut s).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn read_frame_round_trips_an_in_cap_frame() {
+        // The cap must never break a legitimate exchange: an in-cap frame still
+        // round-trips byte-identically through write_frame/read_frame.
+        let payload = vec![0xAB_u8; 1024];
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &payload).unwrap();
+        let mut r = std::io::Cursor::new(wire);
+        assert_eq!(read_frame(&mut r).unwrap(), payload);
+    }
+
+    #[test]
+    // The asserts ARE on constants — deliberately: this is a standing bounds guard
+    // on MAX_FRAME_BYTES itself (same class as required_pgx_floor_is_itself_a_valid
+    // _triple), so a future edit of the const outside the #101-safe window fails a
+    // named test instead of silently shipping.
+    #[allow(clippy::assertions_on_constants)]
+    fn frame_cap_holds_a_realistic_event_batch() {
+        // The events response is deliberately UNPAGINATED (issue #101): a full
+        // sweep ships the whole log suffix as ONE hex-encoded JSON frame, so the
+        // node plane's per-event 8 MiB cap cannot be ported verbatim. The cap must
+        // sit far above a realistic harness batch (~1.5 KiB/event, hex doubling →
+        // ~3 KiB/event on the wire) while still bounding a hostile 4 GiB prefix.
+        // If a deployment's log outgrows the cap, the sweep fails LOUDLY with the
+        // cap message — pagination (#101) is the real fix, tracked there.
+        assert!(
+            MAX_FRAME_BYTES >= 16 * 1024 * 1024,
+            "cap must hold a realistic unpaginated batch (issue #101)"
+        );
+        assert!(
+            MAX_FRAME_BYTES <= 256 * 1024 * 1024,
+            "cap must still bound a hostile 4 GiB prefix to a refusable size"
+        );
+    }
+
+    #[test]
+    fn fingerprint_orderings_compare_under_collate_c() {
+        // ADR-0045 (#69) discipline applied to the convergence PROBE itself
+        // (issue #202): both fingerprint hashes aggregate in an order that
+        // includes a TEXT sort key (node_origin; patient_id::text). Without
+        // COLLATE "C" two honest nodes with different cluster collations report
+        // different hashes for IDENTICAL sets — a false divergence alarm in the
+        // very tool meant to prove convergence. Standing drift guard, same class
+        // as name_winner_order_drift.rs.
+        assert!(
+            FINGERPRINT_EVENT_HASH_SQL.contains(r#"node_origin COLLATE "C""#),
+            "event_hash ORDER BY must pin the TEXT tiebreak to byte order"
+        );
+        assert!(
+            FINGERPRINT_PROJECTION_HASH_SQL.contains(r#"patient_id::text COLLATE "C""#),
+            "projection_hash ORDER BY must pin the TEXT key to byte order"
+        );
+    }
+
+    #[test]
+    fn blobd_error_line_is_legible_and_names_the_retry() {
+        // #202: the byte-tier thread's failure arm was a bare `Err(_) => 0` — a
+        // permanently failing blobd pass (bad conn string after a DB restart,
+        // schema skew) was indistinguishable from "no blobs to fetch" for the
+        // life of the process. The logged line must carry the underlying error
+        // AND say the pass retries, so an operator reading the log can tell a
+        // transient blip from a wedge without reading the source.
+        let e: Box<dyn Error> = "connection refused".into();
+        let line = blobd_error_line(e.as_ref());
+        assert!(
+            line.contains("blobd"),
+            "names the failing subsystem: {line}"
+        );
+        assert!(
+            line.contains("connection refused"),
+            "carries the cause: {line}"
+        );
+        assert!(line.contains("retr"), "says the loop retries: {line}");
+    }
+
+    #[test]
+    fn write_frame_refuses_an_over_cap_frame() {
+        // PR #225 review: the read cap alone is asymmetric — a serving node whose
+        // log outgrew MAX_FRAME_BYTES would serialize and SHIP the whole over-cap
+        // response, which then fails only at the peer's read cap: the bytes cross
+        // the wire for nothing and the serving operator's own log shows no error.
+        // Refusing at the source puts the failure next to its cause (and past
+        // u32::MAX the length prefix would silently truncate — the write cap makes
+        // that unreachable). Nothing may hit the wire before the refusal: a bare
+        // length prefix with no body would wedge the reading peer.
+        let payload = vec![0u8; MAX_FRAME_BYTES + 1];
+        let mut wire = Vec::new();
+        let err = write_frame(&mut wire, &payload).expect_err("an over-cap frame must be refused");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidData,
+            "cap refusal must be InvalidData, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("cap"),
+            "the refusal names the cap so the operator can tell it from an I/O fault: {err}"
+        );
+        assert!(
+            wire.is_empty(),
+            "nothing may be written before the refusal (a bare prefix would wedge the peer)"
+        );
+
+        // The boundary is exact: a frame of exactly MAX_FRAME_BYTES still ships.
+        let at_cap = vec![0u8; MAX_FRAME_BYTES];
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &at_cap).expect("an at-cap frame must still ship");
+        assert_eq!(wire.len(), 4 + MAX_FRAME_BYTES);
+    }
+
     #[test]
     fn events_response_seqs_field_is_additive() {
         // A hand-built response WITHOUT `seqs` (an older serve) decodes to empty.
@@ -2536,7 +2735,8 @@ mod tests {
 mod quarantine_tests {
     use super::*;
 
-    fn cs() -> Option<String> {
+    // pub(super): shared with the sibling `fingerprint_db_tests` module (same file).
+    pub(super) fn cs() -> Option<String> {
         std::env::var("CAIRN_TEST_PG").ok()
     }
 
@@ -2546,7 +2746,8 @@ mod quarantine_tests {
     /// Connect + take the cluster-wide test advisory lock (same 'CARN' key every
     /// DB-gated suite uses), then (re)apply the schema and reset the tables this
     /// suite touches. The returned client HOLDS the lock until dropped.
-    fn locked_client(base: &str) -> postgres::Client {
+    /// pub(super): shared with the sibling `fingerprint_db_tests` module.
+    pub(super) fn locked_client(base: &str) -> postgres::Client {
         let mut c = postgres::Client::connect(base, postgres::NoTls).unwrap();
         c.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
             .unwrap();
@@ -3484,6 +3685,75 @@ mod quarantine_tests {
         };
         let mut c = locked_client(&base);
         assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
+    }
+}
+
+/// PR #225 review — the fingerprint consts must EXECUTE, not just string-match.
+/// The `fingerprint_orderings_compare_under_collate_c` drift guard pins the ORDER BY
+/// collation, but a typo anywhere else in the extracted SQL would load cleanly and
+/// surface only at an operator's first field `fingerprint` run; and the projection
+/// hash's field concatenation must not be boundary-ambiguous. Real Postgres, gated
+/// on `$CAIRN_TEST_PG`, serialized via the shared advisory lock (connection helpers
+/// borrowed from `quarantine_tests` — same file, same discipline).
+#[cfg(test)]
+mod fingerprint_db_tests {
+    use super::quarantine_tests::{cs, locked_client};
+    use super::*;
+
+    #[test]
+    fn fingerprint_event_hash_query_executes_on_the_real_schema() {
+        // Standing execution guard (green by construction today, like the bounds
+        // guard on MAX_FRAME_BYTES): a future edit that breaks the const's SQL —
+        // column rename, quoting slip — becomes a CI failure here instead of a
+        // runtime error in the field. An empty event_log fingerprints as NULL;
+        // that is the documented "no events" shape, not a failure.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base); // loads schema, truncates event_log
+        let hash: Option<String> = c
+            .query_one(FINGERPRINT_EVENT_HASH_SQL, &[])
+            .expect("the event-hash fingerprint SQL must parse and run on the real schema")
+            .get(0);
+        assert!(
+            hash.is_none(),
+            "an empty event_log must fingerprint as NULL (the no-events shape)"
+        );
+    }
+
+    #[test]
+    fn fingerprint_projection_hash_distinguishes_field_boundaries() {
+        // PR #225 review: without separators between the concatenated fields,
+        // (name='X', dob='1980') and (name='X1', dob='980') hash IDENTICALLY — a
+        // false CONVERGENCE (a missed divergence), the exact inverse of the false
+        // alarm the COLLATE "C" pin fixed. Two chart states that differ only in
+        // where one field ends and the next begins must hash differently.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base); // loads schema, truncates patient_chart
+        let pid = uuid::Uuid::now_v7().to_string();
+        let mut hash_for = |name: &str, dob: &str| -> Option<String> {
+            c.execute("TRUNCATE patient_chart", &[]).unwrap();
+            c.execute(
+                "INSERT INTO patient_chart (patient_id, name, dob, sex, note_count)
+                 VALUES (($1::text)::uuid, $2, $3, '', 0)",
+                &[&pid, &name, &dob],
+            )
+            .unwrap();
+            c.query_one(FINGERPRINT_PROJECTION_HASH_SQL, &[])
+                .expect("the projection-hash fingerprint SQL must parse and run")
+                .get(0)
+        };
+        let boundary_a = hash_for("X", "1980");
+        let boundary_b = hash_for("X1", "980");
+        assert!(boundary_a.is_some() && boundary_b.is_some());
+        assert_ne!(
+            boundary_a, boundary_b,
+            "shifting a field boundary must change the projection hash"
+        );
     }
 }
 
