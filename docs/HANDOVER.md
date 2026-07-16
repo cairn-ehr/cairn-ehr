@@ -56,10 +56,11 @@ re-check hook or background sweep — out of scope for the floor-hardening slice
   `sync_quarantine.refused_seq` (forensics). `do_pull` cursors on seq; `cmd_run` sweeps every 10 cycles
   (`cmd_pull --full`); wire gains additive `EventsAfterSeq`/`seqs[]`. Headline regression guard: a
   low-HLC-below-cursor event still converges A→B.
-- **#197 (B2)** — copy the `AND NOT acked` predicate into the clinical quarantine quota subqueries.
-  **⇐ next in P2.**
+- ~~**#197 (B2)**~~ — ✅ **DONE 2026-07-16** (branch `fix/quarantine-quota-acked-197`; detail in the session
+  block below): `AND NOT acked` copied into both clinical quarantine quota subqueries (rows + bytes),
+  mirroring the node plane — acking, the error message's own documented remedy, now actually frees the pen.
 - **#202/#201 (B7/B6)** — cairn-sync framing cap + COLLATE "C" fingerprint + byte-tier logging;
-  the node.superseded apply arm (or a lineage-stays-local comment).
+  the node.superseded apply arm (or a lineage-stays-local comment). **⇐ next in P2.**
 
 **Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be).**
 - **#203 (C2)** + **#96** — one small ADR: ratify-or-rename `role:"recorded"` against the ADR-0028
@@ -106,9 +107,9 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16, latest (#196 — the clinical-plane seq cursor + periodic full sweep;
-earlier the same day #198 the SCHEMA subset, #199 the P2 opener, and the P1 floor-hardening slice;
-review course above; last full regeneration 2026-07-14) ·
+**Session date:** 2026-07-16, latest (#197 — acked rows freed from the clinical quarantine quota;
+earlier the same day #196 the clinical seq cursor, #198 the SCHEMA subset, #199 the P2 opener, and
+the P1 floor-hardening slice; review course above; last full regeneration 2026-07-14) ·
 **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
@@ -170,7 +171,20 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-16, latest) — #196 [B1]: the clinical-plane seq cursor + periodic full sweep (branch
+**This session (2026-07-16, latest) — #197 [B2]: acked rows freed from the clinical quarantine quota (branch
+`fix/quarantine-quota-acked-197`; a two-predicate fix + its comment, no ADR/spec/SCHEMA/event-type change; full
+detail in git + ROADMAP Slice 39).** `quarantine_event`'s per-peer quota subqueries (`cairn-sync/src/main.rs`)
+counted ALL pen rows, acked included — so after a peer flooded the pen past `MAX_QUARANTINE_*` and the operator
+followed the quota error's own instruction ("fix or ack the held rows"), every new refused frame still hit
+`Err(quota)` and the cursor stayed frozen forever; the only real remedy was an undocumented manual `DELETE`. Fix
+mirrors the node plane (`cairn-node/src/sync.rs`, which learned this first): `AND NOT acked` on both the row-count
+and byte-sum subqueries — an acked row is a resolved human decision, retained as the record of it, no longer a
+consumer of the budget; quota error text now says "quota of unacked rows … (acked rows stop counting)". TDD: two
+RED-first DB-gated tests (`acked_rows_do_not_consume_row_quota` / `_byte_quota` — pen filled to quota with acked
+rows, a fresh corrupt frame must be PENNED, failing loudly as a normal unacked refusal, never a pen-quota freeze).
+Workspace **667/0 failed** + fmt + clippy `-D warnings` clean.
+
+**Prior session (2026-07-16) — #196 [B1]: the clinical-plane seq cursor + periodic full sweep (branch
 `fix/clinical-sync-seq-cursor-196`; `db/036` additive columns only — no ADR/spec/event-type change; full detail
 in ROADMAP Slice 38 + the design/plan under `docs/superpowers/` + git).** `cairn-sync do_pull` cursored on the
 HLC watermark and never swept, so an event that lands in a peer's `event_log` with an HLC BELOW an already-advanced
