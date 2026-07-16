@@ -221,11 +221,19 @@ type WireEntry = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 // ---------------------------------------------------------------------------
 // Wire protocol — one JSON request, one JSON response, per connection.
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "op")]
 enum Request {
-    /// Clinical plane: every event at or after this HLC watermark.
+    /// Clinical plane, HLC-cursored (legacy). KEPT so an older puller still works;
+    /// a new puller uses EventsAfterSeq. Every event at or after this HLC watermark.
     EventsAfter { wall: i64, counter: i32 },
+    /// Clinical plane, seq-cursored (issue #196): every event whose serving-node
+    /// `seq` is strictly greater than `after_seq`, in `seq` order. `after_seq = 0`
+    /// returns the full set (the full-sweep path). `seq` is the server's LOCAL
+    /// insertion order — the only ordering where newly-learned events always sort
+    /// above a puller's cursor, so incremental can never silently skip (#196).
+    /// Additive (principle 12): the older EventsAfter variant stays served.
+    EventsAfterSeq { after_seq: i64 },
     /// Byte tier: a BLAKE3 verified-streaming slice of a blob.
     BlobSlice {
         addr_hex: String,
@@ -251,6 +259,13 @@ struct EventsResponse {
     /// Per-event attester public key (hex), parallel to `attestations`.
     #[serde(default)]
     attester_keys: Vec<Option<String>>,
+    /// Per-event serving-node `seq` (issue #196), PARALLEL to `events`. The puller
+    /// checkpoints its per-peer cursor on the max handled seq. Additive (serde
+    /// default): an older peer's response decodes with an empty vec — a new puller
+    /// that sent EventsAfterSeq treats an events-without-seqs response as a
+    /// wire-format error rather than checkpointing blindly (see do_pull).
+    #[serde(default)]
+    seqs: Vec<i64>,
     /// The ADR-0040 signing context this server's events are minted under
     /// (issue #108). Lets the puller tell deterministic wire-format skew ("your
     /// events are signed for a context I don't speak") from tampering BEFORE
@@ -2010,8 +2025,37 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
                 events,
                 attestations,
                 attester_keys,
+                // Legacy HLC arm ships no per-event seq: an old-style puller ignores
+                // it, and a new puller never sends EventsAfter (it uses EventsAfterSeq).
+                seqs: vec![],
                 // Declare the context we mint under (issue #108) so a skewed
                 // puller can refuse the batch deterministically and legibly.
+                signing_context: Some(CTX_EVENT.as_str().to_string()),
+            })?
+        }
+        Request::EventsAfterSeq { after_seq } => {
+            // Serve LOCAL insertion order (seq), STRICTLY above the puller's cursor
+            // (issue #196). The seq prefix is transport metadata; signed_bytes are
+            // the untouched signed core (principle 12). `after_seq = 0` = full sweep.
+            // ORDER BY seq is load-bearing: the puller freezes its cursor at the
+            // contiguous handled prefix and relies on strictly-ascending arrival.
+            let rows = client.query(
+                "SELECT seq, encode(signed_bytes,'hex'), encode(attestation,'hex'),
+                        encode(attester_key,'hex')
+                 FROM event_log
+                 WHERE seq > $1
+                 ORDER BY seq",
+                &[&after_seq],
+            )?;
+            let seqs = rows.iter().map(|r| r.get::<_, i64>(0)).collect();
+            let events = rows.iter().map(|r| r.get::<_, String>(1)).collect();
+            let attestations = rows.iter().map(|r| r.get::<_, Option<String>>(2)).collect();
+            let attester_keys = rows.iter().map(|r| r.get::<_, Option<String>>(3)).collect();
+            serde_json::to_vec(&EventsResponse {
+                events,
+                attestations,
+                attester_keys,
+                seqs,
                 signing_context: Some(CTX_EVENT.as_str().to_string()),
             })?
         }
@@ -2352,6 +2396,43 @@ mod tests {
         // Same additivity for the issue #108 signing-context declaration: a peer
         // predating it decodes as None ("undeclared"), never an error.
         assert_eq!(resp.signing_context, None);
+        // …and for the issue #196 per-event seq array: absent → empty vec.
+        assert!(resp.seqs.is_empty(), "missing seqs defaults empty");
+    }
+
+    #[test]
+    fn events_after_seq_request_round_trips() {
+        let req = Request::EventsAfterSeq { after_seq: 42 };
+        let bytes = serde_json::to_vec(&req).unwrap();
+        match serde_json::from_slice::<Request>(&bytes).unwrap() {
+            Request::EventsAfterSeq { after_seq } => assert_eq!(after_seq, 42),
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn events_response_seqs_field_is_additive() {
+        // A hand-built response WITHOUT `seqs` (an older serve) decodes to empty.
+        let legacy = serde_json::json!({
+            "events": ["deadbeef"], "attestations": [null], "attester_keys": [null]
+        });
+        let r: EventsResponse =
+            serde_json::from_slice(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(
+            r.seqs.is_empty(),
+            "missing seqs decodes to empty (serde default)"
+        );
+        // A response WITH `seqs` round-trips.
+        let with = EventsResponse {
+            events: vec!["deadbeef".into()],
+            attestations: vec![None],
+            attester_keys: vec![None],
+            seqs: vec![7],
+            signing_context: None,
+        };
+        let back: EventsResponse =
+            serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
+        assert_eq!(back.seqs, vec![7]);
     }
 }
 
@@ -2448,6 +2529,9 @@ mod quarantine_tests {
             events: events.iter().map(hex::encode).collect(),
             attestations: vec![None; events.len()],
             attester_keys: vec![None; events.len()],
+            // Canned serve = events already in seq order; assign 1-based seqs so the
+            // puller has a per-event cursor to checkpoint/pen on (issue #196).
+            seqs: (1..=events.len() as i64).collect(),
             signing_context: signing_context.map(str::to_string),
         })
         .unwrap()
