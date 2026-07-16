@@ -1103,6 +1103,9 @@ fn quarantine_event(
     // still consumed quota, "ack the held rows" (this function's own documented
     // remedy, below) could never free the pen and a peer that flooded then got
     // acked would wedge the cursor forever, with a manual DELETE the only way out.
+    // The accepted flip side: the retained ACKED set is bounded per ack round (each
+    // ack licenses another quota's worth of kept bytes), not absolutely — operators
+    // may DELETE acked rows to reclaim disk (the db/021 grant exists for this).
     // refused_seq (issue #196) is set on INSERT only; the dedupe UPDATE above leaves
     // it untouched — FORENSICS ("at what serving seq was this first refused"), never
     // a fetch input. The re-offer POSITION is sync_state.quarantine_floor_seq, a
@@ -3245,6 +3248,34 @@ mod quarantine_tests {
             .unwrap()
             .get(0);
         assert_eq!(unacked, 1, "the fresh frame was penned");
+    }
+
+    /// #197 follow-on (PR #224 review): the quota probes filter on
+    /// `peer = … AND NOT acked`, and the acked rows they exclude from the COUNT
+    /// still sit in the SCAN — with only the content_digest PK they seq-scan the
+    /// whole pen on every refused frame, and the retained-acked set is the one
+    /// part of the table the quota no longer bounds. db/021 must ship a partial
+    /// index matching the probes' predicate so they stay O(unacked).
+    #[test]
+    fn db021_partial_index_backs_unacked_quota_probes() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base); // replays db/021 — also proves idempotency
+        let ok: bool = c
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes
+                                WHERE tablename = 'sync_quarantine'
+                                  AND indexname = 'sync_quarantine_peer_unacked_idx')",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert!(
+            ok,
+            "db/021 must create sync_quarantine_peer_unacked_idx ON (peer) WHERE NOT acked"
+        );
     }
 
     /// The floor must SURVIVE a cycle whose pen write fails (fresh-eyes review

@@ -99,6 +99,14 @@ ALTER TABLE sync_quarantine ADD COLUMN IF NOT EXISTS last_requeue_error TEXT;
 ALTER TABLE sync_quarantine ADD COLUMN IF NOT EXISTS last_requeue_at    TIMESTAMPTZ;
 ALTER TABLE sync_quarantine ADD COLUMN IF NOT EXISTS acked BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Backs the per-peer quota probes (`WHERE peer = … AND NOT acked`, issue #197):
+-- acked rows are retained indefinitely (a resolved human decision, never
+-- auto-deleted) and are the one part of the pen the quota no longer bounds, so
+-- without this the probes' scan set grows with every acked flood. Partial on
+-- the probes' own predicate keeps them O(unacked rows).
+CREATE INDEX IF NOT EXISTS sync_quarantine_peer_unacked_idx
+    ON sync_quarantine (peer) WHERE NOT acked;
+
 -- The re-offer floor itself lives beside the watermark it constrains (additive,
 -- idempotent — sync_state is created in db/001). NULL = no unresolved
 -- quarantine for this peer; when set, pulls fetch from min(watermark, floor).
