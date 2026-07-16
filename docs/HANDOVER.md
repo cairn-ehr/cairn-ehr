@@ -66,7 +66,11 @@ re-check hook or background sweep — out of scope for the floor-hardening slice
   is #101-unpaginated), `COLLATE "C"` on BOTH fingerprint orderings (`node_origin` + the
   same-failure-mode `patient_id::text`) under a standing drift guard, the byte-tier `Err` arm logs;
   `node.superseded` resolved as **REPLICATE** — the db/007 apply door gained the supersede arm
-  (trust-bounded like peer/revoke; feeds only the advisory `node_lineage` view).
+  (trust-bounded like peer/revoke; feeds only the advisory `node_lineage` view). PR #225 review round
+  landed in-branch: source-side `write_frame` cap mirror + `'|'` field separators in the projection
+  fingerprint (boundary-shift false convergence) + both fingerprint consts now EXECUTED in CI;
+  follow-ups [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (HLC-merge helper) +
+  [#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (legible malformed-hex refusals) filed.
 
 **Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be). ⇐ CONTINUE HERE**
 - **#203 (C2)** + **#96** — one small ADR: ratify-or-rename `role:"recorded"` against the ADR-0028
@@ -203,7 +207,18 @@ stays-local comment could not have fixed the wedge anyway (the serve stream ship
 and ADR-0026's cold-peer durability model wants peers holding the COMPLETE set. TDD RED-first throughout (the
 frame test failed UnexpectedEof-not-InvalidData on the doomed-allocation path; the admission test failed with
 the production "unknown node event_type node.superseded" verbatim); the admission test covers admit + lineage
-row + set-union idempotent re-apply + deny-all stranger + legible malformed refusal. Workspace **674/0
+row + set-union idempotent re-apply + deny-all stranger + legible malformed refusal. A **PR #225 review
+round** then landed on the same branch (TDD RED-first, 3 new tests): `write_frame` gained the mirror-image
+SOURCE-side cap (an over-cap events response previously shipped in full only to die at the peer's read cap
+with nothing in the serving node's log — the refusal now lands there via the serve loop's connection-error
+line, and the >4 GiB u32-prefix truncation becomes unreachable); the projection fingerprint gained `'|'`
+field separators (RED proved (name X, dob 1980) vs (name X1, dob 980) hashed EQUAL — a false CONVERGENCE,
+the inverse of the collation false alarm) and both fingerprint consts are now EXECUTED against the real
+schema in CI (the drift guard only string-matched); the `do_fingerprint` doc comment was reattached.
+Follow-ups filed: [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (extract the thrice-copied A3
+HLC-merge block in db/007 into one guarded helper — must NOT become a grantable clock-ratchet door) +
+[#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (non-NULL malformed hex in node-event payloads
+fails with an illegible generic decode error across all three doors). Workspace **677/0
 failed** + fmt + clippy `-D warnings` clean.
 
 **Prior sessions (2026-07-16, same day, condensed — full detail in git + the PRs + ROADMAP Slices 36–39):**

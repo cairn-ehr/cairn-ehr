@@ -786,8 +786,20 @@ the submit door: legible missing-field guard, ON CONFLICT idempotence, the A3 HL
 sits at the submit site. TDD RED-first throughout (the frame test failed UnexpectedEof-not-InvalidData on the
 doomed-allocation path; the admission test failed with the production "unknown node event_type node.superseded"
 verbatim); the admission test covers admit + lineage row + set-union idempotent re-apply + deny-all stranger +
-legible malformed refusal. **P2 (sync-convergence integrity) is COMPLETE — the review course continues at
-Priority 3 (#203/#96 + #189/#92 + #204, the two closing wire windows).**
+legible malformed refusal. A **PR #225 review round** landed on the same branch (TDD RED-first, 3 new tests):
+`write_frame` gained the mirror-image SOURCE-side cap — an over-cap events response previously serialized and
+shipped in full only to die at the peer's read cap, with nothing in the serving node's own log to say why its
+peer stopped converging (the refusal now surfaces there via the serve loop's connection-error line, and the
+>4 GiB u32-prefix truncation becomes unreachable); the projection fingerprint gained `'|'` field separators —
+the RED test proved (name `X`, dob `1980`) vs (name `X1`, dob `980`) hashed EQUAL, a false CONVERGENCE (missed
+divergence), the exact inverse of the collation false alarm; and both fingerprint consts are now EXECUTED
+against the real schema in CI (the drift guard only string-matched them, so a quoting slip would have shipped).
+Follow-ups filed: [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (extract db/007's thrice-copied A3
+HLC-merge block into one guarded helper; the helper must not become a grantable clock-ratchet door) +
+[#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (non-NULL malformed hex in node-event payloads fails
+with an illegible generic decode error across all three doors). Workspace 677/0 failed. **P2 (sync-convergence
+integrity) is COMPLETE — the review course continues at Priority 3 (#203/#96 + #189/#92 + #204, the two closing
+wire windows).**
 
 ## Phase 5 — Security & compliance core
 
