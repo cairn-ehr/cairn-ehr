@@ -31,6 +31,7 @@ pub use attachment::{Attachment, Rendition, SealRef};
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
 pub mod attachment;
+pub mod contributor;
 pub mod demographics;
 pub mod evidence;
 pub mod identity;
@@ -685,7 +686,9 @@ mod tests {
             },
             t_effective: Some("2026-06-16T00:00:00Z".into()),
             signer_key_id: String::new(),
-            contributors: json!([{"role": "author", "kind": "human"}]),
+            // ADR-0051 ratified vocabulary — keep even pure wire fixtures conformant,
+            // so nobody copy-pastes a shape the floor doors would refuse.
+            contributors: json!([{"actor_id": "test-author-key", "role": "authored"}]),
             payload: json!({"name": "Test Patient", "dob": "1980-01-01", "sex": "F"}),
             attachments: vec![],
             plaintext_twin: None,

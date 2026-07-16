@@ -33,7 +33,10 @@ fn node_event_body(
         },
         t_effective: None,
         signer_key_id: signer_key_id.into(),
-        contributors: serde_json::json!([{"actor_id": signer_key_id, "role": "device"}]),
+        // `recorded` is the ADR-0051 ratified role for the recording system; the old
+        // "device" value was an actor KIND, never a vocabulary member. Node-plane
+        // doors (db/007) don't read roles, but production mints stay conformant.
+        contributors: serde_json::json!([{"actor_id": signer_key_id, "role": "recorded"}]),
         payload,
         attachments: vec![],
         plaintext_twin: None,

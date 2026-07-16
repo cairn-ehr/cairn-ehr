@@ -141,11 +141,19 @@ The full ladder, the deniable-deletion design (the institution holds nothing; th
   ([security §7.8](security.md#78-author-scoped-record-export-the-medico-legal-copy)).
 
 - **Role — a closed core enum + free descriptor** ([ADR-0028](decisions/0028-finalized-closed-contributor-role-enum.md)
-  finalises the membership). Roles are a **closed enum** (like `event_type`), kept small so the safety/DB layer
-  reasons about them unambiguously and the taxonomy cannot sprawl into an unbounded folksonomy. It is partitioned
-  by whether a role *bears or transfers responsibility*: **responsibility-bearing** (`authored`, `ordered`,
-  `attested`, `co-signed`, `witnessed`, `dictated`) vs **contributory** (`drafted`, `transcribed`, `graded`,
-  `triaged`, `suggested`). An optional **free-text descriptor** carries nuance the machinery never branches on.
+  finalises the membership; [ADR-0051](decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)
+  adds `recorded` and makes the closure a floor property). Roles are a **closed enum** (like `event_type`), kept small
+  so the safety/DB layer reasons about them unambiguously and the taxonomy cannot sprawl into an unbounded folksonomy.
+  It is partitioned by whether a role *bears or transfers responsibility*: **responsibility-bearing** (`authored`,
+  `ordered`, `attested`, `co-signed`, `witnessed`, `dictated`) vs **contributory** (`drafted`, `transcribed`,
+  `graded`, `triaged`, `suggested`, `recorded` — the recording device/system that captured and persisted the event:
+  capture fidelity, no content, no clinical responsibility). An optional **free-text descriptor** carries nuance the
+  machinery never branches on. **Closure is floor, not convention:** the authoring door fails closed on any role
+  outside the ratified vocabulary, while the sync apply door **never** rejects on membership (set-union losslessness).
+  A member added by a future ADR travels **partition-prefixed on the wire** (`bearing:<name>` / `contrib:<name>`, the
+  prefix a permanent part of the signed value) so a node that predates it still classifies it; a role neither ratified
+  nor prefixed reads as **vouching-unknown** — a first-class honest state (principle 4), never collapsed to
+  "un-vouched".
   Three of the bearing roles are responsibility-distinct in ways hard policy and the [identity §5.10](identity.md#510-authorship-and-responsibility-state-the-consumer-side)
   projection branch on: **`co-signed`** (supervisory countersignature — the registrar→consultant / NP→supervisor
   sign-off a deployment may gate on, *"pending until co-signed"*); **`witnessed`** (attests an event *occurred or
@@ -166,7 +174,14 @@ The full ladder, the deniable-deletion design (the institution holds nothing; th
   routing to its owner/deployer. The attribute is **orthogonal to human/machine**: *"AI is never
   responsible" is a policy default mapping, not a schema law.* The column exists from day one, so the
   transition from "software needs a human to take responsibility" toward "the AI colleague is accountable
-  (initially as proxy for its owner)" is a **policy change with no schema migration**.
+  (initially as proxy for its owner)" is a **policy change with no schema migration**. This shape is the
+  **wire form**, floor-enforced ([ADR-0051](decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)):
+  `held_by` must name the contributor entry's own actor, which must be the verified attester (the
+  issue-#195 binding chain — the record never carries a responsibility claim about someone who never
+  touched the event); responsibility may ride only a responsibility-*bearing* role. `on_behalf_of` is
+  wire-expressible from day one but **refused at the authoring door until a proxy-grant ADR defines its
+  verification**, and admitted at the sync apply door as a signed, display-gated, unverified claim
+  (refusing it there would wedge future lawful proxy events out of the set-union).
 
 - **Signature ≠ attestation.** The **signature** proves *origin + integrity* only; **attestation** (a
   responsibility-bearing role) confers *responsibility*. Every event is signed, including AI output —

@@ -229,6 +229,126 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
           AND e ->> 'actor_id' IS DISTINCT FROM encode(p_attester_key, 'hex'));
 $$;
 
+-- ---------------------------------------------------------------------------
+-- The ratified contributor-role vocabulary (ADR-0028 membership + ADR-0051
+-- ratification of `recorded` and the floor check itself; issues #203/#96).
+--
+-- The role enum is a safety primitive: the structural "AI-generated" reading and
+-- the ADR-0010 suppression owner-gate branch on whether a role BEARS
+-- responsibility, so "closed" must be floor, not convention. This table is the
+-- floor-queryable form; `cairn-event::contributor::ROLE_VOCABULARY` is the Rust
+-- mirror (drift guard: crates/cairn-node/tests/contributor_roles.rs). Additive-only:
+-- a new member is an ADR-recorded act appending ONE row here + one tuple there,
+-- and its canonical WIRE value must carry the partition prefix (`bearing:x` /
+-- `contrib:x`) so a node that predates it can still classify it (#96).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS contributor_role (
+    role  TEXT PRIMARY KEY,
+    bears BOOLEAN NOT NULL   -- responsibility-bearing vs contributory (ADR-0007/0028)
+);
+
+INSERT INTO contributor_role (role, bears) VALUES
+    -- Responsibility-bearing (6) — ADR-0028.
+    ('authored',    true),
+    ('ordered',     true),
+    ('attested',    true),
+    ('co-signed',   true),
+    ('witnessed',   true),
+    ('dictated',    true),
+    -- Contributory (6) — ADR-0028's five + `recorded` (ADR-0051): the recording
+    -- device/system that captured and persisted the event; asserts capture
+    -- fidelity, adds no clinical content, bears no clinical responsibility.
+    ('drafted',     false),
+    ('transcribed', false),
+    ('graded',      false),
+    ('triaged',     false),
+    ('suggested',   false),
+    ('recorded',    false)
+ON CONFLICT (role) DO NOTHING;
+
+-- Safety surface (like event_type_class): a stray write here MOVES the floor itself —
+-- an inserted 'bearing' row would let its author mint arbitrary responsibility-bearing
+-- roles through the strict door; flipping a member's `bears` breaks partition coherence
+-- for every consumer. Lock it down; both doors read it as their SECURITY DEFINER owner,
+-- so no runtime role needs a grant. Growth is a migration-only, ADR-recorded act.
+REVOKE INSERT, UPDATE, DELETE ON contributor_role FROM PUBLIC;
+
+-- The contributor-set floor (ADR-0051), shared by BOTH doors (principle 12) with
+-- one strictness switch that encodes the doors' different obligations:
+--
+--   * submit (p_strict = true, the AUTHORING door): fail closed on any role this
+--     node's vocabulary has not ratified — a door only authors what it can stand
+--     behind — and refuse `on_behalf_of` until a proxy-grant ADR defines how the
+--     principal's consent is verified.
+--   * apply (p_strict = false, the SYNC door): NEVER reject on role membership —
+--     set-union losslessness (#96): a future member arrives partition-prefixed and
+--     classifies by its prefix; a wholly-unknown role claiming nothing degrades to
+--     the vouching-unknown reading at projection time. `on_behalf_of` is admitted
+--     as a signed, display-gated claim (spec §3.9 promises the proxy transition
+--     "with no schema migration" — refusing it here would wedge every future proxy
+--     event out of the set-union, the #201 lesson).
+--
+-- Checks that hold at BOTH doors are the never-lawful shapes no conformant door of
+-- ANY schema version could mint (same refusal class as an invalid attestation
+-- token): a contributor without actor_id/role (illegible authorship), a
+-- responsibility value that is not an object naming held_by (the retired flat
+-- string), held_by naming anyone but the entry's own actor (the #195 binding —
+-- combined with cairn_responsibility_bound's actor=attester check this chains
+-- held_by = actor_id = verified attester), and responsibility claimed on a
+-- non-bearing role (partitions are additive-only and never flip, so this
+-- incoherence can never become valid).
+-- `SET search_path = public` is pinned HERE, not only on the SECURITY DEFINER doors
+-- that call it (the cairn_event_twin discipline): the contributor_role lookup must
+-- never resolve into a caller-shadowed schema, regardless of who invokes the check.
+CREATE OR REPLACE FUNCTION cairn_check_contributors(b jsonb, p_door text, p_strict boolean)
+RETURNS void LANGUAGE plpgsql STABLE
+SET search_path = public
+AS $$
+DECLARE
+    e       jsonb;
+    v_role  text;
+    v_resp  jsonb;
+    v_bears boolean;
+BEGIN
+    IF p_strict AND (jsonb_typeof(b -> 'contributors') IS DISTINCT FROM 'array'
+                     OR jsonb_array_length(b -> 'contributors') = 0) THEN
+        RAISE EXCEPTION '%: contributors must be a non-empty array — an event must declare its authorship (ADR-0051)', p_door;
+    END IF;
+    FOR e IN SELECT * FROM jsonb_array_elements(
+                 CASE WHEN jsonb_typeof(b -> 'contributors') = 'array'
+                      THEN b -> 'contributors' ELSE '[]'::jsonb END) LOOP
+        v_role := e ->> 'role';
+        IF e ->> 'actor_id' IS NULL OR v_role IS NULL THEN
+            RAISE EXCEPTION '%: a contributor entry lacks actor_id/role — illegible authorship refused (ADR-0051)', p_door;
+        END IF;
+        IF p_strict AND NOT EXISTS (SELECT 1 FROM contributor_role r WHERE r.role = v_role) THEN
+            RAISE EXCEPTION '%: contributor role "%" is not in the ratified role vocabulary — this door only authors roles it can stand behind (ADR-0028/ADR-0051)', p_door, v_role;
+        END IF;
+        IF e ? 'responsibility' THEN
+            v_resp := e -> 'responsibility';
+            IF jsonb_typeof(v_resp) IS DISTINCT FROM 'object' OR v_resp ->> 'held_by' IS NULL THEN
+                RAISE EXCEPTION '%: responsibility must be an object naming held_by — the flat-string shape is retired (ADR-0051, spec §3.9)', p_door;
+            END IF;
+            IF v_resp ->> 'held_by' IS DISTINCT FROM e ->> 'actor_id' THEN
+                RAISE EXCEPTION '%: responsibility.held_by must name the contributor entry''s own actor (issue #195 binding, ADR-0051)', p_door;
+            END IF;
+            IF p_strict AND v_resp ? 'on_behalf_of' THEN
+                RAISE EXCEPTION '%: on_behalf_of is not yet admissible at the authoring door — proxy responsibility awaits its verification mechanism (ADR-0051)', p_door;
+            END IF;
+            -- Partition coherence: known members classify from the table, future
+            -- members from their mandatory prefix; anything else claiming
+            -- responsibility is unmintable by a conformant door of any version.
+            v_bears := coalesce(
+                (SELECT r.bears FROM contributor_role r WHERE r.role = v_role),
+                v_role LIKE 'bearing:%');
+            IF NOT v_bears THEN
+                RAISE EXCEPTION '%: responsibility claimed on non-responsibility-bearing role "%" — incoherent authorship refused (ADR-0051)', p_door, v_role;
+            END IF;
+        END IF;
+    END LOOP;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -317,6 +437,11 @@ BEGIN
         RAISE EXCEPTION 'submit_event: t_effective (%) is after t_recorded ceiling (HLC wall % ms) — prima-facie forward-dating / falsification (ADR-0003 tier-1)',
             b ->> 't_effective', b -> 'hlc' ->> 'wall';
     END IF;
+
+    -- 1c. Contributor-set floor (ADR-0051, issues #203/#96): the STRICT door — every
+    --     role must be in the ratified vocabulary, and a responsibility claim must be
+    --     a well-formed {held_by} object on a bearing role (see cairn_check_contributors).
+    PERFORM cairn_check_contributors(b, 'submit_event', true);
 
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
     --    and RECORD the resolution (issue #99): a unique key->actor mapping stamps the

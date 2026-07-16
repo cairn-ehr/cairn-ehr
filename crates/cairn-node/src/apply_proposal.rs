@@ -56,8 +56,11 @@ pub fn build_attested_link_body(
         t_effective: None,
         signer_key_id: human_kid.into(),
         // Responsibility-bearing contributor -> trips the db/005 attestation gate.
+        // ADR-0051 wire shape: responsibility = {held_by} object, held_by = the
+        // entry's own actor = the verified attester (the #195 binding chain).
         contributors: serde_json::json!([
-            {"actor_id": human_kid, "role": "attested", "responsibility": "attested"}
+            {"actor_id": human_kid, "role": "attested",
+             "responsibility": {"held_by": human_kid}}
         ]),
         payload: link_assertion_body(&la),
         attachments: vec![],

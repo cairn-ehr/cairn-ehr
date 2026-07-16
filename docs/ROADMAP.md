@@ -801,6 +801,47 @@ with an illegible generic decode error across all three doors). Workspace 677/0 
 integrity) is COMPLETE — the review course continues at Priority 3 (#203/#96 + #189/#92 + #204, the two closing
 wire windows).**
 
+**Slice 41 — the contributor-role vocabulary floor + responsibility wire shape (2026-07-16; the review course,
+Priority 3 opener; issues #203 [C2] + #96 [B5]; branch `feat/adr-0051-role-vocabulary-203-96`;
+[ADR-0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md), spec §3.9,
+v0.52; no new event type, no SCHEMA change — a db/005-owned vocabulary table + one shared check fn on both
+clinical doors).** Ratified **`recorded` as the 12th role member (contributory** — the recording device/system:
+capture fidelity, no content, no clinical responsibility; 6 bearing + 6 contributory), retroactively legalising
+what every orchestrator already minted. Retired the flat-string `responsibility: "attested"` for the spec-§3.9
+**object `{held_by, on_behalf_of?}`** — the proxy case is now wire-expressible (the can't-retrofit piece);
+`held_by = actor_id = verified attester` extends the #195 binding chain; `on_behalf_of` is **refused at the
+submit door** until a proxy-grant ADR defines verification, **admitted at the apply door** as a signed
+display-gated claim (§3.9 promises the proxy transition without schema migration — an apply-door refusal would
+be the #201 wedge again). **#96's unknown-member encoding:** future members travel **partition-prefixed**
+(`bearing:x`/`contrib:x`, a permanent part of the signed value) so an old node classifies them without an
+upgrade; a role neither ratified nor prefixed reads as first-class **vouching-unknown**, never collapsed to
+un-vouched. The floor: `cairn_check_contributors` (db/005, shared by both doors, principle 12) — **strict at
+submit** (a door only authors its ratified vocabulary; non-empty contributor set; actor_id+role mandatory),
+**lenient at apply** (role membership NEVER rejects — set-union losslessness; refusals reserved for
+never-lawful shapes: responsibility on a non-bearing role, non-object responsibility, held_by naming another
+actor). `contributor_role(role, bears)` is the floor-queryable vocabulary; `cairn-event::contributor` is the
+Rust mirror (`classify_role` for future §5.10 consumers) under a standing drift-guard test. The strict door
+immediately caught three out-of-vocabulary PRODUCTION mint sites beyond the review's list: cairn-sync's
+authoring path minted `role:"author"` with **no actor_id at all** (its events cross db/020 on every pulling
+peer — would now be refused), and `identity.rs`/`medium.rs` minted `"device"` (an actor KIND, not a role); all
+now mint ratified vocabulary. TDD RED-first (10 RED refusal/drift tests + 5 lossless-admission pins that must
+stay green forever); workspace **696/0** + fmt + clippy clean; docs build green. **This slice also SCHEDULES
+#204 [C3]:** the attribution-token / authoring-human slice (per-write attribution, `session.user ≠
+event.author`, `sign-as`; §3.10/ADR-0008) is committed as the NEXT clinical-plane slice before any new
+clinical stream — `recorded` makes the device-only interim honest, #204 ends it. A **PR #229 review round**
+then landed on the same branch (4 new tests, 700/0): the `contributor_role` table gained the explicit house
+REVOKE — the vocabulary table IS floor, so a stray write moves the floor itself (an inserted 'bearing' row
+mints arbitrary responsibility-bearing roles through the strict door; flipping a member's `bears` breaks
+partition coherence) — with a `floor_enforced.rs` pin proving INSERT/UPDATE/DELETE all deny 42501 for the
+unprivileged runtime role; `cairn_check_contributors` pins `SET search_path = public` on itself (the
+cairn_event_twin defense-in-depth discipline, not only on the SECURITY DEFINER doors); the SQL↔Rust drift
+guard sorts `COLLATE "C"` (the ADR-0045/#69 discipline — `co-signed`'s hyphen made the comparison
+collation-dependent under ICU); and 3 more never-lawful apply-door refusal pins (missing actor_id,
+flat-string responsibility, responsibility on an unprefixed unknown role). **Operational caveat, pinned by
+design:** event logs minted by pre-ADR-0051 binaries (cairn-sync's `role:"author"` with no actor_id,
+flat-string responsibility) now refuse at db/020 on every full sweep — dev/PoC rigs holding them
+(replication-failover demo, spike rigs) must be wiped, not synced through.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

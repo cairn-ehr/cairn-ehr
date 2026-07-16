@@ -112,6 +112,13 @@ BEGIN
             b ->> 't_effective', b -> 'hlc' ->> 'wall';
     END IF;
 
+    -- 1c. Contributor-set floor (ADR-0051, issues #203/#96): the LENIENT door — role
+    --     membership NEVER rejects here (set-union losslessness: a future vocabulary
+    --     member arrives partition-prefixed and classifies by its prefix; a wholly-
+    --     unknown role degrades to vouching-unknown at read time, it never excludes
+    --     content). Only the never-lawful shapes refuse — see cairn_check_contributors.
+    PERFORM cairn_check_contributors(b, 'apply_remote_event', false);
+
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
     --    and RECORD the resolution (issue #99). The admission GATE is actor_current,
     --    exactly as at the authoring door. The attribution STAMP, though, must be

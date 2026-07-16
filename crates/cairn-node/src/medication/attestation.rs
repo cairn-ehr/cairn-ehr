@@ -55,8 +55,12 @@ pub fn build_attestation_body(
         hlc,
         t_effective: None,
         signer_key_id: human_kid.into(),
+        // The ADR-0051 wire shape: responsibility is an object naming held_by (the
+        // spec §3.9 {held_by, on_behalf_of?} form); held_by must be the entry's own
+        // actor AND the verified attester (the db/005 #195 binding chain).
         contributors: serde_json::json!([
-            {"actor_id": human_kid, "role": "attested", "responsibility": "attested"}
+            {"actor_id": human_kid, "role": "attested",
+             "responsibility": {"held_by": human_kid}}
         ]),
         payload: medication_attestation_body(&a),
         attachments: vec![],

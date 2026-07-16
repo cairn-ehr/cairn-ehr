@@ -78,10 +78,10 @@ fn body(
 ) -> EventBody {
     let contrib = match resp_kid {
         Some(rk) => serde_json::json!([
-            {"actor_id": signer_kid, "role": "author"},
-            {"actor_id": rk, "role": "attested", "responsibility": "attested"}
+            {"actor_id": signer_kid, "role": "authored"},
+            {"actor_id": rk, "role": "attested", "responsibility": {"held_by": rk}}
         ]),
-        None => serde_json::json!([{"actor_id": signer_kid, "role": "author"}]),
+        None => serde_json::json!([{"actor_id": signer_kid, "role": "authored"}]),
     };
     let payload = match target {
         Some(t) => serde_json::json!({ "target_event_id": t }),

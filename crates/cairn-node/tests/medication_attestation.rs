@@ -107,7 +107,8 @@ fn build_attestation_body(
     // makes the db/005 gate demand a valid human token (v_bears) AND what the db/034
     // floor's M1 hardening now requires for the type to be structurally valid.
     let contributors = serde_json::json!([
-        {"actor_id": human_kid, "role": "attested", "responsibility": "attested"}
+        {"actor_id": human_kid, "role": "attested",
+         "responsibility": {"held_by": human_kid}}
     ]);
     build_attestation_body_with_contributors(
         event_id,
