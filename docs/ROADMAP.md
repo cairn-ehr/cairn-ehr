@@ -756,8 +756,38 @@ node plane (`cairn-node/src/sync.rs` — its comment records exactly this lesson
 row-count and byte-sum subqueries; an acked row is a resolved human decision, retained as the record of it, never
 a consumer of the budget. Quota error text made honest ("quota of unacked rows … acked rows stop counting"). TDD:
 two RED-first DB-gated tests (row + byte halves: pen filled to quota with ACKED rows → a fresh corrupt frame must
-be penned as a normal loud unacked refusal, never a pen-quota freeze). Workspace 667/0 failed. **P2 continues at
-#202/#201 (B7/B6).**
+be penned as a normal loud unacked refusal, never a pen-quota freeze). Workspace 667/0 failed.
+
+**Slice 40 — the P2 closers: cairn-sync wire hygiene + the node.superseded apply arm (2026-07-16; the review
+course, Priority 2; issues #202 [B7] + #201 [B6]; branch `fix/sync-hygiene-202-node-supersede-201`; no
+ADR/spec/SCHEMA/event-type change — an in-place apply-door arm + three cairn-sync hardenings).**
+**#202:** (1) `read_frame` refuses a length prefix over the new `MAX_FRAME_BYTES` (64 MiB) BEFORE allocating —
+a hostile/corrupt u32 prefix could previously demand a 4 GiB allocation on both the puller (peer response) and
+the server (any client reaching the port; WireGuard is the perimeter, not authentication). The cap is
+batch-scale, NOT the node plane's per-event 8 MiB, because the events response is deliberately unpaginated
+(#101): a log outgrowing it fails the sweep loudly with the cap named in the error; pagination (#101) stays the
+real fix. (2) `do_fingerprint`'s TEXT sort keys pinned with `COLLATE "C"` (the ADR-0045/#69 discipline) — BOTH
+of them: the review's `node_origin` (event_hash) and the same-failure-mode `patient_id::text`
+(projection_hash); two honest nodes with different cluster collations no longer raise a false divergence alarm
+from the very tool meant to prove convergence; the SQL is extracted to consts under a standing drift guard (the
+#159 pattern) and validated against PG18. (3) The byte-tier thread's silent `Err(_) => 0` arm now logs a
+unit-tested line — a permanently failing blobd pass (bad conn string after a DB restart, schema skew) was
+indistinguishable from "no blobs to fetch" for the life of the process. **#201:** `apply_remote_node_event`'s
+op map omitted `node.superseded` while the submit (db/007) and restore (db/009) doors both emit/apply it — a
+peer pulling a restored node's history refused the lineage event on every full sweep FOREVER (busy-loop noise +
+a permanent set-union exclusion on the node plane). Resolved as **REPLICATE**, not lineage-stays-local:
+admission is trust-bounded exactly like peer/revoke (the author must resolve to an active peer), and the claim
+feeds ONLY the advisory `node_lineage` view — `node_current` resolves keys from `enroll` rows alone and
+`trust_peer` reads only `peer`/`revoke`, so a false supersede from a hostile-but-trusted peer hijacks neither
+key resolution nor peer trust (principle 2: an attributable, signed claim). A stays-local comment could not
+have fixed the wedge anyway (the serve stream ships the whole `node_event` set), and ADR-0026's durability
+model ("a backup is just another replication peer") wants peers holding the COMPLETE set. The new arm mirrors
+the submit door: legible missing-field guard, ON CONFLICT idempotence, the A3 HLC merge; a cross-reference now
+sits at the submit site. TDD RED-first throughout (the frame test failed UnexpectedEof-not-InvalidData on the
+doomed-allocation path; the admission test failed with the production "unknown node event_type node.superseded"
+verbatim); the admission test covers admit + lineage row + set-union idempotent re-apply + deny-all stranger +
+legible malformed refusal. **P2 (sync-convergence integrity) is COMPLETE — the review course continues at
+Priority 3 (#203/#96 + #189/#92 + #204, the two closing wire windows).**
 
 ## Phase 5 — Security & compliance core
 

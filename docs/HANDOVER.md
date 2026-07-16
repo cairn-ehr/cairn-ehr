@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 DONE, start at P2
+## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 DONE, start at P3
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -34,7 +34,8 @@ so a cessation-only thread is not hidden (+1 RED test). Workspace **643/0**. One
 at link-arrival time (a silent vetoed merge if the clashing demographics sync in later; needs a
 re-check hook or background sweep — out of scope for the floor-hardening slice).
 
-**Priority 2 — sync-convergence integrity (the flagship guarantee). ⇐ CONTINUE HERE**
+**Priority 2 — sync-convergence integrity (the flagship guarantee). ✅ COMPLETE 2026-07-16**
+(B5/#200 — the "refusal + durable re-offer IS the contract" ADR — lives in the Priority 6 design queue, not here.)
 - ~~**#199 (B4)**~~ — ✅ **DONE 2026-07-16** (the P2 opener, PR #221; detail in the session block below):
   CI provisions `cairn_test2`/`cairn_test3` + exports `CAIRN_TEST_PG2`/`PG3` (federation/watermark
   suites no longer self-skip anywhere), `medication_remote_apply.rs` drives every medication verb +
@@ -59,10 +60,15 @@ re-check hook or background sweep — out of scope for the floor-hardening slice
 - ~~**#197 (B2)**~~ — ✅ **DONE 2026-07-16** (branch `fix/quarantine-quota-acked-197`; detail in the session
   block below): `AND NOT acked` copied into both clinical quarantine quota subqueries (rows + bytes),
   mirroring the node plane — acking, the error message's own documented remedy, now actually frees the pen.
-- **#202/#201 (B7/B6)** — cairn-sync framing cap + COLLATE "C" fingerprint + byte-tier logging;
-  the node.superseded apply arm (or a lineage-stays-local comment). **⇐ next in P2.**
+- ~~**#202/#201 (B7/B6)**~~ — ✅ **DONE 2026-07-16** (the P2 closers, branch
+  `fix/sync-hygiene-202-node-supersede-201`; detail in the session block below + ROADMAP Slice 40):
+  cairn-sync `read_frame` 64 MiB cap (refuse-before-allocate, batch-scale because the events response
+  is #101-unpaginated), `COLLATE "C"` on BOTH fingerprint orderings (`node_origin` + the
+  same-failure-mode `patient_id::text`) under a standing drift guard, the byte-tier `Err` arm logs;
+  `node.superseded` resolved as **REPLICATE** — the db/007 apply door gained the supersede arm
+  (trust-bounded like peer/revoke; feeds only the advisory `node_lineage` view).
 
-**Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be).**
+**Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be). ⇐ CONTINUE HERE**
 - **#203 (C2)** + **#96** — one small ADR: ratify-or-rename `role:"recorded"` against the ADR-0028
   enum, decide the on-wire responsibility shape (`{held_by,on_behalf_of}` vs the shipped flat
   string), add the enum-membership check to the floor.
@@ -107,9 +113,10 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16, latest (#197 — acked rows freed from the clinical quarantine quota;
-earlier the same day #196 the clinical seq cursor, #198 the SCHEMA subset, #199 the P2 opener, and
-the P1 floor-hardening slice; review course above; last full regeneration 2026-07-14) ·
+**Session date:** 2026-07-16, latest (#202+#201 — the P2 closers: cairn-sync wire hygiene + the
+`node.superseded` apply arm, **P2 now complete**; earlier the same day #197 quarantine quota, #196 the
+clinical seq cursor, #198 the SCHEMA subset, #199 the P2 opener, and the P1 floor-hardening slice;
+review course above; last full regeneration 2026-07-14) ·
 **Spec/ADRs:** v0.51 · **Phase:** architecture complete; **first
 production clinical surface under construction** — demographics on `cairn-node` (slices 1–5 done) + the §5.2 matcher
 (advisory Python: piece A in-DB veto floor + B1 scoring core + B2/B2b veto-gated pipeline/blocking + B3 eval
@@ -171,122 +178,49 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**This session (2026-07-16, latest) — #197 [B2]: acked rows freed from the clinical quarantine quota (branch
-`fix/quarantine-quota-acked-197`; a two-predicate fix + its comment, no ADR/spec/SCHEMA/event-type change; full
-detail in git + ROADMAP Slice 39).** `quarantine_event`'s per-peer quota subqueries (`cairn-sync/src/main.rs`)
-counted ALL pen rows, acked included — so after a peer flooded the pen past `MAX_QUARANTINE_*` and the operator
-followed the quota error's own instruction ("fix or ack the held rows"), every new refused frame still hit
-`Err(quota)` and the cursor stayed frozen forever; the only real remedy was an undocumented manual `DELETE`. Fix
-mirrors the node plane (`cairn-node/src/sync.rs`, which learned this first): `AND NOT acked` on both the row-count
-and byte-sum subqueries — an acked row is a resolved human decision, retained as the record of it, no longer a
-consumer of the budget; quota error text now says "quota of unacked rows … (acked rows stop counting)". TDD: two
-RED-first DB-gated tests (`acked_rows_do_not_consume_row_quota` / `_byte_quota` — pen filled to quota with acked
-rows, a fresh corrupt frame must be PENNED, failing loudly as a normal unacked refusal, never a pen-quota freeze).
-Workspace **667/0 failed** + fmt + clippy `-D warnings` clean.
+**This session (2026-07-16, latest) — #202 + #201 [B7/B6]: the P2 closers (branch
+`fix/sync-hygiene-202-node-supersede-201`; no ADR/spec/SCHEMA/event-type change; full detail in ROADMAP
+Slice 40 + git).** **#202** (cairn-sync hygiene triple; the node plane already had each hardened version):
+`read_frame` now refuses a length prefix over the new `MAX_FRAME_BYTES` (64 MiB) BEFORE allocating — a
+hostile/corrupt u32 prefix could previously demand a 4 GiB allocation on both wire ends (server: any client
+reaching the port; puller: the peer's response). The cap is batch-scale, NOT the node plane's per-event 8 MiB,
+because the events response is #101-unpaginated (a full sweep ships the whole log suffix in one frame) — a log
+outgrowing it fails the sweep loudly with the cap named; pagination (#101) stays the real fix.
+`do_fingerprint` pins BOTH TEXT sort keys with `COLLATE "C"` (the ADR-0045/#69 discipline — the review named
+`node_origin` in event_hash; `patient_id::text` in projection_hash had the identical failure mode): two honest
+nodes with different cluster collations no longer raise a false divergence alarm from the very tool meant to
+prove convergence; the SQL is extracted to consts under a standing drift guard (the #159 pattern), validated
+on PG18. The byte-tier thread's silent `Err(_) => 0` arm now logs a unit-tested line — a permanently failing
+blobd pass (bad conn string after a DB restart, schema skew) was indistinguishable from "no blobs to fetch"
+for the life of the process. **#201** resolved as **REPLICATE**, not lineage-stays-local: db/007's
+`apply_remote_node_event` gained the missing `node.superseded` arm — submit (db/007) and restore (db/009) both
+emit/apply it, so the omission left a peer pulling a restored node's history refusing the lineage event on
+EVERY full sweep forever (busy-loop noise + a permanent set-union exclusion on the node plane). Admission is
+trust-bounded exactly like peer/revoke (the author must resolve to an active peer) and the claim feeds ONLY
+the advisory `node_lineage` view — `node_current` resolves keys from `enroll` rows alone, `trust_peer` reads
+only `peer`/`revoke` — so a false supersede hijacks nothing (principle 2: an attributable, signed claim). A
+stays-local comment could not have fixed the wedge anyway (the serve stream ships the whole `node_event` set),
+and ADR-0026's cold-peer durability model wants peers holding the COMPLETE set. TDD RED-first throughout (the
+frame test failed UnexpectedEof-not-InvalidData on the doomed-allocation path; the admission test failed with
+the production "unknown node event_type node.superseded" verbatim); the admission test covers admit + lineage
+row + set-union idempotent re-apply + deny-all stranger + legible malformed refusal. Workspace **674/0
+failed** + fmt + clippy `-D warnings` clean.
 
-**Prior session (2026-07-16) — #196 [B1]: the clinical-plane seq cursor + periodic full sweep (branch
-`fix/clinical-sync-seq-cursor-196`; `db/036` additive columns only — no ADR/spec/event-type change; full detail
-in ROADMAP Slice 38 + the design/plan under `docs/superpowers/` + git).** `cairn-sync do_pull` cursored on the
-HLC watermark and never swept, so an event that lands in a peer's `event_log` with an HLC BELOW an already-advanced
-watermark — a multi-hop arrival from a third node, or an L2 agent self-stamping an older `hlc_wall` — was never
-re-fetched: a silent set-union / convergence violation (the flagship guarantee). Ports the #38 node-plane
-treatment. `db/036` (idempotent additive ALTERs, no CREATE-TABLE widening; registered in BOTH SCHEMA lists):
-`event_log.seq` (BIGINT IDENTITY, node-LOCAL insertion order — a newly-learned low-HLC event still gets a fresh
-high seq, so it always sorts above the cursor and can't be skipped) · `sync_state.last_seq` (per-peer cursor,
-advance-only GREATEST) · `sync_state.quarantine_floor_seq` (the seq re-offer floor — a **discovery this session**:
-the approved "derive from `min(refused_seq)`" model would re-ship from the low seq FOREVER after a transient
-corruption heals, so the floor is a SEPARATE persisted column that self-clears on a clean cycle while the pen row
-survives as an audit trace; the user chose to preserve the existing semantics) · `sync_quarantine.refused_seq`
-(forensics). The vestigial HLC watermark/floor columns are kept, deprecated-in-place (a DROP is the non-additive
-move ADR-0012 forbids — an older binary still reads them). Wire (additive, principle 12): a new `EventsAfterSeq
-{ after_seq }` request + a parallel `seqs[]` on `EventsResponse`; serve `WHERE seq > $1 ORDER BY seq`; the legacy
-`EventsAfter` stays served. `cmd_run` sweeps every `FULL_SWEEP_EVERY` (10) cycles (the correctness floor for the
-BIGSERIAL out-of-order-commit residual); `cmd_pull` gains `--full`. Penned events advance the cursor (handled)
-while the floor re-offers them. Every in-file quarantine test migrated HLC→seq (value-only; behaviour unchanged) +
-a direct seq-bookkeeping test; three real-binary A→B acceptance tests (`clinical_pull.rs`): the headline
-low-HLC-below-cursor convergence (fails on the old HLC-fetch code), a `--full`-sweep-reconciles-a-forced-skip, and
-re-pull-from-zero idempotence. PR #223 review fixes landed on the same branch (TDD, 2 new tests): `seqs[]`
-validated strictly-ascending+positive before any use (wire values must not poison the persistent cursor/floor),
-a legible pre-#196-peer diagnosis on a no-response `EventsAfterSeq` (was a bare EOF), the stale
-derive-from-`min(refused_seq)` comment + design doc corrected via a superseded-mid-build addendum, and #101
-pointers restored (issue updated — the sweep makes its unpaginated-batch wedge periodic-by-design on a large log).
-Workspace **665/0 failed** + fmt + clippy `-D warnings` clean.
-
-**Prior session (2026-07-16) — #198 [B3]: the cairn-sync SCHEMA subset stands alone (branch
-`fix/sync-schema-subset-198`; no ADR/spec/SCHEMA/event-type change — a loader-list fix + its standing drift
-guard; full detail in ROADMAP Slice 37 + git).** cairn-sync's embedded migration subset omitted db/027+029,
-which both write doors and the db/002 `patient.created` trigger call — PL/pgSQL late binding meant the subset
-loaded cleanly and a fresh `cairn-sync init` database suffered a **total write outage on the first
-`submit_event`/`apply_remote_event`** (invisible in CI: every suite ran against a database cairn-node's full
-loader had already visited). TDD: the RED test reproduced the exact production error
-(`cairn_hlc_triple_collision ... does not exist`, tripped by db/029 at trigger depth even before db/027's
-learn-refs call). Fix = 027+029 appended to `SCHEMA` + the standing guard `schema_subset_tests` in
-`cairn-sync/src/main.rs` (the private `SCHEMA` const lives there): under the cluster-wide advisory lock it
-wipes `cairn_test2` (one atomic batch — schema drop + `CREATE EXTENSION cairn_pgx` land together; safe
-because every suite sharing PG2 reloads its full schema on connect), loads ONLY the subset, honesty-checks no
-full-schema residue survived, then drives both doors — `submit_event` with a by-reference attachment (lazy
-blob reference lands in `blob_store`), `apply_remote_event` overlaying the same patient, and a genuine
-Byzantine HLC-triple pair whose advisory `hlc_collision_log` row must land (db/029's recorder EXECUTED, not
-just parsed). PR #222 review findings fixed in-branch: the db/006 recall doors (`recall_event`,
-`events_by_actor_epoch`) driven too — every caller-facing entry point the subset ships is now executed — and
-the honesty guard grew to three canaries across three non-subset migrations. Workspace **656/0 failed** +
-fmt + clippy `-D warnings` clean.
-
-**Prior session (2026-07-16, later) — the P2 opener: sync-convergence CI (issue #199 [B4], covers the #176
-deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change — tests +
-CI wiring only; full detail in ROADMAP Slice 36 + git).** The flagship "author on A, apply on B, identical projections"
-guarantee is now machine-checked: `rust.yml` provisions `cairn_test2`/`cairn_test3` on the CI cluster and exports
-`CAIRN_TEST_PG2`/`PG3`, so `federation.rs` (2 tests, incl. the three-node stranger case) and `sync_watermark.rs`
-(the two 2-DB tests) stop self-skipping — **no Rust test self-skips in CI anymore**. New
-`crates/cairn-node/tests/medication_remote_apply.rs` (10 tests): every medication verb —
-assert/cessation/dose-change/dose-correction/reconciliation/separation — through the db/020 door (projection +
-set-union idempotent re-apply + arrival-order independence: cessation-before-assert, correction-before-target,
-and later-HLC-separation-before-the-reconcile-it-repairs);
-the slice-4 **attestation-token round trip** — a valid human token travels, re-verifies, is STORED for
-re-serving, and the db/034 projection records the VERIFIED attester; refusals for missing token, non-human
-attester (device token), and the #195 unbound-responsibility claim (validly-signed body claiming a different
-human than the token's); and the **#176 oversize-group remote branch** — admitted, recompute skipped,
-`medication_projection_flag` (4,3) row, never a veto. New `crates/cairn-sync/tests/clinical_pull.rs`: the A→B
-clinical-plane pull through the REAL binary (`serve` on A, `pull` on B over TCP), events authored via the
-production medication orchestrators (assert+attested dose change, cessation, reconciled duplicate pair),
-asserting **byte-identical read-state** across event log (incl. stored token bytes), current/past views, group
-collapse, and standing vouches (stale=false on B), quarantine empty; the review's RED check is a STANDING second
-test — a pull whose author B has not enrolled completes but applies nothing, pens nothing (the bytes verify;
-the pen is for unverifiable bytes), FREEZES the watermark at 0 (A1 discipline), and converges on the next pull
-after B enrolls the actors (delayed, never lost). cairn-sync gained dev-deps `cairn-node`/`tokio`/`tokio-postgres`
-(workspace-internal/already-vetted). Local two-node rig: `cairn_test2`/`cairn_test3` created on the Mac cluster
-(:5532). PR #221 review findings all fixed in-branch (the two extra verbs, the standing RED check, per-test serve
-ports, same-group tightening). Workspace **655 passed / 0 failed** + fmt + clippy `-D warnings` clean.
-
-**Prior session (2026-07-16) — the P1 floor-hardening slice (issues #187/#207/#194/#191/#192[+#177]/#190/#193/#195;
-branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/event-type change — every fix is an in-place floor
-hardening or an additive node-local projection/flag; full detail in git, one commit per issue).** The ADR-0030
-threat model re-run against the floor, all eight in the HANDOVER's dependency order, strict TDD (every fix has its
-RED-first test): **#187** the local `submit_event` door now rejects a future-dated `hlc_wall` past the shared 24h
-ceiling (mirrors db/007; the remote clinical door deliberately keeps clamp-and-admit); **#207** the five
-#115-widened overlay columns now ALSO ship as additive ALTERs + an upgrade-heal for the two `pc.*` views (a
-replayed narrow-shape view otherwise aborts boot — discovered by the new `migration_replay_widening.rs` guard,
-which simulates the upgraded-in-place DB for all seven widened pairs); **#194** `patient_identifier`/
-`patient_demographic` gained a `content_address` column + final tiebreak (trigger + db/013 backfill, both policy
-branches) closing the divergence that fed `cairn_field_clash`; **#191** the suppression target gate is
-unconditional at both doors (one shared `cairn_suppression_target_id`, legible on missing/misnamed/malformed
-targets) + ADR-0048 registry rows for both suppression types (twin msg NULL; both registry mirrors updated 16→18,
-msg now Option-typed); **#192** medication threads got the db/023 patient-consistency split — one shared
-`cairn_guard_medication_patient` in all four per-thread verb triggers (local fail-loud, sync converge +
-`medication_patient_conflict_flag`), cross-patient reconciliation refused locally when both patients known
-(**resolves #177**), standing cross-patient groups surfaced read-time by `medication_group_cross_patient`,
-separation never guarded (repair primitive); **#190** an un-attested `identity.link` tripping `cairn_has_hard_veto`
-is refused at the local door (human-attested passes — the veto forces a human decision), sync path admits +
-`link_veto_flag` + a new `chart_trust` under-review source (unlink or attested re-link clears); **#193** the
-restore door got the same drift ceiling (tampered-medium ratchet-out-of-federation closed); **#195** resolved as
-BIND: `cairn_responsibility_bound` at both attestation gates (responsibility contributor must name the verified
-attester; two test fixtures that encoded the A7 decoupling corrected to their stated intent). A PR #219
-review round then landed two more fixes on the same branch: the #190 `link_veto_flag` lifecycle now derives
-from the standing overlay winner (closing a backdated-unlink silent merge and a stale-link phantom flag), and
-`medication_group_cross_patient` derives its members' patients from `cairn_medication_thread_patient` (a
-cessation-only thread is no longer hidden) — follow-up [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
-filed for the remaining arrival-time-only veto evaluation. Full workspace **643 passed / 0 failed** + fmt +
-clippy `-D warnings` clean; SQL twin-registry mirror updated in lockstep.
+**Prior sessions (2026-07-16, same day, condensed — full detail in git + the PRs + ROADMAP Slices 36–39):**
+the **P1 floor-hardening slice** (#187/#207/#194/#191/#192[+#177]/#190/#193/#195; branch
+`feat/floor-hardening-spike0002-p1`, PR #219 incl. its review round; follow-up
+[#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) filed — the #190 hard veto is still evaluated only
+at link-arrival time) · the **P2 opener #199 [B4]** (PR #221 — CI provisions `cairn_test2`/`cairn_test3` +
+exports `CAIRN_TEST_PG2`/`PG3` so no Rust test self-skips in CI anymore; `medication_remote_apply.rs` drives
+every medication verb + the attestation-token round trip through db/020; `clinical_pull.rs` proves A→B
+projection equality through the real binary) · **#198 [B3]** (PR #222 — db/027+029 appended to cairn-sync's
+SCHEMA subset + the standing `schema_subset_tests` drift guard: a wiped DB loaded from the subset ALONE must
+satisfy both write doors) · **#196 [B1]** (PR #223 — `db/036` clinical seq cursor: `event_log.seq`, per-peer
+`sync_state.last_seq`, the SEPARATE self-clearing `quarantine_floor_seq` [a derive-from-rows floor would
+re-ship forever after a transient corruption heals], additive `EventsAfterSeq`/`seqs[]` wire, `cmd_run` full
+sweep every 10 cycles) · **#197 [B2]** (PR #224 — `AND NOT acked` on both clinical quarantine quota
+subqueries, mirroring the node plane: acking, the quota error's own documented remedy, now actually frees the
+pen).
 
 **Prior session (2026-07-15) — medication dose effective-date/reason correction, slice 5 (ADR-0050, spec
 v0.50→v0.51; branch `feat/medication-dose-effective-correction`; merged PR #186; full detail in git + the ADR
