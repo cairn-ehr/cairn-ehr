@@ -162,6 +162,21 @@ ADR/spec/wire change; PR #174, on main).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
+**Session (2026-07-16, evening, GUI/L3 design thread) — easyGP consult-screen mining → GP-manifest seed
+(design-only; no code/ADR/spec change; full detail in
+[`scratch/ui-sketches/easygp-consult-screen-inventory.md`](../scratch/ui-sketches/easygp-consult-screen-inventory.md)).**
+Mined a 2019 easyGP consult-screen screenshot (co-author-supplied; image deliberately not committed — real
+name/photo) panel-by-panel against paper-parity questions, mapped onto the 2026-07-12 shell design. Outputs: a
+**GP-manifest seed** (4 pinned safety cards incl. compact ranked recalls; Meds tab as right-pane default;
+Condition-dashboard tab bumped to priority 4); billing **resolved** = companion front-desk app + unobtrusive
+end-of-consult item/comment widget, consult timer is *advisory only* (multi-room interleaving, principle 4);
+toolbar verdict = user-configurable action set (prior art for the shell §7 user preference layer, as is
+context-dependent glance frequency); Decision Support/Research captured = **the same fold at condition scope
+and practice-population scope** (fractal topology in the UI); results/inbox nutshell recorded incl. the open
+**three-zone-layout vs two-pane-shell** question (own session when its screenshots arrive); five principle-4
+prior-art exhibits worth citing in spec prose. **Next:** more screenshots incoming from the co-author; the
+remaining §4.4 open questions ride on them.
+
 **This session (2026-07-16, latest) — #198 [B3]: the cairn-sync SCHEMA subset stands alone (branch
 `fix/sync-schema-subset-198`; no ADR/spec/SCHEMA/event-type change — a loader-list fix + its standing drift
 guard; full detail in ROADMAP Slice 37 + git).** cairn-sync's embedded migration subset omitted db/027+029,
@@ -605,6 +620,11 @@ Medium-style write-up. **Remaining non-load-bearing gaps:** from-source PG build
   formulation/drug data source + renal/hepatic/pregnancy/paediatric **forced-manual** rule table; the
   prefetch/materialization warming daemon (validates ADR-0001 from production). Pre-read
   `scratch/ui-sketches/easygp-prefetch-notes.md`.
+- **easyGP GUI-mining continuation** — more consult-screen/module screenshots incoming from the co-author;
+  they should answer most of the remaining §4.4 open questions in
+  `scratch/ui-sketches/easygp-consult-screen-inventory.md` (Todo/BMI strip, pure fossils, Research-module
+  ranking logic) and open the **results/inbox design session** (the three-zone-layout vs two-pane-shell
+  question is parked there — don't improvise it).
 - **Byte-tier throughput lever** — connection reuse / persistent streaming instead of one TCP connection per
   slice (the production object-store tier). The §8.2 availability + windowing/resume work already shipped.
 
