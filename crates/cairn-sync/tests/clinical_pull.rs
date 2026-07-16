@@ -15,7 +15,7 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
-use cairn_event::generate_key;
+use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, cease_medication, change_dose, reconcile_medications, AssertMedicationInput,
@@ -39,6 +39,53 @@ fn cs_b() -> Option<String> {
 /// TcpListener does not set SO_REUSEADDR), so each test owns its own port.
 const LISTEN_CONVERGE: &str = "127.0.0.1:39717";
 const LISTEN_FREEZE: &str = "127.0.0.1:39718";
+const LISTEN_LOWHLC: &str = "127.0.0.1:39719";
+const LISTEN_SWEEP: &str = "127.0.0.1:39720";
+const LISTEN_REPULL: &str = "127.0.0.1:39721";
+
+/// A realistic PAST HLC wall (ms since epoch, ≈ 2026-06-20) — safely below "now",
+/// so A's remote-apply door accepts it (the drift ceiling bounds FUTURE walls only).
+const WALL: i64 = 1_782_000_000_000;
+
+/// A validly-signed `note.added` at a CHOSEN HLC wall, from a foreign "node-c"
+/// signer — the multi-hop event whose HLC can sit BELOW a node's advanced cursor.
+/// The HLC lives inside the signed body (freely set by the signer); the receiving
+/// node assigns `seq` at insert. So applying this to A gives it a low HLC but a
+/// fresh HIGH seq — exactly the #196 skip trigger. Returns (signed_bytes, event_id).
+fn foreign_note(sk: &SigningKey, kid: &str, wall: i64, text: &str) -> (Vec<u8>, String) {
+    let event_id = Uuid::now_v7().to_string();
+    let body = EventBody {
+        event_id: event_id.clone(),
+        patient_id: Uuid::now_v7().to_string(),
+        event_type: "note.added".into(),
+        schema_version: "note/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "node-c".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"text": text}),
+        attachments: vec![],
+        plaintext_twin: Some(format!("Progress note: {text}")),
+    };
+    (sign(&body, sk).unwrap().signed_bytes, event_id)
+}
+
+/// Enroll a foreign signer as a `device` actor on one node (so its `note.added`
+/// events pass that node's apply door). Actor enrollment does not travel the
+/// clinical plane (#205), so each node does it independently — as a real
+/// deployment does.
+async fn enroll_device(c: &Client, kid: &str) {
+    c.execute(
+        "SELECT enroll_actor('device', '{\"role\":\"node-c\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .unwrap();
+}
 
 /// Kill the spawned `serve` child when the test ends (pass or panic) so a leaked
 /// listener can never wedge a later run on the fixed port.
@@ -53,12 +100,14 @@ impl Drop for ServeGuard {
 /// Truncate the log + the medication projections + the sync bookkeeping on one node
 /// and reset its HLC, so each run starts from a genuinely empty pair of nodes.
 async fn reset(c: &Client) {
+    // RESTART IDENTITY resets event_log.seq to 1 so the #196 seq-cursor tests see
+    // deterministic serving seqs (1, 2, 3 …) rather than a cluster-wide running total.
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, medication_statement, \
          medication_cessation, medication_dose_event, medication_dose_correction, \
          medication_reconciliation, medication_group_member, medication_projection_flag, \
          medication_attestation, medication_patient_conflict_flag, \
-         sync_state, sync_quarantine CASCADE",
+         sync_state, sync_quarantine RESTART IDENTITY CASCADE",
     )
     .await
     .unwrap();
@@ -471,18 +520,18 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         String::from_utf8_lossy(&pull.stdout),
         String::from_utf8_lossy(&pull.stderr)
     );
-    let (applied, penned, wm_w, wm_c): (i64, i64, i64, i32) = {
+    let (applied, penned, cursor): (i64, i64, i64) = {
         let row = b
             .query_one(
                 "SELECT (SELECT count(*) FROM event_log), \
                         (SELECT count(*) FROM sync_quarantine), \
-                        hlc_wall, hlc_counter \
+                        last_seq \
                  FROM sync_state WHERE peer = 'node-a'",
                 &[],
             )
             .await
             .unwrap();
-        (row.get(0), row.get(1), row.get(2), row.get(3))
+        (row.get(0), row.get(1), row.get(2))
     };
     assert_eq!(
         applied, 0,
@@ -493,10 +542,9 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         "nothing penned — these bytes VERIFY; the pen is for unverifiable bytes"
     );
     assert_eq!(
-        (wm_w, wm_c),
-        (0, 0),
-        "the watermark FROZE at the contiguous applied prefix, so the refused \
-         events stay on the wire"
+        cursor, 0,
+        "the seq cursor FROZE at the contiguous applied prefix, so the refused \
+         events stay on the wire (issue #196)"
     );
 
     // --- fix the cause (enroll the actors on B) and pull again: no loss ---
@@ -513,4 +561,307 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         snapshot(&b).await,
         "after the repair the next pull converges — the refusal was a delay, never a loss"
     );
+}
+
+/// Issue #196 (the headline regression guard): an event that lands on A with an HLC
+/// BELOW B's advanced cursor — a multi-hop arrival from a third node — must still
+/// converge to B. The old HLC watermark skipped it forever (it sorts below B's
+/// watermark, so B never re-serves it); the seq cursor cannot, because the late
+/// arrival got a fresh high seq on A regardless of its low HLC.
+#[tokio::test]
+async fn low_hlc_below_cursor_still_converges() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+
+    // A foreign "node-c" signer, enrolled on BOTH nodes so each door admits its notes.
+    let (sk_c, kid_c) = generate_key().unwrap();
+    enroll_device(&a, &kid_c).await;
+    enroll_device(&b, &kid_c).await;
+
+    // Two HIGH-HLC events land on A (seqs 1, 2) via A's own apply door.
+    let (hi1, _) = foreign_note(&sk_c, &kid_c, WALL + 20_000, "high one");
+    let (hi2, _) = foreign_note(&sk_c, &kid_c, WALL + 30_000, "high two");
+    for e in [&hi1, &hi2] {
+        a.execute("SELECT apply_remote_event($1)", &[e])
+            .await
+            .unwrap();
+    }
+
+    // Serve A; pull B once. B applies both and checkpoints last_seq(node-a) = 2.
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args(["serve", "--conn", &base_a, "--listen", LISTEN_LOWHLC])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_LOWHLC);
+    let pull1 = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_LOWHLC,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("run pull 1");
+    assert!(
+        pull1.status.success(),
+        "pull 1: {}",
+        String::from_utf8_lossy(&pull1.stderr)
+    );
+    let cursor: i64 = b
+        .query_one("SELECT last_seq FROM sync_state WHERE peer='node-a'", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(cursor, 2, "B checkpointed the seq cursor at 2");
+
+    // The multi-hop event: a LOW HLC (below both pulled events) lands on A LATE,
+    // getting a fresh seq (3). This is the exact event the HLC watermark skipped.
+    let (low, low_id) = foreign_note(&sk_c, &kid_c, WALL + 10_000, "late low-HLC arrival");
+    a.execute("SELECT apply_remote_event($1)", &[&low])
+        .await
+        .unwrap();
+
+    // Pull B again (incremental). On the OLD HLC code B fetches hlc >= watermark, so
+    // the low-HLC event is never served and this count stays 0. On the seq cursor B
+    // fetches seq > 2 → seq 3 → the event applies.
+    let pull2 = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_LOWHLC,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("run pull 2");
+    assert!(
+        pull2.status.success(),
+        "pull 2: {}",
+        String::from_utf8_lossy(&pull2.stderr)
+    );
+    let present: i64 = b
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id::text = $1",
+            &[&low_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        present, 1,
+        "the low-HLC multi-hop event converged to B (issue #196)"
+    );
+}
+
+/// Issue #196: the full sweep is the correctness floor for the residual BIGSERIAL
+/// out-of-order-commit skip. Simulate the skip by forcing B's cursor PAST an event's
+/// seq; an incremental pull then cannot fetch it (`seq > cursor` excludes it), and a
+/// `--full` sweep (seq > 0) reconciles it.
+#[tokio::test]
+async fn full_sweep_reconciles_a_skipped_seq() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_c, kid_c) = generate_key().unwrap();
+    enroll_device(&a, &kid_c).await;
+    enroll_device(&b, &kid_c).await;
+
+    // Two events on A (seqs 1, 2). e2 is the one B will "skip".
+    let (e1, _) = foreign_note(&sk_c, &kid_c, WALL + 10_000, "one");
+    a.execute("SELECT apply_remote_event($1)", &[&e1])
+        .await
+        .unwrap();
+    let (e2, id2) = foreign_note(&sk_c, &kid_c, WALL + 20_000, "two");
+    a.execute("SELECT apply_remote_event($1)", &[&e2])
+        .await
+        .unwrap();
+
+    // Force B's cursor to 2 WITHOUT applying either event (the commit-race skip).
+    b.execute(
+        "INSERT INTO sync_state (peer, last_seq) VALUES ('node-a', 2)
+         ON CONFLICT (peer) DO UPDATE SET last_seq = 2",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args(["serve", "--conn", &base_a, "--listen", LISTEN_SWEEP])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_SWEEP);
+
+    // Incremental pull: seq > 2 fetches nothing → e2 stays missing.
+    let inc = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_SWEEP,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("incremental pull");
+    assert!(
+        inc.status.success(),
+        "inc pull: {}",
+        String::from_utf8_lossy(&inc.stderr)
+    );
+    let before: i64 = b
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id::text = $1",
+            &[&id2],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        before, 0,
+        "incremental cannot reach a seq below the forced cursor"
+    );
+
+    // Full sweep: seq > 0 fetches everything → e2 reconciled.
+    let full = Command::new(bin)
+        .args([
+            "pull",
+            "--full",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_SWEEP,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("full pull");
+    assert!(
+        full.status.success(),
+        "full pull: {}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let after: i64 = b
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id::text = $1",
+            &[&id2],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, 1,
+        "the full sweep is the correctness floor (issue #196)"
+    );
+}
+
+/// ADR-0004 "the watermark is a hint": a full sweep from seq 0 re-applies the whole
+/// log as set-union no-ops and reaches an identical read-state (idempotent).
+#[tokio::test]
+async fn repull_from_zero_converges() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_c, kid_c) = generate_key().unwrap();
+    enroll_device(&a, &kid_c).await;
+    enroll_device(&b, &kid_c).await;
+    for i in 0..3 {
+        let (e, _) = foreign_note(&sk_c, &kid_c, WALL + 10_000 * (i + 1), "n");
+        a.execute("SELECT apply_remote_event($1)", &[&e])
+            .await
+            .unwrap();
+    }
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args(["serve", "--conn", &base_a, "--listen", LISTEN_REPULL])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_REPULL);
+    let pull = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_REPULL,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("pull");
+    assert!(
+        pull.status.success(),
+        "pull: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
+    let count1: i64 = b
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    // Rewind the cursor to 0 and full-sweep: must be a set-union no-op.
+    b.execute(
+        "UPDATE sync_state SET last_seq = 0 WHERE peer='node-a'",
+        &[],
+    )
+    .await
+    .unwrap();
+    let full = Command::new(bin)
+        .args([
+            "pull",
+            "--full",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_REPULL,
+            "--peer-name",
+            "node-a",
+        ])
+        .output()
+        .expect("full pull");
+    assert!(
+        full.status.success(),
+        "full pull: {}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let count2: i64 = b
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count1, count2, "re-pull from 0 is idempotent (ADR-0004)");
+    assert!(count1 >= 3, "non-vacuous: the chart really replicated");
 }
