@@ -1051,8 +1051,9 @@ fn cmd_gen_blob(conn: &str, size_mb: usize, media: &str) -> R<()> {
 /// `last_seen`/`seen_count`, and ENRICHING a missing attestation via COALESCE —
 /// a token once seen on the wire is never dropped) — repeated cycles against a
 /// broken peer must not grow the table. Distinct garbage is bounded by the
-/// per-peer quota (`MAX_QUARANTINE_*`); at the quota this returns Err and the
-/// caller freezes the watermark instead — delayed, never lost.
+/// per-peer quota (`MAX_QUARANTINE_*`, counting UNACKED rows only — issue
+/// #197); at the quota this returns Err and the caller freezes the watermark
+/// instead — delayed, never lost.
 ///
 /// Returns `acked`: whether a human has already licensed this exact exclusion
 /// (`sync_quarantine.acked`). An acked row must not pin the re-offer floor and
@@ -1096,7 +1097,12 @@ fn quarantine_event(
     // own size, so one huge frame cannot overshoot the byte budget). The
     // aggregate probes ride the same statement so the check and the insert
     // cannot disagree; a concurrent writer can still overshoot by one row —
-    // the cap is a resource budget, not an exact invariant.
+    // the cap is a resource budget, not an exact invariant. Only UNACKED rows
+    // count (issue #197, mirrors the node plane): an acked row is a resolved
+    // human decision, retained as the record of it, never auto-deleted — if it
+    // still consumed quota, "ack the held rows" (this function's own documented
+    // remedy, below) could never free the pen and a peer that flooded then got
+    // acked would wedge the cursor forever, with a manual DELETE the only way out.
     // refused_seq (issue #196) is set on INSERT only; the dedupe UPDATE above leaves
     // it untouched — FORENSICS ("at what serving seq was this first refused"), never
     // a fetch input. The re-offer POSITION is sync_state.quarantine_floor_seq, a
@@ -1110,9 +1116,11 @@ fn quarantine_event(
             "INSERT INTO sync_quarantine
              (content_digest, signed_bytes, attestation, attester_key, peer, refused_seq, reason)
          SELECT $1,$2,$3,$4,$5,$6,$7
-          WHERE (SELECT count(*) FROM sync_quarantine WHERE peer = $5) < $8
+          WHERE (SELECT count(*) FROM sync_quarantine
+                   WHERE peer = $5 AND NOT acked) < $8
             AND (SELECT COALESCE(sum(octet_length(signed_bytes)),0)
-                   FROM sync_quarantine WHERE peer = $5) + octet_length($2::bytea) <= $9
+                   FROM sync_quarantine
+                   WHERE peer = $5 AND NOT acked) + octet_length($2::bytea) <= $9
          ON CONFLICT (content_digest) DO NOTHING",
             &[
                 &digest,
@@ -1139,10 +1147,11 @@ fn quarantine_event(
             return Ok(row.get(0)); // lost a benign race: the trace exists
         }
         return Err(format!(
-            "quarantine pen for peer '{peer_name}' is at its quota \
+            "quarantine pen for peer '{peer_name}' is at its quota of unacked rows \
              ({MAX_QUARANTINE_ROWS_PER_PEER} rows / {MAX_QUARANTINE_BYTES_PER_PEER} bytes) — \
              refusing to grow it; the watermark freezes instead (delayed, never lost). \
-             Inspect with `cairn-sync quarantine` and fix or ack the held rows."
+             Inspect with `cairn-sync quarantine` and fix or ack the held rows \
+             (acked rows stop counting against the quota)."
         )
         .into());
     }
@@ -3142,6 +3151,100 @@ mod quarantine_tests {
             .unwrap()
             .get(0);
         assert_eq!(rows, 1, "the overshooting frame was not penned");
+    }
+
+    /// Issue #197 (2026-07-15 review, B2): acked rows must NOT consume the ROW
+    /// quota. The quota error's own remedy is "fix or ack the held rows" — if
+    /// acked rows still counted, following that instruction would change
+    /// nothing: every new refused frame would still hit Err(quota) and the
+    /// cursor would stay frozen forever, with a manual DELETE the only
+    /// (undocumented) way out. An acked row is a resolved human decision,
+    /// retained as the record of it — the budget bounds only the UNACKED rows
+    /// still awaiting one (the node plane learned this first: see
+    /// quarantine_node_event in cairn-node/src/sync.rs).
+    #[test]
+    fn acked_rows_do_not_consume_row_quota() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+
+        // A peer floods the pen to its row quota; the operator then follows the
+        // documented remedy and acks every held row.
+        c.execute(
+            "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, reason, acked)
+             SELECT int4send(i), '\\x00'::bytea, 'peer-acked-flood', 'filler', TRUE
+             FROM generate_series(1, $1::int) i",
+            &[&(MAX_QUARANTINE_ROWS_PER_PEER as i32)],
+        )
+        .unwrap();
+
+        // A fresh corrupt frame must now be PENNED — the pull still fails
+        // loudly on the unacked refusal (normal quarantine discipline), but
+        // NOT as a pen-quota freeze.
+        let fresh_garbage = b"first frame after the operator acked the flood".to_vec();
+        let raw = response_json(&[&fresh_garbage], None);
+        let addr = serve_canned(raw, 1);
+        let (err, m) = pull_integrity_err(&mut c, &addr, "peer-acked-flood");
+        assert!(
+            !err.contains("quota"),
+            "acked rows must not consume quota, got: {err}"
+        );
+        assert_eq!(
+            m["watermark_frozen"], false,
+            "the pen accepted the frame — nothing to freeze"
+        );
+        let unacked: i64 = c
+            .query_one(
+                "SELECT count(*) FROM sync_quarantine
+                  WHERE peer='peer-acked-flood' AND NOT acked",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(unacked, 1, "the fresh frame was penned");
+    }
+
+    /// Issue #197, the BYTE half: acked rows must not consume the byte budget
+    /// either — same remedy, same wedge if they did.
+    #[test]
+    fn acked_rows_do_not_consume_byte_quota() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+
+        // One ACKED filler row 1 KiB under the byte budget for this peer.
+        c.execute(
+            "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, reason, acked)
+             VALUES ('\\x0042', convert_to(repeat(' ', $1::int), 'UTF8'), 'peer-fat-acked',
+                     'filler', TRUE)",
+            &[&((MAX_QUARANTINE_BYTES_PER_PEER - 1024) as i32)],
+        )
+        .unwrap();
+
+        // A 2 KiB garbage frame would overshoot only if the acked row still
+        // counted — it must be penned.
+        let fat_garbage = vec![0u8; 2048];
+        let raw = response_json(&[&fat_garbage], None);
+        let addr = serve_canned(raw, 1);
+        let (err, m) = pull_integrity_err(&mut c, &addr, "peer-fat-acked");
+        assert!(
+            !err.contains("quota"),
+            "acked bytes must not consume quota, got: {err}"
+        );
+        assert_eq!(m["watermark_frozen"], false);
+        let unacked: i64 = c
+            .query_one(
+                "SELECT count(*) FROM sync_quarantine
+                  WHERE peer='peer-fat-acked' AND NOT acked",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(unacked, 1, "the fresh frame was penned");
     }
 
     /// The floor must SURVIVE a cycle whose pen write fails (fresh-eyes review
