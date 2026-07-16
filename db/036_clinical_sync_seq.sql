@@ -43,12 +43,22 @@ CREATE INDEX IF NOT EXISTS event_log_seq_idx ON event_log (seq);
 -- one is not. "Never erase, always overlay."
 ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS last_seq BIGINT NOT NULL DEFAULT 0;
 
--- sync_quarantine.refused_seq — the serving seq at which an unverifiable event was
--- refused. The re-offer floor is now DERIVED as min(refused_seq) over a peer's
--- UNACKED rows (no persisted floor column), so it SUPERSEDES
--- sync_state.quarantine_floor_wall / _counter (likewise vestigial, kept). Legacy
--- rows default to 0 = re-offer from the log start until they resolve (safe,
--- self-limiting; mirrors db/022 node_event_quarantine.refused_seq).
+-- sync_state.quarantine_floor_seq — the seq re-offer floor: the seq of the first
+-- unacked refused event, so incremental pulls fetch from min(last_seq, floor_seq-1)
+-- and keep re-offering that slot until it is repaired or acked. A SEPARATE persisted
+-- column (recomputed each cycle, cleared on a clean cycle) rather than a value
+-- derived from the pen rows: this preserves the clinical self-clearing semantics — a
+-- one-time corruption that heals stops re-shipping on the next clean cycle, while the
+-- pen row survives as an audit trace (deriving from rows would re-ship forever until
+-- a manual ack). SUPERSEDES the vestigial quarantine_floor_wall / _counter (kept).
+-- NULL = no unresolved re-offer.
+ALTER TABLE sync_state ADD COLUMN IF NOT EXISTS quarantine_floor_seq BIGINT;
+
+-- sync_quarantine.refused_seq — FORENSICS: the serving seq at which an unverifiable
+-- event was refused (recorded on INSERT, never overwritten). The re-offer POSITION
+-- is driven by sync_state.quarantine_floor_seq above; this column is the durable
+-- "at what seq" trace, mirroring db/022 node_event_quarantine.refused_seq. Legacy
+-- rows default to 0.
 ALTER TABLE sync_quarantine ADD COLUMN IF NOT EXISTS refused_seq BIGINT NOT NULL DEFAULT 0;
 
 COMMIT;

@@ -105,6 +105,13 @@ const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amort
 const MAX_QUARANTINE_ROWS_PER_PEER: i64 = 10_000;
 const MAX_QUARANTINE_BYTES_PER_PEER: i64 = 64 * 1024 * 1024;
 
+/// Full-sweep cadence (issue #196, mirroring cairn-node's FULL_SWEEP_EVERY): the
+/// clinical pull does an incremental seq-cursor pull each cycle and a full sweep
+/// (after_seq = 0) every FULL_SWEEP_EVERY cycles. The sweep is the correctness
+/// floor — it reconciles any event a residual hazard (BIGSERIAL out-of-order
+/// commit) caused incremental to skip. Incremental = optimization; sweep = floor.
+const FULL_SWEEP_EVERY: u64 = 10;
+
 type R<T> = Result<T, Box<dyn Error>>;
 
 /// The minimum `cairn_pgx` version this daemon requires. Bumped to 0.2.0 for the
@@ -1050,6 +1057,7 @@ fn quarantine_event(
     signed_bytes: &[u8],
     attestation: Option<&[u8]>,
     attester_key: Option<&[u8]>,
+    refused_seq: i64,
     reason: &str,
 ) -> R<bool> {
     // Surface the database's own message on failure (postgres::Error's Display
@@ -1083,14 +1091,17 @@ fn quarantine_event(
     // aggregate probes ride the same statement so the check and the insert
     // cannot disagree; a concurrent writer can still overshoot by one row —
     // the cap is a resource budget, not an exact invariant.
+    // refused_seq (issue #196) is set on INSERT only; the dedupe UPDATE above leaves
+    // it untouched as forensics. The re-offer floor is min(refused_seq) over a peer's
+    // unacked rows, so the earliest refusal wins regardless.
     let inserted = client
         .execute(
             "INSERT INTO sync_quarantine
-             (content_digest, signed_bytes, attestation, attester_key, peer, reason)
-         SELECT $1,$2,$3,$4,$5,$6
-          WHERE (SELECT count(*) FROM sync_quarantine WHERE peer = $5) < $7
+             (content_digest, signed_bytes, attestation, attester_key, peer, refused_seq, reason)
+         SELECT $1,$2,$3,$4,$5,$6,$7
+          WHERE (SELECT count(*) FROM sync_quarantine WHERE peer = $5) < $8
             AND (SELECT COALESCE(sum(octet_length(signed_bytes)),0)
-                   FROM sync_quarantine WHERE peer = $5) + octet_length($2::bytea) <= $8
+                   FROM sync_quarantine WHERE peer = $5) + octet_length($2::bytea) <= $9
          ON CONFLICT (content_digest) DO NOTHING",
             &[
                 &digest,
@@ -1098,6 +1109,7 @@ fn quarantine_event(
                 &attestation,
                 &attester_key,
                 &peer_name,
+                &refused_seq,
                 &reason,
                 &MAX_QUARANTINE_ROWS_PER_PEER,
                 &MAX_QUARANTINE_BYTES_PER_PEER,
@@ -1126,45 +1138,49 @@ fn quarantine_event(
     Ok(false)
 }
 
-fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serde_json::Value> {
+/// Pull from `peer` on the clinical plane, seq-cursored (issue #196). Cursors on
+/// the serving node's LOCAL event_log.seq (db/036) instead of the HLC watermark, so
+/// an event that lands below an advanced watermark — a multi-hop arrival, or an L2
+/// self-stamped low HLC — still sorts above the cursor and is never silently
+/// skipped. `full_sweep` requests from seq 0 (the periodic correctness floor for the
+/// residual BIGSERIAL out-of-order-commit gap); cmd_run drives the cadence.
+fn do_pull(
+    client: &mut postgres::Client,
+    peer: &str,
+    peer_name: &str,
+    full_sweep: bool,
+) -> R<serde_json::Value> {
     client.execute(
         "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
         &[&peer_name],
     )?;
-    let wm = client.query_one(
-        "SELECT hlc_wall, hlc_counter, quarantine_floor_wall, quarantine_floor_counter
-         FROM sync_state WHERE peer=$1",
+    // The committed seq cursor + the seq re-offer floor for this peer (db/036).
+    // `last_seq` is the highest serving-node event_log.seq we have pulled — the
+    // node-LOCAL insertion order, NOT the HLC. `quarantine_floor_seq` (NULL = none)
+    // is the seq of the first unresolved refused slot, a SEPARATE persisted column
+    // so it self-clears on a clean cycle while the pen row survives as an audit trace.
+    let st = client.query_one(
+        "SELECT last_seq, quarantine_floor_seq FROM sync_state WHERE peer=$1",
         &[&peer_name],
     )?;
-    let (wall, counter): (i64, i32) = (wm.get(0), wm.get(1));
-    let floor: Option<(i64, i32)> = match (wm.get::<_, Option<i64>>(2), wm.get::<_, Option<i32>>(3))
-    {
-        (Some(w), Some(c)) => Some((w, c)),
-        _ => None,
-    };
+    let last_seq: i64 = st.get(0);
+    let floor_seq: Option<i64> = st.get(1);
 
-    // Fetch from min(watermark, floor). The re-offer floor (db/021) pins the
-    // fetch point at the contiguous-applied position below the oldest
-    // unresolved quarantined slot, so a refused event's slot keeps being
-    // re-offered every cycle (deduping onto its pen row) even though the
-    // watermark has advanced for valid events — a peer that re-signs/repairs
-    // its history is picked up AUTOMATICALLY, with no operator watermark
-    // surgery. Events between floor and watermark re-apply as idempotent
-    // set-union no-ops. (Until EventsAfter pagination lands — issue #101 —
-    // this re-ships the suffix wholesale each cycle; correctness first.)
-    let (fetch_w, fetch_c) = match floor {
-        Some(f) if f < (wall, counter) => f,
-        _ => (wall, counter),
+    // Fetch point: a full sweep pulls everything (after_seq = 0); otherwise from the
+    // cursor, pulled back to just BELOW the earliest refused slot when a floor is set
+    // — so that slot keeps being re-offered every cycle (deduping onto its pen row)
+    // even as the cursor advances for valid events, and a repaired/re-signed version
+    // is admitted AUTOMATICALLY. The `-1` is load-bearing: serve streams
+    // `seq > after_seq` (STRICT), so fetching from floor_seq itself would skip the
+    // very slot we re-offer.
+    let after_seq: i64 = if full_sweep {
+        0
+    } else {
+        floor_seq.map_or(last_seq, |f| (f - 1).min(last_seq))
     };
 
     let started = Instant::now();
-    let raw = request(
-        peer,
-        &Request::EventsAfter {
-            wall: fetch_w,
-            counter: fetch_c,
-        },
-    )?;
+    let raw = request(peer, &Request::EventsAfterSeq { after_seq })?;
     let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
@@ -1173,7 +1189,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
     // ships — refuse the batch up front with an error naming both contexts,
     // rather than burning per-event failures whose generic "unverifiable" reason
     // misdirects the operator toward tampering. Nothing is quarantined and the
-    // watermark is untouched: the peer still holds the events, and they apply
+    // cursor is untouched: the peer still holds the events, and they apply
     // normally once the skew (one side needs upgrading) is fixed. A peer that
     // declares NOTHING is an older build — per-event verification decides, and
     // the all-unverifiable diagnosis below catches the pure-legacy case.
@@ -1185,7 +1201,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                 message: format!(
                     "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
                      node expects '{}' — wire-format skew, not tampering; upgrade the older \
-                     side. Batch refused, watermark untouched.",
+                     side. Batch refused, cursor untouched.",
                     CTX_EVENT.as_str()
                 ),
                 metrics: serde_json::Value::Null,
@@ -1193,41 +1209,48 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         }
     }
 
-    // Watermark discipline (review fix A1 + issue #108 + the PR #110 review).
-    // The OLD loop advanced the watermark to the max HLC of the
-    // *successfully-applied* events, so any failure silently dropped events —
-    // a permanent, silent set-union violation. Discipline now:
-    //   * a VERIFIABLE event that fails to APPLY (transient DB error,
-    //     deterministic refusal) FREEZES the watermark at the contiguous
-    //     applied prefix — retried next cycle, never skipped (A1);
-    //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text)
-    //     is quarantined durably (db/021) AND pins the re-offer floor at the
-    //     position below its slot. The watermark still advances for valid
-    //     events (progress), but the floor keeps the refused slot on the wire
-    //     every cycle, so a later repaired/re-signed version is admitted
-    //     automatically — a durable trace alone is NOT a license to move past
-    //     an event (the #110 review's mixed-batch finding: a re-signed history
-    //     below a moved watermark would never be fetched again). Only a human
-    //     `acked` row releases its slot;
-    //   * if the pen itself refuses (insert failure, per-peer quota), the
-    //     watermark freezes exactly as for a valid event — delayed, never lost.
+    // The per-event seq is load-bearing for the cursor (issue #196): a response
+    // carrying events but a short/empty seqs array is a malformed or unexpectedly-old
+    // serve — fail LOUDLY rather than checkpoint the cursor blind.
+    if !resp.events.is_empty() && resp.seqs.len() != resp.events.len() {
+        return Err(format!(
+            "pull {peer_name}: peer returned {} events but {} seqs — cannot checkpoint the \
+             seq cursor safely; the peer serves an incompatible/older wire format",
+            resp.events.len(),
+            resp.seqs.len()
+        )
+        .into());
+    }
+
+    // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
+    // to the node-local seq for #196:
+    //   * a VERIFIABLE event that fails to APPLY (transient DB error, deterministic
+    //     refusal) FREEZES the cursor at the contiguous handled prefix — retried
+    //     next cycle, never skipped (A1);
+    //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text) is
+    //     quarantined durably (db/021) AND pins the re-offer floor at its seq. The
+    //     cursor still advances for valid events, but the floor keeps the refused
+    //     slot on the wire every cycle, so a later repaired/re-signed version is
+    //     admitted automatically — a durable trace alone is NOT a license to move
+    //     past an event. Only a human `acked` row or a clean cycle releases the slot;
+    //   * if the pen itself refuses (insert failure, per-peer quota), the cursor
+    //     freezes exactly as for a valid apply failure — delayed, never lost.
     // Any unacked refusal makes the whole pull FAIL LOUDLY at the end.
     let (mut applied, mut skipped_unverifiable, mut skipped_acked, mut event_bytes) =
         (0usize, 0usize, 0usize, 0usize);
-    let (mut max_w, mut max_c) = (wall, counter);
-    // Verified-stream position within THIS batch, starting at the FETCH point
-    // (not the watermark: on a floor-fetch cycle the watermark is already above
-    // the re-offered events, and a floor pinned at the watermark would let the
-    // refused slot escape). Advances on every event that verifies and applies.
-    let (mut pos_w, mut pos_c) = (fetch_w, fetch_c);
+    // Highest CONTIGUOUS handled seq. Starts at the cursor so re-offered low-seq
+    // events (below it) never rewind the checkpoint; new events above it advance it.
+    let mut max_seq = last_seq;
     let mut frozen = false;
     // First pen failure (if any) — surfaced in the loud error.
     let mut pen_refused: Option<String> = None;
-    // Floor to persist: position below the FIRST unacked refused slot this
-    // cycle (the stream is HLC-ascending, so the first is the lowest).
-    let mut pin: Option<(i64, i32)> = None;
+    // The seq of the FIRST unacked refused event this cycle (the stream is
+    // seq-ascending, so the first is the lowest) — persisted as the new floor.
+    let mut pin: Option<i64> = None;
 
     for (i, hexed) in resp.events.iter().enumerate() {
+        // The serving-node seq for THIS entry (parallel array; length-checked above).
+        let seq = resp.seqs[i];
         // Decode the entry and its PARALLEL attestation pair (an older peer, or
         // an un-attested event, yields None — the in-DB door decides what that
         // means). A NON-HEX entry is handled like any other unverifiable frame:
@@ -1265,19 +1288,6 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                         if new {
                             applied += 1;
                         }
-                        if let Ok(b) = verify_self_described(&signed_bytes) {
-                            // Batch position always follows a verified apply…
-                            if (b.hlc.wall, b.hlc.counter) > (pos_w, pos_c) {
-                                pos_w = b.hlc.wall;
-                                pos_c = b.hlc.counter;
-                            }
-                            // …but the watermark only advances while the
-                            // applied prefix is unbroken.
-                            if !frozen && (b.hlc.wall, b.hlc.counter) > (max_w, max_c) {
-                                max_w = b.hlc.wall;
-                                max_c = b.hlc.counter;
-                            }
-                        }
                         None
                     }
                     Err(e) => {
@@ -1288,8 +1298,8 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                             Ok(_) => {
                                 frozen = true;
                                 eprintln!(
-                                    "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — \
-                                     a valid event failed to apply and must not be skipped: {e}"
+                                    "pull {peer_name}: HALTING seq cursor at {max_seq} — a valid \
+                                     event failed to apply and must not be skipped: {e}"
                                 );
                                 None
                             }
@@ -1310,6 +1320,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                 &bytes,
                 att.as_deref(),
                 akey.as_deref(),
+                seq,
                 &reason,
             ) {
                 Ok(true) => {
@@ -1320,59 +1331,66 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
                 Ok(false) => {
                     skipped_unverifiable += 1;
                     if pin.is_none() {
-                        pin = Some((pos_w, pos_c));
+                        pin = Some(seq);
                     }
                     eprintln!(
                         "pull {peer_name}: unverifiable event quarantined durably \
-                         (sync_quarantine), slot held on the re-offer floor: {reason}"
+                         (sync_quarantine), slot held on the re-offer floor at seq {seq}: {reason}"
                     );
                 }
                 Err(qe) => {
                     frozen = true;
                     eprintln!(
-                        "pull {peer_name}: HALTING watermark at {max_w}/{max_c} — an \
-                         unverifiable event could not be quarantined, so it must not \
-                         be skipped: {qe}; reason: {reason}"
+                        "pull {peer_name}: HALTING seq cursor at {max_seq} — an unverifiable \
+                         event could not be quarantined, so it must not be skipped: {qe}; \
+                         reason: {reason}"
                     );
                     pen_refused.get_or_insert(qe.to_string());
                 }
             }
         }
+
+        // Advance over the contiguous HANDLED prefix (applied / penned / acked); a
+        // freeze stops the advance below its seq. Relies on serve's ascending
+        // `ORDER BY seq` so max_seq tracks the contiguous handled prefix.
+        if !frozen && seq > max_seq {
+            max_seq = seq;
+        }
     }
 
     // Persist progress FIRST — even a loudly-failing cycle keeps what it
-    // legitimately gained (applied events, advanced watermark). The floor:
+    // legitimately gained (applied events, advanced cursor). The floor (same
+    // 3-branch discipline as the HLC version, re-keyed to seq):
     //   * CLEAN cycle (no unacked refusals AND no pen failures) → clear: the
     //     whole suffix from the fetch point was admitted or human-acked, so
     //     nothing is being withheld any more;
-    //   * unacked refusals, pen healthy → pin below the first refused slot
-    //     (everything below the pin applied or was acked this cycle, so raising
-    //     an older floor to the new pin is safe and shrinks re-shipping);
+    //   * unacked refusals, pen healthy → pin at the first refused slot's seq
+    //     (everything below it applied or was acked this cycle, so raising an
+    //     older floor to the new pin is safe and shrinks re-shipping);
     //   * ANY pen failure → this cycle's view is unreliable: a re-offered slot
     //     whose pen write failed produced NO pin (skips stayed 0), so blindly
-    //     overwriting would CLEAR a floor guarding a slot the watermark is
-    //     already above — permanent exclusion (fresh-eyes review of this
-    //     fixup). Keep the most conservative of (existing floor, new pin).
-    let new_floor = if skipped_unverifiable == 0 && pen_refused.is_none() {
+    //     overwriting would CLEAR a floor guarding a slot the cursor is already
+    //     above — permanent exclusion. Keep the most conservative of
+    //     (existing floor, new pin).
+    let new_floor: Option<i64> = if skipped_unverifiable == 0 && pen_refused.is_none() {
         None
     } else if pen_refused.is_none() {
         pin
     } else {
-        match (floor, pin) {
+        match (floor_seq, pin) {
             (Some(f), Some(p)) => Some(f.min(p)),
             (Some(f), None) => Some(f),
             (None, p) => p,
         }
     };
-    let (floor_w, floor_c) = match new_floor {
-        Some((w, c)) => (Some(w), Some(c)),
-        None => (None, None),
-    };
+    // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
+    // whose max_seq did not exceed the committed cursor therefore never rewinds it.
     client.execute(
-        "UPDATE sync_state SET hlc_wall=$1, hlc_counter=$2, last_pull_at=clock_timestamp(),
-                quarantine_floor_wall=$4, quarantine_floor_counter=$5
-         WHERE peer=$3",
-        &[&max_w, &max_c, &peer_name, &floor_w, &floor_c],
+        "UPDATE sync_state
+            SET last_seq = GREATEST(last_seq, $2), last_pull_at = clock_timestamp(),
+                quarantine_floor_seq = $3
+          WHERE peer = $1",
+        &[&peer_name, &max_seq, &new_floor],
     )?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
@@ -1387,7 +1405,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
         "bytes_per_event": if resp.events.is_empty() { 0.0 }
                            else { event_bytes as f64 / resp.events.len() as f64 },
         "elapsed_ms": elapsed_ms,
-        "watermark_wall": max_w, "watermark_counter": max_c
+        "cursor_seq": max_seq, "full_sweep": full_sweep
     });
 
     // LOUD failure (issue #108, generalised by the #110 review): ANY unacked
@@ -1415,7 +1433,7 @@ fn do_pull(client: &mut postgres::Client, peer: &str, peer_name: &str) -> R<serd
             String::new()
         };
         let pen = match &pen_refused {
-            Some(qe) => format!(" Quarantine pen refused (watermark frozen): {qe}"),
+            Some(qe) => format!(" Quarantine pen refused (cursor frozen): {qe}"),
             None => String::new(),
         };
         return Err(Box::new(PullIntegrityError {
@@ -1623,14 +1641,17 @@ fn cmd_quarantine(conn: &str) -> R<()> {
     Ok(())
 }
 
-fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool) -> R<()> {
+fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool, full: bool) -> R<()> {
     let mut client = connect_checked_apply(conn)?;
-    let m = do_pull(&mut client, peer, peer_name)?;
+    // A manual one-shot pull defaults to incremental; `--full` requests a sweep
+    // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
+    // takes on cadence — issue #196).
+    let m = do_pull(&mut client, peer, peer_name, full)?;
     if metrics {
         println!("{m}");
     } else {
         println!(
-            "pulled from {peer_name}: {} shipped, {} new, {} skipped-unverifiable, watermark-frozen={}",
+            "pulled from {peer_name}: {} shipped, {} new, {} skipped-unverifiable, frozen={}",
             m["shipped"], m["applied_new"], m["skipped_unverifiable"], m["watermark_frozen"]
         );
     }
@@ -1950,7 +1971,13 @@ fn cmd_run(
         let mut line = serde_json::json!({ "ts": now_ms(), "cycle": cycle });
         let mut status = format!("cycle {cycle}");
 
-        match do_pull(&mut client, peer, peer_name) {
+        // Full sweep on cadence (issue #196): incremental each cycle, a full sweep
+        // (after_seq = 0) every FULL_SWEEP_EVERY cycles as the correctness floor for
+        // the residual BIGSERIAL out-of-order-commit gap. `% == 0` (not
+        // is_multiple_of, stabilized only in Rust 1.87) keeps within the MSRV 1.74.
+        #[allow(clippy::manual_is_multiple_of)]
+        let full_sweep = cycle % FULL_SWEEP_EVERY == 0;
+        match do_pull(&mut client, peer, peer_name, full_sweep) {
             Ok(m) => {
                 status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
                 line["pull"] = m;
@@ -2126,7 +2153,7 @@ USAGE (all take --conn <postgres-uri>):
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
   gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
-  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics]
+  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full]
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   requeue     --conn URI [--metrics]
               (re-process quarantined events through the apply door after fixing the cause)
@@ -2216,6 +2243,7 @@ fn main() -> R<()> {
             &need(flag(&args, "--peer")),
             &need(flag(&args, "--peer-name")),
             args.iter().any(|a| a == "--metrics"),
+            args.iter().any(|a| a == "--full"),
         )?,
         "quarantine" => cmd_quarantine(&need(conn))?,
         "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
@@ -2559,29 +2587,21 @@ mod quarantine_tests {
         .collect()
     }
 
-    fn watermark(c: &mut postgres::Client, peer: &str) -> (i64, i32) {
-        let row = c
-            .query_one(
-                "SELECT hlc_wall, hlc_counter FROM sync_state WHERE peer=$1",
-                &[&peer],
-            )
-            .unwrap();
-        (row.get(0), row.get(1))
+    /// The per-peer seq cursor (issue #196): sync_state.last_seq.
+    fn cursor(c: &mut postgres::Client, peer: &str) -> i64 {
+        c.query_one("SELECT last_seq FROM sync_state WHERE peer=$1", &[&peer])
+            .unwrap()
+            .get(0)
     }
 
-    /// The per-peer re-offer floor (NULL = no unresolved quarantine).
-    fn floor(c: &mut postgres::Client, peer: &str) -> Option<(i64, i32)> {
-        let row = c
-            .query_one(
-                "SELECT quarantine_floor_wall, quarantine_floor_counter
-                 FROM sync_state WHERE peer=$1",
-                &[&peer],
-            )
-            .unwrap();
-        match (row.get::<_, Option<i64>>(0), row.get::<_, Option<i32>>(1)) {
-            (Some(w), Some(cc)) => Some((w, cc)),
-            _ => None,
-        }
+    /// The per-peer seq re-offer floor (NULL = no unresolved quarantine).
+    fn floor(c: &mut postgres::Client, peer: &str) -> Option<i64> {
+        c.query_one(
+            "SELECT quarantine_floor_seq FROM sync_state WHERE peer=$1",
+            &[&peer],
+        )
+        .unwrap()
+        .get(0)
     }
 
     /// db/036 (issue #196): the clinical seq cursor. event_log.seq (the monotonic
@@ -2603,6 +2623,8 @@ mod quarantine_tests {
                AND EXISTS (SELECT 1 FROM information_schema.columns
                            WHERE table_name='sync_state'      AND column_name='last_seq')
                AND EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='sync_state'      AND column_name='quarantine_floor_seq')
+               AND EXISTS (SELECT 1 FROM information_schema.columns
                            WHERE table_name='sync_quarantine' AND column_name='refused_seq')",
                 &[],
             )
@@ -2620,7 +2642,7 @@ mod quarantine_tests {
         addr: &str,
         peer: &str,
     ) -> (String, serde_json::Value) {
-        let err = do_pull(c, addr, peer).unwrap_err();
+        let err = do_pull(c, addr, peer, false).unwrap_err();
         let ie = err
             .downcast_ref::<PullIntegrityError>()
             .expect("pull must fail as an INTEGRITY error, not transport");
@@ -2685,20 +2707,19 @@ mod quarantine_tests {
             .get(0);
         assert_eq!(held, garbage, "quarantine holds the verbatim wire bytes");
 
-        // Watermark advanced to the LAST VALID event (progress), while the floor
-        // pins below the refused slot: at e1, the last verified position before it.
-        assert_eq!(watermark(&mut c, "peer-a"), (WALL_2026 + 2_000, 0));
-        assert_eq!(floor(&mut c, "peer-a"), Some((WALL_2026 + 1_000, 0)));
+        // Cursor advanced over the whole handled prefix (seq 3, the last event),
+        // while the floor pins AT the refused slot's seq (garbage = seq 2).
+        assert_eq!(cursor(&mut c, "peer-a"), 3);
+        assert_eq!(floor(&mut c, "peer-a"), Some(2));
 
         // Cycle 2 (same canned batch = what a floor-fetch re-offers): idempotent
-        // re-applies, deduped pen row, STILL loud, floor stays below the slot
-        // (the pin must track the batch position, not the advanced watermark).
+        // re-applies, deduped pen row, STILL loud, floor stays at the slot's seq.
         let (_msg, m) = pull_integrity_err(&mut c, &addr, "peer-a");
         assert_eq!(m["applied_new"], 0, "set-union no-op on re-apply");
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 1, "same bytes dedupe onto one row");
         assert_eq!(rows[0].seen_count, 2, "re-offer bumps seen_count");
-        assert_eq!(floor(&mut c, "peer-a"), Some((WALL_2026 + 1_000, 0)));
+        assert_eq!(floor(&mut c, "peer-a"), Some(2));
 
         // Cycle 3 — the peer REPAIRS the slot (re-signed bytes at the same HLC,
         // e.g. after fixing a pre-ADR-0040 history): the fixed event is admitted
@@ -2707,7 +2728,7 @@ mod quarantine_tests {
         let repaired = peer_note(&sk, &kid, WALL_2026 + 1_500);
         let raw = response_json(&[&e1, &repaired, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a").unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
         assert_eq!(
             m["applied_new"], 1,
             "the repaired event is admitted automatically"
@@ -2752,7 +2773,7 @@ mod quarantine_tests {
             .unwrap();
 
         // Same wire content again: quiet success, floor released.
-        let m = do_pull(&mut c, &addr, "peer-a").unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
         assert_eq!(m["skipped_unverifiable"], 0);
         assert_eq!(
             m["skipped_acked"], 1,
@@ -2775,9 +2796,12 @@ mod quarantine_tests {
 
         let g1 = b"legacy or corrupt blob one".to_vec();
         let g2 = b"legacy or corrupt blob two".to_vec();
-        // Legacy peer shape: NO signing_context field at all.
+        // Legacy peer shape: NO signing_context field (pre-ADR-0040), but the seqs
+        // travel (a #196 serve always ships them) so the puller reaches the
+        // per-event verify + all-unverifiable diagnosis rather than the seq guard.
         let raw = serde_json::to_vec(&serde_json::json!({
             "events": [hex::encode(&g1), hex::encode(&g2)],
+            "seqs": [1, 2],
         }))
         .unwrap();
 
@@ -2792,13 +2816,19 @@ mod quarantine_tests {
             "diagnosis must say what happened, got: {err}"
         );
 
-        // Loud, but nothing lost: both events preserved durably, watermark untouched.
+        // Loud, but nothing lost: both events preserved durably. The cursor advances
+        // over the penned (handled) slots, but the floor re-offers them from seq 0.
         assert_eq!(quarantine_rows(&mut c).len(), 2);
-        assert_eq!(watermark(&mut c, "peer-legacy"), (0, 0));
+        assert_eq!(cursor(&mut c, "peer-legacy"), 2);
+        assert_eq!(
+            floor(&mut c, "peer-legacy"),
+            Some(1),
+            "re-offer floor pins the first slot"
+        );
 
         // The next cycle fails loudly AGAIN (no silent livelock) and the
         // quarantine dedupes rather than growing without bound.
-        assert!(do_pull(&mut c, &addr, "peer-legacy").is_err());
+        assert!(do_pull(&mut c, &addr, "peer-legacy", false).is_err());
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 2);
         assert!(
@@ -2824,19 +2854,19 @@ mod quarantine_tests {
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
         let raw = response_json(&[&e1], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a").unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
         assert_eq!(m["applied_new"], 1);
 
-        // Now the peer's new tail is garbage; the boundary event re-ships (the
-        // server query is inclusive), so the batch is MIXED.
+        // Now the peer's new tail is garbage; the boundary event re-ships (a
+        // floor-fetch re-includes it), so the batch is MIXED.
         let garbage = b"corrupt tail after the watermark".to_vec();
         let raw = response_json(&[&e1, &garbage], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
         let (_err, m) = pull_integrity_err(&mut c, &addr, "peer-a");
         assert_eq!(m["skipped_unverifiable"], 1);
         assert_eq!(quarantine_rows(&mut c).len(), 1);
-        // Floor pinned at the boundary so the tail slot stays on the wire.
-        assert_eq!(floor(&mut c, "peer-a"), Some((WALL_2026 + 1_000, 0)));
+        // Floor pinned at the tail slot's seq (garbage = seq 2) so it stays on the wire.
+        assert_eq!(floor(&mut c, "peer-a"), Some(2));
     }
 
     /// A non-hex entry must not abort the pull (the old `hex::decode(..)?` wedged
@@ -2854,6 +2884,7 @@ mod quarantine_tests {
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
         let raw = serde_json::to_vec(&serde_json::json!({
             "events": [hex::encode(&e1), "zz-not-hex-at-all"],
+            "seqs": [1, 2],
             "signing_context": CTX_EVENT.as_str(),
         }))
         .unwrap();
@@ -2879,6 +2910,36 @@ mod quarantine_tests {
             b"zz-not-hex-at-all".to_vec(),
             "verbatim wire text preserved"
         );
+    }
+
+    /// Issue #196 (puller side, direct seq bookkeeping): the cursor checkpoints the
+    /// max HANDLED seq (applied OR penned), the re-offer floor pins the refused
+    /// slot's seq, and the pen row records refused_seq as forensics. A mixed batch
+    /// [valid, garbage, valid] with serve-assigned seqs 1/2/3.
+    #[test]
+    fn pull_checkpoints_seq_cursor_and_reoffers_on_refused_seq() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let garbage = b"not a COSE_Sign1".to_vec();
+        let e3 = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let raw = response_json(&[&e1, &garbage, &e3], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+        let (_msg, m) = pull_integrity_err(&mut c, &addr, "peer-a");
+        // e1(seq1) and e3(seq3) applied; garbage(seq2) penned with refused_seq=2.
+        assert_eq!(m["applied_new"], 2);
+        assert_eq!(m["cursor_seq"], 3, "checkpoint at the max handled seq");
+        assert_eq!(cursor(&mut c, "peer-a"), 3, "cursor persisted");
+        assert_eq!(floor(&mut c, "peer-a"), Some(2), "floor = the refused seq");
+        let rs: i64 = c
+            .query_one("SELECT refused_seq FROM sync_quarantine", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(rs, 2, "the pen row records refused_seq as forensics");
     }
 
     /// At the per-peer quota the pen refuses to grow (#110 review finding 2 —
@@ -2978,8 +3039,8 @@ mod quarantine_tests {
         let raw = response_json(&[&e1, &garbage, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw.clone(), 2);
         let (_msg, _m) = pull_integrity_err(&mut c, &addr, "peer-a");
-        assert_eq!(floor(&mut c, "peer-a"), Some((WALL_2026 + 1_000, 0)));
-        assert_eq!(watermark(&mut c, "peer-a"), (WALL_2026 + 2_000, 0));
+        assert_eq!(floor(&mut c, "peer-a"), Some(2));
+        assert_eq!(cursor(&mut c, "peer-a"), 3);
 
         // Sabotage the pen for the re-offer: delete the row AND fill the peer's
         // quota, so the re-offered garbage can be neither bumped nor inserted.
@@ -2999,7 +3060,7 @@ mod quarantine_tests {
         assert_eq!(m["watermark_frozen"], true);
         assert_eq!(
             floor(&mut c, "peer-a"),
-            Some((WALL_2026 + 1_000, 0)),
+            Some(2),
             "a pen-failure cycle must never clear the floor"
         );
     }
@@ -3040,7 +3101,7 @@ mod quarantine_tests {
             quarantine_rows(&mut c).is_empty(),
             "skew-refused batch is not quarantined"
         );
-        assert_eq!(watermark(&mut c, "peer-skew"), (0, 0));
+        assert_eq!(cursor(&mut c, "peer-skew"), 0);
     }
 
     /// Re-processing after the operator fixes the cause (the issue's "inspectable
