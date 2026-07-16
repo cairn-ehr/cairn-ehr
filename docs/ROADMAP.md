@@ -745,7 +745,19 @@ derive-from-`min(refused_seq)` comment corrected + a superseded-mid-build addend
 the separate self-clearing `quarantine_floor_seq` column, NOT derived from pen rows), and #101 pointers restored at
 `FULL_SWEEP_EVERY`/the serve arm (#101 updated: the sweep re-ships the whole log in one frame, so its wedge fires
 periodically by design once history outgrows the read window — pagination's priority raised). Workspace
-665/0 failed. **P2 continues at #197 (B2).**
+665/0 failed.
+
+**Slice 39 — acked rows freed from the clinical quarantine quota (2026-07-16; the review course, Priority 2;
+issue #197 [B2]; branch `fix/quarantine-quota-acked-197`; no ADR/spec/SCHEMA/event-type change).**
+`quarantine_event`'s per-peer quota subqueries counted ALL pen rows, acked included, so the quota error's own
+documented remedy ("fix or ack the held rows") could never unfreeze the cursor — after acking a flood, every new
+refused frame still hit `Err(quota)`; the only real way out was an undocumented manual `DELETE`. Fix mirrors the
+node plane (`cairn-node/src/sync.rs` — its comment records exactly this lesson): `AND NOT acked` on both the
+row-count and byte-sum subqueries; an acked row is a resolved human decision, retained as the record of it, never
+a consumer of the budget. Quota error text made honest ("quota of unacked rows … acked rows stop counting"). TDD:
+two RED-first DB-gated tests (row + byte halves: pen filled to quota with ACKED rows → a fresh corrupt frame must
+be penned as a normal loud unacked refusal, never a pen-quota freeze). Workspace 667/0 failed. **P2 continues at
+#202/#201 (B7/B6).**
 
 ## Phase 5 — Security & compliance core
 
