@@ -10,7 +10,11 @@
 - **Source:** a screenshot of easyGP v0.532.2450 (2019) supplied by an easyGP co-author,
   showing the main consult screen with a fictional patient. The image is **deliberately not
   committed** (it carries a real clinician's name in the title bar and a person's photo); this
-  note describes every panel textually so it stands alone.
+  note describes every panel textually so it stands alone. **More screenshots are expected**
+  from the co-author; this note will grow as they arrive.
+- **Updated 2026-07-16** with HH's answers to the first round of §4.4 questions — folded in
+  inline as **HH:** annotations. Resolved: billing placement (2.13), the toolbar verdict (2.9),
+  Decision Support / Research module contents (2.20), the results/inbox nutshell (2.21).
 - **Why this artifact matters:** it is a compressed record of what an Australian GP needed
   visible, unprompted, at the moment of consult, refined over ~16 years of daily production use.
   The pixels are 2019; the **information architecture** is the durable payload.
@@ -29,6 +33,13 @@
 > never measured": treat every frequency below as a hypothesis to be annotated, and remember the
 > **survivorship-bias caveat** — this screen is the end state of years of accretion; some panels
 > earned their place, some are fossils nobody dared remove.
+>
+> **HH (2026-07-16):** glance frequency **depends on clinician, patient
+> situation/context/history, and familiarity with the patient — difficult to generalize.**
+> Standing consequence for the design: fixed per-panel frequencies are the wrong model; the
+> layout must be **per-user (and per-context) configurable** within what the role manifest
+> offers — exactly the shell design's site/role ⊕ user preference layering (§7). The 2.9
+> answer below is production prior art for the same conclusion.
 
 ---
 
@@ -43,6 +54,27 @@ two default panes, or the GP manifest needs a denser layout.** The legitimate cr
 original is density *without hierarchy* — everything renders at the same visual weight — not
 density itself. Modern minimalist EHR layouts fail the same clinicians from the opposite
 direction: every fact costs two clicks and a context switch.
+
+## 1a. Why easyGP ultimately failed — and what that validates (HH, 2026-07-16)
+
+The main failure cause was **not the UX** — it was the **choice of programming language**
+(Gambas, adopted over HH's heavy objection): the obscure substrate made it impossible to
+attract more developers, and poor separation of UI from program logic produced spaghetti code
+and a poorly structured source tree. **Under the hood it was a mess; the user experience was
+fabulous regardless.**
+
+Three Cairn validations fall straight out:
+
+1. **The §9 substrate-selection rule** (choose by defect blast radius, optimize the critical
+   surface for reviewer-legibility, keep everything AGPL-mainstream) is precisely the
+   anti-Gambas rule — contributor-attraction is a survival property, not a taste preference.
+2. **The shell design's containment discipline** (framework-free contract/data/manifest layers;
+   render bodies swappable) is the structural answer to "poor separation of UI and logic." It
+   has already paid out once: the iced→Tauri pivot survived because the contract layers were
+   framework-free.
+3. **The mining method of this note is the right one:** harvest the UX and the information
+   architecture; port none of the code. The fabulous-UX/mess-underneath split means the
+   screenshot layer is exactly the valuable layer.
 
 ## 2. Panel inventory
 
@@ -169,13 +201,20 @@ direction: every fact costs two clicks and a context switch.
 - **Paper counterpart:** none — this is pure UI chrome.
 - **Glance:** power-user muscle memory for a handful of them; the rest are onboarding debt
   ("mystery meat").
-- **Cairn mapping:** mostly **superseded by the shell's own mechanisms**: the rail + manifest
+- **Cairn mapping:** partly superseded by the shell's own mechanisms: the rail + manifest
   replace section-jumping; the ADR-0020 type-through verbs (`rx!`, `tx!`, …) replace
   action-buttons *without leaving the keyboard*; explicit Save is replaced by the durable
   scratchpad + sign-off model (ADR-0020 active-write). A small set of labelled, semantic actions
   survives per tab.
-- **Verdict:** FOSSIL-CHECK — HH to name which icons were actually used daily; those become
-  type-through verbs or per-tab actions. Do **not** port the toolbar as a pattern.
+- **HH (2026-07-16) — verdict corrected, not a fossil:** the icons had **tooltips** (and most
+  GPs could derive their function from the glyph alone), and — the important part — the toolbar
+  was **user-configurable in settings**: a few always-needed core icons, the rest picked and
+  chosen per user. Rightly so: GP workflows and styles differ widely (urban subspecialised vs.
+  rural true generalist; different or all age groups).
+- **Verdict (revised):** a **user-configurable action set** — production prior art for the
+  shell design's §7 **user preference layer** (the user arranges/chooses among what the role
+  manifest offers). Port the *configurability*, not the specific toolbar. The "always-needed
+  core + user-chosen rest" split maps exactly onto site/role layer vs. user layer.
 
 ### 2.10 Consult date + care-setting selector — "Consult Date 16/07/2026 16:12", "At consulting rooms"
 
@@ -231,15 +270,22 @@ direction: every fact costs two clicks and a context switch.
 - **Glance:** end of every consult; timer is ambient.
 - **Cost one click away:** moderate — but forgetting it costs the practice real money, which is
   why easyGP kept it on-screen.
-- **Cairn mapping:** **the sharpest scope tension this screenshot surfaces.** The shell spec
-  scopes front-desk work (appointments/billing app) *out* of the clinician reference UI — but
-  consult-time billing is genuinely clinician work in AU general practice. Options when this
-  graduates: (a) a **GP-manifest-only billing band/tab** inside the clinician UI (manifest
-  makes it invisible to ward/ED settings), or (b) billing stays in the companion front-desk
-  product and the clinician UI only emits a "consult ended, duration X, coded reasons Y" event
-  it consumes. The honest auto-billing degradation message, meanwhile, is principle-4
-  archaeology: state *why* the automation can't run, never fake it, never block.
-- **Verdict:** ZERO-CLICK *for AU GP* — but **OPEN QUESTION (a) vs (b)** for where it lives.
+- **HH (2026-07-16) — RESOLVED, essentially option (b), and the tension was overstated:**
+  consult-time billing is a **non-issue**. Billing proper lives in a **companion app for
+  front-desk staff**; the GP only enters **item numbers or a short comment to billing staff at
+  the end of the consult**, in an **unobtrusive widget** (e.g. overlaying the timer when
+  stopping it, or a small tab). And the **timer is not an honest timekeeper**: both easyGP
+  principals routinely ran **multiple patients in multiple rooms near-simultaneously**
+  (alternating rooms while a practice nurse attended in between) — which is typical. The timer
+  is a *visual cue for the GP* and an *input to billing suggestions*, nothing more.
+- **Cairn mapping:** the clinician UI emits a tiny end-of-consult billing event (item numbers /
+  free-text note to billing staff) consumed by the front-desk product; principle 4 applies to
+  the **timer itself** — elapsed wall-clock is *uncertain evidence* of consult duration
+  (multi-room interleaving), so any duration-derived billing suggestion is **advisory, never
+  auto-asserted**. The honest auto-billing degradation message remains principle-4 archaeology:
+  state *why* the automation can't run, never fake it, never block.
+- **Verdict:** the *end-of-consult widget* is ZERO-CLICK-adjacent GP-manifest chrome (one
+  gesture: stop timer → enter items/comment); everything else is the companion app's problem.
 
 ### 2.14 Coded reasons + favourite coded terms (ICPC-2 PLUS-style list, e.g. "Check up;blood pressure (K31001)")
 
@@ -337,13 +383,69 @@ direction: every fact costs two clicks and a context switch.
   principle 4).
 - **Verdict:** ZERO-CLICK for the Most-Significant set (candidate: the fourth safety-zone
   card, or the top block of a right-pane Summary tab); ONE-CLICK for the full/inactive lists.
+  **HH (2026-07-16): confirmed as the right approach** (card-vs-Summary-tab placement still
+  open).
 
 ### 2.20 Clinical Lists / Decision Support tabs + Plans / Forms
 
-- **Shows:** the right panel is itself tabbed; **Decision Support's content is not visible in
-  the screenshot**. Plans/Forms link to care-planning documents (GPMP etc.).
-- **Cairn mapping:** unknowable from this artifact — see open questions.
-- **Verdict:** OPEN QUESTION for HH (2.20 in §5).
+- **Shows:** the right panel is itself tabbed; Decision Support's content is not visible in
+  the screenshot. Plans/Forms link to care-planning documents (GPMP etc.).
+- **HH (2026-07-16) — contents supplied.** Two modules, and HH (who as a locum has used most
+  Australian GP systems) knows **no other AU software with comparable features**:
+  - **Decision Support** = a **condition-centric trajectory dashboard**: e.g. for a diabetic,
+    HbA1c + cardiac risk factors + renal profile over time — *all the data needed to design a
+    treatment plan visible in a single glance* — plus links to relevant literature (e.g.
+    Therapeutic Guidelines) and risk calculators.
+  - **Research** (the left-rail module) = the **same idea at practice-population scope**: list
+    all patients with e.g. deteriorating HbA1c or renal function, **ordered by
+    urgency/priority**; percentage of chronic-disease patients achieving management goals —
+    informing practice policy and resource-allocation decisions.
+- **Cairn mapping:** both are **folds — the same machinery at two scopes**, which is fractal
+  topology showing up in the UI:
+  - the condition dashboard is a **condition-scoped multi-series fold** (2.17's trend machinery,
+    grouped by a condition template instead of one metric); guideline links and risk
+    calculators are advisory actors through the
+    [ADR-0030](../../docs/spec/decisions/0030-advisory-actor-integration-contract.md) contract
+    (a calculator that declares its validity bounds — see the 2.17 Cockcroft-Gault line — is
+    the house style).
+  - the Research module is the **identical fold run at practice-node scope over the population**
+    — a node's role is configuration, so a practice node ranking its own chronic-disease
+    population is the same projection code, wider scope. The ranked deteriorating-patients
+    worklist is ADR-0009-salience applied to a population (and rhymes with ADR-0014's
+    background-sweep-whose-worklist-doubles-as-a-metric pattern).
+- **Verdict:** Decision Support = a high-priority **Condition-dashboard tab** (ONE-CLICK,
+  right pane, likely *the* chronic-disease-consult view); Research = a practice-scope module
+  with its own rail entry in the GP manifest. Both are strong candidates for early slices
+  precisely because they were easyGP's unmatched differentiator.
+
+### 2.21 Results/inbox (not visible in this screenshot — HH description, 2026-07-16)
+
+A topic in its own right (own session when its screenshots arrive); the nutshell as told:
+
+- **On opening a patient**, new/unchecked results are **highlighted in the results tab**;
+  **critical un-actioned results make the tab visually flash and demand attention — but no
+  dialogs open.** (Principle 3 lived, again: ambient, insistent, never blocking.)
+- **Before and after consulting sessions**, most GPs review incoming results and reports.
+  Grouping is **per-clinician choice**: by urgency, by date/time, or by patient — more
+  evidence for the user-preference layer (2.9, glance-frequency note).
+- **The differentiator** (again unmatched in AU software HH has used): **real-time context for
+  a result.** Click an incoming result in a sidebar → a **vertical splitter** shows the actual
+  result/report on one side and **the most relevant consult note** on the other; if the result
+  has a trajectory over time, it is **graphed in a bottom horizontal splitter**.
+- **Cairn mapping:** this is almost a description of machinery Cairn already has on paper:
+  - "most relevant consult note" = the **order-provenance fold** from the prefetch note
+    (`result → order → order.encounter → fold that encounter`), with the honest labelled
+    fallback ("most recent · ordering consult unknown") for externally-sourced results;
+  - result-beside-note = the shell's **two-pane workspace + `OpenInOtherPane` intent**;
+  - the flashing critical tab = **ADR-0009's acknowledgment floor** rendered as chrome;
+  - the trajectory strip = the 2.17 fold.
+  - **One real design question:** the three-zone review layout (result | note | trajectory
+    below) exceeds the shell's strict "two panes, tabs own no internal tiling" rule. Either the
+    results-review tab gets a sanctioned internal bottom strip, or the shell grows an optional
+    horizontal third zone. Flag for the results-inbox session — don't improvise it.
+  - Existing sketch: [`results-inbox.svg`](results-inbox.svg) in this directory.
+- **Verdict:** deferred to its own session, but the *contract implications* (order-provenance
+  fold, acknowledgment floor, three-zone question) are already actionable.
 
 ## 3. Summary table
 
@@ -357,19 +459,20 @@ direction: every fact costs two clicks and a context switch.
 | 2.6 | Allergies + asked-status | zero-click | pinned meds+allergies card (exists) |
 | 2.7 | Warnings | zero-click | pinned urgent-actions card (exists) |
 | 2.8 | Recalls (overdue, aged) | zero-click compact / one-click full | safety-zone card + Prevention tab |
-| 2.9 | Icon toolbars | **fossil-check** | superseded: rail + type-through verbs |
+| 2.9 | Icon toolbars | user-configurable action set (HH) | shell §7 user preference layer |
 | 2.10 | Consult date + setting | zero-click | Note tab write-context header |
 | 2.11 | Note editor | zero-click | Note tab, left-pane default (exists) |
 | 2.12 | Todo/BMI strip | **fossil-check** | type-through verbs + Trends tab |
-| 2.13 | Billing band + timer | zero-click *for AU GP* | **OPEN: GP-manifest band vs companion app** |
+| 2.13 | Billing band + timer | resolved (HH): companion app | end-of-consult widget in GP-manifest chrome |
 | 2.14 | Coded reasons + favourites | one-click → in-flow | inside Note tab (ADR-0025 overlay) |
 | 2.15a | Prescribed today | zero-click | tail of the encounter fold, Note tab |
 | 2.15b | Staff sticky notes | zero-click when unread | ADR-0009 card + one-click archive |
 | 2.16 | Medications table | zero-click summary + tab | Meds tab, right-pane **default** (GP manifest) |
 | 2.17 | Trend chart + CG caveat | one-click | Trends tab (not pinned) |
 | 2.18 | Tasks | zero-click when non-empty | urgent-actions card + tab |
-| 2.19 | Problem list (significance-split) | zero-click (significant set) | 4th safety card or Summary tab top |
-| 2.20 | Decision Support / Plans / Forms | unknown | open question |
+| 2.19 | Problem list (significance-split) | zero-click (significant set) — HH confirmed | 4th safety card or Summary tab top |
+| 2.20 | Decision Support / Research | one-click condition dashboard; practice-scope module | Condition-dashboard tab + Research rail entry |
+| 2.21 | Results/inbox (own session) | deferred | two panes + acknowledgment floor + fold; three-zone question |
 
 ## 4. Outputs
 
@@ -383,23 +486,30 @@ direction: every fact costs two clicks and a context switch.
   reasons in-flow; prescribed-today fold at the tail).
 - **Right pane default:** **Meds tab** (not Demographics — that was a slice-1 convenience).
 - **Tab priority for future slices:** 1 Meds → 2 Problems/Summary → 3 Trends → 4
-  Prevention/recalls worklist → 5 Tasks/messages → 6 Billing band (pending the 2.13 decision)
-  → Demographics and Note already exist.
-- **GP-manifest chrome:** consult timer (ambient, pausable).
+  **Condition dashboard** (2.20 — the unmatched differentiator) → 5 Prevention/recalls
+  worklist → 6 Tasks/messages → 7 Results/inbox (own design session first, 2.21) →
+  Demographics and Note already exist. **Research** (practice-population scope) gets its own
+  rail entry rather than a tab slot.
+- **GP-manifest chrome:** consult timer (ambient, pausable, *advisory only* — see 2.13) with
+  the end-of-consult item-numbers/comment widget attached to its stop action.
 
-### 4.2 Tensions surfaced (each needs a decision when this graduates)
+### 4.2 Tensions surfaced
 
-1. **Consult-time billing vs the shell's front-desk exclusion** (2.13) — the one genuine scope
-   conflict. Recommend deciding *before* the GP manifest is first cut.
+1. ~~**Consult-time billing vs the shell's front-desk exclusion**~~ — **RESOLVED (HH,
+   2026-07-16):** non-issue; companion front-desk app + an unobtrusive end-of-consult
+   item-numbers/comment widget in the clinician UI (2.13).
 2. **Recall ambience vs prompt fatigue** — easyGP shows everything always; case-study 0001's
    reader comments show GPs revolt at noise. ADR-0009 ranking + the acknowledgment floor is the
-   synthesis; the GP card must stay *compact*.
+   synthesis; the GP card must stay *compact*. **HH: confirmed as a real work item.**
 3. **Zero-click budget.** The ZERO-CLICK rows above must fit the safety zone + two panes.
    If they don't, the GP manifest needs a denser safety zone than the four-card default —
    test on real screens early (the Pi/small-screen constraint cuts the other way).
+   **HH: confirmed as a real work item.**
 4. **Colour vocabulary** — one screen, red meaning four things. Assign colour a small,
-   consistent semantic set in the design language.
+   consistent semantic set in the design language. **HH: confirmed as a real work item.**
 5. **Empty panels must cost nothing** (2.18) — a layout rule for every card/tab.
+6. **The three-zone results-review layout** (2.21) vs the shell's two-pane/no-internal-tiling
+   rule — decide in the results-inbox session, not ad hoc.
 
 ### 4.3 Principle-4 archaeology (spec-citable prior art, 2019, production)
 
@@ -411,16 +521,20 @@ direction: every fact costs two clicks and a context switch.
 4. **"BONE DENSITY ??"** — recorded uncertainty in a warning's own text.
 5. **Zero confirmation dialogs on the entire screen** — principle 3's ruling, lived.
 
-### 4.4 Open questions for HH
+### 4.4 Open questions for HH (updated 2026-07-16 — answered items struck)
 
-- Correct the **glance-frequency guesses** in §2 (annotate inline — this file is scratch).
-- **Fossil confirmations:** which of the ~17 toolbar icons were actually used daily (2.9)?
-  Did the Todo/BMI strip earn its place (2.12)? Which panels did you *never* look at?
-- What lived behind the **Decision Support** tab (2.20), and behind Plans/Forms — worth a
-  second screenshot from the co-author if easily had.
-- What's **missing from this screenshot** that a GP needs at consult time? (Results/inbox is a
-  separate module here — `results-inbox.svg` in this directory covers Cairn's take; anything
-  else? Immunisation view? Correspondence?)
-- The 2.13 billing decision: GP-manifest band inside the clinician UI, or companion app?
-- Does the **significance-split problem list** (2.19) deserve the fourth safety-zone card, or
-  top-of-Summary-tab?
+- ~~Glance-frequency guesses~~ → answered structurally: context-dependent, don't generalize;
+  per-user configurability is the design consequence (see the callout in the header).
+- ~~Toolbar icons~~ → answered: tooltips + user-configurable action set (2.9).
+- ~~Decision Support contents~~ → answered (2.20); more screenshots to come.
+- ~~Billing placement~~ → resolved: companion app + end-of-consult widget (2.13).
+- **Still open:**
+  - Did the **Todo/BMI strip** earn its place (2.12), or does a type-through verb cover it?
+  - Which panels did you (or colleagues) **never look at** — the pure fossils?
+  - The 2.19 sub-choice: Most-Significant problems as the **fourth safety-zone card** vs.
+    **top block of a Summary tab** (approach itself confirmed).
+  - What else is **missing from this screenshot** that a GP needs at consult time
+    (immunisation view? correspondence?) — likely answered as further screenshots arrive.
+  - The **Research module**'s ranking logic (how "urgency/priority" was computed for the
+    deteriorating-patients list) — worth capturing when its screenshot comes; it's the seed of
+    the practice-scope salience policy.
