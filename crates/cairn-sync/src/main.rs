@@ -110,6 +110,12 @@ const MAX_QUARANTINE_BYTES_PER_PEER: i64 = 64 * 1024 * 1024;
 /// (after_seq = 0) every FULL_SWEEP_EVERY cycles. The sweep is the correctness
 /// floor — it reconciles any event a residual hazard (BIGSERIAL out-of-order
 /// commit) caused incremental to skip. Incremental = optimization; sweep = floor.
+///
+/// KNOWN COST (issue #101, unpaginated batches): a sweep re-ships the ENTIRE
+/// peer log, hex-inflated, in ONE JSON frame inside the 30 s read window. Once a
+/// node's history outgrows that window the sweep fails loudly every cadence —
+/// the correctness floor stops floor-ing exactly on the largest-history nodes.
+/// #101 pagination is the fix; until it lands this cadence assumes a small log.
 const FULL_SWEEP_EVERY: u64 = 10;
 
 type R<T> = Result<T, Box<dyn Error>>;
@@ -1092,8 +1098,13 @@ fn quarantine_event(
     // cannot disagree; a concurrent writer can still overshoot by one row —
     // the cap is a resource budget, not an exact invariant.
     // refused_seq (issue #196) is set on INSERT only; the dedupe UPDATE above leaves
-    // it untouched as forensics. The re-offer floor is min(refused_seq) over a peer's
-    // unacked rows, so the earliest refusal wins regardless.
+    // it untouched — FORENSICS ("at what serving seq was this first refused"), never
+    // a fetch input. The re-offer POSITION is sync_state.quarantine_floor_seq, a
+    // separate column do_pull recomputes each cycle precisely so it can self-clear
+    // on a clean cycle while this pen row survives as the audit trace. (Deriving the
+    // floor from min(refused_seq) here — the node-plane model — was considered and
+    // REJECTED: it re-ships from the low seq forever after a one-time corruption
+    // heals, until a manual ack. See the db/036 header + the #223 PR description.)
     let inserted = client
         .execute(
             "INSERT INTO sync_quarantine
@@ -1173,14 +1184,31 @@ fn do_pull(
     // is admitted AUTOMATICALLY. The `-1` is load-bearing: serve streams
     // `seq > after_seq` (STRICT), so fetching from floor_seq itself would skip the
     // very slot we re-offer.
+    // saturating_sub: the floor is ≥ 1 for anything persisted by a validated pull
+    // (see the seqs guard below), but an inherited/hand-edited row must degrade to
+    // "fetch everything" rather than wrap the arithmetic.
     let after_seq: i64 = if full_sweep {
         0
     } else {
-        floor_seq.map_or(last_seq, |f| (f - 1).min(last_seq))
+        floor_seq.map_or(last_seq, |f| f.saturating_sub(1).min(last_seq))
     };
 
     let started = Instant::now();
-    let raw = request(peer, &Request::EventsAfterSeq { after_seq })?;
+    // A transport failure here has one skew-shaped cause worth naming (PR #223
+    // review): a pre-#196 serve cannot decode the EventsAfterSeq op — its serde
+    // rejects the unknown tag, the connection drops with no response frame, and
+    // all this side sees is an EOF. Say so, alongside the plain-partition reading,
+    // instead of leaving the operator a bare "failed to fill whole buffer".
+    let raw = request(peer, &Request::EventsAfterSeq { after_seq }).map_err(|e| {
+        format!(
+            "pull {peer_name}: no response to EventsAfterSeq: {e}. If the peer is \
+             down this is a plain partition (retry later); but if it is reachable \
+             and hangs up without answering, it likely predates the #196 seq-cursor \
+             wire (db/036) and cannot decode this request — upgrade the peer binary \
+             (an OLD puller against THIS node still works; an old server cannot be \
+             seq-pulled)."
+        )
+    })?;
     let wire_bytes = raw.len();
     let resp: EventsResponse = serde_json::from_slice(&raw)?;
 
@@ -1221,12 +1249,31 @@ fn do_pull(
         )
         .into());
     }
+    // …and the VALUES are untrusted wire input that persists into sync_state (the
+    // advance-only cursor + the re-offer floor). A well-formed serve (`WHERE seq >
+    // $1 ORDER BY seq` over an IDENTITY starting at 1) always produces strictly-
+    // ascending positive seqs; the contiguous-prefix freeze below RELIES on the
+    // ordering, and the floor's `-1` fetch arithmetic on positivity. A batch
+    // violating either (a buggy or hostile peer) is refused loudly with the cursor
+    // untouched — wire values must not poison persistent cursor state (PR #223
+    // review). (A peer lying HIGH about its own seqs only starves its own
+    // incremental serving; the periodic full sweep remains the correctness floor.)
+    if resp.seqs.first().is_some_and(|&s| s < 1) || resp.seqs.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(format!(
+            "pull {peer_name}: peer returned malformed seqs (must be strictly ascending \
+             and positive) — refusing to checkpoint the seq cursor from these values"
+        )
+        .into());
+    }
 
     // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
     // to the node-local seq for #196:
     //   * a VERIFIABLE event that fails to APPLY (transient DB error, deterministic
     //     refusal) FREEZES the cursor at the contiguous handled prefix — retried
-    //     next cycle, never skipped (A1);
+    //     next cycle, never skipped (A1). (During a FULL SWEEP a failing event may
+    //     sit BELOW the committed cursor; the freeze then leaves the cursor as-is
+    //     and the retry rides the NEXT sweep, not the next incremental — up to
+    //     FULL_SWEEP_EVERY cycles later. Delayed, never lost.);
     //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text) is
     //     quarantined durably (db/021) AND pins the re-offer floor at its seq. The
     //     cursor still advances for valid events, but the floor keeps the refused
@@ -2066,6 +2113,8 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
             // the untouched signed core (principle 12). `after_seq = 0` = full sweep.
             // ORDER BY seq is load-bearing: the puller freezes its cursor at the
             // contiguous handled prefix and relies on strictly-ascending arrival.
+            // Unpaginated (issue #101): the whole suffix — the whole LOG on a sweep —
+            // ships in one frame; see the FULL_SWEEP_EVERY note for the known cost.
             let rows = client.query(
                 "SELECT seq, encode(signed_bytes,'hex'), encode(attestation,'hex'),
                         encode(attester_key,'hex')
@@ -2940,6 +2989,83 @@ mod quarantine_tests {
             .unwrap()
             .get(0);
         assert_eq!(rs, 2, "the pen row records refused_seq as forensics");
+    }
+
+    /// PR #223 review hardening: `seqs[]` is untrusted wire input that persists into
+    /// sync_state (the advance-only cursor + the re-offer floor). The contiguous-
+    /// prefix freeze logic RELIES on ascending order, and the floor's `-1` fetch
+    /// arithmetic on positive values — so a batch violating either (a buggy or
+    /// hostile peer) must be refused loudly, cursor untouched, nothing admitted.
+    #[test]
+    fn pull_rejects_malformed_seqs() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let e2 = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        // VALID events under out-of-order seqs: were the guard missing, both would
+        // apply and the pull would succeed — this test then fails, not just weakens.
+        for seqs in [serde_json::json!([2, 1]), serde_json::json!([0, 1])] {
+            let raw = serde_json::to_vec(&serde_json::json!({
+                "events": [hex::encode(&e1), hex::encode(&e2)],
+                "seqs": seqs,
+                "signing_context": CTX_EVENT.as_str(),
+            }))
+            .unwrap();
+            let addr = serve_canned(raw, 1);
+            let err = do_pull(&mut c, &addr, "peer-a", false)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("ascending"),
+                "malformed seqs must be named, got: {err}"
+            );
+            assert_eq!(cursor(&mut c, "peer-a"), 0, "cursor untouched");
+        }
+        assert!(quarantine_rows(&mut c).is_empty(), "nothing penned");
+        let n: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(n, 0, "no event admitted from a malformed batch");
+    }
+
+    /// PR #223 review: a peer that ACCEPTS the connection but hangs up without a
+    /// response frame is the signature of a pre-#196 serve — its serde decode of the
+    /// unknown `EventsAfterSeq` op fails and the connection drops. The pull must
+    /// fail with a diagnosis naming that likely cause and the remedy (upgrade the
+    /// peer), never a bare EOF the operator can only read as a partition.
+    #[test]
+    fn pull_from_pre_seq_server_fails_legibly() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        // The "old serve": read the request frame, then close without replying.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            // request() retries 4 times; hang up on every attempt.
+            for _ in 0..4 {
+                let Ok((mut s, _)) = listener.accept() else {
+                    break;
+                };
+                let _ = read_frame(&mut s);
+                // Dropping the stream closes it with no response frame written.
+            }
+        });
+        let err = do_pull(&mut c, &addr, "peer-old", false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("db/036"),
+            "must name the likely pre-#196 peer and the remedy, got: {err}"
+        );
+        assert_eq!(cursor(&mut c, "peer-old"), 0, "cursor untouched");
     }
 
     /// At the per-peer quota the pen refuses to grow (#110 review finding 2 —

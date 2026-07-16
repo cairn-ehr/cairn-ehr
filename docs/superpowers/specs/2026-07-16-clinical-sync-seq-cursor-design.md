@@ -122,6 +122,23 @@ fails to decode the request and the pull fails **loudly** (never silent). An old
 
 ### 4. `do_pull` rewrite (net simplification)
 
+> [!WARNING]
+> **Addendum (mid-build, 2026-07-16; the PR #223 record — steps 2, 5 and 6 below are
+> SUPERSEDED as written).** Implementing the approved derive-the-floor-from-`min(refused_seq)` model
+> (step 2) surfaced a regression: that floor **never self-clears** — a one-time wire corruption at
+> seq S pens the corrupt digest, the peer's good bytes at S apply on the next fetch but do not match
+> the corrupt-digest pen row, so the floor stays pinned at S and re-ships from the low seq forever
+> until a manual ack. **As shipped** (owner's call, preserving the pre-existing clinical semantics):
+> the floor is a **separate persisted `sync_state.quarantine_floor_seq` column**, recomputed each
+> cycle from the first refused seq (same 3-branch discipline as the HLC version — clear on a clean
+> cycle / pin at the first refusal / keep the most conservative on a pen failure);
+> `sync_quarantine.refused_seq` is **forensics only**, never a fetch input; pen rows are **kept** as
+> the audit trace on repair (no `DELETE` auto-release, contra step 5); and the checkpoint is an
+> unconditional advance-only `GREATEST` (contra step 6's condition). The PR #223 review added two
+> hardenings on top: `seqs[]` is validated (strictly ascending, positive) before any use, and a
+> no-response transport failure on `EventsAfterSeq` names the likely pre-#196 peer and the remedy.
+> The original text is left standing below per house style — overlay, never erase.
+
 The seq model is simpler than the HLC `pin` logic it replaces:
 
 1. Read the cursor: `last_seq` from `sync_state`.

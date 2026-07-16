@@ -737,8 +737,15 @@ out-of-order-commit gap; `cmd_pull` gains `--full`. Penned events advance the cu
 re-offers them. TDD: every in-file quarantine test migrated HLC→seq (value-only, behaviour unchanged) + a direct
 seq-bookkeeping test; three real-binary A→B acceptance tests (`clinical_pull.rs`) — the headline
 low-HLC-below-cursor convergence (fails on the old HLC-fetch code), a `--full`-sweep-reconciles-a-forced-skip, and
-re-pull-from-zero idempotence (ADR-0004); `reset()` gained `RESTART IDENTITY` for deterministic seqs. Workspace
-663/0 failed. **P2 continues at #197 (B2).**
+re-pull-from-zero idempotence (ADR-0004); `reset()` gained `RESTART IDENTITY` for deterministic seqs. PR #223
+review fixes (same branch, TDD): `seqs[]` validated before any use (strictly ascending + positive — untrusted wire
+values must not poison the persistent cursor/floor; `saturating_sub` on the floor fetch), a no-response transport
+failure on `EventsAfterSeq` now names the likely pre-#196 peer + the remedy (was a bare EOF), the stale
+derive-from-`min(refused_seq)` comment corrected + a superseded-mid-build addendum on the design doc (the floor is
+the separate self-clearing `quarantine_floor_seq` column, NOT derived from pen rows), and #101 pointers restored at
+`FULL_SWEEP_EVERY`/the serve arm (#101 updated: the sweep re-ships the whole log in one frame, so its wedge fires
+periodically by design once history outgrows the read window — pagination's priority raised). Workspace
+665/0 failed. **P2 continues at #197 (B2).**
 
 ## Phase 5 — Security & compliance core
 

@@ -191,7 +191,12 @@ BIGSERIAL out-of-order-commit residual); `cmd_pull` gains `--full`. Penned event
 while the floor re-offers them. Every in-file quarantine test migrated HLC→seq (value-only; behaviour unchanged) +
 a direct seq-bookkeeping test; three real-binary A→B acceptance tests (`clinical_pull.rs`): the headline
 low-HLC-below-cursor convergence (fails on the old HLC-fetch code), a `--full`-sweep-reconciles-a-forced-skip, and
-re-pull-from-zero idempotence. Workspace **663/0 failed** + fmt + clippy `-D warnings` clean.
+re-pull-from-zero idempotence. PR #223 review fixes landed on the same branch (TDD, 2 new tests): `seqs[]`
+validated strictly-ascending+positive before any use (wire values must not poison the persistent cursor/floor),
+a legible pre-#196-peer diagnosis on a no-response `EventsAfterSeq` (was a bare EOF), the stale
+derive-from-`min(refused_seq)` comment + design doc corrected via a superseded-mid-build addendum, and #101
+pointers restored (issue updated — the sweep makes its unpaginated-batch wedge periodic-by-design on a large log).
+Workspace **665/0 failed** + fmt + clippy `-D warnings` clean.
 
 **Prior session (2026-07-16) — #198 [B3]: the cairn-sync SCHEMA subset stands alone (branch
 `fix/sync-schema-subset-198`; no ADR/spec/SCHEMA/event-type change — a loader-list fix + its standing drift
