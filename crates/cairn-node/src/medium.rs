@@ -179,7 +179,8 @@ pub fn build_self_attestation(
         },
         t_effective: None,
         signer_key_id: key_id.into(),
-        contributors: serde_json::json!([{"actor_id": key_id, "role": "device"}]),
+        // ADR-0051 ratified vocabulary ("device" is an actor kind, not a role).
+        contributors: serde_json::json!([{"actor_id": key_id, "role": "recorded"}]),
         payload: serde_json::json!({
             "self_node_id_hex": self_node_id_hex,
             "event_set_commitment": event_set_commitment(events),

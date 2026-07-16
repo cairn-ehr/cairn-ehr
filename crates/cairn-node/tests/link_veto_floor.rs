@@ -149,7 +149,7 @@ fn link_body(
         )
     };
     let contributors = if responsibility {
-        serde_json::json!([{"actor_id": kid, "role": "attested", "responsibility": "attested"}])
+        serde_json::json!([{"actor_id": kid, "role": "attested", "responsibility": {"held_by": kid}}])
     } else {
         serde_json::json!([{"actor_id": kid, "role": "recorded"}])
     };

@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 DONE, start at P3
+## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 DONE, P3 opener DONE, continue at #189/#92
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -42,14 +42,21 @@ supersede arm, trust-bounded like peer/revoke, feeding only the advisory `node_l
 follow-ups [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (HLC-merge helper) +
 [#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (legible malformed-hex refusals) filed).
 
-**Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be). ⇐ CONTINUE HERE**
-- **#203 (C2)** + **#96** — one small ADR: ratify-or-rename `role:"recorded"` against the ADR-0028
-  enum, decide the on-wire responsibility shape (`{held_by,on_behalf_of}` vs the shipped flat
-  string), add the enum-membership check to the floor.
-- **#189 (C1)** + **#92** — decide the seal-by-default posture, then a walking-skeleton seal slice
-  (seal-at-write → twin-under-seal → safety-projection sibling → crypto-shred → restore-replays-shred)
-  that surfaces the twin-location / twin-floor / descriptor collisions while they are still prose.
-- **#204 (C3)** — schedule the attribution-token / authoring-human slice (pairs with C2).
+**Priority 3 — the two closing wire windows (on paper first; cheapest they will ever be).**
+- ~~**#203 (C2)** + **#96**~~ — **✅ DONE 2026-07-16** ([ADR-0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md),
+  spec v0.52, branch `feat/adr-0051-role-vocabulary-203-96`; full detail in ROADMAP Slice 41): `recorded`
+  ratified as the 12th (contributory) member; responsibility = `{held_by, on_behalf_of?}` object
+  (proxy wire-expressible; `on_behalf_of` refused at submit until a proxy-grant ADR, admitted at apply);
+  future members partition-prefixed (`bearing:x`/`contrib:x`) so old nodes classify them; unknown roles
+  read **vouching-unknown**, never un-vouched; `cairn_check_contributors` on BOTH doors — strict submit /
+  lenient apply (role membership never rejects at apply — set-union losslessness).
+- **#189 (C1)** + **#92** — **⇐ CONTINUE HERE**: decide the seal-by-default posture, then a walking-skeleton
+  seal slice (seal-at-write → twin-under-seal → safety-projection sibling → crypto-shred →
+  restore-replays-shred) that surfaces the twin-location / twin-floor / descriptor collisions while they
+  are still prose.
+- ~~**#204 (C3)**~~ — **SCHEDULED 2026-07-16** (in Slice 41): the attribution-token / authoring-human slice
+  (per-write attribution, `session.user ≠ event.author`, `sign-as`; §3.10/ADR-0008) is committed as the
+  next clinical-plane slice before any new clinical stream.
 
 **Priority 4 — the schema-version guard (an afternoon; retires a Critical latent hazard).**
 - **#188 (D1)** — `node_schema(version, loaded_at, loader_build)` + a loader refusal when the
@@ -87,11 +94,11 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16, latest (#202+#201 — the P2 closers, **P2 now complete**; earlier the
-same day #197/#196/#198/#199 + the P1 floor-hardening slice; plus the evening GUI/L3 thread —
-easyGP consult-screen mining → GP-manifest seed; review course above; last full regeneration
-2026-07-14) · **Spec/ADRs:** v0.51 · **Phase:** architecture complete (every original §11 question
-closed); **first production clinical surface under construction** on `cairn-node`. Built so far
+**Session date:** 2026-07-16, latest (#203+#96 — the P3 opener, ADR-0051 role-vocabulary floor;
+earlier the same day the full P2 arc #199/#198/#196/#197/#202/#201 + the P1 floor-hardening slice +
+the evening GUI/L3 easyGP-mining thread; review course above; last full regeneration 2026-07-14) ·
+**Spec/ADRs:** v0.52 · **Phase:** architecture complete (every original §11 question closed);
+**first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
 administrative-sex/gender-identity · §4.3 address; karyotype resolved as a distinct field,
@@ -108,6 +115,8 @@ the **first clinical-content stream `clinical.medication`, slices 1–5** (asser
 reconciliation flag · bitemporal dose timeline · cross-thread reconciliation links, ADR-0047 ·
 the attestation responsibility overlay, ADR-0049 · per-field dose effective/reason correction,
 ADR-0050) + the **twin-check registry** (ADR-0048) ·
+the **contributor-role vocabulary floor** (ADR-0051 — `recorded` ratified, `{held_by}` responsibility
+objects, partition-prefixed future members, strict-submit/lenient-apply) ·
 the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar,
 pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
@@ -128,60 +137,39 @@ and practice-population scope** (fractal topology in the UI); results/inbox nuts
 prior-art exhibits worth citing in spec prose. **Next:** more screenshots incoming from the co-author; the
 remaining §4.4 open questions ride on them.
 
-**Session (2026-07-16, latest code thread) — #202 + #201 [B7/B6]: the P2 closers (branch
-`fix/sync-hygiene-202-node-supersede-201`; no ADR/spec/SCHEMA/event-type change; full detail in ROADMAP
-Slice 40 + git).** **#202** (cairn-sync hygiene triple; the node plane already had each hardened version):
-`read_frame` now refuses a length prefix over the new `MAX_FRAME_BYTES` (64 MiB) BEFORE allocating — a
-hostile/corrupt u32 prefix could previously demand a 4 GiB allocation on both wire ends (server: any client
-reaching the port; puller: the peer's response). The cap is batch-scale, NOT the node plane's per-event 8 MiB,
-because the events response is #101-unpaginated (a full sweep ships the whole log suffix in one frame) — a log
-outgrowing it fails the sweep loudly with the cap named; pagination (#101) stays the real fix.
-`do_fingerprint` pins BOTH TEXT sort keys with `COLLATE "C"` (the ADR-0045/#69 discipline — the review named
-`node_origin` in event_hash; `patient_id::text` in projection_hash had the identical failure mode): two honest
-nodes with different cluster collations no longer raise a false divergence alarm from the very tool meant to
-prove convergence; the SQL is extracted to consts under a standing drift guard (the #159 pattern), validated
-on PG18. The byte-tier thread's silent `Err(_) => 0` arm now logs a unit-tested line — a permanently failing
-blobd pass (bad conn string after a DB restart, schema skew) was indistinguishable from "no blobs to fetch"
-for the life of the process. **#201** resolved as **REPLICATE**, not lineage-stays-local: db/007's
-`apply_remote_node_event` gained the missing `node.superseded` arm — submit (db/007) and restore (db/009) both
-emit/apply it, so the omission left a peer pulling a restored node's history refusing the lineage event on
-EVERY full sweep forever (busy-loop noise + a permanent set-union exclusion on the node plane). Admission is
-trust-bounded exactly like peer/revoke (the author must resolve to an active peer) and the claim feeds ONLY
-the advisory `node_lineage` view — `node_current` resolves keys from `enroll` rows alone, `trust_peer` reads
-only `peer`/`revoke` — so a false supersede hijacks nothing (principle 2: an attributable, signed claim). A
-stays-local comment could not have fixed the wedge anyway (the serve stream ships the whole `node_event` set),
-and ADR-0026's cold-peer durability model wants peers holding the COMPLETE set. TDD RED-first throughout (the
-frame test failed UnexpectedEof-not-InvalidData on the doomed-allocation path; the admission test failed with
-the production "unknown node event_type node.superseded" verbatim); the admission test covers admit + lineage
-row + set-union idempotent re-apply + deny-all stranger + legible malformed refusal. A **PR #225 review
-round** then landed on the same branch (TDD RED-first, 3 new tests): `write_frame` gained the mirror-image
-SOURCE-side cap (an over-cap events response previously shipped in full only to die at the peer's read cap
-with nothing in the serving node's log — the refusal now lands there via the serve loop's connection-error
-line, and the >4 GiB u32-prefix truncation becomes unreachable); the projection fingerprint gained `'|'`
-field separators (RED proved (name X, dob 1980) vs (name X1, dob 980) hashed EQUAL — a false CONVERGENCE,
-the inverse of the collation false alarm) and both fingerprint consts are now EXECUTED against the real
-schema in CI (the drift guard only string-matched); the `do_fingerprint` doc comment was reattached.
-Follow-ups filed: [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (extract the thrice-copied A3
-HLC-merge block in db/007 into one guarded helper — must NOT become a grantable clock-ratchet door) +
-[#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) (non-NULL malformed hex in node-event payloads
-fails with an illegible generic decode error across all three doors). Workspace **677/0
-failed** + fmt + clippy `-D warnings` clean.
+**Session (2026-07-16, latest code thread) — #203 + #96 [C2/B5]: the P3 opener — ADR-0051, the
+contributor-role vocabulary floor + responsibility wire shape (branch `feat/adr-0051-role-vocabulary-203-96`;
+spec §3.9, v0.52; no new event type, no SCHEMA change; full detail in ROADMAP Slice 41 + the ADR + git).**
+`recorded` ratified as the 12th role member (contributory — the recording device: capture fidelity, no
+content, no responsibility; 6 bearing + 6 contributory), retroactively legalising every existing mint.
+Responsibility is now the spec-§3.9 object `{held_by, on_behalf_of?}` — flat string retired pre-production
+(ADR-0040 precedent); `held_by = actor_id = verified attester` extends the #195 binding chain; `on_behalf_of`
+wire-expressible day one, refused at submit until a proxy-grant ADR, admitted at apply as a signed
+display-gated claim (an apply refusal would re-run the #201 wedge on every future proxy event). #96 resolved:
+future members travel partition-prefixed (`bearing:x`/`contrib:x`, permanent part of the signed value) so old
+nodes classify them; neither-ratified-nor-prefixed reads **vouching-unknown**, never un-vouched.
+`cairn_check_contributors` (db/005) runs at BOTH doors — strict submit / lenient apply (membership never
+rejects at apply; refusals only for never-lawful shapes). `contributor_role(role,bears)` table +
+`cairn-event::contributor` Rust mirror (`classify_role`) under a standing drift guard. The strict door
+immediately caught **three out-of-vocabulary production mint sites beyond the review's list** — cairn-sync's
+authoring path minted `role:"author"` with NO actor_id (its events cross db/020 on every pulling peer),
+`identity.rs`/`medium.rs` minted `"device"` (an actor kind, not a role) — all now conformant. TDD RED-first
+(10 RED + 5 lossless-admission pins); workspace **696/0** + fmt + clippy + docs build clean. **#204 [C3]
+scheduled** in Slice 41: the attribution-token/authoring-human slice is committed as the next clinical-plane
+slice before any new clinical stream.
 
-**Prior sessions (2026-07-16, same day, condensed — full detail in git + the PRs + ROADMAP Slices 36–39):**
-the **P1 floor-hardening slice** (#187/#207/#194/#191/#192[+#177]/#190/#193/#195; branch
-`feat/floor-hardening-spike0002-p1`, PR #219 incl. its review round; follow-up
-[#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) filed — the #190 hard veto is still evaluated only
-at link-arrival time) · the **P2 opener #199 [B4]** (PR #221 — CI provisions `cairn_test2`/`cairn_test3` +
-exports `CAIRN_TEST_PG2`/`PG3` so no Rust test self-skips in CI anymore; `medication_remote_apply.rs` drives
-every medication verb + the attestation-token round trip through db/020; `clinical_pull.rs` proves A→B
-projection equality through the real binary) · **#198 [B3]** (PR #222 — db/027+029 appended to cairn-sync's
-SCHEMA subset + the standing `schema_subset_tests` drift guard: a wiped DB loaded from the subset ALONE must
-satisfy both write doors) · **#196 [B1]** (PR #223 — `db/036` clinical seq cursor: `event_log.seq`, per-peer
-`sync_state.last_seq`, the SEPARATE self-clearing `quarantine_floor_seq` [a derive-from-rows floor would
-re-ship forever after a transient corruption heals], additive `EventsAfterSeq`/`seqs[]` wire, `cmd_run` full
-sweep every 10 cycles) · **#197 [B2]** (PR #224 — `AND NOT acked` on both clinical quarantine quota
-subqueries, mirroring the node plane: acking, the quota error's own documented remedy, now actually frees the
-pen).
+**Prior sessions (2026-07-16, same day, condensed — full detail in git + the PRs + ROADMAP Slices 36–40):**
+the **P1 floor-hardening slice** (#187/#207/#194/#191/#192[+#177]/#190/#193/#195; PR #219; follow-up
+[#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) — the #190 hard veto is still link-arrival-only) ·
+the **full P2 arc, five slices, all merged the same day**: #199 [B4] (PR #221 — CI provisions
+`cairn_test2`/`cairn_test3`, `medication_remote_apply.rs` + `clinical_pull.rs` E2E) · #198 [B3] (PR #222 —
+cairn-sync SCHEMA subset stands alone + drift guard) · #196 [B1] (PR #223 — `db/036` clinical seq cursor +
+self-clearing quarantine floor + full sweep every 10 cycles) · #197 [B2] (PR #224 — `AND NOT acked` frees the
+quarantine quota) · #202+#201 [B7/B6] (PR #225 — 64 MiB frame caps BOTH ends, `COLLATE "C"` +
+`'|'`-separated executed-in-CI convergence fingerprints, byte-tier `Err` logging, `node.superseded` resolved
+as REPLICATE with the trust-bounded db/007 apply arm; follow-ups
+[#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) HLC-merge helper +
+[#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) legible malformed-hex refusals).
 
 **Earlier sessions (2026-07-09 → 07-15), condensed — full detail in git + the PRs + the linked ADRs +
 ROADMAP Slices 26–34:** **medication slices 1–5** (PR #171 assert/cease over an immortal `medication_id`
@@ -437,6 +425,7 @@ ADR before reopening any of these.
 | [0048](spec/decisions/0048-twin-check-registry-dispatch.md) | The per-type twin/floor-check registry: one stable dispatcher, register-by-row, unified check-fn signature | §9.6 (refines 0022/0039) |
 | [0049](spec/decisions/0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare, not a position pin; supersede, never retract | §3.15/§3.16 (refines 0007, principle 10) |
 | [0050](spec/decisions/0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike sentinel; corrected effective drives current-dose winner selection; correction-note separate from clinical reason | §3.3/§3.6 (refines principle 4) |
+| [0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th, contributory); responsibility = `{held_by, on_behalf_of?}`; future members partition-prefixed; strict-submit/lenient-apply | §3.9 (refines 0028/0007/0049/0012) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

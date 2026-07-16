@@ -647,7 +647,11 @@ fn emit_event(
         },
         t_effective,
         signer_key_id: kid.to_string(),
-        contributors: serde_json::json!([{ "role": "author", "kind": "human", "node": node }]),
+        // ADR-0051 ratified vocabulary: the node RECORDED this event (contributory);
+        // naming the authoring human is the #204 attribution slice, not a role claim.
+        // These events cross apply_remote_event (db/020) on every pulling peer, so the
+        // entry must carry actor_id + a ratified role or the floor refuses it.
+        contributors: serde_json::json!([{ "actor_id": kid, "role": "recorded" }]),
         payload,
         attachments: vec![],
         plaintext_twin: None,

@@ -57,7 +57,7 @@ fn body(
     let contrib = match resp_kid {
         Some(rk) => serde_json::json!([
             {"actor_id": kid_a, "role": "triaged"},
-            {"actor_id": rk, "role": "attested", "responsibility": "attested"}
+            {"actor_id": rk, "role": "attested", "responsibility": {"held_by": rk}}
         ]),
         None => serde_json::json!([{"actor_id": kid_a, "role": "triaged"}]),
     };
