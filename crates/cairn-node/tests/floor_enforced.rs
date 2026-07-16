@@ -183,6 +183,58 @@ async fn enrollment_gate_closed_for_runtime_role() {
         .ok();
 }
 
+/// PR #229 review fix: the contributor-role vocabulary table (db/005, ADR-0051) is
+/// itself floor — a hostile write MOVES the floor (an inserted 'bearing' row mints
+/// arbitrary responsibility-bearing roles through the strict door; flipping `bears`
+/// breaks partition coherence). Pins that the explicit REVOKE binds the runtime role:
+/// INSERT, UPDATE, and DELETE are all denied. (Default privileges already deny this
+/// for an ungranted role — the pin exists so a future stray broad GRANT fails review
+/// loudly, the same rationale as the actor_event/event_type_class REVOKEs.)
+#[tokio::test]
+async fn contributor_role_vocabulary_closed_for_runtime_role() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+
+    let owner = db::connect_and_load_schema(&base).await.unwrap();
+    let role = "cairn_vocab_gate_test";
+    db::provision_runtime_role(&owner, role).await.unwrap();
+    let runtime: Client = db::connect(&conn_as_role(&base, role)).await.unwrap();
+
+    for (label, sql) in [
+        (
+            "INSERT a self-blessed bearing role",
+            "INSERT INTO contributor_role (role, bears) VALUES ('backdoored', true)",
+        ),
+        (
+            "UPDATE a member's partition",
+            "UPDATE contributor_role SET bears = true WHERE role = 'recorded'",
+        ),
+        (
+            "DELETE a ratified member",
+            "DELETE FROM contributor_role WHERE role = 'attested'",
+        ),
+    ] {
+        let err = runtime
+            .execute(sql, &[])
+            .await
+            .expect_err(&format!("{label}: must be denied for the runtime role"));
+        assert_eq!(
+            err.code(),
+            Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+            "{label}: must fail with insufficient_privilege (42501), got: {err:?}"
+        );
+    }
+
+    drop(runtime);
+    owner
+        .batch_execute(&format!("DROP ROLE IF EXISTS {role}"))
+        .await
+        .ok();
+}
+
 /// The role-name charset gate must reject anything that could break out of the
 /// interpolated DDL — this is the SQL-injection floor for `provision_runtime_role`.
 ///

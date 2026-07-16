@@ -156,7 +156,15 @@ authoring path minted `role:"author"` with NO actor_id (its events cross db/020 
 `identity.rs`/`medium.rs` minted `"device"` (an actor kind, not a role) — all now conformant. TDD RED-first
 (10 RED + 5 lossless-admission pins); workspace **696/0** + fmt + clippy + docs build clean. **#204 [C3]
 scheduled** in Slice 41: the attribution-token/authoring-human slice is committed as the next clinical-plane
-slice before any new clinical stream.
+slice before any new clinical stream. A **PR #229 review round** then landed on the same branch (4 new
+tests, 700/0): `contributor_role` gained the house REVOKE (a stray write MOVES the floor — a hostile
+'bearing' row or a flipped `bears`; `floor_enforced.rs` pins INSERT/UPDATE/DELETE denied 42501 for the
+runtime role, the event_type_class rationale), `cairn_check_contributors` pins `SET search_path = public`
+(the cairn_event_twin discipline), the drift guard sorts `COLLATE "C"` (ADR-0045/#69 — `co-signed`'s
+hyphen made it collation-dependent), and 3 more never-lawful apply-door pins. **Operational caveat, by
+design:** pre-ADR-0051 event logs (old cairn-sync `role:"author"`-without-actor_id entries, flat-string
+responsibility) now REFUSE at db/020 on every sweep — **wipe dev/PoC rigs** (replication-failover demo,
+spike rigs), never sync them through; the wedge is pinned deliberately in `contributor_roles.rs`.
 
 **Prior sessions (2026-07-16, same day, condensed — full detail in git + the PRs + ROADMAP Slices 36–40):**
 the **P1 floor-hardening slice** (#187/#207/#194/#191/#192[+#177]/#190/#193/#195; PR #219; follow-up

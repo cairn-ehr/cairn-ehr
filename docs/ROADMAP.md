@@ -828,7 +828,19 @@ now mint ratified vocabulary. TDD RED-first (10 RED refusal/drift tests + 5 loss
 stay green forever); workspace **696/0** + fmt + clippy clean; docs build green. **This slice also SCHEDULES
 #204 [C3]:** the attribution-token / authoring-human slice (per-write attribution, `session.user ≠
 event.author`, `sign-as`; §3.10/ADR-0008) is committed as the NEXT clinical-plane slice before any new
-clinical stream — `recorded` makes the device-only interim honest, #204 ends it.
+clinical stream — `recorded` makes the device-only interim honest, #204 ends it. A **PR #229 review round**
+then landed on the same branch (4 new tests, 700/0): the `contributor_role` table gained the explicit house
+REVOKE — the vocabulary table IS floor, so a stray write moves the floor itself (an inserted 'bearing' row
+mints arbitrary responsibility-bearing roles through the strict door; flipping a member's `bears` breaks
+partition coherence) — with a `floor_enforced.rs` pin proving INSERT/UPDATE/DELETE all deny 42501 for the
+unprivileged runtime role; `cairn_check_contributors` pins `SET search_path = public` on itself (the
+cairn_event_twin defense-in-depth discipline, not only on the SECURITY DEFINER doors); the SQL↔Rust drift
+guard sorts `COLLATE "C"` (the ADR-0045/#69 discipline — `co-signed`'s hyphen made the comparison
+collation-dependent under ICU); and 3 more never-lawful apply-door refusal pins (missing actor_id,
+flat-string responsibility, responsibility on an unprefixed unknown role). **Operational caveat, pinned by
+design:** event logs minted by pre-ADR-0051 binaries (cairn-sync's `role:"author"` with no actor_id,
+flat-string responsibility) now refuse at db/020 on every full sweep — dev/PoC rigs holding them
+(replication-failover demo, spike rigs) must be wiped, not synced through.
 
 ## Phase 5 — Security & compliance core
 

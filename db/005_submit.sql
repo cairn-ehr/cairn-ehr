@@ -266,6 +266,13 @@ INSERT INTO contributor_role (role, bears) VALUES
     ('recorded',    false)
 ON CONFLICT (role) DO NOTHING;
 
+-- Safety surface (like event_type_class): a stray write here MOVES the floor itself —
+-- an inserted 'bearing' row would let its author mint arbitrary responsibility-bearing
+-- roles through the strict door; flipping a member's `bears` breaks partition coherence
+-- for every consumer. Lock it down; both doors read it as their SECURITY DEFINER owner,
+-- so no runtime role needs a grant. Growth is a migration-only, ADR-recorded act.
+REVOKE INSERT, UPDATE, DELETE ON contributor_role FROM PUBLIC;
+
 -- The contributor-set floor (ADR-0051), shared by BOTH doors (principle 12) with
 -- one strictness switch that encodes the doors' different obligations:
 --
@@ -290,8 +297,13 @@ ON CONFLICT (role) DO NOTHING;
 -- held_by = actor_id = verified attester), and responsibility claimed on a
 -- non-bearing role (partitions are additive-only and never flip, so this
 -- incoherence can never become valid).
+-- `SET search_path = public` is pinned HERE, not only on the SECURITY DEFINER doors
+-- that call it (the cairn_event_twin discipline): the contributor_role lookup must
+-- never resolve into a caller-shadowed schema, regardless of who invokes the check.
 CREATE OR REPLACE FUNCTION cairn_check_contributors(b jsonb, p_door text, p_strict boolean)
-RETURNS void LANGUAGE plpgsql STABLE AS $$
+RETURNS void LANGUAGE plpgsql STABLE
+SET search_path = public
+AS $$
 DECLARE
     e       jsonb;
     v_role  text;

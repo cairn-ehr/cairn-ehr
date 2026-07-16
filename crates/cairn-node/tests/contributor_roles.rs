@@ -115,9 +115,12 @@ async fn vocabulary_table_matches_rust_mirror() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
+    // COLLATE "C" pins the sort to byte order, matching Rust's Vec::sort below —
+    // the ADR-0045/#69 discipline: a cluster's linguistic collation may e.g. ignore
+    // the hyphen in `co-signed`, making this guard collation-dependent otherwise.
     let rows = c
         .query(
-            "SELECT role, bears FROM contributor_role ORDER BY role",
+            "SELECT role, bears FROM contributor_role ORDER BY role COLLATE \"C\"",
             &[],
         )
         .await
@@ -482,6 +485,94 @@ async fn apply_admits_on_behalf_of_as_unverified_claim() {
         r.is_ok(),
         "future-lawful proxy claims must not wedge sync: {r:?}"
     );
+}
+
+/// A contributor entry with no actor_id is illegible authorship — never-lawful,
+/// refused even at the lenient door. This deliberately pins the wedge for
+/// pre-ADR-0051 event logs: old cairn-sync binaries minted exactly this shape
+/// (`{role:"author"}`, no actor_id), so any dev rig still holding such events must
+/// be wiped, not synced through (the ADR retires the shape pre-production).
+#[tokio::test]
+async fn apply_refuses_contributor_missing_actor_id() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _, _) = setup(&c).await;
+    let b = note_with(
+        serde_json::json!([{"role": "recorded"}]),
+        &kid_a,
+        Uuid::now_v7(),
+    );
+    let signed = sign(&b, &sk_a).unwrap();
+    let err = c
+        .execute(APPLY1, &[&signed.signed_bytes])
+        .await
+        .expect_err("a contributor without actor_id is refused even at the lenient door");
+    let m = db_msg(&err);
+    assert!(m.contains("actor_id/role"), "legible refusal: {m}");
+}
+
+/// The retired flat-string responsibility shape is never-lawful at the apply door
+/// too — same class as the missing-actor_id shape: pre-ADR-0051 logs holding it
+/// (medication attestations, link proposals) wedge here by design; wipe, don't sync.
+#[tokio::test]
+async fn apply_refuses_flat_string_responsibility() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_, _, sk_h, kid_h) = setup(&c).await;
+    let b = note_with(
+        serde_json::json!([{"actor_id": kid_h, "role": "attested", "responsibility": "attested"}]),
+        &kid_h,
+        Uuid::now_v7(),
+    );
+    let signed = sign(&b, &sk_h).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_h, "attested", &sk_h).unwrap();
+    let vk = sk_h.verifying_key().to_bytes().to_vec();
+    let err = c
+        .execute(APPLY3, &[&signed.signed_bytes, &token, &vk])
+        .await
+        .expect_err("the retired flat-string shape is refused at the apply door too");
+    let m = db_msg(&err);
+    assert!(m.contains("held_by"), "legible shape refusal: {m}");
+}
+
+/// Responsibility on an unknown UNPREFIXED role refuses at the lenient door: every
+/// post-ADR-0051 conformant door prefixes future members, so an unprefixed unknown
+/// carrying a responsibility claim is unmintable by any conformant door — unlike the
+/// bare unknown role above, which claims nothing and is admitted.
+#[tokio::test]
+async fn apply_refuses_responsibility_on_unknown_bare_role() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_, _, sk_h, kid_h) = setup(&c).await;
+    let b = note_with(
+        serde_json::json!([{"actor_id": kid_h, "role": "curated",
+                            "responsibility": {"held_by": kid_h}}]),
+        &kid_h,
+        Uuid::now_v7(),
+    );
+    let signed = sign(&b, &sk_h).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, &kid_h, "attested", &sk_h).unwrap();
+    let vk = sk_h.verifying_key().to_bytes().to_vec();
+    let err = c
+        .execute(APPLY3, &[&signed.signed_bytes, &token, &vk])
+        .await
+        .expect_err("responsibility on an unprefixed unknown role is never-lawful");
+    let m = db_msg(&err);
+    assert!(m.contains("bearing"), "legible coherence refusal: {m}");
 }
 
 /// Responsibility on a known-CONTRIBUTORY role is never-lawful under any schema
