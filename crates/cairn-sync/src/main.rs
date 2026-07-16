@@ -84,6 +84,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "029_hlc_collision_log",
         include_str!("../../../db/029_hlc_collision_log.sql"),
     ),
+    // The clinical-plane seq cursor (issue #196): event_log.seq +
+    // sync_state.last_seq + sync_quarantine.refused_seq. do_pull cursors on seq
+    // (never the skip-prone HLC watermark) + cmd_run does a periodic full sweep.
+    (
+        "036_clinical_sync_seq",
+        include_str!("../../../db/036_clinical_sync_seq.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -1499,24 +1506,24 @@ fn hex_prefix(digest: &[u8]) -> String {
 /// legibly instead.
 fn connect_checked(conn: &str) -> R<postgres::Client> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
-    // Probe the NEWEST piece of the schema each side needs (the `acked` column
-    // and the sync_state floor), not just table existence — a pen created by an
-    // earlier revision of db/021 would pass a bare to_regclass check and then
-    // fail at runtime instead.
+    // Probe the NEWEST piece of the schema this binary needs — the db/036 seq
+    // cursor (event_log.seq + sync_quarantine.refused_seq) — not just table
+    // existence: a DB created by an earlier revision would pass a bare to_regclass
+    // check and then fail at runtime (the do_pull cursor reads these columns).
     let ok: bool = client
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                            WHERE table_name='sync_quarantine'
-                              AND column_name='acked')
+                            WHERE table_name='event_log'
+                              AND column_name='seq')
                 AND EXISTS (SELECT 1 FROM information_schema.columns
-                            WHERE table_name='sync_state'
-                              AND column_name='quarantine_floor_wall')",
+                            WHERE table_name='sync_quarantine'
+                              AND column_name='refused_seq')",
             &[],
         )?
         .get(0);
     if !ok {
         return Err(
-            "this database predates the sync-quarantine schema (db/021) this binary \
+            "this database predates the clinical seq-cursor schema (db/036) this binary \
              requires — run `cairn-sync init --conn <same URI>` (idempotent) to apply \
              the migrations, then retry"
                 .into(),
@@ -2493,6 +2500,36 @@ mod quarantine_tests {
         }
     }
 
+    /// db/036 (issue #196): the clinical seq cursor. event_log.seq (the monotonic
+    /// node-local insertion order the pull cursors on), sync_state.last_seq (the
+    /// per-peer checkpoint), and sync_quarantine.refused_seq (the seq-keyed
+    /// re-offer floor) must all exist after loading the SCHEMA subset.
+    #[test]
+    fn db036_adds_seq_columns() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base); // loads the whole SCHEMA subset
+        let ok: bool = c
+            .query_one(
+                "SELECT
+                   EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='event_log'       AND column_name='seq')
+               AND EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='sync_state'      AND column_name='last_seq')
+               AND EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='sync_quarantine' AND column_name='refused_seq')",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert!(
+            ok,
+            "db/036 must add event_log.seq, sync_state.last_seq, sync_quarantine.refused_seq"
+        );
+    }
+
     /// Unwrap a pull that must fail as a PullIntegrityError; returns (message, metrics).
     fn pull_integrity_err(
         c: &mut postgres::Client,
@@ -2990,30 +3027,39 @@ mod quarantine_tests {
         assert_eq!(listing[0]["acked"], false);
     }
 
-    /// An upgraded binary against a database that predates db/021 must fail fast
-    /// and legibly (point at `init`), not limp into a freeze-livelock at the first
-    /// refused frame (#110 review finding 4).
+    /// An upgraded binary against a database that predates db/036 (the clinical seq
+    /// cursor) must fail fast and legibly (point at `init`), not limp into a runtime
+    /// failure when do_pull reads the missing seq columns (#110 review finding 4,
+    /// re-pointed at the db/036 marker for #196).
     #[test]
-    fn connect_checked_fails_legibly_on_pre_quarantine_schema() {
+    fn connect_checked_fails_legibly_on_pre_seq_schema() {
         let Some(base) = cs() else {
             eprintln!("skipped: set CAIRN_TEST_PG");
             return;
         };
         let mut c = locked_client(&base);
 
-        c.batch_execute("DROP TABLE sync_quarantine").unwrap();
+        // Knock the seq cursor off event_log — the shape a pre-db/036 DB is in.
+        // connect_checked only CONNECTS + probes (it does not reload the schema),
+        // so the missing column is not silently re-added under it.
+        c.batch_execute("ALTER TABLE event_log DROP COLUMN seq")
+            .unwrap();
         // (No unwrap_err: postgres::Client is not Debug, so destructure by hand.)
         let err = match connect_checked(&base) {
-            Ok(_) => panic!("connect_checked must refuse a pre-db/021 schema"),
+            Ok(_) => panic!("connect_checked must refuse a pre-db/036 schema"),
             Err(e) => e.to_string(),
         };
         assert!(
             err.contains("cairn-sync init"),
             "error must tell the operator the remedy, got: {err}"
         );
+        assert!(
+            err.contains("db/036"),
+            "error must name the missing migration, got: {err}"
+        );
 
         // Restore for whatever suite runs next under the shared lock.
-        c.batch_execute(include_str!("../../../db/021_sync_quarantine.sql"))
+        c.batch_execute(include_str!("../../../db/036_clinical_sync_seq.sql"))
             .unwrap();
         assert!(
             connect_checked(&base).is_ok(),
