@@ -10,6 +10,9 @@
 
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use hkdf::Hkdf;
+use sha2::Sha256;
+use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use crate::EventError;
@@ -145,6 +148,131 @@ pub fn unseal_event_payload(
 struct Inner {
     payload: serde_json::Value,
     plaintext_twin: String,
+}
+
+// ── ADR-0052 §4: the DEK wrap plane (X25519 + HKDF ECIES) ─────────────────────
+//
+// WHY THIS EXISTS: the seal above proves a body CAN be crypto-shredded, but only
+// if something other than the DB holds the DEK's custody path — a DEK sitting in
+// the same database as its ciphertext gives the erasure ladder no teeth (a dump
+// of one table hands you both halves). The wrap plane gives every node a second,
+// INDEPENDENT keypair (X25519, for ECIES-style asymmetric wrap) derived from the
+// same master seed as its Ed25519 signing identity via domain-separated HKDF —
+// so there is no new enrollment ceremony, the existing ADR-0026 seal/recovery
+// escrow already covers this secret, and a plain DB backup (which only ever sees
+// the PUBLIC half via the unwrap-key cert) can never unwrap a DEK on its own.
+
+/// HKDF domain tag for deriving the node's X25519 unwrap secret from its
+/// Ed25519 seed. One master secret, two INDEPENDENT keys (signing vs unwrap)
+/// — so the existing ADR-0026 seal/recovery escrow covers DEK custody with
+/// no new ceremony, and a DB backup (public half only) can never unwrap.
+const UNWRAP_KEY_HKDF_INFO: &[u8] = b"cairn-node-unwrap-x25519-v1";
+/// KEK-derivation + AEAD domain tag for the DEK wrap itself.
+const WRAP_AAD_CONTEXT: &[u8] = b"cairn-dek-wrap-v1";
+
+/// Derive a node's X25519 unwrap secret from its Ed25519 signing seed via
+/// domain-separated HKDF-SHA256. Deterministic (same seed -> same secret) but
+/// cryptographically independent of the seed's use as a signing key: the
+/// distinct info tag means an attacker who somehow recovered the unwrap secret
+/// still learns nothing about the Ed25519 signing key, and vice versa.
+pub fn derive_unwrap_secret(seed: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+    let hk = Hkdf::<Sha256>::new(None, seed);
+    let mut out = Zeroizing::new([0u8; 32]);
+    hk.expand(UNWRAP_KEY_HKDF_INFO, out.as_mut())
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    out
+}
+
+/// The X25519 public half of an unwrap secret — safe to publish (in the
+/// unwrap-key cert) and to store in the DB, since it alone can never unwrap.
+pub fn unwrap_public(unwrap_secret: &[u8; 32]) -> [u8; 32] {
+    PublicKey::from(&StaticSecret::from(*unwrap_secret)).to_bytes()
+}
+
+/// Derive the AEAD key-encryption-key for one wrap from a DH shared secret.
+/// Salt binds BOTH public halves (ephemeral + recipient) so the KEK is unique
+/// to this (eph, recipient) pair even across many wraps to the same recipient;
+/// the info tag domain-separates the wrap KEK from every other HKDF use in
+/// this crate.
+fn wrap_kek(shared: &[u8], eph_pub: &[u8; 32], recipient_pub: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+    let mut salt = Vec::with_capacity(64);
+    salt.extend_from_slice(eph_pub);
+    salt.extend_from_slice(recipient_pub);
+    let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
+    let mut out = Zeroizing::new([0u8; 32]);
+    hk.expand(WRAP_AAD_CONTEXT, out.as_mut())
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    out
+}
+
+/// ECIES-style wrap: fresh ephemeral X25519 keypair -> Diffie-Hellman with the
+/// recipient's public half -> HKDF KEK -> XChaCha20-Poly1305 over the DEK.
+/// Returns a 104-byte blob: `eph_pub(32) ‖ nonce(24) ‖ ct+tag(48)`. Only the
+/// recipient's SECRET half (held in the node daemon, never the DB) can unwrap
+/// — a database holding only wrapped DEKs plus the public unwrap-key cert
+/// cannot recover any DEK on its own (the erasability property this whole
+/// plane exists to provide).
+pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
+    let mut eph_bytes = Zeroizing::new([0u8; 32]);
+    getrandom::fill(eph_bytes.as_mut())
+        .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+    let eph = StaticSecret::from(*eph_bytes);
+    let eph_pub = PublicKey::from(&eph).to_bytes();
+    let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pub));
+
+    let kek = wrap_kek(shared.as_bytes(), &eph_pub, recipient_pub);
+    let mut nonce = [0u8; 24];
+    getrandom::fill(&mut nonce).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(kek.as_ref()));
+    let ct = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: dek.as_slice(),
+                aad: WRAP_AAD_CONTEXT,
+            },
+        )
+        .map_err(|_| EventError::Seal("wrap encrypt failure".into()))?;
+
+    let mut out = Vec::with_capacity(32 + 24 + ct.len());
+    out.extend_from_slice(&eph_pub);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Open a wrapped DEK with the recipient's secret unwrap key. Errors on
+/// malformed length, wrong recipient, or tampering — every failure is a
+/// refusal, never a silent fallback (mirrors `unseal_event_payload`'s posture).
+pub fn unwrap_dek(
+    wrapped: &[u8],
+    unwrap_secret: &[u8; 32],
+) -> Result<Zeroizing<[u8; 32]>, EventError> {
+    if wrapped.len() != 32 + 24 + 32 + 16 {
+        return Err(EventError::Seal("malformed wrapped DEK length".into()));
+    }
+    let eph_pub: [u8; 32] = wrapped[..32].try_into().expect("sliced 32 bytes");
+    let nonce = &wrapped[32..56];
+    let ct = &wrapped[56..];
+
+    let me = StaticSecret::from(*unwrap_secret);
+    let my_pub = PublicKey::from(&me).to_bytes();
+    let shared = me.diffie_hellman(&PublicKey::from(eph_pub));
+    let kek = wrap_kek(shared.as_bytes(), &eph_pub, &my_pub);
+
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(kek.as_ref()));
+    let pt = cipher
+        .decrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: ct,
+                aad: WRAP_AAD_CONTEXT,
+            },
+        )
+        .map_err(|_| EventError::Seal("wrap open failed (wrong recipient or tampered)".into()))?;
+    let mut dek = Zeroizing::new([0u8; 32]);
+    dek.copy_from_slice(&pt);
+    Ok(dek)
 }
 
 #[cfg(test)]
@@ -323,5 +451,40 @@ mod tests {
         // the field name rather than an exact sentence so the test tracks the
         // *behavior* (refuses, names the field) and not one message's wording.
         assert!(err.to_string().contains("plaintext_twin"));
+    }
+
+    // ── ADR-0052 §4: the DEK wrap plane (X25519 + HKDF ECIES) ──────────────────
+
+    fn seed_fixture(tag: u8) -> [u8; 32] {
+        std::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(tag))
+    }
+
+    #[test]
+    fn wrap_then_unwrap_round_trips_the_dek() {
+        let seed = seed_fixture(1);
+        let secret = derive_unwrap_secret(&seed);
+        let public = unwrap_public(&secret);
+        let dek = dek_fixture();
+        let wrapped = wrap_dek_for(&dek, &public).unwrap();
+        assert_eq!(wrapped.len(), 32 + 24 + 32 + 16); // eph ‖ nonce ‖ ct+tag
+        let opened = unwrap_dek(&wrapped, &secret).unwrap();
+        assert_eq!(opened.as_slice(), &dek);
+    }
+
+    #[test]
+    fn unwrap_fails_for_the_wrong_recipient() {
+        let s_a = derive_unwrap_secret(&seed_fixture(1));
+        let s_b = derive_unwrap_secret(&seed_fixture(2));
+        let wrapped = wrap_dek_for(&dek_fixture(), &unwrap_public(&s_a)).unwrap();
+        assert!(unwrap_dek(&wrapped, &s_b).is_err());
+    }
+
+    #[test]
+    fn derivation_is_deterministic_and_domain_separated_from_signing() {
+        let seed = seed_fixture(1);
+        let a = derive_unwrap_secret(&seed);
+        let b = derive_unwrap_secret(&seed);
+        assert_eq!(a.as_slice(), b.as_slice());
+        assert_ne!(a.as_slice(), &seed); // never the raw signing seed
     }
 }

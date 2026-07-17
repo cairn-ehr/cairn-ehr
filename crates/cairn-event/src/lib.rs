@@ -110,6 +110,10 @@ pub const CTX_EVENT: SigningContext = SigningContext("application/cairn-event+cb
 pub const CTX_ATTESTATION: SigningContext = SigningContext("application/cairn-attestation+cbor");
 /// Out-of-band pairing offers ([`PairingBundle`]) — ADR-0017 §7.
 pub const CTX_PAIRING: SigningContext = SigningContext("application/cairn-pairing+cbor");
+/// Unwrap-key certificates (ADR-0052 §4) — binds a node's X25519 DEK-unwrap
+/// public key to its Ed25519 identity, in its own context so it can never be
+/// replayed as an event, attestation, or pairing bundle.
+pub const CTX_UNWRAP_KEY: SigningContext = SigningContext("application/cairn-unwrap-key+cbor");
 
 /// Build a COSE_Sign1 over `payload` bound to `ctx` (the one generic signer every
 /// public signing function delegates to, so threading the context cannot be
@@ -669,6 +673,54 @@ pub fn verify_pairing_bundle(token: &[u8]) -> Result<PairingBundle, EventError> 
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(b)
+}
+
+/// The unwrap-key certificate's CBOR payload: binds a node's X25519 DEK-unwrap
+/// public key to its Ed25519 identity. `kid` duplicates the COSE protected key
+/// id inside the signed payload (checked for equality at verify, same shape as
+/// [`PairingBundle`]'s `pubkey_hex`/fingerprint binding) so the payload alone
+/// is self-describing to an offline reader — principle 11 — without requiring
+/// COSE-header tooling to know who issued it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct UnwrapKeyCertBody {
+    kid: String,
+    x25519_pub: String,
+}
+
+/// A node's signed unwrap-key certificate: binds its X25519 public unwrap key
+/// to its Ed25519 identity, in its own ADR-0040 signing context so it can
+/// never be replayed as an event or attestation. CBOR payload:
+/// {"kid": <hex ed25519 pub>, "x25519_pub": <hex 32 bytes>}.
+pub fn sign_unwrap_key_cert(sk: &SigningKey, x25519_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
+    let body = UnwrapKeyCertBody {
+        kid: hex::encode(sk.verifying_key().to_bytes()),
+        x25519_pub: hex::encode(x25519_pub),
+    };
+    let mut payload = Vec::new();
+    ciborium::into_writer(&body, &mut payload).map_err(|e| EventError::Cbor(e.to_string()))?;
+    cose_sign1_in_context(payload, sk, CTX_UNWRAP_KEY)
+}
+
+/// Verify a cert and return (signer hex kid, X25519 public key). Self-described
+/// like [`verify_pairing_bundle`]: the claimed signer comes from the blob's own
+/// protected header (`cose_verify1_self_described`, one parse), and the payload
+/// must be honest about that key — a cert whose `kid` field disagrees with the
+/// key that actually signed it is rejected exactly as `verify_pairing_bundle`
+/// rejects a bundle lying about its own pubkey (`SignerKeyMismatch`), so the
+/// returned kid can never be forged attribution.
+pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, [u8; 32]), EventError> {
+    let (key_bytes, payload) = cose_verify1_self_described(bytes, CTX_UNWRAP_KEY)?;
+    let body: UnwrapKeyCertBody =
+        ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
+    if body.kid != hex::encode(key_bytes) {
+        return Err(EventError::SignerKeyMismatch);
+    }
+    let raw = hex::decode(&body.x25519_pub)
+        .map_err(|_| EventError::Seal("malformed x25519_pub hex".into()))?;
+    let x25519_pub: [u8; 32] = raw
+        .try_into()
+        .map_err(|_| EventError::Seal("x25519_pub must be 32 bytes".into()))?;
+    Ok((body.kid, x25519_pub))
 }
 
 #[cfg(test)]
@@ -1468,6 +1520,29 @@ mod tests {
         assert_ne!(CTX_EVENT, CTX_ATTESTATION);
         assert_ne!(CTX_EVENT, CTX_PAIRING);
         assert_ne!(CTX_ATTESTATION, CTX_PAIRING);
+    }
+
+    // ── ADR-0052 §4: the unwrap-key certificate (CTX_UNWRAP_KEY) ───────────────
+
+    #[test]
+    fn unwrap_key_cert_round_trips_and_binds_signer() {
+        let sk = generate_key().unwrap().0;
+        let xpub: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let cert = sign_unwrap_key_cert(&sk, &xpub).unwrap();
+        let (kid, got) = verify_unwrap_key_cert(&cert).unwrap();
+        assert_eq!(kid, hex::encode(sk.verifying_key().to_bytes()));
+        assert_eq!(got, xpub);
+    }
+
+    #[test]
+    fn unwrap_key_cert_rejects_event_context_tokens() {
+        // ADR-0040 domain separation: an ordinary event signed blob must not
+        // verify as an unwrap-key cert.
+        let (sk, kid) = generate_key().unwrap();
+        let mut body = sample();
+        body.signer_key_id = kid;
+        let ev = sign(&body, &sk).unwrap();
+        assert!(verify_unwrap_key_cert(&ev.signed_bytes).is_err());
     }
 
     // The cross-context tests above all use CTX_EVENT as the wrong context; this
