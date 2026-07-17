@@ -148,7 +148,10 @@ slice's perf bench (§8).
   be silently reconstructable from ordinary DB backups"* requirement, now structural). Deriving the
   unwrap key from the signing seed means the **existing [ADR-0026](0026-node-durability-and-disaster-recovery.md)
   op-passphrase + recovery-code escrow already covers it** — no new key-management mechanism, and KEK
-  escrow is therefore **mandatory** (KEK loss = whole-record loss).
+  escrow is therefore **mandatory** (KEK loss = whole-record loss). The public half is published as a
+  signed **unwrap-key certificate**: CBOR body `{"kid": <hex ed25519 pub>, "x25519_pub": <hex 32B>}`,
+  signed under its own ADR-0040 signing context `CTX_UNWRAP_KEY` (`"application/cairn-unwrap-key+cbor"`)
+  so it can never be replayed as an event, attestation, or pairing bundle.
 - **Sync:** custody travels as a **wrapped-DEK sidecar** beside the event on the clinical wire (additive
   wire field, ADR-0012). For erasable-tier rows the sender re-wraps the DEK for any admitted peer
   (custody follows admission trust). Sequestered rows ship ciphertext + safety projection only; no

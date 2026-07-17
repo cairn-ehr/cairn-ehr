@@ -219,6 +219,16 @@ pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>,
     let eph = StaticSecret::from(*eph_bytes);
     let eph_pub = PublicKey::from(&eph).to_bytes();
     let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pub));
+    // Contributory-behaviour check (Thái "thaidn" Dương's attack): a
+    // MITM who substitutes recipient_pub with the all-zero identity point (or
+    // another low-order point) can force the shared secret to a small,
+    // publicly-known value, defeating confidentiality while both sides still
+    // believe they share a secret. Refuse BEFORE deriving a KEK from it.
+    if !shared.was_contributory() {
+        return Err(EventError::Seal(
+            "non-contributory X25519 point refused".into(),
+        ));
+    }
 
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, recipient_pub);
     let mut nonce = [0u8; 24];
@@ -258,18 +268,35 @@ pub fn unwrap_dek(
     let me = StaticSecret::from(*unwrap_secret);
     let my_pub = PublicKey::from(&me).to_bytes();
     let shared = me.diffie_hellman(&PublicKey::from(eph_pub));
+    // Same contributory-behaviour check as `wrap_dek_for`'s DH — a wrapped
+    // blob carrying a low-order `eph_pub` (forged or corrupted in transit)
+    // must not be allowed to produce a small, guessable shared secret here
+    // either; both sides of every DH in this plane are checked symmetrically.
+    if !shared.was_contributory() {
+        return Err(EventError::Seal(
+            "non-contributory X25519 point refused".into(),
+        ));
+    }
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, &my_pub);
 
     let cipher = XChaCha20Poly1305::new(Key::from_slice(kek.as_ref()));
-    let pt = cipher
-        .decrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: ct,
-                aad: WRAP_AAD_CONTEXT,
-            },
-        )
-        .map_err(|_| EventError::Seal("wrap open failed (wrong recipient or tampered)".into()))?;
+    // Hardening (mirrors `unseal_event_payload`'s convention): the decrypted
+    // DEK bytes are transient secret material before they're copied into the
+    // fixed-size Zeroizing output below — wrap the AEAD output itself so it is
+    // wiped on drop rather than left in freed heap memory for a later read.
+    let pt: Zeroizing<Vec<u8>> = Zeroizing::new(
+        cipher
+            .decrypt(
+                XNonce::from_slice(nonce),
+                Payload {
+                    msg: ct,
+                    aad: WRAP_AAD_CONTEXT,
+                },
+            )
+            .map_err(|_| {
+                EventError::Seal("wrap open failed (wrong recipient or tampered)".into())
+            })?,
+    );
     let mut dek = Zeroizing::new([0u8; 32]);
     dek.copy_from_slice(&pt);
     Ok(dek)
@@ -486,5 +513,49 @@ mod tests {
         let b = derive_unwrap_secret(&seed);
         assert_eq!(a.as_slice(), b.as_slice());
         assert_ne!(a.as_slice(), &seed); // never the raw signing seed
+    }
+
+    // Review fix (round 2, IMPORTANT 1): the all-zero encoding is Curve25519's
+    // canonical identity point. Mallory's classic attack (Thái Dương): replace
+    // a party's public key with zero and the DH shared secret becomes zero too
+    // — a publicly-known value, defeating confidentiality for anyone who can
+    // intercept and substitute the recipient_pub. `wrap_dek_for` must refuse
+    // this BEFORE it ever derives a KEK from that all-zero shared secret.
+    #[test]
+    fn wrap_rejects_all_zero_recipient_pub_as_non_contributory() {
+        let recipient_pub = [0u8; 32];
+        let err = wrap_dek_for(&dek_fixture(), &recipient_pub).unwrap_err();
+        assert!(err.to_string().contains("non-contributory"));
+    }
+
+    // Review fix (round 2, MINOR 4d): two wraps of the identical DEK to the
+    // identical recipient must differ (fresh ephemeral keypair + fresh nonce
+    // each call) — otherwise a passive observer could correlate repeated
+    // wraps of the same secret across events.
+    #[test]
+    fn two_wraps_of_same_dek_produce_different_blobs() {
+        let secret = derive_unwrap_secret(&seed_fixture(1));
+        let public = unwrap_public(&secret);
+        let dek = dek_fixture();
+        let w1 = wrap_dek_for(&dek, &public).unwrap();
+        let w2 = wrap_dek_for(&dek, &public).unwrap();
+        assert_ne!(w1, w2);
+        // Both still open to the same DEK, so the difference is fresh
+        // randomness, not a correctness bug.
+        assert_eq!(unwrap_dek(&w1, &secret).unwrap().as_slice(), &dek);
+        assert_eq!(unwrap_dek(&w2, &secret).unwrap().as_slice(), &dek);
+    }
+
+    // Review fix (round 2, MINOR 4e): a single flipped bit anywhere in a
+    // wrapped blob (ephemeral pub, nonce, or ciphertext+tag) must be refused,
+    // never silently accepted or decrypted to garbage.
+    #[test]
+    fn unwrap_fails_on_a_bit_flipped_wrapped_blob() {
+        let secret = derive_unwrap_secret(&seed_fixture(1));
+        let public = unwrap_public(&secret);
+        let mut wrapped = wrap_dek_for(&dek_fixture(), &public).unwrap();
+        let last = wrapped.len() - 1; // flip a bit in the AEAD tag itself
+        wrapped[last] ^= 0xFF;
+        assert!(unwrap_dek(&wrapped, &secret).is_err());
     }
 }
