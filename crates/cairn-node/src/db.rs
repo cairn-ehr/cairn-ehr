@@ -189,6 +189,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "036_clinical_sync_seq",
         include_str!("../../../db/036_clinical_sync_seq.sql"),
     ),
+    // ADR-0052 born-sealed custody plane: node_unwrap_key / event_dek / event_clear /
+    // erasure_shred_log + erasure.shred.asserted registration (issues #189/#92).
+    (
+        "037_born_sealed",
+        include_str!("../../../db/037_born_sealed.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
