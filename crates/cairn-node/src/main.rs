@@ -762,6 +762,28 @@ enum Cmd {
         #[command(flatten)]
         attest: AttestFlags,
     },
+
+    /// Rung-3 audited crypto-shred (ADR-0005 / ADR-0052): irreversibly destroy an
+    /// event's custody + derived plaintext, leaving behind a signed, LEGIBLE tombstone
+    /// ("existed -> destroyed, basis Z") that outlives every key. Device-additive by
+    /// default; `--attest-as` makes a human personally responsible for the erasure
+    /// DECISION itself — the tombstone is then authored and signed by that human, not
+    /// the node (mirrors `identify-patient --link`'s human-attributed shape).
+    Shred {
+        /// The event to destroy.
+        event: Uuid,
+        /// Why (the audited "why" — non-empty; the db/037 floor requires it).
+        #[arg(long)]
+        basis: String,
+        /// Take personal responsibility for this erasure decision: a human key that
+        /// authors, signs, and attests the tombstone itself. Absent -> device-additive
+        /// (the node signs; no vouch demanded).
+        #[arg(long)]
+        attest_as: Option<PathBuf>,
+        /// Passphrase to unseal --attest-as (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        attest_passphrase: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1924,6 +1946,50 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("attested medication thread {medication_id} (event {event_id})");
+        }
+        Cmd::Shred {
+            event,
+            basis,
+            attest_as,
+            attest_passphrase,
+        } => {
+            // Pre-authoring validation before any key is unsealed or connection opened —
+            // same discipline as validate_term/validate_identify_method.
+            cairn_node::shred::validate_basis(&basis)?;
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // Owner ceremony: the node key must be an enrolled actor to author the
+            // device-additive tombstone (idempotent; a no-op once already enrolled).
+            // Harmless even on the attested path, where the human — not the node — ends
+            // up as the tombstone's signer.
+            ensure_registration_actor(&db, &node_kid).await?;
+            // Build a throwaway AttestFlags value purely to reuse the existing
+            // resolve_attester/attest_params machinery verbatim (same functions every
+            // medication verb uses): `basis`/`note` are hardcoded absent because a
+            // shred's own required --basis already IS the vouch's "why" — a SEPARATE
+            // AttestFlags --basis on this command would collide with it (clap forbids
+            // two args with the same id) and would double up on meaning besides.
+            let flags = AttestFlags {
+                attest_as,
+                attest_passphrase,
+                basis: None,
+                note: None,
+            };
+            let resolved = resolve_attester(&db, &flags).await?;
+            let params = attest_params(&resolved, &flags);
+            let shred_event_id = cairn_node::shred::shred_event(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                event,
+                &basis,
+                params.as_ref(),
+            )
+            .await?;
+            println!("shredded {event}; tombstone event {shred_event_id}");
         }
     }
     Ok(())

@@ -18,5 +18,6 @@ pub mod pairing;
 pub mod photo_evidence;
 pub mod restore;
 pub mod seal;
+pub mod shred;
 pub mod sync;
 pub mod transport;
