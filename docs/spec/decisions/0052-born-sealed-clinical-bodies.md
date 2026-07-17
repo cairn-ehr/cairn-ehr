@@ -296,6 +296,11 @@ proving the collisions closed while they are cheap. PR number pending.
 - **Seal/unseal cost lands on the Pi-class latency budget** ([ADR-0001](0001-fat-postgres-thin-daemon.md)).
   Per-event DEKs are the simplest keystore but the largest key count; whether a per-episode hierarchy is
   needed is the deferred measurement, now with a bench hook.
+  *Measurement (`cairn-sync bench-seal`, ~1.5 KB medication body, N=10 000, release, Apple-Silicon dev box):*
+  seal ≈ 15 µs, wrap ≈ 42 µs, unwrap ≈ 40 µs, unseal ≈ 12 µs → **whole seal→wrap→unwrap→unseal pipeline
+  ≈ 0.11 ms/event**, ~37× under the Bet-B ~4 ms budget; the X25519 DEK-wrap dominates, the symmetric body
+  AEAD is cheapest. Per-event DEKs are comfortably affordable on a dev-class node — the Pi-class re-run
+  (the actual budget target) stays the deferred per-episode-hierarchy question.
 - **KEK escrow is mandatory** — born-sealed means KEK loss is whole-record loss. This is a real
   operational obligation the default now carries (mitigated by riding ADR-0026's existing recovery
   machinery).

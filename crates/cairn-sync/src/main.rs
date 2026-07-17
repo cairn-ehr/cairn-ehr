@@ -1073,6 +1073,112 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     Ok(())
 }
 
+/// A representative ~1.5 KB clear medication payload for the seal microbench. Shaped like
+/// a real `clinical.medication.asserted` body (substance / dose / sig / provenance) and
+/// padded to ~1.5 KB with a realistic free-text instruction block, so the AEAD measures a
+/// clinically-representative body size rather than a toy `{"a":1}`. Pure — no crypto
+/// material here (the recipient keypair is generated fresh in `cmd_bench_seal`).
+fn representative_medication_payload() -> serde_json::Value {
+    // A believable, sizeable sig/notes block — the kind of free text a real medication
+    // record carries — repeated to bring the whole body to roughly 1.5 KB.
+    let instructions = "Take one tablet by mouth twice daily with food. Do not stop \
+        abruptly; review renal function and HbA1c at the next visit. Counsel on \
+        hypoglycaemia awareness and GI side effects. "
+        .repeat(7);
+    serde_json::json!({
+        "medication_id": uuid::Uuid::now_v7().to_string(),
+        "substance": {"term": "metformin", "inn_code": "6809"},
+        "formulation": "tablet",
+        "dose": {"amount": "500", "unit": "mg"},
+        "sig": "one BD",
+        "info_source": "patient-reported",
+        "started": {"value": "2023", "precision": "year"},
+        "instructions": instructions,
+    })
+}
+
+/// ADR-0052 seal-plane microbench (Task 13): time the four born-sealed crypto stages a
+/// single sealed event traverses on the write+replicate path, over a ~1.5 KB
+/// representative medication body, and print ns/op per stage.
+///
+///   seal   = `seal_event_payload`  (fresh DEK, XChaCha20-Poly1305 over payload + twin)
+///   wrap   = `wrap_dek_for`        (ECIES X25519 → HKDF KEK → AEAD over the DEK)
+///   unwrap = `unwrap_dek`          (the puller/apply-door opening the re-wrapped DEK)
+///   unseal = `unseal_event_payload`(open the sealed body with its DEK)
+///
+/// This feeds the deferred per-event-vs-per-episode DEK-granularity question (ADR-0005 /
+/// ADR-0052) and checks the whole pipeline against the Bet-B ~4 ms p95 latency budget:
+/// it is AEAD over ~1.5 KB, so it must land microseconds-scale, orders below the budget.
+///
+/// House rule 6: the recipient unwrap keypair is DERIVED at runtime from a freshly
+/// generated seed (`generate_key`), never a hard-coded byte literal — and the seal/wrap
+/// primitives draw their own fresh DEK + nonce from the OS RNG internally, so nothing in
+/// this bench presents hard-coded cryptographic material to the scanner.
+fn cmd_bench_seal(iters: usize) -> R<()> {
+    use cairn_event::seal::{
+        derive_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek, unwrap_public,
+        wrap_dek_for,
+    };
+
+    let payload = representative_medication_payload();
+    let payload_bytes = serde_json::to_vec(&payload)?.len();
+    let twin = "metformin 500 mg tablet — one BD, patient-reported, started 2023";
+    let event_id = uuid::Uuid::now_v7().to_string();
+
+    // Recipient (node) unwrap keypair, derived at runtime from a fresh random seed.
+    let (sk, _kid) = cairn_event::generate_key()?;
+    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let public = unwrap_public(&secret);
+
+    // Stage 1: seal the body under a fresh per-event DEK.
+    let t = Instant::now();
+    let mut last_seal = seal_event_payload(&payload, twin, &event_id)?;
+    for _ in 1..iters {
+        last_seal = seal_event_payload(&payload, twin, &event_id)?;
+        std::hint::black_box(&last_seal);
+    }
+    let seal_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+    let (container, dek) = last_seal;
+
+    // Stage 2: wrap the DEK for the recipient node (the custody sidecar).
+    let t = Instant::now();
+    let mut wrapped = wrap_dek_for(&dek, &public)?;
+    for _ in 1..iters {
+        wrapped = wrap_dek_for(&dek, &public)?;
+        std::hint::black_box(&wrapped);
+    }
+    let wrap_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    // Stage 3: unwrap the DEK with the recipient's secret (apply door / puller).
+    let t = Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(unwrap_dek(&wrapped, &secret)?);
+    }
+    let unwrap_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    // Stage 4: unseal the body with its DEK (the clear-view read).
+    let t = Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(unseal_event_payload(&container, &dek, &event_id)?);
+    }
+    let unseal_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "op": "bench_seal",
+            "iters": iters,
+            "payload_bytes": payload_bytes,
+            "seal_ns": seal_ns,
+            "wrap_ns": wrap_ns,
+            "unwrap_ns": unwrap_ns,
+            "unseal_ns": unseal_ns,
+            "pipeline_ns": seal_ns + wrap_ns + unwrap_ns + unseal_ns,
+        })
+    );
+    Ok(())
+}
+
 fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     let bytes = std::fs::read(file)?;
     let addr = blob_address(&bytes);
@@ -2533,6 +2639,7 @@ USAGE (all take --conn <postgres-uri>):
   bench-insert --conn URI --node NAME --key PATH [--count N]   (Bet B B1: maintained-write latency)
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
+  bench-seal  [--iters N]                                      (ADR-0052: seal/wrap/unwrap/unseal ns/op, no DB)
   sign-stdin  --key PATH    (read JSON EventBody on stdin, write hex COSE_Sign1 on stdout)
   attest-stdin --key PATH    (read JSON AttestationBody on stdin, write hex COSE_Sign1 token on stdout)
   key-id      --key PATH    (print the hex Ed25519 public key / kid for the key file)
@@ -2604,6 +2711,11 @@ fn main() -> R<()> {
             flag(&args, "--dek-iters")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100000),
+        )?,
+        "bench-seal" => cmd_bench_seal(
+            flag(&args, "--iters")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10000),
         )?,
         "pull" => cmd_pull(
             &need(conn),

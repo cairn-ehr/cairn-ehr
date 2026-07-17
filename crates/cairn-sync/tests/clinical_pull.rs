@@ -21,6 +21,7 @@ use cairn_node::medication::{
     assert_medication, cease_medication, change_dose, reconcile_medications, AssertMedicationInput,
     AttestParams, CeaseMedicationInput, ChangeDoseInput, ReconcileInput,
 };
+use cairn_node::shred::shred_event;
 use std::path::Path;
 use std::process::{Child, Command};
 use tempfile::TempDir;
@@ -44,6 +45,7 @@ const LISTEN_FREEZE: &str = "127.0.0.1:39718";
 const LISTEN_LOWHLC: &str = "127.0.0.1:39719";
 const LISTEN_SWEEP: &str = "127.0.0.1:39720";
 const LISTEN_REPULL: &str = "127.0.0.1:39721";
+const LISTEN_SEALED: &str = "127.0.0.1:39722";
 
 /// A realistic PAST HLC wall (ms since epoch, ≈ 2026-06-20) — safely below "now",
 /// so A's remote-apply door accepts it (the drift ceiling bounds FUTURE walls only).
@@ -295,6 +297,57 @@ fn wait_listening(addr: &str) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     panic!("serve did not start listening on {addr}");
+}
+
+/// Count the ADR-0052 custody rows a node holds for one content event: the wrapped
+/// DEK (`event_dek`) and the operational clear shadow (`event_clear`). `(1, 1)` means
+/// full crypto-shred custody + a projectable clear view; `(0, 0)` means the node holds
+/// only the sealed ciphertext (never replicated, or shredded). Mirrors seal_apply.rs.
+async fn custody_count(c: &Client, event_id: &str) -> (i64, i64) {
+    let dek: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_dek WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let clear: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    (dek, clear)
+}
+
+/// Count the `medication_statement` projection rows for one immortal thread. The seal
+/// scrub is content_address-PRECISE, so this per-thread count is what distinguishes a
+/// shredded thread (0) from a surviving sibling (1) on the very same chart.
+async fn statement_count_for_med(c: &Client, medication_id: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM medication_statement WHERE medication_id = $1::text::uuid",
+        &[&medication_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// Resolve a thread's `medication_id` to its content event's id via the clear shadow.
+/// `assert_medication` returns the THREAD id (immortal, §3.15), but a shred targets the
+/// CONTENT EVENT — so the test needs this hop. Reads `event_clear` (present only where
+/// the node holds custody), which the author always does after a local sealed submit.
+async fn content_event_id_of(c: &Client, medication_id: Uuid) -> String {
+    c.query_one(
+        "SELECT event_id::text FROM event_clear WHERE body ->> 'medication_id' = $1",
+        &[&medication_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
 #[tokio::test]
@@ -1028,4 +1081,456 @@ async fn repull_from_zero_converges() {
         .get(0);
     assert_eq!(count1, count2, "re-pull from 0 is idempotent (ADR-0004)");
     assert!(count1 >= 3, "non-vacuous: the chart really replicated");
+}
+
+/// ADR-0052 born-sealed erasability, proven END TO END through the REAL binaries
+/// (issues #189 / #92). This is the walking-skeleton thread the whole slice was for:
+///
+///   1. A seal-submits a medication assert (born sealed under a fresh per-event DEK);
+///      it projects on A with custody.
+///   2. serve A / pull B (real `cairn-sync` binary): the custody sidecar re-wraps the
+///      DEK for B, so B gains crypto-shred custody, the clear shadow, AND the projection
+///      — A→B projection equality for a SEALED body. We also open B's re-wrapped DEK
+///      with B's OWN secret in-process, proving the custody is genuinely B's, not A's.
+///   3. A crypto-shreds the content event (patient-request basis). Custody, shadow, and
+///      projection vanish on A; the append-only log rows and their signatures survive.
+///   4. pull B again: the tombstone propagates and B's apply door scrubs B's custody +
+///      shadow + projection too — the shred travelled, not just the content.
+///   5. RESTORE HALF (§3.8 "restore replays the shred"): wipe B entirely and full-sweep
+///      from A. B re-admits the sealed row but A's serve EXCLUDES the shredded DEK (the
+///      wire-level half of the guarantee), so B converges to NO custody, NO projection,
+///      tombstone + shred-log present. Set-union re-delivery resurrects NOTHING.
+///
+/// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
+#[tokio::test]
+async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    // --- provision both nodes; enroll the same actors on each (registry does not sync) ---
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    // Per-node key files for the custody wire (see write_key_file). A's serve runs under
+    // sk_d — the key that SEALS A's medication below — so it can unwrap A's per-event DEK
+    // to re-wrap it for B. B pulls under its OWN key and pre-registers the matching unwrap
+    // key, so B's apply door takes custody of the sealed body and can project it.
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
+    // --- 1. A seal-submits a medication assert; it projects on A with custody ---
+    let mut a = a; // the orchestrators take &mut Client (they open transactions)
+    let patient = Uuid::now_v7();
+    let metformin = AssertMedicationInput {
+        term: "metformin",
+        inn_code: None,
+        formulation: Some("tablet"),
+        dose_amount: Some("500"),
+        dose_unit: Some("mg"),
+        sig: Some("one BD"),
+        info_source: "patient-reported",
+        started: Some("2023"),
+        started_precision: Some("year"),
+    };
+    let med = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
+        .await
+        .unwrap();
+    let content_eid = content_event_id_of(&a, med).await;
+    // A holds full custody + the projection, and the log row is sealed ciphertext.
+    assert_eq!(
+        custody_count(&a, &content_eid).await,
+        (1, 1),
+        "A holds custody + shadow for its own sealed assert"
+    );
+    assert_eq!(
+        statement_count_for_med(&a, med).await,
+        1,
+        "A projects the sealed medication through its clear shadow"
+    );
+    let a_sealed: bool = a
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(a_sealed, "the authored medication row is born sealed");
+
+    // --- 2. the wire: serve A, pull B; the custody sidecar flows ---
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_SEALED,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_SEALED);
+    let pull_b = || {
+        // A closure so the shred-propagation pull below reuses the exact same wire.
+        Command::new(bin)
+            .args([
+                "pull",
+                "--conn",
+                &base_b,
+                "--peer",
+                LISTEN_SEALED,
+                "--peer-name",
+                "node-a",
+                "--key",
+                &key_b,
+            ])
+            .output()
+            .expect("run pull")
+    };
+    let pull = pull_b();
+    assert!(
+        pull.status.success(),
+        "pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull.stdout),
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    // B gained custody, shadow, and projection for the SEALED body.
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (1, 1),
+        "B took custody + shadow of the sealed body it replicated"
+    );
+    let b_sealed: bool = b
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(b_sealed, "B stored the ciphertext, sealed");
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        1,
+        "B projected the sealed medication via its own clear shadow"
+    );
+    // A→B projection equality for the sealed event: both nodes read identically.
+    assert_eq!(
+        snapshot(&a).await,
+        snapshot(&b).await,
+        "A and B render identical medication read-state for the sealed body"
+    );
+
+    // The custody B holds is genuinely B's OWN: open B's re-wrapped DEK with B's secret
+    // (derived from sk_b exactly as the daemon derives it), then unseal B's stored
+    // ciphertext with it. If A's DEK had merely been copied across, B's secret could not
+    // open it — this is the crux of the born-sealed custody wire.
+    let wrapped_for_b: Vec<u8> = b
+        .query_one(
+            "SELECT dek_wrapped FROM event_dek WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let b_secret = cairn_event::seal::derive_unwrap_secret(&sk_b.to_bytes());
+    let b_dek = cairn_event::seal::unwrap_dek(&wrapped_for_b, &b_secret)
+        .expect("B's own secret opens the DEK re-wrapped for B");
+    let b_body_text: String = b
+        .query_one(
+            "SELECT body::text FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let b_container: serde_json::Value = serde_json::from_str(&b_body_text).unwrap();
+    let (_payload, twin) =
+        cairn_event::seal::unseal_event_payload(&b_container, &b_dek, &content_eid)
+            .expect("B opens the sealed body with its own DEK");
+    assert!(
+        twin.contains("metformin"),
+        "the twin under B's seal is the real clinical text, got: {twin}"
+    );
+
+    // --- 3. A crypto-shreds the content event (patient-request basis) ---
+    let target: Uuid = content_eid.parse().unwrap();
+    shred_event(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        target,
+        "patient request — no retention basis",
+        None,
+    )
+    .await
+    .expect("A authors + submits the audited crypto-shred");
+
+    // On A: custody, shadow, projection gone; the append-only log rows + signature stay.
+    assert_eq!(
+        custody_count(&a, &content_eid).await,
+        (0, 0),
+        "the shred scrubbed A's custody + shadow"
+    );
+    assert_eq!(
+        statement_count_for_med(&a, med).await,
+        0,
+        "the shred scrubbed A's projection"
+    );
+    let a_log_rows: i64 = a
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        a_log_rows, 2,
+        "A keeps BOTH append-only rows: the sealed target and the tombstone"
+    );
+    let a_verifies: bool = a
+        .query_one(
+            "SELECT cairn_verify(signed_bytes) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        a_verifies,
+        "the sealed row's signature over ciphertext survives the shred on A"
+    );
+
+    // --- 4. pull B again: the shred propagates and scrubs B's derived surfaces ---
+    let pull2 = pull_b();
+    assert!(
+        pull2.status.success(),
+        "second pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull2.stdout),
+        String::from_utf8_lossy(&pull2.stderr)
+    );
+    let b_shred_log: i64 = b
+        .query_one(
+            "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        b_shred_log, 1,
+        "the tombstone travelled: B logged the shred"
+    );
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (0, 0),
+        "the propagated shred scrubbed B's custody + shadow"
+    );
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        0,
+        "the propagated shred scrubbed B's projection"
+    );
+    let b_log_rows: i64 = b
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        b_log_rows, 2,
+        "B keeps both append-only rows after the shred (target + tombstone)"
+    );
+    let b_verifies: bool = b
+        .query_one(
+            "SELECT cairn_verify(signed_bytes) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        b_verifies,
+        "the sealed row's signature still verifies on B after the shred"
+    );
+
+    // --- 5. RESTORE HALF (§3.8): wipe B entirely, full-sweep from A ---
+    // A genuinely-empty B re-registers its custody capability (owner ceremony) and pulls
+    // everything from seq 0. The proof is that B is FULLY custody-capable, so the ONLY
+    // reason it gains no custody for the sealed row is that A's serve refuses to emit a
+    // shredded event's DEK — set-union may re-deliver the ciphertext forever, the key
+    // never comes back.
+    reset(&b).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+    register_unwrap_key(&b, &sk_b).await;
+    let full = Command::new(bin)
+        .args([
+            "pull",
+            "--full",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_SEALED,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run full pull");
+    assert!(
+        full.status.success(),
+        "full pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&full.stdout),
+        String::from_utf8_lossy(&full.stderr)
+    );
+
+    // The sealed row is re-admitted…
+    let readmitted: bool = b
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .expect("the sealed row was re-admitted by set-union")
+        .get(0);
+    assert!(
+        readmitted,
+        "the ciphertext re-delivers (append-only set-union)"
+    );
+    // …but NO custody (A's serve excluded the shredded DEK) and NO projection…
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (0, 0),
+        "restore grants NO custody: A's serve excludes a shredded event's DEK (wire-level shred)"
+    );
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        0,
+        "restore resurrects NO projection — nothing to project without the clear shadow"
+    );
+    // …and the shred log is present again (rebuilt from the re-delivered tombstone).
+    let restored_shred_log: i64 = b
+        .query_one(
+            "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        restored_shred_log, 1,
+        "restore replays the shred: the tombstone + shred log come back, the content does not"
+    );
+}
+
+/// Never-over-erase precision pin (Task 9 minor, reviews requested). `cairn_execute_shred`
+/// scrubs by `content_address`, so shredding ONE thread must leave a SIBLING thread on the
+/// SAME chart fully intact — custody, shadow, and projection. Single node (no sync needed):
+/// author two sealed asserts, shred one, assert the other survives.
+///
+/// Skips unless CAIRN_TEST_PG (node A) is set.
+#[tokio::test]
+async fn shred_one_thread_leaves_the_sibling_projection_intact() {
+    let Some(base_a) = cs_a() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+
+    let mut a = a;
+    let patient = Uuid::now_v7();
+    let metformin = AssertMedicationInput {
+        term: "metformin",
+        inn_code: None,
+        formulation: Some("tablet"),
+        dose_amount: Some("500"),
+        dose_unit: Some("mg"),
+        sig: Some("one BD"),
+        info_source: "patient-reported",
+        started: Some("2023"),
+        started_precision: Some("year"),
+    };
+    // Two sealed threads on ONE chart. `victim` will be shredded; `survivor` must not be
+    // touched — its content_address is different, and the scrub is content_address-precise.
+    let victim = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
+        .await
+        .unwrap();
+    let atorva = AssertMedicationInput {
+        term: "atorvastatin",
+        dose_amount: Some("40"),
+        ..metformin
+    };
+    let survivor = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &atorva, None)
+        .await
+        .unwrap();
+    let victim_eid = content_event_id_of(&a, victim).await;
+
+    // Both project before the shred.
+    assert_eq!(statement_count_for_med(&a, victim).await, 1);
+    assert_eq!(statement_count_for_med(&a, survivor).await, 1);
+
+    // Shred ONLY the victim thread's content event.
+    shred_event(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        victim_eid.parse().unwrap(),
+        "patient request — no retention basis",
+        None,
+    )
+    .await
+    .expect("the victim thread is shredded");
+
+    // The victim is scrubbed…
+    assert_eq!(
+        custody_count(&a, &victim_eid).await,
+        (0, 0),
+        "the shredded thread loses custody + shadow"
+    );
+    assert_eq!(
+        statement_count_for_med(&a, victim).await,
+        0,
+        "the shredded thread's projection is gone"
+    );
+    // …and the sibling survives, whole.
+    let survivor_eid = content_event_id_of(&a, survivor).await;
+    assert_eq!(
+        custody_count(&a, &survivor_eid).await,
+        (1, 1),
+        "the sibling thread keeps its custody + shadow — the scrub never over-erases"
+    );
+    assert_eq!(
+        statement_count_for_med(&a, survivor).await,
+        1,
+        "the sibling thread's projection survives untouched (content_address-precise scrub)"
+    );
 }
