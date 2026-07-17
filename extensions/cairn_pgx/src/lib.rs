@@ -118,7 +118,9 @@ fn cairn_unseal_body(container: pgrx::JsonB, dek: &[u8], event_id: &str) -> Opti
     let dek: &[u8; 32] = dek.try_into().ok()?;
     let (payload, twin) =
         cairn_event::seal::unseal_event_payload(&container.0, dek, event_id).ok()?;
-    Some(pgrx::JsonB(serde_json::json!({ "payload": payload, "plaintext_twin": twin })))
+    Some(pgrx::JsonB(
+        serde_json::json!({ "payload": payload, "plaintext_twin": twin }),
+    ))
 }
 
 /// ADR-0052: wrap a DEK for a recipient's X25519 public unwrap key. VOLATILE
@@ -126,9 +128,11 @@ fn cairn_unseal_body(container: pgrx::JsonB, dek: &[u8], event_id: &str) -> Opti
 /// half — a DB backup can never reconstruct custody.
 #[pg_extern(volatile, parallel_safe)]
 fn cairn_wrap_dek(dek: &[u8], unwrap_pub: &[u8]) -> Vec<u8> {
-    let dek: &[u8; 32] = dek.try_into()
+    let dek: &[u8; 32] = dek
+        .try_into()
         .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: DEK must be 32 bytes"));
-    let unwrap_pub: &[u8; 32] = unwrap_pub.try_into()
+    let unwrap_pub: &[u8; 32] = unwrap_pub
+        .try_into()
         .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: unwrap_pub must be 32 bytes"));
     cairn_event::seal::wrap_dek_for(dek, unwrap_pub)
         .unwrap_or_else(|e| pgrx::error!("cairn_wrap_dek: {e}"))
@@ -292,8 +296,14 @@ mod tests {
             cairn_event::seal::seal_event_payload(&payload, "the twin", "evt-9").unwrap();
         let inner = Spi::get_one_with_args::<pgrx::JsonB>(
             "SELECT cairn_unseal_body($1::jsonb, $2, $3)",
-            &[container.to_string().into(), dek.as_slice().into(), "evt-9".into()],
-        ).unwrap().unwrap();
+            &[
+                container.to_string().into(),
+                dek.as_slice().into(),
+                "evt-9".into(),
+            ],
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(inner.0["plaintext_twin"], serde_json::json!("the twin"));
         assert_eq!(inner.0["payload"]["medication_id"], serde_json::json!("m1"));
     }
@@ -307,8 +317,13 @@ mod tests {
         let wrong: [u8; 32] = std::array::from_fn(|i| i as u8);
         let got = Spi::get_one_with_args::<pgrx::JsonB>(
             "SELECT cairn_unseal_body($1::jsonb, $2, $3)",
-            &[container.to_string().into(), wrong.as_slice().into(), "e".into()],
-        ).unwrap();
+            &[
+                container.to_string().into(),
+                wrong.as_slice().into(),
+                "e".into(),
+            ],
+        )
+        .unwrap();
         assert!(got.is_none());
     }
 
@@ -324,7 +339,9 @@ mod tests {
         let wrapped = Spi::get_one_with_args::<Vec<u8>>(
             "SELECT cairn_wrap_dek($1, $2)",
             &[dek.as_slice().into(), public.as_slice().into()],
-        ).unwrap().unwrap();
+        )
+        .unwrap()
+        .unwrap();
         let opened = cairn_event::seal::unwrap_dek(&wrapped, &secret).unwrap();
         assert_eq!(opened.as_slice(), &dek);
     }

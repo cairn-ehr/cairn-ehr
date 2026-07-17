@@ -5,10 +5,13 @@
 //!
 //! Drives `shred::shred_event` directly (not the CLI binary) — the same convention
 //! every other verb test in this crate uses (see medication.rs).
-use cairn_event::{generate_key, SigningKey};
+use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
-use cairn_node::medication::{assert_medication, AssertMedicationInput, AttestParams};
-use cairn_node::shred::shred_event;
+use cairn_node::medication::{
+    assert_medication, attest_medication_thread, correct_dose, reconcile_medications,
+    AssertMedicationInput, AttestParams, CorrectDoseInput, ReconcileInput,
+};
+use cairn_node::shred::{build_shred_body, shred_event};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -120,6 +123,21 @@ async fn assert_event_id(c: &Client, medication_id: Uuid) -> Uuid {
 
 async fn count(c: &Client, sql: &str, id: Uuid) -> i64 {
     c.query_one(sql, &[&id.to_string()]).await.unwrap().get(0)
+}
+
+/// "Are medication threads `a` and `b` in the same reconciliation group?" — true iff both
+/// have a medication_group_member row with the SAME group_id (an absent/NULL row ⇒ a thread
+/// standing alone ⇒ not grouped). Used to prove a shredded reconciliation stops merging them.
+async fn grouped(c: &Client, a: Uuid, b: Uuid) -> bool {
+    c.query_one(
+        "SELECT COALESCE(\
+            (SELECT ga.group_id FROM medication_group_member ga WHERE ga.medication_id = $1::text::uuid) \
+          = (SELECT gb.group_id FROM medication_group_member gb WHERE gb.medication_id = $2::text::uuid), false)",
+        &[&a.to_string(), &b.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
 #[tokio::test]
@@ -399,6 +417,301 @@ async fn shred_event_with_attest_scrubs_and_records_human_responsibility() {
     assert_eq!(
         contributor["responsibility"]["held_by"], kid_h,
         "the #195 binding: responsibility.held_by must name the verified attester"
+    );
+}
+
+/// Code-review finding #2 (HIGH): `cairn_execute_shred` scrubbed only medication_statement,
+/// medication_cessation, and medication_dose_event — leaving the DERIVED PLAINTEXT of the
+/// other four verbs (dose-correction, reconciliation, separation, attestation) readable
+/// after a shred that reported success. A retention-ceiling / subject-erasure sweep over a
+/// real thread would leave the corrected dose (amount/unit/reason), the reconciliation
+/// provenance, and the attester identity fully readable in their projection tables — the
+/// exact ADR-0005 rung-3 / #92(b) failure ("a shred that leaves the body's text searchable
+/// is not a shred"). This pins that shredding EACH verb's event scrubs its projection row,
+/// and that the derived medication_group_member membership is recomputed so the erased
+/// reconciliation no longer visibly merges the two threads.
+#[tokio::test]
+async fn shred_scrubs_every_derived_projection_not_just_statement() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup_node_and_human(&c).await;
+    // setup_node_and_human truncates only statement/cessation; clear the other medication
+    // projections so the counts below are exact regardless of sibling-test residue.
+    c.batch_execute(
+        "DO $$ BEGIN \
+           IF to_regclass('public.medication_dose_event') IS NOT NULL THEN TRUNCATE medication_dose_event; END IF; \
+           IF to_regclass('public.medication_dose_correction') IS NOT NULL THEN TRUNCATE medication_dose_correction; END IF; \
+           IF to_regclass('public.medication_reconciliation') IS NOT NULL THEN TRUNCATE medication_reconciliation; END IF; \
+           IF to_regclass('public.medication_group_member') IS NOT NULL THEN TRUNCATE medication_group_member; END IF; \
+           IF to_regclass('public.medication_attestation') IS NOT NULL THEN TRUNCATE medication_attestation; END IF; \
+         END $$;",
+    )
+    .await
+    .unwrap();
+    let patient = Uuid::now_v7();
+
+    // Two threads, so a reconciliation has something to link.
+    let med_a = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .expect("assert A");
+    let med_b = assert_medication(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+    )
+    .await
+    .expect("assert B");
+    let dose_a = assert_event_id(&c, med_a).await; // the initial dose == the assert event id
+
+    // (a) dose-correction on thread A's initial dose → medication_dose_correction row.
+    let corr_in = CorrectDoseInput {
+        dose_amount: Some("60"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: Some("mis-keyed"),
+        strike: &[],
+        note: None,
+        info_source: None,
+    };
+    let corr_evt = correct_dose(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        med_a,
+        dose_a,
+        &corr_in,
+        None,
+    )
+    .await
+    .expect("correct_dose");
+
+    // (b) reconcile A and B → medication_reconciliation edge + medication_group_member.
+    let recon_in = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: Some("brand vs generic"),
+    };
+    let recon_evt = reconcile_medications(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        med_a,
+        med_b,
+        &recon_in,
+        None,
+    )
+    .await
+    .expect("reconcile");
+
+    // (c) attest thread A (human-vouched) → medication_attestation row.
+    let attest_params = AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: None,
+        note: None,
+    };
+    let attest_evt =
+        attest_medication_thread(&mut c, &sk_d, "test-node", &attest_params, patient, med_a)
+            .await
+            .expect("attest");
+
+    // Pre-shred: every derived projection row exists (else the assertions below are vacuous).
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_dose_correction WHERE patient_id = $1::text::uuid",
+            patient
+        )
+        .await,
+        1,
+        "the dose-correction projected before the shred"
+    );
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM medication_reconciliation WHERE low = $1::text::uuid OR high = $1::text::uuid", med_a).await,
+        1, "the reconciliation edge projected before the shred");
+    assert!(
+        grouped(&c, med_a, med_b).await,
+        "A and B are grouped before the shred"
+    );
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_attestation WHERE event_id = $1::text::uuid",
+            attest_evt
+        )
+        .await,
+        1,
+        "the attestation projected before the shred"
+    );
+
+    // Shred each verb's event (device-additive).
+    for (evt, basis) in [
+        (corr_evt, "retention ceiling"),
+        (recon_evt, "retention ceiling"),
+        (attest_evt, "retention ceiling"),
+    ] {
+        shred_event(&mut c, &sk_d, &kid_d, "test-node", evt, basis, None)
+            .await
+            .unwrap_or_else(|e| panic!("shred of {evt} succeeds: {e}"));
+    }
+
+    // Post-shred: every derived projection row is gone — no clinical plaintext survives.
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_dose_correction WHERE patient_id = $1::text::uuid",
+            patient
+        )
+        .await,
+        0,
+        "the shred scrubbed the dose-correction plaintext (amount/unit/reason)"
+    );
+    assert_eq!(
+        count(&c, "SELECT count(*) FROM medication_reconciliation WHERE low = $1::text::uuid OR high = $1::text::uuid", med_a).await,
+        0, "the shred scrubbed the reconciliation edge + provenance");
+    assert!(
+        !grouped(&c, med_a, med_b).await,
+        "the shredded reconciliation no longer visibly merges A and B (group recomputed)"
+    );
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_attestation WHERE event_id = $1::text::uuid",
+            attest_evt
+        )
+        .await,
+        0,
+        "the shred scrubbed the attestation (attester identity + commitment)"
+    );
+}
+
+/// Submit a plaintext (NON-sealed) `note.added` and return its event id. A generic
+/// non-clinical body: `sealed = false`, no DEK, its payload lives plaintext in the
+/// append-only log forever — exactly the kind of event crypto-shred CANNOT erase.
+async fn submit_plaintext_note(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid) -> Uuid {
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "note.added".into(),
+        schema_version: "note/1".into(),
+        hlc: Hlc {
+            wall: 1_782_000_000_000, // ≈ 2026-06-21, safely in the past (drift ceiling ok)
+            counter: 0,
+            node_origin: "test-node".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"text": "a plaintext clinician note"}),
+        attachments: vec![],
+        plaintext_twin: Some("a plaintext clinician note".into()),
+    };
+    let signed = sign(&body, sk).unwrap();
+    let id: String = c
+        .query_one("SELECT submit_event($1)::text", &[&signed.signed_bytes])
+        .await
+        .expect("note.added submits")
+        .get(0);
+    id.parse().unwrap()
+}
+
+/// Code-review finding #5 (MEDIUM): crypto-shred can only erase a BORN-SEALED body (by
+/// destroying its per-event DEK). A plaintext / un-sealed event — a non-clinical body
+/// (plaintext by necessity) or a foreign pre-ADR-0052 clinical event admitted via sync — has
+/// NO DEK and its body sits in the append-only log forever. Shredding it and reporting success
+/// is a FALSE erasure: the operator is told an erasure happened that cannot happen. Both the
+/// product path (`shred_event`, legible early refusal) AND the strict submit floor (db/005,
+/// unbypassable per principle 12) must REFUSE. The APPLY door stays lenient — it can never
+/// RAISE on a verifiable event — so this is a submit-door / authoring-time guard only.
+#[tokio::test]
+async fn shred_refuses_a_non_sealed_plaintext_target() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let target = submit_plaintext_note(&c, &sk, &kid, patient).await;
+    let sealed: bool = c
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&target.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!sealed, "the note is a plaintext, non-sealed target");
+
+    // (a) Product path: the CLI orchestrator refuses with a legible message.
+    let err = shred_event(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        target,
+        "retention ceiling",
+        None,
+    )
+    .await
+    .expect_err("crypto-shred must refuse a non-sealed target");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("non-sealed") || msg.contains("plaintext") || msg.contains("crypto-shred"),
+        "the refusal explains a plaintext event cannot be crypto-shredded, got: {msg}"
+    );
+    let logged = count(
+        &c,
+        "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+        target,
+    )
+    .await;
+    assert_eq!(
+        logged, 0,
+        "no false shred was recorded for the un-shreddable target"
+    );
+
+    // (b) The floor is unbypassable: a hand-built tombstone submitted DIRECTLY (bypassing the
+    //     shred_event pre-check) is still refused by submit_event itself.
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let tombstone = build_shred_body(
+        Uuid::now_v7(),
+        patient,
+        target,
+        "retention ceiling",
+        &kid,
+        None,
+        hlc,
+    );
+    let signed = sign(&tombstone, &sk).unwrap();
+    let floor_err = c
+        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect_err("the submit floor refuses a shred of a non-sealed target directly");
+    // tokio_postgres wraps a RAISE as a generic "db error"; read the real message.
+    let floor_msg = floor_err
+        .as_db_error()
+        .map(|d| d.message().to_string())
+        .unwrap_or_else(|| floor_err.to_string());
+    assert!(
+        floor_msg.contains("non-sealed") || floor_msg.contains("plaintext"),
+        "the DB floor names the plaintext-target refusal, got: {floor_msg}"
     );
 }
 

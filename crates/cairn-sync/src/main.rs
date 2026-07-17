@@ -2418,12 +2418,34 @@ fn rewrap_custody_for_peer(
     };
     local_deks
         .iter()
-        .map(|slot| {
+        .enumerate()
+        .map(|(i, slot)| {
+            // A None slot means no custody must travel (unsealed / no local DEK / shredded):
+            // that is normal, so stay silent.
             let hexed = slot.as_deref()?;
-            let local = hex::decode(hexed).ok()?;
-            let dek = cairn_event::seal::unwrap_dek(&local, own_secret).ok()?;
-            let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub).ok()?;
-            Some(hex::encode(rewrapped))
+            // A PRESENT local DEK that fails to re-wrap, though, is an operator-visible
+            // degradation — the event still syncs but its custody silently vanishes, blanking
+            // the sealed projection on every puller. The usual cause is a serve `--key` whose
+            // derived unwrap secret does not match the registered node_unwrap_key (a misconfig,
+            // or an un-re-wrapped key rotation). Log it rather than fail silently — mirrors the
+            // pull-side "sidecar DEK failed to open — admitting WITHOUT custody" line.
+            let rewrap = || -> Option<String> {
+                let local = hex::decode(hexed).ok()?;
+                let dek = cairn_event::seal::unwrap_dek(&local, own_secret).ok()?;
+                let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub).ok()?;
+                Some(hex::encode(rewrapped))
+            };
+            if let Some(s) = rewrap() {
+                Some(s)
+            } else {
+                eprintln!(
+                    "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving this \
+                     event WITHOUT custody. Check the serve --key matches the node's registered \
+                     unwrap key (a mismatched key or un-re-wrapped rotation blanks sealed \
+                     projections on every puller)."
+                );
+                None
+            }
         })
         .collect()
 }

@@ -104,13 +104,25 @@ ON CONFLICT (event_type) DO NOTHING;
 --    custody + derived plaintext + provenance-precise projection rows. The
 --    event_log row is NEVER touched (append-only; signature still verifies).
 --
---    Both medication_statement AND medication_cessation carry content_address
---    (db/031:149, db/031:225), so both are in scope here; the dose-seed row is
---    keyed by the assert event's own id (db/032). No ADR-0052 deferral needed.
+--    A shred that leaves the shredded body's text readable in ANY projection is not
+--    a shred (ADR-0005 rung 3 / #92(b) mandatory-index invalidation). EVERY medication
+--    verb writes derived plaintext, so EVERY verb's projection is in scope — not only the
+--    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
+--    key differs per table: medication_statement / medication_cessation / medication_dose_correction /
+--    medication_reconciliation / medication_attestation all carry the PRODUCING event's
+--    content_address (db/031/032/033/034) so they scrub by `content_address = v_ca`; the
+--    initial-dose seed row is keyed by the assert event's own id (db/032); and
+--    medication_group_member is a DERIVED table (recomputed from the standing reconciled
+--    edges, like person_member — db/033), so a shredded reconciliation must delete its edge
+--    AND recompute the affected component so the erased merge stops grouping the two threads.
+--    Overlay winners from OTHER, unshredded events survive (never over-erase).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_execute_shred(p_target uuid, p_shred_event uuid, p_basis text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE v_ca BYTEA;
+DECLARE
+    v_ca BYTEA;
+    v_lo uuid;
+    v_hi uuid;
 BEGIN
     INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
     VALUES (p_target, p_shred_event, p_basis)
@@ -133,6 +145,28 @@ BEGIN
         END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;
+        END IF;
+        -- Dose-CORRECTION overlay (db/032/035): the corrected amount/unit/effective/reason/note
+        -- is clinical plaintext keyed by the corrected point but carrying THIS event's CA.
+        IF to_regclass('public.medication_dose_correction') IS NOT NULL THEN
+            DELETE FROM medication_dose_correction WHERE content_address = v_ca;
+        END IF;
+        -- Reconciliation/separation edge (db/033): scrub the standing edge THIS event won, then
+        -- recompute the group around BOTH endpoints so medication_group_member no longer reflects
+        -- the erased merge. Recomputing both endpoints is always correct (an unlink splits a
+        -- component into at most the piece containing lo and the piece containing hi — the same
+        -- invariant db/018's patient_link recompute relies on).
+        IF to_regclass('public.medication_reconciliation') IS NOT NULL THEN
+            DELETE FROM medication_reconciliation WHERE content_address = v_ca
+                RETURNING low, high INTO v_lo, v_hi;
+            IF v_lo IS NOT NULL AND to_regclass('public.medication_group_member') IS NOT NULL THEN
+                PERFORM cairn_recompute_medication_group(v_lo);
+                PERFORM cairn_recompute_medication_group(v_hi);
+            END IF;
+        END IF;
+        -- Attestation overlay (db/034): attester identity + reviewed commitment/count.
+        IF to_regclass('public.medication_attestation') IS NOT NULL THEN
+            DELETE FROM medication_attestation WHERE content_address = v_ca;
         END IF;
     END IF;
     -- The initial-dose seed row is keyed by the assert event's own id (db/032).

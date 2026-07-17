@@ -429,6 +429,7 @@ DECLARE
     v_att_key      BYTEA;
     v_actor_ids    BYTEA[];
     v_actor_id     BYTEA;
+    v_target_sealed BOOLEAN;          -- erasure arm: is the shred TARGET born-sealed? (finding #5)
     -- ADR-0052 born-sealed arm.
     v_sealed       BOOLEAN := false;  -- did the body arrive as the sealed container?
     b_clear        JSONB;             -- the CLEAR view floor checks + projections run on
@@ -681,14 +682,23 @@ BEGIN
     PERFORM cairn_learn_attachment_refs(b);
 
     -- 10. The erasure plane: an admitted shred tombstone EXECUTES here (ADR-0052).
-    --     Strict door: the target must exist locally (shredding the unknown is a
-    --     user error at authoring time; the APPLY door is lenient — a shred may
-    --     arrive before its target on the wire). The tombstone is plaintext by
-    --     design (v_sealed is false for erasure.*), so b_clear = b here.
+    --     Strict door: the target must exist locally AND be born-sealed. Shredding the
+    --     unknown is a user error at authoring time; shredding a NON-sealed (plaintext)
+    --     target is a FALSE erasure — crypto-shred destroys a per-event DEK, but a plaintext
+    --     body has none and stays readable in the append-only log forever, so reporting an
+    --     erasure that cannot happen is refused here (code-review finding #5, ADR-0052 §6).
+    --     The APPLY door is lenient on BOTH (a shred may arrive before its target on the wire,
+    --     and a non-conformant peer's shred of a plaintext event must not freeze the watermark)
+    --     — it degrades honestly instead. The tombstone itself is plaintext by design (v_sealed
+    --     is false for erasure.*), so b_clear = b here.
     IF v_type = 'erasure.shred.asserted' THEN
-        IF NOT EXISTS (SELECT 1 FROM event_log
-                       WHERE event_id = (b_clear -> 'payload' ->> 'target_event_id')::uuid) THEN
+        SELECT sealed INTO v_target_sealed FROM event_log
+            WHERE event_id = (b_clear -> 'payload' ->> 'target_event_id')::uuid;
+        IF NOT FOUND THEN
             RAISE EXCEPTION 'submit_event: erasure.shred targets unknown event % — nothing to shred here', b_clear -> 'payload' ->> 'target_event_id';
+        END IF;
+        IF NOT v_target_sealed THEN
+            RAISE EXCEPTION 'submit_event: erasure.shred targets a non-sealed (plaintext) event % — crypto-shred can only erase a born-sealed body (no DEK to destroy; the body is in the append-only log). Refusing a false erasure (ADR-0052 §6)', b_clear -> 'payload' ->> 'target_event_id';
         END IF;
         PERFORM cairn_execute_shred(
             (b_clear -> 'payload' ->> 'target_event_id')::uuid,

@@ -158,9 +158,17 @@ CLI (`cairn-node shred`, rung-3 audited crypto-shred + plaintext tombstone; log 
 sealed sync **with custody** converges → **shred propagates** → **cold-peer restore replays the shred log
 before projecting, resurrects nothing**. Bench ~**0.11 ms/event**, ~37× under Bet-B. ADR-0049 §9
 false-fresh gate: `reviewed_count` promoted (sealed threads only) to a safe-direction withholding tripwire.
-TDD RED-first; workspace **761/0** + fmt + clippy + docs clean; **final whole-branch review = READY TO
-MERGE**. Nine follow-ups filed ([#230](https://github.com/cairn-ehr/cairn-ehr/issues/230)–[#238](https://github.com/cairn-ehr/cairn-ehr/issues/238),
-all deferred/hardening — none gating). **Operational caveat:** the born-sealed floor refuses plaintext
+TDD RED-first. Nine follow-ups filed ([#230](https://github.com/cairn-ehr/cairn-ehr/issues/230)–[#238](https://github.com/cairn-ehr/cairn-ehr/issues/238), deferred/hardening).
+
+**Post-review fix pass (2026-07-18, `/review` on PR #239 → `/fixall`).** A subsequent whole-diff code review found the branch's own "READY TO MERGE / none gating / fmt clean" verdict had **missed five issues**, all now fixed on-branch (RED-first where behavioural):
+- **[GATING, critical] db/018 sync-wedge** — `patient_link_apply()` cast `(p->>'subject_a')::uuid` in its DECLARE block, which runs *before* the `IF NEW.sealed THEN RETURN NULL` seal guard; a wrongly-sealed `identity.link` with a non-UUID top-level `subject_a` (any enrolled peer can mint one) raised `invalid input syntax for type uuid` at apply, aborting `apply_remote_event` on a verifiable event → **frozen sync watermark, permanent wedge**. Fix: casts moved below the guard.
+- **[GATING, high] db/037 incomplete shred** — `cairn_execute_shred` scrubbed only `medication_statement`/`medication_cessation`/`medication_dose_event`, leaving **dose-correction, reconciliation, and attestation plaintext readable after a shred** (4 of 7 verbs) — defeating the ADR-0005 rung-3 / #92(b) guarantee. Fix: scrub all three by `content_address` + recompute `medication_group_member` (derived table) so the erased merge stops grouping threads.
+- **[CI-red] rustfmt** — the workspace-**excluded** `cairn_pgx` extension was unformatted (CI's separate `cargo fmt --manifest-path …` gate was red; the "fmt clean" claim only ran `cargo fmt --all`). Fixed.
+- **[medium] false erasure** — crypto-shred of a **non-sealed (plaintext) target** reported success while its body stayed in the append-only log (no DEK to destroy). Now refused at both the `cairn-node shred` pre-check and the unbypassable db/005 floor.
+- **[low] silent serve-side degradation** — a serve-side per-DEK re-wrap failure (e.g. serve `--key` ≠ registered unwrap key) silently blanked custody; now logged.
+- **[#231 reaffirmed]** the unwrap-cert has no trust-set check, so **born-sealed ships _erasability_, not confidentiality**, until cert-kid pinning lands — flagged as the load-bearing gap, not a buried TODO. (No code change; already filed.)
+
+Verified: cairn-node **298/0**, cairn-sync **51/0** (subset + 2-node E2E need cairn_pgx **≥ 0.3.0** on BOTH test DBs), cairn-event **140/0**, +3 new RED-first regression tests; **fmt + clippy clean on both trees** (workspace + `cairn_pgx`). **Operational caveat:** the born-sealed floor refuses plaintext
 `clinical.*` at submit, so pre-ADR-0052 plaintext clinical dev/PoC rigs must be **WIPED** — old logs won't
 cross (moot pre-production). **Next:** #204 [C3] attribution-token / authoring-human slice, then P4 #188
 [D1] schema-version guard.

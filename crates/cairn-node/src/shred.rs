@@ -93,13 +93,17 @@ pub fn build_shred_body(
 
 /// Author, sign, and submit the audited crypto-shred tombstone for `target`.
 ///
-/// 1. Reads `target`'s `patient_id` so the tombstone lands in the SAME chart as the
-///    event it describes (an orphaned tombstone would be unfindable from the record it
-///    is about). Refuses legibly — "nothing to shred" — when `target` is not present
-///    locally; the strict door (`cairn_check_erasure_shred`/`cairn_execute_shred`,
-///    db/037, wired through db/005's erasure arm) double-checks this itself, so this
-///    pre-check is a legibility aid, not the enforcement (defense in depth — the same
-///    discipline `resolve_attester` uses for `--attest-as`).
+/// 1. Reads `target`'s `patient_id` (so the tombstone lands in the SAME chart as the
+///    event it describes — an orphaned tombstone would be unfindable from the record it
+///    is about) AND its `sealed` flag. Refuses legibly — "nothing to shred" — when
+///    `target` is not present locally, and — "cannot crypto-shred a plaintext event" —
+///    when the target is NOT born-sealed: crypto-shred works by destroying a per-event
+///    DEK, and a plaintext body (any non-clinical event — plaintext by necessity — or a
+///    foreign pre-ADR-0052 clinical event) has none, so reporting success would be a
+///    FALSE erasure (its body stays in the append-only log). The strict door
+///    (db/005's erasure arm) enforces BOTH checks unbypassably itself, so this pre-check
+///    is a legibility aid, not the enforcement (defense in depth — the same discipline
+///    `resolve_attester` uses for `--attest-as`).
 /// 2. Builds the tombstone body: device-additive when `attest` is `None`, or authored
 ///    and signed by the human when `attest` is `Some` (see `build_shred_body`).
 /// 3. Signs and submits PLAINTEXT. `erasure.*` is exempt from the born-sealed floor
@@ -124,20 +128,31 @@ pub async fn shred_event(
     //    target's event_log row. `query_opt` (not `query_one`) so an unknown target is
     //    a clean `None`, not a driver error, letting us give the legible refusal below.
     let target_s = target.to_string();
-    let patient_s: Option<String> = client
+    let target_row: Option<(String, bool)> = client
         .query_opt(
-            "SELECT patient_id::text FROM event_log WHERE event_id = $1::text::uuid",
+            "SELECT patient_id::text, sealed FROM event_log WHERE event_id = $1::text::uuid",
             &[&target_s],
         )
         .await?
-        .map(|row| row.get(0));
+        .map(|row| (row.get(0), row.get(1)));
+    let (patient_s, target_sealed) = target_row.ok_or_else(|| {
+        anyhow::anyhow!(
+            "nothing to shred: event {target} is not present on this node — sync it \
+             first, or double-check the event id"
+        )
+    })?;
+    // Crypto-shred destroys a per-event DEK; a non-sealed (plaintext) target has none, so
+    // "shredding" it would delete only derived projections while its body stays readable in
+    // the append-only log forever — a false erasure. Refuse (the db/005 floor does too).
+    if !target_sealed {
+        anyhow::bail!(
+            "cannot crypto-shred event {target}: it is a non-sealed (plaintext) event — \
+             crypto-shred erases a body by destroying its per-event DEK, but a plaintext body \
+             has none and its content stays in the append-only log. Only born-sealed clinical \
+             bodies are crypto-shreddable (ADR-0052 §6)."
+        );
+    }
     let patient: Uuid = patient_s
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "nothing to shred: event {target} is not present on this node — sync it \
-                 first, or double-check the event id"
-            )
-        })?
         .parse()
         .with_context(|| format!("event {target}'s patient_id is not a valid uuid"))?;
 

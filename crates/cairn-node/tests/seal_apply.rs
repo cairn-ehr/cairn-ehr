@@ -188,6 +188,37 @@ fn shred_body(node_kid: &str, patient: Uuid, target: &str, hlc: Hlc) -> EventBod
     }
 }
 
+/// A HOSTILE `identity.link.asserted` whose payload claims `sealed=true` AND carries a
+/// MALFORMED top-level `subject_a` (a non-UUID string) — the exact shape a non-conformant
+/// / compromised enrolled peer can mint. A conformant node never seals a non-clinical body
+/// (the strict door refuses it), and a *well-formed* sealed container hides subject_a inside
+/// `ct` (so `p ->> 'subject_a'` is NULL and casts to NULL harmlessly). This shape puts a
+/// non-UUID at the TOP level, so patient_link_apply's DECLARE-block `(p ->> 'subject_a')::uuid`
+/// cast would raise BEFORE the seal guard — aborting apply on a verifiable event and wedging
+/// sync (code-review finding #1). Built by hand (not seal_event_payload) precisely to inject
+/// the top-level garbage field; no DEK travels (the exploit's no-custody path).
+fn malformed_sealed_link_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventBody {
+    let payload = serde_json::json!({
+        "sealed": true,
+        "subject_a": "not-a-uuid",
+        "subject_b": "also-not-a-uuid",
+        "provenance": "hostile-peer",
+    });
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "identity.link.asserted".into(),
+        schema_version: "identity.link/1".into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload,
+        attachments: vec![],
+        plaintext_twin: Some(seal_stub_twin("identity.link.asserted")),
+    }
+}
+
 /// Count the medication_statement rows projected for `patient`.
 async fn statement_count(c: &Client, patient: Uuid) -> i64 {
     c.query_one(
@@ -1067,4 +1098,79 @@ async fn sealed_non_clinical_admits_without_projection_or_wedge() {
         dob, 1,
         "the legit unsealed demographic projected — the apply door was never wedged"
     );
+}
+
+#[tokio::test]
+async fn sealed_identity_link_with_malformed_field_admits_without_wedge() {
+    // db/018 patient_link_apply cast-before-guard wedge (code-review finding #1). The seal
+    // guard `IF NEW.sealed THEN RETURN NULL` must fire BEFORE the DECLARE-block
+    // `(p ->> 'subject_a')::uuid` casts. A hostile enrolled peer mints a sealed
+    // identity.link whose payload carries a NON-UUID top-level subject_a; the lenient apply
+    // door SKIPS the structural floor for a sealed no-custody row, so the garbage is never
+    // validated and reaches the AFTER-INSERT trigger. Pre-fix the DECLARE cast raises
+    // `invalid input syntax for type uuid` before the guard — aborting apply_remote_event on
+    // a VERIFIABLE event, freezing do_pull's watermark, and WEDGING clinical sync forever
+    // (the very availability-floor failure the seal-robustness work exists to prevent, but
+    // db/018 was the one projection that casts a body field in DECLARE rather than after the
+    // guard). Post-fix the guard returns NULL first: admit as harmless ciphertext noise.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    // setup() does not truncate the identity projection (no FK to event_log): clear it so the
+    // "no edge projected" assertion below is exact regardless of sibling-test residue.
+    c.execute("TRUNCATE patient_link CASCADE", &[])
+        .await
+        .unwrap();
+
+    let body = malformed_sealed_link_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+
+    let returned: String = c
+        .query_one(
+            "SELECT apply_remote_event($1)::text",
+            &[&signed.signed_bytes],
+        )
+        .await
+        .expect("a sealed identity-link with a malformed field is ADMITTED, never wedges apply")
+        .get(0);
+    assert_eq!(returned, event_id, "the door returns the event id");
+
+    let sealed: bool = c
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .expect("the event was admitted into the log")
+        .get(0);
+    assert!(
+        sealed,
+        "the sealed identity-link row is admitted, marked sealed"
+    );
+
+    let links: i64 = c
+        .query_one("SELECT count(*) FROM patient_link", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        links, 0,
+        "a sealed identity-link projects no edge — ciphertext noise only, no wedge"
+    );
+
+    // The watermark never froze: a subsequent legit event still applies through the door.
+    let good = demographic_body(&kid_d, patient, peer_hlc(WALL_2026 + 1));
+    let good_signed = sign(&good, &sk_d).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&good_signed.signed_bytes],
+    )
+    .await
+    .expect("a legit event still applies after the sealed identity-link noise — no wedge");
 }

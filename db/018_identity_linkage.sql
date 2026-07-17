@@ -229,10 +229,18 @@ CREATE OR REPLACE FUNCTION patient_link_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     p       jsonb := NEW.body;
-    a       uuid  := (p ->> 'subject_a')::uuid;
-    b       uuid  := (p ->> 'subject_b')::uuid;
-    lo      uuid  := LEAST(a, b);
-    hi      uuid  := GREATEST(a, b);
+    -- a/b/lo/hi are NOT initialized in DECLARE: DECLARE initializers run at block entry,
+    -- BEFORE the seal guard below can return, so a `(p ->> 'subject_a')::uuid` cast here
+    -- would raise `invalid input syntax for type uuid` on a wrongly-sealed row whose ciphertext
+    -- container carries a non-UUID top-level subject_a — aborting apply on a VERIFIABLE event
+    -- and wedging the sync watermark (code-review finding #1). The casts are deferred to AFTER
+    -- the guard. (This projection is the one non-clinical trigger that casts a body field to a
+    -- strict type; its siblings do only NULL-safe text ops in DECLARE, so the guard alone
+    -- protected them — here the cast must sit below the guard, not in DECLARE.)
+    a       uuid;
+    b       uuid;
+    lo      uuid;
+    hi      uuid;
     v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
     v_cur   record;
     -- The STANDING overlay winner for (lo, hi), read back AFTER the upsert below so the
@@ -244,8 +252,16 @@ BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
     -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
-    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak). This guard MUST
+    -- precede the subject_a/subject_b casts below (they are deliberately not in DECLARE, see there).
     IF NEW.sealed THEN RETURN NULL; END IF;
+    -- Canonical (lo, hi) pair — cast here, AFTER the seal guard, so a sealed row never reaches
+    -- these strict UUID casts (the floor already validated subject_a/subject_b for an UNSEALED
+    -- link via cairn_check_link_assertion at both doors).
+    a  := (p ->> 'subject_a')::uuid;
+    b  := (p ->> 'subject_b')::uuid;
+    lo := LEAST(a, b);
+    hi := GREATEST(a, b);
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
     -- applies (e.g. link(A,B) and link(B,C)) each BFS without seeing the other's uncommitted
