@@ -54,6 +54,29 @@ async fn custody_plane_tables_exist_and_are_locked() {
             .get(0);
         assert!(!ok, "cairn_agent must not INSERT into {t} directly");
     }
+    // The two custody SECURITY DEFINER functions must NOT be PUBLIC-executable:
+    // Postgres grants EXECUTE to PUBLIC by default, and every role (including
+    // cairn_agent) is a member of PUBLIC, so an ungated SECURITY DEFINER function
+    // is a below-the-floor door bypass — cairn_agent could call it directly with
+    // raw SQL instead of going through submit_event/apply_remote_event. db/037
+    // must explicitly REVOKE EXECUTE FROM PUBLIC on both.
+    for sig in [
+        "cairn_execute_shred(uuid, uuid, text)",
+        "cairn_register_unwrap_key(bytea)",
+    ] {
+        let ok: bool = c
+            .query_one(
+                "SELECT has_function_privilege('cairn_agent', $1, 'EXECUTE')",
+                &[&sig],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(
+            !ok,
+            "cairn_agent must not EXECUTE {sig} directly (floor bypass)"
+        );
+    }
 }
 
 #[tokio::test]

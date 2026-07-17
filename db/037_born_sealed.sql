@@ -166,6 +166,18 @@ REVOKE ALL ON node_unwrap_key, event_dek, event_clear, erasure_shred_log FROM ca
 GRANT SELECT ON event_clear TO cairn_agent;  -- the clear READ surface (chart/FTS)
 
 GRANT SELECT ON event_dek, erasure_shred_log, node_unwrap_key TO cairn_node;  -- serve-side custody reads
+
+-- Postgres grants EXECUTE on a new function to PUBLIC by default, and every role
+-- (including cairn_agent) is a member of PUBLIC — an un-REVOKEd SECURITY DEFINER
+-- function is therefore directly callable by a below-the-floor adversary with raw
+-- SQL, bypassing submit_event/apply_remote_event entirely. Explicit REVOKE FROM
+-- PUBLIC before each GRANT, mirroring db/007:270 and db/005:571-575.
+REVOKE EXECUTE ON FUNCTION cairn_register_unwrap_key(bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_register_unwrap_key(bytea) TO cairn_node;
+
+-- cairn_execute_shred is called ONLY by the owner's own doors (submit_event's
+-- erasure arm, apply_remote_event's erasure arm), which run SECURITY DEFINER as
+-- the schema owner and so still reach it — no role needs a direct GRANT here.
+REVOKE EXECUTE ON FUNCTION cairn_execute_shred(uuid, uuid, text) FROM PUBLIC;
 
 COMMIT;
