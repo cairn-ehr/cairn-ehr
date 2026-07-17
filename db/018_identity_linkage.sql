@@ -241,6 +241,11 @@ DECLARE
     v_win_ca       bytea;
     v_win_attested boolean;
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
     -- applies (e.g. link(A,B) and link(B,C)) each BFS without seeing the other's uncommitted

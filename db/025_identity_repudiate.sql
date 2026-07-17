@@ -153,6 +153,11 @@ DECLARE
     p jsonb := NEW.body;
     v_cur record;
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     -- #157: detect a Byzantine HLC-triple collision against the current repudiation of this exact
     -- (subject, value) and record an advisory signal before overlaying the winning `reason`. Note
     -- the SUPPRESSION decision itself is value-keyed + idempotent (see the #69 note below), so this

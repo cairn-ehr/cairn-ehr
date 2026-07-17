@@ -119,12 +119,26 @@ BEGIN
     -- Provenance-precise projection scrub: only rows THIS event produced.
     -- (Overlay winners from other, unshredded events survive — never over-erase.)
     SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_target;
+    -- Subset-node degradation (final review): on a cairn-sync subset-only node the medication
+    -- projection tables (db/031-035) are ABSENT, so an unconditional DELETE would raise
+    -- "relation does not exist" and WEDGE the shred — and, via the apply door, freeze the sync
+    -- watermark. Guard each PROJECTION delete with a table-existence check so the shred degrades
+    -- HONESTLY on a projection-less node: custody + derived plaintext (event_clear/event_dek,
+    -- below) and the erasure ledger still die — the whole erasure guarantee — there is simply
+    -- no projection to scrub. The event_clear/event_dek/erasure_shred_log deletes stay
+    -- unconditional (those tables ARE in the subset).
     IF v_ca IS NOT NULL THEN
-        DELETE FROM medication_statement WHERE content_address = v_ca;
-        DELETE FROM medication_cessation WHERE content_address = v_ca;
+        IF to_regclass('public.medication_statement') IS NOT NULL THEN
+            DELETE FROM medication_statement WHERE content_address = v_ca;
+        END IF;
+        IF to_regclass('public.medication_cessation') IS NOT NULL THEN
+            DELETE FROM medication_cessation WHERE content_address = v_ca;
+        END IF;
     END IF;
     -- The initial-dose seed row is keyed by the assert event's own id (db/032).
-    DELETE FROM medication_dose_event WHERE dose_event_id = p_target;
+    IF to_regclass('public.medication_dose_event') IS NOT NULL THEN
+        DELETE FROM medication_dose_event WHERE dose_event_id = p_target;
+    END IF;
 
     -- Derived plaintext + custody die last (the scrub above read nothing from
     -- them, so order is safety, not correctness).

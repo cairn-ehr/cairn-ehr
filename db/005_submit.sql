@@ -593,6 +593,19 @@ BEGIN
     v_sealed := COALESCE((b -> 'payload' ->> 'sealed')::boolean, false);
     b_clear  := b;
     IF v_sealed THEN
+        -- ADR-0052 §2 (the INVERSE of the born-sealed floor below): ONLY clinical.* bodies
+        -- are born-sealed. Demographic/identity/patient/node/erasure bodies are plaintext BY
+        -- NECESSITY — their projections/matchers bind on NEW.body DIRECTLY, so a sealed
+        -- (ciphertext) body of one of those types can never project, and its ciphertext would
+        -- detonate a NEW.body-reading projection (a NULL field driven into a NOT NULL column).
+        -- This is a never-lawful shape; refuse it CLEANLY here, before anything is stored
+        -- (submit refusals are safe — nothing has accepted the event). The apply door cannot
+        -- mirror this RAISE — a refusal there would freeze the seq watermark on a verifiable
+        -- event — so it stays lenient and the non-clinical projection triggers are made
+        -- seal-robust instead (they RETURN NULL on a sealed row; db/002/010-014/018/023-025).
+        IF v_type NOT LIKE 'clinical.%' THEN
+            RAISE EXCEPTION 'submit_event: % is not a clinical body — only clinical.* bodies are born-sealed; demographic/identity/patient/node/erasure bodies are plaintext by necessity and must never be sealed (ADR-0052 §2)', v_type;
+        END IF;
         IF p_dek IS NULL THEN
             RAISE EXCEPTION 'submit_event: sealed event requires its DEK at the strict door (ADR-0052)';
         END IF;

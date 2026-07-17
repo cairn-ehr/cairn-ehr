@@ -940,3 +940,131 @@ async fn custody_is_withheld_when_shred_arrives_before_its_target() {
         "no projection: no custody means no clear shadow to project through"
     );
 }
+
+/// A CLEAR demographic.field.asserted (dob) body — NON-clinical, plaintext by necessity.
+fn demographic_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventBody {
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: "demographic.field.asserted".into(),
+        schema_version: "demographic.field/1".into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload: serde_json::json!({
+            "field": "dob",
+            "value": "1980",
+            "provenance": "document-verified",
+            "facets": {"precision": "year"},
+        }),
+        attachments: vec![],
+        plaintext_twin: Some(format!("dob 1980 — asserted for {patient}")),
+    }
+}
+
+/// The SAME clear demographic body, but wrongly SEALED — the never-lawful shape ADR-0052 §2
+/// forbids (only clinical.* is born-sealed). Returns the sealed body and its (unused) DEK.
+fn sealed_demographic_body(
+    node_kid: &str,
+    patient: Uuid,
+    hlc: Hlc,
+) -> (EventBody, Zeroizing<[u8; 32]>) {
+    let mut b = demographic_body(node_kid, patient, hlc);
+    let payload = b.payload.clone();
+    let twin = b.plaintext_twin.clone().unwrap();
+    let (container, dek) = seal_event_payload(&payload, &twin, &b.event_id).unwrap();
+    b.payload = container;
+    b.plaintext_twin = Some(seal_stub_twin("demographic.field.asserted"));
+    (b, dek)
+}
+
+#[tokio::test]
+async fn sealed_non_clinical_admits_without_projection_or_wedge() {
+    // The availability-floor wedge vector (ADR-0052 §2, final review, issue #10): a
+    // validly-signed NON-clinical body carrying payload.sealed=true, WITHOUT a DEK — the
+    // exact exploit shape. The strict door refuses it, but the LENIENT sync door must ADMIT
+    // it (set-union losslessness) WITHOUT letting a NEW.body-reading projection detonate on
+    // the ciphertext: a RAISE here would fail a VERIFIABLE event at apply, and do_pull
+    // FREEZES its watermark on any verifiable event that fails to apply — WEDGING clinical
+    // sync permanently. The fix makes every non-clinical projection seal-robust (returns
+    // NULL on a sealed row): the sealed non-clinical row is admitted as harmless ciphertext
+    // noise (no custody, no projection, no leak) and a later legit event still projects.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Pre-fix this DETONATES patient_address_apply: on the ciphertext body `p ->> 'field'`
+    // is NULL, so `fld <> 'address'` is NULL (NOT true) and the trigger falls through to
+    // INSERT a NULL `display` into a NOT NULL PK column → RAISE → apply fails on a verifiable
+    // event → freeze. Post-fix the projection guard returns NULL first, so apply succeeds.
+    let (body, _dek) = sealed_demographic_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+    let returned: String = c
+        .query_one(
+            "SELECT apply_remote_event($1)::text",
+            &[&signed.signed_bytes],
+        )
+        .await
+        .expect("a sealed NON-clinical body is ADMITTED, never detonates a projection")
+        .get(0);
+    assert_eq!(returned, event_id, "the door returns the event id");
+
+    // The row landed, marked sealed — and NO projection row exists anywhere (ciphertext
+    // projects nothing: no demographic field, no name, no address).
+    let sealed: bool = c
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .expect("the event was admitted into the log")
+        .get(0);
+    assert!(
+        sealed,
+        "the sealed non-clinical row is admitted, marked sealed"
+    );
+    let projected: i64 = c
+        .query_one(
+            "SELECT (SELECT count(*) FROM patient_demographic WHERE patient_id = $1::text::uuid) \
+                  + (SELECT count(*) FROM patient_name        WHERE patient_id = $1::text::uuid) \
+                  + (SELECT count(*) FROM patient_address     WHERE patient_id = $1::text::uuid)",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        projected, 0,
+        "a sealed non-clinical row projects NOTHING — no custody, no clear view, no leak"
+    );
+
+    // The watermark never froze: a subsequent LEGITIMATE (unsealed) demographic event still
+    // applies and projects — proof the door was not wedged by the sealed ciphertext noise.
+    let good = demographic_body(&kid_d, patient, peer_hlc(WALL_2026 + 1));
+    let good_signed = sign(&good, &sk_d).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&good_signed.signed_bytes],
+    )
+    .await
+    .expect("a legitimate unsealed demographic still applies after the sealed noise");
+    let dob: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_demographic WHERE patient_id = $1::text::uuid AND field = 'dob'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        dob, 1,
+        "the legit unsealed demographic projected — the apply door was never wedged"
+    );
+}

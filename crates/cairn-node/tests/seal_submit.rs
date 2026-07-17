@@ -299,3 +299,77 @@ async fn wrong_dek_is_refused() {
         db_msg(&err)
     );
 }
+
+/// Build a CLEAR demographic.field.asserted payload (dob) and wrongly SEAL it. Demographic
+/// bodies are NON-clinical — plaintext BY NECESSITY (their projections/matchers bind on
+/// NEW.body directly), so a sealed one is the never-lawful shape ADR-0052 §2 forbids.
+/// Returns the sealed body (ready to sign) and its DEK.
+fn sealed_demographic_body(
+    node_kid: &str,
+    patient: Uuid,
+    hlc: Hlc,
+) -> (EventBody, Zeroizing<[u8; 32]>) {
+    let event_id = Uuid::now_v7().to_string();
+    let payload = serde_json::json!({
+        "field": "dob",
+        "value": "1980",
+        "provenance": "document-verified",
+    });
+    let twin = format!("dob 1980 — asserted for {patient}");
+    let (container, dek) = seal_event_payload(&payload, &twin, &event_id).unwrap();
+    let body = EventBody {
+        event_id,
+        patient_id: patient.to_string(),
+        event_type: "demographic.field.asserted".into(),
+        schema_version: "demographic.field/1".into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload: container,
+        attachments: vec![],
+        plaintext_twin: Some(seal_stub_twin("demographic.field.asserted")),
+    };
+    (body, dek)
+}
+
+#[tokio::test]
+async fn sealed_non_clinical_body_is_refused_at_the_strict_door() {
+    // ADR-0052 §2 (inverse of the born-sealed floor): ONLY clinical.* bodies are sealed;
+    // demographic/identity/patient/node/erasure bodies are plaintext by necessity. A sealed
+    // NON-clinical body is a never-lawful shape — its ciphertext body can never project
+    // (the projection reads NEW.body directly). The strict door must refuse it CLEANLY,
+    // BEFORE it is stored, or its ciphertext would detonate a NEW.body-reading projection.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Register the node unwrap key so that — WITHOUT the scope check — the door would run
+    // the full sealed path all the way to the projection INSERT that detonates. The scope
+    // refusal must fire FIRST, stopping the never-lawful shape at the boundary.
+    let secret = derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .unwrap();
+
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let (body, dek) = sealed_demographic_body(&kid, patient, hlc);
+    let signed = sign(&body, &sk).unwrap();
+    let err = c
+        .execute(
+            "SELECT submit_event($1, NULL, NULL, $2)",
+            &[&signed.signed_bytes, &dek.as_slice()],
+        )
+        .await
+        .expect_err("a sealed NON-clinical body must be refused at the strict door");
+    assert!(
+        db_msg(&err).contains("only clinical") && db_msg(&err).contains("ADR-0052"),
+        "the refusal names the seal-scope floor (ADR-0052 §2), got: {}",
+        db_msg(&err)
+    );
+}

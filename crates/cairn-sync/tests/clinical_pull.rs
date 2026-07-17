@@ -47,6 +47,7 @@ const LISTEN_SWEEP: &str = "127.0.0.1:39720";
 const LISTEN_REPULL: &str = "127.0.0.1:39721";
 const LISTEN_SEALED: &str = "127.0.0.1:39722";
 const LISTEN_GUARD: &str = "127.0.0.1:39723";
+const LISTEN_SEALSCOPE: &str = "127.0.0.1:39724";
 
 /// A realistic PAST HLC wall (ms since epoch, ≈ 2026-06-20) — safely below "now",
 /// so A's remote-apply door accepts it (the drift ceiling bounds FUTURE walls only).
@@ -1697,5 +1698,219 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
         statement_count_for_med(&b, med).await,
         0,
         "no DEK across the wire ⇒ no clear shadow ⇒ no projection on B"
+    );
+}
+
+/// Build a validly-signed but wrongly-SEALED `demographic.field.asserted` — the ADR-0052 §2
+/// never-lawful shape (ONLY clinical.* is born-sealed; demographic bodies are plaintext by
+/// necessity, their projections bind on NEW.body directly). Signed by A's device key so B's
+/// apply door VERIFIES and admits it; its ciphertext body must NOT detonate B's
+/// NEW.body-reading demographic projections. Returns the signed wire bytes.
+fn sealed_demographic(sk: &SigningKey, kid: &str, patient: Uuid, wall: i64) -> Vec<u8> {
+    let event_id = Uuid::now_v7().to_string();
+    let payload = serde_json::json!({
+        "field": "dob",
+        "value": "1980",
+        "provenance": "document-verified",
+    });
+    let (container, _dek) =
+        cairn_event::seal::seal_event_payload(&payload, "dob 1980", &event_id).unwrap();
+    let body = EventBody {
+        event_id,
+        patient_id: patient.to_string(),
+        event_type: "demographic.field.asserted".into(),
+        schema_version: "demographic.field/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "node-a".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: container,
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::seal::seal_stub_twin(
+            "demographic.field.asserted",
+        )),
+    };
+    sign(&body, sk).unwrap().signed_bytes
+}
+
+/// Final-review availability-floor wedge (ADR-0052 §2, issue #10): a validly-signed
+/// NON-clinical body carrying `payload.sealed=true` reaches B on the clinical wire. B's
+/// apply door ADMITS it (set-union losslessness), but pre-fix a NEW.body-reading demographic
+/// projection detonates on the ciphertext (NULL into a NOT NULL column) → a VERIFIABLE event
+/// fails to apply → do_pull FREEZES the seq cursor → clinical sync WEDGES, and the legitimate
+/// medication authored AFTER it never reaches B. The fix makes every non-clinical projection
+/// seal-robust (returns NULL on a sealed row), so the sealed noise is admitted with no
+/// projection and the watermark sails right past it.
+///
+/// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
+#[tokio::test]
+async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+    let mut a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    // Both nodes know the authors (the owner ceremony a real site performs): we want B to
+    // APPLY the events, so the freeze under test is the SEAL-SCOPE wedge, not unknown-author.
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
+    let patient = Uuid::now_v7();
+
+    // seq 1: a legit medication, born sealed + projected on A (with custody).
+    assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "metformin",
+            inn_code: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("500"),
+            dose_unit: Some("mg"),
+            sig: Some("one BD"),
+            info_source: "patient-reported",
+            started: Some("2023"),
+            started_precision: Some("year"),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    // seq 2: the wrongly-sealed demographic. INJECTED onto A with the projection triggers
+    // SUPPRESSED (session_replication_role=replica) — the strict door would refuse it and
+    // (pre-fix) the apply door would detonate on A too; suppressing the triggers on the
+    // INJECTING node isolates the RED to B's PULL, modelling "A received this from a third
+    // node". A then SERVES the verbatim signed bytes to B, whose apply door is under test.
+    let sealed_demo = sealed_demographic(&sk_d, &kid_d, patient, WALL);
+    a.batch_execute("SET session_replication_role = replica")
+        .await
+        .unwrap();
+    let injected = a
+        .query_one("SELECT apply_remote_event($1)::text", &[&sealed_demo])
+        .await;
+    a.batch_execute("SET session_replication_role = origin")
+        .await
+        .unwrap();
+    injected.expect("A holds the sealed demographic (projection triggers suppressed on inject)");
+
+    // seq 3: the SUBSEQUENT legitimate medication that must still reach B if sync is unwedged.
+    assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "ibuprofen",
+            inn_code: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("200"),
+            dose_unit: Some("mg"),
+            sig: Some("PRN"),
+            info_source: "patient-reported",
+            started: Some("2024"),
+            started_precision: Some("year"),
+        },
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Serve A, pull B once over real TCP.
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_SEALSCOPE,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_SEALSCOPE);
+    let pull = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_SEALSCOPE,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run pull");
+    assert!(
+        pull.status.success(),
+        "pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull.stdout),
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    // The watermark sailed past the sealed noise: B holds the SUBSEQUENT ibuprofen (seq 3),
+    // so the seq cursor was never frozen at the sealed demographic (seq 2). Pre-fix it froze
+    // there and ibuprofen never arrived.
+    let ibuprofen_on_b: i64 = b
+        .query_one(
+            "SELECT count(*) FROM medication_statement \
+             WHERE patient_id = $1::text::uuid AND term = 'ibuprofen'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        ibuprofen_on_b, 1,
+        "the medication authored AFTER the sealed non-clinical event reached B — \
+         the watermark never froze at the sealed event",
+    );
+
+    // And the sealed non-clinical body projected NOTHING on B (harmless ciphertext).
+    let demo_on_b: i64 = b
+        .query_one(
+            "SELECT count(*) FROM patient_demographic WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        demo_on_b, 0,
+        "the sealed non-clinical body projected nothing on B — admitted as ciphertext noise"
+    );
+
+    // Full convergence: identical event set + medication projections on both nodes.
+    assert_eq!(
+        snapshot(&a).await,
+        snapshot(&b).await,
+        "A and B converge — the sealed non-clinical event synced as lossless ciphertext noise"
     );
 }
