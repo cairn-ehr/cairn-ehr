@@ -12,7 +12,10 @@
 --
 -- event_log.body IS the payload (submit_event inserts body = b->'payload'); patient_id
 -- is a top-level column. So the floor check (sees the full body b) reads b->'payload',
--- while the projection triggers (see NEW.body = the payload) read NEW.body directly.
+-- while the projection triggers read the clear payload via cairn_clear_payload(NEW)
+-- (ADR-0052, db/037): NEW.body unchanged on an unsealed row, the event_clear shadow
+-- on a sealed one, NULL when this node holds no custody — the trigger then returns
+-- without projecting (honest degradation, principle 4).
 BEGIN;
 
 -- 1. Register both types in the fail-closed classification registry. Additive,
@@ -157,8 +160,12 @@ CREATE INDEX IF NOT EXISTS medication_statement_patient_idx ON medication_statem
 CREATE OR REPLACE FUNCTION medication_statement_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     -- #192 thread patient-consistency: local fail-loud / remote converge-and-flag.
     -- Guarded HERE (not also in the dose-seed trigger that fires on this same event),
     -- so a remote contradiction is flagged exactly once per event.
@@ -230,8 +237,12 @@ GRANT SELECT ON medication_cessation TO cairn_agent;
 CREATE OR REPLACE FUNCTION medication_cessation_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     -- #192 thread patient-consistency (see the guard's comment above). An ORPHAN
     -- cessation (no standing claim at all) still passes — offline-first.
     PERFORM cairn_guard_medication_patient(

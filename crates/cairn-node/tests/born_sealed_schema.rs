@@ -124,3 +124,60 @@ async fn erasure_shred_type_is_registered_and_twin_checked() {
         .get(0);
     assert_eq!(n, 1);
 }
+
+/// Task 6: every medication projection trigger now reads NEW.body through
+/// cairn_clear_payload(NEW) instead of directly. This pins the helper's two
+/// branches (Task 5, db/037) that those triggers now depend on, using a
+/// composite-type cast against a SYNTHESIZED (never-inserted) event_log row —
+/// no event_log INSERT is needed, so it's safe to run standalone. Column order
+/// is transcribed from `\d event_log` (db/001 + its ALTER ADD COLUMNs + db/036's
+/// `seq`). The GENERATED ALWAYS seq column does not fight this: identity
+/// generation is an INSERT-time constraint, not enforced on a bare composite
+/// cast (confirmed empirically against CAIRN_TEST_PG before writing this in).
+#[tokio::test]
+async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Unsealed row (sealed = FALSE): cairn_clear_payload must return body unchanged —
+    // this is the regression gate for every trigger edited in this task. Cast to
+    // ::text and parse (rather than fetching jsonb directly) so this doesn't depend
+    // on the tokio-postgres serde_json feature.
+    let body_text: String = c
+        .query_one(
+            "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
+                'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
+                '\\x00'::bytea, '\\x00'::bytea, '{\"k\":1}'::jsonb, '[]'::jsonb, 'k', 'stub',
+                FALSE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL)::event_log)::text",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"k": 1}),
+        "unsealed row must resolve to NEW.body unchanged"
+    );
+
+    // Sealed row with NO event_clear shadow (this node holds no custody): must
+    // resolve NULL — the honest-degradation path every edited trigger now checks
+    // for via `IF p IS NULL THEN RETURN NULL; END IF;` right after BEGIN.
+    let is_null: bool = c
+        .query_one(
+            "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
+                'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
+                '\\x00'::bytea, '\\x00'::bytea, '{}'::jsonb, '[]'::jsonb, 'k', 'stub',
+                TRUE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL)::event_log) IS NULL",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        is_null,
+        "sealed row with no event_clear shadow must resolve NULL"
+    );
+}

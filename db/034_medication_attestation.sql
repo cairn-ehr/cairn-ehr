@@ -176,8 +176,12 @@ CREATE INDEX IF NOT EXISTS medication_attestation_thread_idx
 CREATE OR REPLACE FUNCTION medication_attestation_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     INSERT INTO medication_attestation
         (event_id, medication_id, patient_id, attester_kid, reviewed_commitment,
          reviewed_count, hlc_wall, hlc_counter, origin, content_address)

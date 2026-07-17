@@ -174,7 +174,10 @@ $$;
 CREATE OR REPLACE FUNCTION medication_reconciliation_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p       jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p       jsonb := cairn_clear_payload(NEW);
     a       uuid  := (p ->> 'subject_a')::uuid;
     b       uuid  := (p ->> 'subject_b')::uuid;
     lo      uuid  := LEAST(a, b);
@@ -184,6 +187,7 @@ DECLARE
     v_pa    uuid;
     v_pb    uuid;
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     PERFORM pg_advisory_xact_lock(x'4341524E4D52'::bigint);  -- 'CARNMR'
 
     -- Cross-patient reconciliation guard (#192 scenario B, resolving the #177 design
