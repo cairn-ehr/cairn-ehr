@@ -574,3 +574,369 @@ async fn partial_custody_thread_reads_stale_not_fresh() {
          never fresh — the false-fresh gate forces it (readable count < reviewed_count)"
     );
 }
+
+#[tokio::test]
+async fn shred_after_event_scrubs_everything_but_the_log_row() {
+    // Task 9 (a): the OTHER direction from custody_is_never_granted_to_a_shredded_event
+    // (which shreds BEFORE re-delivery). Here the shred arrives AFTER its target, via
+    // the full local submit_event path (custody + shadow + projection all present
+    // beforehand), and must scrub every DERIVED surface (custody, shadow, provenance-
+    // precise projection) while leaving the append-only event_log rows — target AND
+    // tombstone — untouched, including the target's signature, which still verifies
+    // over the CIPHERTEXT it was signed over (ADR-0005: erasure redistributes key
+    // custody, it never deletes the signed record).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // 1. Full sealed local submit — custody + shadow + projection all present.
+    let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+    .expect("the sealed assert is authored locally");
+    assert_eq!(
+        custody_count(&c, &event_id).await,
+        (1, 1),
+        "custody + shadow exist before the shred"
+    );
+    assert_eq!(
+        statement_count(&c, patient).await,
+        1,
+        "projected before the shred"
+    );
+
+    // 2. Shred it via the STRICT door (the target exists locally, so its existence
+    //    check passes and the shred executes in the same submit).
+    let shred = shred_body(&kid_d, patient, &event_id, peer_hlc(WALL_2026 + 10));
+    let shred_event_id = shred.event_id.clone();
+    let shred_signed = sign(&shred, &sk_d).unwrap();
+    c.execute("SELECT submit_event($1)", &[&shred_signed.signed_bytes])
+        .await
+        .expect("the shred is admitted by the strict door (target exists)");
+
+    // 3. event_dek / event_clear / medication_statement are all scrubbed.
+    assert_eq!(
+        custody_count(&c, &event_id).await,
+        (0, 0),
+        "the shred scrubs custody + shadow"
+    );
+    assert_eq!(
+        statement_count(&c, patient).await,
+        0,
+        "the shred scrubs the content_address-precise projection"
+    );
+
+    // 4. erasure_shred_log carries the row, with its basis.
+    let (logged_shred_id, basis): (String, String) = {
+        let row = c
+            .query_one(
+                "SELECT shred_event_id::text, basis FROM erasure_shred_log \
+                 WHERE target_event_id = $1::text::uuid",
+                &[&event_id],
+            )
+            .await
+            .expect("the shred log carries the target's row");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        logged_shred_id, shred_event_id,
+        "the log names the shredding event"
+    );
+    assert_eq!(basis, "retention ceiling", "the audited basis is recorded");
+
+    // 5. event_log still holds BOTH rows — the target (untouched, sealed ciphertext)
+    //    and the tombstone. Append-only: shredding never deletes a log row.
+    let log_rows: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id IN ($1::text::uuid, $2::text::uuid)",
+            &[&event_id, &shred_event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        log_rows, 2,
+        "both the target and the tombstone survive in event_log"
+    );
+
+    // 6. The signature over the target's CIPHERTEXT still verifies — shredding destroys
+    //    custody (the DEK), never the signed bytes.
+    let still_verifies: bool = c
+        .query_one(
+            "SELECT cairn_verify(signed_bytes) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        still_verifies,
+        "the target row's signature over ciphertext survives the shred"
+    );
+}
+
+#[tokio::test]
+async fn shred_is_idempotent_under_replay() {
+    // Task 9 (b): set-union re-delivery of the SAME shred event must be a silent no-op
+    // at the apply door — the second apply returns the same uuid, raises no error, and
+    // erasure_shred_log still holds exactly one row (the ON CONFLICT DO NOTHING in
+    // cairn_execute_shred, db/037).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Content event, authored locally with custody.
+    let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+    .expect("the sealed assert is authored locally");
+
+    // The shred, applied via the SYNC door (as it would arrive from a peer).
+    let shred = shred_body(&kid_d, patient, &event_id, peer_hlc(WALL_2026 + 10));
+    let shred_event_id = shred.event_id.clone();
+    let shred_signed = sign(&shred, &sk_d).unwrap();
+
+    let first: String = c
+        .query_one(
+            "SELECT apply_remote_event($1)::text",
+            &[&shred_signed.signed_bytes],
+        )
+        .await
+        .expect("the first apply of the shred succeeds")
+        .get(0);
+    assert_eq!(first, shred_event_id);
+
+    let second: String = c
+        .query_one(
+            "SELECT apply_remote_event($1)::text",
+            &[&shred_signed.signed_bytes],
+        )
+        .await
+        .expect("re-delivery of the SAME shred event is a silent no-op, not an error")
+        .get(0);
+    assert_eq!(
+        second, shred_event_id,
+        "the replayed apply returns the same event id"
+    );
+
+    let log_rows: i64 = c
+        .query_one(
+            "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(log_rows, 1, "erasure_shred_log still holds exactly one row");
+}
+
+#[tokio::test]
+async fn schema_reload_rebuilds_the_shred_log() {
+    // Task 9 (c): erasure_shred_log is derived state, rebuilt idempotently from the
+    // append-only event_log tombstone on every schema load (db/037's trailing
+    // INSERT ... SELECT ... ON CONFLICT DO NOTHING). Simulate a wiped projection-state
+    // table, reconnect through connect_and_load_schema, and confirm the row comes back
+    // from the log alone — "restore replays the shred log" (§3.8).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+    .expect("the sealed assert is authored locally");
+
+    let shred = shred_body(&kid_d, patient, &event_id, peer_hlc(WALL_2026 + 10));
+    let shred_event_id = shred.event_id.clone();
+    let shred_signed = sign(&shred, &sk_d).unwrap();
+    c.execute("SELECT submit_event($1)", &[&shred_signed.signed_bytes])
+        .await
+        .expect("the shred is admitted");
+
+    let before: i64 = c
+        .query_one(
+            "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(before, 1, "the shred log row exists before the wipe");
+
+    // Simulate a projection-state wipe (e.g. a fresh replica before its first replay).
+    c.batch_execute("DELETE FROM erasure_shred_log")
+        .await
+        .unwrap();
+    let wiped: i64 = c
+        .query_one("SELECT count(*) FROM erasure_shred_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(wiped, 0, "the wipe removed the row");
+
+    // Reload the schema — db/037's rebuild-from-tombstones INSERT SELECT re-derives
+    // erasure_shred_log purely from event_log's tombstone row.
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let (logged_shred_id, basis): (String, String) = {
+        let row = c2
+            .query_one(
+                "SELECT shred_event_id::text, basis FROM erasure_shred_log \
+                 WHERE target_event_id = $1::text::uuid",
+                &[&event_id],
+            )
+            .await
+            .expect("the schema reload rebuilds the row from the tombstone");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        logged_shred_id, shred_event_id,
+        "the rebuilt row names the shredding event"
+    );
+    assert_eq!(
+        basis, "retention ceiling",
+        "the audited basis survives the rebuild"
+    );
+}
+
+#[tokio::test]
+async fn sealed_apply_with_wrong_dek_admits_without_custody() {
+    // Task-8-review Minor: a DEK that fails to open the sealed body (wrong key,
+    // PRESENT but incorrect — distinct from the absent-DEK leg already pinned by
+    // sealed_apply_without_dek_admits_structurally_never_rejects) is a transport
+    // defect, never a refusal reason at the lenient sync door: cairn_unseal_body
+    // returns NULL, the door WARNs and admits structurally with no custody. The wrong
+    // key is DERIVED from the real, randomly-generated per-event DEK (one bit flipped),
+    // never a literal (house rule 6).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+    let signed = sign(&body, &sk_d).unwrap();
+
+    let mut wrong_dek: [u8; 32] = *dek;
+    wrong_dek[0] ^= 0xFF;
+
+    c.execute(
+        "SELECT apply_remote_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &wrong_dek.as_slice()],
+    )
+    .await
+    .expect("a wrong DEK is a transport defect, never a refusal reason");
+
+    let (dek_rows, clear_rows) = custody_count(&c, &event_id).await;
+    assert_eq!(
+        (dek_rows, clear_rows),
+        (0, 0),
+        "no custody and no shadow when the presented DEK fails to open the body"
+    );
+    assert_eq!(
+        statement_count(&c, patient).await,
+        0,
+        "no projection without the clear shadow"
+    );
+}
+
+#[tokio::test]
+async fn custody_is_withheld_when_shred_arrives_before_its_target() {
+    // Task-8-review Minor: anti-resurrection HALF 2 (the mirror of
+    // custody_is_never_granted_to_a_shredded_event, which pins half 1 — shred AFTER
+    // re-delivery of content). A shred may arrive on the wire BEFORE its target —
+    // erasure.shred.asserted is classified targets_other_author = false (db/037)
+    // precisely so the apply door's generic target-existence gate does not block it.
+    // The LATER-arriving content event must still be admitted (set-union losslessness)
+    // but must NEVER be granted custody — arrival-order independence, either direction.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    // The content event's id is minted before it is ever applied — exactly the shape a
+    // real shred-before-content race takes on the wire.
+    let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
+    let event_id = body.event_id.clone();
+
+    // 1. The shred arrives FIRST, targeting an event this node has never seen.
+    let shred = shred_body(&kid_d, patient, &event_id, peer_hlc(WALL_2026 - 5));
+    let shred_signed = sign(&shred, &sk_d).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&shred_signed.signed_bytes],
+    )
+    .await
+    .expect("the lenient apply door admits a shred whose target is not yet known");
+    let pre_target_log: i64 = c
+        .query_one(
+            "SELECT count(*) FROM erasure_shred_log WHERE target_event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        pre_target_log, 1,
+        "the shred is recorded before its target ever lands"
+    );
+
+    // 2. The content event arrives SECOND, WITH its DEK — it would normally gain full
+    //    custody, but the shred already named it.
+    let signed = sign(&body, &sk_d).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+    .expect("the content event is admitted (set-union), even though it arrives shredded");
+
+    let (dek_rows, clear_rows) = custody_count(&c, &event_id).await;
+    assert_eq!(
+        (dek_rows, clear_rows),
+        (0, 0),
+        "custody is withheld — the shred already named this event"
+    );
+    assert_eq!(
+        statement_count(&c, patient).await,
+        0,
+        "no projection: no custody means no clear shadow to project through"
+    );
+}
