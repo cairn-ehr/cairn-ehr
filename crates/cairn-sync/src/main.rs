@@ -91,6 +91,19 @@ const SCHEMA: &[(&str, &str)] = &[
         "036_clinical_sync_seq",
         include_str!("../../../db/036_clinical_sync_seq.sql"),
     ),
+    // ADR-0052 born-sealed custody plane: node_unwrap_key / event_dek /
+    // erasure_shred_log / event_clear + the shred machinery. Two doors in this
+    // subset already HARD-depend on it: the apply door (db/020) references
+    // erasure_shred_log inside a top-level IF that Postgres plans on EVERY apply
+    // (sealed or not), and the seq serve arm below LEFT JOINs event_dek +
+    // erasure_shred_log unconditionally for the custody sidecar. Omitting it would
+    // fail the FIRST serve/apply on a fresh `cairn-sync init` database — exactly the
+    // #198 late-binding first-write outage this list guards against. Loads standalone
+    // because it lands AFTER db/020, which creates the cairn_node role it grants to.
+    (
+        "037_born_sealed",
+        include_str!("../../../db/037_born_sealed.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -246,7 +259,19 @@ enum Request {
     /// insertion order — the only ordering where newly-learned events always sort
     /// above a puller's cursor, so incremental can never silently skip (#196).
     /// Additive (principle 12): the older EventsAfter variant stays served.
-    EventsAfterSeq { after_seq: i64 },
+    ///
+    /// `unwrap_cert` (ADR-0052 custody sidecar) is the puller's signed unwrap-key
+    /// certificate (hex CBOR): it binds the puller's X25519 unwrap public key to its
+    /// Ed25519 identity. When present, the server re-wraps each sealed event's DEK
+    /// for that key so the puller gains crypto-shred custody of what it replicates
+    /// (see rewrap_custody_for_peer). Additive (serde default): an old puller omits
+    /// it and the server serves the events with no custody — sealed rows still admit
+    /// structurally at the apply door, so nothing fails to sync.
+    EventsAfterSeq {
+        after_seq: i64,
+        #[serde(default)]
+        unwrap_cert: Option<String>,
+    },
     /// Byte tier: a BLAKE3 verified-streaming slice of a blob.
     BlobSlice {
         addr_hex: String,
@@ -288,6 +313,19 @@ struct EventsResponse {
     /// heuristic for the mixed-version diagnosis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signing_context: Option<String>,
+    /// Per-event wrapped DEK (hex), PARALLEL to `events` (ADR-0052 custody sidecar).
+    /// `wrapped_deks[i]` is the sealed event's data-encryption key RE-WRAPPED for the
+    /// pulling peer's unwrap key (from the cert in its request) — the puller opens it
+    /// with its own unwrap secret and hands it to the apply door as the 4th arg, so a
+    /// replicated sealed event becomes crypto-shreddable on the puller too. A slot is
+    /// None whenever no custody travels: the event is unsealed, this node holds no
+    /// DEK for it, it has been SHREDDED here (the serve SQL nulls a shredded row's DEK
+    /// — the wire-level half of the shred guarantee), or the peer sent no/invalid
+    /// cert. Additive (serde default): an old peer omits the field entirely and it
+    /// decodes to an empty vec — the puller then applies every event without custody
+    /// (sealed rows still admit structurally at the door).
+    #[serde(default)]
+    wrapped_deks: Vec<Option<String>>,
 }
 
 /// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
@@ -472,6 +510,12 @@ fn apply_signed(
     signed_bytes: &[u8],
     attestation: Option<&[u8]>,
     attester_key: Option<&[u8]>,
+    // ADR-0052 custody sidecar: the sealed event's DEK, already unwrapped by the
+    // puller for its own key (or None — not a custody holder, a byte-lazy pull, or
+    // an unsealed event). Handed straight to the door's 4th arg. With it, the door
+    // runs the full clear-view floor and records local custody; without it the
+    // sealed row is admitted on structural checks only (set-union losslessness).
+    dek: Option<&[u8]>,
 ) -> R<bool> {
     // Newness probe for the metrics only: the door itself is idempotent (a re-apply
     // of identical bytes is a silent set-union no-op), so "did we already hold these
@@ -485,11 +529,12 @@ fn apply_signed(
         .get(0);
     client
         .execute(
-            "SELECT apply_remote_event($1, $2, $3)",
+            "SELECT apply_remote_event($1, $2, $3, $4)",
             &[
                 &signed_bytes.to_vec(),
                 &attestation.map(|a| a.to_vec()),
                 &attester_key.map(|k| k.to_vec()),
+                &dek.map(|d| d.to_vec()),
             ],
         )
         // Surface the door's legible RAISE text AND its DETAIL: postgres::Error's Display is
@@ -1028,6 +1073,112 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     Ok(())
 }
 
+/// A representative ~1.5 KB clear medication payload for the seal microbench. Shaped like
+/// a real `clinical.medication.asserted` body (substance / dose / sig / provenance) and
+/// padded to ~1.5 KB with a realistic free-text instruction block, so the AEAD measures a
+/// clinically-representative body size rather than a toy `{"a":1}`. Pure — no crypto
+/// material here (the recipient keypair is generated fresh in `cmd_bench_seal`).
+fn representative_medication_payload() -> serde_json::Value {
+    // A believable, sizeable sig/notes block — the kind of free text a real medication
+    // record carries — repeated to bring the whole body to roughly 1.5 KB.
+    let instructions = "Take one tablet by mouth twice daily with food. Do not stop \
+        abruptly; review renal function and HbA1c at the next visit. Counsel on \
+        hypoglycaemia awareness and GI side effects. "
+        .repeat(7);
+    serde_json::json!({
+        "medication_id": uuid::Uuid::now_v7().to_string(),
+        "substance": {"term": "metformin", "inn_code": "6809"},
+        "formulation": "tablet",
+        "dose": {"amount": "500", "unit": "mg"},
+        "sig": "one BD",
+        "info_source": "patient-reported",
+        "started": {"value": "2023", "precision": "year"},
+        "instructions": instructions,
+    })
+}
+
+/// ADR-0052 seal-plane microbench (Task 13): time the four born-sealed crypto stages a
+/// single sealed event traverses on the write+replicate path, over a ~1.5 KB
+/// representative medication body, and print ns/op per stage.
+///
+///   seal   = `seal_event_payload`  (fresh DEK, XChaCha20-Poly1305 over payload + twin)
+///   wrap   = `wrap_dek_for`        (ECIES X25519 → HKDF KEK → AEAD over the DEK)
+///   unwrap = `unwrap_dek`          (the puller/apply-door opening the re-wrapped DEK)
+///   unseal = `unseal_event_payload`(open the sealed body with its DEK)
+///
+/// This feeds the deferred per-event-vs-per-episode DEK-granularity question (ADR-0005 /
+/// ADR-0052) and checks the whole pipeline against the Bet-B ~4 ms p95 latency budget:
+/// it is AEAD over ~1.5 KB, so it must land microseconds-scale, orders below the budget.
+///
+/// House rule 6: the recipient unwrap keypair is DERIVED at runtime from a freshly
+/// generated seed (`generate_key`), never a hard-coded byte literal — and the seal/wrap
+/// primitives draw their own fresh DEK + nonce from the OS RNG internally, so nothing in
+/// this bench presents hard-coded cryptographic material to the scanner.
+fn cmd_bench_seal(iters: usize) -> R<()> {
+    use cairn_event::seal::{
+        derive_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek, unwrap_public,
+        wrap_dek_for,
+    };
+
+    let payload = representative_medication_payload();
+    let payload_bytes = serde_json::to_vec(&payload)?.len();
+    let twin = "metformin 500 mg tablet — one BD, patient-reported, started 2023";
+    let event_id = uuid::Uuid::now_v7().to_string();
+
+    // Recipient (node) unwrap keypair, derived at runtime from a fresh random seed.
+    let (sk, _kid) = cairn_event::generate_key()?;
+    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let public = unwrap_public(&secret);
+
+    // Stage 1: seal the body under a fresh per-event DEK.
+    let t = Instant::now();
+    let mut last_seal = seal_event_payload(&payload, twin, &event_id)?;
+    for _ in 1..iters {
+        last_seal = seal_event_payload(&payload, twin, &event_id)?;
+        std::hint::black_box(&last_seal);
+    }
+    let seal_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+    let (container, dek) = last_seal;
+
+    // Stage 2: wrap the DEK for the recipient node (the custody sidecar).
+    let t = Instant::now();
+    let mut wrapped = wrap_dek_for(&dek, &public)?;
+    for _ in 1..iters {
+        wrapped = wrap_dek_for(&dek, &public)?;
+        std::hint::black_box(&wrapped);
+    }
+    let wrap_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    // Stage 3: unwrap the DEK with the recipient's secret (apply door / puller).
+    let t = Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(unwrap_dek(&wrapped, &secret)?);
+    }
+    let unwrap_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    // Stage 4: unseal the body with its DEK (the clear-view read).
+    let t = Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(unseal_event_payload(&container, &dek, &event_id)?);
+    }
+    let unseal_ns = t.elapsed().as_nanos() as f64 / iters as f64;
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "op": "bench_seal",
+            "iters": iters,
+            "payload_bytes": payload_bytes,
+            "seal_ns": seal_ns,
+            "wrap_ns": wrap_ns,
+            "unwrap_ns": unwrap_ns,
+            "unseal_ns": unseal_ns,
+            "pipeline_ns": seal_ns + wrap_ns + unwrap_ns + unseal_ns,
+        })
+    );
+    Ok(())
+}
+
 fn cmd_put_blob(conn: &str, file: &str, media: &str) -> R<()> {
     let bytes = std::fs::read(file)?;
     let addr = blob_address(&bytes);
@@ -1220,6 +1371,12 @@ fn do_pull(
     peer: &str,
     peer_name: &str,
     full_sweep: bool,
+    // This node's signing key, when the caller wants custody on the wire (ADR-0052).
+    // From it we derive our unwrap secret and present the matching CERT to the peer,
+    // so the peer can re-wrap each sealed event's DEK for us. `None` (older call
+    // paths, DB tests) pulls WITHOUT custody: events still sync, sealed rows admit
+    // structurally at the door — custody is simply not gained on this cycle.
+    key: Option<&SigningKey>,
 ) -> R<serde_json::Value> {
     client.execute(
         "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
@@ -1253,13 +1410,34 @@ fn do_pull(
         floor_seq.map_or(last_seq, |f| f.saturating_sub(1).min(last_seq))
     };
 
+    // This node's unwrap identity for the pull (ADR-0052 custody sidecar). When a
+    // signing key is available we keep our unwrap SECRET (to open re-wrapped DEKs the
+    // peer sends back) and present our unwrap CERT (so the peer can re-wrap for us).
+    // The cert binds our X25519 unwrap public key to our Ed25519 identity — the same
+    // key the DEKs come back wrapped for. Absent a key we pull without custody.
+    let unwrap_secret = key.map(|sk| cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
+    let unwrap_cert: Option<String> = match (key, &unwrap_secret) {
+        (Some(sk), Some(secret)) => {
+            let public = cairn_event::seal::unwrap_public(secret);
+            Some(hex::encode(cairn_event::sign_unwrap_key_cert(sk, &public)?))
+        }
+        _ => None,
+    };
+
     let started = Instant::now();
     // A transport failure here has one skew-shaped cause worth naming (PR #223
     // review): a pre-#196 serve cannot decode the EventsAfterSeq op — its serde
     // rejects the unknown tag, the connection drops with no response frame, and
     // all this side sees is an EOF. Say so, alongside the plain-partition reading,
     // instead of leaving the operator a bare "failed to fill whole buffer".
-    let raw = request(peer, &Request::EventsAfterSeq { after_seq }).map_err(|e| {
+    let raw = request(
+        peer,
+        &Request::EventsAfterSeq {
+            after_seq,
+            unwrap_cert,
+        },
+    )
+    .map_err(|e| {
         format!(
             "pull {peer_name}: no response to EventsAfterSeq: {e}. If the peer is \
              down this is a plain partition (retry later); but if it is reachable \
@@ -1390,7 +1568,38 @@ fn do_pull(
             Err(reason) => Some(((hexed.as_bytes().to_vec(), None, None), reason)),
             Ok((signed_bytes, att, akey)) => {
                 event_bytes += signed_bytes.len(); // A5: real clinical-plane payload
-                match apply_signed(client, &signed_bytes, att.as_deref(), akey.as_deref()) {
+                                                   // Open the sidecar-wrapped DEK for THIS slot with our own unwrap
+                                                   // secret, if the peer shipped one (ADR-0052). This is INDEPENDENT of
+                                                   // event decode: a missing, non-hex, or unopenable DEK just means "no
+                                                   // custody" — the door still admits the sealed row structurally, so it
+                                                   // is never a reason to drop or freeze the event. The unwrapped DEK is
+                                                   // held only for the apply call below (Zeroizing clears it on drop).
+                let dek = match (
+                    &unwrap_secret,
+                    resp.wrapped_deks.get(i).and_then(|o| o.as_deref()),
+                ) {
+                    (Some(secret), Some(hexed)) => match hex::decode(hexed)
+                        .ok()
+                        .and_then(|w| cairn_event::seal::unwrap_dek(&w, secret).ok())
+                    {
+                        Some(d) => Some(d),
+                        None => {
+                            eprintln!(
+                                "pull {peer_name}: sidecar DEK for seq {seq} failed to open — \
+                                 admitting the event WITHOUT custody"
+                            );
+                            None
+                        }
+                    },
+                    _ => None,
+                };
+                match apply_signed(
+                    client,
+                    &signed_bytes,
+                    att.as_deref(),
+                    akey.as_deref(),
+                    dek.as_ref().map(|d| &d[..]),
+                ) {
                     Ok(new) => {
                         if new {
                             applied += 1;
@@ -1596,7 +1805,11 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         let signed: Vec<u8> = row.get(0);
         let att: Option<Vec<u8>> = row.get(1);
         let akey: Option<Vec<u8>> = row.get(2);
-        match apply_signed(client, &signed, att.as_deref(), akey.as_deref()) {
+        // No sidecar DEK on the requeue path: the quarantine pen holds only the
+        // refused signed bytes + attestation pair, never custody. A re-queued sealed
+        // event is admitted structurally without custody; its DEK rides a later
+        // normal pull once the peer serves it. Pass None (ADR-0052).
+        match apply_signed(client, &signed, att.as_deref(), akey.as_deref(), None) {
             Ok(_) => {
                 client.execute(
                     "DELETE FROM sync_quarantine WHERE content_digest=$1",
@@ -1748,12 +1961,22 @@ fn cmd_quarantine(conn: &str) -> R<()> {
     Ok(())
 }
 
-fn cmd_pull(conn: &str, peer: &str, peer_name: &str, metrics: bool, full: bool) -> R<()> {
+fn cmd_pull(
+    conn: &str,
+    peer: &str,
+    peer_name: &str,
+    metrics: bool,
+    full: bool,
+    key_path: &str,
+) -> R<()> {
     let mut client = connect_checked_apply(conn)?;
+    // Load this node's signing key so the pull presents an unwrap cert and gains
+    // custody of any sealed events it replicates (ADR-0052 custody sidecar).
+    let (sk, _kid) = load_or_create_key(key_path)?;
     // A manual one-shot pull defaults to incremental; `--full` requests a sweep
     // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
     // takes on cadence — issue #196).
-    let m = do_pull(&mut client, peer, peer_name, full)?;
+    let m = do_pull(&mut client, peer, peer_name, full, Some(&sk))?;
     if metrics {
         println!("{m}");
     } else {
@@ -1983,7 +2206,10 @@ fn cmd_blobd(conn: &str, peers: &[String], window: usize, budget_ms: u64, metric
     Ok(())
 }
 
-fn cmd_serve(conn: String, listen: &str, corrupt: bool) -> R<()> {
+/// `own_key` (ADR-0052): this node's signing key, wrapped in an `Arc` so a clone can
+/// move into each per-connection thread where `serve_conn` derives the unwrap secret
+/// to re-wrap DEKs. `None` serves without custody (events still sync).
+fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<SigningKey>>) -> R<()> {
     let listener = TcpListener::bind(listen)?;
     eprintln!(
         "serving on {listen}{}",
@@ -1996,8 +2222,9 @@ fn cmd_serve(conn: String, listen: &str, corrupt: bool) -> R<()> {
     for stream in listener.incoming() {
         let stream = stream?;
         let conn = conn.clone();
+        let own_key = own_key.clone();
         std::thread::spawn(move || {
-            if let Err(e) = serve_conn(&conn, stream, corrupt) {
+            if let Err(e) = serve_conn(&conn, stream, corrupt, own_key) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -2030,11 +2257,17 @@ fn cmd_run(
     budget_ms: u64,
     log_path: &str,
     duration_s: u64,
+    key_path: &str,
 ) -> R<()> {
+    // Load the node signing key ONCE up front (ADR-0052): the serve thread and the
+    // pull loop must share the SAME key — deriving it twice would race to create the
+    // file and could leave serve and pull on different identities. One Arc feeds both.
+    let node_key = Arc::new(load_or_create_key(key_path)?.0);
     {
         let (c, l) = (conn.to_string(), listen.to_string());
+        let own_key = Arc::clone(&node_key);
         std::thread::spawn(move || {
-            if let Err(e) = cmd_serve(c, &l, false) {
+            if let Err(e) = cmd_serve(c, &l, false, Some(own_key)) {
                 eprintln!("serve thread exited: {e}");
             }
         });
@@ -2098,7 +2331,13 @@ fn cmd_run(
         // is_multiple_of, stabilized only in Rust 1.87) keeps within the MSRV 1.74.
         #[allow(clippy::manual_is_multiple_of)]
         let full_sweep = cycle % FULL_SWEEP_EVERY == 0;
-        match do_pull(&mut client, peer, peer_name, full_sweep) {
+        match do_pull(
+            &mut client,
+            peer,
+            peer_name,
+            full_sweep,
+            Some(node_key.as_ref()),
+        ) {
             Ok(m) => {
                 status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
                 line["pull"] = m;
@@ -2149,8 +2388,85 @@ fn cmd_run(
     Ok(())
 }
 
-fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
+/// Re-wrap each served event's DEK for the pulling peer — the custody half of the
+/// clinical wire (ADR-0052). Pure so the wire contract is unit-testable.
+///
+/// This node stores each sealed event's DEK wrapped for its OWN unwrap key
+/// (`event_dek.dek_wrapped`, hex-encoded into `local_deks[i]` by the serve SQL). A
+/// DEK is symmetric, so it can never be shipped as-is: we UNWRAP it with our own
+/// secret, then RE-WRAP it for the requester's X25519 public key (from its verified
+/// cert). The requester unwraps with ITS secret and hands the DEK to the apply door.
+/// Custody thus **follows admission** — it does not widen WHICH events a peer
+/// replicates — but the DEK is precisely what makes a sealed body READABLE, so handing
+/// it over confers clinical-data read access (it populates event_clear / opens the
+/// plaintext), not merely a later crypto-shred capability. What currently gates who may
+/// obtain it is the trust-note at the serve site (transport boundary only, for now).
+///
+/// `local_deks[i]` is None whenever no custody must travel: the event is unsealed,
+/// this node holds no DEK for it, OR it has been SHREDDED here (the serve SQL nulls a
+/// shredded row's DEK — the wire-level half of the shred guarantee: a shredded event
+/// NEVER re-emits its key). A per-slot re-wrap failure degrades that one slot to None
+/// (no custody for it), never the whole batch. With no requester key or no local
+/// unwrap secret, every slot is None — the events still sync, custody just does not.
+fn rewrap_custody_for_peer(
+    local_deks: &[Option<String>],
+    requester_pub: Option<&[u8; 32]>,
+    own_secret: Option<&[u8; 32]>,
+) -> Vec<Option<String>> {
+    let (Some(requester_pub), Some(own_secret)) = (requester_pub, own_secret) else {
+        return vec![None; local_deks.len()];
+    };
+    local_deks
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            // A None slot means no custody must travel (unsealed / no local DEK / shredded):
+            // that is normal, so stay silent.
+            let hexed = slot.as_deref()?;
+            // A PRESENT local DEK that fails to re-wrap, though, is an operator-visible
+            // degradation — the event still syncs but its custody silently vanishes, blanking
+            // the sealed projection on every puller. The usual cause is a serve `--key` whose
+            // derived unwrap secret does not match the registered node_unwrap_key (a misconfig,
+            // or an un-re-wrapped key rotation). Log it rather than fail silently — mirrors the
+            // pull-side "sidecar DEK failed to open — admitting WITHOUT custody" line.
+            let rewrap = || -> Option<String> {
+                let local = hex::decode(hexed).ok()?;
+                let dek = cairn_event::seal::unwrap_dek(&local, own_secret).ok()?;
+                let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub).ok()?;
+                Some(hex::encode(rewrapped))
+            };
+            if let Some(s) = rewrap() {
+                Some(s)
+            } else {
+                eprintln!(
+                    "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving this \
+                     event WITHOUT custody. Check the serve --key matches the node's registered \
+                     unwrap key (a mismatched key or un-re-wrapped rotation blanks sealed \
+                     projections on every puller)."
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+/// `own_key` (ADR-0052): this node's signing key, from which we derive the unwrap
+/// SECRET used to open our locally-stored DEKs before re-wrapping them for a pulling
+/// peer. `None` serves without custody (events still sync). One `Arc` is cloned into
+/// each per-connection thread; the secret is derived per connection (a cheap HKDF).
+fn serve_conn(
+    conn: &str,
+    mut stream: TcpStream,
+    corrupt: bool,
+    own_key: Option<Arc<SigningKey>>,
+) -> R<()> {
     let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    // Our own unwrap secret, derived once per connection from this node's signing
+    // seed (ADR-0026 escrow: the secret is never in the DB). Used only to open our
+    // locally-stored DEKs so the EventsAfterSeq arm can re-wrap them for the peer.
+    let own_secret = own_key
+        .as_ref()
+        .map(|k| cairn_event::seal::derive_unwrap_secret(&k.to_bytes()));
     let raw = read_frame(&mut stream)?;
     let req: Request = serde_json::from_slice(&raw)?;
     let resp: Vec<u8> = match req {
@@ -2179,9 +2495,16 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
                 // Declare the context we mint under (issue #108) so a skewed
                 // puller can refuse the batch deterministically and legibly.
                 signing_context: Some(CTX_EVENT.as_str().to_string()),
+                // Legacy HLC arm carries NO custody sidecar (ADR-0052): it cannot
+                // receive an unwrap cert, so it never re-wraps DEKs. Empty = no
+                // custody; sealed events still sync (admitted structurally).
+                wrapped_deks: vec![],
             })?
         }
-        Request::EventsAfterSeq { after_seq } => {
+        Request::EventsAfterSeq {
+            after_seq,
+            unwrap_cert,
+        } => {
             // Serve LOCAL insertion order (seq), STRICTLY above the puller's cursor
             // (issue #196). The seq prefix is transport metadata; signed_bytes are
             // the untouched signed core (principle 12). `after_seq = 0` = full sweep.
@@ -2189,24 +2512,71 @@ fn serve_conn(conn: &str, mut stream: TcpStream, corrupt: bool) -> R<()> {
             // contiguous handled prefix and relies on strictly-ascending arrival.
             // Unpaginated (issue #101): the whole suffix — the whole LOG on a sweep —
             // ships in one frame; see the FULL_SWEEP_EVERY note for the known cost.
+            // The 5th column is THIS node's own wrapped DEK for the event, hex-encoded
+            // — but ONLY when the event has NOT been shredded here (ADR-0052). The
+            // LEFT JOIN to erasure_shred_log + `CASE WHEN s.target_event_id IS NULL`
+            // is the WIRE-LEVEL half of the shred guarantee: a shredded event NEVER
+            // ships its DEK, so custody can never be reconstituted from a peer's serve
+            // after a local crypto-shred. A non-sealed event (or one this node holds
+            // no custody for) has no event_dek row, so dek_hex is NULL there too.
             let rows = client.query(
-                "SELECT seq, encode(signed_bytes,'hex'), encode(attestation,'hex'),
-                        encode(attester_key,'hex')
-                 FROM event_log
-                 WHERE seq > $1
-                 ORDER BY seq",
+                "SELECT e.seq,
+                        encode(e.signed_bytes,'hex'),
+                        encode(e.attestation,'hex'),
+                        encode(e.attester_key,'hex'),
+                        CASE WHEN s.target_event_id IS NULL
+                             THEN encode(d.dek_wrapped,'hex') END AS dek_hex
+                 FROM event_log e
+                 LEFT JOIN event_dek d          ON d.event_id = e.event_id
+                 LEFT JOIN erasure_shred_log s  ON s.target_event_id = e.event_id
+                 WHERE e.seq > $1
+                 ORDER BY e.seq",
                 &[&after_seq],
             )?;
             let seqs = rows.iter().map(|r| r.get::<_, i64>(0)).collect();
             let events = rows.iter().map(|r| r.get::<_, String>(1)).collect();
             let attestations = rows.iter().map(|r| r.get::<_, Option<String>>(2)).collect();
             let attester_keys = rows.iter().map(|r| r.get::<_, Option<String>>(3)).collect();
+            // Each event's DEK still wrapped for OUR key (None = no custody / shredded).
+            let local_deks: Vec<Option<String>> =
+                rows.iter().map(|r| r.get::<_, Option<String>>(4)).collect();
+
+            // Verify the pulling peer's unwrap cert (ADR-0052): signature + kid
+            // self-binding only. `verify_unwrap_key_cert` confirms the cert's kid
+            // signed it, so `requester_pub` provably belongs to that identity.
+            //
+            // TODO(follow-up, filed in Task 14): pin this kid against the node-plane
+            // trust set. The skeleton confirms the cert is internally consistent (the
+            // kid signed it, so `requester_pub` provably belongs to that identity) but
+            // does NOT yet check the kid is a TRUSTED peer. Be honest about what that
+            // leaves standing: until cert-kid trust-set pinning lands, the transport
+            // boundary (WireGuard / mTLS on the serve port) is the SOLE access control
+            // on who obtains sealed-body custody. ANY self-signed unwrap cert that
+            // reaches this port has its DEKs re-wrapped and thereby obtains READ-custody
+            // of every non-shredded sealed body this node serves — the DEK is what
+            // populates event_clear and opens the sealed plaintext, so custody confers
+            // clinical-data READ, not merely a future shred capability. This is the
+            // sanctioned ADR-0052 erasability-by-default skeleton (custody is designed
+            // to follow admission), but its current floor honestly stated is "the link
+            // is the access control"; trust-set pinning is the named hardening that
+            // makes admission the boundary in the DB too, not just on the wire. An
+            // absent or invalid cert simply yields no custody (below), never a refused
+            // pull.
+            let requester_pub = unwrap_cert.as_deref().and_then(|hexed| {
+                hex::decode(hexed)
+                    .ok()
+                    .and_then(|c| cairn_event::verify_unwrap_key_cert(&c).ok())
+                    .map(|(_kid, pubk)| pubk)
+            });
+            let wrapped_deks =
+                rewrap_custody_for_peer(&local_deks, requester_pub.as_ref(), own_secret.as_deref());
             serde_json::to_vec(&EventsResponse {
                 events,
                 attestations,
                 attester_keys,
                 seqs,
                 signing_context: Some(CTX_EVENT.as_str().to_string()),
+                wrapped_deks,
             })?
         }
         Request::BlobSlice {
@@ -2276,19 +2646,22 @@ USAGE (all take --conn <postgres-uri>):
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
   gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
-  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full]
+  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--key PATH]
+              (--key: this node's key; presents an unwrap cert so sealed events arrive with shred custody — ADR-0052)
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   requeue     --conn URI [--metrics]
               (re-process quarantined events through the apply door after fixing the cause)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
-  serve       --conn URI --listen HOST:PORT [--corrupt]
+  serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH]
+              (--key: this node's key; re-wraps sealed events' DEKs for pulling peers — ADR-0052)
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
   run         --conn URI --listen HOST:PORT --peer HOST:PORT --peer-name NAME
-              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N]
-              (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops)
+              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N] [--key PATH]
+              (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops; --key enables custody both ways — ADR-0052)
   bench-insert --conn URI --node NAME --key PATH [--count N]   (Bet B B1: maintained-write latency)
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
+  bench-seal  [--iters N]                                      (ADR-0052: seal/wrap/unwrap/unseal ns/op, no DB)
   sign-stdin  --key PATH    (read JSON EventBody on stdin, write hex COSE_Sign1 on stdout)
   attest-stdin --key PATH    (read JSON AttestationBody on stdin, write hex COSE_Sign1 token on stdout)
   key-id      --key PATH    (print the hex Ed25519 public key / kid for the key file)
@@ -2361,12 +2734,18 @@ fn main() -> R<()> {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100000),
         )?,
+        "bench-seal" => cmd_bench_seal(
+            flag(&args, "--iters")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10000),
+        )?,
         "pull" => cmd_pull(
             &need(conn),
             &need(flag(&args, "--peer")),
             &need(flag(&args, "--peer-name")),
             args.iter().any(|a| a == "--metrics"),
             args.iter().any(|a| a == "--full"),
+            &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
         )?,
         "quarantine" => cmd_quarantine(&need(conn))?,
         "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
@@ -2395,11 +2774,19 @@ fn main() -> R<()> {
                 args.iter().any(|a| a == "--metrics"),
             )?
         }
-        "serve" => cmd_serve(
-            need(conn),
-            &need(flag(&args, "--listen")),
-            args.iter().any(|a| a == "--corrupt"),
-        )?,
+        "serve" => {
+            // Load this node's key so the serve arm can re-wrap sealed events' DEKs
+            // for pulling peers (ADR-0052). Defaults to node.key like the other verbs.
+            let own_key = Arc::new(
+                load_or_create_key(&flag(&args, "--key").unwrap_or_else(|| "node.key".into()))?.0,
+            );
+            cmd_serve(
+                need(conn),
+                &need(flag(&args, "--listen")),
+                args.iter().any(|a| a == "--corrupt"),
+                Some(own_key),
+            )?
+        }
         "run" => cmd_run(
             &need(conn),
             &need(flag(&args, "--listen")),
@@ -2419,6 +2806,7 @@ fn main() -> R<()> {
             flag(&args, "--duration-s")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
         )?,
         "sign-stdin" => {
             cmd_sign_stdin(&flag(&args, "--key").unwrap_or_else(|| "agent.key".into()))?
@@ -2553,10 +2941,19 @@ mod tests {
 
     #[test]
     fn events_after_seq_request_round_trips() {
-        let req = Request::EventsAfterSeq { after_seq: 42 };
+        let req = Request::EventsAfterSeq {
+            after_seq: 42,
+            unwrap_cert: None,
+        };
         let bytes = serde_json::to_vec(&req).unwrap();
         match serde_json::from_slice::<Request>(&bytes).unwrap() {
-            Request::EventsAfterSeq { after_seq } => assert_eq!(after_seq, 42),
+            Request::EventsAfterSeq {
+                after_seq,
+                unwrap_cert,
+            } => {
+                assert_eq!(after_seq, 42);
+                assert!(unwrap_cert.is_none());
+            }
             other => panic!("wrong variant: {other:?}"),
         }
     }
@@ -2721,10 +3118,137 @@ mod tests {
             attester_keys: vec![None],
             seqs: vec![7],
             signing_context: None,
+            wrapped_deks: vec![None],
         };
         let back: EventsResponse =
             serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
         assert_eq!(back.seqs, vec![7]);
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0052 custody sidecar — the clinical wire carries a re-wrapped DEK so a
+    // pulling peer can gain crypto-shred custody of a sealed event it replicates.
+    // Both new fields are ADDITIVE (principle 12 / ADR-0012): an old peer omits
+    // them and everything still syncs (sealed rows admit structurally, no custody).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn events_response_wrapped_deks_field_is_additive() {
+        // Old responder: no `wrapped_deks` field → empty vec (serde default). The
+        // puller then treats every slot as "no custody shipped" (see do_pull's
+        // resp.wrapped_deks.get(i)).
+        let old = r#"{"events":[],"attestations":[],"attester_keys":[],"seqs":[]}"#;
+        let r: EventsResponse = serde_json::from_str(old).unwrap();
+        assert!(
+            r.wrapped_deks.is_empty(),
+            "missing wrapped_deks decodes to empty (serde default)"
+        );
+    }
+
+    #[test]
+    fn events_after_seq_unwrap_cert_is_additive() {
+        // Request is INTERNALLY tagged (`#[serde(tag = "op")]`), so an old puller's
+        // seq request is `{"op":"EventsAfterSeq","after_seq":0}` with no unwrap_cert.
+        // It must decode to None (serde default) — the server then serves without
+        // custody rather than refusing the pull.
+        let old = r#"{"op":"EventsAfterSeq","after_seq":0}"#;
+        let r: Request = serde_json::from_str(old).unwrap();
+        match r {
+            Request::EventsAfterSeq { unwrap_cert, .. } => assert!(
+                unwrap_cert.is_none(),
+                "missing unwrap_cert decodes to None (serde default)"
+            ),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn unwrap_key_cert_round_trip_binds_kid() {
+        // The cert the puller presents must bind its X25519 unwrap public key to its
+        // Ed25519 identity (the kid): the server re-wraps DEKs for `xpub`, trusting
+        // that only the holder of the matching signing key controls it.
+        let (sk, _kid) = cairn_event::generate_key().unwrap();
+        let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+        let xpub = cairn_event::seal::unwrap_public(&secret);
+        let cert = cairn_event::sign_unwrap_key_cert(&sk, &xpub).unwrap();
+        let (kid, got) = cairn_event::verify_unwrap_key_cert(&cert).unwrap();
+        assert_eq!(kid, hex::encode(sk.verifying_key().to_bytes()));
+        assert_eq!(got, xpub);
+    }
+
+    // ---------------------------------------------------------------------
+    // rewrap_custody_for_peer — the load-bearing custody re-wrap on the serve
+    // path (ADR-0052). Pure (no DB), so unit-testable directly. ALL key material
+    // is DERIVED at runtime (house rule 6): a literal 32-byte array in a crypto
+    // context trips CodeQL's hard-coded-cryptographic-value query (issue #146).
+    // ---------------------------------------------------------------------
+
+    /// Deterministic-but-computed 32-byte fixture. `tag` distinguishes each
+    /// role/secret so no two fixtures collide, and nothing is a byte literal.
+    fn derived_bytes(tag: u8) -> [u8; 32] {
+        std::array::from_fn(|i| (i as u8).wrapping_mul(31).wrapping_add(tag))
+    }
+
+    #[test]
+    fn rewrap_custody_round_trips_to_the_requesters_secret() {
+        // (a) A slot re-wrapped for the requester must open with the REQUESTER's
+        //     secret and yield the ORIGINAL dek — the whole contract: custody
+        //     travels to the peer, readable only by the peer.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x11));
+        let own_pub = cairn_event::seal::unwrap_public(&own_secret);
+        let peer_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x22));
+        let peer_pub = cairn_event::seal::unwrap_public(&peer_secret);
+        let dek = derived_bytes(0x33);
+
+        // This node stores the DEK wrapped for its OWN unwrap key (the serve SQL
+        // hands rewrap_custody_for_peer exactly this hex string).
+        let local_wrapped = cairn_event::seal::wrap_dek_for(&dek, &own_pub).unwrap();
+        let local_deks = vec![Some(hex::encode(local_wrapped))];
+
+        let out = rewrap_custody_for_peer(&local_deks, Some(&peer_pub), Some(&*own_secret));
+        assert_eq!(out.len(), 1);
+        let rewrapped = hex::decode(out[0].as_ref().expect("slot was re-wrapped")).unwrap();
+
+        // Opens with the PEER's secret and recovers the original DEK …
+        let recovered = cairn_event::seal::unwrap_dek(&rewrapped, &peer_secret).unwrap();
+        assert_eq!(&*recovered, &dek, "requester recovers the original DEK");
+        // … and is NOT re-openable by the serving node (the wrap is bound to the peer).
+        assert!(
+            cairn_event::seal::unwrap_dek(&rewrapped, &own_secret).is_err(),
+            "the re-wrap is bound to the requester, not the server"
+        );
+    }
+
+    #[test]
+    fn rewrap_custody_leaves_a_none_slot_none() {
+        // (b) A None local slot (unsealed event / no custody here / shredded) stays
+        //     None — no DEK is fabricated for a slot that never carried one.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x44));
+        let peer_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &derived_bytes(0x55),
+        ));
+
+        let out = rewrap_custody_for_peer(&[None], Some(&peer_pub), Some(&*own_secret));
+        assert_eq!(out, vec![None], "a None local slot ships no custody");
+    }
+
+    #[test]
+    fn rewrap_custody_ships_nothing_without_a_requester_key() {
+        // (c) No requester public key (absent / invalid cert → None) means EVERY slot
+        //     is None: sealed events still sync, custody simply does not travel. Even a
+        //     populated local slot must not leak when there is no recipient to bind to.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x66));
+        let own_pub = cairn_event::seal::unwrap_public(&own_secret);
+        let local_wrapped =
+            cairn_event::seal::wrap_dek_for(&derived_bytes(0x77), &own_pub).unwrap();
+        let local_deks = vec![Some(hex::encode(local_wrapped)), None];
+
+        let out = rewrap_custody_for_peer(&local_deks, None, Some(&*own_secret));
+        assert_eq!(
+            out,
+            vec![None, None],
+            "no requester key means all-None custody"
+        );
     }
 }
 
@@ -2827,6 +3351,8 @@ mod quarantine_tests {
             // puller has a per-event cursor to checkpoint/pen on (issue #196).
             seqs: (1..=events.len() as i64).collect(),
             signing_context: signing_context.map(str::to_string),
+            // These quarantine/cursor tests don't exercise custody; ship no DEKs.
+            wrapped_deks: vec![None; events.len()],
         })
         .unwrap()
     }
@@ -2908,7 +3434,7 @@ mod quarantine_tests {
         addr: &str,
         peer: &str,
     ) -> (String, serde_json::Value) {
-        let err = do_pull(c, addr, peer, false).unwrap_err();
+        let err = do_pull(c, addr, peer, false, None).unwrap_err();
         let ie = err
             .downcast_ref::<PullIntegrityError>()
             .expect("pull must fail as an INTEGRITY error, not transport");
@@ -2994,7 +3520,7 @@ mod quarantine_tests {
         let repaired = peer_note(&sk, &kid, WALL_2026 + 1_500);
         let raw = response_json(&[&e1, &repaired, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
         assert_eq!(
             m["applied_new"], 1,
             "the repaired event is admitted automatically"
@@ -3039,7 +3565,7 @@ mod quarantine_tests {
             .unwrap();
 
         // Same wire content again: quiet success, floor released.
-        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
         assert_eq!(m["skipped_unverifiable"], 0);
         assert_eq!(
             m["skipped_acked"], 1,
@@ -3094,7 +3620,7 @@ mod quarantine_tests {
 
         // The next cycle fails loudly AGAIN (no silent livelock) and the
         // quarantine dedupes rather than growing without bound.
-        assert!(do_pull(&mut c, &addr, "peer-legacy", false).is_err());
+        assert!(do_pull(&mut c, &addr, "peer-legacy", false, None).is_err());
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 2);
         assert!(
@@ -3120,7 +3646,7 @@ mod quarantine_tests {
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
         let raw = response_json(&[&e1], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false).unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
         assert_eq!(m["applied_new"], 1);
 
         // Now the peer's new tail is garbage; the boundary event re-ships (a
@@ -3233,7 +3759,7 @@ mod quarantine_tests {
             }))
             .unwrap();
             let addr = serve_canned(raw, 1);
-            let err = do_pull(&mut c, &addr, "peer-a", false)
+            let err = do_pull(&mut c, &addr, "peer-a", false, None)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -3275,7 +3801,7 @@ mod quarantine_tests {
                 // Dropping the stream closes it with no response frame written.
             }
         });
-        let err = do_pull(&mut c, &addr, "peer-old", false)
+        let err = do_pull(&mut c, &addr, "peer-old", false, None)
             .unwrap_err()
             .to_string();
         assert!(

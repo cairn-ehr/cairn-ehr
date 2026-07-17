@@ -151,8 +151,12 @@ GRANT SELECT ON medication_dose_correction TO cairn_agent;
 --    event_id; effective = the assert's `started`.
 CREATE OR REPLACE FUNCTION medication_dose_seed_initial()
 RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE p jsonb := NEW.body;
+-- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+-- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+-- sealed without custody here: nothing to project — honest degradation.
+DECLARE p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     INSERT INTO medication_dose_event
         (dose_event_id, medication_id, patient_id, amount, unit,
          effective_value, effective_precision, is_initial, info_source, reason,
@@ -176,8 +180,12 @@ CREATE TRIGGER medication_dose_seed_initial_trg
 -- 8. Fold a dose change into a new timeline point.
 CREATE OR REPLACE FUNCTION medication_dose_change_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE p jsonb := NEW.body;
+-- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+-- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+-- sealed without custody here: nothing to project — honest degradation.
+DECLARE p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     -- #192 thread patient-consistency (shared guard, db/031): a dose row carries its
     -- own patient_id, so a wrong-patient dose event would mis-attribute the dose
     -- history. Local fail-loud / remote converge-and-flag / unknown passes.
@@ -288,8 +296,12 @@ GRANT SELECT ON patient_medication_past TO cairn_agent;
 --     Offline-first: no check that the target exists locally (it may replicate later).
 CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE p jsonb := NEW.body;
+-- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+-- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+-- sealed without custody here: nothing to project — honest degradation.
+DECLARE p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     -- #192 thread patient-consistency (shared guard, db/031) — same contract as the
     -- dose-change trigger above.
     PERFORM cairn_guard_medication_patient(

@@ -125,6 +125,17 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
     }
 }
 
+/// ADR-0052: the node's X25519 DEK-unwrap secret, HKDF-derived from the SAME
+/// Ed25519 seed the keystore already seals and escrows (ADR-0026) — one master
+/// secret, two independent keys, no second recovery ceremony. Domain-separated
+/// by the HKDF info tag in cairn-event::seal, so the unwrap secret leaks nothing
+/// about the signing key (and vice versa). The daemon holds this secret and NEVER
+/// stores it in the database — only its public half (the unwrap-key cert) does,
+/// so a DB backup can never reconstruct a DEK.
+pub fn unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
+    cairn_event::seal::derive_unwrap_secret(&sk.to_bytes())
+}
+
 /// Inspect the at-rest posture without needing the secret (for `status`).
 pub fn key_at_rest_state(path: &Path) -> KeyAtRest {
     match std::fs::read(path) {

@@ -842,6 +842,81 @@ design:** event logs minted by pre-ADR-0051 binaries (cairn-sync's `role:"author
 flat-string responsibility) now refuse at db/020 on every full sweep — dev/PoC rigs holding them
 (replication-failover demo, spike rigs) must be wiped, not synced through.
 
+**Slice 42 — born-sealed clinical bodies (2026-07-17; the review course, Priority 3 item #189 [C1] +
+#92; branch `feat/adr-0052-born-sealed-189-92`;
+[ADR-0052](spec/decisions/0052-born-sealed-clinical-bodies.md), spec §3.5/§3.8/§5.9, v0.53).** The
+posture decision: **every clinical JSONB body is born sealed** under a per-event DEK wrapped for the
+node's *own* key — an **erasability substrate, NOT confidentiality** (the node reads its own data
+freely, projections and FTS behave exactly as before, nothing is hidden from anyone). Its sole effect
+is that **every ADR-0005 erasure rung stays reachable for every clinical event, forever** — a plaintext
+default silently forecloses rungs 2–4 for the whole record and *that* is the system taking a policy
+stance against erasability (principle 9). The word "sealed" is split into two properties: **erasable**
+(shipped default, node keeps custody) vs **sequestered** (custody narrowed, the ADR-0006 confidentiality
+half — deferred, posture ratified). **Crypto core** (`cairn-event::seal`): per-event DEK
+XChaCha20-Poly1305, **seal-then-sign** (the signature covers the *ciphertext*, so it verifies on every
+node and after shred; AAD binds `event_id` so a container can't be lifted between events); the
+**legibility twin travels inside the sealed region under the same DEK** (the sealed row's outer
+`plaintext_twin` is a signed mechanical *stub* naming only type + seal state — there is no plaintext
+twin column to leak from); an **X25519/HKDF wrap plane** derived from the node's Ed25519 signing seed
+(`info = "cairn-node-unwrap-x25519-v1"` — the DB holds only the *public* half, so an ordinary DB backup
+can never reconstruct a DEK, and ADR-0026's op-pass + recovery-code escrow already covers it, KEK escrow
+now **mandatory**); the public half published as a signed **unwrap-key certificate** under its own
+ADR-0040 context `CTX_UNWRAP_KEY`. **`db/037` custody plane**: `event_dek(event_id, holder, dek_wrapped)`
+(the mutable keystore beside the log — never inside the signed bytes; the reserved `db/001`
+`event_log.dek_wrapped` column retired-unused, superseded), `event_clear` (the mutable derived-plaintext
+operational twin — the FTS/RAG substrate, never a column on the append-only row) + `cairn_clear_payload`,
+**both homed in `db/005`** for `LANGUAGE sql` eager-bind ordering (they must exist before the projection
+fns that call them), and `erasure_shred_log`; `erasure.shred.asserted` twin-registered (twin registry
+**18→19**), plaintext-by-necessity so the tombstone outlives all keys. **Two doors** (the ADR-0051
+strict-submit / lenient-apply asymmetry): the **strict submit door refuses an UNSEALED `clinical.*`
+body** (this is what makes born-sealed unbypassable, not a convention) — caller passes signed sealed
+bytes **plus the DEK**, the door verifies signature-over-ciphertext, **decrypts in-DB** (via `cairn_pgx`
+`cairn_unseal_body`), runs the *full* existing ADR-0048 twin/floor checks on the plaintext, builds
+projections + the `event_clear` row, wraps the DEK for the node into `event_dek`; a sealed event
+*without* its DEK is refused. The **lenient apply door** admits a foreign plaintext body (set-union
+losslessness) and admits a **sealed event arriving without custody on structural checks only** (*can't
+read → never reject*). The final-review round closed the one gating cross-cutting hole — **sealed⇒clinical
+scope enforced at BOTH doors** (a sealed *non*-clinical body is refused; the sealed flag can't smuggle
+a body past its type's floor), non-clinical projection triggers made seal-robust, and subset-node shred
+wedged. **Seal-at-write for all 7 medication verbs** (assert / cease / dose-change / dose-correction /
+attestation / reconciliation-link / separation) routed through the one `medication::sealed_submit`
+path — the pure verb builders are unchanged, clinical semantics identical, now sealed. **Custody sidecar
+on the clinical wire** (additive ADR-0012 field): `cairn-sync` serve/pull unwrap-then-rewrap the DEK
+per-peer (custody follows admission trust), **shred-aware DEK exclusion** — custody is *never* granted to
+an already-shredded event (arrival-order independent: a DEK sidecar landing after the shred tombstone is
+refused, the shred wins regardless of message order). **Shred CLI** (`cairn-node shred`): the rung-3
+audited crypto-shred ceremony — destroy the `event_dek` rows, scrub all derived plaintext (`event_clear`
++ projections + the mandatory future FTS invalidation), append the signed plaintext
+`erasure.shred.asserted` tombstone (*existed → destroyed, basis Z*); **the log row is never touched** (its
+signature still verifies, a resurrected opaque row is keyless noise). **E2E proof** (`cairn-sync`,
+real binaries): sealed sync **with custody** converges A→B readable, **shred propagates**, and a
+**cold-peer restore replays the shred log before projecting so it resurrects nothing** — a restored
+backup can no more resurrect an erased body than a sibling can. **Bench** (`cairn-sync bench-seal`,
+~1.5 KB body, N=10 000, release): whole seal→wrap→unwrap→unseal ≈ **0.11 ms/event**, ~**37× under** the
+Bet-B ~4 ms budget (the X25519 wrap dominates; per-event DEKs comfortably affordable on a dev-class node,
+the Pi-class re-run + per-episode-hierarchy question deferred). **ADR-0049 false-fresh gate** (§9): a
+sealed thread's commitment is now a function of local *custody*, not the pure append-only content-event
+set, so a partial-custody node could read false-fresh; `reviewed_count` is promoted (for sealed threads
+only) to a **safe-direction withholding tripwire** — `readable_count < reviewed_count` forces
+stale/unknown, never asserting fresh it would otherwise have missed (inert on unsealed/full-custody
+threads). **Operational caveat, by design:** the born-sealed floor **refuses plaintext `clinical.*` at
+submit**, so pre-ADR-0052 plaintext clinical dev/PoC rigs must be **WIPED** — old logs won't cross
+(honest degradation per ADR-0012, moot pre-production). TDD RED-first throughout; workspace **761/0** +
+fmt + clippy clean; docs build green; **final whole-branch review = READY TO MERGE**. Nine follow-ups
+filed (all deferred/hardening, none gating): [#230](https://github.com/cairn-ehr/cairn-ehr/issues/230)
+(sealed-no-custody residual false-fresh, ADR-0052 §9), [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231)
+(pin the unwrap-cert kid to the trust set — transport is currently the sole custody-read gate),
+[#232](https://github.com/cairn-ehr/cairn-ehr/issues/232) (sequester + sensitivity-stream +
+safety-projection — the ADR-0006 confidentiality half),
+[#233](https://github.com/cairn-ehr/cairn-ehr/issues/233) (unwrap-key rotation ceremony),
+[#234](https://github.com/cairn-ehr/cairn-ehr/issues/234) (blob-byte born-sealing),
+[#235](https://github.com/cairn-ehr/cairn-ehr/issues/235) (shred authorization policy hooks),
+[#236](https://github.com/cairn-ehr/cairn-ehr/issues/236) (FTS/RAG on the `event_clear` shadow only +
+shred invalidation), [#237](https://github.com/cairn-ehr/cairn-ehr/issues/237) (code-hygiene bundle),
+[#238](https://github.com/cairn-ehr/cairn-ehr/issues/238) (clinical_pull test readiness-timeout flake).
+
+**Post-review `/fixall` pass (2026-07-18).** A whole-diff `/review` of PR #239 caught **five issues the "READY TO MERGE / none gating / fmt clean" verdict had missed**, all fixed on-branch (RED-first): (1) *[gating]* a wrongly-sealed `identity.link` **wedged clinical sync** — `patient_link_apply()` cast `subject_a`/`subject_b` to `uuid` in its DECLARE block, before the seal guard could return, so a non-UUID top-level field raised at apply and froze the watermark (casts moved below the guard, db/018); (2) *[gating]* `cairn_execute_shred` scrubbed only 3 of 7 medication projections, leaving **dose-correction / reconciliation / attestation plaintext readable after a shred** (rung-3 defeated) — now scrubs all by `content_address` + recomputes the derived `medication_group_member` (db/037); (3) *[CI-red]* rustfmt failed on the workspace-**excluded** `cairn_pgx` extension; (4) crypto-shred of a **non-sealed target** was a false erasure — now refused at the CLI + the db/005 floor; (5) silent serve-side DEK re-wrap failure — now logged. Verified cairn-node 298/0, cairn-sync 51/0, cairn-event 140/0 (+3 regression tests), fmt+clippy clean on both trees. The subset/E2E tests require **cairn_pgx ≥ 0.3.0 on both test databases** (a stale 0.1.0 on the 2nd DB trips db/026's version gate). #231 (unwrap-cert kid pinning) reaffirmed as the load-bearing gap: born-sealed ships **erasability, not confidentiality**, until it lands.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

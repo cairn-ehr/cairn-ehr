@@ -21,11 +21,47 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
         .unwrap_or_else(|| e.to_string())
 }
 
-/// Truncate the log + every medication projection and enroll a fresh device actor.
+/// ADR-0052: seal a CLEAR clinical EventBody like the node write path, register the
+/// node's unwrap key, sign, and submit through the 4-arg strict door. Returns the raw
+/// driver Result so refusal-pinning tests keep using db_msg. House rule 6: the DEK is
+/// generated inside seal_event_payload, never a literal.
+async fn seal_and_submit(
+    c: &Client,
+    sk: &SigningKey,
+    mut body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let twin = body
+        .plaintext_twin
+        .take()
+        .expect("a clinical body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id)
+            .expect("seal the clear payload+twin");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+    let signed = sign(&body, sk).expect("sign the sealed body");
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await?;
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+}
+
+/// Truncate the log + every medication projection + the ADR-0052 custody plane and
+/// enroll a fresh device actor (custody tables named explicitly — no FK, no CASCADE).
 async fn setup_node(c: &Client) -> (SigningKey, String) {
-    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
-        .await
-        .unwrap();
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+    )
+    .await
+    .unwrap();
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
@@ -108,10 +144,7 @@ async fn floor_rejects_self_reconcile() {
     };
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let body: EventBody = build_reconcile_body(Uuid::now_v7(), a, a, patient, &input, &kid, hlc);
-    let signed = sign(&body, &sk).unwrap();
-    let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await;
+    let res = seal_and_submit(&c, &sk, body).await;
     let err = db_msg(&res.unwrap_err());
     assert!(
         err.contains("self-reconcile") || err.contains("distinct"),
@@ -140,10 +173,7 @@ async fn floor_rejects_missing_provenance() {
         &kid,
         hlc,
     );
-    let signed = sign(&body, &sk).unwrap();
-    let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await;
+    let res = seal_and_submit(&c, &sk, body).await;
     let err = db_msg(&res.unwrap_err());
     assert!(err.contains("provenance"), "got: {err}");
 }

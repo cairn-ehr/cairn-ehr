@@ -41,9 +41,12 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 /// plus a fresh HUMAN actor (signs + attests the attestation event). Returns
 /// (device_sk, device_kid, human_sk, human_kid).
 async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
-    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
-        .await
-        .unwrap();
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+    )
+    .await
+    .unwrap();
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
@@ -68,6 +71,19 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.execute(
         "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
         &[&kid_h],
+    )
+    .await
+    .unwrap();
+    // ADR-0052: register THIS node's unwrap key (derived from the device/node key) so the
+    // strict door can wrap every sealed event's DEK into custody — including human-signed
+    // attestation events, which are clinical.* and born-sealed too. A node has exactly ONE
+    // unwrap key regardless of who signs individual events; the human key never derives it
+    // (that would collide with the device key on the node_unwrap_key singleton). This also
+    // covers the orphan-attestation case, where no content event ever runs the verb path.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
     )
     .await
     .unwrap();
@@ -157,13 +173,29 @@ async fn sign_attest_submit(
     human_sk: &SigningKey,
     human_kid: &str,
 ) -> Result<u64, tokio_postgres::Error> {
-    let signed = sign(body, human_sk).unwrap();
+    // ADR-0052: the attestation event is clinical.* and must be born-sealed. Seal the
+    // clear body (payload + twin under a fresh per-event DEK, outer stub twin), sign the
+    // SEALED form (so the content_address the token binds to covers the ciphertext and
+    // survives a shred), and submit through the 4-arg strict door carrying the human token
+    // AND the DEK. The node unwrap key was registered in setup(), so the door wraps the
+    // DEK into custody. `body` is borrowed and reused by some callers, so seal a clone.
+    let mut sealed = body.clone();
+    let twin = sealed
+        .plaintext_twin
+        .take()
+        .expect("attestation body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&sealed.payload, &twin, &sealed.event_id)
+            .expect("seal the attestation body");
+    sealed.payload = container;
+    sealed.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&sealed.event_type));
+    let signed = sign(&sealed, human_sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, human_kid, "attested", human_sk).unwrap();
     let vk_h = human_sk.verifying_key().to_bytes().to_vec();
     c.execute(
-        "SELECT submit_event($1,$2,$3)",
-        &[&signed.signed_bytes, &token, &vk_h],
+        "SELECT submit_event($1, $2, $3, $4)",
+        &[&signed.signed_bytes, &token, &vk_h, &dek.as_slice()],
     )
     .await
 }
@@ -410,12 +442,28 @@ async fn floor_rejects_attestation_without_responsibility_contributor() {
         hlc,
     );
 
-    // Submitted through the 1-arg door (no token) — exactly what a raw client would do,
+    // Submitted through the 4-arg door with NO token — exactly what a raw client would do,
     // since with no responsibility marker the gate never demands one. An enrolled DEVICE
-    // key signs it (so it clears the enrolled-actor check and actually reaches the floor).
-    let signed = sign(&body, &sk_d).unwrap();
+    // key signs it. ADR-0052: it must be born-sealed to clear the born-sealed floor and
+    // actually REACH the db/034 responsibility-contributor check this test pins (an
+    // unsealed clinical body would be refused earlier, losing this coverage). The check
+    // runs at the twin dispatch, before the custody path, so it still fails there legibly.
+    let mut sealed = body;
+    let twin = sealed
+        .plaintext_twin
+        .take()
+        .expect("attestation body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&sealed.payload, &twin, &sealed.event_id)
+            .expect("seal the attestation body");
+    sealed.payload = container;
+    sealed.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&sealed.event_type));
+    let signed = sign(&sealed, &sk_d).unwrap();
     let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .execute(
+            "SELECT submit_event($1, NULL, NULL, $2)",
+            &[&signed.signed_bytes, &dek.as_slice()],
+        )
         .await;
     let err = db_msg(&res.unwrap_err());
     assert!(
@@ -670,14 +718,25 @@ async fn submit_vouch_returning_ca(
         "reviewed_commitment": reviewed_commitment_hex,
         "reviewed_count": reviewed_count,
     });
-    let body = build_attestation_body(Uuid::now_v7(), patient, payload, kid_h, hlc);
+    // ADR-0052: seal the clear body (payload + twin) under a fresh DEK, sign the sealed
+    // form, and submit through the 4-arg strict door with the human token AND the DEK.
+    let mut body = build_attestation_body(Uuid::now_v7(), patient, payload, kid_h, hlc);
+    let twin = body
+        .plaintext_twin
+        .take()
+        .expect("attestation body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id)
+            .expect("seal the attestation body");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
     let signed = sign(&body, sk_h).unwrap();
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, kid_h, "attested", sk_h).unwrap();
     let vk_h = sk_h.verifying_key().to_bytes().to_vec();
     c.execute(
-        "SELECT submit_event($1,$2,$3)",
-        &[&signed.signed_bytes, &token, &vk_h],
+        "SELECT submit_event($1, $2, $3, $4)",
+        &[&signed.signed_bytes, &token, &vk_h, &dek.as_slice()],
     )
     .await
     .expect("an equal-HLC-but-distinct-event vouch is accepted (backdating is legal)");
@@ -872,12 +931,19 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
     // BELOW to prove the point.
     let min_wall: i64 = c
         .query_one(
+            // ADR-0052: sealed content carries ciphertext in body — read the thread key
+            // through cairn_clear_payload (the event_clear shadow) to find the assert.
+            // CAUTION (ADR-0049 false-fresh, Tasks 8/9): a cairn_clear_payload thread
+            // lookup is CUSTODY-dependent — a partial-custody node sees fewer content
+            // events than the true set, so any staleness signal derived from it can read
+            // FALSE-FRESH. Tasks 8/9 MUST gate the staleness view (readable content count <
+            // reviewed_count => stale/unknown); see cairn_medication_thread_commitment.
             "SELECT min(hlc_wall) FROM event_log WHERE event_type IN ( \
                  'clinical.medication.asserted', \
                  'clinical.medication-cessation.asserted', \
                  'clinical.medication-dose-change.asserted', \
                  'clinical.medication-dose-correction.asserted') \
-               AND (body ->> 'medication_id')::uuid = $1::text::uuid",
+               AND (cairn_clear_payload(event_log) ->> 'medication_id')::uuid = $1::text::uuid",
             &[&medication_id.to_string()],
         )
         .await
@@ -899,10 +965,24 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
         reason: Some("late-arriving backdated dose change"),
     };
     let event_id = Uuid::now_v7();
-    let body = build_dose_change_body(event_id, medication_id, patient, &ch, &kid_d, low_hlc);
+    let mut body = build_dose_change_body(event_id, medication_id, patient, &ch, &kid_d, low_hlc);
+    // ADR-0052: a clinical dose change is born-sealed — seal it and submit 4-arg (device-
+    // additive, no token). The node unwrap key was registered in setup(), so custody wraps.
+    let twin = body
+        .plaintext_twin
+        .take()
+        .expect("dose-change body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id)
+            .expect("seal the dose-change body");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
     let signed = sign(&body, &sk_d).unwrap();
     let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .execute(
+            "SELECT submit_event($1, NULL, NULL, $2)",
+            &[&signed.signed_bytes, &dek.as_slice()],
+        )
         .await;
     assert!(
         res.is_ok(),
@@ -1192,9 +1272,10 @@ async fn attest_medication_thread_end_to_end() {
         basis: Some("chart review"),
         note: Some("confirmed dose with patient"),
     };
-    let event_id = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
-        .await
-        .expect("a well-formed post-hoc attestation of a real thread must succeed");
+    let event_id =
+        attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
+            .await
+            .expect("a well-formed post-hoc attestation of a real thread must succeed");
 
     let n: i64 = c
         .query_one(
@@ -1242,7 +1323,7 @@ async fn attest_refuses_orphan_thread_with_clear_message() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
+    let (sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
     let medication_id = Uuid::now_v7(); // never asserted -> no local content events
 
@@ -1252,7 +1333,7 @@ async fn attest_refuses_orphan_thread_with_clear_message() {
         basis: None,
         note: None,
     };
-    let err = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    let err = attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect_err("an orphan thread must refuse a post-hoc attestation");
     assert!(
@@ -1615,7 +1696,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
         basis: Some("initial chart review"),
         note: None,
     };
-    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect("the first, post-hoc attestation must succeed");
 
@@ -1687,7 +1768,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
 
     // Attest again: a NEW row is appended (superseding which vouch is "current"),
     // the old one is untouched.
-    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect("re-attesting the corrected thread must succeed");
 
@@ -2075,6 +2156,18 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    // A SECOND enrolled human — the two vouches are differentiated by their attester (a
+    // legitimately-varying, view-visible field), NOT by reviewed_count. The pinned actor
+    // set needs a person-distinguishing determinant or ADR-0044 refuses the enroll as an
+    // actor_id collision with the first clinician (same idiom as
+    // medication_remote_apply.rs::responsibility_claim_for_another_actor_is_refused).
+    let (sk_h2, kid_h2) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"person\":\"second-clinician\"}', $1)",
+        &[&kid_h2],
+    )
+    .await
+    .unwrap();
     let patient = Uuid::now_v7();
 
     let medication_id = assert_medication(
@@ -2094,9 +2187,13 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
     let commitment_hex = hex::encode(&commitment);
 
     // ONE HLC, reused verbatim for BOTH vouches -> an equal-(wall,counter,origin)
-    // collision. Distinct reviewed_count -> distinct payload -> distinct content_address,
-    // the ONLY key the DISTINCT ON can then order by. Both pin the CURRENT commitment, so
-    // both are non-stale; which one stands is decided purely by content_address DESC.
+    // collision. BOTH pin the CURRENT commitment AND carry reviewed_count = 1 (the thread's
+    // true readable content-event count), so both are legitimately non-stale — including
+    // under the ADR-0049 false-fresh gate (readable_count < reviewed_count would force
+    // stale; here readable == reviewed == 1). They are differentiated ONLY by their
+    // attester (distinct signer_key_id -> distinct signed bytes -> distinct content_address,
+    // the key the DISTINCT ON then orders by). Which one stands is decided purely by
+    // content_address DESC — surfaced through the view's attester_kid column.
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
 
     let ca1 = submit_vouch_returning_ca(
@@ -2115,15 +2212,15 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         patient,
         medication_id,
         &commitment_hex,
-        2,
-        &sk_h,
-        &kid_h,
+        1,
+        &sk_h2,
+        &kid_h2,
         hlc.clone(),
     )
     .await;
     assert_ne!(
         ca1, ca2,
-        "distinct payloads must yield distinct content addresses"
+        "distinct attesters must yield distinct content addresses"
     );
 
     // Both vouches landed (append-only, keyed by event_id — the equal HLC does not dedup).
@@ -2137,12 +2234,14 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         .get(0);
     assert_eq!(landed, 2, "both equal-HLC vouches are retained");
 
-    // The standing vouch is the one with the LARGER content_address (bytea DESC).
-    let expected_standing_count: i32 = if ca1 > ca2 { 1 } else { 2 };
-    let (standing_count, stale): (i32, bool) = {
+    // The standing vouch is the one with the LARGER content_address (bytea DESC), identified
+    // here by WHICH human attested it (both are reviewed_count = 1, so the count can no
+    // longer be the discriminator — the attester is).
+    let expected_standing_kid: &str = if ca1 > ca2 { &kid_h } else { &kid_h2 };
+    let (standing_kid, stale): (String, bool) = {
         let row = c
             .query_one(
-                "SELECT reviewed_count, stale FROM medication_thread_attestation \
+                "SELECT attester_kid, stale FROM medication_thread_attestation \
                  WHERE medication_id = $1::text::uuid",
                 &[&medication_id.to_string()],
             )
@@ -2151,11 +2250,11 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         (row.get(0), row.get(1))
     };
     assert_eq!(
-        standing_count, expected_standing_count,
+        standing_kid, expected_standing_kid,
         "the larger-content_address vouch stands (deterministic DESC tiebreak, convergent across nodes)"
     );
     assert!(
         !stale,
-        "both vouches pinned the current commitment -> standing is not stale"
+        "both vouches pinned the current commitment at the true readable count -> standing is not stale"
     );
 }

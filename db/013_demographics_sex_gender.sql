@@ -43,6 +43,11 @@ DECLARE
     v_rank int   := cairn_provenance_rank(p ->> 'provenance');
     policy text  := cairn_demographic_field_policy(fld);
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     -- Projection gate: a field with no winner policy is not projected (it is still in
     -- event_log and legible via its twin). Replaces slice-2's hard-coded field list.
     IF policy IS NULL THEN

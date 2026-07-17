@@ -154,6 +154,8 @@ nav:
       - ADR-0048 · Twin-check registry dispatch: spec/decisions/0048-twin-check-registry-dispatch.md
       - ADR-0049 · Commitment-based sign-off currency: spec/decisions/0049-commitment-based-sign-off-currency.md
       - ADR-0050 · Dose correction — per-field patch: spec/decisions/0050-dose-correction-per-field-patch.md
+      - ADR-0051 · Contributor-role vocabulary floor & responsibility wire shape: spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md
+      - ADR-0052 · Born-sealed clinical bodies — erasability as the shipped default: spec/decisions/0052-born-sealed-clinical-bodies.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

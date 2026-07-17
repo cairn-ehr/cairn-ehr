@@ -38,6 +38,7 @@ pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
 pub mod medication;
+pub mod seal;
 
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
 pub const BLAKE3_MULTIHASH_PREFIX: [u8; 2] = [0x1e, 0x20]; // blake3, 32 bytes
@@ -54,6 +55,8 @@ pub enum EventError {
     BadKeyId,
     #[error("body signer_key_id does not match the key the signature verified against")]
     SignerKeyMismatch,
+    #[error("certificate kid does not match the key that signed it")]
+    CertKidMismatch,
     #[error("missing COSE payload")]
     NoPayload,
     #[error("entropy: {0}")]
@@ -68,6 +71,8 @@ pub enum EventError {
     BlobSlice(String),
     #[error("blob slice failed verification against the content address")]
     BlobVerify,
+    #[error("seal: {0}")]
+    Seal(String),
 }
 
 /// A signing context — the domain-separation tag for one *kind* of signed artifact
@@ -107,6 +112,10 @@ pub const CTX_EVENT: SigningContext = SigningContext("application/cairn-event+cb
 pub const CTX_ATTESTATION: SigningContext = SigningContext("application/cairn-attestation+cbor");
 /// Out-of-band pairing offers ([`PairingBundle`]) — ADR-0017 §7.
 pub const CTX_PAIRING: SigningContext = SigningContext("application/cairn-pairing+cbor");
+/// Unwrap-key certificates (ADR-0052 §4) — binds a node's X25519 DEK-unwrap
+/// public key to its Ed25519 identity, in its own context so it can never be
+/// replayed as an event, attestation, or pairing bundle.
+pub const CTX_UNWRAP_KEY: SigningContext = SigningContext("application/cairn-unwrap-key+cbor");
 
 /// Build a COSE_Sign1 over `payload` bound to `ctx` (the one generic signer every
 /// public signing function delegates to, so threading the context cannot be
@@ -666,6 +675,71 @@ pub fn verify_pairing_bundle(token: &[u8]) -> Result<PairingBundle, EventError> 
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(b)
+}
+
+/// The unwrap-key certificate's CBOR payload: binds a node's X25519 DEK-unwrap
+/// public key to its Ed25519 identity. `kid` duplicates the COSE protected key
+/// id inside the signed payload (checked for equality at verify, same shape as
+/// [`PairingBundle`]'s `pubkey_hex`/fingerprint binding) so the payload alone
+/// is self-describing to an offline reader — principle 11 — without requiring
+/// COSE-header tooling to know who issued it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct UnwrapKeyCertBody {
+    kid: String,
+    x25519_pub: String,
+}
+
+/// A node's signed unwrap-key certificate: binds its X25519 public unwrap key
+/// to its Ed25519 identity, in its own ADR-0040 signing context so it can
+/// never be replayed as an event or attestation. CBOR payload:
+/// {"kid": <hex ed25519 pub>, "x25519_pub": <hex 32 bytes>}.
+pub fn sign_unwrap_key_cert(sk: &SigningKey, x25519_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
+    let body = UnwrapKeyCertBody {
+        kid: hex::encode(sk.verifying_key().to_bytes()),
+        x25519_pub: hex::encode(x25519_pub),
+    };
+    let mut payload = Vec::new();
+    ciborium::into_writer(&body, &mut payload).map_err(|e| EventError::Cbor(e.to_string()))?;
+    cose_sign1_in_context(payload, sk, CTX_UNWRAP_KEY)
+}
+
+/// Verify a cert and return (signer hex kid, X25519 public key). Self-described
+/// like [`verify_pairing_bundle`]: the claimed signer comes from the blob's own
+/// protected header (`cose_verify1_self_described`, one parse), and the payload
+/// must be honest about that key — a cert whose `kid` field disagrees with the
+/// key that actually signed it is rejected the same way `verify_pairing_bundle`
+/// rejects a bundle lying about its own pubkey, via the dedicated
+/// [`EventError::CertKidMismatch`] (kept distinct from `SignerKeyMismatch`,
+/// whose message names `body`/`signer_key_id` — an event-body-specific phrasing
+/// that would be a lie if reused here), so the returned kid can never be forged
+/// attribution.
+///
+/// Point validation: the all-zero encoding is Curve25519's canonical identity
+/// point (order 1), so a cert advertising it is refused here — the cheapest
+/// sound check available without performing a DH (x25519-dalek exposes no
+/// direct point-validation API, and every OTHER low-order point looks like an
+/// ordinary 32 bytes to this function). The full `was_contributory()` check
+/// against non-identity low-order points runs where it is actually
+/// load-bearing: at wrap/unwrap time in `seal.rs`, on the live DH shared
+/// secret, regardless of what any cert claims.
+pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, [u8; 32]), EventError> {
+    let (key_bytes, payload) = cose_verify1_self_described(bytes, CTX_UNWRAP_KEY)?;
+    let body: UnwrapKeyCertBody =
+        ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
+    if body.kid != hex::encode(key_bytes) {
+        return Err(EventError::CertKidMismatch);
+    }
+    let raw = hex::decode(&body.x25519_pub)
+        .map_err(|_| EventError::Seal("malformed x25519_pub hex".into()))?;
+    let x25519_pub: [u8; 32] = raw
+        .try_into()
+        .map_err(|_| EventError::Seal("x25519_pub must be 32 bytes".into()))?;
+    if x25519_pub == [0u8; 32] {
+        return Err(EventError::Seal(
+            "x25519_pub is the identity point (non-contributory)".into(),
+        ));
+    }
+    Ok((body.kid, x25519_pub))
 }
 
 #[cfg(test)]
@@ -1465,6 +1539,125 @@ mod tests {
         assert_ne!(CTX_EVENT, CTX_ATTESTATION);
         assert_ne!(CTX_EVENT, CTX_PAIRING);
         assert_ne!(CTX_ATTESTATION, CTX_PAIRING);
+    }
+
+    // ── ADR-0052 §4: the unwrap-key certificate (CTX_UNWRAP_KEY) ───────────────
+
+    #[test]
+    fn unwrap_key_cert_round_trips_and_binds_signer() {
+        let sk = generate_key().unwrap().0;
+        let xpub: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let cert = sign_unwrap_key_cert(&sk, &xpub).unwrap();
+        let (kid, got) = verify_unwrap_key_cert(&cert).unwrap();
+        assert_eq!(kid, hex::encode(sk.verifying_key().to_bytes()));
+        assert_eq!(got, xpub);
+    }
+
+    #[test]
+    fn unwrap_key_cert_rejects_event_context_tokens() {
+        // ADR-0040 domain separation: an ordinary event signed blob must not
+        // verify as an unwrap-key cert.
+        let (sk, kid) = generate_key().unwrap();
+        let mut body = sample();
+        body.signer_key_id = kid;
+        let ev = sign(&body, &sk).unwrap();
+        assert!(verify_unwrap_key_cert(&ev.signed_bytes).is_err());
+    }
+
+    // Review fix (round 2, MINOR 4a): a cert whose payload `kid` disagrees with
+    // the key that actually signed it must be rejected via the dedicated
+    // CertKidMismatch variant — the same forged-attribution class already
+    // guarded for events (SignerKeyMismatch) and pairing bundles.
+    #[test]
+    fn unwrap_key_cert_rejects_forged_kid() {
+        let (sk, _kid) = generate_key().unwrap();
+        let (_victim_sk, victim_kid) = generate_key().unwrap();
+        let xpub: [u8; 32] = std::array::from_fn(|i| i as u8);
+        // Hand-craft a cert body claiming the victim's kid while signing with sk.
+        let body = UnwrapKeyCertBody {
+            kid: victim_kid,
+            x25519_pub: hex::encode(xpub),
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&body, &mut payload).unwrap();
+        let forged = cose_sign1_in_context(payload, &sk, CTX_UNWRAP_KEY).unwrap();
+        match verify_unwrap_key_cert(&forged) {
+            Err(EventError::CertKidMismatch) => {}
+            other => panic!("expected CertKidMismatch, got {other:?}"),
+        }
+    }
+
+    // Review fix (round 2, MINOR 4b): malformed x25519_pub payloads (bad hex,
+    // wrong length) must fail legibly rather than panicking on the `[u8; 32]`
+    // conversion.
+    #[test]
+    fn unwrap_key_cert_rejects_malformed_x25519_pub() {
+        let (sk, kid) = generate_key().unwrap();
+
+        let bad_hex = UnwrapKeyCertBody {
+            kid: kid.clone(),
+            x25519_pub: "not-valid-hex".into(),
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&bad_hex, &mut payload).unwrap();
+        let cert = cose_sign1_in_context(payload, &sk, CTX_UNWRAP_KEY).unwrap();
+        let err = verify_unwrap_key_cert(&cert).unwrap_err();
+        assert!(err.to_string().contains("malformed x25519_pub hex"));
+
+        let wrong_len = UnwrapKeyCertBody {
+            kid,
+            x25519_pub: hex::encode([1u8; 16]), // 16 bytes, not 32
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&wrong_len, &mut payload).unwrap();
+        let cert = cose_sign1_in_context(payload, &sk, CTX_UNWRAP_KEY).unwrap();
+        let err = verify_unwrap_key_cert(&cert).unwrap_err();
+        assert!(err.to_string().contains("x25519_pub must be 32 bytes"));
+    }
+
+    // Review fix (round 2, IMPORTANT 1 continuation): the all-zero encoding is
+    // Curve25519's canonical identity point — a cert advertising it must be
+    // refused rather than accepted and later silently forcing every wrap to a
+    // non-contributory (Mallory-style) shared secret.
+    #[test]
+    fn unwrap_key_cert_rejects_all_zero_x25519_pub() {
+        let (sk, kid) = generate_key().unwrap();
+        let body = UnwrapKeyCertBody {
+            kid,
+            x25519_pub: hex::encode([0u8; 32]),
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&body, &mut payload).unwrap();
+        let cert = cose_sign1_in_context(payload, &sk, CTX_UNWRAP_KEY).unwrap();
+        let err = verify_unwrap_key_cert(&cert).unwrap_err();
+        assert!(err.to_string().contains("identity point"));
+    }
+
+    // Review fix (round 2, MINOR 4c): the unwrap-key cert context must not
+    // cross with EITHER of the other two non-event contexts, not just events
+    // (already covered by unwrap_key_cert_rejects_event_context_tokens above).
+    #[test]
+    fn unwrap_key_cert_rejects_attestation_and_pairing_context_tokens() {
+        let (sk, kid) = generate_key().unwrap();
+        let xpub: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let body = UnwrapKeyCertBody {
+            kid: kid.clone(),
+            x25519_pub: hex::encode(xpub),
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&body, &mut payload).unwrap();
+
+        let as_attestation = cose_sign1_in_context(payload.clone(), &sk, CTX_ATTESTATION).unwrap();
+        assert!(
+            verify_unwrap_key_cert(&as_attestation).is_err(),
+            "an attestation-context signature must not verify as an unwrap-key cert"
+        );
+
+        let as_pairing = cose_sign1_in_context(payload, &sk, CTX_PAIRING).unwrap();
+        assert!(
+            verify_unwrap_key_cert(&as_pairing).is_err(),
+            "a pairing-context signature must not verify as an unwrap-key cert"
+        );
     }
 
     // The cross-context tests above all use CTX_EVENT as the wrong context; this

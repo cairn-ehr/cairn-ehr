@@ -72,6 +72,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0049](0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare; supersede, never retract | Accepted (refines 0007, principle 10) | 2026-07-14 |
 | [0050](0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike, corrected effective drives the winner | Accepted (refines principle 4, §3.6) | 2026-07-15 |
 | [0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th member, contributory); responsibility = `{held_by, on_behalf_of?}` object; future members partition-prefixed; strict-submit/lenient-apply | Accepted (refines 0028/0007/0049/0012) | 2026-07-16 |
+| [0052](0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: erasability as the shipped default; erasable vs. sequestered; seal-then-sign container + twin-under-seal; the `event_dek`/`event_clear`/`erasure_shred_log` custody plane; strict-submit refuses unsealed `clinical.*` | Accepted (refines 0005/0006/0026/0048/0051) | 2026-07-17 |
 
 ## Template
 

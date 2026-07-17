@@ -122,6 +122,11 @@ DECLARE
                            THEN p ->> 'resolution' ELSE p ->> 'reason' END;
     v_cur record;
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     -- #157: detect a Byzantine HLC-triple collision against the current dispute state and record
     -- an advisory signal before overlaying. Placed before the subject-consistency guard so the
     -- collision is observed regardless of which door (local submit / remote apply) we are on.

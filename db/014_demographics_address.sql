@@ -146,6 +146,11 @@ DECLARE
     v_key  text;
     v_rank int;
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     -- Only ADDRESS events project here. dob/sex-at-birth (db/011/013), name (db/012), and
     -- any unknown field are ignored — each projection gates to its own fields and writes a
     -- different table, so the several triggers on demographic.field.asserted are order-free.

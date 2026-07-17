@@ -20,7 +20,7 @@
 //! read-time view catches the late-arriving contradiction whichever order it lands in.
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
-use cairn_event::{generate_key, sign, SigningKey};
+use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, build_assert_body, build_dose_change_body, cease_medication,
@@ -40,11 +40,47 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
         .unwrap_or_else(|| e.to_string())
 }
 
-/// Truncate the log + every medication projection and enroll a fresh device actor.
+/// ADR-0052: seal a CLEAR clinical EventBody like the node write path, register the
+/// node's unwrap key, sign, and submit through the 4-arg strict door. Returns the raw
+/// driver Result. House rule 6: the DEK is generated inside seal_event_payload, never a
+/// literal.
+async fn seal_and_submit(
+    c: &Client,
+    sk: &SigningKey,
+    mut body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let twin = body
+        .plaintext_twin
+        .take()
+        .expect("a clinical body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id)
+            .expect("seal the clear payload+twin");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+    let signed = sign(&body, sk).expect("sign the sealed body");
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await?;
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+}
+
+/// Truncate the log + every medication projection + the ADR-0052 custody plane and
+/// enroll a fresh device actor (custody tables named explicitly — no FK, no CASCADE).
 async fn setup_node(c: &Client) -> (SigningKey, String) {
-    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
-        .await
-        .unwrap();
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+    )
+    .await
+    .unwrap();
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
@@ -102,9 +138,20 @@ async fn reassert_at_door(
         kid,
         hlc,
     );
-    let signed = sign(&body, sk).unwrap();
-    c.execute(&format!("SELECT {door}($1)")[..], &[&signed.signed_bytes])
-        .await
+    match door {
+        // The STRICT door (submit_event) demands a born-sealed clinical body (ADR-0052):
+        // seal it and pass the DEK as the 4th arg. The #192 patient-consistency guard
+        // fires in the projection, on the CLEAR payload the door unseals — fail-loud
+        // locally, so a wrong-patient reassert is still refused here.
+        "submit_event" => seal_and_submit(c, sk, body).await,
+        // The APPLY door (apply_remote_event) stays lenient (set-union) and has no
+        // born-sealed floor yet (Tasks 8/9), so a replicated event still arrives plaintext.
+        _ => {
+            let signed = sign(&body, sk).unwrap();
+            c.execute(&format!("SELECT {door}($1)")[..], &[&signed.signed_bytes])
+                .await
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,10 +285,7 @@ async fn local_dose_change_under_different_patient_refused() {
     };
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let body = build_dose_change_body(Uuid::now_v7(), med, patient_b, &input, &kid, hlc);
-    let signed = sign(&body, &sk).unwrap();
-    let r = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await;
+    let r = seal_and_submit(&c, &sk, body).await;
     assert!(
         r.is_err(),
         "a dose change naming another patient for the thread must be refused locally"

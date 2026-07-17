@@ -115,16 +115,59 @@ ON CONFLICT (event_type) DO NOTHING;
 --    events EXCLUDE reconciliation/separation/attestation (not thread content).
 CREATE OR REPLACE FUNCTION cairn_medication_thread_commitment(p_medication_id uuid)
 RETURNS bytea LANGUAGE sql STABLE AS $$
+    -- ADR-0052: a sealed content event carries CIPHERTEXT in event_log.body, so its
+    -- medication_id lives in the event_clear shadow — the thread lookup must read the
+    -- CLEAR payload via cairn_clear_payload (unsealed rows resolve to body unchanged,
+    -- the same sealed-aware read the projection triggers use). content_address is on
+    -- event_log for EVERY row (it hashes the signed bytes, sealed or not).
+    --
+    -- CAUTION — ADR-0049 FALSE-FRESH hazard (Tasks 8/9 MUST close this): routing the
+    -- thread filter through cairn_clear_payload makes this commitment a function of
+    -- CUSTODY, not of the event SET. A node that holds an attestation's custody but is
+    -- MISSING a later content event's custody recomputes H({ca1}) for a thread that has
+    -- actually grown to {ca1, ca2} -> the staleness view reads stale = FALSE and shows the
+    -- thread FRESH when it in fact grew. That is a FALSE-FRESH — the exact unsafe direction
+    -- ADR-0049 exists to forbid: staleness-signal CORRUPTION, NOT honest degradation.
+    -- UNREACHABLE today (the apply door does not populate custody yet), but Tasks 8/9 MUST
+    -- gate the staleness view to force stale/unknown whenever the readable content-event
+    -- count is LESS THAN the attestation's reviewed_count. See ADR-0052 (+ the issue to be
+    -- filed for the sealed-aware staleness gate).
     SELECT CASE WHEN count(*) = 0 THEN NULL
-                ELSE digest(string_agg(content_address, ''::bytea ORDER BY content_address), 'sha256')
+                ELSE digest(string_agg(el.content_address, ''::bytea ORDER BY el.content_address), 'sha256')
            END
-    FROM event_log
-    WHERE event_type IN (
+    FROM event_log el
+    WHERE el.event_type IN (
             'clinical.medication.asserted',
             'clinical.medication-cessation.asserted',
             'clinical.medication-dose-change.asserted',
             'clinical.medication-dose-correction.asserted')
-      AND (body ->> 'medication_id')::uuid = p_medication_id;
+      AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
+$$;
+
+-- 4a. The READABLE content-event count for a thread — the ADR-0049 FALSE-FRESH gate's
+--     tripwire (Task 8, issues #189/#92). Deliberately the SAME filter as the commitment
+--     fn above (four content types, read through cairn_clear_payload) and byte-identical
+--     to how the author-time orchestrator sizes reviewed_count
+--     (crates/cairn-node/src/medication/attestation.rs::thread_commitment_on) — so on a
+--     FULL-custody node readable_count == reviewed_count and the gate below never fires
+--     spuriously; on a PARTIAL-custody node (a sealed content event synced in WITHOUT its
+--     DEK is invisible to cairn_clear_payload) it reads SHORT.
+--
+--     Task 8 is the task that first populates custody on the sync path (db/020's sealed
+--     arm), so the false-fresh hazard cairn_medication_thread_commitment warns about goes
+--     LIVE here: a node that cannot reproduce the reviewed set must never read a grown
+--     thread as "fresh". The staleness view (part 2) forces stale whenever this count is
+--     LESS than the attestation's reviewed_count.
+CREATE OR REPLACE FUNCTION cairn_medication_thread_readable_count(p_medication_id uuid)
+RETURNS bigint LANGUAGE sql STABLE AS $$
+    SELECT count(*)
+    FROM event_log el
+    WHERE el.event_type IN (
+            'clinical.medication.asserted',
+            'clinical.medication-cessation.asserted',
+            'clinical.medication-dose-change.asserted',
+            'clinical.medication-dose-correction.asserted')
+      AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
 -- 4b. Read-time support for the set-commitment fn. Unlike the other medication read
@@ -137,6 +180,11 @@ $$;
 --     functional index (only the four content-event types the fn sums) makes each
 --     commitment a bounded index lookup. `(body ->> 'medication_id')` is immutable and
 --     the ::uuid cast is immutable, so the expression is indexable.
+--     ADR-0052 caveat: the commitment fn now reads the thread key through
+--     cairn_clear_payload (sealed rows carry ciphertext in body), so this index only
+--     accelerates the UNSEALED path; sealed-thread commitment is a small scan for now
+--     (pre-clinical, acceptable — a sealed-aware index on the event_clear shadow is the
+--     follow-up if the staleness view ever becomes a hot path).
 CREATE INDEX IF NOT EXISTS event_log_medication_thread_idx
     ON event_log (((body ->> 'medication_id')::uuid))
     WHERE event_type IN (
@@ -176,8 +224,12 @@ CREATE INDEX IF NOT EXISTS medication_attestation_thread_idx
 CREATE OR REPLACE FUNCTION medication_attestation_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p jsonb := cairn_clear_payload(NEW);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     INSERT INTO medication_attestation
         (event_id, medication_id, patient_id, attester_kid, reviewed_commitment,
          reviewed_count, hlc_wall, hlc_counter, origin, content_address)
@@ -217,6 +269,22 @@ CREATE TRIGGER medication_attestation_apply_trg
 --    content is append-only (grow-only), ANY later content event (higher OR lower
 --    HLC) changes the commitment -> stale. content_address is bytea -> byte-order
 --    tiebreak needs no COLLATE.
+--
+--    ADR-0049 FALSE-FRESH gate (Task 8, issues #189/#92): the commitment above is
+--    computed through cairn_clear_payload, so it is CUSTODY-dependent, not event-set-
+--    dependent. On a PARTIAL-custody node (a sealed content event synced WITHOUT its DEK
+--    is unreadable, hence uncountable and un-hashable for its thread) the recomputed
+--    commitment can coincidentally match what the vouch pinned even though the attester
+--    reviewed MORE — reading a grown thread as FALSE-FRESH, the exact unsafe direction
+--    ADR-0049 forbids. The FIRST disjunct closes that: when this node cannot even
+--    reproduce the reviewed set (its readable content count < reviewed_count), the vouch
+--    is forced stale/unknown — never "current" — regardless of whether the partial
+--    commitment happens to match. Safe direction: uncertainty can only WITHHOLD "fresh".
+--    (Residual, tracked as follow-up: when readable_count == reviewed_count but the thread
+--    grew via a content event this node cannot attribute to the thread at all — a sealed-
+--    no-custody row — the tripwire cannot see it; closing that needs thread-membership
+--    metadata that survives custody loss, a separate design decision. See
+--    cairn_medication_thread_commitment's CAUTION note.)
 CREATE OR REPLACE VIEW medication_thread_attestation AS
 SELECT DISTINCT ON (a.medication_id)
        a.medication_id,
@@ -225,7 +293,8 @@ SELECT DISTINCT ON (a.medication_id)
        a.hlc_wall     AS attested_wall,
        a.hlc_counter  AS attested_counter,
        a.reviewed_count,
-       (cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
+       (cairn_medication_thread_readable_count(a.medication_id) < a.reviewed_count
+        OR cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
            AS stale
 FROM medication_attestation a
 ORDER BY a.medication_id, a.hlc_wall DESC, a.hlc_counter DESC, a.content_address DESC;

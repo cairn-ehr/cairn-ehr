@@ -148,7 +148,10 @@ $$;
 CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
+    -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
+    -- sealed without custody here: nothing to project — honest degradation.
+    p jsonb := cairn_clear_payload(NEW);
     v_dose_set     boolean := p ? 'dose';
     v_eff_set      boolean := p ? 'effective';
     v_reason_set   boolean := p ? 'reason';
@@ -156,6 +159,7 @@ DECLARE
     v_eff_struck    boolean := COALESCE(p -> 'strike' ? 'effective', FALSE);
     v_reason_struck boolean := COALESCE(p -> 'strike' ? 'reason', FALSE);
 BEGIN
+    IF p IS NULL THEN RETURN NULL; END IF;
     INSERT INTO medication_dose_correction
         (corrected_dose_event_id, medication_id, patient_id,
          amount, unit, effective_value, effective_precision, reason, note, info_source,

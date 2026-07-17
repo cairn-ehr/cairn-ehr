@@ -107,6 +107,11 @@ DECLARE
     p    jsonb := NEW.body;
     norm text  := NULLIF(p ->> 'normalized', '');
 BEGIN
+    -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
+    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
+    -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
+    IF NEW.sealed THEN RETURN NULL; END IF;
     INSERT INTO patient_identifier
         (patient_id, system, match_key, value, normalized, profile, use_type,
          provenance, asserted_hlc_wall, asserted_hlc_count, asserted_origin,

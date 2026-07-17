@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 DONE, P3 opener DONE, continue at #189/#92
+## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 DONE, P3 DONE (#203/#96 + #189/#92); next is #204 [C3] then P4 #188 [D1]
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -50,13 +50,19 @@ follow-ups [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (HLC-merge 
   future members partition-prefixed (`bearing:x`/`contrib:x`) so old nodes classify them; unknown roles
   read **vouching-unknown**, never un-vouched; `cairn_check_contributors` on BOTH doors — strict submit /
   lenient apply (role membership never rejects at apply — set-union losslessness).
-- **#189 (C1)** + **#92** — **⇐ CONTINUE HERE**: decide the seal-by-default posture, then a walking-skeleton
-  seal slice (seal-at-write → twin-under-seal → safety-projection sibling → crypto-shred →
-  restore-replays-shred) that surfaces the twin-location / twin-floor / descriptor collisions while they
-  are still prose.
-- ~~**#204 (C3)**~~ — **SCHEDULED 2026-07-16** (in Slice 41): the attribution-token / authoring-human slice
-  (per-write attribution, `session.user ≠ event.author`, `sign-as`; §3.10/ADR-0008) is committed as the
-  next clinical-plane slice before any new clinical stream.
+- ~~**#189 (C1)** + **#92**~~ — **✅ DONE 2026-07-17** ([ADR-0052](spec/decisions/0052-born-sealed-clinical-bodies.md),
+  spec v0.53, branch `feat/adr-0052-born-sealed-189-92`; full detail in ROADMAP Slice 42 + the PR): born-sealed
+  clinical bodies — every clinical JSONB body sealed at write under a per-event DEK held by the node itself
+  (**erasability substrate, NOT confidentiality**), so the ADR-0005 erasure ladder stays reachable forever. Both
+  doors enforce it (strict submit refuses unsealed `clinical.*` + sealed⇒clinical scope; lenient apply admits
+  sealed-without-custody structurally), all 7 medication verbs seal-at-write, custody sidecar on the clinical wire,
+  a rung-3 crypto-shred CLI, E2E (sealed sync → shred propagates → restore resurrects nothing) + bench
+  (~0.11 ms/event, 37× under Bet-B). Nine follow-ups filed ([#230](https://github.com/cairn-ehr/cairn-ehr/issues/230)–[#238](https://github.com/cairn-ehr/cairn-ehr/issues/238)).
+  **Operational caveat:** pre-ADR-0052 plaintext clinical dev/PoC rigs must be **WIPED** (the born-sealed floor
+  refuses plaintext clinical at submit; old logs won't cross).
+- **#204 (C3)** — **⇐ CONTINUE HERE** (scheduled in Slice 41): the attribution-token / authoring-human slice
+  (per-write attribution, `session.user ≠ event.author`, `sign-as`; §3.10/ADR-0008) is the next clinical-plane
+  slice before any new clinical stream — `recorded` (ADR-0051) makes the device-only interim honest, #204 ends it.
 
 **Priority 4 — the schema-version guard (an afternoon; retires a Critical latent hazard).**
 - **#188 (D1)** — `node_schema(version, loaded_at, loader_build)` + a loader refusal when the
@@ -94,10 +100,11 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-16, latest (#203+#96 — the P3 opener, ADR-0051 role-vocabulary floor;
-earlier the same day the full P2 arc #199/#198/#196/#197/#202/#201 + the P1 floor-hardening slice +
-the evening GUI/L3 easyGP-mining thread; review course above; last full regeneration 2026-07-14) ·
-**Spec/ADRs:** v0.52 · **Phase:** architecture complete (every original §11 question closed);
+**Session date:** 2026-07-17, latest (#189+#92 — the P3 closer, ADR-0052 born-sealed clinical bodies;
+2026-07-16 had #203+#96 the P3 opener ADR-0051, the full P2 arc #199/#198/#196/#197/#202/#201, the P1
+floor-hardening slice + the evening GUI/L3 easyGP-mining thread; review course above; last full
+regeneration 2026-07-14) · **Spec/ADRs:** v0.53 (through ADR-0052) · **Phase:** architecture complete
+(every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -117,10 +124,54 @@ the attestation responsibility overlay, ADR-0049 · per-field dose effective/rea
 ADR-0050) + the **twin-check registry** (ADR-0048) ·
 the **contributor-role vocabulary floor** (ADR-0051 — `recorded` ratified, `{held_by}` responsibility
 objects, partition-prefixed future members, strict-submit/lenient-apply) ·
+**born-sealed clinical bodies** (ADR-0052 — every clinical JSONB body sealed at write under a per-event
+DEK held by the node itself, an erasability substrate not confidentiality; `db/037` custody plane
+`event_dek`/`event_clear`/`erasure_shred_log`, both doors enforce sealed⇒clinical scope, all 7
+medication verbs seal-at-write, custody sidecar + rung-3 shred CLI; twin registry 18→19) ·
 the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar,
 pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**Session (2026-07-17) — #189/#92 [C1]: born-sealed clinical bodies, the P3 closer (branch
+`feat/adr-0052-born-sealed-189-92`; [ADR-0052](spec/decisions/0052-born-sealed-clinical-bodies.md), spec
+§3.5/§3.8/§5.9, v0.53; full detail in ROADMAP Slice 42 + the PR + the ADR).** Posture decision: **every
+clinical JSONB body is born sealed** under a per-event DEK wrapped for the node's *own* key — an
+**erasability substrate, NOT confidentiality** (the node reads its own data freely; projections/FTS
+behave as before; nothing is hidden), so **every ADR-0005 erasure rung stays reachable for every clinical
+event forever** (a plaintext default silently forecloses rungs 2–4 — principle 9). Crypto core
+(`cairn-event::seal`): per-event DEK XChaCha20-Poly1305, **seal-then-sign** (signature over ciphertext,
+survives shred; AAD binds `event_id`), the legibility twin under the same DEK (the sealed row's outer
+`plaintext_twin` is a signed stub — no plaintext column to leak from), X25519/HKDF wrap plane derived
+from the Ed25519 seed (DB holds only the public half → DEKs unreconstructable from a DB backup; ADR-0026
+escrow covers the KEK, now mandatory), signed unwrap-key cert (`CTX_UNWRAP_KEY`). `db/037` custody plane:
+`event_dek`/`event_clear`/`erasure_shred_log`, with `event_clear` + `cairn_clear_payload` homed in `db/005`
+for `LANGUAGE sql` eager-bind ordering; `erasure.shred.asserted` twin-registered (18→19). Two doors: the
+strict submit door **refuses unsealed `clinical.*`** (decrypts in-DB via `cairn_pgx`, runs the full
+ADR-0048 twin/floor checks on plaintext, wraps the DEK into `event_dek`), the lenient apply door admits
+a sealed event without custody structurally (**can't read → never reject**); the **final review closed the
+one gating cross-cutting hole — sealed⇒clinical scope at BOTH doors** (a sealed non-clinical body is
+refused). All 7 medication verbs seal-at-write via one `medication::sealed_submit` path (semantics
+unchanged, now sealed). Custody sidecar on the clinical wire (unwrap-then-rewrap per peer, **shred-aware
+DEK exclusion** — custody never granted to an already-shredded event, arrival-order independent). Shred
+CLI (`cairn-node shred`, rung-3 audited crypto-shred + plaintext tombstone; log row never touched). E2E:
+sealed sync **with custody** converges → **shred propagates** → **cold-peer restore replays the shred log
+before projecting, resurrects nothing**. Bench ~**0.11 ms/event**, ~37× under Bet-B. ADR-0049 §9
+false-fresh gate: `reviewed_count` promoted (sealed threads only) to a safe-direction withholding tripwire.
+TDD RED-first. Nine follow-ups filed ([#230](https://github.com/cairn-ehr/cairn-ehr/issues/230)–[#238](https://github.com/cairn-ehr/cairn-ehr/issues/238), deferred/hardening).
+
+**Post-review fix pass (2026-07-18, `/review` on PR #239 → `/fixall`).** A subsequent whole-diff code review found the branch's own "READY TO MERGE / none gating / fmt clean" verdict had **missed five issues**, all now fixed on-branch (RED-first where behavioural):
+- **[GATING, critical] db/018 sync-wedge** — `patient_link_apply()` cast `(p->>'subject_a')::uuid` in its DECLARE block, which runs *before* the `IF NEW.sealed THEN RETURN NULL` seal guard; a wrongly-sealed `identity.link` with a non-UUID top-level `subject_a` (any enrolled peer can mint one) raised `invalid input syntax for type uuid` at apply, aborting `apply_remote_event` on a verifiable event → **frozen sync watermark, permanent wedge**. Fix: casts moved below the guard.
+- **[GATING, high] db/037 incomplete shred** — `cairn_execute_shred` scrubbed only `medication_statement`/`medication_cessation`/`medication_dose_event`, leaving **dose-correction, reconciliation, and attestation plaintext readable after a shred** (4 of 7 verbs) — defeating the ADR-0005 rung-3 / #92(b) guarantee. Fix: scrub all three by `content_address` + recompute `medication_group_member` (derived table) so the erased merge stops grouping threads.
+- **[CI-red] rustfmt** — the workspace-**excluded** `cairn_pgx` extension was unformatted (CI's separate `cargo fmt --manifest-path …` gate was red; the "fmt clean" claim only ran `cargo fmt --all`). Fixed.
+- **[medium] false erasure** — crypto-shred of a **non-sealed (plaintext) target** reported success while its body stayed in the append-only log (no DEK to destroy). Now refused at both the `cairn-node shred` pre-check and the unbypassable db/005 floor.
+- **[low] silent serve-side degradation** — a serve-side per-DEK re-wrap failure (e.g. serve `--key` ≠ registered unwrap key) silently blanked custody; now logged.
+- **[#231 reaffirmed]** the unwrap-cert has no trust-set check, so **born-sealed ships _erasability_, not confidentiality**, until cert-kid pinning lands — flagged as the load-bearing gap, not a buried TODO. (No code change; already filed.)
+
+Verified: cairn-node **298/0**, cairn-sync **51/0** (subset + 2-node E2E need cairn_pgx **≥ 0.3.0** on BOTH test DBs), cairn-event **140/0**, +3 new RED-first regression tests; **fmt + clippy clean on both trees** (workspace + `cairn_pgx`). **Operational caveat:** the born-sealed floor refuses plaintext
+`clinical.*` at submit, so pre-ADR-0052 plaintext clinical dev/PoC rigs must be **WIPED** — old logs won't
+cross (moot pre-production). **Next:** #204 [C3] attribution-token / authoring-human slice, then P4 #188
+[D1] schema-version guard.
 
 **Session (2026-07-16, evening, GUI/L3 design thread) — easyGP consult-screen mining → GP-manifest seed
 (design-only; no code/ADR/spec change; full detail in
@@ -180,30 +231,16 @@ as REPLICATE with the trust-bounded db/007 apply arm; follow-ups
 [#228](https://github.com/cairn-ehr/cairn-ehr/issues/228) legible malformed-hex refusals).
 
 **Earlier sessions (2026-07-09 → 07-15), condensed — full detail in git + the PRs + the linked ADRs +
-ROADMAP Slices 26–34:** **medication slices 1–5** (PR #171 assert/cease over an immortal `medication_id`
-thread + separate arrival-order-independent projections + the E1 advisory reconciliation flag · PR #175 the
-bitemporal dose timeline overlay, `db/032` · PR #178 cross-thread reconciliation as a symmetric reversible
-LINK, never a false cessation, **ADR-0047**, `db/033` · PRs #182/#183 the separable per-thread attestation
-responsibility overlay — staleness by set-commitment compare, supersede-never-retract — **ADR-0049**,
-`db/034`, + its hardening round · PR #186 per-field dose effective/reason correction — the corrected
-effective drives current-dose winner selection — **ADR-0050**, `db/035`; open follow-on
-[#185](https://github.com/cairn-ehr/cairn-ehr/issues/185): the pre-existing db/032 cross-thread
-correction-suppression PK-eviction vector, needs a PK/design decision) · the **`cairn_event_twin` twin-check
-registry refactor** (**ADR-0048**, PR #179 — one stable dispatcher over a locked registry table, a new event
-type registers ONE additive row, fail-closed at load) · the **reference-UI framework verdict** (iced FAILS
-the accessibility bar → **Tauri 2**; PR #174; eco-eval 0004 + Spike 0004) · the **enroll dual-mapping floor
-guard** (**ADR-0046**, PR #170, closes #166; open follow-up
-[#172](https://github.com/cairn-ehr/cairn-ehr/issues/172) — future rotate-key/sync-apply doors must mirror
-both A+B checks) · the **`enroll-human` ceremony CLI** + the **§5.4 finishers 1–3** (`db/030` node-local
-John-Doe display ordinal, `--observed-year`, `identify`→optional-link PR #165; open:
-[#168](https://github.com/cairn-ehr/cairn-ehr/issues/168) entity→role-actor 1:many) ·
-**collation-independent projection winner tiebreaks** (**ADR-0045**, closes #69) + the #159 `ORDER BY`
-drift guard · the **Byzantine HLC-collision advisory log** (`db/029`, PR #158) + the deterministic
-`content_address` overlay tiebreaker (#115 pt 1) · the **enroll `actor_id` collision floor** (**ADR-0044**,
-closes #152) · the **suppression owner-gate** (**ADR-0043** — self-only for human-authored content,
-disagreement is additive; open follow-on
-[#154](https://github.com/cairn-ehr/cairn-ehr/issues/154): the apply-door gate inherits a
-node-local-registry limitation for plain-signed human notes; closes with registry federation).
+ROADMAP Slices 26–34:** **medication slices 1–5** (assert/cease + E1 flag · bitemporal dose timeline `db/032`
+· cross-thread reconciliation ADR-0047 `db/033` · attestation overlay ADR-0049 `db/034` · per-field dose
+correction ADR-0050 `db/035`; open [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) db/032
+suppression PK-eviction) · the **twin-check registry refactor** (ADR-0048) · the **reference-UI verdict**
+(iced FAILS a11y → Tauri 2; PR #174) · the **enroll dual-mapping guard** (ADR-0046, closes #166; open
+[#172](https://github.com/cairn-ehr/cairn-ehr/issues/172)) · the **`enroll-human` CLI** + §5.4 finishers 1–3
+(open [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168)) · **collation-independent tiebreaks**
+(ADR-0045, closes #69) + #159 drift guard · the **HLC-collision advisory log** (`db/029`) + `content_address`
+tiebreaker (#115 pt 1) · the **enroll `actor_id` collision floor** (ADR-0044, closes #152) · the
+**suppression owner-gate** (ADR-0043; open [#154](https://github.com/cairn-ehr/cairn-ehr/issues/154)).
 
 **Merged 2026-07-08 (condensed — full detail in git + the PRs + ROADMAP Phase 1).** §5.4 marks/belongings/EMS-context text identity evidence (PR #142, three text `kind` values on the existing `identity.evidence.asserted` type, no floor/SCHEMA/ADR/spec change) + a CI/tooling catch-up day (PRs #143/#147/#149/#150/#151: fmt gate, cargo-deny, `matcher.yml`, toolchain pin, PG16→18 CI, CodeQL crypto FP fix → house rule 6, matcher test-leak/retraction fixes). Closed [#144]/[#145]/[#146]/[#117]/[#135]/[#84 pt1].
 
@@ -434,6 +471,7 @@ ADR before reopening any of these.
 | [0049](spec/decisions/0049-commitment-based-sign-off-currency.md) | Commitment-based sign-off currency: separable per-thread attestation overlay; staleness by set-commitment compare, not a position pin; supersede, never retract | §3.15/§3.16 (refines 0007, principle 10) |
 | [0050](spec/decisions/0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike sentinel; corrected effective drives current-dose winner selection; correction-note separate from clinical reason | §3.3/§3.6 (refines principle 4) |
 | [0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th, contributory); responsibility = `{held_by, on_behalf_of?}`; future members partition-prefixed; strict-submit/lenient-apply | §3.9 (refines 0028/0007/0049/0012) |
+| [0052](spec/decisions/0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: every clinical JSONB body sealed at write under a per-event DEK held by the node (erasability substrate, not confidentiality); erase ladder always reachable; two doors enforce sealed⇒clinical scope; custody plane + custody sidecar + rung-3 shred | §3.5/§3.8/§5.9 (refines 0005/0006/0026/0048/0051) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

@@ -3,7 +3,7 @@
 use cairn_event::medication::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
 };
-use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
 const MEDICATION_CESSATION_SCHEMA_VERSION: &str = "clinical.medication-cessation/1";
@@ -66,22 +66,8 @@ pub async fn cease_medication(
     let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let body = build_cease_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
-    let signed = sign(&body, node_sk)?;
-    match attest {
-        None => {
-            client
-                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
-        }
-        Some(params) => {
-            let attest_hlc = crate::db::next_hlc(client, node_origin).await?;
-            let tx = client.transaction().await?;
-            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
-            crate::medication::attest_thread_in_tx(&tx, params, patient, medication_id, attest_hlc)
-                .await?;
-            tx.commit().await?;
-        }
-    }
+    // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
+    // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
     Ok(event_id)
 }
