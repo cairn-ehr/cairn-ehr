@@ -25,3 +25,10 @@ getrandom = "0.4"          # key generation entropy (0.4 matches uuid/rand; dedu
 hex = "0.4"
 serde_bytes = "0.11"       # CBOR byte-string encoding for reserved inline blob bytes
 thiserror = "1"
+# ADR-0052 born-sealed bodies: AEAD seal + DEK wrap plane. Licenses checked
+# (house rule 1): chacha20poly1305 MIT/Apache-2.0, x25519-dalek BSD-3-Clause,
+# hkdf MIT/Apache-2.0, zeroize MIT/Apache-2.0 — all AGPL-3.0-compatible.
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+zeroize = "1"

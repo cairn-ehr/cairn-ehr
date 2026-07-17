@@ -38,6 +38,7 @@ pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
 pub mod medication;
+pub mod seal;
 
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
 pub const BLAKE3_MULTIHASH_PREFIX: [u8; 2] = [0x1e, 0x20]; // blake3, 32 bytes
@@ -68,6 +69,8 @@ pub enum EventError {
     BlobSlice(String),
     #[error("blob slice failed verification against the content address")]
     BlobVerify,
+    #[error("seal: {0}")]
+    Seal(String),
 }
 
 /// A signing context — the domain-separation tag for one *kind* of signed artifact
