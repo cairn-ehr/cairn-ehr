@@ -231,6 +231,40 @@ regardless of message order. The shred log table is **`erasure_shred_log`**.
 - **Unwrap-key rotation** — rotating the node X25519 unwrap key (the derivation and escrow are fixed
   now; rotation mechanics later).
 
+### 9. Interaction with ADR-0049 (sign-off currency)
+
+Born-sealing changes what the [ADR-0049](0049-commitment-based-sign-off-currency.md) thread commitment
+measures. ADR-0049's staleness compare reads a sealed thread's content-event set through
+`cairn_clear_payload` (§3 above) — i.e. only events **this node holds custody of** contribute to the
+recomputed commitment. The commitment is therefore a function of local **custody**, not, as ADR-0049
+Decision-3 states, a pure function of the append-only content-event **set**. This breaks ADR-0049's own
+stated soundness argument — *"sound because thread content is append-only / grow-only"* — for the
+**sealed, partial-custody** case only: a node that is missing custody of a later sealed content event
+cannot see that the set has grown, so its recomputed commitment can coincidentally match the pinned one
+for a thread that in fact grew — a **false-fresh** read, corrupting the staleness signal rather than
+honestly degrading it.
+
+To hold ADR-0049's soundness in that case, `reviewed_count` — ADR-0049's *"legibility hint only, never a
+staleness authority"* — is promoted, for sealed threads, to a **safe-direction withholding tripwire**:
+whenever a node's readable content-event count for a thread (`cairn_medication_thread_readable_count`) is
+**less than** the attestation's `reviewed_count`, the sign-off is forced **stale/unknown**, never reported
+"current," regardless of whether the (necessarily partial) commitment happens to match. This **refines**
+ADR-0049's "never a staleness authority" statement for the sealed case; it does not retract it. On an
+**unsealed or full-custody** thread the refinement is inert — nothing is ever unreadable there, so the
+readable count can never fall short of `reviewed_count`, the tripwire's condition never fires, and the
+commitment compare alone remains the sole staleness authority, exactly as ADR-0049 states.
+
+The added direction is safe by construction: the tripwire can only **withhold** "fresh," never assert it
+in a case the plain commitment compare would have missed — the same "err toward re-review" posture
+ADR-0049 Decision-3 already commits to, and principle 4 (acknowledged uncertainty — an imprecise
+near-truth over a precise untruth) applied to a staleness signal specifically.
+
+**Residual, tracked as a follow-up, not closed here:** the tripwire is blind to the case where the
+readable count coincidentally equals `reviewed_count` while the thread has in fact grown by a sealed
+content event this node cannot attribute to the thread *at all* — a sealed-no-custody row it cannot even
+count. Closing that gap needs thread-membership metadata that survives custody loss — a separate design
+decision, deferred.
+
 The accompanying **walking-skeleton seal slice** lands on `clinical.medication` (the only live
 clinical-content stream) — the thinnest end-to-end thread through seal-at-write, the two doors, the
 `event_dek`/`event_clear`/`erasure_shred_log` custody plane, the sync sidecar, shred, and restore-replay,
