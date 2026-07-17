@@ -46,6 +46,7 @@ const LISTEN_LOWHLC: &str = "127.0.0.1:39719";
 const LISTEN_SWEEP: &str = "127.0.0.1:39720";
 const LISTEN_REPULL: &str = "127.0.0.1:39721";
 const LISTEN_SEALED: &str = "127.0.0.1:39722";
+const LISTEN_GUARD: &str = "127.0.0.1:39723";
 
 /// A realistic PAST HLC wall (ms since epoch, ≈ 2026-06-20) — safely below "now",
 /// so A's remote-apply door accepts it (the drift ceiling bounds FUTURE walls only).
@@ -1532,5 +1533,169 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
         statement_count_for_med(&a, survivor).await,
         1,
         "the sibling thread's projection survives untouched (content_address-precise scrub)"
+    );
+}
+
+/// ADR-0052 wire-level shred guard — ISOLATES the serve-query CASE branch
+/// (`CASE WHEN s.target_event_id IS NULL THEN encode(d.dek_wrapped,'hex') END`, the
+/// EventsAfterSeq query in main.rs). In the ordinary crypto-shred path `cairn_execute_shred`
+/// DELETEs the `event_dek` row, so the LEFT JOIN already yields NULL and the CASE is never
+/// the thing that excludes a DEK — it is defense-in-depth with no test, and a maintainer
+/// could drop it with every existing test still green. This test constructs the ONE state
+/// the CASE alone defends: an event with a LIVE `event_dek` row (custody present) that ALSO
+/// carries an `erasure_shred_log` row (the future custody-rotation path where a DEK row can
+/// co-exist with a shred-log entry). It drives the REAL serve binary, so removing the CASE
+/// from main.rs breaks this test (a copied SQL could not protect against that).
+///
+///   Phase 1 (non-vacuous baseline): pull with NO shred-log row → B GAINS custody, proving
+///     the live `event_dek` row genuinely ships its DEK over this wire.
+///   Phase 2 (the guard): manually INSERT an `erasure_shred_log` row for the SAME event
+///     WITHOUT deleting `event_dek`, wipe B, pull again → B gains NO custody. Since A's
+///     `event_dek` row is still live, the ONLY thing that withheld the DEK is the serve CASE.
+///
+/// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
+#[tokio::test]
+async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
+    // A authors one sealed medication assert → a LIVE event_dek row on A.
+    let mut a = a;
+    let patient = Uuid::now_v7();
+    let metformin = AssertMedicationInput {
+        term: "metformin",
+        inn_code: None,
+        formulation: Some("tablet"),
+        dose_amount: Some("500"),
+        dose_unit: Some("mg"),
+        sig: Some("one BD"),
+        info_source: "patient-reported",
+        started: Some("2023"),
+        started_precision: Some("year"),
+    };
+    let med = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
+        .await
+        .unwrap();
+    let content_eid = content_event_id_of(&a, med).await;
+    assert_eq!(
+        custody_count(&a, &content_eid).await,
+        (1, 1),
+        "A holds live custody for its sealed assert"
+    );
+
+    // Serve A under its authoring key so DEKs can be re-wrapped for a puller.
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_GUARD,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_GUARD);
+    let full_pull_b = || {
+        Command::new(bin)
+            .args([
+                "pull",
+                "--full",
+                "--conn",
+                &base_b,
+                "--peer",
+                LISTEN_GUARD,
+                "--peer-name",
+                "node-a",
+                "--key",
+                &key_b,
+            ])
+            .output()
+            .expect("run pull")
+    };
+
+    // --- Phase 1 (non-vacuous baseline): NO shred-log row → the DEK ships, B gets custody ---
+    let p1 = full_pull_b();
+    assert!(
+        p1.status.success(),
+        "phase-1 pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&p1.stdout),
+        String::from_utf8_lossy(&p1.stderr)
+    );
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (1, 1),
+        "baseline: with no shred-log row the live event_dek row genuinely ships its DEK, \
+         so B gains custody — this is what proves the guard is non-vacuous (the test fails \
+         if the CASE is dropped, because phase 2 would then also grant custody)"
+    );
+
+    // --- Phase 2 (the guard): shred-log row present, event_dek STILL LIVE on A ---
+    // Directly insert the shred-log row WITHOUT calling cairn_execute_shred, so A's
+    // event_dek row survives — exactly the state (shred-logged + custody-present) that the
+    // ordinary DELETE path never leaves behind, and the CASE alone must defend.
+    a.execute(
+        "INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis) \
+         VALUES ($1::text::uuid, $2::text::uuid, $3)",
+        &[
+            &content_eid,
+            &Uuid::now_v7().to_string(),
+            &"custody-rotation path: DEK row intentionally retained (CASE-branch fixture)",
+        ],
+    )
+    .await
+    .unwrap();
+    // Precondition: A's event_dek row is STILL live (the branch the DELETE path prevents).
+    assert_eq!(
+        custody_count(&a, &content_eid).await,
+        (1, 1),
+        "A's event_dek row is intentionally still live alongside the shred-log row"
+    );
+
+    // Wipe B and re-arm it as fully custody-capable, so the ONLY difference from phase 1 is
+    // the shred-log row on A. If B now gains no custody, the serve CASE — not a deleted DEK
+    // row, not B's own apply door (B has no shred-log row) — is what withheld the DEK.
+    reset(&b).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+    register_unwrap_key(&b, &sk_b).await;
+    let p2 = full_pull_b();
+    assert!(
+        p2.status.success(),
+        "phase-2 pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&p2.stdout),
+        String::from_utf8_lossy(&p2.stderr)
+    );
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (0, 0),
+        "the serve CASE excluded the DEK for a shred-logged event even though A's event_dek \
+         row is still live — the wire-level shred guarantee does not depend on the DELETE"
+    );
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        0,
+        "no DEK across the wire ⇒ no clear shadow ⇒ no projection on B"
     );
 }
