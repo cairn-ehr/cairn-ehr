@@ -109,6 +109,31 @@ fn cairn_blob_verify_error(addr: &[u8], content: &[u8]) -> Option<String> {
     ))
 }
 
+/// ADR-0052: open a sealed body container with its DEK, in-DB, so the floor
+/// checks and projections run on plaintext INSIDE the door (unbypassable —
+/// principle 12). Returns NULL on any failure; the door raises the legible
+/// refusal. IMMUTABLE: pure function of (container, dek, event_id).
+#[pg_extern(immutable, parallel_safe)]
+fn cairn_unseal_body(container: pgrx::JsonB, dek: &[u8], event_id: &str) -> Option<pgrx::JsonB> {
+    let dek: &[u8; 32] = dek.try_into().ok()?;
+    let (payload, twin) =
+        cairn_event::seal::unseal_event_payload(&container.0, dek, event_id).ok()?;
+    Some(pgrx::JsonB(serde_json::json!({ "payload": payload, "plaintext_twin": twin })))
+}
+
+/// ADR-0052: wrap a DEK for a recipient's X25519 public unwrap key. VOLATILE
+/// (fresh ephemeral key + nonce per call). The DB only ever sees the PUBLIC
+/// half — a DB backup can never reconstruct custody.
+#[pg_extern(volatile, parallel_safe)]
+fn cairn_wrap_dek(dek: &[u8], unwrap_pub: &[u8]) -> Vec<u8> {
+    let dek: &[u8; 32] = dek.try_into()
+        .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: DEK must be 32 bytes"));
+    let unwrap_pub: &[u8; 32] = unwrap_pub.try_into()
+        .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: unwrap_pub must be 32 bytes"));
+    cairn_event::seal::wrap_dek_for(dek, unwrap_pub)
+        .unwrap_or_else(|e| pgrx::error!("cairn_wrap_dek: {e}"))
+}
+
 /// True iff `token` is a valid attestation by `attester_key` bound to `content_address`.
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_attestation_ok(token: &[u8], content_address: &[u8], attester_key: &[u8]) -> bool {
@@ -256,6 +281,52 @@ mod tests {
             err.contains("wrong multihash prefix 0x1220"),
             "prefix is the named cause: {err}"
         );
+    }
+
+    // ADR-0052 door surface: seal in Rust, open via the SQL surface — the exact
+    // door flow a submit_event trigger will use once Task 5+ wires it in.
+    #[pg_test]
+    fn unseal_body_round_trips_via_sql() {
+        let payload = serde_json::json!({"medication_id": "m1"});
+        let (container, dek) =
+            cairn_event::seal::seal_event_payload(&payload, "the twin", "evt-9").unwrap();
+        let inner = Spi::get_one_with_args::<pgrx::JsonB>(
+            "SELECT cairn_unseal_body($1::jsonb, $2, $3)",
+            &[container.to_string().into(), dek.as_slice().into(), "evt-9".into()],
+        ).unwrap().unwrap();
+        assert_eq!(inner.0["plaintext_twin"], serde_json::json!("the twin"));
+        assert_eq!(inner.0["payload"]["medication_id"], serde_json::json!("m1"));
+    }
+
+    // The wrong DEK must refuse, never return corrupted/partial plaintext — the
+    // pgrx surface stays panic-free (NULL, not an ERROR) so a caller can probe.
+    #[pg_test]
+    fn unseal_body_returns_null_on_wrong_dek() {
+        let (container, _dek) =
+            cairn_event::seal::seal_event_payload(&serde_json::json!({}), "t", "e").unwrap();
+        let wrong: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let got = Spi::get_one_with_args::<pgrx::JsonB>(
+            "SELECT cairn_unseal_body($1::jsonb, $2, $3)",
+            &[container.to_string().into(), wrong.as_slice().into(), "e".into()],
+        ).unwrap();
+        assert!(got.is_none());
+    }
+
+    // The DEK wrap plane's SQL door: wrap via SQL, unwrap via the Rust primitive
+    // — proves the DB-visible half (cairn_wrap_dek) interoperates with the
+    // daemon-held secret half it will never see.
+    #[pg_test]
+    fn wrap_dek_produces_openable_custody() {
+        let seed: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(9));
+        let secret = cairn_event::seal::derive_unwrap_secret(&seed);
+        let public = cairn_event::seal::unwrap_public(&secret);
+        let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3));
+        let wrapped = Spi::get_one_with_args::<Vec<u8>>(
+            "SELECT cairn_wrap_dek($1, $2)",
+            &[dek.as_slice().into(), public.as_slice().into()],
+        ).unwrap().unwrap();
+        let opened = cairn_event::seal::unwrap_dek(&wrapped, &secret).unwrap();
+        assert_eq!(opened.as_slice(), &dek);
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,
