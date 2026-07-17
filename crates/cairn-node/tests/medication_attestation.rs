@@ -2156,6 +2156,18 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    // A SECOND enrolled human — the two vouches are differentiated by their attester (a
+    // legitimately-varying, view-visible field), NOT by reviewed_count. The pinned actor
+    // set needs a person-distinguishing determinant or ADR-0044 refuses the enroll as an
+    // actor_id collision with the first clinician (same idiom as
+    // medication_remote_apply.rs::responsibility_claim_for_another_actor_is_refused).
+    let (sk_h2, kid_h2) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"person\":\"second-clinician\"}', $1)",
+        &[&kid_h2],
+    )
+    .await
+    .unwrap();
     let patient = Uuid::now_v7();
 
     let medication_id = assert_medication(
@@ -2175,9 +2187,13 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
     let commitment_hex = hex::encode(&commitment);
 
     // ONE HLC, reused verbatim for BOTH vouches -> an equal-(wall,counter,origin)
-    // collision. Distinct reviewed_count -> distinct payload -> distinct content_address,
-    // the ONLY key the DISTINCT ON can then order by. Both pin the CURRENT commitment, so
-    // both are non-stale; which one stands is decided purely by content_address DESC.
+    // collision. BOTH pin the CURRENT commitment AND carry reviewed_count = 1 (the thread's
+    // true readable content-event count), so both are legitimately non-stale — including
+    // under the ADR-0049 false-fresh gate (readable_count < reviewed_count would force
+    // stale; here readable == reviewed == 1). They are differentiated ONLY by their
+    // attester (distinct signer_key_id -> distinct signed bytes -> distinct content_address,
+    // the key the DISTINCT ON then orders by). Which one stands is decided purely by
+    // content_address DESC — surfaced through the view's attester_kid column.
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
 
     let ca1 = submit_vouch_returning_ca(
@@ -2196,15 +2212,15 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         patient,
         medication_id,
         &commitment_hex,
-        2,
-        &sk_h,
-        &kid_h,
+        1,
+        &sk_h2,
+        &kid_h2,
         hlc.clone(),
     )
     .await;
     assert_ne!(
         ca1, ca2,
-        "distinct payloads must yield distinct content addresses"
+        "distinct attesters must yield distinct content addresses"
     );
 
     // Both vouches landed (append-only, keyed by event_id — the equal HLC does not dedup).
@@ -2218,12 +2234,14 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         .get(0);
     assert_eq!(landed, 2, "both equal-HLC vouches are retained");
 
-    // The standing vouch is the one with the LARGER content_address (bytea DESC).
-    let expected_standing_count: i32 = if ca1 > ca2 { 1 } else { 2 };
-    let (standing_count, stale): (i32, bool) = {
+    // The standing vouch is the one with the LARGER content_address (bytea DESC), identified
+    // here by WHICH human attested it (both are reviewed_count = 1, so the count can no
+    // longer be the discriminator — the attester is).
+    let expected_standing_kid: &str = if ca1 > ca2 { &kid_h } else { &kid_h2 };
+    let (standing_kid, stale): (String, bool) = {
         let row = c
             .query_one(
-                "SELECT reviewed_count, stale FROM medication_thread_attestation \
+                "SELECT attester_kid, stale FROM medication_thread_attestation \
                  WHERE medication_id = $1::text::uuid",
                 &[&medication_id.to_string()],
             )
@@ -2232,11 +2250,11 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         (row.get(0), row.get(1))
     };
     assert_eq!(
-        standing_count, expected_standing_count,
+        standing_kid, expected_standing_kid,
         "the larger-content_address vouch stands (deterministic DESC tiebreak, convergent across nodes)"
     );
     assert!(
         !stale,
-        "both vouches pinned the current commitment -> standing is not stale"
+        "both vouches pinned the current commitment at the true readable count -> standing is not stale"
     );
 }

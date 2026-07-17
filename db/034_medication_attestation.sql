@@ -144,6 +144,32 @@ RETURNS bytea LANGUAGE sql STABLE AS $$
       AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
+-- 4a. The READABLE content-event count for a thread — the ADR-0049 FALSE-FRESH gate's
+--     tripwire (Task 8, issues #189/#92). Deliberately the SAME filter as the commitment
+--     fn above (four content types, read through cairn_clear_payload) and byte-identical
+--     to how the author-time orchestrator sizes reviewed_count
+--     (crates/cairn-node/src/medication/attestation.rs::thread_commitment_on) — so on a
+--     FULL-custody node readable_count == reviewed_count and the gate below never fires
+--     spuriously; on a PARTIAL-custody node (a sealed content event synced in WITHOUT its
+--     DEK is invisible to cairn_clear_payload) it reads SHORT.
+--
+--     Task 8 is the task that first populates custody on the sync path (db/020's sealed
+--     arm), so the false-fresh hazard cairn_medication_thread_commitment warns about goes
+--     LIVE here: a node that cannot reproduce the reviewed set must never read a grown
+--     thread as "fresh". The staleness view (part 2) forces stale whenever this count is
+--     LESS than the attestation's reviewed_count.
+CREATE OR REPLACE FUNCTION cairn_medication_thread_readable_count(p_medication_id uuid)
+RETURNS bigint LANGUAGE sql STABLE AS $$
+    SELECT count(*)
+    FROM event_log el
+    WHERE el.event_type IN (
+            'clinical.medication.asserted',
+            'clinical.medication-cessation.asserted',
+            'clinical.medication-dose-change.asserted',
+            'clinical.medication-dose-correction.asserted')
+      AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
+$$;
+
 -- 4b. Read-time support for the set-commitment fn. Unlike the other medication read
 --     views (which read trigger-maintained projection TABLES), the commitment is
 --     re-derived straight from event_log at BOTH author and read time — that direct
@@ -243,6 +269,22 @@ CREATE TRIGGER medication_attestation_apply_trg
 --    content is append-only (grow-only), ANY later content event (higher OR lower
 --    HLC) changes the commitment -> stale. content_address is bytea -> byte-order
 --    tiebreak needs no COLLATE.
+--
+--    ADR-0049 FALSE-FRESH gate (Task 8, issues #189/#92): the commitment above is
+--    computed through cairn_clear_payload, so it is CUSTODY-dependent, not event-set-
+--    dependent. On a PARTIAL-custody node (a sealed content event synced WITHOUT its DEK
+--    is unreadable, hence uncountable and un-hashable for its thread) the recomputed
+--    commitment can coincidentally match what the vouch pinned even though the attester
+--    reviewed MORE — reading a grown thread as FALSE-FRESH, the exact unsafe direction
+--    ADR-0049 forbids. The FIRST disjunct closes that: when this node cannot even
+--    reproduce the reviewed set (its readable content count < reviewed_count), the vouch
+--    is forced stale/unknown — never "current" — regardless of whether the partial
+--    commitment happens to match. Safe direction: uncertainty can only WITHHOLD "fresh".
+--    (Residual, tracked as follow-up: when readable_count == reviewed_count but the thread
+--    grew via a content event this node cannot attribute to the thread at all — a sealed-
+--    no-custody row — the tripwire cannot see it; closing that needs thread-membership
+--    metadata that survives custody loss, a separate design decision. See
+--    cairn_medication_thread_commitment's CAUTION note.)
 CREATE OR REPLACE VIEW medication_thread_attestation AS
 SELECT DISTINCT ON (a.medication_id)
        a.medication_id,
@@ -251,7 +293,8 @@ SELECT DISTINCT ON (a.medication_id)
        a.hlc_wall     AS attested_wall,
        a.hlc_counter  AS attested_counter,
        a.reviewed_count,
-       (cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
+       (cairn_medication_thread_readable_count(a.medication_id) < a.reviewed_count
+        OR cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
            AS stale
 FROM medication_attestation a
 ORDER BY a.medication_id, a.hlc_wall DESC, a.hlc_counter DESC, a.content_address DESC;
