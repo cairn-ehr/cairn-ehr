@@ -349,6 +349,56 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- ADR-0052 custody plane, part 1 — the CLEAR-view table and its read helper.
+--
+-- These two definitions live HERE, in db/005, rather than in db/037 (the rest of
+-- the custody plane), for a hard migration-ordering reason: db/034's two
+-- `LANGUAGE sql` functions (cairn_medication_thread_commitment,
+-- cairn_medication_thread_readable_count) call cairn_clear_payload, and a
+-- `LANGUAGE sql` function resolves its references EAGERLY at CREATE time. If the
+-- helper were still defined in db/037 (which loads AFTER db/034), a genuinely
+-- FRESH database would fail at db/034 with "function cairn_clear_payload(event_log)
+-- does not exist". db/005 (the submit door) is the earliest migration present in
+-- BOTH the cairn-node main schema (crates/cairn-node/src/db.rs) AND the cairn-sync
+-- subset (crates/cairn-sync/src/main.rs), it loads before db/034, event_log already
+-- exists (db/001, with its `body` and `sealed` columns), and the door below is the
+-- first user of event_clear — so this is the correct common home. The rest of the
+-- custody plane (event_dek, node_unwrap_key, erasure_shred_log, shred execution,
+-- the erasure.shred.asserted verb) stays in db/037. Idempotent: CREATE TABLE IF NOT
+-- EXISTS / CREATE OR REPLACE, so replay is safe on a DB that loaded the pre-move
+-- layout.
+--
+-- The operational clear view of sealed bodies: THE single derived-plaintext surface
+-- (clear payload + clear twin), populated by the doors, deleted by a shred. No FK to
+-- event_log: the door inserts this row BEFORE the event_log row so the AFTER INSERT
+-- projection triggers can already read it (same transaction — atomicity keeps them
+-- consistent). Future FTS/RAG indexes MUST build on this table and nothing else (#92 (b)).
+CREATE TABLE IF NOT EXISTS event_clear (
+    event_id UUID  PRIMARY KEY,
+    body     JSONB NOT NULL,   -- the CLEAR payload (matches event_log.body semantics)
+    twin     TEXT  NOT NULL    -- the CLEAR legibility twin
+);
+
+-- Projection read helper: the ONE way a projection trigger reads a clinical payload.
+-- Unsealed → the derived body column; sealed → the clear shadow (NULL when this node
+-- holds no custody: the caller skips projection). LANGUAGE sql, so its callers in
+-- db/034 bind eagerly against it (see the ordering note above).
+CREATE OR REPLACE FUNCTION cairn_clear_payload(ev event_log) RETURNS jsonb
+LANGUAGE sql STABLE AS $$
+    SELECT CASE WHEN NOT ev.sealed THEN ev.body
+                ELSE (SELECT body FROM event_clear WHERE event_id = ev.event_id)
+           END
+$$;
+
+-- Grant floor for event_clear (door-managed writes only; SELECT is the clear READ
+-- surface for chart/FTS). cairn_agent is created in db/004, before this migration.
+-- Moved here from db/037 alongside the table definition above.
+REVOKE ALL ON event_clear FROM PUBLIC;
+REVOKE ALL ON event_clear FROM cairn_agent;
+GRANT SELECT ON event_clear TO cairn_agent;  -- the clear READ surface (chart/FTS)
+-- ---------------------------------------------------------------------------
+
 -- ADR-0052: the door gained p_dek. A CREATE OR REPLACE with a different arg
 -- list would OVERLOAD (3-arg + 4-arg → ambiguous 1-arg calls), so drop the old
 -- signature first. Idempotent across replays.

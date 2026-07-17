@@ -47,18 +47,11 @@ CREATE TABLE IF NOT EXISTS event_dek (
 );
 
 -- ---------------------------------------------------------------------------
--- 3. The operational clear view of sealed bodies: THE single derived-plaintext
---    surface (clear payload + clear twin), populated by the doors, deleted by a
---    shred. No FK to event_log: the door inserts this row BEFORE the event_log
---    row so the AFTER INSERT projection triggers can already read it (same
---    transaction — atomicity keeps them consistent). Future FTS/RAG indexes
---    MUST build on this table and nothing else (#92 (b)).
+-- 3. event_clear (the CLEAR-view table) + cairn_clear_payload moved to db/005 so
+--    db/034's LANGUAGE sql functions can bind them (LANGUAGE sql resolves refs
+--    eagerly at CREATE time, and db/034 loads before this migration); the rest of
+--    the custody plane stays here. See db/005 for the full ordering rationale.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS event_clear (
-    event_id UUID  PRIMARY KEY,
-    body     JSONB NOT NULL,   -- the CLEAR payload (matches event_log.body semantics)
-    twin     TEXT  NOT NULL    -- the CLEAR legibility twin
-);
 
 -- ---------------------------------------------------------------------------
 -- 4. The shred log: which events have been erased here. Rebuilt idempotently
@@ -73,16 +66,10 @@ CREATE TABLE IF NOT EXISTS erasure_shred_log (
 );
 
 -- ---------------------------------------------------------------------------
--- 5. Projection read helper: the ONE way a projection trigger reads a clinical
---    payload. Unsealed → the derived body column; sealed → the clear shadow
---    (NULL when this node holds no custody: the caller skips projection).
+-- 5. Projection read helper cairn_clear_payload moved to db/005 (see section 3
+--    above and the ordering note in db/005): db/034's LANGUAGE sql functions bind
+--    it eagerly, so it must be defined before db/034 loads.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION cairn_clear_payload(ev event_log) RETURNS jsonb
-LANGUAGE sql STABLE AS $$
-    SELECT CASE WHEN NOT ev.sealed THEN ev.body
-                ELSE (SELECT body FROM event_clear WHERE event_id = ev.event_id)
-           END
-$$;
 
 -- ---------------------------------------------------------------------------
 -- 6. erasure.shred.asserted — the rung-3 audited tombstone (plaintext BY DESIGN:
@@ -160,10 +147,11 @@ ON CONFLICT (target_event_id) DO NOTHING;
 --    earlier in migration order, so no existence guard is needed here — mirrors
 --    the unconditional REVOKE/GRANT style used from db/022 onward.
 -- ---------------------------------------------------------------------------
-REVOKE ALL ON node_unwrap_key, event_dek, event_clear, erasure_shred_log FROM PUBLIC;
+REVOKE ALL ON node_unwrap_key, event_dek, erasure_shred_log FROM PUBLIC;
 
-REVOKE ALL ON node_unwrap_key, event_dek, event_clear, erasure_shred_log FROM cairn_agent;
-GRANT SELECT ON event_clear TO cairn_agent;  -- the clear READ surface (chart/FTS)
+REVOKE ALL ON node_unwrap_key, event_dek, erasure_shred_log FROM cairn_agent;
+-- event_clear's REVOKE/GRANT (SELECT to cairn_agent) moved to db/005 alongside its
+-- table definition (see section 3).
 
 GRANT SELECT ON event_dek, erasure_shred_log, node_unwrap_key TO cairn_node;  -- serve-side custody reads
 

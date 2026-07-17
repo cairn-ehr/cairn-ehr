@@ -2290,8 +2290,11 @@ fn cmd_run(
 /// DEK is symmetric, so it can never be shipped as-is: we UNWRAP it with our own
 /// secret, then RE-WRAP it for the requester's X25519 public key (from its verified
 /// cert). The requester unwraps with ITS secret and hands the DEK to the apply door.
-/// Custody thus **follows admission**: a peer that can already pull the event gains
-/// no new clinical data — only the ability to later crypto-shred what it now holds.
+/// Custody thus **follows admission** — it does not widen WHICH events a peer
+/// replicates — but the DEK is precisely what makes a sealed body READABLE, so handing
+/// it over confers clinical-data read access (it populates event_clear / opens the
+/// plaintext), not merely a later crypto-shred capability. What currently gates who may
+/// obtain it is the trust-note at the serve site (transport boundary only, for now).
 ///
 /// `local_deks[i]` is None whenever no custody must travel: the event is unsealed,
 /// this node holds no DEK for it, OR it has been SHREDDED here (the serve SQL nulls a
@@ -2415,24 +2418,30 @@ fn serve_conn(
             // signed it, so `requester_pub` provably belongs to that identity.
             //
             // TODO(follow-up, filed in Task 14): pin this kid against the node-plane
-            // trust set. The skeleton confirms the cert is internally consistent but
-            // does NOT yet check the kid is a TRUSTED peer. Because custody FOLLOWS
-            // ADMISSION — the peer can already pull these very events — re-wrapping
-            // their DEKs grants no new clinical data, only future shred capability, so
-            // this is not a new escalation; trust-set pinning is the intended
-            // hardening. An absent or invalid cert simply yields no custody (below),
-            // never a refused pull.
+            // trust set. The skeleton confirms the cert is internally consistent (the
+            // kid signed it, so `requester_pub` provably belongs to that identity) but
+            // does NOT yet check the kid is a TRUSTED peer. Be honest about what that
+            // leaves standing: until cert-kid trust-set pinning lands, the transport
+            // boundary (WireGuard / mTLS on the serve port) is the SOLE access control
+            // on who obtains sealed-body custody. ANY self-signed unwrap cert that
+            // reaches this port has its DEKs re-wrapped and thereby obtains READ-custody
+            // of every non-shredded sealed body this node serves — the DEK is what
+            // populates event_clear and opens the sealed plaintext, so custody confers
+            // clinical-data READ, not merely a future shred capability. This is the
+            // sanctioned ADR-0052 erasability-by-default skeleton (custody is designed
+            // to follow admission), but its current floor honestly stated is "the link
+            // is the access control"; trust-set pinning is the named hardening that
+            // makes admission the boundary in the DB too, not just on the wire. An
+            // absent or invalid cert simply yields no custody (below), never a refused
+            // pull.
             let requester_pub = unwrap_cert.as_deref().and_then(|hexed| {
                 hex::decode(hexed)
                     .ok()
                     .and_then(|c| cairn_event::verify_unwrap_key_cert(&c).ok())
                     .map(|(_kid, pubk)| pubk)
             });
-            let wrapped_deks = rewrap_custody_for_peer(
-                &local_deks,
-                requester_pub.as_ref(),
-                own_secret.as_deref(),
-            );
+            let wrapped_deks =
+                rewrap_custody_for_peer(&local_deks, requester_pub.as_ref(), own_secret.as_deref());
             serde_json::to_vec(&EventsResponse {
                 events,
                 attestations,
@@ -3031,6 +3040,81 @@ mod tests {
         let (kid, got) = cairn_event::verify_unwrap_key_cert(&cert).unwrap();
         assert_eq!(kid, hex::encode(sk.verifying_key().to_bytes()));
         assert_eq!(got, xpub);
+    }
+
+    // ---------------------------------------------------------------------
+    // rewrap_custody_for_peer — the load-bearing custody re-wrap on the serve
+    // path (ADR-0052). Pure (no DB), so unit-testable directly. ALL key material
+    // is DERIVED at runtime (house rule 6): a literal 32-byte array in a crypto
+    // context trips CodeQL's hard-coded-cryptographic-value query (issue #146).
+    // ---------------------------------------------------------------------
+
+    /// Deterministic-but-computed 32-byte fixture. `tag` distinguishes each
+    /// role/secret so no two fixtures collide, and nothing is a byte literal.
+    fn derived_bytes(tag: u8) -> [u8; 32] {
+        std::array::from_fn(|i| (i as u8).wrapping_mul(31).wrapping_add(tag))
+    }
+
+    #[test]
+    fn rewrap_custody_round_trips_to_the_requesters_secret() {
+        // (a) A slot re-wrapped for the requester must open with the REQUESTER's
+        //     secret and yield the ORIGINAL dek — the whole contract: custody
+        //     travels to the peer, readable only by the peer.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x11));
+        let own_pub = cairn_event::seal::unwrap_public(&own_secret);
+        let peer_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x22));
+        let peer_pub = cairn_event::seal::unwrap_public(&peer_secret);
+        let dek = derived_bytes(0x33);
+
+        // This node stores the DEK wrapped for its OWN unwrap key (the serve SQL
+        // hands rewrap_custody_for_peer exactly this hex string).
+        let local_wrapped = cairn_event::seal::wrap_dek_for(&dek, &own_pub).unwrap();
+        let local_deks = vec![Some(hex::encode(local_wrapped))];
+
+        let out = rewrap_custody_for_peer(&local_deks, Some(&peer_pub), Some(&*own_secret));
+        assert_eq!(out.len(), 1);
+        let rewrapped = hex::decode(out[0].as_ref().expect("slot was re-wrapped")).unwrap();
+
+        // Opens with the PEER's secret and recovers the original DEK …
+        let recovered = cairn_event::seal::unwrap_dek(&rewrapped, &peer_secret).unwrap();
+        assert_eq!(&*recovered, &dek, "requester recovers the original DEK");
+        // … and is NOT re-openable by the serving node (the wrap is bound to the peer).
+        assert!(
+            cairn_event::seal::unwrap_dek(&rewrapped, &own_secret).is_err(),
+            "the re-wrap is bound to the requester, not the server"
+        );
+    }
+
+    #[test]
+    fn rewrap_custody_leaves_a_none_slot_none() {
+        // (b) A None local slot (unsealed event / no custody here / shredded) stays
+        //     None — no DEK is fabricated for a slot that never carried one.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x44));
+        let peer_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &derived_bytes(0x55),
+        ));
+
+        let out = rewrap_custody_for_peer(&[None], Some(&peer_pub), Some(&*own_secret));
+        assert_eq!(out, vec![None], "a None local slot ships no custody");
+    }
+
+    #[test]
+    fn rewrap_custody_ships_nothing_without_a_requester_key() {
+        // (c) No requester public key (absent / invalid cert → None) means EVERY slot
+        //     is None: sealed events still sync, custody simply does not travel. Even a
+        //     populated local slot must not leak when there is no recipient to bind to.
+        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x66));
+        let own_pub = cairn_event::seal::unwrap_public(&own_secret);
+        let local_wrapped =
+            cairn_event::seal::wrap_dek_for(&derived_bytes(0x77), &own_pub).unwrap();
+        let local_deks = vec![Some(hex::encode(local_wrapped)), None];
+
+        let out = rewrap_custody_for_peer(&local_deks, None, Some(&*own_secret));
+        assert_eq!(
+            out,
+            vec![None, None],
+            "no requester key means all-None custody"
+        );
     }
 }
 
