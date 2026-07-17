@@ -119,10 +119,19 @@ RETURNS bytea LANGUAGE sql STABLE AS $$
     -- medication_id lives in the event_clear shadow — the thread lookup must read the
     -- CLEAR payload via cairn_clear_payload (unsealed rows resolve to body unchanged,
     -- the same sealed-aware read the projection triggers use). content_address is on
-    -- event_log for EVERY row (it hashes the signed bytes, sealed or not), so the
-    -- commitment VALUE is unchanged; only finding the thread's events became sealed-aware.
-    -- A node holding no custody for a sealed event sees NULL here and honestly EXCLUDES it
-    -- (degradation, never corruption) — the same posture the projections take.
+    -- event_log for EVERY row (it hashes the signed bytes, sealed or not).
+    --
+    -- CAUTION — ADR-0049 FALSE-FRESH hazard (Tasks 8/9 MUST close this): routing the
+    -- thread filter through cairn_clear_payload makes this commitment a function of
+    -- CUSTODY, not of the event SET. A node that holds an attestation's custody but is
+    -- MISSING a later content event's custody recomputes H({ca1}) for a thread that has
+    -- actually grown to {ca1, ca2} -> the staleness view reads stale = FALSE and shows the
+    -- thread FRESH when it in fact grew. That is a FALSE-FRESH — the exact unsafe direction
+    -- ADR-0049 exists to forbid: staleness-signal CORRUPTION, NOT honest degradation.
+    -- UNREACHABLE today (the apply door does not populate custody yet), but Tasks 8/9 MUST
+    -- gate the staleness view to force stale/unknown whenever the readable content-event
+    -- count is LESS THAN the attestation's reviewed_count. See ADR-0052 (+ the issue to be
+    -- filed for the sealed-aware staleness gate).
     SELECT CASE WHEN count(*) = 0 THEN NULL
                 ELSE digest(string_agg(el.content_address, ''::bytea ORDER BY el.content_address), 'sha256')
            END

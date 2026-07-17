@@ -535,7 +535,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- 6b. ADR-0052 born-sealed arm. A clinical body arrives EITHER as the sealed
+    -- 7. ADR-0052 born-sealed arm. A clinical body arrives EITHER as the sealed
     --     container (payload.sealed = true) — the shipped default — or as legacy
     --     plaintext, which the STRICT door refuses: an unsealed clinical body is
     --     permanently un-shreddable, and this floor is what makes the posture
@@ -561,13 +561,13 @@ BEGIN
         RAISE EXCEPTION 'submit_event: % is a clinical body and must be born-sealed — plaintext clinical submissions are refused at the strict door (ADR-0052; wipe pre-ADR-0052 dev rigs, never sync them through)', v_type;
     END IF;
 
-    -- 7. Plaintext twin (§3.13/§4.5) + any per-type structural floor, via the
+    -- 8. Plaintext twin (§3.13/§4.5) + any per-type structural floor, via the
     --    cairn_event_twin hook so a new event type adds its branch there, not by
     --    re-declaring this whole door. Runs on the CLEAR view so a sealed body's
     --    structural floor is checked on its real payload, never the ciphertext.
     v_twin := cairn_event_twin(v_type, b_clear);
 
-    -- 6c. Custody + operational clear view — BEFORE the log INSERT so the AFTER
+    -- 9. Custody + operational clear view — BEFORE the log INSERT so the AFTER
     --     INSERT projection triggers can already read the shadow (same txn).
     --     An already-shredded target gets NEITHER: set-union may re-deliver the
     --     row forever, but custody never resurrects (arrival-order independence).
@@ -617,7 +617,7 @@ BEGIN
     -- two doors never drift.
     PERFORM cairn_learn_attachment_refs(b);
 
-    -- 6d. The erasure plane: an admitted shred tombstone EXECUTES here (ADR-0052).
+    -- 10. The erasure plane: an admitted shred tombstone EXECUTES here (ADR-0052).
     --     Strict door: the target must exist locally (shredding the unknown is a
     --     user error at authoring time; the APPLY door is lenient — a shred may
     --     arrive before its target on the wire). The tombstone is plaintext by

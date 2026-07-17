@@ -87,6 +87,12 @@ async fn thread_commitment_on(
             // event carries ciphertext in event_log.body, so medication_id lives in the
             // event_clear shadow (unsealed rows resolve to body unchanged). Mirrors the
             // sealed-aware lookup in cairn_medication_thread_commitment (db/034).
+            // CAUTION (ADR-0049 false-fresh, Tasks 8/9): this count — like the commitment —
+            // is now CUSTODY-dependent, not event-set-dependent. A partial-custody node can
+            // read a SHORT count for a thread that actually grew, so a stale check built on
+            // it could show FALSE-FRESH. Tasks 8/9 MUST gate the staleness view to force
+            // stale/unknown when the readable content count < the attestation reviewed_count
+            // (see db/034's caution). Here it only sizes the vouch, so it is not yet unsafe.
             "SELECT encode(cairn_medication_thread_commitment($1::text::uuid), 'hex') AS c, \
              (SELECT count(*) FROM event_log \
                 WHERE event_type IN ('clinical.medication.asserted', \
@@ -177,13 +183,29 @@ pub async fn attest_thread_in_tx(
 }
 
 /// Post-hoc standalone sign-off: mint an HLC, open a one-statement txn, attest, commit.
+///
+/// `node_sk` is the NODE's own signing key — used ONLY to register the node's DEK-unwrap
+/// key defensively before the sealed attestation submits (ADR-0052). The author-time verb
+/// paths always register it via the content submit, but a post-hoc vouch on a thread this
+/// node acquired by SYNC (Tasks 8/9, when synced threads gain custody) may reach the door
+/// with no unwrap key registered yet, and the attestation's custody wrap would then fail
+/// with "node unwrap key not registered". Registration MUST be the node key, never the
+/// human attester (`params.human_sk`): the node holds custody, and the node_unwrap_key
+/// singleton refuses a second, different key (`cairn_register_unwrap_key`). Idempotent, so
+/// calling it when the content path already registered the same key is a safe no-op.
+///
+/// SAFETY FOLLOW-UP (Tasks 8/9): this only makes the CUSTODY key present; it does NOT fix
+/// the ADR-0049 false-fresh hazard a partial-custody node can still hit at the staleness
+/// view (see cairn_medication_thread_commitment in db/034). That gate is Tasks 8/9's job.
 pub async fn attest_medication_thread(
     client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
     node_origin: &str,
     params: &AttestParams<'_>,
     patient: Uuid,
     medication_id: Uuid,
 ) -> anyhow::Result<Uuid> {
+    crate::medication::sealed_submit::ensure_unwrap_key(client, node_sk).await?;
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let tx = client.transaction().await?;
     let id = attest_thread_in_tx(&tx, params, patient, medication_id, hlc).await?;

@@ -933,6 +933,11 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
         .query_one(
             // ADR-0052: sealed content carries ciphertext in body — read the thread key
             // through cairn_clear_payload (the event_clear shadow) to find the assert.
+            // CAUTION (ADR-0049 false-fresh, Tasks 8/9): a cairn_clear_payload thread
+            // lookup is CUSTODY-dependent — a partial-custody node sees fewer content
+            // events than the true set, so any staleness signal derived from it can read
+            // FALSE-FRESH. Tasks 8/9 MUST gate the staleness view (readable content count <
+            // reviewed_count => stale/unknown); see cairn_medication_thread_commitment.
             "SELECT min(hlc_wall) FROM event_log WHERE event_type IN ( \
                  'clinical.medication.asserted', \
                  'clinical.medication-cessation.asserted', \
@@ -1267,9 +1272,10 @@ async fn attest_medication_thread_end_to_end() {
         basis: Some("chart review"),
         note: Some("confirmed dose with patient"),
     };
-    let event_id = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
-        .await
-        .expect("a well-formed post-hoc attestation of a real thread must succeed");
+    let event_id =
+        attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
+            .await
+            .expect("a well-formed post-hoc attestation of a real thread must succeed");
 
     let n: i64 = c
         .query_one(
@@ -1317,7 +1323,7 @@ async fn attest_refuses_orphan_thread_with_clear_message() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
+    let (sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
     let medication_id = Uuid::now_v7(); // never asserted -> no local content events
 
@@ -1327,7 +1333,7 @@ async fn attest_refuses_orphan_thread_with_clear_message() {
         basis: None,
         note: None,
     };
-    let err = attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    let err = attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect_err("an orphan thread must refuse a post-hoc attestation");
     assert!(
@@ -1690,7 +1696,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
         basis: Some("initial chart review"),
         note: None,
     };
-    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect("the first, post-hoc attestation must succeed");
 
@@ -1762,7 +1768,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
 
     // Attest again: a NEW row is appended (superseding which vouch is "current"),
     // the old one is untouched.
-    attest_medication_thread(&mut c, "test-node", &params, patient, medication_id)
+    attest_medication_thread(&mut c, &sk_d, "test-node", &params, patient, medication_id)
         .await
         .expect("re-attesting the corrected thread must succeed");
 

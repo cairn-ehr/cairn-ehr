@@ -1894,11 +1894,13 @@ async fn main() -> anyhow::Result<()> {
             patient,
             attest,
         } => {
-            // Post-hoc sign-off authors no clinical content event, so — unlike the six
-            // verb handlers above — this needs no node signing key / registration-actor
-            // ceremony: `attest_medication_thread` only needs `node_origin` (to mint the
-            // HLC) and the human attester, matched to its exact signature in
-            // `cairn_node::medication::attestation`.
+            // Post-hoc sign-off authors no clinical content EVENT of its own, but the
+            // attestation event IS clinical.* and born-sealed (ADR-0052), so its DEK must be
+            // wrapped into node custody — which needs the NODE signing key to register the
+            // node's unwrap key defensively (idempotent; a no-op when the content path
+            // already registered it). No registration-ACTOR ceremony is needed (this key
+            // authors no additive content event); just the node key for custody.
+            let node_sk = load_signing_key(&cli.key, true)?;
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             let (human_sk, human_kid) = resolve_attester(&db, &attest).await?.ok_or_else(|| {
@@ -1914,6 +1916,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let event_id = cairn_node::medication::attest_medication_thread(
                 &mut db,
+                &node_sk,
                 &id.node_id_hex,
                 &params,
                 patient,
