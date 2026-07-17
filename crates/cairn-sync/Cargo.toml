@@ -31,3 +31,6 @@ chacha20poly1305 = "0.10"  # Bet B (B3): DEK-wrap / body-seal keystore-cost micr
 cairn-node = { path = "../cairn-node" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-postgres = "0.7"
+# Per-node key files for the ADR-0052 custody wire: each test writes its serve/pull
+# key into a TempDir that auto-cleans on drop (no node.key litter in the crate cwd).
+tempfile = "3"

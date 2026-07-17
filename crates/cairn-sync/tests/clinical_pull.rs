@@ -21,7 +21,9 @@ use cairn_node::medication::{
     assert_medication, cease_medication, change_dose, reconcile_medications, AssertMedicationInput,
     AttestParams, CeaseMedicationInput, ChangeDoseInput, ReconcileInput,
 };
+use std::path::Path;
 use std::process::{Child, Command};
+use tempfile::TempDir;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -102,11 +104,23 @@ impl Drop for ServeGuard {
 async fn reset(c: &Client) {
     // RESTART IDENTITY resets event_log.seq to 1 so the #196 seq-cursor tests see
     // deterministic serving seqs (1, 2, 3 …) rather than a cluster-wide running total.
+    //
+    // The ADR-0052 custody plane (node_unwrap_key / event_dek / event_clear /
+    // erasure_shred_log) MUST be truncated too. node_unwrap_key is a SINGLETON that
+    // refuses a second, different key (`cairn_register_unwrap_key` — rotation is a
+    // separate ceremony), and each run authors under a FRESH device key whose derived
+    // unwrap key differs from the last run's. Without wiping it here, the prior run's
+    // singleton survives the truncate and the fresh key collides at the first sealed
+    // author (ensure_unwrap_key), failing every sealed-authoring test. event_dek /
+    // event_clear are the per-event custody + clear-view rows those authored events
+    // populate; erasure_shred_log is the anti-resurrection ledger — all three are
+    // per-run state that a genuinely-empty node must not inherit.
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, medication_statement, \
          medication_cessation, medication_dose_event, medication_dose_correction, \
          medication_reconciliation, medication_group_member, medication_projection_flag, \
          medication_attestation, medication_patient_conflict_flag, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log, \
          sync_state, sync_quarantine RESTART IDENTITY CASCADE",
     )
     .await
@@ -130,6 +144,48 @@ async fn enroll_actors(c: &Client, kid_device: &str, kid_human: &str) {
     c.execute(
         "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
         &[&kid_human],
+    )
+    .await
+    .unwrap();
+}
+
+/// Write a signing key into `dir` in the EXACT format the `cairn-sync` binary's
+/// serve/pull commands read — a hex-encoded 32-byte Ed25519 seed (see the daemon's
+/// `load_or_create_key`, which does `hex::decode(text.trim())`). Note this is NOT the
+/// same on-disk shape as `keystore::load` (raw bytes / sealed CBOR): the serve/pull
+/// verbs use the daemon's own hex loader, so the file MUST be hex or the process
+/// rejects it. Returns the `--key` path (a child of the caller's TempDir, which
+/// auto-cleans on drop — no node.key litter in the crate cwd). House rule 6: the seed
+/// is generated at runtime by `generate_key`, never a literal.
+///
+/// WHY per-node key files matter here (ADR-0052 born-sealed custody): the serve process
+/// on A must run under the SAME key that SEALED A's events — each sealed event's DEK is
+/// wrapped for that key's derived unwrap secret, so ONLY that key can unwrap it to
+/// re-wrap custody for a puller. The pull process on B runs under B's OWN key so B
+/// unwraps the re-wrapped DEK and its apply door gains crypto-shred custody (and hence
+/// the clear view it projects from). A shared random key — the old default node.key —
+/// is neither, so serve could not unwrap A's DEKs, no custody crossed the wire, and B
+/// received the events but could not project the sealed bodies.
+fn write_key_file(dir: &Path, name: &str, sk: &SigningKey) -> String {
+    let path = dir.join(name);
+    std::fs::write(&path, hex::encode(sk.to_bytes())).expect("write hex-seed key file");
+    path.to_str().expect("utf-8 key path").to_string()
+}
+
+/// Register a node's OWN DEK-unwrap public key so its apply door can take custody of
+/// (and later crypto-shred) the sealed events it pulls. Derived from the node's signing
+/// seed exactly as the daemon derives it (`derive_unwrap_secret` → `unwrap_public`) and
+/// registered through the same in-DB singleton the author-side `ensure_unwrap_key` uses.
+/// Without this, the door ADMITS a sealed event but WARNS and withholds custody (no
+/// `event_clear` row is written), so the node never projects the sealed body — exactly
+/// the born-sealed floor (#92). A real second site performs this owner ceremony once,
+/// just like actor enrollment; the custody plane does not replicate.
+async fn register_unwrap_key(c: &Client, sk: &SigningKey) {
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let public = cairn_event::seal::unwrap_public(&secret);
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&public.as_slice()],
     )
     .await
     .unwrap();
@@ -259,6 +315,18 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     enroll_actors(&a, &kid_d, &kid_h).await;
     enroll_actors(&b, &kid_d, &kid_h).await;
 
+    // Per-node key files for the ADR-0052 custody wire (see write_key_file). A's serve
+    // runs under sk_d — the device key that SEALS A's medication events below — so it
+    // can unwrap A's per-event DEKs and re-wrap them for the puller. B pulls under its
+    // OWN key and pre-registers the matching unwrap key, so B's apply door takes custody
+    // of every sealed body it pulls and can therefore project it (without this, B would
+    // receive the events by set-union but render an empty chart).
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
     // --- author a realistic little chart on A through the production orchestrators ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
     let patient = Uuid::now_v7();
@@ -359,13 +427,25 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
 
     // --- the wire: serve on A, one pull on B, through the real binary ---
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    // serve under A's authoring key (--key key_a): only that key can unwrap A's DEKs to
+    // re-wrap sealed-body custody for the puller (ADR-0052).
     let _serve = ServeGuard(
         Command::new(bin)
-            .args(["serve", "--conn", &base_a, "--listen", LISTEN_CONVERGE])
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_CONVERGE,
+                "--key",
+                &key_a,
+            ])
             .spawn()
             .expect("spawn serve"),
     );
     wait_listening(LISTEN_CONVERGE);
+    // pull under B's own key (--key key_b): B presents the matching unwrap cert and
+    // gains custody of the sealed bodies it replicates.
     let pull = Command::new(bin)
         .args([
             "pull",
@@ -375,6 +455,8 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
             LISTEN_CONVERGE,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("run pull");
@@ -464,6 +546,19 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
     // real second site performs before its first pull, deliberately omitted).
     enroll_actors(&a, &kid_d, &kid_h).await;
 
+    // Per-node key files for the ADR-0052 custody wire (see write_key_file). A's serve
+    // runs under sk_d (which seals A's metformin); B pulls under its own key with its
+    // unwrap key pre-registered. The custody plane is orthogonal to the actor-enrollment
+    // freeze under test: the FIRST pull still refuses everything (author unknown at B)
+    // BEFORE the custody step, so nothing applies; once the author is enrolled the
+    // re-offered sealed event applies WITH custody and B projects it — the delayed, never
+    // lost guarantee, now proven all the way through a sealed body.
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
     let mut a = a;
     let patient = Uuid::now_v7();
     assert_medication(
@@ -489,13 +584,23 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
     .unwrap();
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    // serve under A's authoring key so the custody sidecar can travel (ADR-0052).
     let _serve = ServeGuard(
         Command::new(bin)
-            .args(["serve", "--conn", &base_a, "--listen", LISTEN_FREEZE])
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_FREEZE,
+                "--key",
+                &key_a,
+            ])
             .spawn()
             .expect("spawn serve"),
     );
     wait_listening(LISTEN_FREEZE);
+    // pull under B's own key so the recovered pull gains sealed-body custody.
     let pull_cmd = || {
         Command::new(bin)
             .args([
@@ -506,6 +611,8 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
                 LISTEN_FREEZE,
                 "--peer-name",
                 "node-a",
+                "--key",
+                &key_b,
             ])
             .output()
             .expect("run pull")
@@ -585,6 +692,14 @@ async fn low_hlc_below_cursor_still_converges() {
     enroll_device(&a, &kid_c).await;
     enroll_device(&b, &kid_c).await;
 
+    // Per-node key files (ADR-0052). These events are UNSEALED (foreign note.added via
+    // apply_remote_event), so no custody travels and no unwrap key is registered — but
+    // serve/pull still run under DISTINCT per-node keys, mirroring a real two-site
+    // deployment and keeping the wire uniform with the sealed-body tests above.
+    let keydir = TempDir::new().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &generate_key().unwrap().0);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &generate_key().unwrap().0);
+
     // Two HIGH-HLC events land on A (seqs 1, 2) via A's own apply door.
     let (hi1, _) = foreign_note(&sk_c, &kid_c, WALL + 20_000, "high one");
     let (hi2, _) = foreign_note(&sk_c, &kid_c, WALL + 30_000, "high two");
@@ -598,7 +713,15 @@ async fn low_hlc_below_cursor_still_converges() {
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
     let _serve = ServeGuard(
         Command::new(bin)
-            .args(["serve", "--conn", &base_a, "--listen", LISTEN_LOWHLC])
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_LOWHLC,
+                "--key",
+                &key_a,
+            ])
             .spawn()
             .expect("spawn serve"),
     );
@@ -612,6 +735,8 @@ async fn low_hlc_below_cursor_still_converges() {
             LISTEN_LOWHLC,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("run pull 1");
@@ -646,6 +771,8 @@ async fn low_hlc_below_cursor_still_converges() {
             LISTEN_LOWHLC,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("run pull 2");
@@ -687,6 +814,12 @@ async fn full_sweep_reconciles_a_skipped_seq() {
     enroll_device(&a, &kid_c).await;
     enroll_device(&b, &kid_c).await;
 
+    // Per-node key files (ADR-0052). Unsealed events, so no custody travels — distinct
+    // per-node serve/pull keys only, uniform with the sealed-body tests.
+    let keydir = TempDir::new().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &generate_key().unwrap().0);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &generate_key().unwrap().0);
+
     // Two events on A (seqs 1, 2). e2 is the one B will "skip".
     let (e1, _) = foreign_note(&sk_c, &kid_c, WALL + 10_000, "one");
     a.execute("SELECT apply_remote_event($1)", &[&e1])
@@ -709,7 +842,15 @@ async fn full_sweep_reconciles_a_skipped_seq() {
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
     let _serve = ServeGuard(
         Command::new(bin)
-            .args(["serve", "--conn", &base_a, "--listen", LISTEN_SWEEP])
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_SWEEP,
+                "--key",
+                &key_a,
+            ])
             .spawn()
             .expect("spawn serve"),
     );
@@ -725,6 +866,8 @@ async fn full_sweep_reconciles_a_skipped_seq() {
             LISTEN_SWEEP,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("incremental pull");
@@ -757,6 +900,8 @@ async fn full_sweep_reconciles_a_skipped_seq() {
             LISTEN_SWEEP,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("full pull");
@@ -795,6 +940,13 @@ async fn repull_from_zero_converges() {
     let (sk_c, kid_c) = generate_key().unwrap();
     enroll_device(&a, &kid_c).await;
     enroll_device(&b, &kid_c).await;
+
+    // Per-node key files (ADR-0052). Unsealed events, so no custody travels — distinct
+    // per-node serve/pull keys only, uniform with the sealed-body tests.
+    let keydir = TempDir::new().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &generate_key().unwrap().0);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &generate_key().unwrap().0);
+
     for i in 0..3 {
         let (e, _) = foreign_note(&sk_c, &kid_c, WALL + 10_000 * (i + 1), "n");
         a.execute("SELECT apply_remote_event($1)", &[&e])
@@ -804,7 +956,15 @@ async fn repull_from_zero_converges() {
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
     let _serve = ServeGuard(
         Command::new(bin)
-            .args(["serve", "--conn", &base_a, "--listen", LISTEN_REPULL])
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_REPULL,
+                "--key",
+                &key_a,
+            ])
             .spawn()
             .expect("spawn serve"),
     );
@@ -818,6 +978,8 @@ async fn repull_from_zero_converges() {
             LISTEN_REPULL,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("pull");
@@ -849,6 +1011,8 @@ async fn repull_from_zero_converges() {
             LISTEN_REPULL,
             "--peer-name",
             "node-a",
+            "--key",
+            &key_b,
         ])
         .output()
         .expect("full pull");
