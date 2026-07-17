@@ -5,7 +5,7 @@ use cairn_event::medication::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,
     ReconciliationAssertion,
 };
-use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
 const RECONCILIATION_SCHEMA_VERSION: &str = "clinical.medication-reconciliation/1";
@@ -139,25 +139,17 @@ pub async fn reconcile_medications(
     let body = build_reconcile_body(
         event_id, subject_a, subject_b, patient, input, node_kid, verb_hlc,
     );
-    let signed = sign(&body, node_sk)?;
-    match attest {
-        None => {
-            client
-                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
-        }
-        Some(params) => {
-            // Two attestation HLCs (one per subject thread), minted up front.
-            let hlc_a = crate::db::next_hlc(client, node_origin).await?;
-            let hlc_b = crate::db::next_hlc(client, node_origin).await?;
-            let tx = client.transaction().await?;
-            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
-            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;
-            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_b, hlc_b).await?;
-            tx.commit().await?;
-        }
-    }
+    submit_reconcile_like(
+        client,
+        node_sk,
+        node_origin,
+        body,
+        patient,
+        subject_a,
+        subject_b,
+        attest,
+    )
+    .await?;
     Ok(event_id)
 }
 
@@ -185,25 +177,65 @@ pub async fn separate_medications(
     let body = build_separate_body(
         event_id, subject_a, subject_b, patient, input, node_kid, verb_hlc,
     );
-    let signed = sign(&body, node_sk)?;
+    submit_reconcile_like(
+        client,
+        node_sk,
+        node_origin,
+        body,
+        patient,
+        subject_a,
+        subject_b,
+        attest,
+    )
+    .await?;
+    Ok(event_id)
+}
+
+/// ADR-0052 seal-at-write for the TWO-thread verbs (reconcile / separate). The single-
+/// thread `sealed_submit::seal_sign_submit` can't express "vouch for both subjects", so
+/// the paired shape lives here — shared by both verbs so the seal-then-sign discipline
+/// and the atomic two-attestation txn are written once (house rule 4).
+///
+/// `None`  → device-additive: seal + sign + one 4-arg strict-door submit (auto-commit).
+/// `Some`  → the reconcile/separate event AND a human responsibility attestation for
+///           BOTH subject threads run in ONE transaction (two HLCs minted up front); a
+///           rejected attestation on either thread rolls the WHOLE operation back.
+#[allow(clippy::too_many_arguments)] // signer + node context + body + patient/2 subjects/attest
+async fn submit_reconcile_like(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_origin: &str,
+    body: EventBody,
+    patient: Uuid,
+    subject_a: Uuid,
+    subject_b: Uuid,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<()> {
     match attest {
         None => {
-            client
-                .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
+            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None).await?;
         }
         Some(params) => {
+            // Two attestation HLCs (one per subject thread), minted up front.
             let hlc_a = crate::db::next_hlc(client, node_origin).await?;
             let hlc_b = crate::db::next_hlc(client, node_origin).await?;
+            let (signed_bytes, dek) =
+                crate::medication::sealed_submit::seal_and_sign(body, node_sk)?;
+            // The door needs the node's unwrap key registered before it can wrap this
+            // event's DEK into custody (idempotent; committed ahead of the txn).
+            crate::medication::sealed_submit::ensure_unwrap_key(client, node_sk).await?;
             let tx = client.transaction().await?;
-            tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
+            tx.execute(
+                "SELECT submit_event($1, NULL, NULL, $2)",
+                &[&signed_bytes, &dek.as_slice()],
+            )
+            .await?;
             crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;
             crate::medication::attest_thread_in_tx(&tx, params, patient, subject_b, hlc_b).await?;
             tx.commit().await?;
         }
     }
-    Ok(event_id)
+    Ok(())
 }
 
 #[cfg(test)]

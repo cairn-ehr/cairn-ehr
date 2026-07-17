@@ -25,11 +25,50 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
         .unwrap_or_else(|| e.to_string())
 }
 
-/// Truncate the log + medication projections and enroll a fresh device actor.
+/// ADR-0052: seal a CLEAR clinical EventBody like the node write path (payload + twin
+/// under a fresh per-event DEK, outer stub twin), register the node's unwrap key, sign,
+/// and submit through the 4-arg strict door. Returns the raw driver Result so refusal-
+/// pinning tests keep using db_msg on the error. House rule 6: the DEK is generated
+/// inside seal_event_payload, never a literal.
+async fn seal_and_submit(
+    c: &Client,
+    sk: &SigningKey,
+    mut body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let twin = body
+        .plaintext_twin
+        .take()
+        .expect("a clinical body carries its clear twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &twin, &body.event_id)
+            .expect("seal the clear payload+twin");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+    let signed = sign(&body, sk).expect("sign the sealed body");
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await?;
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+}
+
+/// Truncate the log + medication projections + the ADR-0052 custody plane and enroll a
+/// fresh device actor. node_unwrap_key/event_dek/event_clear/erasure_shred_log have NO FK
+/// to event_log, so the CASCADE does not reach them — a stale prior-test node key would
+/// otherwise collide with this test's fresh key at cairn_register_unwrap_key.
 async fn setup_node(c: &Client) -> (SigningKey, String) {
-    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart CASCADE")
-        .await
-        .unwrap();
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+    )
+    .await
+    .unwrap();
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
@@ -171,10 +210,9 @@ async fn empty_term_is_rejected_by_the_floor() {
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let body: EventBody =
         build_assert_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
-    let signed = sign(&body, &sk).unwrap();
-    let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await;
+    // Seal it so it clears the born-sealed floor and reaches the term floor on the CLEAR
+    // payload (the door unseals, then dispatches the structural check).
+    let res = seal_and_submit(&c, &sk, body).await;
     let err = db_msg(&res.unwrap_err());
     assert!(
         err.contains("term"),
@@ -201,10 +239,8 @@ async fn empty_info_source_is_rejected_by_the_floor() {
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let body: EventBody =
         build_assert_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
-    let signed = sign(&body, &sk).unwrap();
-    let res = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await;
+    // Sealed so it reaches the info_source floor on the CLEAR payload.
+    let res = seal_and_submit(&c, &sk, body).await;
     let err = db_msg(&res.unwrap_err());
     assert!(
         err.contains("info_source"),
@@ -245,10 +281,9 @@ async fn inject_assert(
     let hlc = db::next_hlc(c, "test-node").await.unwrap();
     let body: EventBody =
         build_assert_body(Uuid::now_v7(), medication_id, patient, input, kid, hlc);
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+    seal_and_submit(c, sk, body)
         .await
-        .unwrap();
+        .expect("sealed assert with a chosen thread id is admitted");
 }
 
 #[tokio::test]

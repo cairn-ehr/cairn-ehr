@@ -9,7 +9,7 @@
 use cairn_event::medication::{
     medication_attestation_body, render_medication_attestation_twin, MedicationAttestation,
 };
-use cairn_event::{event_address, sign, sign_attestation, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, sign_attestation, EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
 const ATTESTATION_SCHEMA_VERSION: &str = "clinical.medication-attestation/1";
@@ -83,13 +83,17 @@ async fn thread_commitment_on(
 ) -> anyhow::Result<Option<(String, u32)>> {
     let row = client
         .query_one(
+            // ADR-0052: read the thread key through cairn_clear_payload — a sealed content
+            // event carries ciphertext in event_log.body, so medication_id lives in the
+            // event_clear shadow (unsealed rows resolve to body unchanged). Mirrors the
+            // sealed-aware lookup in cairn_medication_thread_commitment (db/034).
             "SELECT encode(cairn_medication_thread_commitment($1::text::uuid), 'hex') AS c, \
              (SELECT count(*) FROM event_log \
                 WHERE event_type IN ('clinical.medication.asserted', \
                     'clinical.medication-cessation.asserted', \
                     'clinical.medication-dose-change.asserted', \
                     'clinical.medication-dose-correction.asserted') \
-                  AND (body ->> 'medication_id')::uuid = $1::text::uuid) AS n",
+                  AND (cairn_clear_payload(event_log) ->> 'medication_id')::uuid = $1::text::uuid) AS n",
             &[&medication_id.to_string()],
         )
         .await?;
@@ -152,13 +156,21 @@ pub async fn attest_thread_in_tx(
         params.human_kid,
         hlc,
     );
-    let signed = sign(&body, params.human_sk)?;
-    let ca = event_address(&signed.signed_bytes);
+    // ADR-0052: the attestation event is clinical.* and must be born-sealed too. Seal +
+    // sign via the shared helper (seal-then-sign, so the content_address the token binds
+    // to covers the ciphertext and survives a shred), then submit through the 4-arg
+    // strict door carrying the human token AND the DEK. The node's unwrap key is already
+    // registered by the content-authoring path that precedes every attestation — the
+    // verb's own submit (author-time), or the earlier authoring of the thread a post-hoc
+    // vouch reviews — so no ensure_unwrap_key is needed here.
+    let (signed_bytes, dek) =
+        crate::medication::sealed_submit::seal_and_sign(body, params.human_sk)?;
+    let ca = event_address(&signed_bytes);
     let token = sign_attestation(&ca, params.human_kid, "attested", params.human_sk)?;
     let attester_vk = params.human_sk.verifying_key().to_bytes().to_vec();
     tx.execute(
-        "SELECT submit_event($1,$2,$3)",
-        &[&signed.signed_bytes, &token, &attester_vk],
+        "SELECT submit_event($1, $2, $3, $4)",
+        &[&signed_bytes, &token, &attester_vk, &dek.as_slice()],
     )
     .await?;
     Ok(event_id)

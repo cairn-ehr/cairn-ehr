@@ -10,6 +10,7 @@ mod attestation;
 mod cessation;
 mod dose;
 mod reconciliation;
+mod sealed_submit;
 
 pub use assert::{assert_medication, build_assert_body, validate_term, AssertMedicationInput};
 pub use attestation::{

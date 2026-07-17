@@ -349,10 +349,16 @@ BEGIN
 END;
 $$;
 
+-- ADR-0052: the door gained p_dek. A CREATE OR REPLACE with a different arg
+-- list would OVERLOAD (3-arg + 4-arg → ambiguous 1-arg calls), so drop the old
+-- signature first. Idempotent across replays.
+DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
+
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
-    p_attester_key BYTEA DEFAULT NULL
+    p_attester_key BYTEA DEFAULT NULL,
+    p_dek          BYTEA DEFAULT NULL
 ) RETURNS UUID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -373,6 +379,12 @@ DECLARE
     v_att_key      BYTEA;
     v_actor_ids    BYTEA[];
     v_actor_id     BYTEA;
+    -- ADR-0052 born-sealed arm.
+    v_sealed       BOOLEAN := false;  -- did the body arrive as the sealed container?
+    b_clear        JSONB;             -- the CLEAR view floor checks + projections run on
+    v_inner        JSONB;             -- {payload, plaintext_twin} recovered by cairn_unseal_body
+    v_pub          BYTEA;             -- this node's X25519 unwrap-key public half
+    v_twin_stub    TEXT;              -- the outer, signed mechanical stub twin (principle 11)
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
     --    so an event too large to replicate or back up can never be admitted (it would
@@ -523,23 +535,72 @@ BEGIN
         END IF;
     END IF;
 
+    -- 6b. ADR-0052 born-sealed arm. A clinical body arrives EITHER as the sealed
+    --     container (payload.sealed = true) — the shipped default — or as legacy
+    --     plaintext, which the STRICT door refuses: an unsealed clinical body is
+    --     permanently un-shreddable, and this floor is what makes the posture
+    --     unbypassable (principle 12). The apply door stays lenient (set-union).
+    v_sealed := COALESCE((b -> 'payload' ->> 'sealed')::boolean, false);
+    b_clear  := b;
+    IF v_sealed THEN
+        IF p_dek IS NULL THEN
+            RAISE EXCEPTION 'submit_event: sealed event requires its DEK at the strict door (ADR-0052)';
+        END IF;
+        v_inner := cairn_unseal_body(b -> 'payload', p_dek, v_event_id::text);
+        IF v_inner IS NULL THEN
+            RAISE EXCEPTION 'submit_event: sealed body failed to open with the presented DEK (wrong key, tampered container, or event-id mismatch) — refused (ADR-0052)';
+        END IF;
+        v_twin_stub := b ->> 'plaintext_twin';
+        IF COALESCE(v_twin_stub, '') = '' THEN
+            RAISE EXCEPTION 'submit_event: sealed event must carry a signed plaintext twin STUB (principle 11 — the row must stay self-describing) (ADR-0052)';
+        END IF;
+        -- The floor checks below run on the CLEAR view; the log stores ciphertext.
+        b_clear := jsonb_set(jsonb_set(b, '{payload}', v_inner -> 'payload'),
+                             '{plaintext_twin}', v_inner -> 'plaintext_twin');
+    ELSIF v_type LIKE 'clinical.%' THEN
+        RAISE EXCEPTION 'submit_event: % is a clinical body and must be born-sealed — plaintext clinical submissions are refused at the strict door (ADR-0052; wipe pre-ADR-0052 dev rigs, never sync them through)', v_type;
+    END IF;
+
     -- 7. Plaintext twin (§3.13/§4.5) + any per-type structural floor, via the
     --    cairn_event_twin hook so a new event type adds its branch there, not by
-    --    re-declaring this whole door.
-    v_twin := cairn_event_twin(v_type, b);
+    --    re-declaring this whole door. Runs on the CLEAR view so a sealed body's
+    --    structural floor is checked on its real payload, never the ciphertext.
+    v_twin := cairn_event_twin(v_type, b_clear);
+
+    -- 6c. Custody + operational clear view — BEFORE the log INSERT so the AFTER
+    --     INSERT projection triggers can already read the shadow (same txn).
+    --     An already-shredded target gets NEITHER: set-union may re-deliver the
+    --     row forever, but custody never resurrects (arrival-order independence).
+    IF v_sealed AND NOT EXISTS (SELECT 1 FROM erasure_shred_log WHERE target_event_id = v_event_id) THEN
+        SELECT unwrap_pub INTO v_pub FROM node_unwrap_key;
+        IF v_pub IS NULL THEN
+            RAISE EXCEPTION 'submit_event: node unwrap key not registered — the authoring daemon must call cairn_register_unwrap_key first (ADR-0052)';
+        END IF;
+        INSERT INTO event_dek (event_id, dek_wrapped)
+        VALUES (v_event_id, cairn_wrap_dek(p_dek, v_pub))
+        ON CONFLICT (event_id) DO NOTHING;
+        INSERT INTO event_clear (event_id, body, twin)
+        VALUES (v_event_id, b_clear -> 'payload', v_twin)
+        ON CONFLICT (event_id) DO NOTHING;
+    END IF;
 
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
-         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id)
+         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
         b -> 'hlc' ->> 'node_origin',
         v_t_eff,
+        -- body stays the honest derived view: the ciphertext container for a
+        -- sealed row (event_log is append-only + never holds cleartext); the
+        -- CLEAR payload lives in the event_clear shadow above.
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
-        b ->> 'signer_key_id', v_twin, COALESCE(b -> 'attachments','[]'::jsonb),
-        v_att, v_att_key, v_actor_id)
+        b ->> 'signer_key_id',
+        CASE WHEN v_sealed THEN v_twin_stub ELSE v_twin END,
+        COALESCE(b -> 'attachments','[]'::jsonb),
+        v_att, v_att_key, v_actor_id, v_sealed)
     ON CONFLICT (event_id) DO NOTHING;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).
@@ -556,6 +617,21 @@ BEGIN
     -- two doors never drift.
     PERFORM cairn_learn_attachment_refs(b);
 
+    -- 6d. The erasure plane: an admitted shred tombstone EXECUTES here (ADR-0052).
+    --     Strict door: the target must exist locally (shredding the unknown is a
+    --     user error at authoring time; the APPLY door is lenient — a shred may
+    --     arrive before its target on the wire). The tombstone is plaintext by
+    --     design (v_sealed is false for erasure.*), so b_clear = b here.
+    IF v_type = 'erasure.shred.asserted' THEN
+        IF NOT EXISTS (SELECT 1 FROM event_log
+                       WHERE event_id = (b_clear -> 'payload' ->> 'target_event_id')::uuid) THEN
+            RAISE EXCEPTION 'submit_event: erasure.shred targets unknown event % — nothing to shred here', b_clear -> 'payload' ->> 'target_event_id';
+        END IF;
+        PERFORM cairn_execute_shred(
+            (b_clear -> 'payload' ->> 'target_event_id')::uuid,
+            v_event_id, b_clear -> 'payload' ->> 'basis');
+    END IF;
+
     RETURN v_event_id;
 END;
 $$;
@@ -571,8 +647,8 @@ REVOKE INSERT, UPDATE, DELETE ON event_type_class FROM PUBLIC;
 -- submit_event is SECURITY DEFINER, so PUBLIC's default EXECUTE on a new function
 -- would let *any* connected role drive the privileged write door (bypassing the
 -- table REVOKEs above). Close that: only cairn_agent may knock.
-REVOKE EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea) TO cairn_agent;
+REVOKE EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea, bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea, bytea) TO cairn_agent;
 GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
 
 COMMIT;

@@ -115,16 +115,24 @@ ON CONFLICT (event_type) DO NOTHING;
 --    events EXCLUDE reconciliation/separation/attestation (not thread content).
 CREATE OR REPLACE FUNCTION cairn_medication_thread_commitment(p_medication_id uuid)
 RETURNS bytea LANGUAGE sql STABLE AS $$
+    -- ADR-0052: a sealed content event carries CIPHERTEXT in event_log.body, so its
+    -- medication_id lives in the event_clear shadow — the thread lookup must read the
+    -- CLEAR payload via cairn_clear_payload (unsealed rows resolve to body unchanged,
+    -- the same sealed-aware read the projection triggers use). content_address is on
+    -- event_log for EVERY row (it hashes the signed bytes, sealed or not), so the
+    -- commitment VALUE is unchanged; only finding the thread's events became sealed-aware.
+    -- A node holding no custody for a sealed event sees NULL here and honestly EXCLUDES it
+    -- (degradation, never corruption) — the same posture the projections take.
     SELECT CASE WHEN count(*) = 0 THEN NULL
-                ELSE digest(string_agg(content_address, ''::bytea ORDER BY content_address), 'sha256')
+                ELSE digest(string_agg(el.content_address, ''::bytea ORDER BY el.content_address), 'sha256')
            END
-    FROM event_log
-    WHERE event_type IN (
+    FROM event_log el
+    WHERE el.event_type IN (
             'clinical.medication.asserted',
             'clinical.medication-cessation.asserted',
             'clinical.medication-dose-change.asserted',
             'clinical.medication-dose-correction.asserted')
-      AND (body ->> 'medication_id')::uuid = p_medication_id;
+      AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
 
 -- 4b. Read-time support for the set-commitment fn. Unlike the other medication read
@@ -137,6 +145,11 @@ $$;
 --     functional index (only the four content-event types the fn sums) makes each
 --     commitment a bounded index lookup. `(body ->> 'medication_id')` is immutable and
 --     the ::uuid cast is immutable, so the expression is indexable.
+--     ADR-0052 caveat: the commitment fn now reads the thread key through
+--     cairn_clear_payload (sealed rows carry ciphertext in body), so this index only
+--     accelerates the UNSEALED path; sealed-thread commitment is a small scan for now
+--     (pre-clinical, acceptable — a sealed-aware index on the event_clear shadow is the
+--     follow-up if the staleness view ever becomes a hot path).
 CREATE INDEX IF NOT EXISTS event_log_medication_thread_idx
     ON event_log (((body ->> 'medication_id')::uuid))
     WHERE event_type IN (
