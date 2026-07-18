@@ -174,37 +174,37 @@ async fn registry_is_seeded_with_the_expected_mapping() {
         (
             "clinical.medication.asserted",
             "cairn_check_medication_assertion",
-            Some("medication assertion requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication assertion requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-cessation.asserted",
             "cairn_check_medication_assertion",
-            Some("medication assertion requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication assertion requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-dose-change.asserted",
             "cairn_check_medication_dose",
-            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-dose-correction.asserted",
             "cairn_check_medication_dose",
-            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication dose assertion requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-attestation.asserted",
             "cairn_check_medication_attestation",
-            Some("medication attestation requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication attestation requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-reconciliation.asserted",
             "cairn_check_medication_reconciliation",
-            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.3)"),
         ),
         (
             "clinical.medication-separation.asserted",
             "cairn_check_medication_reconciliation",
-            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.15)"),
+            Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.3)"),
         ),
     ];
     expected.sort();
@@ -332,5 +332,46 @@ async fn registered_type_absent_twin_raises_required_msg() {
     assert!(
         msg.contains("requires a non-empty authored twin") && msg.contains("§5.7"),
         "expected the registry twin_required_msg for a link assertion, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn medication_registry_rows_heal_to_migration_text_on_replay() {
+    // #214 — the medication registry rows' error strings carried a spec mislabel
+    // (§3.15/§3.16; medication prose lives at data-model §3.3). Because every loader
+    // replays db/*.sql on connect, fixing the string in the migration is only real if
+    // the replay CONVERGES an existing row to the migration text: the medication
+    // registrations use ON CONFLICT DO UPDATE (not DO NOTHING), so a stale or tampered
+    // twin_required_msg/check_fn is healed on the next connect. Pin that here by
+    // tampering one row as the (privileged) test connection, replaying via a fresh
+    // connect_and_load_schema, and asserting the migration text is back.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    c.execute(
+        "UPDATE cairn_event_twin_check \
+         SET twin_required_msg = 'tampered' \
+         WHERE event_type = 'clinical.medication.asserted'",
+        &[],
+    )
+    .await
+    .unwrap();
+    drop(c);
+
+    // A fresh connection replays every migration; the DO UPDATE arm must restore the row.
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let msg: String = c2
+        .query_one(
+            "SELECT twin_required_msg FROM cairn_event_twin_check \
+             WHERE event_type = 'clinical.medication.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        msg, "medication assertion requires a non-empty authored twin (§3.13/§3.3)",
+        "replay did not heal the tampered registry row to the migration text"
     );
 }

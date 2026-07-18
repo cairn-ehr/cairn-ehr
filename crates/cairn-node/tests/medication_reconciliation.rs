@@ -1,4 +1,4 @@
-//! §3.15/§3.16 medication reconciliation resolution (slice 3) — DB-gated on
+//! §3.3 medication reconciliation resolution (slice 3) — DB-gated on
 //! $CAIRN_TEST_PG, serialized cluster-wide via db::test_serial_guard. Patients and
 //! threads need no pre-existence (offline-first). Key material is runtime-derived.
 use cairn_event::{generate_key, sign, EventBody, SigningKey};

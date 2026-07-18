@@ -1,5 +1,5 @@
 //! Reconciliation/separation — link or split TWO `medication_id` threads
-//! declared to be the same real drug (§3.16, slice 3; never-merge-always-link).
+//! declared to be the same real drug (§3.3, slice 3; never-merge-always-link).
 //! Device-additive; offline-first (no local existence check on either thread).
 use cairn_event::medication::{
     reconciliation_body, render_reconciliation_twin, render_separation_twin, separation_body,

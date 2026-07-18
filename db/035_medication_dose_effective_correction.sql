@@ -1,4 +1,4 @@
--- 035_medication_dose_effective_correction.sql — slice 5 of clinical.medication (§3.15/§3.16).
+-- 035_medication_dose_effective_correction.sql — slice 5 of clinical.medication (data-model §3.3).
 --
 -- Extends the slice-2 dose-correction overlay (db/032) so a correction PATCHES a targeted
 -- dose point per-field: dose (amount+unit), effective (value+precision), and the point's

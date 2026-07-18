@@ -436,7 +436,7 @@ into each role-actor).
 
 **Slice 30 — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
 `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates
-data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code; design+plan under
+data-model §3.3 + the "union + flagged for reconciliation" line into product code; design+plan under
 `docs/superpowers/{specs,plans}/2026-07-11-medication-recording-*`). Distinct from slices 1–29 above: those
 are all *administrative/identity* data about the patient (demographics, matcher, identity algebra,
 John-Doe); this is the first event stream carrying actual *clinical content* — what medication the patient

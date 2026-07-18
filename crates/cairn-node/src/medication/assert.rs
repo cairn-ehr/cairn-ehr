@@ -1,4 +1,4 @@
-//! Medication assertion — mints the immortal `medication_id` thread (§3.15).
+//! Medication assertion — mints the immortal `medication_id` thread (§3.3).
 //! Device-additive: signed by the node/clinician key with a `recorded`
 //! contributor and NO responsibility attestation (mirrors identify.rs).
 use cairn_event::medication::{

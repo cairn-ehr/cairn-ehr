@@ -1,4 +1,4 @@
-//! §3.15 medication dose overlay (slice 2) — DB-gated on $CAIRN_TEST_PG, serialized
+//! §3.3 medication dose overlay (slice 2) — DB-gated on $CAIRN_TEST_PG, serialized
 //! cluster-wide via db::test_serial_guard. Patients need no pre-existence (offline-first).
 //! Key material is runtime-derived (generate_key), never literal (house rule 6).
 use cairn_event::{generate_key, sign, EventBody, SigningKey};

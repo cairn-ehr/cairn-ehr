@@ -1,5 +1,5 @@
 //! Dose change/correction — two more orchestrators over the `medication_id`
-//! thread (§3.15, slice 2). Change is a new clinical claim (`info_source`
+//! thread (§3.3, slice 2). Change is a new clinical claim (`info_source`
 //! required); correction targets a specific prior dose event and may correct
 //! to unknown. Offline-first throughout.
 use cairn_event::medication::{

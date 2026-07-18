@@ -1,4 +1,4 @@
-//! §3.15 medication recording — DB-gated on $CAIRN_TEST_PG, serialized cluster-wide
+//! §3.3 medication recording — DB-gated on $CAIRN_TEST_PG, serialized cluster-wide
 //! via db::test_serial_guard (shared-DB + TRUNCATE pattern, like identify.rs).
 //! Patients need no pre-existence (offline-first: no patient FK), so tests use a
 //! bare Uuid as the patient. Key material is derived at runtime (generate_key).

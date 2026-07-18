@@ -1,4 +1,4 @@
-//! §3.15/§3.16 medication recording — the node authoring surface. Device-additive
+//! §3.3 medication recording — the node authoring surface. Device-additive
 //! by default (signed by the node key, a `recorded` contributor, no attestation);
 //! the slice-4 attestation path (`attestation.rs`) layers human responsibility as a
 //! separable overlay. Orchestrators over an immortal `medication_id` thread:
