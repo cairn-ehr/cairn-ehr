@@ -234,6 +234,18 @@ jobs:
           CAIRN_TEST_PG3: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test3
         run: cargo test --workspace
 
+      # ---- SQL mirrors: db/tests/*.sql (#212) ----------------------------------------
+      # These previously ran NOWHERE (the mechanism that manufactured the #182 twin-
+      # registry drift). The script builds a THROWAWAY database on this same cluster
+      # (the spike-only db/008 its test needs never touches cairn_test*), loads every
+      # migration, and runs each mirror with ON_ERROR_STOP — cheap (psql only), so it
+      # rides the rig this job already stood up.
+      - name: db/tests SQL mirrors (throwaway database)
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+        run: scripts/run-db-sql-tests.sh
+
       # ---- matcher DB-gated integration suite (#145) --------------------------------
       # Runs AFTER the Rust floor tests, against the same cluster + extension. uv is the
       # project's mandated Python tool (never venv/pip); the `pipeline` extra pulls psycopg

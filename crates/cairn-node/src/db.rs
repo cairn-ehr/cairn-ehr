@@ -195,6 +195,16 @@ const SCHEMA: &[(&str, &str)] = &[
         "037_born_sealed",
         include_str!("../../../db/037_born_sealed.sql"),
     ),
+    // The node's recorded schema generation (issue #188): the table behind the
+    // downgrade-refusal guard in connect_and_load_schema below — the first brick of
+    // the ADR-0012 code plane. The generation itself is the repo-wide
+    // cairn_event::schema_generation::SCHEMA_GENERATION, not a property of this
+    // list's tail; the unit test below pins that this FULL list really does carry
+    // the repo's newest migration.
+    (
+        "038_node_schema",
+        include_str!("../../../db/038_node_schema.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
@@ -285,14 +295,108 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
     Ok(())
 }
 
+/// The schema generation this binary carries — the repo-wide constant, NOT a value
+/// derived from this loader's own list. Both write doors (this full replay and
+/// cairn-sync's deliberate SUBSET replay) must report the SAME generation for one
+/// git build, and the subset may legitimately lag behind db/'s newest file — so a
+/// per-list derivation would make the two doors disagree the moment a node-only
+/// migration lands, and the #188 guard would start refusing healthy databases (see
+/// `cairn_event::schema_generation` module docs for the full argument). Two guards
+/// keep the constant honest: cairn-event's fs-derived test (constant == newest
+/// db/*.sql) and this crate's unit test (this FULL list embeds that newest file).
+pub fn embedded_schema_version() -> i32 {
+    cairn_event::schema_generation::SCHEMA_GENERATION
+}
+
+/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188).
+///
+/// The replay is idempotent for a database at or below this binary's generation. But
+/// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
+/// database it silently rewrites newer function bodies — including the in-DB
+/// safety-floor checks — back to their older versions. So before replaying, read the
+/// generation the last successful loader recorded (db/038 `node_schema`) and refuse
+/// when it exceeds ours; after a successful replay, stamp our own. An absent table or
+/// row means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
+/// psql) and the replay proceeds — the guard stops known downgrades, it does not lock
+/// out hand-built rigs. First brick of the ADR-0012 code plane.
 pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
+    let embedded = embedded_schema_version();
+    // Serialize the whole check→replay→stamp against every OTHER loader on this
+    // database (2026-07-19 review of PR #251, finding 1). Without it the guard is
+    // check-then-act: an old and a new binary connecting together can interleave so
+    // the old one reads a stale generation, passes, and still replays over the
+    // schema the new one just loaded. BLOCKING and session-level: a concurrent
+    // loader waits its turn, then reads the now-current record. Released explicitly
+    // after the stamp — this client lives on as the daemon's connection, and a lock
+    // held for its lifetime would park every later loader forever. Error paths drop
+    // the client, and the session close releases the lock.
+    client
+        .execute(
+            "SELECT pg_advisory_lock($1)",
+            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {e}"))?;
+    // Two round-trips, not one CASE: SQL references to node_schema are checked at
+    // plan time, so a single statement naming the table errors on a database that
+    // does not have it yet (fresh, or pre-#188) — exactly the databases that must
+    // pass the guard.
+    let table_exists: bool = client
+        .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])
+        .await?
+        .get(0);
+    // query_opt: an absent ROW (never stamped — hand-loaded rig) is a legitimate
+    // "generation unknown", but a real query error must still fail loudly.
+    let recorded: Option<i32> = if table_exists {
+        client
+            .query_opt("SELECT version FROM node_schema", &[])
+            .await?
+            .map(|row| row.get(0))
+    } else {
+        None
+    };
+    if let Some(recorded) = recorded {
+        if recorded > embedded {
+            anyhow::bail!(
+                "refusing to load schema: this database was last loaded at schema \
+                 generation {recorded}, but this binary embeds only generation \
+                 {embedded}. Replaying an older schema would silently downgrade the \
+                 in-DB safety floor (issue #188 / ADR-0012). Upgrade this binary, or \
+                 point it at a database of its own generation."
+            );
+        }
+    }
     for (name, sql) in SCHEMA.iter() {
         client
             .batch_execute(sql)
             .await
             .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
+    // Stamp only AFTER the full replay succeeded: a half-applied load must not claim
+    // the new generation. loaded_at defaults to now() on insert; refresh it on
+    // conflict so the record always says who touched the schema last, and when.
+    client
+        .execute(
+            "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE
+               SET version = EXCLUDED.version,
+                   loaded_at = now(),
+                   loader_build = EXCLUDED.loader_build",
+            &[
+                &embedded,
+                &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
+            ],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("recording schema generation: {e}"))?;
+    client
+        .execute(
+            "SELECT pg_advisory_unlock($1)",
+            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("releasing schema load-lock: {e}"))?;
     Ok(client)
 }
 
@@ -347,4 +451,32 @@ pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
         .await
         .map_err(|e| anyhow::anyhow!("acquiring test serialization lock: {e}"))?;
     Ok(client)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The FULL loader list must actually carry the repo's newest migration. The
+    /// generation this binary stamps is the shared SCHEMA_GENERATION constant, so if
+    /// db/039_*.sql lands (cairn-event's fs guard forces the constant bump) but is
+    /// never appended to THIS list, the node would stamp generation 39 while
+    /// replaying only generation-38 bodies — a silent gap the stamp then papers
+    /// over. Completeness, not position: the max prefix anywhere in the list, so a
+    /// mis-ordered append still counts.
+    #[test]
+    fn full_schema_list_carries_the_repo_generation() {
+        let newest = cairn_event::schema_generation::newest_migration_prefix(
+            SCHEMA.iter().map(|(name, _)| *name),
+        )
+        .expect("SCHEMA is never empty and every entry has a numeric prefix");
+        assert_eq!(
+            newest,
+            embedded_schema_version(),
+            "cairn-node's FULL migration list ends at {newest} but the repo's schema \
+             generation is {}: append the new db/*.sql to SCHEMA in the same commit \
+             that bumps SCHEMA_GENERATION",
+            embedded_schema_version()
+        );
+    }
 }

@@ -291,14 +291,20 @@ async fn snapshot(c: &Client) -> Vec<String> {
 }
 
 /// Wait until A's serve loop accepts TCP (readiness poll, bounded).
+///
+/// The ceiling is deliberately generous (60 s, issue #238): under a parallel
+/// `cargo test --workspace` the freshly-spawned serve binary competes with every
+/// other suite for CPU, and the original 5 s ceiling flaked intermittently on
+/// loaded machines. The poll returns the moment the socket accepts, so a large
+/// ceiling costs nothing on the happy path — it only buys headroom on the slow one.
 fn wait_listening(addr: &str) {
-    for _ in 0..50 {
+    for _ in 0..600 {
         if std::net::TcpStream::connect(addr).is_ok() {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    panic!("serve did not start listening on {addr}");
+    panic!("serve did not start listening on {addr} within 60s");
 }
 
 /// Count the ADR-0052 custody rows a node holds for one content event: the wrapped

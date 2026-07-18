@@ -104,6 +104,18 @@ const SCHEMA: &[(&str, &str)] = &[
         "037_born_sealed",
         include_str!("../../../db/037_born_sealed.sql"),
     ),
+    // The node's recorded schema generation (issue #188): the table behind the
+    // downgrade-refusal guard in load_schema below. This subset MUST keep carrying
+    // this file — `init` on a fresh database stamps node_schema right after the
+    // replay, so the table's migration has to be part of the subset (the unit test
+    // in schema_generation_tests pins that). The generation stamped is the repo-wide
+    // cairn_event SCHEMA_GENERATION, never derived from this subset's tail — the
+    // subset legitimately LAGS db/'s newest file whenever a node-only migration
+    // lands (see cairn_event::schema_generation module docs).
+    (
+        "038_node_schema",
+        include_str!("../../../db/038_node_schema.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -620,10 +632,100 @@ fn cmd_init(conn: &str) -> R<()> {
     // operator's first action, the right place to surface a stale `.so` before it becomes
     // a mystery write outage (issue #109).
     assert_pgx_floor(&mut client)?;
+    load_schema(&mut client)
+}
+
+/// The schema generation this binary carries — the repo-wide constant, NOT a value
+/// derived from this loader's own list. This list is a deliberate SUBSET (issue #198:
+/// it must satisfy both write doors standing alone) and it legitimately LAGS db/'s
+/// newest file whenever a node-only migration lands — which is the normal case. A
+/// per-list derivation would then make this binary report an older generation than
+/// the cairn-node that stamped the database, and `init` would refuse every healthy
+/// node in the fleet: a downgrade guard that bricks the sync daemon (see
+/// `cairn_event::schema_generation` module docs). The constant is kept honest by
+/// cairn-event's fs-derived guard test; the subset-shape invariants (contains 038,
+/// never exceeds the constant) are pinned in schema_generation_tests below.
+fn embedded_schema_version() -> i32 {
+    cairn_event::schema_generation::SCHEMA_GENERATION
+}
+
+/// Replay the embedded SCHEMA subset — guarded against DOWNGRADE (issue #188).
+///
+/// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
+/// database it silently rewrites newer function bodies — including the in-DB
+/// safety-floor checks — back to their older versions. So read the generation the
+/// last successful loader recorded (db/038 `node_schema`) and refuse when it exceeds
+/// ours; stamp our own only AFTER the full replay succeeded. An absent table or row
+/// means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
+/// psql) and the replay proceeds — the guard stops known downgrades, it does not
+/// lock out hand-built rigs. Mirrors cairn-node db::connect_and_load_schema.
+fn load_schema(client: &mut postgres::Client) -> R<()> {
+    // Serialize the whole check→replay→stamp against every OTHER loader on this
+    // database (2026-07-19 review of PR #251, finding 1): without it the guard is
+    // check-then-act — an old and a new binary connecting together can interleave so
+    // the old one reads a stale generation, passes, and still replays over the
+    // schema the new one just loaded. BLOCKING and session-level: a concurrent
+    // loader waits its turn, then reads the now-current record.
+    client.execute(
+        "SELECT pg_advisory_lock($1)",
+        &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+    )?;
+    let result = load_schema_under_lock(client);
+    // Release on success AND refusal — the caller's client outlives this call, and a
+    // lock held for its lifetime would park every later loader forever. If the load
+    // failed because the session itself died, the unlock fails too; the load error
+    // is the one that must surface (the dead session releases the lock server-side).
+    let unlock = client.execute(
+        "SELECT pg_advisory_unlock($1)",
+        &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+    );
+    result?;
+    unlock?;
+    Ok(())
+}
+
+/// The #188 guard + replay + stamp, assumed to run under `SCHEMA_LOAD_LOCK` — only
+/// `load_schema` above may call this.
+fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
+    let embedded = embedded_schema_version();
+    // Two round-trips, not one CASE: SQL naming node_schema is checked at plan time,
+    // so a single statement referencing it errors on exactly the databases (fresh or
+    // pre-#188) that must PASS the guard.
+    let table_exists: bool = client
+        .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])?
+        .get(0);
+    if table_exists {
+        // query_opt: an absent ROW is a legitimate "generation unknown", but a real
+        // query error must still fail loudly.
+        if let Some(row) = client.query_opt("SELECT version FROM node_schema", &[])? {
+            let recorded: i32 = row.get(0);
+            if recorded > embedded {
+                return Err(format!(
+                    "refusing to load schema: this database was last loaded at schema \
+                     generation {recorded}, but this binary embeds only generation \
+                     {embedded}. Replaying an older schema would silently downgrade \
+                     the in-DB safety floor (issue #188 / ADR-0012). Upgrade this \
+                     binary, or point it at a database of its own generation."
+                )
+                .into());
+            }
+        }
+    }
     for (name, sql) in SCHEMA {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
     }
+    client.execute(
+        "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
+         ON CONFLICT (id) DO UPDATE
+           SET version = EXCLUDED.version,
+               loaded_at = now(),
+               loader_build = EXCLUDED.loader_build",
+        &[
+            &embedded,
+            &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
+        ],
+    )?;
     Ok(())
 }
 
@@ -4567,5 +4669,181 @@ mod schema_subset_tests {
             .unwrap()
             .get(0);
         assert_eq!(events, 3);
+    }
+}
+
+/// Issue #188 — `init`'s schema replay is the SECOND door (beside cairn-node's
+/// connect_and_load_schema) through which an older binary could silently downgrade a
+/// newer database's safety floor. Same refusal rule, same db/038 record; mirrors
+/// crates/cairn-node/tests/schema_version_guard.rs.
+#[cfg(test)]
+mod schema_generation_tests {
+    use super::*;
+
+    /// The two subset-shape invariants the #188 guard leans on. (1) The subset must
+    /// CARRY db/038_node_schema: `init` stamps `node_schema` right after its replay,
+    /// so on a fresh database the table's migration has to be in the subset or every
+    /// init fails at the stamp. (2) The subset may LAG the repo generation (that is
+    /// the normal case — node-only migrations never enter it) but can never EXCEED
+    /// it: a subset entry newer than SCHEMA_GENERATION means the constant was not
+    /// bumped alongside a new migration (cairn-event's fs guard catches that from
+    /// the db/ side; this catches it from the list side).
+    #[test]
+    fn subset_carries_node_schema_and_never_exceeds_the_repo_generation() {
+        assert!(
+            SCHEMA.iter().any(|(name, _)| *name == "038_node_schema"),
+            "the subset must include db/038_node_schema.sql: init stamps node_schema \
+             immediately after its replay, so a fresh database needs the table"
+        );
+        let newest = cairn_event::schema_generation::newest_migration_prefix(
+            SCHEMA.iter().map(|(name, _)| *name),
+        )
+        .expect("SCHEMA is never empty and every entry has a numeric prefix");
+        assert!(
+            newest <= embedded_schema_version(),
+            "subset entry {newest} is newer than SCHEMA_GENERATION {}: bump the \
+             constant in crates/cairn-event/src/schema_generation.rs in the same \
+             commit that adds the migration",
+            embedded_schema_version()
+        );
+    }
+
+    #[test]
+    fn load_schema_stamps_the_generation_and_refuses_a_newer_db() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        // Serialize against every other DB-gated suite (same 'CARN' key). Held until
+        // `lock` drops at test end.
+        let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+        let embedded = embedded_schema_version();
+
+        let mut c = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        c.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")
+            .unwrap();
+        // Heal residue from a previously aborted run: a stale future generation would
+        // wedge every loader on this shared database.
+        c.batch_execute(&format!(
+            "DO $$ BEGIN
+               IF to_regclass('public.node_schema') IS NOT NULL THEN
+                 UPDATE node_schema SET version = LEAST(version, {embedded});
+               END IF;
+             END $$;"
+        ))
+        .unwrap();
+
+        // 1. Happy path: the guarded replay stamps this binary's generation.
+        load_schema(&mut c).expect("replay at own generation must succeed");
+        let (version, build): (i32, String) = {
+            let row = c
+                .query_one("SELECT version, loader_build FROM node_schema", &[])
+                .unwrap();
+            (row.get(0), row.get(1))
+        };
+        assert_eq!(
+            version, embedded,
+            "a successful replay must stamp the record"
+        );
+        assert!(
+            build.contains("cairn-sync"),
+            "loader_build must identify WHICH tool stamped: {build}"
+        );
+
+        // 2. Old binary, new DB: refuse rather than downgrade the floor. Restore
+        //    BEFORE asserting so a panic cannot strand the shared database claiming
+        //    a future generation.
+        c.execute("UPDATE node_schema SET version = $1", &[&(embedded + 1)])
+            .unwrap();
+        let refused = load_schema(&mut c);
+        c.execute("UPDATE node_schema SET version = $1", &[&embedded])
+            .unwrap();
+        let err = refused
+            .expect_err("an older binary must refuse a newer database (issue #188)")
+            .to_string();
+        assert!(
+            err.contains(&format!("{}", embedded + 1)) && err.contains(&format!("{embedded}")),
+            "the refusal must name both generations: {err}"
+        );
+
+        // 3. The restored database replays again — only genuine downgrades refuse.
+        load_schema(&mut c).expect("replay after restore must succeed");
+    }
+
+    /// The guard must read the recorded generation UNDER the loaders' advisory
+    /// load-lock (2026-07-19 review of PR #251, finding 1) — mirrors
+    /// guard_check_happens_under_the_load_lock in cairn-node's
+    /// schema_version_guard.rs; see there for the full interleaving argument. An
+    /// admin session stands in for a concurrent newer loader mid-replay: it holds
+    /// the lock, we spawn this binary's loader, and only then bump the recorded
+    /// generation and release. A correct loader parks and sees the bump (refusal);
+    /// a check-first loader has already read the stale record and succeeds — which
+    /// this test turns into a failure.
+    #[test]
+    fn guard_check_happens_under_the_load_lock() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+        let embedded = embedded_schema_version();
+
+        let mut admin = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        admin
+            .batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")
+            .unwrap();
+        // Heal tamper residue from any previously aborted run (same clamp as above).
+        admin
+            .batch_execute(&format!(
+                "DO $$ BEGIN
+                   IF to_regclass('public.node_schema') IS NOT NULL THEN
+                     UPDATE node_schema SET version = LEAST(version, {embedded});
+                   END IF;
+                 END $$;"
+            ))
+            .unwrap();
+        // Baseline: schema present and stamped at this binary's generation.
+        load_schema(&mut admin).expect("baseline replay must succeed");
+
+        // The "concurrent newer loader": holds the load-lock while mid-replay.
+        admin
+            .execute(
+                "SELECT pg_advisory_lock($1)",
+                &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+            )
+            .unwrap();
+        let base2 = base.clone();
+        // Box<dyn Error> is not Send, so the thread reports only Ok/Err-as-String.
+        let loader = std::thread::spawn(move || {
+            let mut c = postgres::Client::connect(&base2, postgres::NoTls).unwrap();
+            load_schema(&mut c).map_err(|e| e.to_string())
+        });
+        // Long enough for a check-first (buggy) loader to run to completion; a
+        // correct loader is parked on the lock, so this cannot flake when green.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        // The "newer loader" finishes: stamp a newer generation, release the lock.
+        admin
+            .execute("UPDATE node_schema SET version = $1", &[&(embedded + 1)])
+            .unwrap();
+        admin
+            .execute(
+                "SELECT pg_advisory_unlock($1)",
+                &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+            )
+            .unwrap();
+        let result = loader.join().unwrap();
+        // Restore BEFORE asserting so a failure cannot strand the shared database.
+        admin
+            .execute("UPDATE node_schema SET version = $1", &[&embedded])
+            .unwrap();
+        assert!(
+            result.is_err(),
+            "load_schema read the recorded generation BEFORE taking the load-lock: \
+             check-then-act TOCTOU — a concurrent old binary can still downgrade the floor"
+        );
     }
 }
