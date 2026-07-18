@@ -72,7 +72,7 @@ device-only path (batch / emergency / no enrolled human present) stays first-cla
    clinical.medication.asserted
      signer_key_id : <human>                              # session(node) ≠ author(human)
      contributors  : [ {actor_id:<human>, role:"authored"},   # signs → authenticated
-                        {actor_id:<node>,  role:"recorded"} ]   # seals + holds DEK
+                       {actor_id:<node>,  role:"recorded"} ]   # seals + holds DEK
      (no responsibility object)
    ```
    The `authored` role is *responsibility-bearing* but carried **without** a `responsibility` object — a

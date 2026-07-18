@@ -360,6 +360,14 @@ $$;
 -- idiom as cairn_check_contributors). STABLE (reads contributor_role) with a pinned
 -- search_path (the contributor_role lookup must never resolve into a shadowed schema).
 --
+-- STRUCTURAL, not semantic — exactly like its sibling cairn_responsibility_bound, this
+-- predicate is intentionally structural over ALL responsibility-bearing contributors: it
+-- checks only that the named actor authenticated (signed or attested), never who/what that
+-- actor is (it does NOT resolve actor-kind). It therefore FAILS CLOSED stricter than the
+-- §3.9 prose ("resolves to a human actor"): the deferred token-backed-author / AI-scribe
+-- path (an author who did not sign) authenticates through the verified-attester arm
+-- (actor_id = attester), so no lawful future authorship shape is wrongly refused here.
+--
 -- STRICT DOOR ONLY. The apply door (db/020) must NOT call this: an unverifiable
 -- authorship claim there is a forgery OR an author authenticated by a scheme this
 -- older node cannot parse (ADR-0012 guarantees such events arrive), and the two are

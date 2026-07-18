@@ -386,7 +386,7 @@ async fn human_author_owns_suppression_rights() {
     );
 
     // A different human does NOT (cross-human suppression is refused — ADR-0043).
-    let (other_sk, _other_kid) = cairn_event::generate_key().unwrap();
+    let (other_sk, _other_kid) = generate_key().unwrap();
     let other_vk = other_sk.verifying_key().to_bytes().to_vec();
     let stranger_owns: bool = c
         .query_one(
