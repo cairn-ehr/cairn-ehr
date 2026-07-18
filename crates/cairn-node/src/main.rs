@@ -184,6 +184,57 @@ fn attest_params<'a>(
         })
 }
 
+/// The `--author-as` flag set (#204 / ADR-0053): the human who AUTHORS the clinical
+/// event. Present ⇒ the human's key signs the sealed content event and rides as an
+/// `authored` contributor (session ≠ author); absent ⇒ device-additive (the node
+/// signs, `recorded`-only), unchanged. Distinct from `--attest-as` (which layers the
+/// separate ADR-0049 responsibility overlay); the two compose.
+#[derive(clap::Args, Clone)]
+struct AuthorFlags {
+    /// Author this clinical event as a specific enrolled human: their key signs the
+    /// event. Absent ⇒ device-additive (the node signs, no human author).
+    #[arg(long)]
+    author_as: Option<std::path::PathBuf>,
+    /// Passphrase to unseal --author-as (else CAIRN_AUTHOR_PASSPHRASE, else prompt).
+    #[arg(long, env = "CAIRN_AUTHOR_PASSPHRASE")]
+    author_passphrase: Option<String>,
+}
+
+/// Resolve `--author-as` into a loaded human key + verified kid, or `None` when the
+/// flag is absent. Runs the same enrolled-human pre-check as `resolve_attester` (the
+/// db/005 authorship binding is the real enforcement — this only gives a clean error
+/// before any event is authored).
+async fn resolve_author(
+    client: &tokio_postgres::Client,
+    flags: &AuthorFlags,
+) -> anyhow::Result<Option<(cairn_event::SigningKey, String)>> {
+    match &flags.author_as {
+        None => Ok(None),
+        Some(path) => {
+            let sk = load_attester_key(path, flags.author_passphrase.clone())?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            if !cairn_node::identify::attester_is_enrolled_human(client, &kid).await? {
+                anyhow::bail!(
+                    "--author-as key is not an enrolled human actor; run `enroll-human` first"
+                );
+            }
+            Ok(Some((sk, kid)))
+        }
+    }
+}
+
+/// Borrow a resolved author into `AuthorParams`, or `None` (device-additive).
+fn author_params<'a>(
+    resolved: &'a Option<(cairn_event::SigningKey, String)>,
+) -> Option<cairn_node::medication::AuthorParams<'a>> {
+    resolved
+        .as_ref()
+        .map(|(sk, kid)| cairn_node::medication::AuthorParams {
+            human_sk: sk,
+            human_kid: kid,
+        })
+}
+
 #[cfg(test)]
 mod attest_context_tests {
     use super::attest_context_without_key;
@@ -615,6 +666,8 @@ enum Cmd {
         started_precision: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
     /// Cease a medication thread (clinical.medication-cessation.asserted) — makes it
     /// past. Offline-first: does not require the assert to be present locally.
@@ -634,6 +687,8 @@ enum Cmd {
         reason: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
     /// Record a dose change on an existing medication thread
     /// (clinical.medication-dose-change.asserted). Additive — the prior dose stays in
@@ -663,6 +718,8 @@ enum Cmd {
         reason: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
     /// Correct a wrongly-recorded dose (clinical.medication-dose-correction.asserted).
     /// The prior value stays in the record (audit); this only wins the current dose.
@@ -706,6 +763,8 @@ enum Cmd {
         info_source: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
     /// Reconcile two medication threads as the same real drug
     /// (clinical.medication-reconciliation.asserted). Symmetric, reversible, additive —
@@ -726,6 +785,8 @@ enum Cmd {
         reason: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
     /// Separate two previously-reconciled threads — "actually two different drugs"
     /// (clinical.medication-separation.asserted). The never-erase reversal.
@@ -744,6 +805,8 @@ enum Cmd {
         reason: Option<String>,
         #[command(flatten)]
         attest: AttestFlags,
+        #[command(flatten)]
+        author: AuthorFlags,
     },
 
     /// Take clinical responsibility for an existing medication thread (post-hoc med-rec
@@ -1690,6 +1753,7 @@ async fn main() -> anyhow::Result<()> {
             started,
             started_precision,
             attest,
+            author,
         } => {
             cairn_node::medication::validate_term(&term)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1710,6 +1774,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let med_id = cairn_node::medication::assert_medication(
                 &mut db,
                 &node_sk,
@@ -1717,7 +1783,7 @@ async fn main() -> anyhow::Result<()> {
                 &id.node_id_hex,
                 patient,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
@@ -1730,6 +1796,7 @@ async fn main() -> anyhow::Result<()> {
             stopped_precision,
             reason,
             attest,
+            author,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1743,6 +1810,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::cease_medication(
                 &mut db,
                 &node_sk,
@@ -1751,7 +1820,7 @@ async fn main() -> anyhow::Result<()> {
                 patient,
                 medication_id,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
@@ -1767,6 +1836,7 @@ async fn main() -> anyhow::Result<()> {
             info_source,
             reason,
             attest,
+            author,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1783,6 +1853,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::change_dose(
                 &mut db,
                 &node_sk,
@@ -1791,7 +1863,7 @@ async fn main() -> anyhow::Result<()> {
                 patient,
                 medication_id,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
@@ -1810,6 +1882,7 @@ async fn main() -> anyhow::Result<()> {
             correction_note,
             info_source,
             attest,
+            author,
         } => {
             let node_sk = load_signing_key(&cli.key, true)?;
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
@@ -1832,6 +1905,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::correct_dose(
                 &mut db,
                 &node_sk,
@@ -1841,7 +1916,7 @@ async fn main() -> anyhow::Result<()> {
                 medication_id,
                 corrects,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
@@ -1854,6 +1929,7 @@ async fn main() -> anyhow::Result<()> {
             provenance,
             reason,
             attest,
+            author,
         } => {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1867,6 +1943,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::reconcile_medications(
                 &mut db,
                 &node_sk,
@@ -1876,7 +1954,7 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
@@ -1889,6 +1967,7 @@ async fn main() -> anyhow::Result<()> {
             provenance,
             reason,
             attest,
+            author,
         } => {
             cairn_node::medication::validate_distinct_subjects(thread_a, thread_b)?;
             let node_sk = load_signing_key(&cli.key, true)?;
@@ -1902,6 +1981,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let resolved = resolve_attester(&db, &attest).await?;
             let params = attest_params(&resolved, &attest);
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::separate_medications(
                 &mut db,
                 &node_sk,
@@ -1911,7 +1992,7 @@ async fn main() -> anyhow::Result<()> {
                 thread_a,
                 thread_b,
                 &input,
-                None,
+                a_params.as_ref(),
                 params.as_ref(),
             )
             .await?;
