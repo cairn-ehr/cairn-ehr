@@ -381,19 +381,18 @@ fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
     // Refuse at the SOURCE, mirroring read_frame's cap (PR #225 review): an over-cap
     // frame would cross the wire in full only to be refused by the peer's read cap,
     // with nothing in the SERVING node's log to say why its peer stopped converging.
-    // Checked before the prefix is written — a bare length prefix with no body would
-    // wedge the reader — and it makes the u32 prefix truncation (> 4 GiB) unreachable.
+    // The decision (cap + u32-truncation-unreachable) lives in the shared
+    // cairn_event::framing core (#212); refusing before the prefix is written stays
+    // here — a bare length prefix with no body would wedge the reader.
     // A log that outgrows the cap needs pagination: issue #101.
-    if b.len() > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "refusing to send a {}-byte frame over the {MAX_FRAME_BYTES}-byte cap (pagination: issue #101)",
-                b.len()
-            ),
-        ));
-    }
-    s.write_all(&(b.len() as u32).to_be_bytes())?;
+    let prefix = cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES)
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("refusing to send: {e} (pagination: issue #101)"),
+            )
+        })?;
+    s.write_all(&prefix)?;
     s.write_all(b)?;
     s.flush()
 }
@@ -401,14 +400,10 @@ fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
 fn read_frame(s: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut len = [0u8; 4];
     s.read_exact(&mut len)?;
-    let n = u32::from_be_bytes(len) as usize;
-    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES).
-    if n > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("frame length {n} exceeds {MAX_FRAME_BYTES}-byte cap"),
-        ));
-    }
+    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES);
+    // the decision is the shared cairn_event::framing core (#212).
+    let n = cairn_event::framing::decode_len_prefix(len, MAX_FRAME_BYTES)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf)?;
     Ok(buf)

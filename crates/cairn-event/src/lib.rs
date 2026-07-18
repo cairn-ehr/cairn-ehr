@@ -34,6 +34,7 @@ pub mod attachment;
 pub mod contributor;
 pub mod demographics;
 pub mod evidence;
+pub mod framing;
 pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
