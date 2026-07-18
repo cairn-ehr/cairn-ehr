@@ -246,6 +246,7 @@ async fn local_cessation_under_different_patient_refused() {
             reason: Some("wrong chart"),
         },
         None,
+        None,
     )
     .await;
     assert!(
@@ -320,6 +321,7 @@ async fn local_orphan_cessation_still_accepted() {
             stopped_precision: Some("year"),
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -440,6 +442,7 @@ async fn local_cross_patient_reconcile_refused() {
             reason: Some("looks same"),
         },
         None,
+        None,
     )
     .await;
     assert!(
@@ -478,6 +481,7 @@ async fn cross_patient_group_surfaced_by_view() {
             provenance: "clinician-judgment",
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -539,6 +543,7 @@ async fn cross_patient_group_via_cessation_only_thread_surfaced() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .expect("offline-first: unknown subjects must pass the local door");
@@ -561,6 +566,7 @@ async fn cross_patient_group_via_cessation_only_thread_surfaced() {
             stopped_precision: Some("year"),
             reason: Some("stopped elsewhere"),
         },
+        None,
         None,
     )
     .await
@@ -608,6 +614,7 @@ async fn separation_of_cross_patient_group_still_accepted() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -630,6 +637,7 @@ async fn separation_of_cross_patient_group_still_accepted() {
             provenance: "clinician-judgment",
             reason: Some("wrong chart — undoing"),
         },
+        None,
         None,
     )
     .await

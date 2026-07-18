@@ -501,6 +501,7 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
         dose_a,
         &corr_in,
         None,
+        None,
     )
     .await
     .expect("correct_dose");
@@ -519,6 +520,7 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
         med_a,
         med_b,
         &recon_in,
+        None,
         None,
     )
     .await

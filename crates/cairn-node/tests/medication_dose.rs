@@ -211,9 +211,19 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    let change_evt = change_dose(&mut c, &sk, &kid, "test-node", patient, med_id, &ch, None)
-        .await
-        .unwrap();
+    let change_evt = change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med_id,
+        &ch,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     // A correction of the change we just made (target it explicitly).
     let corr = CorrectDoseInput {
@@ -238,6 +248,7 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
         med_id,
         target,
         &corr,
+        None,
         None,
     )
     .await
@@ -389,6 +400,7 @@ async fn change_moves_current_and_keeps_history() {
             reason: Some("titration"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -439,6 +451,7 @@ async fn backdated_change_does_not_override_later_effective() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -458,6 +471,7 @@ async fn backdated_change_does_not_override_later_effective() {
             info_source: "patient-reported",
             reason: Some("historical backfill"),
         },
+        None,
         None,
     )
     .await
@@ -507,6 +521,7 @@ async fn undated_change_becomes_current_over_older_effective() {
             info_source: "patient-reported",
             reason: Some("patient says increased"),
         },
+        None,
         None,
     )
     .await
@@ -562,6 +577,7 @@ async fn correction_overlays_current_and_sets_flag() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -616,6 +632,7 @@ async fn correct_to_unknown_shows_unknown_not_original() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -658,6 +675,7 @@ async fn orphan_correction_converges_when_target_arrives() {
             note: Some("early correction"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -740,6 +758,7 @@ async fn later_correction_of_same_point_wins() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -761,6 +780,7 @@ async fn later_correction_of_same_point_wins() {
             note: Some("re-corrected"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -838,6 +858,7 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -899,6 +920,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
             reason: Some("titration"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -935,6 +957,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
             note: Some("point-0 mis-keyed"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -1002,6 +1025,7 @@ async fn corrected_effective_flips_current_dose_winner() {
             reason: Some("titration"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1020,6 +1044,7 @@ async fn corrected_effective_flips_current_dose_winner() {
             info_source: "clinician-observed",
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -1051,6 +1076,7 @@ async fn corrected_effective_flips_current_dose_winner() {
             note: Some("mis-keyed the date"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -1111,6 +1137,7 @@ async fn floor_rejects_no_op_correction() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap_err();
@@ -1159,6 +1186,7 @@ async fn floor_rejects_unknown_strike_token() {
             note: None,
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -1209,6 +1237,7 @@ async fn floor_rejects_set_and_struck_same_group() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap_err();
@@ -1255,6 +1284,7 @@ async fn corrected_reason_surfaces_and_other_groups_kept() {
             reason: Some("titration"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1276,6 +1306,7 @@ async fn corrected_reason_surfaces_and_other_groups_kept() {
             note: Some("wrong reason keyed"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -1326,6 +1357,7 @@ async fn strike_dose_reads_unknown_others_kept() {
             reason: Some("titration"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1347,6 +1379,7 @@ async fn strike_dose_reads_unknown_others_kept() {
             note: Some("was a guess"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -1399,6 +1432,7 @@ async fn later_correction_supersedes_earlier_wholesale() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1422,6 +1456,7 @@ async fn later_correction_supersedes_earlier_wholesale() {
             info_source: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1444,6 +1479,7 @@ async fn later_correction_supersedes_earlier_wholesale() {
             note: None,
             info_source: None,
         },
+        None,
         None,
     )
     .await

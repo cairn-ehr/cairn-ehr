@@ -115,9 +115,20 @@ async fn floor_accepts_valid_reconciliation() {
         reason: Some("brand vs generic"),
     };
     // Offline-first: neither thread need exist locally.
-    let ev = reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    let ev = reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let n: i64 = c
         .query_one(
             "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid",
@@ -228,9 +239,20 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let expected = std::cmp::min(a, b);
     assert_eq!(group_of(&c, a).await, expected);
     assert_eq!(
@@ -287,12 +309,34 @@ async fn transitive_component_and_clean_split() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, d, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        d,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let min = std::cmp::min(a, std::cmp::min(b, d));
     assert_eq!(group_of(&c, a).await, min);
     assert_eq!(
@@ -301,9 +345,20 @@ async fn transitive_component_and_clean_split() {
         "A-B, B-C transitively one group"
     );
     // Separating B-D splits D back out; A-B stays together.
-    separate_medications(&mut c, &sk, &kid, "test-node", patient, b, d, &input, None)
-        .await
-        .unwrap();
+    separate_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        d,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(group_of(&c, a).await, std::cmp::min(a, b));
     assert_eq!(group_of(&c, b).await, std::cmp::min(a, b));
     assert_eq!(
@@ -327,9 +382,20 @@ async fn reconciliation_before_threads_converges() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     // The edge stands and the group is computed even with no statements yet.
     assert_eq!(group_of(&c, a).await, std::cmp::min(a, b));
     assert_eq!(group_of(&c, b).await, std::cmp::min(a, b));
@@ -368,15 +434,48 @@ async fn oversize_group_over_cap_is_refused() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap(); // {a,b} size 2 — ok
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, cc, &input, None)
-        .await
-        .unwrap(); // {a,b,c} size 3 == cap — ok
-    let err = reconcile_medications(&mut c, &sk, &kid, "test-node", patient, cc, d, &input, None)
-        .await
-        .unwrap_err(); // {a,b,c,d} size 4 > cap — refused
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap(); // {a,b} size 2 — ok
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        cc,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap(); // {a,b,c} size 3 == cap — ok
+    let err = reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        cc,
+        d,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err(); // {a,b,c,d} size 4 > cap — refused
     let msg = format!("{err:#}");
     assert!(
         msg.contains("exceeds max size") && msg.contains("matcher pathology"),
@@ -409,12 +508,34 @@ async fn oversize_group_at_cap_is_accepted() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap(); // {a,b} size 2 — ok
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, b, cc, &input, None)
-        .await
-        .unwrap(); // {a,b,c} size 3 == cap — accepted
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap(); // {a,b} size 2 — ok
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        cc,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap(); // {a,b,c} size 3 == cap — accepted
     let expected = std::cmp::min(a, std::cmp::min(b, cc));
     assert_eq!(group_of(&c, a).await, expected);
     assert_eq!(group_of(&c, b).await, expected);
@@ -495,9 +616,20 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let rows = current_rows(&c, patient).await;
     assert_eq!(rows.len(), 1, "collapsed to one row");
     assert_eq!(
@@ -511,9 +643,20 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         "flag cleared without a cessation"
     );
     // Separate: re-splits, flag returns.
-    separate_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    separate_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(current_rows(&c, patient).await.len(), 2);
     assert_eq!(flag_count(&c, patient).await, 1);
 }
@@ -560,9 +703,20 @@ async fn brand_generic_collapse_without_shared_key() {
         provenance: "clinician-judgment",
         reason: Some("brand vs generic"),
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         current_rows(&c, patient).await.len(),
         1,
@@ -610,16 +764,27 @@ async fn group_current_dose_is_latest_effective_across_members() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    change_dose(&mut c, &sk, &kid, "test-node", patient, b, &ch, None)
+    change_dose(&mut c, &sk, &kid, "test-node", patient, b, &ch, None, None)
         .await
         .unwrap();
     let input = ReconcileInput {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let rows = current_rows(&c, patient).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -669,7 +834,7 @@ async fn mixed_status_resolves_latest_effective() {
         info_source: "clinician-observed",
         reason: None,
     };
-    change_dose(&mut c, &sk, &kid, "test-node", patient, a, &ch, None)
+    change_dose(&mut c, &sk, &kid, "test-node", patient, a, &ch, None, None)
         .await
         .unwrap();
     let cease = CeaseMedicationInput {
@@ -677,16 +842,37 @@ async fn mixed_status_resolves_latest_effective() {
         stopped_precision: Some("month"),
         reason: None,
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", patient, b, &cease, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        b,
+        &cease,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let input = ReconcileInput {
         provenance: "clinician-judgment",
         reason: None,
     };
-    reconcile_medications(&mut c, &sk, &kid, "test-node", patient, a, b, &input, None)
-        .await
-        .unwrap();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     // The later-effective standing statement (A's 2025-06 dose) wins → ACTIVE.
     let rows = current_rows(&c, patient).await;
     assert_eq!(
@@ -702,9 +888,19 @@ async fn mixed_status_resolves_latest_effective() {
         stopped_precision: Some("year"),
         reason: None,
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease_a, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        &cease_a,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         current_rows(&c, patient).await.len(),
         0,
@@ -766,6 +962,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -795,6 +992,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
             reason: None,
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -810,6 +1008,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
             provenance: "clinician-judgment",
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -841,6 +1040,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
             note: Some("mis-keyed the date"),
             info_source: None,
         },
+        None,
         None,
     )
     .await
@@ -890,9 +1090,19 @@ async fn single_thread_semantics_unchanged() {
         stopped_precision: Some("year"),
         reason: Some("done"),
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        &cease,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         current_rows(&c, patient).await.len(),
         0,
@@ -956,9 +1166,19 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
         stopped_precision: Some("year"),
         reason: None,
     };
-    cease_medication(&mut c, &sk, &kid, "test-node", patient, a, &cease, None)
-        .await
-        .unwrap();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        &cease,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let past_dose: Option<String> = c
         .query_one(
             "SELECT dose_amount FROM patient_medication_past WHERE patient_id = $1::text::uuid",

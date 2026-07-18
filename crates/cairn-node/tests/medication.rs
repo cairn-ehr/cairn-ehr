@@ -326,6 +326,7 @@ async fn cease_flips_current_to_past() {
             reason: Some("switched"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -362,6 +363,7 @@ async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
             stopped_precision: None,
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -470,6 +472,7 @@ async fn ceasing_one_clears_the_flag() {
             stopped_precision: None,
             reason: Some("duplicate"),
         },
+        None,
         None,
     )
     .await

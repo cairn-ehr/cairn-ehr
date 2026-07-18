@@ -132,3 +132,72 @@ async fn human_authored_medication_is_signed_by_the_human_node_keeps_custody() {
         "the node must hold the DEK even though the human signed"
     );
 }
+
+#[tokio::test]
+async fn human_authored_cessation_is_signed_by_the_human() {
+    let Some(cs) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
+    let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+    let author = AuthorParams {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+
+    let input = AssertMedicationInput {
+        term: "warfarin",
+        inn_code: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "patient-reported",
+        started: None,
+        started_precision: None,
+    };
+    let med_id = assert_medication(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        &node_kid,
+        patient,
+        &input,
+        Some(&author),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let cease_input = cairn_node::medication::CeaseMedicationInput {
+        stopped: None,
+        stopped_precision: None,
+        reason: Some("bleeding risk"),
+    };
+    cairn_node::medication::cease_medication(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        &node_kid,
+        patient,
+        med_id,
+        &cease_input,
+        Some(&author),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let signer: String = c
+        .query_one(
+            "SELECT signer_key_id FROM event_log WHERE event_type = 'clinical.medication-cessation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(signer, human_kid);
+}

@@ -873,6 +873,7 @@ async fn later_change_flips_stale_true() {
         medication_id,
         &ch,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1061,6 +1062,7 @@ async fn group_current_only_when_all_members_current() {
         b,
         &input,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1096,9 +1098,19 @@ async fn group_current_only_when_all_members_current() {
         info_source: "clinician-observed",
         reason: Some("titration"),
     };
-    change_dose(&mut c, &sk_d, &kid_d, "test-node", patient, b, &ch, None)
-        .await
-        .unwrap();
+    change_dose(
+        &mut c,
+        &sk_d,
+        &kid_d,
+        "test-node",
+        patient,
+        b,
+        &ch,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let (attested_current2, stale_members2): (bool, i64) = {
         let row = c
@@ -1560,6 +1572,7 @@ async fn author_time_dose_change_is_attested_current() {
         patient,
         medication_id,
         &ch,
+        None,
         Some(&params),
     )
     .await
@@ -1643,6 +1656,7 @@ async fn reconcile_attest_as_vouches_for_both_threads() {
         a,
         b,
         &input,
+        None,
         Some(&params),
     )
     .await
@@ -1749,6 +1763,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
         medication_id,
         target,
         &corr,
+        None,
         None,
     )
     .await
@@ -1933,6 +1948,7 @@ async fn reconcile_attest_second_subject_rejection_rolls_back_first() {
         subject_a,
         subject_b,
         &input,
+        None,
         Some(&params),
     )
     .await;
@@ -1993,6 +2009,7 @@ async fn separate_attest_second_subject_rejection_rolls_back_first() {
         subject_a,
         subject_b,
         &input,
+        None,
         Some(&params),
     )
     .await;
@@ -2081,6 +2098,7 @@ async fn group_rollup_flags_an_unattested_member() {
         a,
         b,
         &input,
+        None,
         None,
     )
     .await

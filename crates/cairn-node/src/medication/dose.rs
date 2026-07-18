@@ -62,8 +62,10 @@ pub fn build_dose_change_body(
 /// is `None` (unchanged 1-arg submit door). When `attest` is `Some`, the change AND
 /// the human's responsibility attestation for the thread run in ONE transaction (same
 /// atomic shape as `assert_medication`); a rejected attestation rolls the change back
-/// with it.
-#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/attest, mirrors dose orchestrators
+/// with it. `author` is ADR-0053's separable human-authorship overlay (`None` ⇒
+/// device-additive, the node signs and is the sole `recorded` contributor); it is
+/// independent of `attest` (who vouches) — see `AuthorParams`.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/author/attest, mirrors dose orchestrators
 pub async fn change_dose(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -72,6 +74,7 @@ pub async fn change_dose(
     patient: Uuid,
     medication_id: Uuid,
     input: &ChangeDoseInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
@@ -79,7 +82,8 @@ pub async fn change_dose(
     let body = build_dose_change_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
     // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
     Ok(event_id)
 }
 
@@ -142,8 +146,10 @@ pub fn build_dose_correction_body(
 /// the correction AND the human's responsibility attestation for the THREAD
 /// (`medication_id`, not the targeted `corrects` event) run in ONE transaction (same
 /// atomic shape as `assert_medication`); a rejected attestation rolls the correction
-/// back with it.
-#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/target/input/attest, mirrors photo_evidence.rs / identity_evidence.rs / john_doe.rs
+/// back with it. `author` is ADR-0053's separable human-authorship overlay (`None` ⇒
+/// device-additive, the node signs and is the sole `recorded` contributor); it is
+/// independent of `attest` (who vouches) — see `AuthorParams`.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/target/input/author/attest, mirrors photo_evidence.rs / identity_evidence.rs / john_doe.rs
 pub async fn correct_dose(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -153,6 +159,7 @@ pub async fn correct_dose(
     medication_id: Uuid,
     corrects: Uuid,
     input: &CorrectDoseInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
@@ -169,7 +176,8 @@ pub async fn correct_dose(
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door. The
     // attestation (when Some) vouches for the THREAD (`medication_id`), not the targeted
     // `corrects` event — seal_sign_submit reads the thread from payload.medication_id.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
     Ok(event_id)
 }
 
