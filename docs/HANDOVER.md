@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 whole-project review course — P1 + P2 + P3 ALL DONE (#203/#96 + #189/#92 + #204); next is P4 #188 [D1]
+## ⇒ NEXT: the 2026-07-15 whole-project review course — P1–P4 ALL DONE (P4 #188 landed 2026-07-19); next is the REMAINDER of P5 (#212 drift guards + verb-then-vouch, #214, #215, #213)
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -72,15 +72,29 @@ follow-ups [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (HLC-merge 
   ([#242](https://github.com/cairn-ehr/cairn-ehr/issues/242)–[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245)).
   **With this, Priority 3 is closed — both wire windows shut.**
 
-**Priority 4 — the schema-version guard (an afternoon; retires a Critical latent hazard).**
-- **#188 (D1)** — **⇐ CONTINUE HERE**: `node_schema(version, loaded_at, loader_build)` + a loader refusal
-  when the recorded version exceeds the binary's embedded version + one "old binary, new DB" test. First
-  brick of the ADR-0012 code plane; goes live at the first pilot upgrade.
+**Priority 4 — the schema-version guard. ✅ DONE 2026-07-19** (tech-debt slice, one branch with the
+#238 flake fix and the #212 CI wiring): ~~#188 (D1)~~ — `db/038_node_schema.sql` (singleton
+`node_schema(version, loaded_at, loader_build)`) + the downgrade-refusal guard in **BOTH** loaders
+(cairn-node `connect_and_load_schema` — the every-connect silent path — and cairn-sync `init`, which
+replays its subset through a new guarded `load_schema`). The generation is DERIVED from each loader's
+embedded list (numeric prefix of the newest entry, both lists must end on the same file), never
+hand-counted. An absent table/row means "generation unknown" and the replay proceeds (hand-loaded rigs
+stay usable); a recorded generation ABOVE the binary's refuses with a legible error before any
+`CREATE OR REPLACE` runs. Stamped only after a full successful replay. Tests:
+`schema_version_guard.rs` (cairn-node) + `schema_generation_tests` (cairn-sync), both self-healing
+against tamper residue on the shared test DB. Also in the slice: ~~#238~~ (the `wait_listening`
+readiness ceiling 5 s → 60 s; the poll returns on first accept, so the ceiling only buys headroom
+under parallel-workspace CPU load).
 
 **Priority 5 — one process-mechanization session (attacks the mechanism that produced #182).**
-- **#212 (F)** — decide the `db/tests/*.sql` question (wire into CI or delete); add drift guards
-  for the three unguarded Rust↔SQL pairs; factor the six-fold verb-then-vouch copy **before**
-  medication slice 5.
+- **#212 (F)** — **PARTLY DONE 2026-07-19**: the `db/tests/*.sql` question is DECIDED (wire into CI,
+  not delete) and DONE — `scripts/run-db-sql-tests.sh` builds a throwaway `cairn_sqltest` database
+  (so the spike-only db/008 its own test needs never touches `cairn_test*`), loads every migration,
+  runs all 10 mirrors under `ON_ERROR_STOP`; wired into `rust.yml` after the cargo-test step.
+  **Still open:** drift guards for the three unguarded Rust↔SQL pairs (+ a FOURTH mirror noticed in
+  passing: `matcher/tests/conftest.py::_SCHEMA_FILES` hand-mirrors the loader list, currently ends at
+  025); factor the six-fold verb-then-vouch copy **before** medication slice 5; property/fuzz tests
+  on the floor fns.
 - **#214** — fix the §3.15/§3.16→§3.3 medication mislabel once, across the three-place registry
   lockstep (registry rows + Rust mirror + SQL mirror together).
 - **#215 (G)** — spec prose honesty batch (index.md/CLAUDE.md staleness, the duplicate Slice 30,
@@ -108,7 +122,8 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-18, latest (#204 [C3] — the P3 CLOSER, ADR-0053 authoring-human; 2026-07-17 had
+**Session date:** 2026-07-19, latest (the P4 tech-debt slice — #188 schema-version guard + #238 flake
+fix + #212 CI wiring; 2026-07-18 had #204 [C3] — the P3 CLOSER, ADR-0053 authoring-human; 2026-07-17 had
 #189+#92 ADR-0052 born-sealed; 2026-07-16 had #203+#96 ADR-0051 + the full P2 arc + the P1 floor-hardening
 slice; review course above; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.54 (through ADR-0053) ·
 **Phase:** architecture complete
@@ -148,6 +163,23 @@ the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the acc
 pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**Session (2026-07-19) — the P4 tech-debt slice: #188 + #238 + the #212 CI half (branch
+`claude/tech-debt-cleanup-8513ce`).** Triage of all 50 open issues for "blocks other development" put
+three items in tier 1; all three landed in one branch. **~~#188 (D1, Critical-latent)~~** —
+`db/038_node_schema.sql` + the downgrade-refusal guard in BOTH loaders (cairn-node
+`connect_and_load_schema`, cairn-sync `init`→`load_schema`); generation DERIVED from each embedded
+list's newest prefix (never hand-counted — the #212 rule); absent table/row = "generation unknown,
+proceed" (hand-loaded rigs fine); stamp only after full successful replay; TDD both doors
+(`schema_version_guard.rs` + `schema_generation_tests`), tamper-residue self-healing on the shared
+test DB. **~~#238~~** — `wait_listening` ceiling 5 s→60 s (poll returns on first accept; ceiling is
+pure headroom under parallel-workspace load). **#212 (CI half)** — DECIDED wire-not-delete:
+`scripts/run-db-sql-tests.sh` (throwaway `cairn_sqltest` DB, so the spike-only db/008 its test needs
+never touches `cairn_test*`; all migrations; all 10 mirrors under `ON_ERROR_STOP`) + the `rust.yml`
+step; all 10 pass today (twin-registry mirror verified in sync at 19). Noticed in passing: a FOURTH
+hand-mirror of the loader list at `matcher/tests/conftest.py::_SCHEMA_FILES` (ends at 025) — added to
+the #212 remainder. Workspace green (74 suites, all 3 DBs) + fmt/clippy clean. **Next:** the P5
+remainder (#212 drift guards + verb-then-vouch factor-out before medication slice 5, #214, #215, #213).
 
 **Session (2026-07-18) — #204 [C3]: the authoring-human slice, the P3 CLOSER (branch
 `feat/adr-0053-authoring-human-204`; [ADR-0053](spec/decisions/0053-per-write-human-authorship.md), spec

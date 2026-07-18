@@ -195,6 +195,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "037_born_sealed",
         include_str!("../../../db/037_born_sealed.sql"),
     ),
+    // The node's recorded schema generation (issue #188): the table behind the
+    // downgrade-refusal guard in connect_and_load_schema below — the first brick of
+    // the ADR-0012 code plane. Keep this LAST-numbered: embedded_schema_version()
+    // derives the binary's generation from the newest entry here.
+    (
+        "038_node_schema",
+        include_str!("../../../db/038_node_schema.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
@@ -285,14 +293,87 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
     Ok(())
 }
 
+/// The schema generation this binary carries: the numeric prefix of the NEWEST
+/// embedded migration ("038_node_schema" -> 38). Derived from the list rather than
+/// hand-maintained beside it — a second hand-counted constant would be exactly the
+/// drift-pair disease issue #212 catalogs (and #183 already caught once). Appending
+/// db/039_* bumps this without anyone remembering to.
+pub fn embedded_schema_version() -> i32 {
+    let (name, _) = SCHEMA
+        .last()
+        .expect("SCHEMA is never empty: the migration list is compiled in");
+    name.split('_')
+        .next()
+        .and_then(|prefix| prefix.parse().ok())
+        .expect("every SCHEMA entry starts with its numeric db/*.sql prefix")
+}
+
+/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188).
+///
+/// The replay is idempotent for a database at or below this binary's generation. But
+/// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
+/// database it silently rewrites newer function bodies — including the in-DB
+/// safety-floor checks — back to their older versions. So before replaying, read the
+/// generation the last successful loader recorded (db/038 `node_schema`) and refuse
+/// when it exceeds ours; after a successful replay, stamp our own. An absent table or
+/// row means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
+/// psql) and the replay proceeds — the guard stops known downgrades, it does not lock
+/// out hand-built rigs. First brick of the ADR-0012 code plane.
 pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
+    let embedded = embedded_schema_version();
+    // Two round-trips, not one CASE: SQL references to node_schema are checked at
+    // plan time, so a single statement naming the table errors on a database that
+    // does not have it yet (fresh, or pre-#188) — exactly the databases that must
+    // pass the guard.
+    let table_exists: bool = client
+        .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])
+        .await?
+        .get(0);
+    // query_opt: an absent ROW (never stamped — hand-loaded rig) is a legitimate
+    // "generation unknown", but a real query error must still fail loudly.
+    let recorded: Option<i32> = if table_exists {
+        client
+            .query_opt("SELECT version FROM node_schema", &[])
+            .await?
+            .map(|row| row.get(0))
+    } else {
+        None
+    };
+    if let Some(recorded) = recorded {
+        if recorded > embedded {
+            anyhow::bail!(
+                "refusing to load schema: this database was last loaded at schema \
+                 generation {recorded}, but this binary embeds only generation \
+                 {embedded}. Replaying an older schema would silently downgrade the \
+                 in-DB safety floor (issue #188 / ADR-0012). Upgrade this binary, or \
+                 point it at a database of its own generation."
+            );
+        }
+    }
     for (name, sql) in SCHEMA.iter() {
         client
             .batch_execute(sql)
             .await
             .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
+    // Stamp only AFTER the full replay succeeded: a half-applied load must not claim
+    // the new generation. loaded_at defaults to now() on insert; refresh it on
+    // conflict so the record always says who touched the schema last, and when.
+    client
+        .execute(
+            "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
+             ON CONFLICT (id) DO UPDATE
+               SET version = EXCLUDED.version,
+                   loaded_at = now(),
+                   loader_build = EXCLUDED.loader_build",
+            &[
+                &embedded,
+                &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
+            ],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("recording schema generation: {e}"))?;
     Ok(client)
 }
 
