@@ -79,6 +79,7 @@ pub fn build_assert_body(
 /// newly-minted thread run in ONE transaction, so the attestation's commitment sees
 /// the assert event just submitted (mirrors `identify_patient`'s identify+link atomic
 /// shape). A rejected attestation rolls the assert back with it.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/input/author/attest, mirrors dose orchestrators
 pub async fn assert_medication(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -86,6 +87,7 @@ pub async fn assert_medication(
     node_origin: &str,
     patient: Uuid,
     input: &AssertMedicationInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_term(input.term)?;
@@ -98,7 +100,10 @@ pub async fn assert_medication(
     // ADR-0052 seal-at-write: the clear body is sealed, signed, and submitted through the
     // ONE strict door by seal_sign_submit — which also runs the atomic author-time
     // attestation when `attest` is Some (it vouches for the thread named in the body's
-    // payload.medication_id). We return the THREAD id, not the content event id.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
+    // payload.medication_id), and rewrites the body to human-signed authorship when
+    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). We return the
+    // THREAD id, not the content event id.
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
     Ok(medication_id)
 }

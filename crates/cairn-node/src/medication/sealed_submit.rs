@@ -20,6 +20,43 @@ use cairn_event::{sign, EventBody, SigningKey};
 
 use crate::keystore;
 
+/// The human who AUTHORS a clinical event (#204 / ADR-0053) — the FIRST half of
+/// principle 10, the mirror of `AttestParams` (attestation.rs, the second half). The
+/// human's key SIGNS the sealed content event (`session ≠ author`); the node still
+/// holds custody. Threaded explicitly so the verb paths stay pure functions of their
+/// arguments. `None` ⇒ device-additive (the node signs, `recorded`-only), unchanged.
+pub struct AuthorParams<'a> {
+    pub human_sk: &'a SigningKey,
+    pub human_kid: &'a str,
+}
+
+/// Apply an optional human author to a clear clinical body and pick the key that must
+/// SIGN it — the ONE place ADR-0053's authoring rewrite happens (house rule 4).
+///
+/// `Some` ⇒ the body is rewritten to `{human, authored} + {node, recorded}` and the
+/// HUMAN's key signs; `None` ⇒ the body is untouched and the NODE signs (device-additive,
+/// unchanged). Custody is NOT decided here and never follows the signature: every caller
+/// still registers the node's unwrap key (born-sealed erasability, ADR-0052).
+///
+/// WHY A HELPER: the single-thread door (`seal_sign_submit`) and the two-thread
+/// reconcile/separate path both need this pair, and `with_human_author` is NOT idempotent
+/// — calling it twice prepends a SECOND `authored` contributor. Funnelling both callers
+/// through one function is what guarantees it is applied exactly once per body, and that
+/// the rewrite and the signing-key choice can never drift apart.
+pub fn apply_author<'a>(
+    body: EventBody,
+    author: Option<&'a AuthorParams<'a>>,
+    node_sk: &'a SigningKey,
+) -> (EventBody, &'a SigningKey) {
+    match author {
+        Some(a) => (
+            cairn_event::contributor::with_human_author(body, a.human_kid),
+            a.human_sk,
+        ),
+        None => (body, node_sk),
+    }
+}
+
 /// Register this node's X25519 public unwrap key so the strict door can wrap every
 /// sealed event's DEK into recoverable custody. Idempotent: `cairn_register_unwrap_key`
 /// is a no-op once the same key is present (and refuses a *different* key — rotation is
@@ -100,13 +137,18 @@ fn thread_id_of(body: &EventBody) -> anyhow::Result<uuid::Uuid> {
 /// Returns the content event's id (`body.event_id`). The routing facts (event id,
 /// patient, node origin, and — only when attesting — the thread) are read out of the
 /// CLEAR body before it is consumed by the seal, so the verb call sites keep the tidy
-/// `(client, node_sk, body, attest)` shape.
+/// `(client, node_sk, body, author, attest)` shape.
 pub async fn seal_sign_submit(
     client: &mut tokio_postgres::Client,
-    sk: &SigningKey,
+    node_sk: &SigningKey,
     body: EventBody,
+    author: Option<&AuthorParams<'_>>,
     attest: Option<&super::AttestParams<'_>>,
 ) -> anyhow::Result<uuid::Uuid> {
+    // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
+    // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
+    let (body, signing_sk) = apply_author(body, author, node_sk);
+
     let event_id: uuid::Uuid = body.event_id.parse().with_context(|| {
         format!(
             "seal_sign_submit: event_id {:?} is not a uuid",
@@ -126,10 +168,11 @@ pub async fn seal_sign_submit(
         None => None,
     };
 
-    let (signed_bytes, dek) = seal_and_sign(body, sk)?;
+    let (signed_bytes, dek) = seal_and_sign(body, signing_sk)?;
+    // Custody is the NODE's regardless of who signed (born-sealed erasability, ADR-0052).
     // Register the node's unwrap key first (idempotent, node-scoped): the door needs it
     // committed and visible so it can wrap this event's DEK into recoverable custody.
-    ensure_unwrap_key(client, sk).await?;
+    ensure_unwrap_key(client, node_sk).await?;
 
     match attest {
         None => {

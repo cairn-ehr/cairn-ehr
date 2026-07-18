@@ -917,6 +917,77 @@ shred invalidation), [#237](https://github.com/cairn-ehr/cairn-ehr/issues/237) (
 
 **Post-review `/fixall` pass (2026-07-18).** A whole-diff `/review` of PR #239 caught **five issues the "READY TO MERGE / none gating / fmt clean" verdict had missed**, all fixed on-branch (RED-first): (1) *[gating]* a wrongly-sealed `identity.link` **wedged clinical sync** — `patient_link_apply()` cast `subject_a`/`subject_b` to `uuid` in its DECLARE block, before the seal guard could return, so a non-UUID top-level field raised at apply and froze the watermark (casts moved below the guard, db/018); (2) *[gating]* `cairn_execute_shred` scrubbed only 3 of 7 medication projections, leaving **dose-correction / reconciliation / attestation plaintext readable after a shred** (rung-3 defeated) — now scrubs all by `content_address` + recomputes the derived `medication_group_member` (db/037); (3) *[CI-red]* rustfmt failed on the workspace-**excluded** `cairn_pgx` extension; (4) crypto-shred of a **non-sealed target** was a false erasure — now refused at the CLI + the db/005 floor; (5) silent serve-side DEK re-wrap failure — now logged. Verified cairn-node 298/0, cairn-sync 51/0, cairn-event 140/0 (+3 regression tests), fmt+clippy clean on both trees. The subset/E2E tests require **cairn_pgx ≥ 0.3.0 on both test databases** (a stale 0.1.0 on the 2nd DB trips db/026's version gate). #231 (unwrap-cert kid pinning) reaffirmed as the load-bearing gap: born-sealed ships **erasability, not confidentiality**, until it lands.
 
+**Slice 43 — the authoring-human attribution slice (2026-07-18; the review course, Priority 3 CLOSER; issue
+#204 [C3]; branch `feat/adr-0053-authoring-human-204`;
+[ADR-0053](spec/decisions/0053-per-write-human-authorship.md), spec §3.9/§3.10, v0.54; no new event type, no
+SCHEMA change).** Closes the mirror-image gap the review found — the build had *responsibility* (ADR-0049
+attestation) but no *authorship*, so by §3.9's own rule every un-attested medication row read as
+machine-generated content. A clinical event can now carry an **authenticated human author**: contributors
+`[{human,"authored"},{node,"recorded"}]`, **signed by the human**, while the node seals the body and holds the
+DEK — realizing ADR-0008's `session.user ≠ event.author` at the data/floor/CLI layer (the durable-draft +
+`sign-as` UX defers to the Tauri surface, #243). `authored` is carried **without** a `responsibility` object —
+the legitimate "authored, not-yet-vouched" state (§3.9). **Floor (db/005):** `cairn_authorship_bound` — a
+responsibility-*bearing* contributor's `actor_id` must be the event's **signer or the verified attester** (the
+#195 responsibility↔attester binding extended to authorship; forged authorship refused at the strict submit
+door, step 4b); contributory roles (`recorded`) exempt so the device default is untouched; structural /
+fails-closed like its sibling `cairn_responsibility_bound`. **Strict-enforce / apply-grade asymmetry (the
+load-bearing decision, design §4):** db/020 is **unchanged** — the sync door never refuses an unverifiable
+authorship claim, because at apply a forgery is indistinguishable from an author authenticated by a scheme an
+older node cannot parse (ADR-0012), and refusing would make a lawful future medication *invisible* — inferior
+to paper. It **admits + grades** instead: `cairn-event::classify_authorship_confidence` → `attested` (human
+signed / verified attester) · `unverified` (unverifiable claim, upgradable) · `device` (recorded-only).
+**Node:** `AuthorParams` + an `author` param threaded through `seal_sign_submit` and all six medication
+orchestrators (the human's key signs; `ensure_unwrap_key` keeps the NODE as custodian — born-sealed
+erasability preserved under human signature); pure `with_human_author` does the body rewrite. **CLI:**
+`--author-as` / `--author-passphrase` on the six verbs (composes with `--attest-as`). **Tests:** forged
+authorship refused through the real door (raises at step 4b before custody), device path unchanged, the
+suppression owner-gate now recognises the human author. TDD RED-first; workspace **775/0** (all 3 DBs) + fmt
+(both trees) + clippy + cargo-deny + mkdocs clean; **final whole-branch review (opus) = READY TO MERGE** (0
+gating; custody-stays-node, floor soundness, eager-bind ordering, and the strict/apply asymmetry all
+independently verified). A cross-crate build gap the per-crate task runs missed — `cairn-sync/tests/clinical_pull.rs`
+calling the medication orchestrators — was caught by the coordinator's full-workspace build and fixed
+(author=None). Four follow-ups filed: [#242](https://github.com/cairn-ehr/cairn-ehr/issues/242) (the
+`asserted` grade + token-backed author — verbal orders / AI-scribe; the floor's verified-attester arm already
+reserves room), [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243) (durable drafts + `sign-as` salvage —
+the ADR-0008 UI half), [#244](https://github.com/cairn-ehr/cairn-ehr/issues/244) (author+responsibility on one
+event), [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) (SQL mirror + §5.10 authorship-confidence
+projection). **This closes Priority 3 — both wire windows are shut; the review course continues at Priority 4
+(#188 [D1], the schema-version guard).**
+
+**Post-review `/fixall` pass on PR #246 (2026-07-18).** A whole-diff `/review` found **0 correctness
+defects** — the floor predicate, the strict-enforce/apply-grade asymmetry, the kid-derived-from-key CLI path,
+and the no-regression claim over all four pre-existing bearing-contributor call sites (`apply_proposal`,
+`shred`, `medication::attestation`, `auto_apply` — each already sets `signer_key_id` to the human it names,
+so none trips step 4b) were each independently checked and held. It did find **one real coverage hole and
+four polish items**, all fixed on-branch: (1) *[the substantive one]* every author test passed
+`attest: None`, so the advertised `--author-as` + `--attest-as` **composition was untested** — and the only
+path reaching it, `submit_reconcile_like`'s attested arm, **hand-duplicated** the author rewrite from
+`seal_sign_submit`, giving that duplicate zero coverage; the duplication is now the shared
+`sealed_submit::apply_author` (which is also what guarantees the **non-idempotent** `with_human_author` is
+applied exactly once per body — calling it twice prepends a second `authored` contributor), covered by
+`author_and_attest_compose_with_different_humans_on_reconcile` using **two different humans** (registrar
+authors, supervisor vouches) so a regression collapsing author into attester cannot pass; **proven RED by
+sabotaging the rewrite before accepting it green**. (2) `authorship_binding.rs` tested only the NULL-attester
+arm — the **verified-attester arm** (the one the deferred #242 token-author path authenticates through) now
+has 4 cases, including one-good-one-forged. (3) `classify_authorship_confidence` is doc-flagged **NOT YET
+WIRED TO A READ PATH**: it has no production consumer, so the ADR's "apply admits and **grades**" is today
+only half-live (apply admits; #245 brings the grading). Not a live hole — no read path surfaces the
+contributor set to a clinician yet — but the type must not be mistaken for enforcement. (4) db/005 now
+records that the `bearing:` prefix arm of `cairn_authorship_bound` is **unreachable at its only call site**
+(step 1c's strict `cairn_check_contributors` already refuses unratified roles) and is kept for safe reuse by
+a lenient caller, not as live future-role coverage. Workspace **777/0** (all 3 DBs, **0 self-skips**) +
+fmt + clippy `-D warnings` + cargo-deny + mkdocs clean. One issue filed:
+[#247](https://github.com/cairn-ehr/cairn-ehr/issues/247) — `contributors[].actor_id` holds a signing-**key**
+id, not an `actor_current.actor_id`, so authorship is **key-scoped and does not survive key rotation** or
+re-enrolment under a new skill_epoch (pre-existing, shared with the #195 binding; #99 already solved the
+same problem at row level by stamping the resolved actor, and the contributor set is now the one place that
+does not). It constrains #245: the projection must either join through `actor_event` at read time or we
+record an ADR saying key-id-in-body is the permanent shape. **Behaviour note for the UI layer:** making the
+human the signer also *tightens* the ADR-0043 suppression owner-gate — a `--author-as` event is now **owned**,
+where the same event device-signed and un-attested was un-owned and dismissable by anyone. Intended and
+covered by `human_author_owns_suppression_rights`, but it is a change in *who may dismiss*, not purely a gain
+as the ADR's "for free" phrasing suggests.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

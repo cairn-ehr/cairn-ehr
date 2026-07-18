@@ -396,9 +396,11 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         started: Some("2023"),
         started_precision: Some("year"),
     };
-    let med1 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
-        .await
-        .unwrap();
+    let med1 = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
+    )
+    .await
+    .unwrap();
     // Dose change WITH an atomic human vouch: the attestation covers assert+change,
     // so the standing vouch must read non-stale on BOTH nodes after sync.
     let vouch = AttestParams {
@@ -422,6 +424,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
             info_source: "clinician",
             reason: Some("HbA1c above target"),
         },
+        None,
         Some(&vouch),
     )
     .await
@@ -432,9 +435,11 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         dose_amount: Some("40"),
         ..metformin
     };
-    let med2 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &atorva, None)
-        .await
-        .unwrap();
+    let med2 = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &atorva, None, None,
+    )
+    .await
+    .unwrap();
     cease_medication(
         &mut a,
         &sk_d,
@@ -448,6 +453,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
             reason: Some("myalgia"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -457,10 +463,10 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         dose_amount: Some("400"),
         ..metformin
     };
-    let med3 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &ibu, None)
+    let med3 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &ibu, None, None)
         .await
         .unwrap();
-    let med4 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &ibu, None)
+    let med4 = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &ibu, None, None)
         .await
         .unwrap();
     reconcile_medications(
@@ -475,6 +481,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
             provenance: "clinician-judgment",
             reason: None,
         },
+        None,
         None,
     )
     .await
@@ -633,6 +640,7 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
             started: Some("2023"),
             started_precision: Some("year"),
         },
+        None,
         None,
     )
     .await
@@ -1146,9 +1154,11 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         started: Some("2023"),
         started_precision: Some("year"),
     };
-    let med = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
-        .await
-        .unwrap();
+    let med = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
+    )
+    .await
+    .unwrap();
     let content_eid = content_event_id_of(&a, med).await;
     // A holds full custody + the projection, and the log row is sealed ciphertext.
     assert_eq!(
@@ -1482,17 +1492,21 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
     };
     // Two sealed threads on ONE chart. `victim` will be shredded; `survivor` must not be
     // touched — its content_address is different, and the scrub is content_address-precise.
-    let victim = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
-        .await
-        .unwrap();
+    let victim = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
+    )
+    .await
+    .unwrap();
     let atorva = AssertMedicationInput {
         term: "atorvastatin",
         dose_amount: Some("40"),
         ..metformin
     };
-    let survivor = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &atorva, None)
-        .await
-        .unwrap();
+    let survivor = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &atorva, None, None,
+    )
+    .await
+    .unwrap();
     let victim_eid = content_event_id_of(&a, victim).await;
 
     // Both project before the shred.
@@ -1592,9 +1606,11 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
         started: Some("2023"),
         started_precision: Some("year"),
     };
-    let med = assert_medication(&mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None)
-        .await
-        .unwrap();
+    let med = assert_medication(
+        &mut a, &sk_d, &kid_d, "node-a", patient, &metformin, None, None,
+    )
+    .await
+    .unwrap();
     let content_eid = content_event_id_of(&a, med).await;
     assert_eq!(
         custody_count(&a, &content_eid).await,
@@ -1793,6 +1809,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
             started_precision: Some("year"),
         },
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1832,6 +1849,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
             started: Some("2024"),
             started_precision: Some("year"),
         },
+        None,
         None,
     )
     .await

@@ -51,8 +51,10 @@ pub fn build_cease_body(
 /// `attest` is `None` (unchanged 1-arg submit door). When `attest` is `Some`, the
 /// cessation AND the human's responsibility attestation for the thread run in ONE
 /// transaction (same atomic shape as `assert_medication`); a rejected attestation
-/// rolls the cessation back with it.
-#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/attest, mirrors dose orchestrators
+/// rolls the cessation back with it. `author` is ADR-0053's separable human-authorship
+/// overlay (`None` ⇒ device-additive, the node signs and is the sole `recorded`
+/// contributor); it is independent of `attest` (who vouches) — see `AuthorParams`.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/author/attest, mirrors dose orchestrators
 pub async fn cease_medication(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -61,6 +63,7 @@ pub async fn cease_medication(
     patient: Uuid,
     medication_id: Uuid,
     input: &CeaseMedicationInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
@@ -68,6 +71,7 @@ pub async fn cease_medication(
     let body = build_cease_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
     // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
     Ok(event_id)
 }

@@ -73,6 +73,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0050](0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike, corrected effective drives the winner | Accepted (refines principle 4, §3.6) | 2026-07-15 |
 | [0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th member, contributory); responsibility = `{held_by, on_behalf_of?}` object; future members partition-prefixed; strict-submit/lenient-apply | Accepted (refines 0028/0007/0049/0012) | 2026-07-16 |
 | [0052](0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: erasability as the shipped default; erasable vs. sequestered; seal-then-sign container + twin-under-seal; the `event_dek`/`event_clear`/`erasure_shred_log` custody plane; strict-submit refuses unsealed `clinical.*` | Accepted (refines 0005/0006/0026/0048/0051) | 2026-07-17 |
+| [0053](0053-per-write-human-authorship.md) | Per-write human authorship: authoring signature + authorship binding + authorship-confidence grade | Accepted (refines 0008/0007/0051/0052/0012) | 2026-07-18 |
 
 ## Template
 

@@ -120,8 +120,11 @@ pub fn build_separate_body(
 /// existence check on either thread). Returns the event id. When `attest` is `Some`,
 /// the reconciliation AND a human responsibility attestation for BOTH subject threads
 /// run in ONE transaction (two attestation HLCs, minted up front, one per thread) — a
-/// rejected attestation on either thread rolls the WHOLE reconciliation back.
-#[allow(clippy::too_many_arguments)] // signer + node context + patient/2 subjects/input/attest, mirrors dose orchestrators
+/// rejected attestation on either thread rolls the WHOLE reconciliation back. `author`
+/// is ADR-0053's separable human-authorship overlay (`None` ⇒ device-additive, the
+/// node signs and is the sole `recorded` contributor); it is independent of `attest`
+/// (who vouches) — see `AuthorParams`.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/2 subjects/input/author/attest, mirrors dose orchestrators
 pub async fn reconcile_medications(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -131,6 +134,7 @@ pub async fn reconcile_medications(
     subject_a: Uuid,
     subject_b: Uuid,
     input: &ReconcileInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_distinct_subjects(subject_a, subject_b)?;
@@ -147,6 +151,7 @@ pub async fn reconcile_medications(
         patient,
         subject_a,
         subject_b,
+        author,
         attest,
     )
     .await?;
@@ -158,7 +163,9 @@ pub async fn reconcile_medications(
 /// id. When `attest` is `Some`, the separation AND a human responsibility attestation
 /// for BOTH subject threads run in ONE transaction (same shape as
 /// `reconcile_medications`) — a rejected attestation on either thread rolls the WHOLE
-/// separation back.
+/// separation back. `author` is ADR-0053's separable human-authorship overlay (`None`
+/// ⇒ device-additive, the node signs and is the sole `recorded` contributor); it is
+/// independent of `attest` (who vouches) — see `AuthorParams`.
 #[allow(clippy::too_many_arguments)]
 pub async fn separate_medications(
     client: &mut tokio_postgres::Client,
@@ -169,6 +176,7 @@ pub async fn separate_medications(
     subject_a: Uuid,
     subject_b: Uuid,
     input: &ReconcileInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
     validate_distinct_subjects(subject_a, subject_b)?;
@@ -185,6 +193,7 @@ pub async fn separate_medications(
         patient,
         subject_a,
         subject_b,
+        author,
         attest,
     )
     .await?;
@@ -196,11 +205,19 @@ pub async fn separate_medications(
 /// the paired shape lives here — shared by both verbs so the seal-then-sign discipline
 /// and the atomic two-attestation txn are written once (house rule 4).
 ///
-/// `None`  → device-additive: seal + sign + one 4-arg strict-door submit (auto-commit).
-/// `Some`  → the reconcile/separate event AND a human responsibility attestation for
-///           BOTH subject threads run in ONE transaction (two HLCs minted up front); a
-///           rejected attestation on either thread rolls the WHOLE operation back.
-#[allow(clippy::too_many_arguments)] // signer + node context + body + patient/2 subjects/attest
+/// `attest = None`  → device-additive: seal + sign + one 4-arg strict-door submit
+///                     (auto-commit).
+/// `attest = Some`  → the reconcile/separate event AND a human responsibility
+///                     attestation for BOTH subject threads run in ONE transaction (two
+///                     HLCs minted up front); a rejected attestation on either thread
+///                     rolls the WHOLE operation back.
+///
+/// `author` (ADR-0053) is applied in BOTH arms: `None` ⇒ device-additive (the node
+/// signs, `recorded`-only); `Some` ⇒ the human authors the content event too — the
+/// body is rewritten to an `authored`+`recorded` contributor pair and SIGNED by the
+/// human key — while custody stays the NODE's regardless (`ensure_unwrap_key` always
+/// registers the node's key, never the author's; born-sealed erasability, ADR-0052).
+#[allow(clippy::too_many_arguments)] // signer + node context + body + patient/2 subjects/author/attest
 async fn submit_reconcile_like(
     client: &mut tokio_postgres::Client,
     node_sk: &SigningKey,
@@ -209,20 +226,29 @@ async fn submit_reconcile_like(
     patient: Uuid,
     subject_a: Uuid,
     subject_b: Uuid,
+    author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<()> {
     match attest {
         None => {
-            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None).await?;
+            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, None)
+                .await?;
         }
         Some(params) => {
             // Two attestation HLCs (one per subject thread), minted up front.
             let hlc_a = crate::db::next_hlc(client, node_origin).await?;
             let hlc_b = crate::db::next_hlc(client, node_origin).await?;
+            // ADR-0053: the human authors the content event too — rewrite + sign with
+            // the author key when present; the node still holds custody + signs the
+            // attestations (attest_thread_in_tx below is unchanged). Shared with the
+            // single-thread door via `apply_author` so the two can never drift.
+            let (body, signing_sk) =
+                crate::medication::sealed_submit::apply_author(body, author, node_sk);
             let (signed_bytes, dek) =
-                crate::medication::sealed_submit::seal_and_sign(body, node_sk)?;
-            // The door needs the node's unwrap key registered before it can wrap this
-            // event's DEK into custody (idempotent; committed ahead of the txn).
+                crate::medication::sealed_submit::seal_and_sign(body, signing_sk)?;
+            // The door needs the NODE's unwrap key registered before it can wrap this
+            // event's DEK into custody (idempotent; committed ahead of the txn) — the
+            // node keeps custody regardless of who signed.
             crate::medication::sealed_submit::ensure_unwrap_key(client, node_sk).await?;
             let tx = client.transaction().await?;
             tx.execute(
