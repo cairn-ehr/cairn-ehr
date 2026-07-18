@@ -325,7 +325,7 @@ async fn authorship_binding_predicate() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let c = db::connect(&cs).await.unwrap();
+    let c = db::connect_and_load_schema(&cs).await.unwrap();
 
     // bearing author == signer -> bound.
     assert!(bound(&c, serde_json::json!([{"actor_id": "H", "role": "authored"},
@@ -477,7 +477,7 @@ async fn human_authored_medication_is_signed_by_the_human_node_keeps_custody() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let mut c = db::connect(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -671,7 +671,7 @@ async fn human_authored_cessation_is_signed_by_the_human() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let mut c = db::connect(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
     let author = AuthorParams { human_sk: &human_sk, human_kid: &human_kid };
@@ -956,7 +956,7 @@ async fn forged_authorship_refused_at_the_strict_door() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let c = db::connect(&cs).await.unwrap();
+    let c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, _human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -990,7 +990,7 @@ async fn device_additive_assert_still_valid_with_no_author() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let mut c = db::connect(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, _hs, _hk) = setup(&c).await;
     let patient = Uuid::now_v7();
     let input = AssertMedicationInput {
@@ -1026,7 +1026,7 @@ async fn human_author_owns_suppression_rights() {
         return;
     };
     let _g = db::test_serial_guard(&cs).await.unwrap();
-    let mut c = db::connect(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
     let author = AuthorParams { human_sk: &human_sk, human_kid: &human_kid };
