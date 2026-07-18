@@ -183,6 +183,32 @@ The full ladder, the deniable-deletion design (the institution holds nothing; th
   verification**, and admitted at the sync apply door as a signed, display-gated, unverified claim
   (refusing it there would wedge future lawful proxy events out of the set-union).
 
+- **Authorship binding — a bearing-role human contributor must be signer or verified attester**
+  ([ADR-0053](decisions/0053-per-write-human-authorship.md), generalising the
+  [#195](https://github.com/cairn-ehr/cairn-ehr/issues/195)/ADR-0051 responsibility binding to
+  authorship, one field over). A contributor whose role is **responsibility-bearing** and whose
+  `actor_id` resolves to a **human** actor must be authenticated as **the event's signer** or **a
+  verified attester** — floor-enforced at **strict submit** (a door only authors what it can stand
+  behind: a forged `{human_X, "authored"}` signed by another key with no token is refused), but
+  **graded, never refused, at apply** (an unverifiable claim — actor ≠ signer, no verifiable token —
+  is admitted and graded, per [ADR-0012](decisions/0012-schema-evolution-event-format-and-legibility-across-time.md)'s
+  never-refuse-what-you-can't-understand: the door cannot distinguish a forgery from a future
+  authentication scheme it is too old to parse). A bearing role carried **without** a `responsibility`
+  object is the legitimate **"authored, not-yet-vouched"** state — the ordinary case of a human who
+  signs and authors an event with no attestation yet (responsibility, if any, remains the separate
+  ADR-0049 overlay).
+
+- **Authorship-confidence grade — `attested` / `unverified` / `device`** (ADR-0053,
+  `classify_authorship_confidence`, the ADR-0051 `classify_role` discipline: one shared pure
+  predicate, upgradable as newer nodes re-grade). **`attested`** — a human author authenticated as the
+  event's signer or a verified attester. **`unverified`** — a human-author claim this node cannot
+  verify; rendered *"authorship claimed, not authenticated here"*, never *attested*, never dropped,
+  and re-gradable when a newer node can parse the credential. **`device`** — recorded-only, no human
+  author (the honest device-additive default, [ADR-0051](decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)).
+  The middle **`asserted`** rung (a *named* human author with no key present — verbal/telephone
+  orders) and a token-backed author who did not sign (AI-scribe, dictation) are reserved by the
+  binding's verified-attester arm but deferred.
+
 - **Signature ≠ attestation.** The **signature** proves *origin + integrity* only; **attestation** (a
   responsibility-bearing role) confers *responsibility*. Every event is signed, including AI output —
   *signed ≠ vouched-for* ([security §7.2](security.md#72-signing-attestation-and-ai-agent-identity)).
@@ -233,6 +259,7 @@ Two infrastructure invariants underpin point-of-care possession and work-salvage
 
 - **`session.user` and `event.author` are independently bindable.** The data model must **never** assume `note.author == session.user`. The contributor set ([§3.9](#39-authorship-and-accountability)) of an event is established by the *attribution* act at commit time (which authenticates the author — *attestation*, [security §7.2](security.md#72-signing-attestation-and-ai-agent-identity)), not by whoever happens to hold the *session*. This is what makes **`sign-as`** possible (attribute and sign a note as the true author without changing the logged-in user), and its absence is exactly why deployed EHRs cannot salvage stranded work. *Authentication* is thereby unbundled into **gatekeeping** (session-level, coarse, rare) and **attribution** (per-event, cheap, the binding that actually reaches `event.author`).
 - **Drafts are durable and session-decoupled.** An uncommitted write-context survives an authentication-context change: it stays bound to its **subject** (the `patient_uuid` never wavers — you were always writing about this patient), is owned by its **provisional author** (so a draft follows *that clinician* to wherever they re-authenticate, and a "switch" hides but never discards the previous user's draft), and carries a provisional authorship-confidence grade resolved on commit ([identity §5.11](identity.md#511-point-of-care-identity-possession-fast-authentication-and-salvage)). This extends the append-only work-preservation guarantee ([§3.1](#31-append-only-clinical-event-log-source-of-truth)) — which protects *committed* events — to the *pre-commit* side of the commit boundary; the same value (never discard clinician effort) on both sides. The context/draft store is keyed by `(author, patient)`, not by the session, which is also what lets one contended workstation hold several warm, hidden contexts at once.
+- **The invariant is realized at the data/floor/CLI layer: the authoring signature is the per-write attribution act** ([ADR-0053](decisions/0053-per-write-human-authorship.md)). A clinical event may carry an authenticated human author distinct from the recording session: `signer_key_id` is the human, the contributor set is `{human, "authored"}` + `{node, "recorded"}` ([§3.9](#39-authorship-and-accountability)), and the node — the session party — stays `recorded` and keeps body custody (seals the event and holds its DEK, [ADR-0052](decisions/0052-born-sealed-clinical-bodies.md)) regardless of who signs. This is the node-as-session / human-as-author split that makes `session.user ≠ event.author` cryptographic rather than aspirational, on the one clinical stream (medication) that exists. The **durable session-decoupled drafts** and **`sign-as`** stranded-work salvage described above remain **explicitly deferred to the UI layer** — no draft store or session/UI layer exists yet to hang them on; this slice lays down only the can't-retrofit wire shape and floor binding beneath them.
 
 ## 3.11 Notifications as projections, responsibility-routing, and acknowledgment
 > Resolves former open question §11.10 — see [ADR-0009](decisions/0009-notification-economy-salience-routing-and-the-acknowledgment-floor.md), canonical design [identity §5.12](identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor). Minimal data-model commitments; the clinical model and the *why* live there and in the ADR.
