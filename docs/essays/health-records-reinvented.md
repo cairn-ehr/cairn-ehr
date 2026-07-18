@@ -170,9 +170,9 @@ Raspberry Pi — a computer the size of a pack of cards that a small UPS can pow
 its database layer has been run on an ordinary Android phone. Synchronisation has been validated
 over a real satellite link with nearly a second of round-trip delay — and not a laboratory
 simulation of one. The two nodes were my laptop in hospital accommodation in Bamaga, at the
-northern tip of Cape York, and a machine at my home in Dorrigo, New South Wales, some 2,400
-kilometres south: WireGuard over Starlink at both ends, the Bamaga end a Starlink Mini lying
-unfastened on the roof while a storm blew through. If sync shrugs that off, a hospital basement
+northern tip of Cape York, and a machine at my home some 2,400 kilometres south on the New South
+Wales coast: WireGuard over Starlink at both ends — a residential dish at the southern end, and at
+Bamaga a Starlink Mini lying unfastened on the roof while a storm blew through. If sync shrugs that off, a hospital basement
 holds no terrors. These are not projections; they are passed tests.
 
 ### Never slower than paper — paper-parity as law
