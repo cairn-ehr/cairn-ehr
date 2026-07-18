@@ -229,6 +229,7 @@ async fn floor_accepts_well_formed_attestation() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -557,6 +558,7 @@ async fn device_key_cannot_attest_only_humans_vouch() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -612,6 +614,7 @@ async fn commitment_fn_is_deterministic_and_null_when_absent() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -791,6 +794,7 @@ async fn post_hoc_attestation_shows_attester_and_not_stale() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -835,6 +839,7 @@ async fn later_change_flips_stale_true() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -911,6 +916,7 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
         None,
     )
     .await
@@ -1025,6 +1031,7 @@ async fn group_current_only_when_all_members_current() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1035,6 +1042,7 @@ async fn group_current_only_when_all_members_current() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -1262,6 +1270,7 @@ async fn attest_medication_thread_end_to_end() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1391,6 +1400,7 @@ async fn author_time_assert_is_attested_current_in_one_txn() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         Some(&params),
     )
     .await
@@ -1462,6 +1472,7 @@ async fn author_time_rejection_rolls_the_verb_back() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         Some(&params),
     )
     .await;
@@ -1521,6 +1532,7 @@ async fn author_time_dose_change_is_attested_current() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -1595,6 +1607,7 @@ async fn reconcile_attest_as_vouches_for_both_threads() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1605,6 +1618,7 @@ async fn reconcile_attest_as_vouches_for_both_threads() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -1685,6 +1699,7 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
         None,
     )
     .await
@@ -1893,6 +1908,7 @@ async fn reconcile_attest_second_subject_rejection_rolls_back_first() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1951,6 +1967,7 @@ async fn separate_attest_second_subject_rejection_rolls_back_first() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -2035,6 +2052,7 @@ async fn group_rollup_flags_an_unattested_member() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2045,6 +2063,7 @@ async fn group_rollup_flags_an_unattested_member() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -2109,6 +2128,7 @@ async fn singleton_group_reduces_to_its_thread() {
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
         None,
     )
     .await
@@ -2177,6 +2197,7 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await

@@ -158,6 +158,7 @@ async fn shred_event_appends_tombstone_and_scrubs() {
         patient,
         &sample_input(),
         None,
+        None,
     )
     .await
     .expect("assert_medication succeeds");
@@ -300,6 +301,7 @@ async fn shred_event_with_attest_scrubs_and_records_human_responsibility() {
         "test-node",
         patient,
         &sample_input(),
+        None,
         None,
     )
     .await
@@ -460,6 +462,7 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
         patient,
         &sample_input(),
         None,
+        None,
     )
     .await
     .expect("assert A");
@@ -470,6 +473,7 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
         "test-node",
         patient,
         &sample_input(),
+        None,
         None,
     )
     .await

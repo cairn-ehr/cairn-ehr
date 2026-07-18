@@ -213,7 +213,8 @@ async fn submit_reconcile_like(
 ) -> anyhow::Result<()> {
     match attest {
         None => {
-            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None).await?;
+            crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, None)
+                .await?;
         }
         Some(params) => {
             // Two attestation HLCs (one per subject thread), minted up front.

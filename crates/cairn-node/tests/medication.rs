@@ -129,6 +129,7 @@ async fn assert_appears_as_current() {
         patient,
         &sample_input(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -168,6 +169,7 @@ async fn asserted_at_is_the_convergent_hlc_wall_not_the_local_fold_clock() {
         "test-node",
         patient,
         &sample_input(),
+        None,
         None,
     )
     .await
@@ -302,6 +304,7 @@ async fn cease_flips_current_to_past() {
         patient,
         &sample_input(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -408,10 +411,10 @@ async fn two_active_same_term_are_flagged() {
     a1.term = "Atorvastatin";
     let mut a2 = sample_input();
     a2.term = "atorvastatin ";
-    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None, None)
         .await
         .unwrap();
-    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None, None)
         .await
         .unwrap();
 
@@ -436,6 +439,7 @@ async fn ceasing_one_clears_the_flag() {
         patient,
         &sample_input(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -446,6 +450,7 @@ async fn ceasing_one_clears_the_flag() {
         "test-node",
         patient,
         &sample_input(),
+        None,
         None,
     )
     .await
@@ -487,10 +492,10 @@ async fn distinct_terms_are_not_flagged() {
     a1.term = "atorvastatin";
     let mut a2 = sample_input();
     a2.term = "metformin";
-    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a1, None, None)
         .await
         .unwrap();
-    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None)
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &a2, None, None)
         .await
         .unwrap();
     assert!(

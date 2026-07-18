@@ -79,7 +79,7 @@ pub async fn change_dose(
     let body = build_dose_change_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
     // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, attest).await?;
     Ok(event_id)
 }
 
@@ -169,7 +169,7 @@ pub async fn correct_dose(
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door. The
     // attestation (when Some) vouches for the THREAD (`medication_id`), not the targeted
     // `corrects` event — seal_sign_submit reads the thread from payload.medication_id.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, attest).await?;
     Ok(event_id)
 }
 

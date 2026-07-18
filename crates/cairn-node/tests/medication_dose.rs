@@ -198,6 +198,7 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -337,6 +338,7 @@ async fn assert_seeds_point0_and_it_is_current() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -366,6 +368,7 @@ async fn change_moves_current_and_keeps_history() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -415,6 +418,7 @@ async fn backdated_change_does_not_override_later_effective() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -483,6 +487,7 @@ async fn undated_change_becomes_current_over_older_effective() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap(); // 40 @2024
@@ -531,6 +536,7 @@ async fn correction_overlays_current_and_sets_flag() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -584,6 +590,7 @@ async fn correct_to_unknown_shows_unknown_not_original() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -709,6 +716,7 @@ async fn later_correction_of_same_point_wins() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -790,6 +798,7 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -803,6 +812,7 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -868,6 +878,7 @@ async fn correcting_older_point_leaves_current_unchanged() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -970,6 +981,7 @@ async fn corrected_effective_flips_current_dose_winner() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -1074,6 +1086,7 @@ async fn floor_rejects_no_op_correction() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1123,6 +1136,7 @@ async fn floor_rejects_unknown_strike_token() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1170,6 +1184,7 @@ async fn floor_rejects_set_and_struck_same_group() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -1219,6 +1234,7 @@ async fn corrected_reason_surfaces_and_other_groups_kept() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -1289,6 +1305,7 @@ async fn strike_dose_reads_unknown_others_kept() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -1361,6 +1378,7 @@ async fn later_correction_supersedes_earlier_wholesale() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await
@@ -1553,6 +1571,7 @@ async fn floor_rejects_non_string_correction_reason() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1607,6 +1626,7 @@ async fn floor_rejects_non_string_correction_note() {
         patient,
         &sample_assert(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1651,6 +1671,7 @@ async fn floor_rejects_non_string_correction_info_source() {
         "test-node",
         patient,
         &sample_assert(),
+        None,
         None,
     )
     .await

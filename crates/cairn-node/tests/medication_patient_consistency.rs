@@ -177,6 +177,7 @@ async fn local_reassert_under_different_patient_refused() {
         patient_a,
         &sample_assert("metoprolol"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -227,6 +228,7 @@ async fn local_cessation_under_different_patient_refused() {
         patient_a,
         &sample_assert("metoprolol"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -270,6 +272,7 @@ async fn local_dose_change_under_different_patient_refused() {
         "test-node",
         patient_a,
         &sample_assert("metoprolol"),
+        None,
         None,
     )
     .await
@@ -345,6 +348,7 @@ async fn remote_reassert_converges_and_flags() {
         patient_a,
         &sample_assert("metoprolol"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -406,6 +410,7 @@ async fn local_cross_patient_reconcile_refused() {
         patient_a,
         &sample_assert("metoprolol"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -416,6 +421,7 @@ async fn local_cross_patient_reconcile_refused() {
         "test-node",
         patient_b,
         &sample_assert("betaloc"),
+        None,
         None,
     )
     .await

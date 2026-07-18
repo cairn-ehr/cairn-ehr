@@ -208,6 +208,7 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -218,6 +219,7 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -253,6 +255,7 @@ async fn transitive_component_and_clean_split() {
         patient,
         &sample_assert("metformin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -264,6 +267,7 @@ async fn transitive_component_and_clean_split() {
         patient,
         &sample_assert("metformin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -274,6 +278,7 @@ async fn transitive_component_and_clean_split() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -466,6 +471,7 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -476,6 +482,7 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -527,6 +534,7 @@ async fn brand_generic_collapse_without_shared_key() {
         patient,
         &sample_assert("Lipitor"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -537,6 +545,7 @@ async fn brand_generic_collapse_without_shared_key() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -576,6 +585,7 @@ async fn group_current_dose_is_latest_effective_across_members() {
         patient,
         &sample_assert("atorvastatin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -586,6 +596,7 @@ async fn group_current_dose_is_latest_effective_across_members() {
         "test-node",
         patient,
         &sample_assert("atorvastatin"),
+        None,
         None,
     )
     .await
@@ -634,6 +645,7 @@ async fn mixed_status_resolves_latest_effective() {
         patient,
         &sample_assert("metformin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -644,6 +656,7 @@ async fn mixed_status_resolves_latest_effective() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -733,6 +746,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
         patient,
         &sample_assert("metformin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -763,6 +777,7 @@ async fn corrected_effective_flips_group_status_across_cessation() {
         "test-node",
         patient,
         &sample_assert("metformin"),
+        None,
         None,
     )
     .await
@@ -862,6 +877,7 @@ async fn single_thread_semantics_unchanged() {
         patient,
         &sample_assert("aspirin"),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -912,6 +928,7 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
         "test-node",
         patient,
         &sample_assert("warfarin"),
+        None,
         None,
     )
     .await

@@ -68,6 +68,6 @@ pub async fn cease_medication(
     let body = build_cease_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door, with the
     // atomic author-time attestation folded in when `attest` is Some (see sealed_submit).
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, attest).await?;
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, None, attest).await?;
     Ok(event_id)
 }
