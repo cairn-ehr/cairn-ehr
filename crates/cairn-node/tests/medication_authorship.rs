@@ -4,7 +4,10 @@
 //! {human,"authored"} + {node,"recorded"}, while the node keeps custody (event_dek).
 use cairn_event::generate_key;
 use cairn_node::db;
-use cairn_node::medication::{assert_medication, AssertMedicationInput, AuthorParams};
+use cairn_node::medication::{
+    assert_medication, reconcile_medications, AssertMedicationInput, AttestParams, AuthorParams,
+    ReconcileInput,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -400,4 +403,164 @@ async fn human_author_owns_suppression_rights() {
         !stranger_owns,
         "a stranger must NOT own suppression rights over the human's event"
     );
+}
+
+/// ADR-0053 x ADR-0049: `--author-as` and `--attest-as` COMPOSE, and they are
+/// SEPARABLE (principle 10 — authorship is compositional, accountability is separable).
+///
+/// This is the two-thread reconcile path, which is the only caller that reaches
+/// `submit_reconcile_like`'s attested arm; it exercises the shared `apply_author`
+/// helper under `attest = Some`, the combination no other test covers. Deliberately
+/// uses TWO DIFFERENT humans — a registrar AUTHORS the reconciliation, a supervising
+/// clinician VOUCHES for it — so a regression that collapsed author into attester (or
+/// signed the content event with the attester's key) fails loudly here.
+///
+/// Asserted: the content event is signed by the AUTHOR and carries
+/// {author,"authored"} + {node,"recorded"}; both attestation events are signed by the
+/// ATTESTER; the node still holds custody of the content event's DEK; and all three
+/// events committed in the one transaction (both threads read non-stale).
+#[tokio::test]
+async fn author_and_attest_compose_with_different_humans_on_reconcile() {
+    let Some(cs) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&cs).await.unwrap();
+    let mut c = db::connect_and_load_schema(&cs).await.unwrap();
+    let (node_sk, node_kid, author_sk, author_kid) = setup(&c).await;
+    // A SECOND enrolled human: the one who vouches, distinct from the one who authors.
+    let (attester_sk, attester_kid) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"supervising-clinician\"}', $1)",
+        &[&attester_kid],
+    )
+    .await
+    .unwrap();
+    let patient = Uuid::now_v7();
+
+    let input = AssertMedicationInput {
+        term: "atorvastatin",
+        inn_code: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "patient-reported",
+        started: None,
+        started_precision: None,
+    };
+    // Two device-additive threads for the same drug — the duplicate the reconcile fuses.
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        threads.push(
+            assert_medication(
+                &mut c, &node_sk, &node_kid, &node_kid, patient, &input, None, None,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (thread_a, thread_b) = (threads[0], threads[1]);
+
+    let author = AuthorParams {
+        human_sk: &author_sk,
+        human_kid: &author_kid,
+    };
+    let attest = AttestParams {
+        human_sk: &attester_sk,
+        human_kid: &attester_kid,
+        basis: Some("reconciliation review"),
+        note: None,
+    };
+    let reconcile_input = ReconcileInput {
+        provenance: "clinician-judgment",
+        reason: None,
+    };
+    let event_id = reconcile_medications(
+        &mut c,
+        &node_sk,
+        &node_kid,
+        &node_kid,
+        patient,
+        thread_a,
+        thread_b,
+        &reconcile_input,
+        Some(&author),
+        Some(&attest),
+    )
+    .await
+    .expect("author + attest must compose atomically through the two-thread door");
+
+    // 1. The content event: signed by the AUTHOR, contributors = author + node, sealed,
+    //    and the node — not the author — holds the DEK.
+    let row = c
+        .query_one(
+            "SELECT el.signer_key_id, el.contributors::text, el.sealed, \
+                    EXISTS (SELECT 1 FROM event_dek d WHERE d.event_id = el.event_id) \
+             FROM event_log el WHERE el.event_id = $1::text::uuid",
+            &[&event_id.to_string()],
+        )
+        .await
+        .unwrap();
+    let signer: String = row.get(0);
+    let contributors: String = row.get(1);
+    let sealed: bool = row.get(2);
+    let has_dek: bool = row.get(3);
+    assert_eq!(
+        signer, author_kid,
+        "the reconcile content event must be signed by the AUTHOR, not the attester or the node"
+    );
+    let contributors: serde_json::Value = serde_json::from_str(&contributors).unwrap();
+    assert_eq!(contributors[0]["actor_id"], serde_json::json!(author_kid));
+    assert_eq!(contributors[0]["role"], serde_json::json!("authored"));
+    assert!(
+        contributors[0].get("responsibility").is_none(),
+        "an `authored` contributor rides WITHOUT responsibility — the legitimate \
+         authored-not-yet-vouched state (§3.9); the vouch is the separate attestation event"
+    );
+    assert_eq!(contributors[1]["actor_id"], serde_json::json!(node_kid));
+    assert_eq!(contributors[1]["role"], serde_json::json!("recorded"));
+    assert!(sealed, "the content event must still be born sealed");
+    assert!(
+        has_dek,
+        "custody stays with the NODE regardless of who signed (ADR-0052 erasability)"
+    );
+
+    // 2. Both attestation events are signed by the ATTESTER, not the author.
+    let attestation_signers: Vec<String> = c
+        .query(
+            "SELECT signer_key_id FROM event_log \
+             WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(
+        attestation_signers.len(),
+        2,
+        "one attestation per subject thread"
+    );
+    assert!(
+        attestation_signers.iter().all(|s| *s == attester_kid),
+        "the vouch is the ATTESTER's, separable from authorship — got {attestation_signers:?}"
+    );
+
+    // 3. All three events committed together: both threads read a current vouch.
+    for (label, thread) in [("A", thread_a), ("B", thread_b)] {
+        let stale: bool = c
+            .query_one(
+                "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+                &[&thread.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(
+            !stale,
+            "thread {label}'s attestation must be current — the whole shape committed in one txn"
+        );
+    }
 }

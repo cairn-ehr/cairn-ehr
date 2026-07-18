@@ -164,6 +164,31 @@ coordinator full-workspace build and fixed (author=None). Four follow-ups filed
 the `asserted`/token-author path, drafts+`sign-as` (UI half), author+responsibility on one event, the SQL
 mirror + §5.10 projection. **Next:** P4 #188 [D1] schema-version guard.
 
+**Post-review `/fixall` on PR #246 (2026-07-18).** A whole-diff `/review` found **0 correctness defects** —
+the floor logic, the strict-enforce/apply-grade asymmetry, and the no-regression claim over the four
+pre-existing bearing-contributor call sites (`apply_proposal`, `shred`, `medication::attestation`,
+`auto_apply`) all verified — but **one real coverage hole**: every author test passed `attest: None`, so
+`--author-as` + `--attest-as` (the advertised composition) was untested, and the *only* path reaching it —
+`submit_reconcile_like`'s attested arm, which **hand-duplicated** the author rewrite — had zero coverage.
+Fixed: the duplicate is now the shared `sealed_submit::apply_author` (one place, and it is what guarantees
+the non-idempotent `with_human_author` is applied exactly once per body), plus
+`author_and_attest_compose_with_different_humans_on_reconcile` — deliberately **two different humans**
+(registrar authors, supervisor vouches) so a regression collapsing author into attester fails loudly. Proven
+RED by sabotage before being accepted green. Also: the predicate test gained the **verified-attester arm**
+(4 cases incl. one-good-one-forged), `classify_authorship_confidence` is now doc-flagged **NOT YET WIRED TO A
+READ PATH** (grading is #245 — the ADR's "apply admits + GRADES" is today only half-live; nothing surfaces
+authorship to a clinician yet, so nothing mis-renders), and db/005 records that the `bearing:` prefix arm is
+**unreachable at the strict door** (step 1c already refuses unratified roles) and is kept for reuse, not as
+live future-role coverage. Workspace **777/0** (all 3 DBs, 0 self-skips) + fmt/clippy/deny/mkdocs clean.
+One issue filed: [#247](https://github.com/cairn-ehr/cairn-ehr/issues/247) — `contributor.actor_id` holds a
+signing-**key** id, not an `actor_id`, so authorship is key-scoped and does **not** survive key rotation /
+re-enrolment under a new skill_epoch (pre-existing, shared with #195; constrains #245's projection — it needs
+a read-side join through `actor_event`, or an ADR saying key-id-in-body is the permanent shape).
+*Behaviour note for the UI layer:* making the human the signer also **tightens** the ADR-0043 suppression
+owner-gate — a `--author-as` event is now *owned*, where the same event device-signed + un-attested was
+un-owned and dismissable by anyone. Intended, covered by `human_author_owns_suppression_rights`, but it is a
+change in who may dismiss, not only a gain.
+
 **Session (2026-07-17) — #189/#92 [C1]: born-sealed clinical bodies (branch
 `feat/adr-0052-born-sealed-189-92`; [ADR-0052](spec/decisions/0052-born-sealed-clinical-bodies.md), spec
 §3.5/§3.8/§5.9, v0.53; full detail in ROADMAP Slice 42 + the PR + the ADR).** Every clinical JSONB body is **born sealed** under a per-event DEK held by the node — an **erasability

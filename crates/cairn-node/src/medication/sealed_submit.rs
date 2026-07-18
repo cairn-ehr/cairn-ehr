@@ -30,6 +30,33 @@ pub struct AuthorParams<'a> {
     pub human_kid: &'a str,
 }
 
+/// Apply an optional human author to a clear clinical body and pick the key that must
+/// SIGN it — the ONE place ADR-0053's authoring rewrite happens (house rule 4).
+///
+/// `Some` ⇒ the body is rewritten to `{human, authored} + {node, recorded}` and the
+/// HUMAN's key signs; `None` ⇒ the body is untouched and the NODE signs (device-additive,
+/// unchanged). Custody is NOT decided here and never follows the signature: every caller
+/// still registers the node's unwrap key (born-sealed erasability, ADR-0052).
+///
+/// WHY A HELPER: the single-thread door (`seal_sign_submit`) and the two-thread
+/// reconcile/separate path both need this pair, and `with_human_author` is NOT idempotent
+/// — calling it twice prepends a SECOND `authored` contributor. Funnelling both callers
+/// through one function is what guarantees it is applied exactly once per body, and that
+/// the rewrite and the signing-key choice can never drift apart.
+pub fn apply_author<'a>(
+    body: EventBody,
+    author: Option<&'a AuthorParams<'a>>,
+    node_sk: &'a SigningKey,
+) -> (EventBody, &'a SigningKey) {
+    match author {
+        Some(a) => (
+            cairn_event::contributor::with_human_author(body, a.human_kid),
+            a.human_sk,
+        ),
+        None => (body, node_sk),
+    }
+}
+
 /// Register this node's X25519 public unwrap key so the strict door can wrap every
 /// sealed event's DEK into recoverable custody. Idempotent: `cairn_register_unwrap_key`
 /// is a no-op once the same key is present (and refuses a *different* key — rotation is
@@ -120,12 +147,7 @@ pub async fn seal_sign_submit(
 ) -> anyhow::Result<uuid::Uuid> {
     // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
     // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
-    let body = match author {
-        Some(a) => cairn_event::contributor::with_human_author(body, a.human_kid),
-        None => body,
-    };
-    // The content event is signed by the author when present, else the node (device).
-    let signing_sk: &SigningKey = author.map(|a| a.human_sk).unwrap_or(node_sk);
+    let (body, signing_sk) = apply_author(body, author, node_sk);
 
     let event_id: uuid::Uuid = body.event_id.parse().with_context(|| {
         format!(

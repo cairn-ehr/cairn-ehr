@@ -360,6 +360,14 @@ $$;
 -- idiom as cairn_check_contributors). STABLE (reads contributor_role) with a pinned
 -- search_path (the contributor_role lookup must never resolve into a shadowed schema).
 --
+-- NOTE on the `bearing:` prefix arm: it is UNREACHABLE from this function's only call
+-- site. Step 1c already ran cairn_check_contributors(..., p_strict => true), which
+-- refuses any role outside the ratified table, so a future `bearing:x` role never
+-- reaches step 4b at THIS door. The arm is kept deliberately — it costs nothing, it
+-- keeps the idiom identical to its siblings, and it is what makes the predicate safe to
+-- reuse from a lenient caller (e.g. the #245 read-side grader) without re-deriving the
+-- partition rule. Do not read it as live coverage of future roles at the strict door.
+--
 -- STRUCTURAL, not semantic — exactly like its sibling cairn_responsibility_bound, this
 -- predicate is intentionally structural over ALL responsibility-bearing contributors: it
 -- checks only that the named actor authenticated (signed or attested), never who/what that

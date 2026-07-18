@@ -954,6 +954,40 @@ event), [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) (SQL mirror + 
 projection). **This closes Priority 3 — both wire windows are shut; the review course continues at Priority 4
 (#188 [D1], the schema-version guard).**
 
+**Post-review `/fixall` pass on PR #246 (2026-07-18).** A whole-diff `/review` found **0 correctness
+defects** — the floor predicate, the strict-enforce/apply-grade asymmetry, the kid-derived-from-key CLI path,
+and the no-regression claim over all four pre-existing bearing-contributor call sites (`apply_proposal`,
+`shred`, `medication::attestation`, `auto_apply` — each already sets `signer_key_id` to the human it names,
+so none trips step 4b) were each independently checked and held. It did find **one real coverage hole and
+four polish items**, all fixed on-branch: (1) *[the substantive one]* every author test passed
+`attest: None`, so the advertised `--author-as` + `--attest-as` **composition was untested** — and the only
+path reaching it, `submit_reconcile_like`'s attested arm, **hand-duplicated** the author rewrite from
+`seal_sign_submit`, giving that duplicate zero coverage; the duplication is now the shared
+`sealed_submit::apply_author` (which is also what guarantees the **non-idempotent** `with_human_author` is
+applied exactly once per body — calling it twice prepends a second `authored` contributor), covered by
+`author_and_attest_compose_with_different_humans_on_reconcile` using **two different humans** (registrar
+authors, supervisor vouches) so a regression collapsing author into attester cannot pass; **proven RED by
+sabotaging the rewrite before accepting it green**. (2) `authorship_binding.rs` tested only the NULL-attester
+arm — the **verified-attester arm** (the one the deferred #242 token-author path authenticates through) now
+has 4 cases, including one-good-one-forged. (3) `classify_authorship_confidence` is doc-flagged **NOT YET
+WIRED TO A READ PATH**: it has no production consumer, so the ADR's "apply admits and **grades**" is today
+only half-live (apply admits; #245 brings the grading). Not a live hole — no read path surfaces the
+contributor set to a clinician yet — but the type must not be mistaken for enforcement. (4) db/005 now
+records that the `bearing:` prefix arm of `cairn_authorship_bound` is **unreachable at its only call site**
+(step 1c's strict `cairn_check_contributors` already refuses unratified roles) and is kept for safe reuse by
+a lenient caller, not as live future-role coverage. Workspace **777/0** (all 3 DBs, **0 self-skips**) +
+fmt + clippy `-D warnings` + cargo-deny + mkdocs clean. One issue filed:
+[#247](https://github.com/cairn-ehr/cairn-ehr/issues/247) — `contributors[].actor_id` holds a signing-**key**
+id, not an `actor_current.actor_id`, so authorship is **key-scoped and does not survive key rotation** or
+re-enrolment under a new skill_epoch (pre-existing, shared with the #195 binding; #99 already solved the
+same problem at row level by stamping the resolved actor, and the contributor set is now the one place that
+does not). It constrains #245: the projection must either join through `actor_event` at read time or we
+record an ADR saying key-id-in-body is the permanent shape. **Behaviour note for the UI layer:** making the
+human the signer also *tightens* the ADR-0043 suppression owner-gate — a `--author-as` event is now **owned**,
+where the same event device-signed and un-attested was un-owned and dismissable by anyone. Intended and
+covered by `human_author_owns_suppression_rights`, but it is a change in *who may dismiss*, not purely a gain
+as the ADR's "for free" phrasing suggests.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

@@ -108,6 +108,16 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 /// The authorship-confidence grade an event carries (ADR-0008 "a grade, not a gate";
 /// ADR-0053). The single, shared reading every consumer must use so an unverifiable
 /// claim is never displayed as authenticated.
+///
+/// NOT YET WIRED TO A READ PATH. This grade has no production consumer today — the SQL
+/// mirror and the §5.10 authorship-confidence projection are issue #245. No read path in
+/// this repo surfaces the contributor set to a clinician yet, so nothing is currently
+/// rendering an unverified claim as authenticated; but do not read this type's existence
+/// as evidence that grading is in force. It is the reference definition #245 will mirror
+/// into SQL, and its "authenticated" test must stay in lockstep with
+/// `cairn_authorship_bound` (db/005): the two ask the same question at opposite doors —
+/// that one REFUSES at authoring, this one GRADES at read (see the "STRICT DOOR ONLY"
+/// note there for why the asymmetry is deliberate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorshipConfidence {
     /// A responsibility-bearing human author, authenticated as the signer or a verified attester.

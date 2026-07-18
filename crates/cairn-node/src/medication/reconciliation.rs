@@ -240,12 +240,10 @@ async fn submit_reconcile_like(
             let hlc_b = crate::db::next_hlc(client, node_origin).await?;
             // ADR-0053: the human authors the content event too — rewrite + sign with
             // the author key when present; the node still holds custody + signs the
-            // attestations (attest_thread_in_tx below is unchanged).
-            let body = match author {
-                Some(a) => cairn_event::contributor::with_human_author(body, a.human_kid),
-                None => body,
-            };
-            let signing_sk: &SigningKey = author.map(|a| a.human_sk).unwrap_or(node_sk);
+            // attestations (attest_thread_in_tx below is unchanged). Shared with the
+            // single-thread door via `apply_author` so the two can never drift.
+            let (body, signing_sk) =
+                crate::medication::sealed_submit::apply_author(body, author, node_sk);
             let (signed_bytes, dek) =
                 crate::medication::sealed_submit::seal_and_sign(body, signing_sk)?;
             // The door needs the NODE's unwrap key registered before it can wrap this
