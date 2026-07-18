@@ -8,6 +8,14 @@ narrative — written to be read start to finish.
 
 ---
 
+## [Health records reinvented — what happens when clinicians are in the driver's seat](health-records-reinvented.md)
+
+The personal case, from thirty years and seventy-two record systems at the clinical front line:
+what clinicians actually want from an EHR, what the ideal system would look like, and how each
+demand maps to one of Cairn's structural design decisions — availability, paper-parity, honest
+uncertainty, survivable identity errors, friction-free exchange, safe AI assistance, and freedom
+from vendor capture. The best starting point for clinicians; no technical background required.
+
 ## [The chart that stays up — designing a fractal EHR from the clinician's chair](designing-a-fractal-ehr.md)
 
 What it takes to build an EHR like Cairn, and why the people who have been failed by these systems
