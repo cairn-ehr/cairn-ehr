@@ -28,6 +28,18 @@ cd "$(dirname "$0")/.."   # repo root: db/ paths below are relative to it
 
 DBNAME="${1:-cairn_sqltest}"
 
+# The database is DROPPED and recreated below — refuse the names the Rust and
+# matcher suites share (cairn_test, cairn_test2, …) so a mistyped argument cannot
+# nuke a standing rig.
+case "$DBNAME" in
+    cairn_test*)
+        echo "refusing to run against '${DBNAME}': cairn_test* databases belong to the" >&2
+        echo "Rust/matcher suites and this script DROPS its target. Use the default" >&2
+        echo "(cairn_sqltest) or another throwaway name." >&2
+        exit 2
+        ;;
+esac
+
 echo "== recreating throwaway database ${DBNAME}"
 dropdb --if-exists "$DBNAME"
 createdb "$DBNAME"

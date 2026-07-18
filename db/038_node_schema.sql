@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS node_schema (
 -- The runtime role may inspect the generation (status surfaces); only the schema
 -- owner (the loader's connection) writes it. This file is part of cairn-sync's
 -- SUBSET load too, which skips db/007 — so guard the role's existence here exactly
--- as db/020/021/022 (the other subset members) do.
+-- as db/020/021 (the other role-touching subset members) do.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_node') THEN

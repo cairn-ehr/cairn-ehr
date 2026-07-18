@@ -76,15 +76,21 @@ follow-ups [#227](https://github.com/cairn-ehr/cairn-ehr/issues/227) (HLC-merge 
 #238 flake fix and the #212 CI wiring): ~~#188 (D1)~~ — `db/038_node_schema.sql` (singleton
 `node_schema(version, loaded_at, loader_build)`) + the downgrade-refusal guard in **BOTH** loaders
 (cairn-node `connect_and_load_schema` — the every-connect silent path — and cairn-sync `init`, which
-replays its subset through a new guarded `load_schema`). The generation is DERIVED from each loader's
-embedded list (numeric prefix of the newest entry, both lists must end on the same file), never
-hand-counted. An absent table/row means "generation unknown" and the replay proceeds (hand-loaded rigs
-stay usable); a recorded generation ABOVE the binary's refuses with a legible error before any
-`CREATE OR REPLACE` runs. Stamped only after a full successful replay. Tests:
-`schema_version_guard.rs` (cairn-node) + `schema_generation_tests` (cairn-sync), both self-healing
-against tamper residue on the shared test DB. Also in the slice: ~~#238~~ (the `wait_listening`
-readiness ceiling 5 s → 60 s; the poll returns on first accept, so the ceiling only buys headroom
-under parallel-workspace CPU load).
+replays its subset through a new guarded `load_schema`). The generation is the **repo-wide constant**
+`cairn_event::schema_generation::SCHEMA_GENERATION` — shared by both doors because cairn-sync's subset
+legitimately LAGS db/'s newest file (a per-list derivation would make `init` refuse every healthy node
+the moment a node-only migration lands). Kept honest by a **fs-derived guard test** in cairn-event
+(constant == newest `db/*.sql` on disk) + a cairn-node unit test (the FULL list embeds that newest
+file) + cairn-sync subset-shape tests (carries 038, never exceeds the constant). Both loaders take the
+session-level **`SCHEMA_LOAD_LOCK` advisory lock ("CARNLOAD") across check→replay→stamp**, closing the
+check-then-act race where an old + new binary connecting together could still interleave into a silent
+downgrade; deterministic interleaving tests on both doors pin it. An absent table/row means "generation
+unknown" and the replay proceeds (hand-loaded rigs stay usable; explicitly tested); a recorded
+generation ABOVE the binary's refuses with a legible error before any `CREATE OR REPLACE` runs.
+Stamped only after a full successful replay. Tests: `schema_version_guard.rs` (cairn-node) +
+`schema_generation_tests` (cairn-sync), both self-healing against tamper residue on the shared test
+DB. Also in the slice: ~~#238~~ (the `wait_listening` readiness ceiling 5 s → 60 s; the poll returns
+on first accept, so the ceiling only buys headroom under parallel-workspace CPU load).
 
 **Priority 5 — one process-mechanization session (attacks the mechanism that produced #182).**
 - **#212 (F)** — **PARTLY DONE 2026-07-19**: the `db/tests/*.sql` question is DECIDED (wire into CI,
@@ -93,8 +99,9 @@ under parallel-workspace CPU load).
   runs all 10 mirrors under `ON_ERROR_STOP`; wired into `rust.yml` after the cargo-test step.
   **Still open:** drift guards for the three unguarded Rust↔SQL pairs (+ a FOURTH mirror noticed in
   passing: `matcher/tests/conftest.py::_SCHEMA_FILES` hand-mirrors the loader list, currently ends at
-  025); factor the six-fold verb-then-vouch copy **before** medication slice 5; property/fuzz tests
-  on the floor fns.
+  025; + a FIFTH from the #188 slice: the guard/replay/stamp logic itself is hand-mirrored between the
+  two loaders — async/sync split, low churn, but it's on the list); factor the six-fold verb-then-vouch
+  copy **before** medication slice 5; property/fuzz tests on the floor fns.
 - **#214** — fix the §3.15/§3.16→§3.3 medication mislabel once, across the three-place registry
   lockstep (registry rows + Rust mirror + SQL mirror together).
 - **#215 (G)** — spec prose honesty batch (index.md/CLAUDE.md staleness, the duplicate Slice 30,
@@ -168,8 +175,7 @@ Postgres-on-Android).
 `claude/tech-debt-cleanup-8513ce`).** Triage of all 50 open issues for "blocks other development" put
 three items in tier 1; all three landed in one branch. **~~#188 (D1, Critical-latent)~~** —
 `db/038_node_schema.sql` + the downgrade-refusal guard in BOTH loaders (cairn-node
-`connect_and_load_schema`, cairn-sync `init`→`load_schema`); generation DERIVED from each embedded
-list's newest prefix (never hand-counted — the #212 rule); absent table/row = "generation unknown,
+`connect_and_load_schema`, cairn-sync `init`→`load_schema`); absent table/row = "generation unknown,
 proceed" (hand-loaded rigs fine); stamp only after full successful replay; TDD both doors
 (`schema_version_guard.rs` + `schema_generation_tests`), tamper-residue self-healing on the shared
 test DB. **~~#238~~** — `wait_listening` ceiling 5 s→60 s (poll returns on first accept; ceiling is
@@ -178,8 +184,19 @@ pure headroom under parallel-workspace load). **#212 (CI half)** — DECIDED wir
 never touches `cairn_test*`; all migrations; all 10 mirrors under `ON_ERROR_STOP`) + the `rust.yml`
 step; all 10 pass today (twin-registry mirror verified in sync at 19). Noticed in passing: a FOURTH
 hand-mirror of the loader list at `matcher/tests/conftest.py::_SCHEMA_FILES` (ends at 025) — added to
-the #212 remainder. Workspace green (74 suites, all 3 DBs) + fmt/clippy clean. **Next:** the P5
-remainder (#212 drift guards + verb-then-vouch factor-out before medication slice 5, #214, #215, #213).
+the #212 remainder. **Review round (same day, /review of PR #251):** two substantive findings, both
+fixed on the branch. (1) The per-list generation derivation was WRONG in a way the review's drift
+analysis surfaced — cairn-sync's subset legitimately lags db/'s newest file, so per-list derivation
+would split the two doors' generations the moment a node-only migration lands and `init` would refuse
+healthy nodes; generation is now the repo-wide `cairn_event::schema_generation::SCHEMA_GENERATION`,
+kept honest by a fs-derived cairn-event guard test (constant == newest `db/*.sql`) + a cairn-node
+completeness unit test + cairn-sync subset-shape tests. (2) The guard was check-then-act (TOCTOU): an
+old + new binary connecting together could interleave into the very silent downgrade #188 targets;
+both loaders now hold the session-level `SCHEMA_LOAD_LOCK` ("CARNLOAD") advisory lock across
+check→replay→stamp, pinned by deterministic interleaving tests on both doors (red first, then green).
+Minor: row-absent path now explicitly tested; `run-db-sql-tests.sh` refuses `cairn_test*` dbnames.
+Workspace green + fmt/clippy clean after the review round. **Next:** the P5 remainder (#212 drift
+guards + verb-then-vouch factor-out before medication slice 5, #214, #215, #213).
 
 **Session (2026-07-18) — #204 [C3]: the authoring-human slice, the P3 CLOSER (branch
 `feat/adr-0053-authoring-human-204`; [ADR-0053](spec/decisions/0053-per-write-human-authorship.md), spec

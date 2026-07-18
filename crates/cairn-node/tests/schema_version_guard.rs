@@ -17,15 +17,13 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// The binary's schema generation is DERIVED from the embedded migration list (the
-/// numeric prefix of the last entry), never hand-counted — a hand-maintained constant
-/// beside the list would be exactly the Rust↔SQL drift-pair disease issue #212 catalogs.
-/// Appending db/039_* must bump this without anyone remembering to.
-#[test]
-fn embedded_schema_version_is_the_last_migration_prefix() {
-    // db/038_node_schema.sql is currently the newest embedded migration.
-    assert_eq!(db::embedded_schema_version(), 38);
-}
+// The generation itself is the repo-wide `cairn_event::schema_generation::
+// SCHEMA_GENERATION` constant, shared with cairn-sync so one git build reports one
+// generation through either door (the sync subset legitimately lags the newest
+// migration, so per-list derivation would split the two). Its honesty guards live
+// where the facts live: crates/cairn-event/tests/schema_generation.rs pins the
+// constant to the newest db/*.sql on disk, and db.rs's unit test pins that
+// cairn-node's FULL list actually embeds that newest file.
 
 #[tokio::test]
 async fn loader_stamps_the_generation_and_refuses_a_newer_db() {
@@ -97,4 +95,91 @@ async fn loader_stamps_the_generation_and_refuses_a_newer_db() {
 
     // 3. The restored database loads again — the guard refuses only genuine downgrades.
     db::connect_and_load_schema(&base).await.unwrap();
+
+    // 4. Table present, row ABSENT — the documented "hand-loaded rig, never stamped"
+    //    posture: generation unknown, replay proceeds (and re-stamps).
+    admin.execute("DELETE FROM node_schema", &[]).await.unwrap();
+    db::connect_and_load_schema(&base)
+        .await
+        .expect("an unstamped database is 'generation unknown' and must load");
+    let restamped: i32 = admin
+        .query_one("SELECT version FROM node_schema", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(restamped, embedded, "the load must re-stamp the record");
+}
+
+/// The guard must read the recorded generation UNDER the loaders' advisory load-lock
+/// (2026-07-19 review of PR #251, finding 1). Check-then-act is not enough: an old
+/// and a new binary connecting together can interleave so the old one reads a stale
+/// generation, passes the check, and still replays over the schema the new one just
+/// loaded — the exact silent downgrade #188 exists to stop, through a timing window.
+///
+/// Deterministic shape: an admin session holds `SCHEMA_LOAD_LOCK` (standing in for a
+/// concurrent newer loader mid-replay), we spawn this binary's loader, and only THEN
+/// bump the recorded generation and release the lock. A correct loader parks on the
+/// lock and sees the bumped generation — refusal. A check-first loader has already
+/// read the stale generation (the sleep gives it ample time to finish outright) and
+/// succeeds — which this test turns into a failure.
+#[tokio::test]
+async fn guard_check_happens_under_the_load_lock() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let embedded = db::embedded_schema_version();
+    let admin = db::connect(&base).await.unwrap();
+    // Heal tamper residue from any previously aborted run (same clamp as above).
+    admin
+        .batch_execute(&format!(
+            "DO $$ BEGIN
+               IF to_regclass('public.node_schema') IS NOT NULL THEN
+                 UPDATE node_schema SET version = LEAST(version, {embedded});
+               END IF;
+             END $$;"
+        ))
+        .await
+        .unwrap();
+    // Baseline: schema present and stamped at this binary's generation.
+    db::connect_and_load_schema(&base).await.unwrap();
+
+    // The "concurrent newer loader": holds the load-lock while mid-replay.
+    admin
+        .execute(
+            "SELECT pg_advisory_lock($1)",
+            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+        )
+        .await
+        .unwrap();
+    let base2 = base.clone();
+    let loader = tokio::spawn(async move { db::connect_and_load_schema(&base2).await });
+    // Long enough for a check-first (buggy) loader to run to completion; a correct
+    // loader is parked on the lock for however long this takes, so the duration
+    // cannot make the test flaky in the green state.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // The "newer loader" finishes: stamp a newer generation, release the lock.
+    admin
+        .execute("UPDATE node_schema SET version = $1", &[&(embedded + 1)])
+        .await
+        .unwrap();
+    admin
+        .execute(
+            "SELECT pg_advisory_unlock($1)",
+            &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
+        )
+        .await
+        .unwrap();
+    let result = loader.await.unwrap();
+    // Restore BEFORE asserting so a failure cannot strand the shared database.
+    admin
+        .execute("UPDATE node_schema SET version = $1", &[&embedded])
+        .await
+        .unwrap();
+    assert!(
+        result.is_err(),
+        "the loader read the recorded generation BEFORE taking the load-lock: \
+         check-then-act TOCTOU — a concurrent old binary can still downgrade the floor"
+    );
 }
