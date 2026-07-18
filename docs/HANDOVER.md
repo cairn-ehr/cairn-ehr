@@ -112,6 +112,11 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 #189+#92 ADR-0052 born-sealed; 2026-07-16 had #203+#96 ADR-0051 + the full P2 arc + the P1 floor-hardening
 slice; review course above; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.54 (through ADR-0053) ·
 **Phase:** architecture complete
+**Session date:** 2026-07-18, (the PR #239 post-review fix pass + the GUI/L3 easyGP
+editing-area mining session; 2026-07-17 #189+#92 — the P3 closer, ADR-0052 born-sealed clinical bodies;
+2026-07-16 had #203+#96 the P3 opener ADR-0051, the full P2 arc #199/#198/#196/#197/#202/#201, the P1
+floor-hardening slice + the evening GUI/L3 easyGP-mining thread; review course above; last full
+regeneration 2026-07-14) · **Spec/ADRs:** v0.53 (through ADR-0052) · **Phase:** architecture complete
 (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
@@ -206,6 +211,38 @@ non-sealed target, and a silent serve re-wrap failure. [#231](https://github.com
 (unwrap-cert kid pinning) remains the load-bearing gap — born-sealed ships **erasability, not confidentiality**
 until it lands. **Operational caveat:** pre-ADR-0052 plaintext clinical dev/PoC rigs must be **WIPED** (the
 floor refuses plaintext `clinical.*` at submit; subset/E2E tests need cairn_pgx **≥ 0.3.0** on all test DBs).
+
+**Session (2026-07-18, GUI/L3 design thread) — easyGP data-entry mining: the Editing Area grammar
+(design-only; no code/ADR/spec change; full detail in
+[`scratch/ui-sketches/easygp-editing-area-inventory.md`](../scratch/ui-sketches/easygp-editing-area-inventory.md)).**
+The anticipated co-author batch arrived: 18 screen snips (entry *sequences*: allergies, ordering,
+prescribing, notes review, draw/webcam, referrals, past-history/care-plan) + the developer-guide "Editing
+Area" chapters (source folder git-ignored under `docs/untracked_for_brainstorming/` — real photo /
+potentially confidential content; **never commit or publish**; the note records mechanisms only). Headline:
+easyGP's **six editing-area invariants ≅ Cairn's event envelope** near line-for-line (invariant 6 —
+"key elements imply the totality in a list" — is the legibility twin discovered from the display side):
+external validation that the envelope is the right *user-facing* grammar, exposable directly as one entry
+grammar for all clinical data. Ten distilled GUI principles queued for shell-spec graduation (one entry
+grammar; type-ahead primary; **auto-fill to the fork**; all state ambient never modal — interaction
+checking renders *beside* the work; vocabulary never blocks; session folds; documents = previewed
+projections; **record-as-book incl. the audit-trail display overlay in the same timeline**; paper's
+drawing hand restored; per-user geometry/action-set persistence). Six NEW principle-4 archaeology exhibits
+(Nil-Known explicit negative; allergy specificity class/generic/brand; Confirmed Y/N; Uncertain-onset +
+Year-or-Age; laterality "None"; Date-of-Reaction vs Date-Entered bitemporal pair). Negative exhibits: the
+Accept-or-lose lifecycle (ADR-0020 scratchpad supersedes, keep the visible tri-state), a silently-accepted
+11th-century backdate (→ advisory plausibility flag, never block, ADR-0003 posture). **Next:** co-author
+questions filed in the note §7 (audit-overlay + draw-editor real usage, Accept-loss anecdotes, one-grammar
+counterexamples); results-inbox screenshots still pending (the 2.21 three-zone question rides on them).
+**HH clarification (same day):** the easyGP audit trail covered **saved traces only** (never-Accepted data
+left no trace anywhere) in **bare wall-clock time** — the abandoned-entry blind spot and the Accept-loss
+mode are one defect seen from two sides, and the ADR-0020 durable-scratchpad + quarantine-commit mechanism
+retires both (time side: ADR-0027 graded clock confidence vs trusting the box's clock). **Team/scope news:**
+the easyGP co-author is interested in returning from retirement to lead **GP-facing GUI design** (ergonomics
+of data entry/display is his strength); HH (ED + remote Aboriginal-health practice for ~10 years, out of GP)
+will design the **ED & ward GUI/workflow** once core infrastructure is nailed down. The shell design's
+role-manifest layer (§7) is the seam that makes this division clean: GP manifest = the co-author's canvas,
+ED/ward manifests = HH's, one shell codebase underneath (uniform core, plural edges — ADR-0021 working
+as intended).
 
 **Session (2026-07-16, evening, GUI/L3 design thread) — easyGP consult-screen mining → GP-manifest seed
 (design-only; no code/ADR/spec change; full detail in

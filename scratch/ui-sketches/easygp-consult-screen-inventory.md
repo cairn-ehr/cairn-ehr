@@ -2,7 +2,10 @@
 
 > Scratch / conversation aid — NOT canonical. Sibling of
 > [`easygp-prefetch-notes.md`](easygp-prefetch-notes.md) (write-model/prefetch mining, since
-> promoted to ADR-0020) and of the private schema-mining companion note kept outside this repo.
+> promoted to ADR-0020), of
+> [`easygp-editing-area-inventory.md`](easygp-editing-area-inventory.md) (the 2026-07-18
+> data-entry-grammar mining — the anticipated "more screenshots" batch arrived), and of the
+> private schema-mining companion note kept outside this repo.
 > If anything here graduates, it graduates into the
 > [shell design spec](../../docs/superpowers/specs/2026-07-12-clinician-reference-gui-shell-design.md),
 > a GP manifest, or spec prose — this file stays scaffolding.
@@ -534,7 +537,11 @@ A topic in its own right (own session when its screenshots arrive); the nutshell
   - The 2.19 sub-choice: Most-Significant problems as the **fourth safety-zone card** vs.
     **top block of a Summary tab** (approach itself confirmed).
   - What else is **missing from this screenshot** that a GP needs at consult time
-    (immunisation view? correspondence?) — likely answered as further screenshots arrive.
+    (immunisation view? correspondence?) — **partially answered 2026-07-18:** the entry
+    surfaces (allergies, ordering, prescribing, referrals, past-history/care-plan, notes
+    review incl. audit overlay, draw/webcam) arrived and are mined in
+    [`easygp-editing-area-inventory.md`](easygp-editing-area-inventory.md); results-inbox
+    screenshots still pending.
   - The **Research module**'s ranking logic (how "urgency/priority" was computed for the
     deteriorating-patients list) — worth capturing when its screenshot comes; it's the seed of
     the practice-scope salience policy.
