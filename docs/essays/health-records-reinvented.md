@@ -6,6 +6,9 @@ An essay on what clinicians actually need from an electronic health record, and 
 designed to deliver it.*
 {: .essay-lead }
 
+![Health Records Reinvented: what happens when clinicians are in the driver's seat](assets/clinician_in_drivers_seat.png)
+*Clinician in the driver's seat — image generated with AI by the author's prompt*
+
 ---
 
 ## Thirty years, seventy-two systems
@@ -17,21 +20,21 @@ decade mainly in emergency medicine in remote hospitals.
 
 Wherever I worked, there were "electronic health records". They came in many varieties and behind
 many user interfaces, but all of them — in every country and every setting — had one thing in
-common: they were unfit for clinical purpose. Not one of them supported the clinical workflow. The
-best merely slowed us down compared to paper and were a nuisance; the majority forced us to record
-untruthful data, made our work materially harder, and put our patients at risk.
+common: they were mostly unfit for clinical purpose. Not one of them fully supported the clinical
+workflow. The best merely slowed us down compared to paper and were a nuisance; the majority forced
+us to record untruthful data, made our work materially harder, and put our patients at risk.
 
 I remember one number: **72**. That was the tally, the last time I counted, of the different record
 systems I had used in my career. I stopped counting a few years ago. I will not name and shame any
 particular product, because they should all hang their heads collectively: not a single one, in
 thirty years, has deserved praise from an experienced clinician.
 
-This is genuinely puzzling, because computerised records have undeniable advantages over paper.
-Legibility, first and foremost — provided the interface doesn't make finding anything next to
-impossible. Distribution — a record can be up to date in several places at once. And automated
-assistance: knowledge support, dose checking, quality control that no paper chart can offer. The
-raw material for something wonderful has been sitting there for decades. So why do clinicians
-mostly hate the result?
+> *This is puzzling, because computerised records have undeniable advantages over paper.
+> Legibility, first and foremost — provided the interface doesn't make finding anything next to
+> impossible. Distribution: a record can be up to date in several places at once. And automated
+> assistance: knowledge support, dose checking, quality control that no paper chart can offer. The
+> raw material for something wonderful has been sitting there for decades. So why do clinicians
+> mostly hate the result?*
 
 One root cause stands out. Most of these systems are designed *for* — and often *by* —
 administrators and managers: people far removed from the clinical front line, and generally as
@@ -44,9 +47,9 @@ the one profession that was never really in the room.
 This essay is my answer to a simple question: what would the record look like if clinicians had
 been in the driver's seat from the first line of code? The first half is the demand — what we want,
 and what the ideal system would look like. The second half is the response — how
-[Cairn](https://cairn-ehr.org), an open-source health record architecture I am building with
-exactly this question as its founding brief, answers each demand not with a feature promise but
-with a structural design decision.
+[Cairn](https://cairn-ehr.org), an open-source health record architecture we (clinicians who also
+code) are building with exactly this question as its founding brief, answers each demand not with a
+feature promise but with a structural design decision.
 
 ## What clinicians want from an EHR
 
@@ -80,22 +83,27 @@ computer could trivially give us if anyone had asked.
 And two more that paper never gave us, but that three decades of watching electronic systems fail
 have added to the list:
 
-10. **It must make identity errors survivable.** Records get attached to the wrong patient; two
-    patients get merged who are not the same person. In most systems these mistakes are somewhere
-    between painful and impossible to undo. They must be fully repairable — with an audit trail and
-    with zero data loss.
-11. **It must belong to no one but the people it serves.** Not to a vendor who can hold the data
-    hostage at contract renewal, not to a cloud whose outage is our outage, not to a company whose
-    acquisition ends the product.
+1. **It must make identity errors survivable.** Records get attached to the wrong patient; two
+   patients get merged who are not the same person. In most systems these mistakes are somewhere
+   between painful and impossible to undo. They must be fully repairable — with an audit trail and
+   with zero data loss.
+2. **It must belong to no one but the people it serves.** Not to a vendor who can hold the data
+   hostage at contract renewal, not to a cloud whose outage is our outage, not to a company whose
+   acquisition ends the product.
+
+> *Vendors can make their legitimate money by crafting and polishing specialised user interfaces,
+> by providing training & support services and hardware provisioning — but never by installing any
+> toll gates or limitations on the infrastructure that drives interoperability, safety, and
+> confidentiality.*
 
 ## What the ideal EHR would look like
 
 Take those demands seriously and a picture emerges.
 
 **It runs and performs well on whatever hardware is available at the point of care.** In most
-hospitals, clinicians queue and squabble for workstations, because workstations cost money — the
-hardware and the per-seat licences — and they occupy space and power that clinical rooms don't
-have. Software that runs on tiny, power-frugal computers, the kind a small UPS can carry through a
+hospitals, clinicians queue and squabble for workstations, because workstations cost money (the
+hardware and the per-seat licences) and they occupy space and power that clinical rooms don't have.
+Software that runs on cheap & tiny, power-frugal computers, the kind a small UPS can carry through a
 whole day's outage, changes that arithmetic completely.
 
 **It keeps working when the network doesn't** — the way email does. Everything already on the local
@@ -104,13 +112,14 @@ synchronise. Reliably, automatically, with no human intervention and no "sync co
 asking a nurse to adjudicate a distributed-systems problem at 3 a.m.
 
 **It lets clinicians document in their own language, in their own words, in their own style.** It
-never forces an imprecise truth into false precision, and never forces a falsehood at all. I have
-worked with systems that made us pick a diagnosis from a fixed list before the record would save —
-and when the correct diagnosis, or anything remotely near it, was not on the list, we picked a
-wrong one, because the alternative was losing the note. Those consistently wrong diagnoses then
-"informed" public-health statistics and funding decisions. Garbage in, garbage out, and at the end
-of that chain: poorer care at higher cost, built on data everyone involved knew was false the
-moment it was entered.
+never forces an imprecise truth into false precision, and never forces a falsehood at all.
+
+> *I have worked with systems that made us pick a diagnosis from a fixed list before the record
+> would save — and when the correct diagnosis, or anything remotely near it, was not on the list,
+> we picked a wrong one, because the alternative was losing the note. Those consistently wrong
+> diagnoses then "informed" public-health statistics and funding decisions.
+> **Garbage in, garbage out, and at the end of that chain: poorer care at higher cost, built on
+> data everyone involved knew was false the moment it was entered.***
 
 **It facilitates the workflow instead of interrupting it.** Clinical dashboards that show exactly
 the information the current decision needs, at the moment it is needed. Dosing insulin? Show me the
@@ -129,11 +138,11 @@ physician sees the history immediately — not after a records clerk wakes up in
 safety pull in opposite directions — the sensitive episode a patient wants sealed may be exactly
 the fact a future clinician needs to be warned about. The ideal record refuses to sacrifice either.
 
-**And it lets machine assistance in — on our terms.** AI that drafts, summarises, cross-checks, and
-flags is coming to clinical work whether the record systems are ready or not. The ideal record
-neither bans it nor blindly trusts it: machine contributions are welcome, permanently labelled as
-what they are, and structurally incapable of corrupting the record — with accountability that
-always, traceably, rests with an identifiable human who accepted responsibility.
+> *And it lets machine assistance in — on our terms. AI that drafts, summarises, cross-checks, and
+> flags is coming to clinical work whether the record systems are ready or not. The ideal record
+> neither bans it nor blindly trusts it: machine contributions are welcome, permanently labelled as
+> what they are, and structurally incapable of corrupting the record — with accountability that
+> always, traceably, rests with an identifiable human who accepted responsibility.*
 
 That is the demand side. Now the response.
 
@@ -149,7 +158,7 @@ What makes Cairn different is not a feature list. Features can be promised by an
 the next product manager. Cairn answers each clinical demand with a *structural* decision — a
 property of the architecture that cannot be quietly walked back later. Here is the mapping.
 
-### Always available, because every node is the whole system
+### 1. Always available, because every node is the whole system
 
 When a network partitions, a system must choose: stay consistent, or stay available. Cairn chooses
 availability, unconditionally. A clinician must always be able to read the locally relevant record
@@ -172,33 +181,33 @@ over a real satellite link with nearly a second of round-trip delay — and not 
 simulation of one. The two nodes were my laptop in hospital accommodation in Bamaga, at the
 northern tip of Cape York, and a machine at my home some 2,400 kilometres south on the New South
 Wales coast: WireGuard over Starlink at both ends — a residential dish at the southern end, and at
-Bamaga a Starlink Mini lying unfastened on the roof while a storm blew through. If sync shrugs that off, a hospital basement
-holds no terrors. These are not projections; they are passed tests.
+Bamaga a Starlink Mini lying unfastened on the roof while a storm blew through. If sync shrugs that
+off, a hospital basement holds no terrors. These are not projections; they are passed tests.
 
-### Never slower than paper — paper-parity as law
+### 2. Never slower than paper — paper-parity as law
 
-Cairn elevates the speed demand from an aspiration to a governing law: **no clinical workflow may
-be slower, harder, more cognitively demanding, or less capable than its paper equivalent.** The
-only excluded paper "capabilities" are the fraudulent ones — silent falsification, untraceable
+Cairn elevates the speed demand from an aspiration to a governing law: no clinical workflow may be
+slower, harder, more cognitively demanding, or less capable than its paper equivalent. The only
+excluded paper "capabilities" are the fraudulent ones such as silent falsification, untraceable
 backdating. Every new workflow must name its paper counterpart and be benchmarked against it in
 time, steps, and cognitive load.
 
-One consequence deserves special mention, because it breaks with two decades of lazy convention:
-**confirmation dialogs are explicitly rejected as a safety mechanism.** A clinician who is
-interrupted a hundred times a day learns to click "OK" reflexively; the dialog provides legal
-cover, not safety, and it fails the paper benchmark every single time. Where software has a safety
-problem — documenting on the wrong chart, say — Cairn's rule is to restore the *physical
-affordance* that made the error hard on paper (you were holding one specific folder), not to
-interrogate the user.
+> *One consequence deserves special mention, because it breaks with two decades of lazy convention:
+> **confirmation dialogs are explicitly rejected as a safety mechanism.** A clinician who is
+> interrupted a hundred times a day learns to click "OK" reflexively; the dialog provides legal
+> cover, not safety, and it fails the paper benchmark every single time.* Where software has a
+> safety problem — documenting on the wrong chart, say — Cairn's rule is to restore the *physical
+> affordance* that made the error hard on paper (you were holding one specific folder), not to
+> interrogate the user.
 
-### Never a forced untruth — uncertainty as a first-class value
+### 3. Never a forced untruth — uncertainty as a first-class value
 
 Cairn's data model is built on a principle it states baldly: **an imprecise near-truth always beats
-a precise untruth.** Uncertainty, imprecision, ranges, and an explicit *unknown* — distinct from
-*not yet asked*, and distinct again from *the patient declined to say* — are first-class recordable
+a precise untruth.** Uncertainty, imprecision, ranges, and an explicit *unknown* (distinct from
+*not yet asked*, and distinct again from *the patient declined to say*) are first-class recordable
 values everywhere. No required field, anywhere in the system, may be satisfiable only by
-fabrication. The mandatory diagnosis picker with no honest option is not a design flaw in Cairn; it
-is a violation of the architecture.
+fabrication. The mandatory diagnosis picker with no honest option is not permitted in Cairn: it is
+a violation of the architecture.
 
 Time — the thing most systems most cheerfully falsify — gets the full treatment. Every event
 carries two timestamps: the objective moment it was recorded, and the clinically asserted time it
@@ -209,13 +218,26 @@ human — never silently "resolved" by the machine.
 
 Certainty, when it improves, is added later by overlay. It is never extorted up front.
 
-### Nothing is ever lost — and everything stays readable
+> *Honest time has one more enemy: the clocks themselves. Every computer's clock drifts, and a node
+> that has been offline for a week — precisely the situation Cairn is built for — may drift far, or
+> be flatly wrong. A record system that orders events by wall-clock alone will, sooner or later,
+> show a treatment given before the assessment that prompted it, purely because two machines
+> disagreed about what time it was. Cairn therefore orders events by a hybrid logical clock: each
+> event's stamp combines the writer's wall-clock with a counter that tracks what that writer had
+> already seen. The effect is a guarantee no wall-clock can give — if a note was written by someone
+> who had already read an earlier note, it sorts after that note, on every node, forever, no matter
+> whose clock was fast or slow. Wall-time keeps the stamps humanly meaningful when the clocks are
+> behaving; the causal counter keeps the story in the right order when they are not. And because
+> the stamp needs no time server and no coordinator, it works exactly where it is needed most: on
+> the node that has not spoken to anyone in days.*
 
-Every clinical entry in Cairn is an immutable, cryptographically signed event. Corrections do not
-overwrite — they are new events that reference what they correct, so the record always shows both
-what is believed now and what was believed at the time, and by whom. This is exactly the paper
-discipline of the single ruled-through line with initials, made rigorous: never erase, always
-overlay.
+### 4. Identity errors are survivable — never merge, always link
+
+**Nothing is ever lost — and everything stays readable.** Every clinical entry in Cairn is an
+immutable, cryptographically signed event. Corrections do not overwrite — they are new events that
+reference what they correct, so the record always shows both what is believed now and what was
+believed at the time, and by whom. This is exactly the paper discipline of the single ruled-through
+line with initials, made rigorous: never erase, always overlay.
 
 This is also, quietly, the mechanism that makes synchronisation trustworthy. Because events are
 immutable, merging two nodes' histories is a *set union* — each side simply acquires the events it
@@ -228,28 +250,28 @@ plain-text rendering of itself, and the data schema is only ever extended, never
 written today must still be legible, as written, to whatever software — or whatever human — reads
 it in fifty years.
 
-### Identity errors are survivable — never merge, always link
-
-In Cairn, patient identity is treated as what it clinically is: **a claim, never a fact.** Records
-are never merged into one another; they are *linked* by explicit, signed, auditable identity events
-— and every one of those events can be countermanded by a later one. Linked in error? Unlink, with
+In Cairn, patient identity is treated as what it clinically is: a claim, never a fact. Records are
+never merged into one another; they are *linked* by explicit, signed, auditable identity events —
+and every one of those events can be countermanded by a later one. Linked in error? Unlink, with
 the reason on the record. A document attached to the wrong patient? Reattribute it, auditable,
 reversible, with nothing lost. The identity mistakes that in conventional systems demand a vendor
 ticket and a prayer are, in Cairn, ordinary auditable events that any authorised clinician can
 apply and any later clinician can inspect.
 
-### Exchange without friction — one record, many front-ends
+### 5. Exchange without friction — one record, many front-ends
 
 Cairn inverts the interoperability problem. Conventional systems are walled gardens that grudgingly
 exchange summaries through interface engines; every fence between them is a place where data is
-lost, mangled, or delayed. In Cairn, what makes any two nodes interoperable is the signed event
-core itself — the wire format, the sync rules, the identity algebra — and *nothing above it*. No
-API, no policy layer, no user interface sits on the path between nodes.
+lost, mangled, or delayed.
 
-The safety and compatibility floor is enforced in the database itself, unbypassably: even software
-talking raw SQL to a node cannot produce an invalid or wire-incompatible event. Above that floor,
-user interfaces may proliferate freely — an emergency department UI, a general-practice UI, a
-bespoke UI for a single specialised clinic — many front-ends, one record. A badly designed
+> *In Cairn, what makes any two nodes interoperable is the signed event core itself — the wire
+> format, the sync rules, the identity algebra — and nothing above it. No API, no policy layer, no
+> user interface sits on the path between nodes.*
+
+**The safety and compatibility floor is enforced in the database itself, unbypassably: even
+software talking raw SQL to a node cannot produce an invalid or wire-incompatible event.** Above
+that floor, user interfaces may proliferate freely — an emergency department UI, a general-practice
+UI, a bespoke UI for a single specialised clinic — many front-ends, one record. A badly designed
 front-end can produce a note its clinic finds unhelpful; it *cannot* produce a record another node
 can't read.
 
@@ -259,41 +281,50 @@ becomes a courtesy narrative, not the sole carrier of truth. And for the world o
 Cairn speaks standard FHIR through a dedicated façade — interoperability with the systems that
 exist, without letting their limitations dictate the internal model.
 
-### Decision support that fits the workflow — and can't corrupt the record
+### 6. Decision support that fits the workflow — and can't corrupt the record
 
 That insulin dashboard — trajectory of glucose against doses given, the HbA1c, the complications,
 the interfering co-medication, exactly when the dosing decision is being made — is precisely the
 kind of thing Cairn's layering is built to make cheap. Dashboards, checkers, and calculators live
 *above* the enforcement floor: they read the same event stream everyone else does and they write
-through the same validated gate everyone else must use. A hospital, a research group, or a single
-motivated registrar can build the decision-support view their unit needs, without asking a vendor's
-permission and without any possibility of breaking the record underneath. The record is
-infrastructure; the workflow tooling on top is a garden anyone may plant in.
+through the same validated gate everyone else must use.
 
-### Confidential *and* safe — not one at the other's expense
+> *A hospital, a research group, or a single motivated registrar can build the decision-support
+> view their unit needs, without asking a vendor's permission and without any possibility of
+> breaking the record underneath. The record is infrastructure; the workflow tooling on top is a
+> garden anyone may plant in.*
+
+### 7. Confidential and safe — not one at the other's expense
 
 Cairn refuses the usual trade. A patient may seal a sensitive episode — the content becomes
 cryptographically inaccessible without the appropriate key custody. But a sealed episode that
 carries future clinical risk still emits a de-identified, severity-graded *safety projection*: the
-warning without the story. The antenatal clinician is told there is a sensitisation risk that
-matters for this pregnancy — not the confidential history behind it. Emergency access
-("break-glass") is not a hole in the wall but an audited use of a key: possible when it must be,
-and permanently on the record that it happened.
+warning without the story.
+
+> *The antenatal clinician is told there is a sensitisation risk that matters for this pregnancy —
+> not the confidential history behind it (the classical case where a rhesus-factor sensitisation
+> risk exists: the clinician does not need to know whether it was due to a past pregnancy
+> termination, a miscarriage, or whatever — stigma and bias can be avoided where patient
+> preferences or cultural or legal contexts would compromise clinical care). Emergency access
+> ("break-glass") is not a hole in the wall but an audited use of a key: possible when it must be,
+> and permanently on the record that it happened.*
 
 Even the right to erasure is honoured within the append-only design: erasure is implemented as the
 destruction of encryption keys — provable, auditable, and honest about exactly what it does and
 does not guarantee.
 
-### AI assistants as first-class citizens — made safe to use
+### 8. AI assistants as first-class citizens — made safe to use
 
 Most record systems will bolt AI on the way they bolted everything else on: as an afterthought,
 with the accountability questions waved away. Cairn was designed for it from first principles,
 starting with an honest one: authorship and accountability are not the same thing. Every
 contributor to a note — human or machine — is recorded in the event itself, permanently. But
 *responsibility* is a separate, explicit act: a signature proves who produced content; an
-attestation records who vouches for it. An AI draft is labelled as an AI draft forever, and the
-human who reviewed and accepted it is on the record as having done so. No laundering of machine
-output into apparent human prose; no ambiguity, years later, about who stood behind a decision.
+attestation records who vouches for it.
+
+> *An AI draft is labelled as an AI draft forever, and the human who reviewed and accepted it is on
+> the record as having done so. No laundering of machine output into apparent human prose; no
+> ambiguity, years later, about who stood behind a decision.*
 
 The machine itself is held to a standard no human clinician could be: an AI assistant in Cairn is a
 *registered actor* whose identity is pinned to the exact model and configuration it runs — change
@@ -303,12 +334,12 @@ mechanism, exactly as medicine already does for a faulty batch of a drug.
 
 And the floor holds. Because validation lives unbypassably in the database, an AI agent — however
 capable, however misbehaving — physically cannot forge another author's signature, alter history,
-or write around the record's rules. This is not a policy statement; it was tested by
-red-teaming: a deliberately hostile agent, granted direct database access, could not break the
-contract. That is what "first-class citizen, made safe" means: not a chat window bolted to the
-side, but a colleague with a name tag, a scope of practice, and no ability to falsify the chart.
+or write around the record's rules. **This is not a policy statement; it was tested by red-teaming:
+a deliberately hostile agent, granted direct database access, could not break the contract. That is
+what "first-class citizen, made safe" means:** not a chat window bolted to the side, but a
+colleague with a name tag, a scope of practice, and no ability to falsify the chart.
 
-### No lock-in — by construction, not by promise
+### 9. No lock-in — by construction, not by promise
 
 Every mechanism above serves a mission that is explicitly anti-capture, and the project's own
 governance is built to the same standard. The entire codebase is AGPL-3.0 — every improvement,
@@ -321,30 +352,47 @@ construction, no vendor controls.
 
 ## Where this stands, and an invitation
 
-I want to be precise about status, because health IT has heard enough vapourware promises. Cairn
-today is a completed, published architecture; a set of passed proof-of-concept trials for its
-riskiest bets — synchronisation over a genuine high-latency satellite link, a full node on a
+I want to clarify the project's status because health IT has heard enough vapourware promises.
+Cairn today is a completed, published architecture, a set of passed proof-of-concept trials for its
+riskiest bets (synchronisation over a genuine high-latency satellite link, a full node on a
 Raspberry Pi, the database layer on an Android phone, the write-contract floor held against a
-hostile AI agent with direct database access; and the first production clinical components now
-being built on that proven spine, slice by slice, in the open. It is not yet a product you can
-deploy in your hospital. It is the foundation for one, built in the right order: the hard,
-unforgiving, safety-critical parts first, validated before anything was stacked on top of them.
+hostile AI agent with direct database access) and the first production clinical components now
+being built on that proven spine, slice by slice, in the open.
 
-The design method that got it this far is one I intend to keep: take a real clinical failure —
-mine, or one a colleague brings — and test it against the architecture until the architecture
-either absorbs it or bends. Seventy-two systems taught me where the bodies are buried. If you have
-worked the front line, you know where more of them are.
+> *It is not yet a product you can deploy in your hospital. It is the foundation for one, built in
+> the right order: the hard, unforgiving, safety-critical parts first, validated before anything
+> was stacked on top of them.*
 
-So this is the invitation. If you are a clinician: bring your worst war stories — the workflow that
-made you slower, the dialog that made you lie, the merge that could not be undone. They are design
-input of the highest grade, and they are exactly what this project runs on. If you are an engineer:
-the specification, the decision log, and the code are public, and the problems are as hard and as
-worthwhile as any in software. And if you are an administrator — you are genuinely welcome too. The
-record that serves clinicians honestly turns out to serve you better as well: data that was never
-falsified at entry is the only data worth funding decisions downstream.
+**The design method that got it this far is one we intend to keep: take a real clinical
+failure — ours, or one a colleague or patient brings — and test it against the architecture until
+the architecture either absorbs it or bends.** Seventy-two systems taught me where the bodies are
+buried. If you have worked the front line, you know where more of them are. Bring them to us.
 
-For thirty years I have used systems built by people who never had to use them at three in the
-morning. Cairn is what happens when the people who do take the wheel.
+So this is the invitation.
+
+- If you are a **clinician**: bring your worst war stories: the workflow that made you slower, the
+  dialog that made you lie, the merge that could not be undone. They are design input of the
+  highest grade, and they are exactly what this project runs on.
+- If you are an **engineer**: the specification, the decision log, and the code are public, and the
+  problems are as hard and as worthwhile as any in software. Tell us about your experiences — what
+  worked and what didn't, and what you would do differently now. You are welcome to get your hands
+  dirty on our code!
+- If you are an **administrator**: you are genuinely welcome too. The record that serves clinicians
+  honestly turns out to serve you better as well: data that was never falsified at entry is the
+  only data worth funding decisions downstream.
+- If you are a **funder**: we cannot promise (or even suggest) that a contribution will ever yield a
+  direct financial return. There is no equity to hold and no license revenue to share; **the
+  license is deliberately built so that nobody, including us, can ever capture this project.** The
+  return arrives elsewhere: in clinician time given back to patients, in workplace satisfaction of
+  expensive professionals, in labour costs avoided, in clinical and administrative errors that
+  never happen — savings on a scale open to every entity that adopts the system precisely *because*
+  no vendor stands between them and it — and, beyond all of that, in health outcomes. If that is a
+  payoff you can accept, contributions that speed this project up are very welcome. We are
+  clinicians who code, and the scarcest resource here is our time: financial support that frees us
+  from some shifts converts directly into deliverables.
+
+> *For thirty years I have used systems built by people who never had to use them at three in the
+> morning. Cairn is what happens when the people who do take the wheel.*
 
 *Cairn is developed in the open at
 [github.com/cairn-ehr/cairn-ehr](https://github.com/cairn-ehr/cairn-ehr), AGPL-3.0. The
