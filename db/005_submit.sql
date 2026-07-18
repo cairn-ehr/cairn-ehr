@@ -349,6 +349,35 @@ BEGIN
 END;
 $$;
 
+-- Authorship binding (ADR-0053, issue #204). The authorship analog of
+-- cairn_responsibility_bound (#195): a responsibility-BEARING contributor may only
+-- name an actor who AUTHENTICATED to the event — the signer, or the verified
+-- attester. So an `authored`/`ordered`/`attested` claim about a human is unforgeable:
+-- that human either signed the bytes or attested them. Contributory roles
+-- (`recorded`/`drafted`/...) are EXEMPT — a device/auxiliary contributor need not
+-- sign or attest (the node stays `recorded` while the human signs). Bearing-ness
+-- classifies from the ratified table, else the mandatory `bearing:` prefix (the same
+-- idiom as cairn_check_contributors). STABLE (reads contributor_role) with a pinned
+-- search_path (the contributor_role lookup must never resolve into a shadowed schema).
+--
+-- STRICT DOOR ONLY. The apply door (db/020) must NOT call this: an unverifiable
+-- authorship claim there is a forgery OR an author authenticated by a scheme this
+-- older node cannot parse (ADR-0012 guarantees such events arrive), and the two are
+-- indistinguishable — so apply admits and GRADES (classify_authorship_confidence),
+-- never refuses. Do not "simplify" this into a both-doors symmetry.
+CREATE OR REPLACE FUNCTION cairn_authorship_bound(b jsonb, p_signer text, p_attester_key bytea)
+RETURNS boolean LANGUAGE sql STABLE
+SET search_path = public
+AS $$
+    SELECT NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
+        WHERE coalesce((SELECT r.bears FROM contributor_role r WHERE r.role = e ->> 'role'),
+                       (e ->> 'role') LIKE 'bearing:%')
+          AND (e ->> 'actor_id') IS DISTINCT FROM p_signer
+          AND (p_attester_key IS NULL
+               OR (e ->> 'actor_id') IS DISTINCT FROM encode(p_attester_key, 'hex')));
+$$;
+
 -- ---------------------------------------------------------------------------
 -- ADR-0052 custody plane, part 1 — the CLEAR-view table and its read helper.
 --
@@ -555,6 +584,16 @@ BEGIN
         -- node could never re-run this gate at its own apply door.
         v_att     := p_attestation;
         v_att_key := p_attester_key;
+    END IF;
+
+    -- 4b. Authorship binding (ADR-0053, issue #204): every responsibility-bearing
+    --     contributor must be AUTHENTICATED — its actor_id is the event's signer or
+    --     the verified attester (v_att_key, set by step 4, else NULL). Extends the
+    --     #195 responsibility<->attester binding to AUTHORSHIP so an authored/ordered
+    --     claim about a human is unforgeable. Contributory roles are exempt. STRICT
+    --     door only; the apply door admits + grades (see cairn_authorship_bound).
+    IF NOT cairn_authorship_bound(b, b ->> 'signer_key_id', v_att_key) THEN
+        RAISE EXCEPTION 'submit_event: a responsibility-bearing contributor names an actor that is neither the event signer nor the verified attester — forged authorship refused (ADR-0053; the author must sign or attest)';
     END IF;
 
     -- 5. Target gate for an overlay on another author's event — UNCONDITIONAL for every
