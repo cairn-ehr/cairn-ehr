@@ -86,6 +86,73 @@ pub fn is_ratified(role: &str) -> bool {
     ROLE_VOCABULARY.iter().any(|(r, _)| *r == role)
 }
 
+use crate::EventBody;
+
+/// Rewrite a device-shaped clinical body so a human takes AUTHORSHIP of it (#204 /
+/// ADR-0053): prepend an `authored` contributor for the human (no `responsibility`
+/// object — "authored, not-yet-vouched", a legitimate §3.9 state) and make the human
+/// the event's signer. The device `recorded` contributor is preserved AFTER the
+/// human — mixed sets like `{human, authored} + {node, recorded}` are compositional
+/// authorship working as designed (ADR-0051). Pure; the caller then signs the sealed
+/// bytes with the human's key while the node keeps custody (session ≠ author).
+pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
+    let author = serde_json::json!({"actor_id": human_kid, "role": "authored"});
+    match body.contributors.as_array_mut() {
+        Some(arr) => arr.insert(0, author),
+        None => body.contributors = serde_json::json!([author]),
+    }
+    body.signer_key_id = human_kid.to_string();
+    body
+}
+
+/// The authorship-confidence grade an event carries (ADR-0008 "a grade, not a gate";
+/// ADR-0053). The single, shared reading every consumer must use so an unverifiable
+/// claim is never displayed as authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorshipConfidence {
+    /// A responsibility-bearing human author, authenticated as the signer or a verified attester.
+    Attested,
+    /// A responsibility-bearing author this node cannot verify (actor ≠ signer, no verifiable
+    /// token) — a forgery OR an author authenticated by a scheme this node is too old to parse.
+    /// Rendered "authorship claimed, not authenticated here", never `Attested`, and upgradable.
+    Unverified,
+    /// No responsibility-bearing contributor — the honest device-additive default (`recorded`).
+    Device,
+}
+
+/// Grade an event's authorship from its contributor set, the verified signer, and the
+/// verified attester (if any). Pure; total. A bearing contributor is "authenticated"
+/// iff its actor is the signer or the verified attester; every bearing author must be
+/// authenticated for `Attested`, else `Unverified`; no bearing contributor at all is
+/// `Device`.
+pub fn classify_authorship_confidence(
+    contributors: &serde_json::Value,
+    signer_key_id: &str,
+    verified_attester: Option<&str>,
+) -> AuthorshipConfidence {
+    let bearing: Vec<&str> = contributors
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|e| {
+                    classify_role(e.get("role").and_then(|r| r.as_str()).unwrap_or(""))
+                        == RolePartition::Bearing
+                })
+                .filter_map(|e| e.get("actor_id").and_then(|v| v.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if bearing.is_empty() {
+        return AuthorshipConfidence::Device;
+    }
+    let authenticated = |actor: &str| actor == signer_key_id || verified_attester == Some(actor);
+    if bearing.iter().all(|a| authenticated(a)) {
+        AuthorshipConfidence::Attested
+    } else {
+        AuthorshipConfidence::Unverified
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +188,79 @@ mod tests {
         assert_eq!(ROLE_VOCABULARY.len(), 12);
         assert_eq!(ROLE_VOCABULARY.iter().filter(|(_, b)| *b).count(), 6);
         assert!(is_ratified("recorded") && !is_ratified("bearing:delegated"));
+    }
+
+    #[test]
+    fn with_human_author_prepends_authored_and_makes_human_the_signer() {
+        // A device-shaped body (node recorded, node signs) gains the human author IN
+        // FRONT, and the human becomes the signer — session(node) ≠ author(human).
+        let body = crate::EventBody {
+            event_id: "e".into(),
+            patient_id: "p".into(),
+            event_type: "clinical.medication.asserted".into(),
+            schema_version: "clinical.medication/1".into(),
+            hlc: crate::Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+            t_effective: None,
+            signer_key_id: "NODEKID".into(),
+            contributors: serde_json::json!([{"actor_id": "NODEKID", "role": "recorded"}]),
+            payload: serde_json::json!({}),
+            attachments: vec![],
+            plaintext_twin: Some("twin".into()),
+        };
+        let out = with_human_author(body, "HUMANKID");
+        assert_eq!(out.signer_key_id, "HUMANKID");
+        assert_eq!(out.contributors[0]["actor_id"], "HUMANKID");
+        assert_eq!(out.contributors[0]["role"], "authored");
+        assert!(out.contributors[0].get("responsibility").is_none());
+        // The device recorded contributor is preserved after the human author.
+        assert_eq!(out.contributors[1]["actor_id"], "NODEKID");
+        assert_eq!(out.contributors[1]["role"], "recorded");
+    }
+
+    #[test]
+    fn authorship_grade_attested_when_bearing_author_is_the_signer() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "authored"},
+            {"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_confidence(&c, "H", None),
+            AuthorshipConfidence::Attested
+        );
+    }
+
+    #[test]
+    fn authorship_grade_attested_when_bearing_author_is_the_verified_attester() {
+        let c = serde_json::json!([{"actor_id": "H", "role": "attested",
+                                    "responsibility": {"held_by": "H"}}]);
+        // signer is the node, but the bearing human is the verified attester.
+        assert_eq!(
+            classify_authorship_confidence(&c, "N", Some("H")),
+            AuthorshipConfidence::Attested
+        );
+    }
+
+    #[test]
+    fn authorship_grade_unverified_when_bearing_author_is_neither_signer_nor_attester() {
+        let c = serde_json::json!([
+            {"actor_id": "H", "role": "authored"},   // claimed human author
+            {"actor_id": "N", "role": "recorded"}]);
+        // signed by the node, no token for H — a forgery OR a future credential; either way unverified.
+        assert_eq!(
+            classify_authorship_confidence(&c, "N", None),
+            AuthorshipConfidence::Unverified
+        );
+    }
+
+    #[test]
+    fn authorship_grade_device_when_no_bearing_contributor() {
+        let c = serde_json::json!([{"actor_id": "N", "role": "recorded"}]);
+        assert_eq!(
+            classify_authorship_confidence(&c, "N", None),
+            AuthorshipConfidence::Device
+        );
     }
 }
