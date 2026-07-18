@@ -28,3 +28,6 @@ poc/walking-skeleton/target/
 
 #private stuff
 untracked_for_brainstorming/
+
+# Local PDF exports of published essays (the .md source is the tracked original)
+docs/essays/*.pdf
