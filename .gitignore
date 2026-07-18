@@ -25,3 +25,6 @@ poc/walking-skeleton/target/
 # Subagent-driven-development scratch (ledger + briefs/reports/diffs)
 .superpowers/
 .claude/
+
+#private stuff
+untracked_for_brainstorming/
