@@ -130,16 +130,11 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 ---
 
 **Session date:** 2026-07-19, latest (the P4 tech-debt slice — #188 schema-version guard + #238 flake
-fix + #212 CI wiring; 2026-07-18 had #204 [C3] — the P3 CLOSER, ADR-0053 authoring-human; 2026-07-17 had
-#189+#92 ADR-0052 born-sealed; 2026-07-16 had #203+#96 ADR-0051 + the full P2 arc + the P1 floor-hardening
-slice; review course above; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.54 (through ADR-0053) ·
-**Phase:** architecture complete
-**Session date:** 2026-07-18, (the PR #239 post-review fix pass + the GUI/L3 easyGP
-editing-area mining session; 2026-07-17 #189+#92 — the P3 closer, ADR-0052 born-sealed clinical bodies;
-2026-07-16 had #203+#96 the P3 opener ADR-0051, the full P2 arc #199/#198/#196/#197/#202/#201, the P1
-floor-hardening slice + the evening GUI/L3 easyGP-mining thread; review course above; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.53 (through ADR-0052) · **Phase:** architecture complete
-(every original §11 question closed);
+fix + #212 CI wiring; 2026-07-18 had #204 [C3] — the P3 CLOSER, ADR-0053 authoring-human + the PR #239
+post-review fix pass + the GUI/L3 easyGP editing-area mining session; 2026-07-17 had #189+#92 ADR-0052
+born-sealed; 2026-07-16 had #203+#96 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; review
+course above; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.54 (through ADR-0053) ·
+**Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -592,6 +587,7 @@ ADR before reopening any of these.
 | [0050](spec/decisions/0050-dose-correction-per-field-patch.md) | Dose correction is a per-field patch: explicit strike sentinel; corrected effective drives current-dose winner selection; correction-note separate from clinical reason | §3.3/§3.6 (refines principle 4) |
 | [0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th, contributory); responsibility = `{held_by, on_behalf_of?}`; future members partition-prefixed; strict-submit/lenient-apply | §3.9 (refines 0028/0007/0049/0012) |
 | [0052](spec/decisions/0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: every clinical JSONB body sealed at write under a per-event DEK held by the node (erasability substrate, not confidentiality); erase ladder always reachable; two doors enforce sealed⇒clinical scope; custody plane + custody sidecar + rung-3 shred | §3.5/§3.8/§5.9 (refines 0005/0006/0026/0048/0051) |
+| [0053](spec/decisions/0053-per-write-human-authorship.md) | Per-write human authorship: `{human,authored}`+`{node,recorded}`, human signs while the node seals + holds the DEK; `cairn_authorship_bound` strict-door binding; apply admits + grades | §3.9/§3.10 (refines 0007/0008/0028/0051/0052) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

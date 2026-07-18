@@ -988,6 +988,36 @@ where the same event device-signed and un-attested was un-owned and dismissable 
 covered by `human_author_owns_suppression_rights`, but it is a change in *who may dismiss*, not purely a gain
 as the ADR's "for free" phrasing suggests.
 
+**Slice 44 — the P4 tech-debt slice: the schema-version guard + db/tests in CI (2026-07-19; the review
+course, Priority 4; issues #188 [D1] + #238 + the #212 CI half; branch `claude/tech-debt-cleanup-8513ce`,
+PR #251; no ADR/spec change — first brick of the settled ADR-0012 code plane).** A triage of all 50 open
+issues for "blocks other development" put three items in tier 1; all landed in one branch. **#188 (the
+Critical latent hazard):** `db/038_node_schema.sql` — a singleton `node_schema(version, loaded_at,
+loader_build)` — plus a downgrade-refusal guard in **BOTH** loaders (cairn-node `connect_and_load_schema`,
+the every-connect silent replay path, and cairn-sync `init`, which now replays its subset through a guarded
+`load_schema`): a recorded generation ABOVE the binary's embedded one refuses with a legible error before
+any `CREATE OR REPLACE` runs; an absent table/row means "generation unknown, proceed" (hand-loaded rigs
+stay usable — explicitly tested); the stamp lands only after a full successful replay. The generation is
+the **repo-wide constant** `cairn_event::schema_generation::SCHEMA_GENERATION`, shared by both doors
+because cairn-sync's subset legitimately LAGS db/'s newest file — the PR-#251 review round caught that the
+original per-list derivation would split the two doors' generations the moment a node-only migration lands
+(cairn-sync `init` would then refuse every healthy node); kept honest by a fs-derived cairn-event guard
+test (constant == newest `db/*.sql` on disk) + a cairn-node completeness unit test + cairn-sync
+subset-shape tests. The same review round caught a check-then-act (TOCTOU) hole — an old + new binary
+connecting together could interleave into the very silent downgrade #188 targets — so both loaders hold
+the session-level `SCHEMA_LOAD_LOCK` ("CARNLOAD") advisory lock across check→replay→stamp, pinned by
+deterministic interleaving tests on both doors (RED first). **#238:** the `wait_listening` readiness
+ceiling 5 s → 60 s (the poll returns on first accept, so the ceiling is pure headroom under
+parallel-workspace CPU load). **#212 (CI half), DECIDED wire-not-delete:** `scripts/run-db-sql-tests.sh`
+builds a throwaway `cairn_sqltest` database (refuses `cairn_test*` dbnames, so the spike-only db/008 its
+own test needs never touches the shared test DBs), loads every migration, runs all 10 `db/tests/*.sql`
+mirrors under `ON_ERROR_STOP`; wired into `rust.yml` after the cargo-test step — a missed twin-registry
+mirror bump now fails CI instead of drifting (the #183 luck-catch, mechanized). Noticed in passing and
+added to the #212 remainder: a FOURTH hand-mirror of the loader list at
+`matcher/tests/conftest.py::_SCHEMA_FILES` (ends at 025), and a FIFTH — the guard/replay/stamp logic
+itself is hand-mirrored between the two loaders (async/sync split, low churn). **The review course
+continues at the Priority 5 remainder (#212 drift guards + verb-then-vouch, #214, #215, #213).**
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
