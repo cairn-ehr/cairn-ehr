@@ -434,7 +434,10 @@ key-keyed); documented as accepted, durable fix is a floor-level per-key guard i
 make the entity→role-actor (1:many) relationship first-class (today implicit via a shared `registration_id` pinned
 into each role-actor).
 
-**Slice 30 — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
+**Slice 30b — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
+<!-- "30b", not a renumber (#215): two slices were both logged as 30; renumbering every later
+     slice would break the Slice-N cross-references in HANDOVER, issues, and PRs. -->
+
 `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates
 data-model §3.3 + the "union + flagged for reconciliation" line into product code; design+plan under
 `docs/superpowers/{specs,plans}/2026-07-11-medication-recording-*`). Distinct from slices 1–29 above: those
