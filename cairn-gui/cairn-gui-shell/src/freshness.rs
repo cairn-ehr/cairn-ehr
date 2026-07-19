@@ -27,11 +27,17 @@ mod tests {
 
     #[test]
     fn within_ttl_is_fresh() {
-        assert_eq!(freshness(&Loaded { at_tick: 100 }, 150, 60), Freshness::Fresh);
+        assert_eq!(
+            freshness(&Loaded { at_tick: 100 }, 150, 60),
+            Freshness::Fresh
+        );
     }
 
     #[test]
     fn beyond_ttl_is_stale() {
-        assert_eq!(freshness(&Loaded { at_tick: 100 }, 200, 60), Freshness::Stale);
+        assert_eq!(
+            freshness(&Loaded { at_tick: 100 }, 200, 60),
+            Freshness::Stale
+        );
     }
 }

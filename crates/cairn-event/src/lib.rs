@@ -936,9 +936,8 @@ mod tests {
 
         // Wrong key -> reject (a forged attester does not verify). Derived, not a
         // literal (house rule 6 / #146).
-        let other_vk =
-            SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_add(5)))
-                .verifying_key();
+        let other_vk = SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_add(5)))
+            .verifying_key();
         assert!(!verify_attestation(&token, &ca, &other_vk));
 
         // Tampered token bytes -> reject.

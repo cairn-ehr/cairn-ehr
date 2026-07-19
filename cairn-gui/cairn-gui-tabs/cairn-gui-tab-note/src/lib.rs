@@ -48,7 +48,10 @@ impl Semantic for NoteTab {
                 label: r.one_line.clone(),
             });
         }
-        SemanticNode { title: "Current note".into(), fields }
+        SemanticNode {
+            title: "Current note".into(),
+            fields,
+        }
     }
 }
 
@@ -64,7 +67,10 @@ mod tests {
                 uuid: "00000000-0000-0000-0000-0000000000aa".into(),
                 display_name: "Amina".into(),
             }),
-            user: UserRef { actor_id: "clin-1".into(), display_name: "Dr Vega".into() },
+            user: UserRef {
+                actor_id: "clin-1".into(),
+                display_name: "Dr Vega".into(),
+            },
             capabilities: Capabilities::clinician_all(),
         }
     }
@@ -75,14 +81,24 @@ mod tests {
         tab.load(&ctx(), &MockData::with_fixtures());
         let node = tab.semantics(&ctx());
         node.assert_complete().unwrap();
-        let btn = node.fields.iter().find(|f| f.id.starts_with("open:")).expect("a cross-ref button");
+        let btn = node
+            .fields
+            .iter()
+            .find(|f| f.id.starts_with("open:"))
+            .expect("a cross-ref button");
         assert_eq!(btn.role, cairn_gui_tab::Role::Button);
-        assert!(btn.label.contains("X-ray"), "one-line summary is the button label");
+        assert!(
+            btn.label.contains("X-ray"),
+            "one-line summary is the button label"
+        );
     }
 
     #[test]
     fn intent_target_can_be_parsed_from_field_id() {
-        assert_eq!(NoteTab::target_of("open:xray-2026-07-01"), Some("xray-2026-07-01".to_string()));
+        assert_eq!(
+            NoteTab::target_of("open:xray-2026-07-01"),
+            Some("xray-2026-07-01".to_string())
+        );
         assert_eq!(NoteTab::target_of("note.body"), None);
     }
 }

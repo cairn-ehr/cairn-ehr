@@ -20,7 +20,11 @@ pub fn repair_ratio(r: f32) -> f32 {
 /// A manifest offering NOTHING is broken beyond soft repair; the default is kept
 /// then so the shell still renders something rather than panicking on empty panes.
 fn filter_to_offered(user: &[TabId], offered: &[TabId], fallback: &TabId) -> Vec<TabId> {
-    let filtered: Vec<TabId> = user.iter().filter(|t| offered.contains(t)).cloned().collect();
+    let filtered: Vec<TabId> = user
+        .iter()
+        .filter(|t| offered.contains(t))
+        .cloned()
+        .collect();
     if !filtered.is_empty() {
         return filtered;
     }
@@ -49,7 +53,12 @@ pub fn merge(site: &SiteManifest, user: &UserPrefs) -> EffectiveManifest {
         .unwrap_or_else(|| right_tabs[0].clone());
 
     // Rail is site-controlled but never shows an unoffered tab.
-    let rail = site.rail.iter().filter(|t| site.offered.contains(t)).cloned().collect();
+    let rail = site
+        .rail
+        .iter()
+        .filter(|t| site.offered.contains(t))
+        .cloned()
+        .collect();
 
     EffectiveManifest {
         rail,
@@ -63,9 +72,9 @@ pub fn merge(site: &SiteManifest, user: &UserPrefs) -> EffectiveManifest {
 
 #[cfg(test)]
 mod tests {
+    use super::{merge, repair_ratio};
     use crate::model::{SiteManifest, UserPrefs};
     use cairn_gui_tab::TabId;
-    use super::{merge, repair_ratio};
 
     fn site() -> SiteManifest {
         SiteManifest {
@@ -81,8 +90,10 @@ mod tests {
         let mut prefs = UserPrefs::default();
         prefs.left_tabs = vec![TabId("billing".into())]; // not offered
         let eff = merge(&site(), &prefs);
-        assert!(!eff.left_tabs.contains(&TabId("billing".into())),
-            "unoffered tab must be dropped (soft policy stays within soft policy)");
+        assert!(
+            !eff.left_tabs.contains(&TabId("billing".into())),
+            "unoffered tab must be dropped (soft policy stays within soft policy)"
+        );
     }
 
     #[test]
@@ -127,6 +138,9 @@ mod tests {
         let mut prefs = UserPrefs::default();
         prefs.left_tabs = vec![TabId("demographics".into()), TabId("note".into())];
         let eff = merge(&site(), &prefs);
-        assert_eq!(eff.left_tabs, vec![TabId("demographics".into()), TabId("note".into())]);
+        assert_eq!(
+            eff.left_tabs,
+            vec![TabId("demographics".into()), TabId("note".into())]
+        );
     }
 }

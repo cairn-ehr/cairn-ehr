@@ -42,7 +42,9 @@ fn arb_body() -> impl Strategy<Value = serde_json::Value> {
         any::<i64>().prop_map(serde_json::Value::from),
         ".{0,16}".prop_map(serde_json::Value::from),
         Just(serde_json::Value::from("clinical.medication/1")),
-        Just(serde_json::Value::from("00000000-0000-0000-0000-000000000001")),
+        Just(serde_json::Value::from(
+            "00000000-0000-0000-0000-000000000001"
+        )),
     ];
     let node = leaf.prop_recursive(3, 32, 4, move |inner| {
         prop_oneof![

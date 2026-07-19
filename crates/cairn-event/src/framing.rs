@@ -35,11 +35,7 @@ pub struct FrameOverCap {
 
 impl std::fmt::Display for FrameOverCap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "frame length {} exceeds {}-byte cap",
-            self.len, self.cap
-        )
+        write!(f, "frame length {} exceeds {}-byte cap", self.len, self.cap)
     }
 }
 
@@ -83,7 +79,10 @@ mod tests {
     fn encode_refuses_one_byte_over_the_cap() {
         assert_eq!(
             encode_len_prefix(1025, 1024),
-            Err(FrameOverCap { len: 1025, cap: 1024 })
+            Err(FrameOverCap {
+                len: 1025,
+                cap: 1024
+            })
         );
     }
 
@@ -92,7 +91,10 @@ mod tests {
         let prefix = 1025u32.to_be_bytes();
         assert_eq!(
             decode_len_prefix(prefix, 1024),
-            Err(FrameOverCap { len: 1025, cap: 1024 })
+            Err(FrameOverCap {
+                len: 1025,
+                cap: 1024
+            })
         );
     }
 
@@ -123,6 +125,9 @@ mod tests {
     fn the_refusal_names_both_numbers_legibly() {
         // Operators read this out of a log line; it must name the length AND the cap.
         let msg = FrameOverCap { len: 5, cap: 4 }.to_string();
-        assert!(msg.contains('5') && msg.contains('4') && msg.contains("cap"), "{msg}");
+        assert!(
+            msg.contains('5') && msg.contains('4') && msg.contains("cap"),
+            "{msg}"
+        );
     }
 }

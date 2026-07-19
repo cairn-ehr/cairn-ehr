@@ -35,8 +35,14 @@ pub struct Workspace {
 impl Workspace {
     pub fn from_manifest(m: &EffectiveManifest) -> Self {
         Self {
-            left: Pane { tabs: m.left_tabs.clone(), active: m.active_left.clone() },
-            right: Pane { tabs: m.right_tabs.clone(), active: m.active_right.clone() },
+            left: Pane {
+                tabs: m.left_tabs.clone(),
+                active: m.active_left.clone(),
+            },
+            right: Pane {
+                tabs: m.right_tabs.clone(),
+                active: m.active_right.clone(),
+            },
             divider_ratio: m.divider_ratio,
         }
     }
@@ -114,7 +120,11 @@ mod tests {
     fn open_in_opposite_does_not_duplicate_an_existing_tab() {
         let mut ws = Workspace::from_manifest(&eff());
         ws.open_in_opposite(Side::Left, TabId("demographics".into())); // already on right
-        let count = ws.tabs(Side::Right).iter().filter(|t| **t == TabId("demographics".into())).count();
+        let count = ws
+            .tabs(Side::Right)
+            .iter()
+            .filter(|t| **t == TabId("demographics".into()))
+            .count();
         assert_eq!(count, 1, "no duplicate tab");
     }
 

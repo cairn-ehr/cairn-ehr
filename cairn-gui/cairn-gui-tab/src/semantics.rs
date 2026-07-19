@@ -25,7 +25,10 @@ impl Role {
     /// are announced but not stops. A1 requires labels on focusable controls;
     /// A2 requires each be keyboard-reachable.
     pub fn is_focusable(self) -> bool {
-        matches!(self, Role::TextInput | Role::Button | Role::Tab | Role::Divider)
+        matches!(
+            self,
+            Role::TextInput | Role::Button | Role::Tab | Role::Divider
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -83,16 +86,27 @@ mod tests {
     fn every_focusable_field_must_have_a_nonempty_label() {
         let node = SemanticNode {
             title: "test".into(),
-            fields: vec![Field { id: "a".into(), role: Role::Button, label: "".into() }],
+            fields: vec![Field {
+                id: "a".into(),
+                role: Role::Button,
+                label: "".into(),
+            }],
         };
-        assert!(node.assert_complete().is_err(), "empty label on a focusable control must fail");
+        assert!(
+            node.assert_complete().is_err(),
+            "empty label on a focusable control must fail"
+        );
     }
 
     #[test]
     fn complete_node_passes() {
         let node = SemanticNode {
             title: "test".into(),
-            fields: vec![Field { id: "a".into(), role: Role::Button, label: "Save".into() }],
+            fields: vec![Field {
+                id: "a".into(),
+                role: Role::Button,
+                label: "Save".into(),
+            }],
         };
         assert!(node.assert_complete().is_ok());
     }
@@ -102,8 +116,16 @@ mod tests {
         let node = SemanticNode {
             title: "t".into(),
             fields: vec![
-                Field { id: "a".into(), role: Role::Button, label: "One".into() },
-                Field { id: "a".into(), role: Role::Button, label: "Two".into() },
+                Field {
+                    id: "a".into(),
+                    role: Role::Button,
+                    label: "One".into(),
+                },
+                Field {
+                    id: "a".into(),
+                    role: Role::Button,
+                    label: "Two".into(),
+                },
             ],
         };
         assert!(node.assert_complete().is_err(), "duplicate ids must fail");

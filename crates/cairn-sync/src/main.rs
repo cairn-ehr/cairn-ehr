@@ -385,8 +385,8 @@ fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
     // cairn_event::framing core (#212); refusing before the prefix is written stays
     // here — a bare length prefix with no body would wedge the reader.
     // A log that outgrows the cap needs pagination: issue #101.
-    let prefix = cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES)
-        .map_err(|e| {
+    let prefix =
+        cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("refusing to send: {e} (pagination: issue #101)"),

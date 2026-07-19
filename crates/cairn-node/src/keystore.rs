@@ -50,8 +50,8 @@ pub fn generate_sealed(
 ) -> Result<(SigningKey, String), KeystoreError> {
     let (sk, kid) = generate_key().map_err(|e| KeystoreError::Key(e.to_string()))?;
     let seed = zeroize::Zeroizing::new(sk.to_bytes());
-    let sealed = seal::seal(&seed, op_pass, recovery_code)
-        .map_err(|e| KeystoreError::Key(e.to_string()))?;
+    let sealed =
+        seal::seal(&seed, op_pass, recovery_code).map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
     Ok((sk, kid))
 }
@@ -128,11 +128,10 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
         })?;
         Ok(SigningKey::from_bytes(&seed))
     } else {
-        let seed: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
-            bytes.as_slice().try_into().map_err(|_| {
+        let seed: zeroize::Zeroizing<[u8; 32]> =
+            zeroize::Zeroizing::new(bytes.as_slice().try_into().map_err(|_| {
                 KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into())
-            })?,
-        );
+            })?);
         Ok(SigningKey::from_bytes(&seed))
     }
 }

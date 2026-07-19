@@ -63,21 +63,32 @@ mod tests {
     #[test]
     fn mock_returns_fixture_demographics() {
         let data = MockData::with_fixtures();
-        let d = data.demographics(FIXTURE_UUID).expect("fixture patient exists");
+        let d = data
+            .demographics(FIXTURE_UUID)
+            .expect("fixture patient exists");
         assert_eq!(d.patient.uuid, FIXTURE_UUID);
-        assert!(!d.identifiers.is_empty(), "fixture has at least one identifier");
+        assert!(
+            !d.identifiers.is_empty(),
+            "fixture has at least one identifier"
+        );
     }
 
     #[test]
     fn mock_unknown_patient_is_not_found() {
         let data = MockData::with_fixtures();
-        assert!(matches!(data.demographics("no-such"), Err(crate::port::DataError::NotFound)));
+        assert!(matches!(
+            data.demographics("no-such"),
+            Err(crate::port::DataError::NotFound)
+        ));
     }
 
     #[test]
     fn mock_has_a_cross_reference_note() {
         let data = MockData::with_fixtures();
         let refs = data.note_refs(FIXTURE_UUID).unwrap();
-        assert!(!refs.is_empty(), "fixture provides a cross-reference for the note→pane demo");
+        assert!(
+            !refs.is_empty(),
+            "fixture provides a cross-reference for the note→pane demo"
+        );
     }
 }

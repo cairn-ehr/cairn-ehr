@@ -4,7 +4,9 @@
 use crate::workspace::{Side, Workspace};
 use cairn_gui_data::MockData;
 use cairn_gui_manifest::{merge, EffectiveManifest, SiteManifest, UserPrefs};
-use cairn_gui_tab::{Capabilities, Context, Field, PatientRef, Role, Semantic, SemanticNode, TabId, UserRef};
+use cairn_gui_tab::{
+    Capabilities, Context, Field, PatientRef, Role, Semantic, SemanticNode, TabId, UserRef,
+};
 use cairn_gui_tab_demographics::DemographicsTab;
 use cairn_gui_tab_note::NoteTab;
 
