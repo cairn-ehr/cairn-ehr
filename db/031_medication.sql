@@ -68,9 +68,13 @@ INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VAL
 -- DO UPDATE, not DO NOTHING (#214): the loader replays this file on every connect, so the
 -- registry row must CONVERGE to the migration text — a stale row (e.g. the pre-#214 §3.15
 -- mislabel in twin_required_msg) heals on the next connect instead of persisting forever.
+-- The IS DISTINCT FROM guard keeps the steady-state replay write-free: without it every
+-- connect rewrites the row (dead tuple + validate-trigger fire) even when nothing changed.
 ON CONFLICT (event_type) DO UPDATE SET
     check_fn          = EXCLUDED.check_fn,
-    twin_required_msg = EXCLUDED.twin_required_msg;
+    twin_required_msg = EXCLUDED.twin_required_msg
+WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg)
+      IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
 
 -- 3b. Thread patient-consistency (issue #192, finding A4). A medication_id thread
 --     belongs to ONE chart for life: medication_statement's PK is medication_id alone

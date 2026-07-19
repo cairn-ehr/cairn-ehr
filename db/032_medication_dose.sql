@@ -91,11 +91,14 @@ $$;
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
     ('clinical.medication-dose-change.asserted',     'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.3)'),
     ('clinical.medication-dose-correction.asserted', 'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.3)')
--- DO UPDATE, not DO NOTHING (#214): replay must converge the row to the migration text
--- (see db/031's medication registration for the rationale).
+-- DO UPDATE, not DO NOTHING (#214): replay must converge the row to the migration text;
+-- the IS DISTINCT FROM guard keeps the steady-state replay write-free (see db/031's
+-- medication registration for the rationale).
 ON CONFLICT (event_type) DO UPDATE SET
     check_fn          = EXCLUDED.check_fn,
-    twin_required_msg = EXCLUDED.twin_required_msg;
+    twin_required_msg = EXCLUDED.twin_required_msg
+WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg)
+      IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
 
 -- 4. Deterministic effective sort key: the ISO-ish effective string sorts
 --    chronologically as bytes; a NULL effective falls back to the recording time
