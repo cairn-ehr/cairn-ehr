@@ -158,6 +158,7 @@ nav:
       - ADR-0051 · Contributor-role vocabulary floor & responsibility wire shape: spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md
       - ADR-0052 · Born-sealed clinical bodies — erasability as the shipped default: spec/decisions/0052-born-sealed-clinical-bodies.md
       - ADR-0053 · Per-write human authorship — authoring signature, binding & confidence grade: spec/decisions/0053-per-write-human-authorship.md
+      - ADR-0054 · Actor-registry federation — admit-and-dispute: spec/decisions/0054-actor-registry-federation-admit-and-dispute.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
