@@ -98,8 +98,10 @@ Trusted time must not require a network round-trip at write time — the genuine
 ## 6.9 The actor-registry stream
 > Resolves the 2026-07-15 review finding C4 (issue #205) — see [ADR-0054](decisions/0054-actor-registry-federation-admit-and-dispute.md). Registry design: [security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody); wire shape: [data-model §3.12](data-model.md#312-actor-identity-in-the-registry).
 
-Actor-registry events (enroll / supersede / revoke — signed, content-addressed, HLC-stamped,
-[data-model §3.12](data-model.md#312-actor-identity-in-the-registry)) travel as a **distinct stream
+Actor-registry events — the full closed [security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody)
+algebra, `enroll / supersede / revoke / suspend / rotate-key` (rotations must travel too, or a peer
+cannot resolve post-rotation signatures); all signed, content-addressed, HLC-stamped
+([data-model §3.12](data-model.md#312-actor-identity-in-the-registry)) — travel as a **distinct stream
 on the node plane**: deny-all trusted-peer admission ([security §7.7](security.md#77-federation-admission-peering-trust-anchors-and-the-custodian-contract)
 — **registry trust is node trust**), **full replication within the trust neighborhood** (the
 registry is small trust-plane state; full replication is what makes an enrolment or vouch portable),

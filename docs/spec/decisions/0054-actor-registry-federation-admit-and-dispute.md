@@ -71,7 +71,8 @@ for unverifiable bytes.
 
 **3. The apply door admits, then detects — never refuses verifiable history.**
 `apply_remote_actor_event`: verify signature + signing context (unverifiable → pen) → origin
-admission (untrusted → skip-and-sweep) → content-address dedupe (idempotent) → **INSERT
+admission (untrusted → skip-and-sweep: not applied now, revisited by a background sweep when peer
+admission changes — never silently dropped) → content-address dedupe (idempotent) → **INSERT
 unconditionally** (custody is total) → re-evaluate the **derived dispute state** (point 4) and
 raise a salience-routed worklist item ([identity §5.12](../identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor))
 on a newly-disputed `actor_id`/key — at *both* implicated nodes, never a modal (principle 3). The
@@ -80,7 +81,9 @@ remains the first line. Admission ≠ endorsement: safety lives in the projectio
 
 **4. Disputed is derived, never declared — and computed over live bindings.**
 An `actor_id`/key is *disputed* iff the conflict predicates detect a violation among **live**
-(non-superseded, non-revoked) bindings in the local log: ≥ 2 live keys under one `actor_id`, or
+bindings in the local log — a binding is live until a later algebra event closes it (`supersede`,
+`revoke`, or `rotate-key` rotating the key away; without the rotate-key closer, every routine
+rotation would read as a false two-key dispute): ≥ 2 live keys under one `actor_id`, or
 ≥ 2 live `actor_id`s under one key. No event creates or clears the dispute; adjudication changes
 the *log* the state derives from ([ADR-0010](0010-additive-vs-suppressing-classification.md)
 derived-not-declared). Consequence: **log convergence ⇒ state convergence** — no dispute flag to
@@ -121,7 +124,9 @@ stolen-key tail, resolved by `revoke` + the [ADR-0011](0011-actor-registry-versi
   set, proper determinants). A join expressed as links — never a merge; both lineages survive.
 - **A-case (per-key fork):** the degenerate binding is superseded per key; each person gets a
   successor `actor_id` (distinguishing determinants added) binding their key. Attribution then
-  re-derives exactly, per signing key.
+  re-derives exactly, per signing key. (The supersede content therefore cites the **specific
+  enrolment binding** it closes, never an `actor_id` wholesale — an additive wire-shape field,
+  canonical in [data-model §3.12](../data-model.md#312-actor-identity-in-the-registry).)
 - **Hostile tail:** `revoke` with compromise-time + contamination cascade.
 
 The ceremony is audited with a **mandatory recorded human adjudicator** (the
@@ -164,8 +169,12 @@ never auto-picked. Rare, honest, convergent.
   joins the whole-history one; the split must stay legible or a future door will call the wrong one.
 - **Operational:** pre-wire unsigned `actor_event` rows never sync — wipe dev/PoC rigs before
   federating them. The `rotate-key`/`supersede` *local* door obligation (#172's other half) is
-  restated unchanged: it must mirror **both whole-history checks**. The human key-loss recovery
-  ceremony remains an open gap needing its own ADR before any pilot enrolls real humans
+  restated with one qualification: it must mirror **both whole-history checks applied
+  lineage-aware** — a key may re-bind only along its own supersede lineage. (Lineage-blind
+  mirroring would refuse every key-preserving supersession and deadlock the point-6 repairs;
+  lineage-aware, the forks and joins pass while a foreign key-grab still refuses.) The human
+  key-loss recovery ceremony remains an open gap needing its own ADR before any pilot enrolls
+  real humans
   ([security §7.5](../security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody),
   issue #94); nothing here forecloses it.
 - **Blast radius (§9):** the wire shape, apply door, dispute derivation, and adjudication ceremony
