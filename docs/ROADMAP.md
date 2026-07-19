@@ -1085,6 +1085,23 @@ matcher-conftest exclusion-direction coupling is documented at the site; and
 review course is fully closed; next is the Priority-6 design queue (#205 first) or the now-unblocked
 feature work.**
 
+**Slice 46 — the #205 design session: ADR-0054 actor-registry federation (2026-07-19; P6 design
+queue, first item; spec v0.56; docs-only — code slices are future feature work).** The C4
+contradiction (fail-closed enrolment vs never-reject set-union custody) is resolved as
+**admit-and-dispute**: the actor event becomes a first-class signed wire event (node-signed COSE
+under a dedicated context, content-addressed, HLC+origin; `(HLC, content_address)` winner order;
+pre-wire rows never sync) riding the **node plane** (deny-all peers, full replication in the trust
+neighborhood, db/022 pen); the apply door **admits unconditionally and detects** — the conflict
+becomes a **derived disputed state over live bindings** (log convergence ⇒ state convergence, no
+dispute events), under which `actor_current` picks no winner, implicated events attribute to the
+honest **candidate set**, and **registry uncertainty withholds permissions, never content** (closes
+#154 structurally; the #172 sync-door half discharged by specification). Adjudication = the
+existing `supersede` by audited human ceremony (join / per-key fork / revoke+cascade), with
+conflicting adjudications honestly re-deriving as disputed. Considered-and-rejected: pen-outside
+(registries diverge), deterministic tiebreak (automated identity resolution — principle 2's
+forbidden move). Spec homes: security §7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10.
+Design/plan docs under `docs/superpowers/`.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
