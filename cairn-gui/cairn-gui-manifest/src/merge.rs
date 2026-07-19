@@ -87,8 +87,10 @@ mod tests {
 
     #[test]
     fn user_cannot_surface_a_tab_the_site_does_not_offer() {
-        let mut prefs = UserPrefs::default();
-        prefs.left_tabs = vec![TabId("billing".into())]; // not offered
+        let prefs = UserPrefs {
+            left_tabs: vec![TabId("billing".into())], // not offered
+            ..UserPrefs::default()
+        };
         let eff = merge(&site(), &prefs);
         assert!(
             !eff.left_tabs.contains(&TabId("billing".into())),
@@ -135,8 +137,10 @@ mod tests {
 
     #[test]
     fn user_may_reorder_offered_tabs() {
-        let mut prefs = UserPrefs::default();
-        prefs.left_tabs = vec![TabId("demographics".into()), TabId("note".into())];
+        let prefs = UserPrefs {
+            left_tabs: vec![TabId("demographics".into()), TabId("note".into())],
+            ..UserPrefs::default()
+        };
         let eff = merge(&site(), &prefs);
         assert_eq!(
             eff.left_tabs,
