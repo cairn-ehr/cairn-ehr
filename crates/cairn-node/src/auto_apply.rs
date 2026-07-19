@@ -215,7 +215,7 @@ pub async fn apply_auto_candidates(
     // brand-new epoch would BOTH see no key file and BOTH mint+enroll it (a TOCTOU on the
     // per-epoch key file -> divergent on-disk keys and duplicate enroll rows). A session
     // advisory lock makes the ceremony single-writer; it auto-releases when this
-    // short-lived connection closes (and we unlock explicitly on the happy path below).
+    // short-lived connection closes.
     let got_lock: bool = client
         .query_one(
             "SELECT pg_try_advisory_lock($1, $2)",
@@ -229,6 +229,30 @@ pub async fn apply_auto_candidates(
         );
     }
 
+    // Run the ceremony body, then release the lock on EVERY exit — success or error
+    // (#213: the body's `?` returns previously kept the session lock held, so on a
+    // long-lived owner connection one failed run blocked every later run until
+    // disconnect). Disconnect still releases it as the backstop; best-effort unlock
+    // (an unlock failure means the connection is dying, which releases it anyway).
+    let result = ceremony_locked(client, keystore_dir, secret, node_origin).await;
+    let _ = client
+        .execute(
+            "SELECT pg_advisory_unlock($1, $2)",
+            &[&AUTO_APPLY_LOCK_NS, &AUTO_APPLY_LOCK_SLOT],
+        )
+        .await;
+    result
+}
+
+/// The auto-apply ceremony body. MUST only run under the session advisory lock taken
+/// by [`apply_auto_candidates`] — factored out so the lock/unlock bracket wraps every
+/// early `?` return here by construction.
+async fn ceremony_locked(
+    client: &mut Client,
+    keystore_dir: &Path,
+    secret: Option<&str>,
+    node_origin: &str,
+) -> anyhow::Result<AutoSummary> {
     // Snapshot the worklist first (a read), then act — so we never hold a cursor across
     // the per-pair transactions.
     let rows = client
@@ -301,14 +325,6 @@ pub async fn apply_auto_candidates(
         }
     }
 
-    // Release the ceremony lock (also released on disconnect; explicit keeps a long-lived
-    // owner connection clean if it runs more commands after this one).
-    let _ = client
-        .execute(
-            "SELECT pg_advisory_unlock($1, $2)",
-            &[&AUTO_APPLY_LOCK_NS, &AUTO_APPLY_LOCK_SLOT],
-        )
-        .await;
     Ok(summary)
 }
 

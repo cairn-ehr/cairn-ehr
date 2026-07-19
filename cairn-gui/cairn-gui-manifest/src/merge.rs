@@ -14,13 +14,20 @@ pub fn repair_ratio(r: f32) -> f32 {
 }
 
 /// Keep only tabs the site offers, preserving the user's order; if the result is
-/// empty, fall back to the given site default (a single tab).
+/// empty, fall back to the site default — itself validated against `offered` (#213:
+/// a site manifest whose default names an unoffered tab must not surface exactly
+/// the tab this merge exists to filter; repair to the first offered tab instead).
+/// A manifest offering NOTHING is broken beyond soft repair; the default is kept
+/// then so the shell still renders something rather than panicking on empty panes.
 fn filter_to_offered(user: &[TabId], offered: &[TabId], fallback: &TabId) -> Vec<TabId> {
     let filtered: Vec<TabId> = user.iter().filter(|t| offered.contains(t)).cloned().collect();
-    if filtered.is_empty() {
+    if !filtered.is_empty() {
+        return filtered;
+    }
+    if offered.contains(fallback) {
         vec![fallback.clone()]
     } else {
-        filtered
+        vec![offered.first().unwrap_or(fallback).clone()]
     }
 }
 
@@ -91,6 +98,28 @@ mod tests {
         assert_eq!(repair_ratio(5.0), 0.9);
         assert_eq!(repair_ratio(f32::NAN), 0.5);
         assert!((repair_ratio(0.4) - 0.4).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn an_unoffered_site_default_never_surfaces() {
+        // #213 — the self-repairing merge existed to keep unoffered tabs out, but a
+        // site manifest whose default_left names an UNOFFERED tab made the fallback
+        // path surface exactly the tab it filters: empty user prefs → fall back to
+        // default_left → the unoffered tab renders. The fallback must be validated
+        // against `offered` like every user value is.
+        let mut s = site();
+        s.default_left = TabId("billing".into()); // site error: default not offered
+        let eff = merge(&s, &UserPrefs::default());
+        assert!(
+            !eff.left_tabs.contains(&TabId("billing".into())),
+            "an unoffered site default must not surface through the fallback"
+        );
+        assert_eq!(
+            eff.left_tabs,
+            vec![TabId("note".into())],
+            "the repair falls back to the first offered tab"
+        );
+        assert_eq!(eff.active_left, TabId("note".into()));
     }
 
     #[test]

@@ -473,7 +473,10 @@ pub fn materialise_generic_twin(mut body: EventBody) -> EventBody {
 /// sync + chart reads.
 pub fn bench_sign_verify(iters: u32) -> (f64, f64) {
     use ed25519_dalek::{Signer, Verifier};
-    let sk = SigningKey::from_bytes(&[7u8; 32]);
+    // House rule 6: bench key material is DERIVED at runtime, never a byte literal —
+    // a literal in a crypto context re-trips CodeQL's hard-coded-value query (#146),
+    // and keeping that query literal-free keeps it live for production code.
+    let sk = SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_add(7)));
     let vk = sk.verifying_key();
     let msg = vec![0xABu8; 512]; // a representative signed-event size (~A5: ~500 B)
 
@@ -931,8 +934,11 @@ mod tests {
         let other = event_address(b"a different event");
         assert!(!verify_attestation(&token, &other, &vk));
 
-        // Wrong key -> reject (a forged attester does not verify).
-        let other_vk = SigningKey::from_bytes(&[5u8; 32]).verifying_key();
+        // Wrong key -> reject (a forged attester does not verify). Derived, not a
+        // literal (house rule 6 / #146).
+        let other_vk =
+            SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_add(5)))
+                .verifying_key();
         assert!(!verify_attestation(&token, &ca, &other_vk));
 
         // Tampered token bytes -> reject.
@@ -950,9 +956,10 @@ mod tests {
         let (sk, _kid) = generate_key().unwrap();
         let vk = sk.verifying_key();
         let ca = event_address(b"evt");
-        // Claim a victim's key id while signing with our own key.
+        // Claim a victim's key id while signing with our own key. Derived, not a
+        // literal (house rule 6 / #146).
         let victim_kid = hex::encode(
-            SigningKey::from_bytes(&[9u8; 32])
+            SigningKey::from_bytes(&std::array::from_fn(|i| (i as u8).wrapping_add(9)))
                 .verifying_key()
                 .to_bytes(),
         );

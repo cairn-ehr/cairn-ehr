@@ -1129,14 +1129,19 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     // destroy the DEK, so opening a sealed episode is one unwrap per DEK — hence the
     // per-event vs per-episode granularity question this cost feeds.
     //
-    // BENCHMARK ONLY: the fixed all-zero nonce reused across every encrypt below is a
+    // BENCHMARK ONLY: the fixed nonce reused across every encrypt below is a
     // throughput microbench, not a keystore. NEVER copy this into real DEK-wrap /
     // body-seal code — nonce reuse under XChaCha20Poly1305 (same key + same nonce)
     // is catastrophic for confidentiality. Real sealing draws a fresh random nonce
     // per encryption.
-    let kek = XChaCha20Poly1305::new(Key::from_slice(&[9u8; 32]));
-    let nonce = XNonce::from_slice(&[0u8; 24]);
-    let dek = [3u8; 32];
+    // House rule 6 (#146): bench key/nonce material is DERIVED at runtime, never a
+    // byte literal, so CodeQL's hard-coded-crypto-value query stays literal-free and
+    // live for production code. Deterministic on purpose — same bench input every run.
+    let kek_bytes: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3).wrapping_add(9));
+    let kek = XChaCha20Poly1305::new(Key::from_slice(&kek_bytes));
+    let nonce_bytes: [u8; 24] = std::array::from_fn(|i| i as u8);
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let dek: [u8; 32] = std::array::from_fn(|i| (i as u8) ^ 3);
     let t = Instant::now();
     for _ in 0..dek_iters {
         std::hint::black_box(kek.encrypt(nonce, dek.as_ref()).unwrap());

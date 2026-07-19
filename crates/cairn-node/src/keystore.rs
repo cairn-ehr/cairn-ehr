@@ -34,7 +34,10 @@ pub enum KeyAtRest {
 /// escrow does NOT exist for a plaintext key (key loss = node loss).
 pub fn generate_plaintext(path: &Path) -> Result<(SigningKey, String), KeystoreError> {
     let (sk, kid) = generate_key().map_err(|e| KeystoreError::Key(e.to_string()))?;
-    crate::fsio::atomic_write(path, &sk.to_bytes(), Some(0o600))?;
+    // Wipe the seed temporary on drop (#213: seal.rs is scrupulous about this — issue
+    // #54 — but the discipline stopped one layer up, in this file).
+    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+    crate::fsio::atomic_write(path, seed.as_ref(), Some(0o600))?;
     Ok((sk, kid))
 }
 
@@ -46,7 +49,8 @@ pub fn generate_sealed(
     recovery_code: &str,
 ) -> Result<(SigningKey, String), KeystoreError> {
     let (sk, kid) = generate_key().map_err(|e| KeystoreError::Key(e.to_string()))?;
-    let sealed = seal::seal(&sk.to_bytes(), op_pass, recovery_code)
+    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+    let sealed = seal::seal(&seed, op_pass, recovery_code)
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
     Ok((sk, kid))
@@ -61,14 +65,18 @@ pub fn generate_sealed(
 /// the recovered seed does not match, the error is loud and explicit — the operator
 /// still holds the recovery code shown by the CLI and must intervene.
 pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<(), KeystoreError> {
-    let bytes = std::fs::read(path)?;
+    // The file content IS the plaintext seed on this path — hold both the raw read
+    // and the fixed-size copy in Zeroizing so neither outlives its use (#213).
+    let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
     if seal::from_cbor(&bytes).is_ok() {
         return Err(KeystoreError::Key("key is already sealed".into()));
     }
-    let seed: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| KeystoreError::Key("not a 32-byte plaintext key".into()))?;
+    let seed: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| KeystoreError::Key("not a 32-byte plaintext key".into()))?,
+    );
     let sealed =
         seal::seal(&seed, op_pass, recovery_code).map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
@@ -95,7 +103,7 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
     })?;
     // `seed_op`/`seed_rec` are `Zeroizing<[u8; 32]>` (issue #54); deref to compare bytes
     // against the original plaintext seed.
-    if *seed_op != seed || *seed_rec != seed {
+    if *seed_op != *seed || *seed_rec != *seed {
         return Err(KeystoreError::Key(
             "seal verification failed after write: recovered seed does not match original".into(),
         ));
@@ -107,7 +115,10 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
 /// `secret` (operational passphrase OR recovery code); a missing/wrong secret yields
 /// a legible error, never a panic. A plaintext file ignores `secret`.
 pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreError> {
-    let bytes = std::fs::read(path)?;
+    // On the plaintext branch the raw read IS the seed — Zeroizing on both the Vec
+    // and the fixed-size copy so neither survives the load (#213). Harmless on the
+    // sealed branch (the bundle is ciphertext).
+    let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
     if let Ok(sealed) = seal::from_cbor(&bytes) {
         let secret = secret.ok_or(KeystoreError::Sealed)?;
         let seed = seal::unseal(&sealed, secret).ok_or_else(|| {
@@ -117,10 +128,11 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
         })?;
         Ok(SigningKey::from_bytes(&seed))
     } else {
-        let seed: [u8; 32] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into()))?;
+        let seed: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+            bytes.as_slice().try_into().map_err(|_| {
+                KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into())
+            })?,
+        );
         Ok(SigningKey::from_bytes(&seed))
     }
 }
@@ -133,7 +145,8 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
 /// stores it in the database — only its public half (the unwrap-key cert) does,
 /// so a DB backup can never reconstruct a DEK.
 pub fn unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
-    cairn_event::seal::derive_unwrap_secret(&sk.to_bytes())
+    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+    cairn_event::seal::derive_unwrap_secret(&seed)
 }
 
 /// Inspect the at-rest posture without needing the secret (for `status`).
