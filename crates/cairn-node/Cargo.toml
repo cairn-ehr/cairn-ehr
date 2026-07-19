@@ -49,3 +49,6 @@ tempfile = "3"
 # ADR-0042 rendition shape: tests construct an inline Rendition directly (serde_bytes::ByteBuf).
 # MIT OR Apache-2.0; already vetted for the workspace (Task 1).
 serde_bytes = "0.11"
+# First property-test harness (#212): generative junk through the live in-DB floor
+# (floor_properties.rs). MIT OR Apache-2.0 — AGPL-3.0-compatible (cargo-deny enforces).
+proptest = "1"

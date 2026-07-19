@@ -32,3 +32,9 @@ chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
 zeroize = "1"
+
+[dev-dependencies]
+# First property-test harness (#212): floor twins take attacker-controlled input, so
+# their pure Rust mirrors get generative coverage. License checked (house rule 1):
+# proptest is MIT OR Apache-2.0 — AGPL-3.0-compatible (cargo-deny enforces).
+proptest = "1"
