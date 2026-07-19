@@ -69,9 +69,13 @@ $$;
 --    registry trigger (db/005) sees cairn_check_medication_reconciliation(text, jsonb)
 --    declared at load time.
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
-    ('clinical.medication-reconciliation.asserted', 'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.15)'),
-    ('clinical.medication-separation.asserted',     'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.15)')
-ON CONFLICT (event_type) DO NOTHING;
+    ('clinical.medication-reconciliation.asserted', 'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.3)'),
+    ('clinical.medication-separation.asserted',     'cairn_check_medication_reconciliation', 'medication reconciliation requires a non-empty authored twin (§3.13/§3.3)')
+-- DO UPDATE, not DO NOTHING (#214): replay must converge the row to the migration text
+-- (see db/031's medication registration for the rationale).
+ON CONFLICT (event_type) DO UPDATE SET
+    check_fn          = EXCLUDED.check_fn,
+    twin_required_msg = EXCLUDED.twin_required_msg;
 
 COMMIT;
 

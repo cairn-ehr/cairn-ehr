@@ -8,15 +8,19 @@ Cairn is an **offline-first, vendor-independent electronic health record**. The 
 complete** (all open questions resolved; the current spec version is stated in `docs/spec/index.md`,
 never restated here); viability was proven by **proof-of-concept spikes**
 (walking skeleton + WAN sync in `poc/walking-skeleton`, an advisory-actor write-contract spike, a first
-federating node `cairn-node` under `/crates`, Postgres-on-Android). As of 2026-06-27 the **first
-production clinical surface is now under construction** — the demographics §4.4 patient-identifier
-assertion tier on `cairn-node` (`db/010_demographics.sql` + `cairn-event::demographics`; PR #68, slice 1
-of many). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
+federating node `cairn-node` under `/crates`, Postgres-on-Android). The **first production clinical surface is under construction** on `cairn-node`
+(since 2026-06-27), and by mid-2026-07 it spans: demographics slices 1–5 (§4.4/§4.2/§4.3), the advisory
+§5.2 Python matcher, the §5.7 identity core C1–C5, the §5.4 John-Doe subsystem, the first
+clinical-content stream `clinical.medication` (§3.3, five slices) under **born-sealed bodies**
+(ADR-0052) with **per-write human authorship** (ADR-0053), and the first reference-UI shell slice
+(Tauri 2). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
 event/floor/projection spine into real product code, brainstorm→spec→plan→TDD) **and continued design
 work** (clinical case-mining, stress-testing the data model, refining spec prose). There is a Rust/Cargo
 workspace (`/crates`, `/extensions`, `/db`) and an mkdocs docs build; the clinical application is **early
-and partial** — only the §4.4 identifier slice exists, so don't assume product build/run instructions
-beyond what `cairn-node` actually provides.
+and partial** — no prescriptions, notes, orders, or results yet — so don't assume product build/run
+instructions beyond what `cairn-node` actually provides. **`docs/HANDOVER.md` carries the current build
+state; trust it over any status snapshot here** (this paragraph is corrected only when it goes badly
+stale — issue #215's finding).
 
 ## Document hierarchy (what wins when sources disagree)
 

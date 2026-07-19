@@ -101,3 +101,27 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
                 raise _Sentinel
     finally:
         assert fake.closed, "the connection must still be closed even when exit truncation fails"
+
+
+def test_schema_file_list_tracks_the_db_directory():
+    """#212 — the schema list is DERIVED from db/*.sql, never a hand copy.
+
+    The previous hand-written list silently stalled at 025 while the loader grew to
+    038. Pin the derivation's intent: it is non-empty, sorted, includes the NEWEST
+    migration on disk (the same "tracks disk" property the #188 fs-derived guards pin
+    on the Rust side), and still excludes the spike-only surrogate projection.
+    """
+    from tests import conftest
+
+    on_disk = sorted(
+        p.stem for p in conftest._DB_DIR.glob("[0-9][0-9][0-9]_*.sql")
+    )
+    assert on_disk, "db/*.sql not found — _DB_DIR is wrong"
+    newest = on_disk[-1]
+    assert newest in conftest._SCHEMA_FILES, (
+        f"the newest migration {newest} must be loaded; the list has gone stale"
+    )
+    assert conftest._SCHEMA_FILES == sorted(conftest._SCHEMA_FILES)
+    assert "008_surrogate_projection" not in conftest._SCHEMA_FILES, (
+        "spike-only file must stay excluded (db.rs does not load it either)"
+    )

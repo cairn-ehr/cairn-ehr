@@ -58,13 +58,23 @@ pub fn base32_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Canonical form of a recovery code for KDF input: uppercase, keep only
-/// alphabet characters (drops grouping dashes/spaces and lowercases). This lets a
-/// human re-type the code with any spacing/case and still unseal.
+/// Canonical form of a recovery code for KDF input: uppercase, map the Crockford
+/// ambiguous glyphs to the digits they stand for (`I`/`L` → `1`, `O` → `0` — the
+/// alphabet excludes those letters precisely so a transcription slip still decodes,
+/// #213), then keep only alphabet characters (drops grouping dashes/spaces). This
+/// lets a human re-type the code with any spacing/case — or an O read off paper as
+/// a zero — and still unseal on the disaster-recovery path. (`U` is excluded from
+/// Crockford with NO mapping defined, so it stays dropped.) Generated codes never
+/// contain I/L/O, so the mapping can only repair input, never change a valid code.
 pub fn normalize_recovery_code(s: &str) -> String {
     s.to_ascii_uppercase()
         .chars()
-        // Guard on `is_ascii()` BEFORE the `*c as u8` cast: that cast truncates a
+        .map(|c| match c {
+            'I' | 'L' => '1',
+            'O' => '0',
+            other => other,
+        })
+        // Guard on `is_ascii()` BEFORE the `c as u8` cast: that cast truncates a
         // multi-byte codepoint to its low 8 bits (e.g. 'Ł' U+0141 -> 0x41 'A'),
         // which would otherwise smuggle non-alphabet input past the filter and
         // corrupt the KDF input. ASCII-only is the real contract here.
@@ -544,6 +554,25 @@ mod tests {
     #[test]
     fn normalize_strips_grouping_and_case() {
         assert_eq!(normalize_recovery_code("ab cde-fghjk"), "ABCDEFGHJK");
+    }
+
+    #[test]
+    fn normalize_maps_crockford_ambiguous_glyphs_instead_of_deleting_them() {
+        // Crockford base32 canonically maps I/L→1 and O→0 — the alphabet excludes
+        // those letters PRECISELY so a human transcribing an ambiguous glyph still
+        // decodes (#213). Deleting them instead turned a one-glyph transcription
+        // slip into "wrong passphrase or corrupt file" on the DISASTER-RECOVERY
+        // path, with no hint. (Excluded 'U' stays dropped: Crockford defines no
+        // mapping for it.)
+        assert_eq!(normalize_recovery_code("oIl"), "011");
+        assert_eq!(normalize_recovery_code("AB1O-CDEFG"), "AB10CDEFG");
+        // A generated code round-trips even when a 0/1 is transcribed as O/I/L.
+        let code = "AB102-CDEFG";
+        let transcribed = "ABIOZ-CDEFG".replace('Z', "2"); // O for 0, I for 1
+        assert_eq!(
+            normalize_recovery_code(&transcribed),
+            normalize_recovery_code(code)
+        );
     }
 
     #[test]

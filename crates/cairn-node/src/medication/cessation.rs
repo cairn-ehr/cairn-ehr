@@ -1,5 +1,5 @@
 //! Medication cessation — marks an existing `medication_id` thread "past"
-//! (§3.15). References the thread; offline-first (no local-presence check).
+//! (§3.3). References the thread; offline-first (no local-presence check).
 use cairn_event::medication::{
     medication_cessation_body, render_medication_cessation_twin, MedicationCessation,
 };

@@ -106,12 +106,21 @@ pub struct PullStats {
 }
 
 // ---------------------------------------------------------------------------
-// Length-prefixed framing over an async stream (mirrors cairn-sync's
-// write_frame/read_frame, but async over the tokio_rustls stream).
+// Length-prefixed framing over an async stream — a thin async I/O wrapper over
+// the shared cairn_event::framing length discipline (#212; cairn-sync's sync
+// wrapper sits over the same core, so the two planes cannot drift on the
+// cap-before-alloc / truncation-unreachable rules; only the cap VALUE is
+// per-plane policy).
 // ---------------------------------------------------------------------------
 
 async fn write_frame<S: AsyncWriteExt + Unpin>(s: &mut S, b: &[u8]) -> std::io::Result<()> {
-    s.write_all(&(b.len() as u32).to_be_bytes()).await?;
+    // Refuse an over-cap (or > u32) payload at the source instead of silently
+    // truncating the prefix; the bulk node_event path pre-checks and skips-loudly
+    // before ever reaching here, so this firing means a code path forgot its own
+    // bound.
+    let prefix = cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    s.write_all(&prefix).await?;
     s.write_all(b).await?;
     s.flush().await
 }
@@ -130,16 +139,12 @@ async fn read_frame<S: AsyncReadExt + Unpin>(s: &mut S) -> std::io::Result<Optio
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(e) => return Err(e),
     }
-    let n = u32::from_be_bytes(len) as usize;
     // Bound the allocation: node-event frames are tiny (a signed envelope is ~hundreds
-    // of bytes). Reject an oversized length so a malformed or compromised-but-pinned
-    // peer cannot force a multi-GiB allocation.
-    if n > MAX_FRAME_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("frame length {n} exceeds {MAX_FRAME_BYTES}-byte cap"),
-        ));
-    }
+    // of bytes). Reject an oversized length BEFORE allocating so a malformed or
+    // compromised-but-pinned peer cannot force a multi-GiB allocation; the decision
+    // is the shared cairn_event::framing core (#212).
+    let n = cairn_event::framing::decode_len_prefix(len, MAX_FRAME_BYTES)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf).await?;
     Ok(Some(buf))

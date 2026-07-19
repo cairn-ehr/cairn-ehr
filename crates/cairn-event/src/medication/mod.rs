@@ -1,4 +1,4 @@
-//! §3.15/§3.16 medication recording — the clinical-content builders.
+//! §3.3 medication recording — the clinical-content builders.
 //!
 //! Pure: no clock, no randomness, no I/O. The cairn-node edge mints the ids,
 //! stamps the HLC, and signs; these functions only shape the `payload` JSON that

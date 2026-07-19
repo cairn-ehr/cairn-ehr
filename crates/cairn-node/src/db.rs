@@ -151,32 +151,32 @@ const SCHEMA: &[(&str, &str)] = &[
         "030_john_doe_local_ordinal",
         include_str!("../../../db/030_john_doe_local_ordinal.sql"),
     ),
-    // §3.15/§3.16 the first clinical-content surface: medication assert + cessation
+    // §3.3 the first clinical-content surface: medication assert + cessation
     // floor, the medication_statement projection, and the assert-only current view.
     (
         "031_medication",
         include_str!("../../../db/031_medication.sql"),
     ),
-    // §3.15 slice 2: medication dose change/correction floor + dose-timeline projection.
+    // §3.3 slice 2: medication dose change/correction floor + dose-timeline projection.
     (
         "032_medication_dose",
         include_str!("../../../db/032_medication_dose.sql"),
     ),
-    // §3.15/§3.16 slice 3 part 1: medication reconciliation/separation floor + twin
+    // §3.3 slice 3 part 1: medication reconciliation/separation floor + twin
     // dispatch. Parts 2/3 (projection + view reworks) append to the SAME db/033 file
     // as separate BEGIN;/COMMIT; blocks — this include_str! auto-picks them up too.
     (
         "033_medication_reconciliation",
         include_str!("../../../db/033_medication_reconciliation.sql"),
     ),
-    // §3.15/§3.16 slice 4 part 1: medication attestation floor + set-commitment fn.
+    // §3.3 slice 4 part 1: medication attestation floor + set-commitment fn.
     // Part 2 (overlay/projection) is a follow-on task; this include_str! auto-picks
     // it up too once appended to the same db/034 file.
     (
         "034_medication_attestation",
         include_str!("../../../db/034_medication_attestation.sql"),
     ),
-    // §3.15/§3.16 slice 5: dose-correction per-field patch — effective/reason columns,
+    // §3.3 slice 5: dose-correction per-field patch — effective/reason columns,
     // strike-aware floor + trigger, corrected-effective winner selection (ADR-0050).
     (
         "035_medication_dose_effective_correction",

@@ -103,8 +103,12 @@ $$;
 --    follow the CREATE, or a fresh load rolls back).
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
     ('clinical.medication-attestation.asserted', 'cairn_check_medication_attestation',
-     'medication attestation requires a non-empty authored twin (§3.13/§3.15)')
-ON CONFLICT (event_type) DO NOTHING;
+     'medication attestation requires a non-empty authored twin (§3.13/§3.3)')
+-- DO UPDATE, not DO NOTHING (#214): replay must converge the row to the migration text
+-- (see db/031's medication registration for the rationale).
+ON CONFLICT (event_type) DO UPDATE SET
+    check_fn          = EXCLUDED.check_fn,
+    twin_required_msg = EXCLUDED.twin_required_msg;
 
 -- 4. The set-commitment SINGLE SOURCE. Sorted-concat-hash of the thread's content-event
 --    content_addresses (byte order -> order-independent, collation-free; mirrors

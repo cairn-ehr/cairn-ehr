@@ -1,4 +1,4 @@
--- 031_medication.sql — the first clinical-content surface (§3.15/§3.16).
+-- 031_medication.sql — the first clinical-content surface (data-model §3.3).
 --
 -- Two append-only verbs over an immortal medication_id thread:
 --   clinical.medication.asserted            — patient takes/took a substance (mints the thread)
@@ -63,9 +63,14 @@ $$;
 --    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
 --    registry trigger (db/005) sees cairn_check_medication_assertion(text, jsonb) declared.
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
-    ('clinical.medication.asserted',           'cairn_check_medication_assertion', 'medication assertion requires a non-empty authored twin (§3.13/§3.15)'),
-    ('clinical.medication-cessation.asserted', 'cairn_check_medication_assertion', 'medication assertion requires a non-empty authored twin (§3.13/§3.15)')
-ON CONFLICT (event_type) DO NOTHING;
+    ('clinical.medication.asserted',           'cairn_check_medication_assertion', 'medication assertion requires a non-empty authored twin (§3.13/§3.3)'),
+    ('clinical.medication-cessation.asserted', 'cairn_check_medication_assertion', 'medication assertion requires a non-empty authored twin (§3.13/§3.3)')
+-- DO UPDATE, not DO NOTHING (#214): the loader replays this file on every connect, so the
+-- registry row must CONVERGE to the migration text — a stale row (e.g. the pre-#214 §3.15
+-- mislabel in twin_required_msg) heals on the next connect instead of persisting forever.
+ON CONFLICT (event_type) DO UPDATE SET
+    check_fn          = EXCLUDED.check_fn,
+    twin_required_msg = EXCLUDED.twin_required_msg;
 
 -- 3b. Thread patient-consistency (issue #192, finding A4). A medication_id thread
 --     belongs to ONE chart for life: medication_statement's PK is medication_id alone
@@ -289,7 +294,7 @@ CREATE TRIGGER medication_cessation_apply_trg
 --    `asserted_at` is derived from the assert event's HLC wall component
 --    (`hlc_wall`, t_recorded in ms — db/001), NOT the local `updated_at`. This is
 --    the *convergent* recording time: the same on every node that holds the event,
---    so the staleness signal (§3.15/§9-B — a med asserted years ago shows its age)
+--    so the staleness signal (§3.3/ADR-0049 currency — a med asserted years ago shows its age)
 --    is honest even on a node that only just replicated an old assert. `updated_at`
 --    is a local-clock fold marker (reset on every overlay apply) and would make a
 --    freshly-synced old med look new and diverge between nodes — wrong for display.

@@ -135,12 +135,20 @@ pub enum AuthorshipConfidence {
 /// iff its actor is the signer or the verified attester; every bearing author must be
 /// authenticated for `Attested`, else `Unverified`; no bearing contributor at all is
 /// `Device`.
+///
+/// A bearing entry with a missing or non-string `actor_id` is an ANONYMOUS claim: it
+/// still counts as a bearing contributor (→ never `Device`) and can never authenticate
+/// (→ never `Attested`). Dropping it instead would silently downgrade "authorship
+/// claimed, not authenticated" to "device-generated" — the exact collapse this grade
+/// exists to prevent (caught by the #212 property suite before any read path shipped).
 pub fn classify_authorship_confidence(
     contributors: &serde_json::Value,
     signer_key_id: &str,
     verified_attester: Option<&str>,
 ) -> AuthorshipConfidence {
-    let bearing: Vec<&str> = contributors
+    // Every bearing-role entry's actor claim, kept as Option so an anonymous claim
+    // stays visible to the grading instead of vanishing from the set.
+    let bearing: Vec<Option<&str>> = contributors
         .as_array()
         .map(|a| {
             a.iter()
@@ -148,15 +156,18 @@ pub fn classify_authorship_confidence(
                     classify_role(e.get("role").and_then(|r| r.as_str()).unwrap_or(""))
                         == RolePartition::Bearing
                 })
-                .filter_map(|e| e.get("actor_id").and_then(|v| v.as_str()))
+                .map(|e| e.get("actor_id").and_then(|v| v.as_str()))
                 .collect()
         })
         .unwrap_or_default();
     if bearing.is_empty() {
         return AuthorshipConfidence::Device;
     }
-    let authenticated = |actor: &str| actor == signer_key_id || verified_attester == Some(actor);
-    if bearing.iter().all(|a| authenticated(a)) {
+    let authenticated = |actor: Option<&str>| match actor {
+        Some(a) => a == signer_key_id || verified_attester == Some(a),
+        None => false,
+    };
+    if bearing.iter().all(|a| authenticated(*a)) {
         AuthorshipConfidence::Attested
     } else {
         AuthorshipConfidence::Unverified

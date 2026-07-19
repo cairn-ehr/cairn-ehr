@@ -381,19 +381,18 @@ fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
     // Refuse at the SOURCE, mirroring read_frame's cap (PR #225 review): an over-cap
     // frame would cross the wire in full only to be refused by the peer's read cap,
     // with nothing in the SERVING node's log to say why its peer stopped converging.
-    // Checked before the prefix is written — a bare length prefix with no body would
-    // wedge the reader — and it makes the u32 prefix truncation (> 4 GiB) unreachable.
+    // The decision (cap + u32-truncation-unreachable) lives in the shared
+    // cairn_event::framing core (#212); refusing before the prefix is written stays
+    // here — a bare length prefix with no body would wedge the reader.
     // A log that outgrows the cap needs pagination: issue #101.
-    if b.len() > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "refusing to send a {}-byte frame over the {MAX_FRAME_BYTES}-byte cap (pagination: issue #101)",
-                b.len()
-            ),
-        ));
-    }
-    s.write_all(&(b.len() as u32).to_be_bytes())?;
+    let prefix =
+        cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("refusing to send: {e} (pagination: issue #101)"),
+            )
+        })?;
+    s.write_all(&prefix)?;
     s.write_all(b)?;
     s.flush()
 }
@@ -401,14 +400,10 @@ fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
 fn read_frame(s: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut len = [0u8; 4];
     s.read_exact(&mut len)?;
-    let n = u32::from_be_bytes(len) as usize;
-    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES).
-    if n > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("frame length {n} exceeds {MAX_FRAME_BYTES}-byte cap"),
-        ));
-    }
+    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES);
+    // the decision is the shared cairn_event::framing core (#212).
+    let n = cairn_event::framing::decode_len_prefix(len, MAX_FRAME_BYTES)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let mut buf = vec![0u8; n];
     s.read_exact(&mut buf)?;
     Ok(buf)
@@ -1134,14 +1129,19 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     // destroy the DEK, so opening a sealed episode is one unwrap per DEK — hence the
     // per-event vs per-episode granularity question this cost feeds.
     //
-    // BENCHMARK ONLY: the fixed all-zero nonce reused across every encrypt below is a
+    // BENCHMARK ONLY: the fixed nonce reused across every encrypt below is a
     // throughput microbench, not a keystore. NEVER copy this into real DEK-wrap /
     // body-seal code — nonce reuse under XChaCha20Poly1305 (same key + same nonce)
     // is catastrophic for confidentiality. Real sealing draws a fresh random nonce
     // per encryption.
-    let kek = XChaCha20Poly1305::new(Key::from_slice(&[9u8; 32]));
-    let nonce = XNonce::from_slice(&[0u8; 24]);
-    let dek = [3u8; 32];
+    // House rule 6 (#146): bench key/nonce material is DERIVED at runtime, never a
+    // byte literal, so CodeQL's hard-coded-crypto-value query stays literal-free and
+    // live for production code. Deterministic on purpose — same bench input every run.
+    let kek_bytes: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3).wrapping_add(9));
+    let kek = XChaCha20Poly1305::new(Key::from_slice(&kek_bytes));
+    let nonce_bytes: [u8; 24] = std::array::from_fn(|i| i as u8);
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let dek: [u8; 32] = std::array::from_fn(|i| (i as u8) ^ 3);
     let t = Instant::now();
     for _ in 0..dek_iters {
         std::hint::black_box(kek.encrypt(nonce, dek.as_ref()).unwrap());

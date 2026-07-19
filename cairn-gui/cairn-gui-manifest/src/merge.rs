@@ -14,13 +14,24 @@ pub fn repair_ratio(r: f32) -> f32 {
 }
 
 /// Keep only tabs the site offers, preserving the user's order; if the result is
-/// empty, fall back to the given site default (a single tab).
+/// empty, fall back to the site default — itself validated against `offered` (#213:
+/// a site manifest whose default names an unoffered tab must not surface exactly
+/// the tab this merge exists to filter; repair to the first offered tab instead).
+/// A manifest offering NOTHING is broken beyond soft repair; the default is kept
+/// then so the shell still renders something rather than panicking on empty panes.
 fn filter_to_offered(user: &[TabId], offered: &[TabId], fallback: &TabId) -> Vec<TabId> {
-    let filtered: Vec<TabId> = user.iter().filter(|t| offered.contains(t)).cloned().collect();
-    if filtered.is_empty() {
+    let filtered: Vec<TabId> = user
+        .iter()
+        .filter(|t| offered.contains(t))
+        .cloned()
+        .collect();
+    if !filtered.is_empty() {
+        return filtered;
+    }
+    if offered.contains(fallback) {
         vec![fallback.clone()]
     } else {
-        filtered
+        vec![offered.first().unwrap_or(fallback).clone()]
     }
 }
 
@@ -42,7 +53,12 @@ pub fn merge(site: &SiteManifest, user: &UserPrefs) -> EffectiveManifest {
         .unwrap_or_else(|| right_tabs[0].clone());
 
     // Rail is site-controlled but never shows an unoffered tab.
-    let rail = site.rail.iter().filter(|t| site.offered.contains(t)).cloned().collect();
+    let rail = site
+        .rail
+        .iter()
+        .filter(|t| site.offered.contains(t))
+        .cloned()
+        .collect();
 
     EffectiveManifest {
         rail,
@@ -56,9 +72,9 @@ pub fn merge(site: &SiteManifest, user: &UserPrefs) -> EffectiveManifest {
 
 #[cfg(test)]
 mod tests {
+    use super::{merge, repair_ratio};
     use crate::model::{SiteManifest, UserPrefs};
     use cairn_gui_tab::TabId;
-    use super::{merge, repair_ratio};
 
     fn site() -> SiteManifest {
         SiteManifest {
@@ -71,11 +87,15 @@ mod tests {
 
     #[test]
     fn user_cannot_surface_a_tab_the_site_does_not_offer() {
-        let mut prefs = UserPrefs::default();
-        prefs.left_tabs = vec![TabId("billing".into())]; // not offered
+        let prefs = UserPrefs {
+            left_tabs: vec![TabId("billing".into())], // not offered
+            ..UserPrefs::default()
+        };
         let eff = merge(&site(), &prefs);
-        assert!(!eff.left_tabs.contains(&TabId("billing".into())),
-            "unoffered tab must be dropped (soft policy stays within soft policy)");
+        assert!(
+            !eff.left_tabs.contains(&TabId("billing".into())),
+            "unoffered tab must be dropped (soft policy stays within soft policy)"
+        );
     }
 
     #[test]
@@ -94,10 +114,37 @@ mod tests {
     }
 
     #[test]
+    fn an_unoffered_site_default_never_surfaces() {
+        // #213 — the self-repairing merge existed to keep unoffered tabs out, but a
+        // site manifest whose default_left names an UNOFFERED tab made the fallback
+        // path surface exactly the tab it filters: empty user prefs → fall back to
+        // default_left → the unoffered tab renders. The fallback must be validated
+        // against `offered` like every user value is.
+        let mut s = site();
+        s.default_left = TabId("billing".into()); // site error: default not offered
+        let eff = merge(&s, &UserPrefs::default());
+        assert!(
+            !eff.left_tabs.contains(&TabId("billing".into())),
+            "an unoffered site default must not surface through the fallback"
+        );
+        assert_eq!(
+            eff.left_tabs,
+            vec![TabId("note".into())],
+            "the repair falls back to the first offered tab"
+        );
+        assert_eq!(eff.active_left, TabId("note".into()));
+    }
+
+    #[test]
     fn user_may_reorder_offered_tabs() {
-        let mut prefs = UserPrefs::default();
-        prefs.left_tabs = vec![TabId("demographics".into()), TabId("note".into())];
+        let prefs = UserPrefs {
+            left_tabs: vec![TabId("demographics".into()), TabId("note".into())],
+            ..UserPrefs::default()
+        };
         let eff = merge(&site(), &prefs);
-        assert_eq!(eff.left_tabs, vec![TabId("demographics".into()), TabId("note".into())]);
+        assert_eq!(
+            eff.left_tabs,
+            vec![TabId("demographics".into()), TabId("note".into())]
+        );
     }
 }

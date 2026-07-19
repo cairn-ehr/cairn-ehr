@@ -34,18 +34,23 @@ def _seed_content_address(*parts: str) -> bytes:
     """
     return b"\x12\x20" + hashlib.sha256("|".join(parts).encode()).digest()
 
-# Mirror crates/cairn-node/src/db.rs SCHEMA order. 008 is intentionally skipped (spike-only).
-_SCHEMA_FILES = [
-    "001_envelope", "002_projection", "003_blobs", "004_actors", "005_submit",
-    "006_recall", "007_node_federation", "009_node_supersede_and_restore",
-    "010_demographics", "011_demographics_fields", "012_demographics_names",
-    "013_demographics_sex_gender", "014_demographics_address", "015_globalise_twin",
-    "016_match_veto", "017_match_proposal", "018_identity_linkage", "019_apply_proposal",
-    "020_apply_remote_event", "021_sync_quarantine", "022_node_event_quarantine",
-    "023_identity_dispute", "024_identity_identify", "025_identity_repudiate",
-]
-
 _DB_DIR = Path(__file__).resolve().parents[2] / "db"
+
+# Mirror crates/cairn-node/src/db.rs SCHEMA: every top-level db/*.sql in filename order,
+# minus the deliberate exclusions below. DERIVED from disk rather than hand-written
+# (issue #212: the previous hand copy silently stalled at 025 while the loader grew to
+# 038), so a new migration is picked up the moment it lands. The Rust loader is pinned
+# to the same disk set by the #188 fs-derived guards (cairn-event's schema_generation
+# test + cairn-node's completeness test), which is what keeps this derivation and
+# db.rs's explicit list from drifting apart.
+_SKIPPED_SCHEMA_FILES = {
+    "008_surrogate_projection",  # spike-only; db.rs deliberately does not load it either
+}
+_SCHEMA_FILES = sorted(
+    p.stem
+    for p in _DB_DIR.glob("[0-9][0-9][0-9]_*.sql")
+    if p.stem not in _SKIPPED_SCHEMA_FILES
+)
 
 # Projection tables a test seeds / the fixture truncates between tests. name_repudiation
 # (db/025) backs the patient_alias_pool view the known-alias matcher reads.

@@ -434,9 +434,12 @@ key-keyed); documented as accepted, durable fix is a floor-level per-key guard i
 make the entity→role-actor (1:many) relationship first-class (today implicit via a shared `registration_id` pinned
 into each role-actor).
 
-**Slice 30 — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
+**Slice 30b — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
+<!-- "30b", not a renumber (#215): two slices were both logged as 30; renumbering every later
+     slice would break the Slice-N cross-references in HANDOVER, issues, and PRs. -->
+
 `feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates
-data-model §3.15/§3.16 + the "union + flagged for reconciliation" line into product code; design+plan under
+data-model §3.3 + the "union + flagged for reconciliation" line into product code; design+plan under
 `docs/superpowers/{specs,plans}/2026-07-11-medication-recording-*`). Distinct from slices 1–29 above: those
 are all *administrative/identity* data about the patient (demographics, matcher, identity algebra,
 John-Doe); this is the first event stream carrying actual *clinical content* — what medication the patient
@@ -987,6 +990,92 @@ human the signer also *tightens* the ADR-0043 suppression owner-gate — a `--au
 where the same event device-signed and un-attested was un-owned and dismissable by anyone. Intended and
 covered by `human_author_owns_suppression_rights`, but it is a change in *who may dismiss*, not purely a gain
 as the ADR's "for free" phrasing suggests.
+
+**Slice 44 — the P4 tech-debt slice: the schema-version guard + db/tests in CI (2026-07-19; the review
+course, Priority 4; issues #188 [D1] + #238 + the #212 CI half; branch `claude/tech-debt-cleanup-8513ce`,
+PR #251; no ADR/spec change — first brick of the settled ADR-0012 code plane).** A triage of all 50 open
+issues for "blocks other development" put three items in tier 1; all landed in one branch. **#188 (the
+Critical latent hazard):** `db/038_node_schema.sql` — a singleton `node_schema(version, loaded_at,
+loader_build)` — plus a downgrade-refusal guard in **BOTH** loaders (cairn-node `connect_and_load_schema`,
+the every-connect silent replay path, and cairn-sync `init`, which now replays its subset through a guarded
+`load_schema`): a recorded generation ABOVE the binary's embedded one refuses with a legible error before
+any `CREATE OR REPLACE` runs; an absent table/row means "generation unknown, proceed" (hand-loaded rigs
+stay usable — explicitly tested); the stamp lands only after a full successful replay. The generation is
+the **repo-wide constant** `cairn_event::schema_generation::SCHEMA_GENERATION`, shared by both doors
+because cairn-sync's subset legitimately LAGS db/'s newest file — the PR-#251 review round caught that the
+original per-list derivation would split the two doors' generations the moment a node-only migration lands
+(cairn-sync `init` would then refuse every healthy node); kept honest by a fs-derived cairn-event guard
+test (constant == newest `db/*.sql` on disk) + a cairn-node completeness unit test + cairn-sync
+subset-shape tests. The same review round caught a check-then-act (TOCTOU) hole — an old + new binary
+connecting together could interleave into the very silent downgrade #188 targets — so both loaders hold
+the session-level `SCHEMA_LOAD_LOCK` ("CARNLOAD") advisory lock across check→replay→stamp, pinned by
+deterministic interleaving tests on both doors (RED first). **#238:** the `wait_listening` readiness
+ceiling 5 s → 60 s (the poll returns on first accept, so the ceiling is pure headroom under
+parallel-workspace CPU load). **#212 (CI half), DECIDED wire-not-delete:** `scripts/run-db-sql-tests.sh`
+builds a throwaway `cairn_sqltest` database (refuses `cairn_test*` dbnames, so the spike-only db/008 its
+own test needs never touches the shared test DBs), loads every migration, runs all 10 `db/tests/*.sql`
+mirrors under `ON_ERROR_STOP`; wired into `rust.yml` after the cargo-test step — a missed twin-registry
+mirror bump now fails CI instead of drifting (the #183 luck-catch, mechanized). Noticed in passing and
+added to the #212 remainder: a FOURTH hand-mirror of the loader list at
+`matcher/tests/conftest.py::_SCHEMA_FILES` (ends at 025), and a FIFTH — the guard/replay/stamp logic
+itself is hand-mirrored between the two loaders (async/sync split, low churn). **The review course
+continues at the Priority 5 remainder (#212 drift guards + verb-then-vouch, #214, #215, #213).**
+
+**Slice 45 — the P5 process-mechanization session: #212 remainder + #213 + #214 + #215 (2026-07-19;
+the review course, Priority 5 — CLOSES the whole 2026-07-15 review course; branch
+`chore/p5-process-mechanization`; spec v0.55, prose honesty only, no decision change).**
+**#214 (the self-propagating mislabel):** medication prose lives at data-model **§3.3** (§3.15 is
+active-write, §3.16 is ICD-11); the wrong cite was baked into the ADR-0048 locked registry rows'
+error strings (db/031–034), the byte-for-byte Rust mirror, every migration header (each new file
+copied it from the previous — four times), module docs/test headers, and ROADMAP Slice 30b. The
+medication twin-check registrations flip `ON CONFLICT DO NOTHING → DO UPDATE` so **replay CONVERGES
+existing registry rows to the migration text** (under DO NOTHING the fixed strings could never reach
+an existing DB); pinned by a tamper-then-replay heal test. **#212 (the drift pairs):** the two
+hand-rolled framing implementations are now thin I/O wrappers over ONE pure core
+(`cairn_event::framing` — cap-before-alloc, refuse-at-source, u32-truncation-unreachable; the cap
+VALUE stays per-plane policy, node 8 MiB / clinical 64 MiB, deliberately different); the
+`reviewed_count` hand copy of the four content-event types is deleted — `thread_commitment_on` calls
+`cairn_medication_thread_readable_count`, the same db/034 fn the ADR-0049 false-fresh gate compares
+`reviewed_count` against, so the two are definitionally one measure; the matcher conftest
+`_SCHEMA_FILES` hand-list (silently stalled at 025 while the loader grew to 038) is now fs-derived
+(minus the spike-only 008) under a newest-file-included guard test; the six-fold verb-then-vouch
+copy was verified **already factored** by ADR-0052's `seal_sign_submit` (the two residual
+`submit_event` sites — the two-thread reconcile path and the attestation token door — are
+legitimately distinct); and the **first property-test suite** landed (proptest, MIT/Apache-2.0,
+cargo-deny-verified): pure laws for `classify_role` (total; ratified/partition-prefixed/honestly-
+Unknown over arbitrary strings — the #96 wire case) and `classify_authorship_confidence`, plus a
+DB-gated hostile-JSONB property through the live twin floor (48 arbitrary bodies: twin-less ⇒
+legible raise, backend survives; proven to bite by sabotage). **The property run immediately caught
+a real defect:** a bearing-role contributor with a missing `actor_id` (an anonymous authorship
+claim) was dropped by `filter_map` and graded `Device` instead of `Unverified` — the exact
+"claimed-but-not-authenticated collapses to device-generated" reading the enum doc forbids; fixed
+(anonymous claims count as bearing, never authenticate) before any read path ships (#245).
+**#213 (hygiene):** keystore plaintext-seed temporaries all `Zeroizing` (the #54 discipline extended
+one layer up); house-rule-6 bench/test crypto literals derived via `std::array::from_fn` (incl. the
+non-test `bench_sign_verify`); the auto_apply advisory-lock leak closed **by construction**
+(`ceremony_locked` body + one unconditional unlock in the wrapper); `normalize_recovery_code` now
+MAPS Crockford-ambiguous glyphs (I/L→1, O→0, TDD RED-first) instead of deleting them — a
+transcription slip on the disaster-recovery path unseals instead of "wrong passphrase"; the
+cairn-gui merge fallback is validated against `offered` (an unoffered site default no longer
+surfaces through the very filter meant to stop it, TDD RED-first). **#215 (prose honesty, spec
+v0.55):** index.md/CLAUDE.md status currency (+ a "HANDOVER wins on build state" pointer at the
+source of the staleness); ROADMAP's duplicate Slice 30 disambiguated as 30b (renumbering would break
+Slice-N cross-references); sync.md §6.3 gains the quarantine/re-offer floor's spec home (refusal +
+durable re-offer row; the `acked=TRUE` recorded-human-decision exception named as the ONE deliberate
+exception to never-drop; the honest unbounded-pen row — no cap/expiry, a denial-of-storage exposure
+bounded by peer admission); sync.md §6.1 states the ADR-0045 convergence claim's honest limit
+(same-projection-code only) + the winner-rules-are-ADR-gated convention; security.md records the
+**human key-loss recovery ceremony as an unspecified gap needing its own ADR before any pilot
+enrolls real humans** (ADR-0044/0046 anti-reuse guards + #247 key-scoped authorship make ad-hoc
+answers dangerous) and the SMS rung's carrier-dependent/phishable caveat; identity.md flags the
+deceased-status veto as a db/016 stub and the alias pool's rung-2 erasure-reach note. **Also:**
+cairn-gui rustfmt + clippy drift cleaned (the tree sits outside the CI gates);
+[#252](https://github.com/cairn-ehr/cairn-ehr/issues/252) filed — quick-xml RUSTSEC-2026-0194/0195
+(DoS-class) via wayland-scanner in the gui lock, upstream-blocked (the #11 shape). Verification:
+workspace **800/0** (all 3 DBs), matcher 383 + ruff, cairn-gui green, all 10 SQL mirrors on a fresh
+throwaway DB, fmt ×3 trees, clippy `-D warnings` ×2, cargo-deny, mkdocs. **With this the 2026-07-15
+review course is fully closed; next is the Priority-6 design queue (#205 first) or the now-unblocked
+feature work.**
 
 ## Phase 5 — Security & compliance core
 

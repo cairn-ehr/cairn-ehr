@@ -78,7 +78,7 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
     p
 }
 
-/// The §3.13/§3.15 legibility twin for a medication statement — a mechanically
+/// The §3.13/§3.3 legibility twin for a medication statement — a mechanically
 /// derived, honest one-line rendering. Non-empty because `term` is non-empty.
 pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     let mut s = String::from(a.term);

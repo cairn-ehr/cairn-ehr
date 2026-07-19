@@ -1,4 +1,4 @@
--- 032_medication_dose.sql — slice 2 of the clinical.medication surface (§3.15/§3.16).
+-- 032_medication_dose.sql — slice 2 of the clinical.medication surface (data-model §3.3).
 --
 -- Two append-only verbs over the existing medication_id thread:
 --   clinical.medication-dose-change.asserted     — the dose changed (additive; both
@@ -89,9 +89,13 @@ $$;
 --    dispatcher reads these rows). Placed after the floor fn above so the fail-closed
 --    registry trigger (db/005) sees cairn_check_medication_dose(text, jsonb) declared.
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
-    ('clinical.medication-dose-change.asserted',     'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.15)'),
-    ('clinical.medication-dose-correction.asserted', 'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.15)')
-ON CONFLICT (event_type) DO NOTHING;
+    ('clinical.medication-dose-change.asserted',     'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.3)'),
+    ('clinical.medication-dose-correction.asserted', 'cairn_check_medication_dose', 'medication dose assertion requires a non-empty authored twin (§3.13/§3.3)')
+-- DO UPDATE, not DO NOTHING (#214): replay must converge the row to the migration text
+-- (see db/031's medication registration for the rationale).
+ON CONFLICT (event_type) DO UPDATE SET
+    check_fn          = EXCLUDED.check_fn,
+    twin_required_msg = EXCLUDED.twin_required_msg;
 
 -- 4. Deterministic effective sort key: the ISO-ish effective string sorts
 --    chronologically as bytes; a NULL effective falls back to the recording time

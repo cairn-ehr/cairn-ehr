@@ -36,9 +36,21 @@ impl Semantic for DemographicsTab {
             label: "Patient demographics".into(),
         }];
         if let Some(d) = &self.state {
-            fields.push(Field { id: "demographics.name".into(), role: Role::TextInput, label: format!("Name: {}", d.patient.display_name) });
-            fields.push(Field { id: "demographics.sex".into(), role: Role::TextInput, label: format!("Sex: {}", d.sex) });
-            fields.push(Field { id: "demographics.dob".into(), role: Role::TextInput, label: format!("Date of birth: {}", d.birth_date) });
+            fields.push(Field {
+                id: "demographics.name".into(),
+                role: Role::TextInput,
+                label: format!("Name: {}", d.patient.display_name),
+            });
+            fields.push(Field {
+                id: "demographics.sex".into(),
+                role: Role::TextInput,
+                label: format!("Sex: {}", d.sex),
+            });
+            fields.push(Field {
+                id: "demographics.dob".into(),
+                role: Role::TextInput,
+                label: format!("Date of birth: {}", d.birth_date),
+            });
             for (i, (system, value)) in d.identifiers.iter().enumerate() {
                 fields.push(Field {
                     id: format!("demographics.id.{i}"),
@@ -47,7 +59,10 @@ impl Semantic for DemographicsTab {
                 });
             }
         }
-        SemanticNode { title: "Demographics".into(), fields }
+        SemanticNode {
+            title: "Demographics".into(),
+            fields,
+        }
     }
 }
 
@@ -63,7 +78,10 @@ mod tests {
                 uuid: "00000000-0000-0000-0000-0000000000aa".into(),
                 display_name: "Amina أمينة अमीना 阿明娜".into(),
             }),
-            user: UserRef { actor_id: "clin-1".into(), display_name: "Dr Vega".into() },
+            user: UserRef {
+                actor_id: "clin-1".into(),
+                display_name: "Dr Vega".into(),
+            },
             capabilities: Capabilities::clinician_all(),
         }
     }
@@ -73,7 +91,8 @@ mod tests {
         let mut tab = DemographicsTab::new();
         tab.load(&ctx(), &MockData::with_fixtures());
         let node = tab.semantics(&ctx());
-        node.assert_complete().expect("every focusable control labelled");
+        node.assert_complete()
+            .expect("every focusable control labelled");
         assert_eq!(tab.tab_id(), cairn_gui_tab::TabId("demographics".into()));
     }
 
@@ -83,6 +102,9 @@ mod tests {
         tab.load(&ctx(), &MockData::with_fixtures());
         let node = tab.semantics(&ctx());
         let labels: Vec<String> = node.fields.iter().map(|f| f.label.clone()).collect();
-        assert!(labels.iter().any(|l| l.contains("MRN")), "MRN identifier surfaced");
+        assert!(
+            labels.iter().any(|l| l.contains("MRN")),
+            "MRN identifier surfaced"
+        );
     }
 }

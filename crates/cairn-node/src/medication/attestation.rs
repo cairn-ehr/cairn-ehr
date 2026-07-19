@@ -83,23 +83,19 @@ async fn thread_commitment_on(
 ) -> anyhow::Result<Option<(String, u32)>> {
     let row = client
         .query_one(
-            // ADR-0052: read the thread key through cairn_clear_payload — a sealed content
-            // event carries ciphertext in event_log.body, so medication_id lives in the
-            // event_clear shadow (unsealed rows resolve to body unchanged). Mirrors the
-            // sealed-aware lookup in cairn_medication_thread_commitment (db/034).
-            // CAUTION (ADR-0049 false-fresh, Tasks 8/9): this count — like the commitment —
-            // is now CUSTODY-dependent, not event-set-dependent. A partial-custody node can
-            // read a SHORT count for a thread that actually grew, so a stale check built on
-            // it could show FALSE-FRESH. Tasks 8/9 MUST gate the staleness view to force
-            // stale/unknown when the readable content count < the attestation reviewed_count
-            // (see db/034's caution). Here it only sizes the vouch, so it is not yet unsafe.
+            // Both numbers come from the db/034 single-source SQL fns — the commitment
+            // AND the count that sizes reviewed_count. The count previously inlined the
+            // four content-event types here as a hand copy of the SQL filter (#212 drift
+            // pair 2: slice 5 adds a verb to db/034 and every later attestation carries a
+            // permanently wrong SIGNED reviewed_count); calling
+            // cairn_medication_thread_readable_count deletes the copy AND makes
+            // reviewed_count definitionally the same measure the ADR-0049 false-fresh
+            // staleness gate later compares it against.
+            // CAUTION (ADR-0049 false-fresh, Tasks 8/9): both fns read through
+            // cairn_clear_payload, so they are CUSTODY-dependent, not event-set-dependent
+            // — see db/034's caution. Here the count only sizes the vouch, not yet unsafe.
             "SELECT encode(cairn_medication_thread_commitment($1::text::uuid), 'hex') AS c, \
-             (SELECT count(*) FROM event_log \
-                WHERE event_type IN ('clinical.medication.asserted', \
-                    'clinical.medication-cessation.asserted', \
-                    'clinical.medication-dose-change.asserted', \
-                    'clinical.medication-dose-correction.asserted') \
-                  AND (cairn_clear_payload(event_log) ->> 'medication_id')::uuid = $1::text::uuid) AS n",
+             cairn_medication_thread_readable_count($1::text::uuid) AS n",
             &[&medication_id.to_string()],
         )
         .await?;

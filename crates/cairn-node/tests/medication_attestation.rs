@@ -1,4 +1,4 @@
-//! §3.15/§3.16 slice-4 medication attestation — FLOOR tests (registration,
+//! §3.3 slice-4 medication attestation — FLOOR tests (registration,
 //! structural check, twin registry, set-commitment fn; part 1) plus the overlay/
 //! projection tests (part 2: `medication_attestation`, its apply trigger, and the
 //! `medication_thread_attestation` / `medication_group_attestation` staleness views),
