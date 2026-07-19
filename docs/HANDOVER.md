@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done; P5 landed 2026-07-19, PR pending on `chore/p5-process-mechanization`). Next: a Priority-6 design session (start with #205) — or the feature work below, now unblocked
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done; P5 merged 2026-07-19 as PRs #253 + #255). Next: a Priority-6 design session (start with #205) — or the feature work below, now unblocked
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -24,8 +24,8 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
 - **P4 ✅ 2026-07-19** — the #188 schema-version downgrade guard in BOTH loaders (repo-wide
   `SCHEMA_GENERATION` constant + fs-derived guard tests + the `SCHEMA_LOAD_LOCK` TOCTOU close;
   PR #251, Slice 44) + #238 flake fix + the #212 CI half (`scripts/run-db-sql-tests.sh` in `rust.yml`).
-- **P5 ✅ 2026-07-19** — the process-mechanization session (#212/#213/#214/#215, this session's
-  branch; Slice 45 below). #212's property suite **caught a real grading defect** before any read
+- **P5 ✅ 2026-07-19** — the process-mechanization session (#212/#213/#214/#215; PRs #253 + #255,
+  merged; Slice 45 below). #212's property suite **caught a real grading defect** before any read
   path shipped. Post-review follow-up: [#254](https://github.com/cairn-ehr/cairn-ehr/issues/254)
   (the 8 remaining `DO NOTHING` twin-check registry files — unify with the #214 `DO UPDATE` arm
   or record why not).
@@ -89,8 +89,7 @@ Viability proven by spikes (walking skeleton, advisory-actor contract, a first f
 Postgres-on-Android).
 
 **Session (2026-07-19, latest) — the P5 process-mechanization session: #212 + #213 + #214 + #215,
-closing the whole review course (branch `chore/p5-process-mechanization`; full detail in ROADMAP
-Slice 45 + the PR).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
+closing the whole review course (PRs #253 + #255, merged; full detail in ROADMAP Slice 45).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
 registry rows + Rust mirror + headers; the medication twin-check registrations flip to `ON CONFLICT
 DO UPDATE` so **replay converges registry rows to the migration text** (under `DO NOTHING` the fixed
 strings could never reach an existing DB — pinned by a tamper-then-replay heal test). **#212** —
