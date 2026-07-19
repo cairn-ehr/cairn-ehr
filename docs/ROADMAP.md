@@ -1073,7 +1073,15 @@ cairn-gui rustfmt + clippy drift cleaned (the tree sits outside the CI gates);
 [#252](https://github.com/cairn-ehr/cairn-ehr/issues/252) filed — quick-xml RUSTSEC-2026-0194/0195
 (DoS-class) via wayland-scanner in the gui lock, upstream-blocked (the #11 shape). Verification:
 workspace **800/0** (all 3 DBs), matcher 383 + ruff, cairn-gui green, all 10 SQL mirrors on a fresh
-throwaway DB, fmt ×3 trees, clippy `-D warnings` ×2, cargo-deny, mkdocs. **With this the 2026-07-15
+throwaway DB, fmt ×3 trees, clippy `-D warnings` ×2, cargo-deny, mkdocs. **Post-review fix pass
+(same day, on the PR):** the `DO UPDATE` arms gained an `IS DISTINCT FROM` guard so the
+steady-state replay is write-free again (RED-first via an xmin-stability test — the unguarded arm
+rewrote all 7 medication rows on every connect); the heal test now also tampers+heals `check_fn`
+(to an *existing* wrong fn — the db/005 validate trigger fail-closes on nonexistent ones); the
+matcher-conftest exclusion-direction coupling is documented at the site; and
+[#254](https://github.com/cairn-ehr/cairn-ehr/issues/254) filed — the other 8 registry files still
+`DO NOTHING`, so a future string fix there would pass fresh CI but never reach a standing rig
+(unify-or-decide, house rule 5). **With this the 2026-07-15
 review course is fully closed; next is the Priority-6 design queue (#205 first) or the now-unblocked
 feature work.**
 

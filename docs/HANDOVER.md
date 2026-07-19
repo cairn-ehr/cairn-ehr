@@ -26,7 +26,9 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
   PR #251, Slice 44) + #238 flake fix + the #212 CI half (`scripts/run-db-sql-tests.sh` in `rust.yml`).
 - **P5 ✅ 2026-07-19** — the process-mechanization session (#212/#213/#214/#215, this session's
   branch; Slice 45 below). #212's property suite **caught a real grading defect** before any read
-  path shipped.
+  path shipped. Post-review follow-up: [#254](https://github.com/cairn-ehr/cairn-ehr/issues/254)
+  (the 8 remaining `DO NOTHING` twin-check registry files — unify with the #214 `DO UPDATE` arm
+  or record why not).
 
 **Priority 6 — design sessions (no rush, but settle before the dependent feature work).**
 - **#205 (C4)** — actor-registry sync-apply merge/quarantine/adjudication semantics (#172/#154);

@@ -349,9 +349,14 @@ async fn medication_registry_rows_heal_to_migration_text_on_replay() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
+    // Tamper BOTH converged columns. check_fn must be tampered to an EXISTING
+    // (text, jsonb) function — the db/005 validate trigger fail-closes on a
+    // nonexistent one — which is also the realistic drift shape (a wrong-but-real
+    // check wired to the wrong type).
     c.execute(
         "UPDATE cairn_event_twin_check \
-         SET twin_required_msg = 'tampered' \
+         SET twin_required_msg = 'tampered', \
+             check_fn          = 'cairn_check_medication_dose' \
          WHERE event_type = 'clinical.medication.asserted'",
         &[],
     )
@@ -361,9 +366,56 @@ async fn medication_registry_rows_heal_to_migration_text_on_replay() {
 
     // A fresh connection replays every migration; the DO UPDATE arm must restore the row.
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
-    let msg: String = c2
+    let row = c2
         .query_one(
-            "SELECT twin_required_msg FROM cairn_event_twin_check \
+            "SELECT twin_required_msg, check_fn FROM cairn_event_twin_check \
+             WHERE event_type = 'clinical.medication.asserted'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let msg: String = row.get(0);
+    let check_fn: String = row.get(1);
+    assert_eq!(
+        msg, "medication assertion requires a non-empty authored twin (§3.13/§3.3)",
+        "replay did not heal the tampered registry row to the migration text"
+    );
+    assert_eq!(
+        check_fn, "cairn_check_medication_assertion",
+        "replay did not heal the tampered check_fn to the migration value"
+    );
+}
+
+#[tokio::test]
+async fn steady_state_replay_leaves_registry_rows_untouched() {
+    // The DO UPDATE arm exists to CONVERGE a divergent row (test above) — but when
+    // the row already matches the migration text, replay must not rewrite it: an
+    // unconditional DO UPDATE writes a new row version (dead tuple + validate-trigger
+    // fire) for all seven medication rows on EVERY connect, and connect_and_load_schema
+    // replays on every connect. The WHERE ... IS DISTINCT FROM guard makes the
+    // steady-state replay write-free; pin that via xmin (the row version's inserting/
+    // updating txid), which only changes if the row is actually rewritten.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+
+    // First connect converges the row (whatever state the shared DB was in).
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let xmin_before: String = c
+        .query_one(
+            "SELECT xmin::text FROM cairn_event_twin_check \
+             WHERE event_type = 'clinical.medication.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    drop(c);
+
+    // Second connect replays over an already-converged row: no write may occur.
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let xmin_after: String = c2
+        .query_one(
+            "SELECT xmin::text FROM cairn_event_twin_check \
              WHERE event_type = 'clinical.medication.asserted'",
             &[],
         )
@@ -371,7 +423,8 @@ async fn medication_registry_rows_heal_to_migration_text_on_replay() {
         .unwrap()
         .get(0);
     assert_eq!(
-        msg, "medication assertion requires a non-empty authored twin (§3.13/§3.3)",
-        "replay did not heal the tampered registry row to the migration text"
+        xmin_before, xmin_after,
+        "steady-state replay rewrote an already-converged registry row \
+         (the ON CONFLICT DO UPDATE arm must be guarded by IS DISTINCT FROM)"
     );
 }

@@ -42,7 +42,10 @@ _DB_DIR = Path(__file__).resolve().parents[2] / "db"
 # 038), so a new migration is picked up the moment it lands. The Rust loader is pinned
 # to the same disk set by the #188 fs-derived guards (cairn-event's schema_generation
 # test + cairn-node's completeness test), which is what keeps this derivation and
-# db.rs's explicit list from drifting apart.
+# db.rs's explicit list from drifting apart. RESIDUAL COUPLING: those guards cannot
+# catch the exclusion direction — if db.rs ever deliberately skips another file (the
+# 008 pattern), it must be added to _SKIPPED_SCHEMA_FILES here by hand, or this
+# derivation silently loads what the product loader does not.
 _SKIPPED_SCHEMA_FILES = {
     "008_surrogate_projection",  # spike-only; db.rs deliberately does not load it either
 }
