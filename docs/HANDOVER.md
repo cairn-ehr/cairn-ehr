@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done; P5 landed 2026-07-19, PR pending on `chore/p5-process-mechanization`). Next: a Priority-6 design session (start with #205) — or the feature work below, now unblocked
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done; P5 merged 2026-07-19 as PRs #253 + #255). Next: continue the Priority-6 design queue (#205 ✅ done → ADR-0054; #206/#200/#208/#216/#217 remain) — or the feature work below, now unblocked
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -24,15 +24,16 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
 - **P4 ✅ 2026-07-19** — the #188 schema-version downgrade guard in BOTH loaders (repo-wide
   `SCHEMA_GENERATION` constant + fs-derived guard tests + the `SCHEMA_LOAD_LOCK` TOCTOU close;
   PR #251, Slice 44) + #238 flake fix + the #212 CI half (`scripts/run-db-sql-tests.sh` in `rust.yml`).
-- **P5 ✅ 2026-07-19** — the process-mechanization session (#212/#213/#214/#215, this session's
-  branch; Slice 45 below). #212's property suite **caught a real grading defect** before any read
+- **P5 ✅ 2026-07-19** — the process-mechanization session (#212/#213/#214/#215; PRs #253 + #255,
+  merged; Slice 45 below). #212's property suite **caught a real grading defect** before any read
   path shipped. Post-review follow-up: [#254](https://github.com/cairn-ehr/cairn-ehr/issues/254)
   (the 8 remaining `DO NOTHING` twin-check registry files — unify with the #214 `DO UPDATE` arm
   or record why not).
 
 **Priority 6 — design sessions (no rush, but settle before the dependent feature work).**
-- **#205 (C4)** — actor-registry sync-apply merge/quarantine/adjudication semantics (#172/#154);
-  settle before clinical federation, not after.
+- **#205 (C4) ✅ 2026-07-19** — resolved by [ADR-0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md)
+  (admit-and-dispute; spec v0.56; closes #154 structurally, discharges the #172 sync-door half);
+  code slices are future feature work.
 - **#206 (C5)** — distribution/policy-plane trust-root governance (threshold steward signing / key
   transparency); no ADR owns it.
 - **#200 (B5)** — an ADR stating "refusal + durable re-offer *is* the sync contract for unknown
@@ -51,12 +52,12 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-19, latest (the P5 process-mechanization session — #212/#213/#214/#215,
-closing the review course; earlier same day the P4 tech-debt slice PR #251; 2026-07-18 had #204
-ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
-ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.55 (through ADR-0053; v0.55 is the #215 prose-honesty
-batch) · **Phase:** architecture complete (every original §11 question closed);
+**Session date:** 2026-07-19, latest (the #205 design session → ADR-0054 actor-registry federation;
+earlier same day the P5 process-mechanization session #212/#213/#214/#215 closing the review course,
+and the P4 tech-debt slice PR #251; 2026-07-18 had #204 ADR-0053 + the PR #246 fix pass + the GUI/L3
+easyGP editing-area mining; 2026-07-17 #189+#92 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc +
+the P1 floor-hardening slice; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.56 (through
+ADR-0054) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -88,9 +89,26 @@ pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**Session (2026-07-19, latest) — the P5 process-mechanization session: #212 + #213 + #214 + #215,
-closing the whole review course (branch `chore/p5-process-mechanization`; full detail in ROADMAP
-Slice 45 + the PR).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
+**Session (2026-07-19, latest) — the #205 design session: ADR-0054 actor-registry federation
+(spec v0.56; ROADMAP Slice 46; the first Priority-6 item).** The C4 contradiction (fail-closed
+enrolment ADR-0044/0046 vs never-reject set-union custody) resolves as **admit-and-dispute**: the
+actor event becomes a first-class signed wire event (node-signed COSE under a dedicated context,
+content-addressed, HLC+origin; `(HLC, content_address)` winner order; pre-wire unsigned rows never
+sync — wipe dev rigs) riding the **node plane** (deny-all peers, full replication in the trust
+neighborhood, db/022 pen); the apply door **admits unconditionally and detects** — a conflict
+becomes a **derived disputed state over live bindings** (log convergence ⇒ state convergence; no
+dispute events), under which `actor_current` picks no winner, implicated events attribute to the
+honest **candidate set**, and **registry uncertainty withholds permissions, never content** (closes
+#154 structurally; discharges the #172 sync-door half). Adjudication = the existing `supersede` by
+audited human ceremony (join / per-key fork / revoke+cascade); conflicting adjudications honestly
+re-derive as disputed — never auto-resolved (benign-dominant threat model: the locum-at-two-sites
+case is the common path). Named follow-ons: #94 + the key-loss ceremony ADR; the rotate-key local
+door. Spec homes: security §7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10. Design/plan docs
+under `docs/superpowers/`. **Next:** the remaining P6 queue (#206/#200/#208/#216/#217) or the
+now-unblocked feature work.
+
+**Session (2026-07-19, earlier) — the P5 process-mechanization session: #212 + #213 + #214 + #215,
+closing the whole review course (PRs #253 + #255, merged; full detail in ROADMAP Slice 45).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
 registry rows + Rust mirror + headers; the medication twin-check registrations flip to `ON CONFLICT
 DO UPDATE` so **replay converges registry rows to the migration text** (under `DO NOTHING` the fixed
 strings could never reach an existing DB — pinned by a tamper-then-replay heal test). **#212** —
@@ -114,7 +132,6 @@ are-ADR-gated; security.md the human key-loss-ceremony gap + SMS caveat; identit
 veto stub + alias-pool rung-2 note). Also: cairn-gui rustfmt/clippy drift cleaned (tree sits outside
 the CI gates), and [#252](https://github.com/cairn-ehr/cairn-ehr/issues/252) filed — quick-xml
 RUSTSEC-2026-0194/0195 via wayland-scanner in the gui lock, upstream-blocked (the #11 shape).
-**Next:** a P6 design session (start with #205) or the now-unblocked feature work.
 
 **Sessions (2026-07-17→18, condensed — full detail in ROADMAP Slices 42–43 + the PRs):**
 **#204/ADR-0053 authoring-human** (Slice 43, PR #246 incl. its fix pass): authenticated human author
@@ -397,6 +414,7 @@ ADR before reopening any of these.
 | [0051](spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th, contributory); responsibility = `{held_by, on_behalf_of?}`; future members partition-prefixed; strict-submit/lenient-apply | §3.9 (refines 0028/0007/0049/0012) |
 | [0052](spec/decisions/0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: every clinical JSONB body sealed at write under a per-event DEK held by the node (erasability substrate, not confidentiality); erase ladder always reachable; two doors enforce sealed⇒clinical scope; custody plane + custody sidecar + rung-3 shred | §3.5/§3.8/§5.9 (refines 0005/0006/0026/0048/0051) |
 | [0053](spec/decisions/0053-per-write-human-authorship.md) | Per-write human authorship: `{human,authored}`+`{node,recorded}`, human signs while the node seals + holds the DEK; `cairn_authorship_bound` strict-door binding; apply admits + grades | §3.9/§3.10 (refines 0007/0008/0028/0051/0052) |
+| [0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation is admit-and-dispute: signed actor-event wire shape on the node plane; derived live-bindings disputed state; content never waits, permissions always wait; adjudication = supersede by human ceremony, never auto-resolved | §7.5/§6.9/§3.12/§5.10 (refines 0011/0044/0046) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

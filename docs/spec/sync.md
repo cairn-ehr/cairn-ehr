@@ -33,6 +33,7 @@
 | Node destroyed (solo, no peer) | Restore from the sealed local backup + recovery secret; new supersede-linked identity, erasures replayed on restore — see [security §7.10](security.md#710-node-durability-and-disaster-recovery), [ADR-0026](decisions/0026-node-durability-and-disaster-recovery.md) |
 | Peer offers an event this node's floor refuses (unknown type, malformed, floor-rejected) | **Refusal + durable re-offer.** The bytes are quarantined *verbatim* by digest, the refusal is answered legibly, and the sync watermark does not advance past unresolved refusals (a quarantine floor pins it) — so an upgraded floor later admits what an older one refused, and nothing is silently dropped. The one deliberate exception: an operator **ack** (`acked = TRUE`) is a *recorded human decision* that permanently excludes a penned event from re-offer and quota — never an automatic drop. (Mechanism today in `db/020`–`db/022`; the "refusal + durable re-offer *is* the contract" ADR is tracked as issue #200.) |
 | Hostile-but-credentialed peer streams unique invalid bytes | **Honest limit:** the quarantine pen stores verbatim bytes per digest with **no cap or expiry today**, so an enrolled-but-malicious peer can grow it without bound — a denial-of-*storage* exposure accepted at the current direct-pairwise trust tier, bounded only by peer admission ([§7.7](security.md#77-federation-admission-peering-trust-anchors-and-the-custodian-contract)) and the operator ack path above. A cap/expiry would be a policy rung on the same mechanism (principle 9), not a new mechanism. |
+| Two partitioned nodes each locally-validly enrolled conflicting actor-registry state (one `actor_id`/two keys, or one key/two `actor_id`s) | **Admit-and-dispute.** The actor-stream apply door admits both signed events (custody total, never a refusal of verifiable history) and the conflict surfaces as a **derived disputed state** — no winner picked, permissions withheld, content still flowing with candidate-set attribution — until a human adjudication ceremony (`supersede`) resolves it. Never auto-resolved. See [§6.9](#69-the-actor-registry-stream), [ADR-0054](decisions/0054-actor-registry-federation-admit-and-dispute.md) |
 
 ## 6.4 Scope is a prefetch hint, not an authority
 > Resolves former open question §11.3 — see [ADR-0004](decisions/0004-dynamic-sync-scope-prefetch-not-authority.md).
@@ -93,3 +94,30 @@ Trusted time must not require a network round-trip at write time — the genuine
 - **Peer cross-attestation gives the lower bound offline.** A received anchor (a peer's token, or a notary token a peer forwarded) is a **causal lower bound**: any event a node authors *after* receiving an anchor timestamped T has `t_recorded.lower ≥ T`. No write-time round-trip; the bound rides ordinary inbound sync.
 - **Deferred Merkle-root batch notarization gives the upper bound on reconnect — and is the privacy fix.** A reconnecting node notarizes the **Merkle root** of a batch of pending events, not each event, so the anchor learns only *"a batch of this size existed by T,"* never per-event clinic-activity metadata. A single inclusion proof upgrades the clock-confidence grade ([data-model §3.17](data-model.md#317-trusted-time-anchoring-the-clock-confidence-grade-and-the-bracketed-t_recorded)) of **every** event under that root; the token is overlaid signed data ([ADR-0015](decisions/0015-event-serialization-signatures-and-content-addressing.md)) that syncs like any other overlay.
 - **Honest assembly.** A node running on a self-asserted clock, or one whose anchor has not been reachable, surfaces that exactly as it surfaces sync freshness ([§6.2](#62-consistency-model)) and backup health ([security §7.10](security.md#710-node-durability-and-disaster-recovery)) — a wide, honestly-graded interval, never a fake-precise timestamp.
+
+## 6.9 The actor-registry stream
+> Resolves the 2026-07-15 review finding C4 (issue #205) — see [ADR-0054](decisions/0054-actor-registry-federation-admit-and-dispute.md). Registry design: [security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody); wire shape: [data-model §3.12](data-model.md#312-actor-identity-in-the-registry).
+
+Actor-registry events — the full closed [security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody)
+algebra, `enroll / supersede / revoke / suspend / rotate-key` (rotations must travel too, or a peer
+cannot resolve post-rotation signatures); all signed, content-addressed, HLC-stamped
+([data-model §3.12](data-model.md#312-actor-identity-in-the-registry)) — travel as a **distinct stream
+on the node plane**: deny-all trusted-peer admission ([security §7.7](security.md#77-federation-admission-peering-trust-anchors-and-the-custodian-contract)
+— **registry trust is node trust**), **full replication within the trust neighborhood** (the
+registry is small trust-plane state; full replication is what makes an enrolment or vouch portable),
+per-peer cursor, and the node plane's quarantine pen + re-offer floor ([§6.3](#63-failure-modes-designed-for))
+for unverifiable bytes. Pre-wire unsigned registry rows never sync.
+
+**The ordering contract is honest, not strict.** The registry and clinical streams have independent
+cursors; no cross-plane ordering is promised. Instead, two rules at the consuming doors
+([ADR-0054](decisions/0054-actor-registry-federation-admit-and-dispute.md)):
+
+- **Content never waits.** A clinical event citing a key the local registry does not know yet (or
+  one in dispute) applies normally — availability over consistency — with attribution honestly
+  degraded ("key not yet resolved" / the candidate set, [identity §5.10](identity.md#510-authorship-and-responsibility-state-the-consumer-side));
+  it re-derives losslessly when the registry catches up.
+- **Permissions always wait.** An operation where the registry *grants* authority (a suppression's
+  owner-gate, an attestation's authority check) is penned — delayed, never lost, re-offered — until
+  the cited registry state arrives and is **clean**; disputed is not clean. Fail-safe by direction:
+  a held suppression keeps the note visible; a held attestation reads un-vouched — never the
+  reverse. **Registry uncertainty may withhold a permission, never withhold content.**

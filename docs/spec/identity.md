@@ -135,6 +135,11 @@ The **reattribution event** — "event set E belongs to UUID-B, not UUID-A" — 
    distinct from *wrong*, from *not-yet-reviewed*, and from *refused*. The same projection carries a
    **recall marker** when an event's authoring agent was later superseded or revoked (*"authored by a model
    version since found defective"*, [security §7.5](security.md#75-the-actor-registry-enrollment-version-pinning-and-key-custody)) — overlaid, never erased.
+   The same projection carries the **registry-dispute state** ([ADR-0054](decisions/0054-actor-registry-federation-admit-and-dispute.md)):
+   an event signed by a key implicated in an unresolved actor-registry conflict attributes to the honest
+   **candidate set** (*"one of Dr X / Dr Y — registry dispute pending"*) — acknowledged uncertainty, distinct
+   from *unknown* — and re-derives to the exact author when the dispute is adjudicated; while disputed,
+   registry-granted permissions are withheld but content keeps flowing ([sync §6.9](sync.md#69-the-actor-registry-stream)).
 
 3. **Expressible policy rung.** *"Un-vouched suppressing AI output must be attested before it takes
    effect"* is an *available* policy, never mandatory — tied to the additive-vs-suppressing distinction
