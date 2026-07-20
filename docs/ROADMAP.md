@@ -56,630 +56,78 @@ API**. Policy and UI sit *above* this line and are deliberately out of scope her
 
 - **Identity event algebra** — closed link/unlink/reattribute/repudiate/identify/dispute set; immortal UUIDs; never merge/erase ([§5.7](spec/identity.md), principle 2).
 - **Demographics assertion stream** — per-field projection policy ([§4](spec/demographics.md)). **Address model specified** ([ADR-0032](spec/decisions/0032-culture-neutral-address-representation.md), [§4.3](spec/demographics.md)): culture-neutral three-facet value (display legibility twin + optional geolocation + culture-tagged structured parts via a content-addressed locale profile reusing ADR-0014). **Patient-identifier representation specified** ([ADR-0033](spec/decisions/0033-patient-identifier-representation.md), [§4.4](spec/demographics.md)): namespace/profile split (stable veto key + versioned validator) + a normalized form materialised so the hard veto survives a profile-less node; advisory validation; professional **licensure/registration** IDs fixed in the §7.5 actor registry (billing/relational provider numbers split out to §4.6, below). **Demographic legibility twin specified** ([ADR-0034](spec/decisions/0034-demographic-legibility-twin.md), [§4.5](spec/demographics.md)): every demographic assertion carries the §3.13 principle-11 twin, materialised profile-independently, with `display`/`value` reconciled as its value-core and a forward guarantee for future field shapes. **Provider-number relational model specified** ([ADR-0035](spec/decisions/0035-entities-relationships-and-provider-numbers.md), [§4.6](spec/demographics.md)): abstract entity (open `kind`) + reified relationships carrying their own identifier sets + subject-kind partitioning `{patient, entity, relationship}` as structural non-conflation. **All demographics gaps now closed.** **Demographics IMPLEMENTATION underway** (first production clinical surface, on `cairn-node`). **Slice 1 — §4.4 patient identifiers** (`db/010_demographics.sql`): culture-neutral structural floor + authored §4.5 twin carried through the reused `submit_event` + set-union `patient_identifier` projection; pure `cairn-event::demographics` builders + `EventBody.plaintext_twin`. **Slice 2 — §4.2 DOB + sex-at-birth** (`db/011_demographics_fields.sql`): the *provenance-precedence* mechanic — generic `demographic.field.asserted` event + `cairn_provenance_rank` ladder (incl. new `fact-proven` top tier; unrecognized→0) + winner-by-`(rank,HLC,origin)` `patient_demographic` projection ("verified value locks"); **floor stays open / projection gated** (unknown field stored + legible but not projected — federation-forward per ADR-0012); §4.1 ladder prose extended. **Slice 3 — §4.2 names** (`patient_name` retained-set projection + `patient_name_current` display-winner VIEW): recency-first within the legal-use tier (HLC wins; provenance/origin break ties); falls back to most-recent any-`use` when no legal name exists; all names retained as evidence; deliberately diverges from DOB's provenance-lock ([ADR-0036](spec/decisions/0036-demographic-name-display-recency-first.md)). **Slice 4 — §4.2 administrative-sex + gender-identity** (`db/013_demographics_sex_gender.sql`): per-field winner policy via an IMMUTABLE `cairn_demographic_field_policy(field)` classifier; administrative-sex provenance-first (document-anchored; recency breaks equal-provenance ties); gender-identity recency-first (patient's current stated identity always wins regardless of provenance — the inverse of DOB's ordering; provenance still feeds the §5.2 matcher). Karyotype resolved ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) as a distinct field — no karyotype code yet; spec/ADR only. Additive: no new event type, no floor change, no `patient_demographic` schema change; db/013 supersedes db/011's trigger. **Slice 5 — §4.3 address** (`db/014_demographics_address.sql`): retained-set `patient_address` + per-use `patient_address_current` recency-first VIEW (one current address per `use`); additive floor branch; per-use recency-first winner — addresses are volatile, a fresh patient-stated move must displace a stale document-verified address ([ADR-0038](spec/decisions/0038-demographic-address-winner-per-use-recency.md)). **Slices 6–12 — §5.2 matcher pieces A/B1/B2/B2b/B3 harness + compound key + generator** (2026-06-28→07-01; condensed, full detail in git). Advisory Python `matcher/` (`cairn-matcher`, AGPL-3.0, zero runtime deps, pure functions — fit-for-purpose §9 tier); no ADR/spec bump throughout (implements settled §5.2/§5.13/§4.1). **Slice 6 — piece A** (`db/016_match_veto.sql`, SCHEMA 14→15): the in-DB hard-veto floor — `cairn_match_veto`/`cairn_has_hard_veto` implement the closed hard-veto set (same-system identifier mismatch · verified-DOB clash · verified-sex-at-birth clash); `hard_veto`/`degrade_hold` verdicts, precision-gated DOB (no date parsing), `system:unknown` never vetoes; 12 tests; deceased-status veto deferred (stub). **Slice 7 — piece B1**: the scoring core — comparator contract (`PHONETIC`/`NICKNAME` reserved, never emitted — anti-cultural-capture) + in-house Jaro–Winkler + 4 culture-neutral comparators + positive-only `compare_identifier_sets` + Fellegi–Sunter combiner (`MatchScore`); 55 pure tests; final review fixed one Critical (score symmetry, greedy name-pairing `max(a,b / b,a)`). **Slice 8 — piece B2** (`db/017_match_proposal.sql`, SCHEMA 15→16): the veto-gated pairwise pipeline — ISO-only DOB extraction, token-bag names, `auto_candidate`/`review`/`None` banding (any veto caps at review, never auto-link/auto-reject); `db/017` an advisory worklist, not a safety gate; 92 tests with DB. **Slice 9 — piece B2b** (no `db/` file): blocking/candidate-pair generation — 3-pass disjunction (shared identifier · exact DOB · shared name token), canonical-pair dedup, oversized-block guard skips+reports (never silently caps) + `sweep()` batch driver; 113 tests with DB. **Slice 10 — B3 harness** (`cairn_matcher/eval/`, no `db/` file): scorer metrics (precision/recall/F1, zero-denominator→0.0) + DB-gated blocking-recall measurement (pair-completeness/reduction-ratio/dropped-true-matches) + culture-plural `gold_v1.json` + CLI; 146 with DB. **Slice 11 — B3 compound key** (`pipeline/db.py`): additive `name+year` `UNION ALL` pass (birth-year CTE, first-4-digit-run culture-neutral degrade) partitions oversized name-token blocks — recall non-decreasing; 151 with DB; filed [issue #84](https://github.com/cairn-ehr/cairn-ehr/issues/84) (test-leak + harness `KeyError`, the `KeyError` arm later fixed in slice 21). **Slice 12 — B3 generator** (`eval/generator.py` + `generate.py`, pure/stdlib): seed+corrupted-clone entity clusters recoverable by construction (a `_repair` step guarantees ≥1 shared blocking key), drift-canary-pinned to `_GROUPS_SQL`; 200-entity volume test: `pair_completeness == 1.0`, `reduction_ratio≈0.919`. All pieces' whole-branch reviews READY-TO-MERGE/MERGE-READY (0 Critical outstanding per slice; findings fixed in-branch or in PR #83's post-review wave).
-**Slice 13 — §5.1/§5.7 identity linkage core (piece C1)** (`cairn-event/src/identity.rs`, `db/018_identity_linkage.sql`,
-SCHEMA 16→17): first slice of the closed §5.7 algebra. Pure `LinkAssertion` builder; two additive event types
-`identity.link.asserted`/`identity.unlink.asserted` through the reused `submit_event` door; `cairn_check_link_assertion`
-culture-neutral floor (distinct valid UUID subjects + non-empty provenance; self-link rejected); HARD authored-twin in
-the `cairn_event_twin` hook. `patient_link` HLC-overlay edge table (canonical `(low,high)`, latest-HLC-wins, out-of-order
-convergent — now with the #115 content_address tiebreaker); `person_member` golden-identity projection (`person_id` =
-min-UUID of the component via `cairn_recompute_component`, correct on merge **and** unmerge/split, fail-loud oversize
-guard `cairn_max_component_size()` GUC). 15 DB-gated tests. **Additive, no floor bypass, no SCHEMA/ADR/spec change**
-(settled §5.1/§5.7/ADR-0014). Deferred: an accept-at-cap boundary test for the oversize guard.
-
-**Slice 14 — §5.2/§5.7 match_proposal→apply seam (piece C2)** (`db/019_apply_proposal.sql`, SCHEMA 17→18;
-`cairn-node/src/apply_proposal.rs`): a **human-accepted** advisory proposal becomes a real **human-attested**
-`identity.link.asserted` event through the C1 door. **Key property: no floor change** — the link is additive, but
-placing a responsibility-bearing contributor trips the existing db/005 attestation gate, so C2 composes settled §5.7
-(C1) + ADR-0030 + ADR-0014 verbatim; `submit_event` untouched, no new event type. Additive `applied_event_id UUID`
-column; pure `compose_provenance`/`build_attested_link_body` + IO `apply_accepted_proposal` (read `FOR UPDATE` →
-sign+attest → 3-arg `submit_event` → mark applied, one txn = idempotency; canonical `(low,high)`). 6 tests, green.
-**Additive, no ADR/spec change.** Deferred: **C2b** auto-apply of `auto_candidate`; matcher as a compositional
-contributor (needs §7.5 matcher-actor registration — lives in provenance string for now); a CLI subcommand +
-production human-key custody (ADR-0011).
-
-**Slice 15 — §5.2/§5.7 auto-apply of the `auto_candidate` band (piece C2b)** (`crates/cairn-node/src/matcher_actor.rs`
-+ `auto_apply.rs`; `apply-auto-candidates` CLI): a matcher proposal banded `auto_candidate` (score ≥ auto AND zero
-vetoes at propose time) becomes a **matcher-authored, un-attested, recallable** `identity.link.asserted` event —
-**no human in the loop** — through the *same* `submit_event` door. **No `db/` migration, no floor change,
-no SCHEMA/ADR/spec bump** (the db/018 floor already made an identity link additive + `targets_other_author=FALSE`, so
-an un-attested matcher link needs no attestation) — the change is Rust plus two comment-only clarifications in
-`db/017`/`db/019` (the new `auto_applied` status makes db/019's documented `applied` invariant honest; no DDL).
-Realises the deferred **§7.5 matcher-actor** piece: each distinct
-`matcher_version` is its OWN `agent` actor with its OWN key (auto-enrolled, owner ceremony), pinned under `skill_epoch`
-so the db/006 `events_by_actor_epoch` recall selects a bad config's auto-links **precisely** (contamination cascade).
-Contributor role `suggested` (ADR-0028 contributory, no `responsibility`) ⇒ authorship present, accountability absent
-(principle 10). **Apply-time veto re-check** (the no-human-backstop safety add): a since-vetoed pair is kicked to human
-`review`, never auto-linked over. Status `pending → auto_applied` (distinct from C2's human `applied`) or `→ review`;
-idempotent (only `pending` picked up), respects a human `rejected`. 6 pure + 7 DB-gated tests (enroll-once/reuse,
-distinct-epoch actors, un-attested link + person projection, veto→review, human-rejected skipped, batch+idempotent,
-recall precision) + end-to-end CLI smoke; full cairn-node suite + workspace clippy green. Deferred: no background
-scheduler (operator-invoked CLI only); matcher key sealed but no recovery escrow (regenerable); ADR-0028 role enum
-still not DB-enforced ([#96](https://github.com/cairn-ehr/cairn-ehr/issues/96)).
-
-**Slice 16 — §5.7 `dispute` + the chart trust-state projection (piece C3)** (`db/023_identity_dispute.sql` wired into
-`db.rs`; `crates/cairn-event/src/identity.rs` dispute builders): the patient-initiated "I was never there" front door
-(§5.5(b) identity theft) **and** the §5.7 projection-side contract — the chart **trust state** (*confirmed /
-under-review*) — the keystone that C1 explicitly deferred and that the rest of the algebra composes into. Two
-**additive** dispute event types (`identity.dispute.asserted` / `.resolved`) through the reused `submit_event` door
-(low-ceremony like the C1 link; a dispute annotates trust, never erases/moves/blocks — attestation only if a
-responsibility-bearing contributor is named); a culture-neutral `cairn_check_dispute_assertion` structural floor +
-HARD-required legibility twin; a `chart_dispute` standing overlay keyed by the dispute's own id (HLC-latest wins,
-converges out-of-order — the C1 `patient_link` shape, but a single-row fact so no BFS/oversize guard); a `chart_trust`
-effective-state **VIEW** shaped so `identify`/`reattribute`/the §5.2 coherence check ADD source branches later (never a
-rewrite); surfaced via a `person_chart_trust` view **composing on top of** C1's `person_chart` (reusing its
-`person_member` join). **No SCHEMA/ADR/spec bump; `db/018` untouched** (implements settled §5.7). A review finding
-steered the composition: extending `person_chart` in place would need `DROP+CREATE` (since `CREATE OR REPLACE VIEW`
-cannot shrink an already-extended view across the `connect_and_load_schema` reload), and a bare `DROP` would abort
-node boot once any dependent view sits on `person_chart` — so a separate composing view keeps `person_chart`
-droppable-free. 3 pure builder unit tests + 14
-DB-gated integration tests (accept, HLC overlay, out-of-order convergence, multi-dispute resolve, idempotent
-re-assert, dispute-before-chart safety signal, five floor rejections); full workspace suite + clippy green on PG18 /
-cairn_pgx 0.2.0. Deferred: the *unconfirmed* (identity-pending) state + registration classes / John Doe (C4/C5 with
-`identify`); `reattribute` (§5.5 strike-through + tiered adjudication) and `repudiate` (alias pool); the §5.2 coherence
-feedback loop; notification/contamination cascade on dispute; person-level trust aggregation (read-surface tier).
-
-**Slice 17 — §5.4/§5.7 `identify` + the *unconfirmed* trust state (piece C4)** (`db/024_identity_identify.sql` wired
-into `db.rs`; `crates/cairn-event/src/identity.rs` pending/identify builders): the third and final state of the §5.7
-trust-state contract C3 opened. Two **additive** event types — `identity.pending.asserted` (the §5.4 John-Doe front
-door: marks a chart identity-pending → *unconfirmed*) and `identity.identify.asserted` (§5.7 "who, method": establishes
-identity → *confirmed*) — through the reused `submit_event` door (low-ceremony like C1/C3; `method` structurally
-required = "method recorded", the "Human" vouching composing via the existing attestation gate when a
-responsibility-bearing contributor is named). Keyed by the **subject itself** (a per-chart lifecycle state, unlike a
-dispute's own id ⇒ *no* subject-consistency guard is possible or needed); `chart_identity_state` HLC-overlay table
-(latest-HLC wins, full pending⇄identified lifecycle, out-of-order convergent, no BFS/oversize guard). `chart_trust`
-reworked into a **severity-max UNION** composing **under-review (open dispute, 2) over unconfirmed (pending, 1)** — the
-"highest standing assertion" discipline (§5.9) — with the column contract unchanged so `CREATE OR REPLACE VIEW` stays
-reload-idempotent and C3's `person_chart_trust` is untouched (it now surfaces `unconfirmed` for free). Precedence
-documented: under-review (attribution actively challenged, data present possibly wrong-patient) outranks unconfirmed
-(who-is-this unknown, absent history). **No SCHEMA/ADR/spec bump; `db/023` untouched** (implements settled
-§5.4/§5.7; CREATE-OR-REPLACEs the shared twin hook + `chart_trust`). 3 pure builder unit tests + 15 DB-gated
-integration tests (accept, HLC overlay both directions, re-pending-reopens lifecycle, idempotent re-assert, pending→
-unconfirmed on `chart_trust`+`person_chart_trust`, identify→confirmed, pending-before-chart safety signal, the **C3⊔C4
-compose/precedence proof** — dispute outranks pending → resolve → identify, five floor rejections); full workspace
-suite + clippy green on PG16 / cairn_pgx 0.2.0. Deferred: the full §5.4 John-Doe registration subsystem (callsign,
-clinician-observed evidence assertions, matcher re-run), the "prior history now available" push alert on link,
-registration-class funnel partitioning (§5.3/§5.8); `reattribute` (§5.5 strike-through + tiered adjudication) and
-`repudiate` (alias pool); the §5.2 coherence feedback loop; person-level trust aggregation (read-surface tier).
-
-**Slice 18 — §5.5(a)/§5.7 `repudiate` + the known-alias pool (piece C5)** (`db/025_identity_repudiate.sql` wired into
-`db.rs`; `crates/cairn-event/src/identity.rs` repudiate builder): the **first *suppressing*** identity event (C1–C4 were
-all additive/annotative). The §5.5(a) fabricated-persona case — a patient presented under a deliberately false name;
-once established false, the name is struck from the display header but stays in the record (fact of presentation
-preserved, principle 1) and enters a matcher-visible **known-alias pool** (aliases are reused). One event type
-`identity.repudiate.asserted` registered **`mode='suppressing'`**, so the db/005 attestation gate structurally forces a
-valid **human** attestation token — §5.7's "Human" made unbypassable in the DB (no floor special-case; reuses the
-`salience.downgrade` gate). This is the deliberate contrast with the additive C1/C3/C4 (whose "human vouches" bit only
-when a responsibility contributor was named). **Digital strike-through** (principle 1+2): the assertion event and
-db/012's `patient_name` retained set are **untouched**; a **value-grained** `name_repudiation` overlay (keyed by
-`(subject, value)` — a false name is false however labelled, and value-keying avoids replicating db/012's `use`-fold →
-no drift; HLC-latest-wins so a future reversal composes) records the struck value, and `patient_name_current` is
-`CREATE-OR-REPLACE`d to **anti-join** it (same column contract ⇒ reload-idempotent). New `patient_alias_pool` VIEW
-surfaces struck names to the §5.2 matcher. `cairn_check_repudiation_assertion` structural floor (valid subject uuid,
-non-empty value + reason) + **HARD-required legibility twin**. **Design call** (documented): striking a chart's *only*
-name → `patient_name_current` has *no* row for it — honest (name genuinely unknown-now; showing the known-false one is
-a precise untruth, principle 4); "header shows something" is satisfied one layer up by the §5.4 callsign / *unconfirmed*
-rendering (C4). **Honest limit:** value match is exact-string on an opaque value (culture-neutral, deterministic — the
-floor must be precise); fuzzy recognition of a returning alias is the advisory matcher's job over `patient_alias_pool`.
-**No SCHEMA/ADR/spec bump; db/010–024 untouched** (implements settled §5.5/§5.7; CREATE-OR-REPLACEs the shared twin
-hook + `patient_name_current`). 2 pure builder unit tests + 10 DB-gated integration tests (struck name leaves winner +
-surviving name takes over + alias-pool entry + retained-set evidence preserved; only-name → no winner; idempotent
-re-assert + HLC-latest reason; newer re-assertion does NOT un-strike [HLC-blind anti-join pinned]; **un-attested AND
-agent-attested repudiation refused** — the suppressing "Human" floor; four floor rejections). Full workspace suite
-(364 passed / 0 failed) + clippy green on a from-scratch PG16 / cairn_pgx 0.2.0 in-container rig. **Review hardening**
-(3-agent adversarial pass, 0 hard bugs): `patient_alias_pool` made reason-free + base overlay not agent-granted (no
-cross-patient forensic-`reason` leak, ADR-0006); `reason` NOT NULL; HLC-blind + agent-attested-refused tests added.
-**Deferred:** a reversal / de-repudiation event (the overlay is HLC-versioned so it composes without a
-rewrite); a chart-history VIEW rendering struck names (data already present); ~~matcher wiring that *consumes*
-`patient_alias_pool`~~ **(done — slice 19, below)**; `reattribute` (needs a clinical-note surface that does not yet
-exist — premature).
-
-**Slice 19 — the §5.2 matcher consumes `patient_alias_pool` (known-alias evidence)** (advisory Python;
-`matcher/src/cairn_matcher/pipeline/{alias,db,runner,banding}.py`; **no `db/` floor, no SCHEMA/ADR/spec bump**).
-Closes C5's deferred matcher wiring. **Key finding:** because C5 left db/012's `patient_name` retained set
-physically untouched, a struck name is still a blocking token *and* still scored, so the returning-persona pair
-**already** gets proposed — consuming the alias pool does **not** enable a missing match. Its genuine value is
-**explainability / paper-parity**: the proposal now carries a `known_alias` evidence entry restoring the registry's
-"known alias" flag to the worklist. New pure `known_alias_evidence` (`pipeline/alias.py`) recognises a repudiated
-alias corroborated by the other chart in **normalized space** (NFC + casefold token-bag, reusing the adapter's
-`_name_bag` so "same name" is byte-identical to the scorer — no drift); `band()` gains `has_known_alias` → always
-**REVIEW** (never dropped below threshold, never auto-linked on a name a chart declared false — §5.7 "Human");
-`build_payload` appends the entries; `runner.propose` reads the reason-free `patient_alias_pool` (ADR-0006
-confidentiality preserved) for both charts and threads it through. **Flag, never suppress** — the deliberate call:
-the matcher cannot distinguish a returning fabricated persona from a real, different bearer of that false name, so
-suppression would kill the very §5.5(a) recognition it exists to serve; only a human can adjudicate. 6 pure alias
-tests + 4 banding tests + 3 DB-gated e2e (`test_alias_pipeline.py`); conftest extended to apply db/018–025.
-**Deferred (recorded):** fuzzy/edit-distance alias recognition (this cut is normalized-exact); a dedicated `alias`
-blocking pass (zero recall today — the name-token pass already generates the identical pair; pure future-proofing);
-any scoring-weight treatment of known-false names (declined by design — needs B3 weight-learning + a spec call).
-
-**Slice 20 — §5.4 John-Doe registration front door (slices A + B)** (composes built primitives; **no new event type,
-no `db/` floor change, no SCHEMA/ADR/spec bump**). **A — callsign + matcher placeholder exclusion** (prior session,
-PR #123/#125): `cairn-event::john_doe::callsign` mints `Unknown-<class>-<site>-<date>-<suffix>` (UUID-derived suffix,
-partition-safe), `cairn-node::john_doe::register_john_doe` composes a `use_key='callsign'` name assertion + C4's
-`identity.pending.asserted` in one txn (chart renders *unconfirmed*), a `register-john-doe` CLI, and the advisory
-matcher excludes placeholder `use_key` from blocking + scoring (`use_key <> ALL(%s)`), with a cross-language
-`CALLSIGN_USE`↔placeholder-set drift guard (issue #124). **B — clinician-observed evidence (estimated-age range +
-observed sex), full loop** (this session): the demographic spine already carries it (db/011 dob field requires
-`facets.precision` + accepts `facets.basis`, `clinician-observed`=rank 30). Pure `cairn-event::evidence`
-(`birth_year_range_from_age` → a time-invariant birth-year *range*, never raw age nor a false-precise midpoint —
-principle 4; `estimated_dob_body` value `"<min>/<max>"`/precision `"year-range"`; `observed_sex_body` on
-`administrative-sex`, not the `sex-at-birth` birth fact a clinician can't know); `cairn-node::evidence::assert_observed_evidence`
-+ an `assert-observed-evidence <patient-uuid>` CLI (authors on an EXISTING chart, one txn, provenance
-`clinician-observed`; `register-john-doe` unchanged; `db::next_hlc` promoted `pub`); advisory matcher made
-**range-aware + POSITIVE-ONLY** — `DateValue` interval, `parse_dob` reads `"year-range"`, `compare_dob` overlap→PARTIAL /
-no-overlap→INSUFFICIENT_DATA / **never DISAGREE** (a soft estimate supports but never suppresses a match). 8 pure
-`cairn-event` + 4 DB-gated `cairn-node` integration (`observed_evidence.rs`) + matcher pure (`DateValue`/`parse_dob`/
-`compare_dob` incl. inclusive touching-boundary + symmetry) + a DB-gated matcher e2e (`test_observed_age_pipeline.py`).
-Full workspace + matcher suites green (cargo 0 failed / clippy clean; matcher 226 passed / ruff clean, PG18 + cairn_pgx
-0.2.0); end-to-end CLI smoke on a provisioned node passed (`dob=1981/1991` year-range clinician-observed +
-`administrative-sex=male`, `chart_trust=unconfirmed`); opus whole-branch review READY-TO-MERGE. **Honest limit
-(recorded):** slice B's range is a *scoring* signal, **not a blocking key** (`"1981/1991"`→first-4-digit `1981` won't
-block a 1985-born candidate; a John Doe's only name is an excluded callsign) — the estimate helps once a pair is blocked
-by another key (belongings identifier, refined name, hub sweep). **Remaining §5.4:** ~~photo/marks/belongings/EMS-context
-evidence~~ **(done — slices 26/27, below)**, the "prior history now available" push-alert (§5.12, no notification tier),
-the search-before-create funnel (UI/API tier), ~~a birth-year-*range* blocking pass~~ **(done — slice 21, below)**, a
-readable sequential callsign suffix, a `--observed-year` override, `identify`→optional-link resolution flow.
-
-**Slice 21 — §5.4 birth-year-range blocking pass + A/B pass-toggle** (this session; advisory Python only — **no `db/`
-floor change, no SCHEMA/ADR/spec bump**; design+plan under `docs/superpowers/{specs,plans}/2026-07-04-dob-range-blocking-pass*`).
-Closes slice 20's recorded honest limit: a `year-range` dob now generates blocking keys. Two **additive, ANCHORED**
-passes in `pipeline/db.py` (`_RANGE_GROUPS_SQL`): **`dob-range`** — a `birth_window` CTE gives every chart an inclusive
-birth-year interval (range rows via `facets.precision='year-range'` + NULL-safe `substring` year extraction,
-**evaluation-order-proof** — a malformed value can never crash the sweep; point rows via the first-4-digit run,
-year-range excluded so a range never double-enters as a false point); anchors = range charts; members = window-overlap
-(range↔point AND range↔range — two John Does at two sites, the only key that pair can share); pairs are **anchor×member
-ONLY** (all-pairing a window would manufacture C(k,2) noise — new pure `pipeline/blocking.py::pairs_from_anchor`);
-**`dob-range+sex`** — the same join ∩ a shared blocking-sex value (**UNION** of `sex-at-birth` + `administrative-sex`,
-so the trans case still groups; `unknown` sentinel excluded — no-data-is-never-agreement), the additive **rescue** when
-the plain window block exceeds the cap (skipped+reported, hub sweep the backstop). Plus the **A/B pass-toggle**
-(`enabled_passes` on `generate_candidate_pairs`; unknown pass name raises — a silent typo would fake a measurement) and
-an honesty fix (`birth_year` CTE excludes `year-range`, so `"1981/1991"` no longer leaks `1981` into `name+year` as a
-fake birth year). TDD: 9 pure (`test_blocking_passes.py`) + 14 DB-gated (`test_dob_range_blocking.py`) + 3 toggle tests.
-Fable whole-branch review → fix wave (order-proof guard, unknown-sentinel exclusion) → **READY TO MERGE**; a post-PR
-8-angle review→adversarial-verify wave (PR #131) then fixed 7 more: eval-harness `KeyError` guard vs resident charts
-(the #84 crash arm), shape-aware `dropped_pair_estimate` (s−1 for anchored skips, not C(s,2)), `blocking_sex` sentinel
-param-bound from `adapter.VALUE_SENTINELS` + explicit whitespace trim-set, exact-`dob` arm excludes `year-range` (A/B
-purity), statement-level toggle skip, SQL↔registry pass-name guard, `canonical_pair` deduped into pure `blocking.py`.
-Suites pure 200 / DB 264 / ruff clean. ~~**Honest limit (recorded, [issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130)):**
-the pure-age John Doe pair now *blocks* but still scores below `review=3.0`~~ **(closed — slice 22, below)**.
-**Deferred:** ~~generator range-DOB emission + range-aware
-eval mirror (the quantitative recall number the toggle now enables; must also mirror `administrative_sex` — slice 22's
-composite-sex fallback is unrepresentable in the eval `DatasetRecord` until it does)~~ **(done — slice 23, below)**;
-fuzzy near-window softening; hub-tier range sweep.
-
-**Slice 22 — §5.4 administrative-sex scoring + the unconfirmed-chart REVIEW rule** (2026-07-05; closes
-[issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130); advisory Python only — **no `db/` floor change, no
-SCHEMA/ADR/spec bump**; design+plan under `docs/superpowers/{specs,plans}/2026-07-05-admin-sex-scoring*`). The
-design-critical arithmetic: scoring administrative-sex alone leaves the headline pure-age Doe pair at ≈1.79 < `review=3.0`
-(honest F–S weights can't be inflated past an 11-year window + a two-valued field), so the slice has TWO halves. (1) **The
-composite `sex` field**: `records.SexValue` + pure `compare_sex` — both charts carry `sex-at-birth` → old EXACT/DISAGREE
-semantics (a birth-fact clash stays negative evidence, aligned with db/016); otherwise a **positive-only union fallback**
-over {`sex-at-birth`, `administrative-sex`} (intersect→EXACT, disjoint→INSUFFICIENT_DATA, **never DISAGREE** — observed
-evidence supports but never suppresses; mirrors blocking's union-sex); one field one contribution (no correlated
-double-count); weight key `sex-at-birth`→`"sex"` (projection field names untouched); `load_candidate` reads both facets
-in ONE query; side rank = sab's if present else admin's (documented second-order approximation). (2) **The scoped forcing
-rule** (`banding.band(unconfirmed=)`, the known-alias-forcing precedent): a pair with a `chart_trust='unconfirmed'` chart,
-**≥2 positive-LEVEL fields, zero DISAGREE** → REVIEW even below threshold — never AUTO; fires **with vetoes attached**
-(post-review amendment: the original no-vetoes gate rested on a false "near-vacuous" premise — an identifier veto needs
-no verified values, so a vetoed-yet-corroborated Doe pair is reachable, and suppressing it would be the ADR-0014
-auto-reject); `'under-review'` (a dispute) deliberately does NOT trigger it; per-Doe volume bounded by the blocking cap;
-every persisted proposal involving an unconfirmed chart carries an `{"kind":"identity_pending","unconfirmed":[uuids]}`
-evidence marker (`"kind"` = the one non-field-evidence discriminator, the alias-marker convention; worklist grouping).
-Trust plumbing mirrors aliases: one batch loader `db.load_trust_for` (sweep preloads; propose's per-pair fallback is the
-same one-query loader), canonical lowercase-uuid keys for map + marker. TDD: pure + DB-gated incl. the #130 e2e
-(`test_identity_pending_pipeline.py` — the headline pair surfaces as REVIEW; a no-pending control (shared seed helper)
-proves the RULE, not sex scoring, surfaces it, hardened non-vacuous; a direct-`propose()` test covers the on-demand
-trust seam; the two-Does pair carries both uuids in the marker).
-6-task subagent-SDD each reviewed clean; **final whole-branch review (fable): 0 Critical/Important**, 2 test-only
-must-fixes fixed → re-review READY TO MERGE; then an **8-angle post-review fix wave** (veto-gate removal;
-`_corroborated_positive` counts agreement LEVELS so learned weights can't stand the rule down; `score()` raises on a
-weights table missing a compared field — the stale-table/key-rename hazard — instead of silently zeroing; marker key
-`"rule"`→`"kind"`; singular `load_trust` deleted; the stale-forced-REVIEW retraction gap filed as
-[#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)). Suites pure 227 / DB 298 (full) /
-ruff clean. **Honest limits (recorded):** a pending+disputed Doe reads `'under-review'` (severity-max view) and bypasses
-the forcing rule while the dispute is open — deliberate, per db/024 semantics; ranking within a Doe's surfaced candidate
-list is the worklist tier's job; weights/thresholds remain shipped defaults (B3 learning unblocked); forced-REVIEW rows
-persist after the Doe is identified ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135)); ~~the eval mirror cannot
-yet represent `administrative_sex` (folded into the deferred range-aware eval-mirror work, slice 21 above — B3
-weight-learning needs it first)~~ **(closed — slice 23, below)**.
-
-**Slice 23 — B3 eval mirror: generator range-DOB emission + administrative-sex representation** (2026-07-05/06;
-advisory Python only, eval-harness tier — **no production matcher/pipeline/floor change, no SCHEMA/ADR/spec bump**;
-design+plan under `docs/superpowers/{specs,plans}/2026-07-05-eval-range-adminsex-mirror*`). Unblocks B3
-weight-learning: the harness now carries the field set the shipped matcher scores and blocks on. Four additive parts:
-(1) `DatasetRecord.administrative_sex` plumbed through the REAL adapter (`candidate_from_rows(admin_sex_row=)`) so the
-pure scorer eval exercises slice 22's composite-sex fallback (pinned by an sab-vs-admin `field_comparisons` EXACT
-test); (2) pure `_birth_window` mirror of `_RANGE_GROUPS_SQL`'s birth_window CTE + an anchored range-overlap branch in
-`shares_blocking_key` (overlap ∧ ≥1 side is_range; `dob-range+sex` needs no separate branch — same overlap join,
-subset), plus a fix for a live over-claim found in design: the exact-DOB branch compared raw values with no precision
-guard, so two identical `year-range` strings faked an exact key the SQL excludes (`IS DISTINCT FROM 'year-range'`);
-(3) `corrupt_dob_estimate` generator operator — dob → inclusive birth-year window CONTAINING the current value's first
-4-digit run (tol 2–5 ⇒ the 5–11-year §5.4 widths, provenance 30), sex moved sab→`administrative_sex` (observed facet;
-random draw when the seed recorded none), knob `p_dob_estimate=0.15`, LAST in `_OPERATORS`; `_repair` now stands down
-on window-overlap pairs (pinned by identity: `repaired is clone`); (4) drift canary extended to `_RANGE_GROUPS_SQL`
-(3-tuple table; the exact-dob exclusion pinned by a dob-arm-unique two-clause fragment after review found the one-line
-literal occurs twice in `_GROUPS_SQL`; containment check whitespace-normalized so a cosmetic reindent of the SQL can't
-trip it) + `seed_dataset` writes `administrative-sex` rows + two DB-gated proofs: the
-`dob-range+sex` rescue sees seeded admin-sex under `enabled_passes` isolation, and an estimate-heavy volume set
-(`p_dob_estimate=0.9, p_name=0.9`, n=150, >100 range clones asserted non-vacuous) measures `pair_completeness == 1.0`
-— the end-to-end proof the mirror never over-claims what the SQL recovers. 5-task subagent-SDD, each reviewed;
-**final whole-branch review (fable) found 1 Critical**: Python's `$` matches before a trailing newline, POSIX's does
-not, so `"1980/1990\n"` got a window the SQL rejects — the exact over-claim class the slice exists to close; fixed by
-de-anchored `re.fullmatch` (+ the canary now pins BOTH overlap-join bounds); re-review READY TO MERGE. Suites pure
-253 / DB-gated 326 (full) / ruff clean. **Honest limits (recorded):** the mirror still ignores the block-size cap
-(volume proofs run under a large cap; `evaluate_blocking` reports skips honestly); a `p_dob_typo`-shifted year windows
-around the typo (honestly unrecoverable by the range key alone; `_repair` restores a name token — safe direction);
-same-seed generator output differs from pre-slice output (reproducibility within a version, not cross-version
-stability); gold_v1.json deliberately untouched (synthetic data carries the new fields).
-
-**Slice 24 — B3 weight-learning: supervised Fellegi–Sunter estimation** (2026-07-07; advisory Python, eval tier only —
-**no production matcher/pipeline/floor change, no SCHEMA/event/ADR/spec bump**; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-06-b3-weight-learning*`). The learner the shipped
-`DEFAULT_WEIGHTS`/`DEFAULT_THRESHOLDS` comments always pointed at. Closed-form supervised F-S: count agreement levels
-across labelled pairs → `m/u` (additive-Laplace-smoothed; INSUFFICIENT_DATA excluded → 0, principle 4;
-provenance-blind — the `provenance_factor` stays an orthogonal score-time multiplier) → `weight = log2(m/u)`, the same
-math as `scoring.score` run backwards from ground truth. Four new pure modules under `matcher/src/cairn_matcher/eval/`:
-`learner.py` (`estimate_weights`, `derive_thresholds`, `learn_model`, `LearnedModel`/`LearnMetadata`), `crossval.py`
-(deterministic entity-cluster k-fold — split on WHOLE clusters so no match pair straddles train/test — + held-out
-before/after lift, skips folds whose training partition has no match pairs), `model_io.py` (`LearnedModel`↔JSON,
-`ModelIOError` on malformed input), `learn.py` (the `python -m cairn_matcher.eval.learn` CLI); + a behavior-preserving
-`scorer_outcomes` extract in `scorer_eval.py`. **Thresholds are safety-first, anchored to the best impostor:**
-`auto = max(non-match)+margin` (zero false auto-links by construction; `margin` guarded `>0` — a non-positive margin
-collapses/inverts the gap), `review = max(non-match)` (surface above the top impostor, never below → `review<auto`
-always), and `recall_target` is an honest **conflict diagnostic** (`collided` = the safe placement can't meet the
-recall floor), never a lever that drags `review` into impostor range. 6-task subagent-SDD; the Task-2 implementer
-caught a real plan bug (the original recall-cut `review` inverted on cleanly-separated data) → corrected before
-coding; **final whole-branch review (opus) found 1 Important** (`margin<=0` false-auto hole) → guarded; re-review READY
-TO MERGE. Suites pure 288 passed / 73 skipped / ruff clean. **Honest limits (design §8):** ships the *mechanism*, NOT
-new shipped weights — the gold demo actually scores *worse* than the hand-tuned defaults (tiny set, noisy k-fold,
-in-sample overlap; `collided=True`), so a **large hand-crafted gold-set re-run** is the deferred authoritative
-follow-up; synthetic-learned weights reflect the generator's corruption model; veto-blind (end-to-end the veto only
-lowers a band — safe); no pipeline consumer loads a learned model yet (advisory desk artifact).
-
-**Slice 25 — B3 compound blocking keys: `dob+first-initial` + `name+sex`** (2026-07-07; advisory Python, eval/matcher
-tier only, no floor/spec bump; condensed — full detail in git + PR #138). Two additive symmetric compound passes
-(registry 6→8): `dob+first-initial` (birth-year + first char of each name token — a first-initial relaxation of the
-name requirement, genuinely new recall for transpose/diacritic/misspelling variants) + `name+sex` (name token +
-normalized sex — the oversized-unisex-name-block per-sex rescue; the only name rescue that fires for the John-Doe
-population). Shared CTE fragments extracted to avoid sex-normalization drift. Suites pure 297 / DB 375 green. Honest
-limit: `name+sex` gain invisible to the uncapped metric (proven by a targeted over-cap DB test); lift on SYNTHETIC
-data only, real magnitudes await the large hand-crafted gold set (deferred slice-24 follow-on).
-
-**Slice 26 — §5.4 photo evidence + the day-one §3.14 attachment-reference shape** (2026-07-08; **ADR-0042**, spec
-v0.42→v0.43; design+plan under `docs/superpowers/{specs,plans}/2026-07-08-attachment-shape-and-photo-evidence*`).
-The FIRST content-addressed **attachment** on a clinical surface — forced finalizing the ONE can't-retrofit piece of
-ADR-0013 (also lands the Phase-7 attachment-reference shape). 9-task subagent-SDD, final whole-branch review "ready to
-merge" (0 Critical/Important); workspace 418 passed / 0 failed, clippy clean. **(1) Shape:** `AttachmentRef` stub →
-`Attachment{descriptor, renditions:[Rendition{role,alg,digest_hex,media_type,byte_len,inline?,seal?}]}` +
-`SealRef{alg,dek_wrap}` (`cairn-event/src/attachment.rs`) — all five §3.14 reserves; rendition set nested
-(structurally can't-retrofit), seal + inline reserved-None; field order frozen by ADR-0042 (reconciles ADR-0041's
-note `payload.media` — one shared primitive, two carriers). `EventBody.attachments: Vec<Attachment>`, empty-vec
-byte-identity proven. **(2) Floor:** `db/027` `cairn_learn_attachment_refs` walks `attachments[*].renditions[*]`
-(skips inline); db/005 + db/020 call the one shared helper (no drift). **(3) Author path:** non-demographic
-`identity.evidence.asserted` (`db/028` registers it — fail-closed floor; twin from descriptor never pixels);
-`cairn-node/photo_evidence.rs` (pure `prepare_local_blob` + atomic `assert_photo_evidence` — blob stored present
-through the db/026 verify trigger + event authored in ONE txn, `ON CONFLICT DO UPDATE` fills a placeholder) + an
-`assert-photo-evidence` CLI. **Honest limits:** plaintext (seal reserved), single `original` rendition (no preview),
-bytes local (cross-node fetch deferred), POC harness diverges. **Review fixes applied:** honest-descriptor rule
-moved into the library (`validate_photo_descriptor`, not only the CLI); a direct db/020 apply-door attachment test
-added (both doors now directly cover `cairn_learn_attachment_refs`); local-blob size-guard gap lodged as
-[#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) (§6.6 byte-tier slice). Residual (benign): DO-UPDATE
-overwrites caller `media_type` on an already-present row.
-
-**Slice 27 — §5.4 marks/belongings/EMS-context text identity evidence** (2026-07-08; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-08-marks-belongings-ems-evidence*`). Three text-shaped `kind` values —
-`mark`, `belongings`, `ems-context` — on the **existing** `identity.evidence.asserted` event type (the photo slice's
-non-attachment sibling). **No new migration / floor / SCHEMA / ADR / spec change** — the type is already registered
-(`db/028`), additive, non-demographic (db/015 carries the authored twin verbatim); the observation is free text in the
-payload, so `attachments` stays empty (zero-attachment content-address preserved). Pure `cairn-event::identity_evidence`
-additions (`MARK`/`BELONGINGS`/`EMS_CONTEXT_EVIDENCE_KIND` + `TEXT_EVIDENCE_KINDS` closed set + `parse_text_evidence_kind`
-typo-drift guard + `text_evidence_body` `{kind,provenance,description,basis?}` + `render_text_evidence_twin`); new
-`cairn-node::identity_evidence` author path (`validate_description` honest-content floor **in the library**; pure
-`build_text_evidence_body`; one-statement `assert_text_evidence` — no blob tier).
-Provenance fixed `clinician-observed` (relayed/hearsay in `basis`); `description` required-non-empty (floor refuses an
-empty claim; UI defaults are soft policy, principle 12). 4-task TDD; e2e + CLI smoke green; clippy clean.
-**Review follow-up (PR #142):** the slice-26 photo command and this slice's text command were **folded into one**
-`assert-identity-evidence --kind photo|mark|belongings|ems-context …` behind a new pure, unit-tested
-`route_identity_evidence` flag gate. **Honest limits:** free-text description only; no projection/worklist/matcher signal.
-**Remaining §5.4:** the "prior history now available" push-alert (§5.12, no notification tier), the search-before-create
-funnel (§5.3/§5.8, UI/API tier); ~~an `enroll-human` ceremony CLI~~ **done — slice 30 below**;
-~~a readable callsign suffix~~ + ~~`--observed-year`~~ done in slice 28 below; ~~`identify`→optional-link~~ **done —
-slice 29 below**.
-
-**Slice 28 — §5.4 finishers PR#1: node-local John-Doe ordinal + `--observed-year`** (2026-07-11; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-11-john-doe-ordinal-and-observed-year*`; **no new event type / migration-floor /
-SCHEMA / ADR / spec change** beyond one read-only VIEW). **Finisher 1 — node-local friendly ordinal:** the callsign
-identity string stays UUID-suffixed (partition-safe — a per-day counter was deliberately NOT used, it races on a
-partition), so a new read-only `db/030_john_doe_local_ordinal.sql` VIEW derives "this node's John Doe #N" from
-`event_log` — `row_number()` **PARTITION BY `node_origin`** over each node's own callsign registrations
-(`demographic.field.asserted` + `field=name` + `facets.use=callsign` + `provenance=system:john-doe-registration`),
-ordered by the collation-free `(hlc_wall,hlc_counter,content_address)` spine. Node-local by construction (foreign
-registrations land in their own partition); never signed/on-the-wire/an-identity. `register_john_doe → (Uuid,String,i64)`;
-CLI prints `local ref: John Doe #N (this node)`. All-time (no daily reset → no TZ semantics). **Finisher 2 —
-`--observed-year`:** pure `resolve_observed_year(Option<i32>,current_year)` bounds a supplied year to `1900..=current`
-(reject future/absurdly-historical; principle 4), defaults to today; feeds the already-parameterized
-`assert_observed_evidence(...)` — computed DOB range only, **not** `t_effective` (deliberate scope boundary).
-Subagent-driven TDD (new DB-gated partition/callsign-only test + 5 pure tests); full workspace green; fmt+clippy clean.
-**Finisher 3 (`identify`→optional-link) done in slice 29 below.**
-
-**Slice 29 — §5.4 finisher 3: `identify` → optional link** (2026-07-11, PR #165; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-11-john-doe-identify-optional-link*`; **no new event type / migration / floor /
-SCHEMA / ADR / spec change**). The last structural finisher: the node surface that RESOLVES a John-Doe chart (type/
-floor/overlay/builders already existed — this added the Rust path). New `cairn-node::identify`: device-additive
-`build_identify_body` (flips chart *unconfirmed*→*confirmed*) + the async `identify_patient` orchestrator authoring the
-identify and, on `--link <prior>`, an OPTIONAL human-attested `identity.link.asserted` (reusing
-`apply_proposal::build_attested_link_body`) — **both in ONE atomic transaction** (a link rejection rolls the identify
-back). `attester_is_enrolled_human` advisory pre-check on `actor_current` (mirrors the db/005 floor). New
-`identify-patient` CLI. Subagent-driven TDD (5 DB-gated + 2 pure); whole-branch review clean. **§5.4 structural
-finishers 1–3 all done.**
-
-**Slice 30 — §5.4 `enroll-human` ceremony CLI** (2026-07-11; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-11-enroll-human-ceremony-cli*`; **no migration / floor / SCHEMA / ADR / spec
-change** — additive Rust reusing the `enroll_actor` db/004 floor). The `identify --link` prerequisite: enrols a
-clinician's key as a `kind='human'` actor with an ADR-0044 person-distinguishing determinant, and drops the raw-SQL
-human enrollment from `identify.rs` tests (house rule 5). New `cairn-node::enroll`: pure
-`build_human_pinned(role, registration_id?, handle?)` — requires ≥1 determinant (principle 4), **never pins the key**
-(rotate-key stability, ADR-0011 §5); async `enroll_human_actor` — a **dual-mapping guard** (one key→>1 `actor_current`
-row makes db/005 NULL that key's authorship node-wide) + an advisory ADR-0044 collision pre-check over the floor. New
-`enroll-human` CLI: pre-I/O + pre-mint validation, mint-if-absent personal key (sealed + recovery code, or
-`--insecure-plaintext`; no `.lsk` node-escrow). Subagent-driven TDD (6 pure + 7 DB-gated `tests/enroll_human.rs`);
-whole-branch review (opus) **Ready = YES**, 0 Critical/Important, 3 Minor fixed; a post-PR `/review` pass then fixed 4
-further Minors (documented the (entity, role) actor model so `--role` splits are understood as intended not a bug;
-extracted the pre-mint collision check to a DB-gated library fn; softened the "no stray key" claim to best-effort;
-documented the load-branch unseal). Full workspace green (cairn-node lib 117 + all DB-gated incl. enroll_human 7/7 &
-identify 5/5 · cairn-event 86 · cairn-sync 18); fmt + clippy --workspace + mkdocs clean. **Follow-ups:
-[#166](https://github.com/cairn-ehr/cairn-ehr/issues/166):** the dual-mapping guard's
-accepted TOCTOU (concurrent enroll of the SAME key under DIFFERENT actor_ids — floor lock is actor_id-keyed, not
-key-keyed); documented as accepted, durable fix is a floor-level per-key guard in db/004. **[#168](https://github.com/cairn-ehr/cairn-ehr/issues/168):**
-make the entity→role-actor (1:many) relationship first-class (today implicit via a shared `registration_id` pinned
-into each role-actor).
-
-**Slice 30b — `clinical.medication`: the first clinical-content event stream** (2026-07-12; branch
-<!-- "30b", not a renumber (#215): two slices were both logged as 30; renumbering every later
-     slice would break the Slice-N cross-references in HANDOVER, issues, and PRs. -->
-
-`feat/medication-recording-slice-1`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates
-data-model §3.3 + the "union + flagged for reconciliation" line into product code; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-11-medication-recording-*`). Distinct from slices 1–29 above: those
-are all *administrative/identity* data about the patient (demographics, matcher, identity algebra,
-John-Doe); this is the first event stream carrying actual *clinical content* — what medication the patient
-is on. Two append-only verbs over an immortal `medication_id` thread: `clinical.medication.asserted`
-(schema `clinical.medication/1`) + `clinical.medication-cessation.asserted`
-(`clinical.medication-cessation/1`). `cairn-event::medication` pure builders — substance ref is mandatory
-`term` + nullable `inn_code` + formulation (principle-4 uncertainty floor: only `term` mandatory, all else
-honest-unknown); free-text `DoseUnit` with a recommended vocab; `info_source` provenance-of-claim. New
-`db/031_medication.sql`: the structural floor (`cairn_check_medication_assertion` + the shared
-`cairn_event_twin` hook — non-empty `term` + `info_source`, valid `medication_id`); `medication_statement` /
-`medication_cessation` kept as **separate projections** so they're arrival-order-independent (an orphan
-cessation renders nothing until its assert arrives, then surfaces in `patient_medication_past`); the
-`patient_medication{,_current,_past}` views union across sources with staleness visible via assert date;
-the **E1 deterministic advisory reconciliation flag** (view `patient_medication_reconciliation_flag`;
-`coalesce(inn_code, normalized term)` — advisory only, cleared by ceasing a duplicate; fuzzy brand↔generic
-deferred). `cairn-node::medication` orchestrators
-(`assert_medication` / `cease_medication`, both device-additive) + `medication-assert` / `medication-cease`
-CLI verbs; end-to-end CLI smoke passed live. Cessation is offline-first (no requirement that the local node
-has already seen the corresponding assert). Subagent-driven TDD (6 tasks); full workspace green — fmt +
-clippy `--workspace -D warnings` clean, all tests pass incl. **DB-gated `tests/medication.rs` 9/9**
-alongside the existing cairn-node/cairn-event/cairn-sync suite. **Post-review fix:** `asserted_at` derives
-from the convergent `hlc_wall` (t_recorded), not the local `updated_at` fold clock, keeping the staleness
-signal honest and node-independent (regression-tested). **Deferred:** dose-correction/change
-overlay; fuzzy reconciliation (brand↔generic, typos, salts); reconciliation *resolution* as a first-class
-event; a `delete` rendering-suppression visibility overlay; structured sig/frequency (lands with
-prescriptions); the Tier-A dictionary + autocomplete + DDI; a separate `route` field; active
-review/last-confirmed staleness; the [#157](https://github.com/cairn-ehr/cairn-ehr/issues/157) HLC-triple
-collision advisory extended onto the medication projections; human-attested clinical responsibility on a
-medication statement (slice 1 is device-additive throughout).
-
-**Slice 31 — medication dose overlay (slice 2 of `clinical.medication`)** (2026-07-12; branch
-`feat/medication-dose-overlay-slice-2`; **no ADR/spec/SCHEMA/floor-contract/wire change** — graduates the
-slice-30 §8 deferral into product code; design+plan under
-`docs/superpowers/{specs,plans}/2026-07-12-medication-dose-overlay-*`). Two new **additive** verbs over the
-existing `medication_id` thread: `clinical.medication-dose-change.asserted` (titration — both doses true over
-effective time) + `clinical.medication-dose-correction.asserted` (a recorded dose was wrong; references the dose
-event it fixes via a plain `corrects` UUID — **not** the existence-forcing `target_event_id`, so it stays
-offline-first). New `db/032_medication_dose.sql` (**db/031 UNTOUCHED**): the structural floor
-(`cairn_check_medication_dose` + two `cairn_event_twin` branches reproduced verbatim; both types
-`additive`/`targets_other_author=FALSE` — a correction is additive, **not** suppressing, so the ADR-0043
-owner-gate does not apply and cross-author correction is ungated with the original preserved). A **dose timeline**:
-`medication_dose_event` (point-0 seeded from the assert by a 2nd additive trigger + one row per change,
-`ON CONFLICT DO NOTHING` idempotent) + `medication_dose_correction` (HLC-wins overlay keyed by the **target** dose
-event, offline-first orphan convergence). `medication_current_dose` picks the **latest-EFFECTIVE** point (bitemporal
-§5.1: `cairn_dose_effective_sort_key` — ISO-lexical string, null→recording-time; then HLC/`content_address`, all
-`COLLATE "C"` → fully node-convergent, a backdated change never overrides a real later one).
-`patient_medication_dose_history` = the titration trail; `patient_medication_current`/`_past` reworked to source the
-dose from the timeline **without widening** (same column set as db/031 — a widening `CREATE OR REPLACE` breaks
-`connect_and_load_schema`'s every-connect db/031 replay: "cannot drop columns from view"). **correct-to-unknown shows
-unknown, not the stale original** (views key on correction-row presence, not `COALESCE`). `cairn-event::medication`
-split into `assert`/`cessation`/`dose`; device-additive `change_dose`/`correct_dose` orchestrators +
-`resolve_correction_target` (defaults to the current dose point) + `medication-change-dose`/`medication-correct-dose`
-CLI. Subagent-driven TDD (8 tasks); full workspace green — fmt + clippy `--workspace -D warnings`,
-`cargo test --workspace` 0 failures / 31 binaries (DB-gated `medication_dose` **14/14** + slice-1 `medication` 10/10
-across many reconnects), mkdocs. Whole-branch review (opus): **Ready to merge, 0 Critical/Important**; 2 floor
-findings caught + fixed in-build (a 3VL NULL hole in the no-op guard → content-check + `COALESCE(...,FALSE)`; an
-empty-`{"dose":{}}` raw-SQL bypass → the guard checks dose/effective CONTENT not key-presence, proven by a hostile
-hand-injected test). **Post-review fix (PR #175):** the correction projection join is now **thread-scoped**
-(`corr.medication_id = de.medication_id`) so a mistargeted correction (names thread X, `corrects` a point of thread Y)
-is a fail-safe no-op on the projection instead of silently overlaying Y's displayed dose — regression-tested
-(negative-control verified). **Deferred (slice 3+):** cross-thread **reconciliation resolution** (link two threads as the
-same real med — never-merge); correcting a dose event's *effective date*/*reason* (slice 2 corrects the value only);
-the #173 twin-dispatch registry refactor; the #157 collision advisory onto the dose projections; human-attested
-clinical responsibility on a dose event.
-
-**Slice 32 — medication cross-thread reconciliation resolution (slice 3 of `clinical.medication`)** (2026-07-13;
-branch `feat/medication-reconciliation-slice-3`, PR #178; **[ADR-0047](spec/decisions/0047-medication-reconciliation-resolution.md)**,
-spec v0.47→v0.48; design+plan under `docs/superpowers/{specs,plans}/2026-07-13-medication-reconciliation-*`).
-Removes the **slice-30 wart**: clearing a duplicate `patient_medication_reconciliation_flag` no longer requires a
-**false cessation**. Two additive verbs over a canonical `(low,high)` `medication_id` thread pair —
-`clinical.medication-reconciliation.asserted` (state `reconciled`) + `clinical.medication-separation.asserted` (state
-`separated`, the never-erase reversal); both `additive`/`targets_other_author=FALSE` (a reconciliation forecloses
-nothing → ADR-0043 owner-gate N/A → **cross-author reconciliation allowed**). New `db/033_medication_reconciliation.sql`
-(**db/031 + db/032 UNTOUCHED**): structural floor (`cairn_check_medication_reconciliation` — two DISTINCT valid UUID
-subjects + valid patient + non-empty provenance; self-reconcile refused; **offline-first**, no subject existence check)
-+ 2 `cairn_event_twin` branches reproduced verbatim; an HLC-overlay `medication_reconciliation` edge table + a
-connected-component `medication_group_member` projection (min-UUID canonical, `cairn_recompute_medication_group`,
-advisory lock `CARNMR` distinct from db/018's `CARNLK`, oversize guard RAISE-local/clamp-flag-remote) **mirroring
-db/018 `patient_link`/`person_member`** one level down; collapsed group views — `patient_medication_current`/`_past`
-emit **one row per reconciled group** (SAME column set as db/032, replay-safe) with group status by
-**latest-EFFECTIVE-wins** (all-active→active; all-ceased→ceased; mixed→later-effective decides; **provably reduces to
-slice-30/31 for singletons**) and current dose = latest-effective across ACTIVE members. The flag fires on
-`count(DISTINCT group_id)>1` (reconciling clears it, separating re-fires it) — `thread_count` **kept its name for
-replay-safety** (renaming is replay-UNSAFE: db/031 re-issues `CREATE OR REPLACE ... thread_count` every connect before
-db/033). `cairn-event::medication::reconciliation` pure builders/twins; device-additive `reconcile_medications`/
-`separate_medications` orchestrators + `medication-reconcile`/`medication-separate` CLI (live e2e smoke passed).
-Subagent-driven TDD (8 tasks, per-task review); full workspace green — fmt + clippy `--workspace -D warnings`,
-`cargo test --workspace` **560 passed / 0 failed** (58 binaries; `medication_reconciliation` all + slice-30 `medication`
-10/10 + slice-31 `medication_dose` 14/14), mkdocs. Whole-branch review (opus): **Ready to merge, 0 Critical/0 Important.**
-Two in-build catches: an untested oversize-guard (+ a FALSE "db/018 leaves it untested" rationale) → added a
-walk-to-cap RAISE+txn-rollback test; the plan's `thread_count`→`group_count` rename was replay-unsafe → kept the name.
-**PR-review fix:** restored db/032's as-asserted dose fallback in the collapsed current/past views (dropping it would
-NULL a slice-1-only med's dose on reconnect — a principle-11 regression, since db/032's seed trigger never backfills
-pre-existing asserts) + COLLATE "C"-pinned the status latest-effective comparison (ADR-0045); +1 regression test.
-**Filed:** [#176](https://github.com/cairn-ehr/cairn-ehr/issues/176) (oversize **remote** clamp-and-flag test — needs a
-medication apply-door harness); [#177](https://github.com/cairn-ehr/cairn-ehr/issues/177) (**cross-patient reconciliation
-guard — needs a design decision**). **Deferred:** correcting a dose event's *effective date*/*reason*; fuzzy/automatic
-reconciliation + Tier-A dictionary (the human-driven *resolution* now exists, automated *detection* is the gap); a
-prefer-INN display term for groups; human-attested reconciliation (composes additively, zero floor change); #173/#157.
-
-**Slice 33 — medication attestation: human-attested responsibility (slice 4 of `clinical.medication`)**
-(2026-07-14; branch `feat/medication-attestation-responsibility`; **[ADR-0049](spec/decisions/0049-commitment-based-sign-off-currency.md)**,
-spec v0.49→v0.50; design+plan under `docs/superpowers/{specs,plans}/2026-07-14-medication-attestation-*`).
-Graduates the slice-30/31/32 §8 deferral ("human-attested clinical responsibility on a medication event")
-into product code, advancing [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163). One new **additive**
-verb, `clinical.medication-attestation.asserted`, over an existing `medication_id` thread — a **separable**
-responsibility-bearing overlay (principle 10) that trips the **existing** db/005 attestation gate (3-arg
-`submit_event`, enrolled `kind='human'` actor); the device-signed medication events are unchanged, so a
-*different* human may vouch, possibly later. New `db/034_medication_attestation.sql` (**db/031–033
-UNTOUCHED**): structural floor (`cairn_check_medication_attestation`) + `cairn_medication_thread_commitment`
-(the **single SQL source** for a convergent sorted-concat-hash over the thread's content-event
-`content_address`es, used at both author and read time — no Rust↔SQL byte-identity risk) + the append-only
-`medication_attestation` projection. Staleness is a **set-commitment compare, not a position pin**:
-`medication_thread_attestation.stale = current_commitment IS DISTINCT FROM reviewed_commitment`, which
-closes the case a head-position pin would silently absorb — a **lower-HLC event arriving after the sign-off**
-(a late-synced earlier-wall update) still flips it stale, since the append-only content *set* changed even
-though the new event's HLC is causally below the pinned head; also catches a divergent set on another node
-(errs toward re-review). `medication_group_attestation` is a **conservative rollup** — a reconciled group
-reads attested-current only when every active member thread does. Rust: `cairn-event::medication::attestation`
-(pure builder + twin) + `cairn-node::medication::attestation` (`attest_thread_in_tx` — the shared
-in-caller-txn primitive — + the post-hoc `attest_medication_thread` orchestrator) + **`attest: Option<AttestParams>`
-threaded through all six existing verbs** (atomic verb-then-vouch in one txn; a rejected attestation rolls the
-verb back; the pair verbs `reconcile`/`separate` attest **both** subject threads). Companion refactor: `medication.rs`
-split into a per-verb module dir (`assert`/`cessation`/`dose`/`reconciliation`/`attestation`), zero behaviour
-change. CLI: new `medication-attest <medication_id>` (post-hoc) + **`--attest-as`/`--attest-passphrase`
-(`env: CAIRN_ATTESTER_PASSPHRASE`)/`--basis`/`--note`** on all six existing verbs, one shared `AttestFlags` +
-`resolve_attester`. **Supersede, never retract** (the maintainer's clinical call, principles 1/2): there is
-**no de-attestation event** — a clinician who vouched in error authors a corrective event instead (a
-`dose-correction`, `cessation`, or new assertion), which changes the thread's content set, flips the prior
-attestation stale, and prompts re-review/re-vouch; the erroneous vouch stays in the record. Subagent-driven
-TDD (7 tasks, per-task review); full workspace green (fmt + clippy `--workspace -D warnings`, `cargo test
---workspace`, incl. a **DB-gated test proving the lower-HLC-late-arrival case flips stale**, the design's
-load-bearing property); live e2e CLI smoke (assert+attest→current; dose-change→stale; re-attest→current;
-`reconcile --attest-as`→both threads current). **In-branch catches:** the #173 twin-check registry contract
-test (`twin_registry.rs`) correctly needed updating from 15→16 rows once db/034 registered its type — an
-implementer misdiagnosed this as a pre-existing/unrelated failure and filed
-[#180](https://github.com/cairn-ehr/cairn-ehr/issues/180); a reviewer confirmed it was branch-introduced,
-fixed the contract to 16 rows, and closed #180 as a misfile. **CRITICAL fix:** the CLI's cross-flag "nothing
-to attest" guard originally gated on `--attest-passphrase` being present, but that flag carries `env =
-CAIRN_ATTESTER_PASSPHRASE` — so exporting the documented shared env var made every plain device-additive
-verb call fail spuriously; fixed by extracting a pure `attest_context_without_key` predicate that gates only
-on `--basis`/`--note` (mirroring `identify-patient`, which never gates on its passphrase field either).
-**Deferred:** a partially-attested-group read surface (which member is stale); a whole-list-sign-off summary
-event (composes from N thread attestations today).
-
-**Slice 33 follow-up — attestation hardening + coverage** (2026-07-14, closes
-[#181](https://github.com/cairn-ehr/cairn-ehr/issues/181); no ADR/spec/SCHEMA change; no new event type,
-migration is an in-place `cairn_check_medication_attestation` edit to db/034). One real floor improvement
-(**M1**): a hostile/raw attestation body with **no responsibility-bearing contributor** used to slip past the
-db/005 gate (`v_bears` false → `attester_key` NULL) and fail only later at the apply trigger's `attester_kid
-TEXT NOT NULL` with a cryptic message; the floor now rejects it **legibly** (mirrors the db/005 predicate
-`e ? 'responsibility'`; principle 12, db/026 precedent), still fail-closed, no well-formed event affected.
-Plus five coverage tests closing the review's inspection-verified-correct gaps: the **second-subject**
-reconcile/separate attestation rejection **rolls back the first subject's vouch + the verb event** (atomic-txn,
-forced via an orphan second thread); the **group-rollup unattested-member** branch and the **singleton
-reduction** (asserting `unattested_members`); the equal-HLC **`content_address DESC` tiebreak** (convergence
-determinism); and the pure builder `note`-without-`basis` permutation. The signer==attester invariant is
-documented at the apply trigger (attester_key vs signer_key_id, principle 10). A post-review `/review`→`/fixall`
-pass corrected the M1 comment (the type guard is **defense-in-depth for a direct caller**, not a door-level
-non-array fix — both doors compute `v_bears` before the floor) and added a sixth test covering that live branch.
-**Deferred, both unreachable by well-formed clients:** the cosmetic `reviewed_count` `u32`→`int4` note (#181)
-and the pre-existing all-types **door-level non-array-`contributors` legibility gap**
-([#184](https://github.com/cairn-ehr/cairn-ehr/issues/184)).
-
-**Slice 34 — medication dose effective-date/reason correction (slice 5 of `clinical.medication`)** (2026-07-15;
-branch `feat/medication-dose-effective-correction`; **[ADR-0050](spec/decisions/0050-dose-correction-per-field-patch.md)**,
-spec v0.50→v0.51; design+plan under `docs/superpowers/{specs,plans}/2026-07-15-medication-dose-effective-correction*`).
-Closes slice 2's honest gap: `-dose-correction` fixed the dose *value* only, so a mis-keyed effective date — which
-drives current-dose winner selection — and clinical reason were uncorrectable. The correction becomes a **per-field
-patch** of a targeted dose point: three groups `dose`/`effective`/`reason`, each **set** (a value) / **struck**
-(named in a `strike` array → set-unknown) / **kept** (omitted). Brainstormed decision: patch-not-restatement so
-fixing one field never wipes the rest (principle 4); an explicit `strike` sentinel keeps set-to-unknown first-class.
-**The corrected effective date drives current-dose winner selection** (bitemporal repair, not a display label).
-New `db/035` (db/031–034 UNTOUCHED): `ALTER`-extends the db/032 correction overlay (+`effective_value`/`_precision`/
-`note` + three touched-flags disambiguating struck-NULL from untouched), idempotent guarded backfill, the correction
-floor (strike-array/set-strike-conflict/set-group-must-carry-value/no-op + **non-string reason/note/info_source**
-guards hardened beyond the plan, principle 12), the apply trigger, and **five** reworked views kept column-identical (replay-safe):
-the two db/032 dose views + db/033's three group-rollup views (a mid-build discovery — `patient_medication_current`/
-`_past` route through the group rollup, so the corrected effective must be threaded there too or the headline is
-invisible). `reason` repurposed to the point's clinical reason; the correction rationale is a separate `note`
-(CLI `--correction-note`, renamed to dodge the flattened attest `--note`). `schema_version` /1→/2 (honest signal:
-omitted-field meaning changed from "unknown" to "keep"). Rust: `cairn-event::medication::dose` (`DoseCorrection` +
-builder/twin), `cairn-node::medication::dose` (`CorrectDoseInput` + orchestrator), CLI flags. Reuses the existing
-verb: **no new event type, no floor bypass, no SCHEMA-counter bump, twin-registry unchanged.** Convergence stays
-**one row per point, HLC-wins WHOLESALE** — a later correction of the same point supersedes an earlier one, not
-field-merged (documented boundary; field-merge would need per-field HLC tracking). Subagent-driven build (6 tasks);
-opus whole-branch review **READY TO MERGE, 0 Critical/0 Important-in-scope**; a post-review `/fixall` pass then
-extended the floor's type-guards from `reason` to `note`/`info_source` (principle 12, uniform annotation guard)
-and added the cross-cessation-boundary status test; full workspace green (`cargo test --workspace` 0 failed;
-medication_dose 25, reconciliation 15, attestation 27). **Filed
-[#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (OPEN):** a **pre-existing** (db/032) cross-thread
-correction **suppression** vector — the overlay's single-column PK lets an authenticated hostile node evict a legit
-correction via `ON CONFLICT` (bounded: reverts to original, event auditable); needs a PK/design decision.
-**Deferred (documented boundaries):** the statement-level `started`-date correction (slice 5 covers the
-dose-timeline effective only); per-field merge across corrections of the same point. (The `medication_group_status`
-cross-cessation-boundary test, deferred at build time, was added in the post-review `/fixall` pass.)
-
-**Matcher cleanup (2026-07-08, sixth session — advisory/test-infra only, no product/floor/spec bump):**
-~~stale forced-REVIEW proposal retraction ([#135](https://github.com/cairn-ehr/cairn-ehr/issues/135))~~ **done**
-(PR #151): `propose()`'s band-None branch now retracts a still-`pending` row (`status='retracted'`, append-only, no
-DELETE) once a Doe is identified, `upsert_proposal` reverts `retracted→pending` on a genuine re-proposal, human
-dispositions preserved. ~~matcher integration-test committed-row leak ([#84](https://github.com/cairn-ehr/cairn-ehr/issues/84) pt1)~~
-**done** (PR #150): `managed_pg_conn` truncates projections on teardown (pt2 `KeyError` already fixed in PR #131).
-
-**Remaining matcher pieces:** **B3** — a large hand-crafted gold set to re-run the slice-24 learner + locale comparator packs (phonetic/nickname + content-addressed profiles) + hub-tier
-aggressive duplicate-sweep + full §7.5 matcher actor registration; ~~an A/B pass-toggle in
-`generate_candidate_pairs`~~ **(done — slice 21)**; ~~scoring `administrative-sex` / the evidence-sparse score floor
-([issue #130](https://github.com/cairn-ehr/cairn-ehr/issues/130))~~ **(done — slice 22)**. **Identity: pieces C1
-(the §5.1/§5.7 linkage core — `db/018`) and C2 (the `match_proposal`→apply seam — `db/019`, `apply_proposal.rs`)
-are now BUILT** (slices 13–14, above), as is **C2b** — auto-apply of the `auto_candidate` band (slice 15, above),
-**C3** — `dispute` + the chart trust-state projection (slice 16, above) — and **C4** — `identify` + the *unconfirmed*
-trust state (slice 17, above), which completes the §5.7 confirmed/unconfirmed/under-review contract, and **C5** —
-`repudiate` + the known-alias pool (slice 18, above), the first *suppressing* identity event. Remaining:
-**C5+** — the rest of the §5.7 algebra (`reattribute` §5.5 event-granular strike-through + tiered adjudication — waits on
-a clinical-note surface). The §5.4 John-Doe subsystem's structural finishers are all built (slices 20–29) and the
-`enroll-human` ceremony CLI (slice 30); the non-structural remainder is the §5.12 push-alert and the §5.3/§5.8
-search-before-create funnel.
-**Other deferred:** a veto-aware
-scorer mode; variable cluster size / an unrecoverable fraction / hard negatives in the volume generator; a
-`compare_address` comparator; a CLI sweep entry; B2 follow-up Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
 - **Point-of-care identity, possession semantics, `sign-as` salvage** ([ADR-0008](spec/decisions/0008-point-of-care-identity-possession-and-salvage.md)).
 - **Locale-pluggable matcher comparators** — *advisory only* (Python/ML); comparator-profile tag travels with each demographic assertion, degrades honestly to human review ([ADR-0014](spec/decisions/0014-locale-pluggable-matcher-comparators.md)).
 
-**Slice 35 — the P1 floor-hardening slice (2026-07-16; the 2026-07-15 review course, Priority 1; issues
-#187/#207/#194/#191/#192[+#177]/#190/#193/#195; branch `feat/floor-hardening-spike0002-p1`; no ADR/spec/SCHEMA/
-event-type change; TDD, one commit per issue; full detail in git + HANDOVER).** The ADR-0030 hostile-enrolled-writer
-threat model re-run against the floor: local-door `hlc_wall` drift-ceiling reject (#187); additive ALTERs for all
-#115-widened overlay columns + `pc.*` view upgrade-heal + the `migration_replay_widening.rs` guard (#207);
-`content_address` final tiebreak on `patient_identifier`/`patient_demographic` (#194); fail-closed suppression
-target gate at both doors + registry rows, mirrors 16→18 (#191); medication thread patient-consistency — shared
-guard in all four verb triggers, local fail-loud / sync converge-and-flag (`medication_patient_conflict_flag`),
-cross-patient reconciliation refused when both patients known + `medication_group_cross_patient` read-time surface,
-separation never guarded (#192, resolves #177); un-attested `identity.link` faces the db/016 hard veto at the door,
-sync path flags (`link_veto_flag`) + a new `chart_trust` under-review source (#190); drift ceiling at the restore
-door (#193); responsibility contributor bound to the verified attester via `cairn_responsibility_bound` at both
-attestation gates (#195). A PR #219 review round added two fixes on the same branch: the #190
-`link_veto_flag` lifecycle now derives from the standing overlay winner (closing a backdated-unlink silent
-merge and a stale-link phantom flag), and `medication_group_cross_patient` derives members' patients from
-`cairn_medication_thread_patient` (cessation-only threads no longer hidden); follow-up #220 filed for the
-remaining arrival-time-only veto evaluation. Workspace 643/0 failed.
+**Slices 13–35 — condensed (2026-07-02 → 07-16; full detail in git, the PRs and the linked ADRs).**
+The identity/John-Doe/medication build-out and the review course's Priority-1 slice. What exists:
+
+- **§5.7 identity core C1–C5** (slices 13–18, `db/018`/`019`/`023`/`024`/`025`, SCHEMA 16→18) — the closed
+  identity algebra: `link` assertions and the linkage projection (C1); the `match_proposal`→apply seam with a
+  human-accepted door (C2); auto-apply of the `auto_candidate` band via `matcher_actor.rs` (C2b); `dispute` +
+  the chart trust-state projection (C3); `identify` + the *unconfirmed* trust state (C4); `repudiate` + the
+  known-alias pool (C5, the first *suppressing* identity event). The
+  confirmed/unconfirmed/under-review contract is COMPLETE.
+- **§5.4 John-Doe subsystem** (slices 20, 26–30) — registration front door (A+B, no new event type); photo
+  evidence carrying the day-one §3.14 attachment-reference shape ([ADR-0042](spec/decisions/0042-concrete-attachment-reference-shape.md));
+  marks/belongings/EMS-context text evidence (three `kind` values on the existing evidence type); finishers
+  (node-local ordinal + `--observed-year`; `identify` → optional link); the `enroll-human` ceremony CLI.
+- **§5.2 matcher, advisory tier** (slices 19, 21–25; Python `matcher/`, no `db/` change) — the alias-pool
+  evidence pass; birth-year-range blocking + A/B pass toggle; administrative-sex scoring and the
+  unconfirmed-chart REVIEW rule; the B3 eval mirror (generator range-DOB + sex representation); supervised
+  Fellegi–Sunter weight-learning (a PoC on small/synthetic data — see the gold-set item below); compound
+  blocking keys (`dob+first-initial`, `name+sex`).
+- **`clinical.medication` slices 1–5** (slices 30b–34, `db/031`–`db/035`) — the first clinical-content stream:
+  assert/cease + the E1 reconciliation flag; the bitemporal dose overlay/timeline; cross-thread reconciliation
+  as a *link* ([ADR-0047](spec/decisions/0047-medication-reconciliation-resolution.md)); the commitment-based
+  attestation responsibility overlay ([ADR-0049](spec/decisions/0049-commitment-based-sign-off-currency.md), plus a
+  hardening/coverage follow-up); per-field dose effective-date/reason correction
+  ([ADR-0050](spec/decisions/0050-dose-correction-per-field-patch.md)). Twin-check registry:
+  [ADR-0048](spec/decisions/0048-twin-check-registry-dispatch.md).
+- **Slice 35 — the P1 floor-hardening slice** (2026-07-16, PR #219; no ADR/spec/SCHEMA change) — the ADR-0030
+  hostile-enrolled-writer threat model re-run against the in-DB floor across eight issues
+  (#187/#207/#194/#191/#192[+#177]/#190/#193/#195), closing the local-door HLC drift ceiling, the widened-column
+  replay guard, `content_address` final tiebreaks, the fail-closed suppression-target gate, medication
+  patient-consistency (resolving #177), the un-attested `identity.link` veto, the restore-door drift ceiling and
+  the responsibility↔attester binding. Follow-up [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) remains
+  (the #190 veto is link-arrival-only).
+
+**Still open from these slices.** Condensing 13–35 must not lose the open remainder, so it is enumerated in full
+here (a PR #271 review finding: the first pass dropped two *open* issues out of every tracked file).
+
+- **Filed and open.** [#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) — photo evidence has no size guard
+  on the local blob-store path (§6.6 byte-tier slice). [#184](https://github.com/cairn-ehr/cairn-ehr/issues/184) —
+  a non-array `contributors` yields a cryptic scalar-extract error at **both** submit doors, all event types.
+  [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163) (demographics currency),
+  [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168) (entity→role-actor 1:many),
+  [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (cross-thread dose-correction suppression vector —
+  needs a PK/design decision), [#79](https://github.com/cairn-ehr/cairn-ehr/issues/79) (B2 Minors),
+  [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) (the #190 veto is link-arrival-only).
+- **Identity C5+.** `reattribute` (§5.5 event-granular strike-through of clinical documentation) **waits on a
+  clinical-note surface**; a reversal / de-repudiation event; a chart-history VIEW rendering struck names (the data
+  is already present); an accept-at-cap boundary test for the oversize guard; the §5.2 coherence feedback loop;
+  notification / contamination cascade on dispute; person-level trust aggregation. The §5.12 push-alert and the
+  §5.3/§5.8 search-before-create funnel are the non-structural John-Doe remainder.
+- **Matcher (advisory tier).** A **large hand-crafted gold set** to re-run the learner for authoritative magnitudes;
+  **full §7.5 matcher actor registration** (the matcher's contributor identity lives in a provenance string for
+  now); **no recovery escrow for the sealed matcher key** (regenerable today, so this is a convenience gap, not a
+  data-loss one); no background scheduler (operator-invoked CLI only); locale comparator packs; the hub-tier
+  aggressive duplicate sweep; a veto-aware scorer mode; fuzzy/edit-distance alias recognition and a dedicated
+  `alias` blocking pass; fuzzy near-window softening; variable cluster size / hard negatives in the volume
+  generator; a `compare_address` comparator; a CLI sweep entry; the B3 mirror still ignores the block-size cap.
+- **Medication (slices 30b–34).** Automated reconciliation **detection** — the human-driven *resolution* exists,
+  fuzzy/automatic detection plus a Tier-A dictionary is the gap; a partially-attested-group read surface (which
+  member is stale); a whole-list sign-off summary event; statement-level `started`-date correction and per-field
+  merge across corrections of the same point; a rendering-suppression visibility overlay for `delete`; structured
+  sig/frequency; a separate `route` field; prefer-INN display term.
+- **Attachments (slice 26).** Bytes are local only — **cross-node fetch deferred**; the residual DO-UPDATE
+  overwrites a caller-supplied `media_type` (benign).
+- **Accepted risk with a named remedy.** The `enroll_actor` dual-mapping guard's TOCTOU window
+  ([#166](https://github.com/cairn-ehr/cairn-ehr/issues/166), closed as *accepted*): the durable fix is a
+  floor-level per-key guard in `db/004`. Recorded here so the accepted risk keeps its remedy attached.
+
+*Done, not open* (called out because an earlier condensation listed it as outstanding): stale forced-REVIEW
+proposal **retraction** — [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135), closed by PR #151.
 
 **Slice 36 — sync-convergence CI (2026-07-16; the review course, Priority 2 opener; issue #199 [B4], covers the
 #176 deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change —
@@ -1124,6 +572,59 @@ ADR-0026 escrow custody floor), and **one root shape for all three provisioning-
 admits-and-disputes — the ADR-0054 contrast completed). Follow-ons filed: #257 (verifier/load-gate
 code), #258 (transparency-log role), #259 (reproducibility CI), #260 (freshness rung), #261
 (sync-auth onboarding UX design session). Design/plan docs under `docs/superpowers/`.
+
+**Slice 48 — the #200 design session: ADR-0056 unknown event types admitted uninterpreted
+(2026-07-20; P6 design queue, third item; spec v0.58; docs-only — code slices filed as
+follow-ons).** Review finding B5 filed #200 as a spec *over-promise* ("refusal + durable re-offer
+*is* the contract, it just needs stating"). Investigation found the opposite: the **spec was right
+and the code was wrong**. Three findings, all verified — (F1) `sync.md` §6.5's lossless-forwarding
+invariant ("stores, re-propagates and exports byte-for-byte — never rejecting") is **contradicted**,
+not merely imprecise, by `db/020:163-167`'s fail-closed on an unclassifiable `event_type`; it holds
+for unknown *fields*, never for unknown *types*. (F2) §6.3's claim that refused bytes "are
+quarantined *verbatim* by digest" is **false for verifiable bytes** — both pens hold *unverifiable*
+bytes only (`clinical_pull.rs:766-769` asserts `penned == 0`). (F3) the two planes diverge and the
+clinical one fails **quietly**: node plane skips-and-advances (10-cycle sweep re-offer,
+`sync.rs:680-685`), clinical plane freezes its cursor and **still exits success**
+(`main.rs:1697-1716`, `PullIntegrityError` at `:1834` never fires on a freeze) — so one
+unclassifiable event from an upgraded peer silently wedges a whole peer's pull.
+**The deciding failure:** under fail-closed, a phone-tier node carrying a chart between two upgraded
+facilities (§6.1 sneakernet) acquires *nothing* past the first unknown type — a future
+`clinical.medication.recall` would be **absent**, not merely unrendered (`cairn_twin_skeleton`
+already renders any type). Resolution — **admit-and-defer**: an unknown type is *not a refusal*
+(stored verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); the
+**strict door keeps failing closed** (carry a type you cannot author — ADR-0051's
+strict-submit/lenient-apply applied to types); the **floor gates effect, not presence** (enumerated:
+signature/enrollment/envelope/oversize/`t_effective` ceiling/never-lawful contributor shapes still
+refuse — each decidable from the envelope alone; the suppressing⇒attestation gate is moot since
+suppressing power is withheld); **power is granted at reclassification, never retroactively
+assumed** — classification arrival **re-runs the deferred classification-gated checks and only then
+reprojects**, so *no unattested suppression* holds at every instant rather than
+violated-then-repaired (couples to #208); and **refusal + durable re-offer survives as the residual
+contract** for genuine refusals. **No wire change** — ADR-0010's derived-not-declared stands, so no
+self-declared mode field (a declaration can lie).
+**The posture triad completes:** content plane admits-and-disputes (0054) *and* admits-and-defers
+(0056); code plane verifies-or-refuses (0055) — content withheld is a safety failure, code admitted
+is a compromise. Cost is small: `serve` already reads `event_log` unconditionally, sealed-scope is
+**not enforced at the remote door at all** (strict-door-only by design — `db/020:229-234`), and
+`cairn_event_twin` already degrades — **one fail-closed line** stands between the tree and the
+contract. Follow-ons filed: #265 (door admits uninterpreted), #266 (re-adjudicate + reproject on
+classification), #267 (pen door refusals verbatim), #268 (align node-plane skip), #269 (node-plane
+heal test gap), #270 (frozen watermark must fail loud). Design doc under `docs/superpowers/specs/`.
+
+**PR #271 review corrections (2026-07-20; folded in before merge).** Three findings against the
+first draft, all fixed here and in the ADR: (i) the enumerated floor list wrongly named **sealed-scope**
+as a remote-door refusal — `apply_remote_event` deliberately mirrors neither the born-sealed scope
+rule nor the unopenable-body refusal (`db/020:229-234`, reason at `db/005:658-661`: *"a refusal there
+would freeze the seq watermark on a verifiable event"* — ADR-0056's own argument), and leaving it
+would have pointed #265's implementer at exactly that failure; (ii) decision 4 said only
+"reprojects", but admitting uninterpreted **skips** the attestation gate, the overlay-target-exists
+check and the ADR-0043 cross-author-suppression refusal (all downstream of the NULL `v_mode` /
+`v_targets_other`), so reclassification must **re-adjudicate before backfilling** or power is granted
+that never passed a gate — #266 retitled and rescoped accordingly, and the deferred state must be
+recorded *explicitly* rather than inferred from NULL fall-through (noted on #265); (iii) ADR-0056 was
+the only ADR in the corpus citing `file:line` — converted to symbol-level references, since ADRs are
+immutable and #265 deletes the very line the central claim cited. Line-level evidence stays in the
+mutable design note and here.
 
 ## Phase 5 — Security & compliance core
 
