@@ -12,6 +12,54 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
         .unwrap_or_else(|| e.to_string())
 }
 
+/// ADR-0057's rule, enforced structurally: the dispatcher is the ONLY row-level
+/// AFTER INSERT trigger on event_log. A slice that adds a bespoke projection
+/// trigger instead of registering an apply fn fails here.
+#[tokio::test]
+async fn dispatcher_is_the_only_event_log_insert_trigger() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let rows = c
+        .query(
+            "SELECT t.tgname FROM pg_trigger t
+             JOIN pg_class cl ON cl.oid = t.tgrelid
+             WHERE cl.relname = 'event_log' AND NOT t.tgisinternal
+               AND pg_get_triggerdef(t.oid) LIKE '%AFTER INSERT%'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let names: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
+    assert_eq!(
+        names,
+        vec!["cairn_projection_dispatch_trg".to_string()],
+        "unexpected event_log INSERT triggers: {names:?}"
+    );
+}
+
+/// Registry membership pinned (product loader — no spike db/008): 22 rows.
+/// A new projection slice bumps this AND db/tests/039_projection_registry_test.sql
+/// (the #212 two-places discipline; a missed bump fails CI, not drifts).
+#[tokio::test]
+async fn registry_row_count_is_pinned() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.execute(
+        "DELETE FROM cairn_projection_apply WHERE event_type LIKE 'test.%'",
+        &[],
+    )
+    .await
+    .unwrap();
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM cairn_projection_apply", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 22, "cairn_projection_apply row count drifted");
+}
+
 /// A registry row naming an apply fn that does not exist with the (event_log)
 /// signature is refused at INSERT time — fail closed at registration, like the
 /// twin-check registry (ADR-0048).
