@@ -379,9 +379,40 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             .await
             .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
-    // Stamp only AFTER the full replay succeeded: a half-applied load must not claim
-    // the new generation. loaded_at defaults to now() on insert; refresh it on
-    // conflict so the record always says who touched the schema last, and when.
+    // #208/ADR-0057: heal replay on generation CHANGE only, and BEFORE the stamp
+    // below. New projection capability (and any projection-logic fix) arrives only
+    // via a code-plane update — i.e. a generation change — so an unchanged
+    // generation means there is nothing to heal and the connect path does zero
+    // reprojection work (the old db/013 every-connect backfill is retired by this
+    // branch's demographics conversion). An UNKNOWN recorded generation (fresh DB:
+    // free no-op; hand-built rig: converges once) errs toward healing. Runs inside
+    // SCHEMA_LOAD_LOCK: concurrent loaders serialize, and the second sees the
+    // stamped generation.
+    //
+    // Ordered BEFORE the stamp deliberately: if the heal query below errors, the
+    // stamp never runs, so the recorded generation stays at its OLD (pre-upgrade)
+    // value and the `?` propagates the failure up to the caller. The NEXT connect
+    // attempt then sees the same stale `recorded`, so it retries the FULL
+    // replay-then-heal — exactly the loud, self-retrying failure mode a broken
+    // migration file already has in this loader (a bad `db/*.sql` blocks connect
+    // until fixed; it never silently half-applies). Stamp-then-heal would invert
+    // this: a heal failure AFTER the stamp leaves the generation already advanced,
+    // so the next connect reads `recorded == embedded`, skips the heal entirely,
+    // and the projections stay SILENTLY stale — the worst failure mode, and the
+    // reason this order is load-bearing, not cosmetic.
+    if recorded != Some(embedded) {
+        client
+            .execute(
+                "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
+                &[],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {e}"))?;
+    }
+    // Stamp only AFTER the full replay (and any heal above) succeeded: a
+    // half-applied load must not claim the new generation. loaded_at defaults to
+    // now() on insert; refresh it on conflict so the record always says who
+    // touched the schema last, and when.
     client
         .execute(
             "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
@@ -396,23 +427,6 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("recording schema generation: {e}"))?;
-    // #208/ADR-0057: heal replay on generation CHANGE only. New projection
-    // capability (and any projection-logic fix) arrives only via a code-plane
-    // update — i.e. a generation change — so an unchanged generation means
-    // there is nothing to heal and the connect path does zero reprojection
-    // work (the old db/013 every-connect backfill is retired). An UNKNOWN
-    // recorded generation (fresh DB: free no-op; hand-built rig: converges
-    // once) errs toward healing. Runs inside SCHEMA_LOAD_LOCK: concurrent
-    // loaders serialize, and the second sees the stamped generation.
-    if recorded != Some(embedded) {
-        client
-            .execute(
-                "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
-                &[],
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {e}"))?;
-    }
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",

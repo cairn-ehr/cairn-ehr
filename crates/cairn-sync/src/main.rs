@@ -696,8 +696,8 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
         .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])?
         .get(0);
     // Hoisted to fn scope (was a block-local inside the `if let` below) so the
-    // SAME generation reading can drive the gated heal after the stamp, further
-    // down this function — without a second round-trip to node_schema.
+    // SAME generation reading can drive the gated heal further down this
+    // function — without a second round-trip to node_schema.
     let mut recorded: Option<i32> = None;
     if table_exists {
         // query_opt: an absent ROW is a legitimate "generation unknown", but a real
@@ -721,6 +721,30 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
     }
+    // #208/ADR-0057: same gated heal as cairn-node's loader, and BEFORE the stamp
+    // below for the same reason. On this SUBSET database only the
+    // subset-registered projections exist (db/002's rows); the registry makes
+    // that automatic — replay heals exactly what is registered here, nothing
+    // more (the old db/013 every-connect backfill is retired by this branch's
+    // demographics conversion).
+    //
+    // Ordered BEFORE the stamp deliberately: if the heal query below errors, the
+    // stamp never runs, so the recorded generation stays at its OLD (pre-upgrade)
+    // value and the `?` propagates the failure up to the caller. The NEXT connect
+    // attempt then sees the same stale `recorded`, so it retries the FULL
+    // replay-then-heal — exactly the loud, self-retrying failure mode a broken
+    // migration file already has in this loader (a bad `db/*.sql` blocks connect
+    // until fixed; it never silently half-applies). Stamp-then-heal would invert
+    // this: a heal failure AFTER the stamp leaves the generation already
+    // advanced, so the next connect reads `recorded == embedded`, skips the heal
+    // entirely, and the projections stay SILENTLY stale — the worst failure
+    // mode, and the reason this order is load-bearing, not cosmetic.
+    if recorded != Some(embedded) {
+        client.execute(
+            "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
+            &[],
+        )?;
+    }
     client.execute(
         "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
          ON CONFLICT (id) DO UPDATE
@@ -732,16 +756,6 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
             &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
         ],
     )?;
-    // #208/ADR-0057: same gated heal as cairn-node's loader. On this SUBSET
-    // database only the subset-registered projections exist (db/002's rows);
-    // the registry makes that automatic — replay heals exactly what is
-    // registered here, nothing more.
-    if recorded != Some(embedded) {
-        client.execute(
-            "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
-            &[],
-        )?;
-    }
     Ok(())
 }
 
