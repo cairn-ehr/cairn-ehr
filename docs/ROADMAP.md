@@ -1102,6 +1102,29 @@ conflicting adjudications honestly re-deriving as disputed. Considered-and-rejec
 forbidden move). Spec homes: security §7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10.
 Design/plan docs under `docs/superpowers/`.
 
+**Slice 47 — the #206 design session: ADR-0055 distribution-plane trust-root governance
+(2026-07-20; P6 design queue, second item; spec v0.57; docs-only — code slices filed as
+follow-ons).** Review finding C5 (single steward key signing the highest-blast-radius artifact)
+resolves by applying the corpus's own anchor doctrine to the steward: **no privileged root on the
+distribution plane** — a **channel** `{trust-root chain, transparency log, release stream}` is the
+trust unit, the root is provisioning config on the ADR-0017 spectrum, the steward is only the
+official channel's default anchor. Mechanism: a **chained, content-addressed trust-root document**
+(version N+1 signed by ≥ M_root of version N; explicit TUF-shape multi-sig, N=1/M=1 first-class;
+monotonic pin; **no expiry** — availability floor, compensated by retirement key-destruction +
+log/gossip fork detection), a **root/release role split** (constitution key vs daily pen — a
+release-key compromise is one rotation, not a fleet re-provisioning), a **fork-freeze rule** (two
+verifiable successors ⇒ security incident + ceremony, never arrival-order), the **verify-or-refuse
+load gate** (newest-root rule: `root_version_ref` is diagnostic, never authoritative; legible
+refusals; co-signer floor), the **transparency log** (ADR-0027 shape as a self-hostable node role;
+rebuilder attestations = co-signatures; limits stated: genesis TOFU procedural, young-log monitor
+scarcity, reproducible builds carry near-term weight), an **honest N=1 posture with a ratchet
+tripwire** (≥ 2-of-3 before the first production deployment outside the steward's control;
+ADR-0026 escrow custody floor), and **one root shape for all three provisioning-time roots**
+(§7.6/§7.9/§7.7). Code plane vs content plane now carry opposite postures (verifies-or-refuses vs
+admits-and-disputes — the ADR-0054 contrast completed). Follow-ons filed: #257 (verifier/load-gate
+code), #258 (transparency-log role), #259 (reproducibility CI), #260 (freshness rung), #261
+(sync-auth onboarding UX design session). Design/plan docs under `docs/superpowers/`.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

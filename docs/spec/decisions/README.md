@@ -74,6 +74,8 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) | Contributor-role vocabulary floor: `recorded` ratified (12th member, contributory); responsibility = `{held_by, on_behalf_of?}` object; future members partition-prefixed; strict-submit/lenient-apply | Accepted (refines 0028/0007/0049/0012) | 2026-07-16 |
 | [0052](0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: erasability as the shipped default; erasable vs. sequestered; seal-then-sign container + twin-under-seal; the `event_dek`/`event_clear`/`erasure_shred_log` custody plane; strict-submit refuses unsealed `clinical.*` | Accepted (refines 0005/0006/0026/0048/0051) | 2026-07-17 |
 | [0053](0053-per-write-human-authorship.md) | Per-write human authorship: authoring signature + authorship binding + authorship-confidence grade | Accepted (refines 0008/0007/0051/0052/0012) | 2026-07-18 |
+| [0054](0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation: admit-and-dispute; signed actor-event wire shape on the node plane; derived live-bindings disputed state — content never waits, permissions always wait; adjudication = supersede by human ceremony | Accepted (refines 0011/0044/0046) | 2026-07-19 |
+| [0055](0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze; transparency by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | Accepted (refines 0012/0024; applies 0017/0018) | 2026-07-20 |
 
 ## Template
 

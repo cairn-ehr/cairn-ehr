@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done; P5 merged 2026-07-19 as PRs #253 + #255). Next: continue the Priority-6 design queue (#205 ✅ done → ADR-0054; #206/#200/#208/#216/#217 remain) — or the feature work below, now unblocked
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Next: continue the Priority-6 design queue (#205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200/#208/#216/#217 remain) — or the feature work below, now unblocked
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -34,8 +34,12 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
 - **#205 (C4) ✅ 2026-07-19** — resolved by [ADR-0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md)
   (admit-and-dispute; spec v0.56; closes #154 structurally, discharges the #172 sync-door half);
   code slices are future feature work.
-- **#206 (C5)** — distribution/policy-plane trust-root governance (threshold steward signing / key
-  transparency); no ADR owns it.
+- **#206 (C5) ✅ 2026-07-20** — resolved by [ADR-0055](spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md)
+  (chained trust-root document; spec v0.57); follow-ons filed: [#257](https://github.com/cairn-ehr/cairn-ehr/issues/257)
+  (verifier/load-gate code), [#258](https://github.com/cairn-ehr/cairn-ehr/issues/258) (transparency-log
+  role), [#259](https://github.com/cairn-ehr/cairn-ehr/issues/259) (reproducibility CI),
+  [#260](https://github.com/cairn-ehr/cairn-ehr/issues/260) (freshness rung),
+  [#261](https://github.com/cairn-ehr/cairn-ehr/issues/261) (sync-auth onboarding UX design session).
 - **#200 (B5)** — an ADR stating "refusal + durable re-offer *is* the sync contract for unknown
   types"; correct the `sync.md` §6.5 over-promise. Pairs with the code-plane work (#188).
 - **#208 (D3)** — a generic reprojection mechanism + the written "a projection fix ships with its
@@ -52,12 +56,13 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-19, latest (the #205 design session → ADR-0054 actor-registry federation;
-earlier same day the P5 process-mechanization session #212/#213/#214/#215 closing the review course,
-and the P4 tech-debt slice PR #251; 2026-07-18 had #204 ADR-0053 + the PR #246 fix pass + the GUI/L3
-easyGP editing-area mining; 2026-07-17 #189+#92 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc +
-the P1 floor-hardening slice; last full regeneration 2026-07-14) · **Spec/ADRs:** v0.56 (through
-ADR-0054) · **Phase:** architecture complete (every original §11 question closed);
+**Session date:** 2026-07-20, latest (the #206 design session → ADR-0055 distribution trust root;
+2026-07-19 had the #205 design session → ADR-0054, the P5 process-mechanization session
+#212/#213/#214/#215 closing the review course, and the P4 tech-debt slice PR #251; 2026-07-18 had
+#204 ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
+ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
+regeneration 2026-07-14) · **Spec/ADRs:** v0.57 (through
+ADR-0055) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -89,23 +94,36 @@ pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**Session (2026-07-19, latest) — the #205 design session: ADR-0054 actor-registry federation
-(spec v0.56; ROADMAP Slice 46; the first Priority-6 item).** The C4 contradiction (fail-closed
-enrolment ADR-0044/0046 vs never-reject set-union custody) resolves as **admit-and-dispute**: the
-actor event becomes a first-class signed wire event (node-signed COSE under a dedicated context,
-content-addressed, HLC+origin; `(HLC, content_address)` winner order; pre-wire unsigned rows never
-sync — wipe dev rigs) riding the **node plane** (deny-all peers, full replication in the trust
-neighborhood, db/022 pen); the apply door **admits unconditionally and detects** — a conflict
-becomes a **derived disputed state over live bindings** (log convergence ⇒ state convergence; no
-dispute events), under which `actor_current` picks no winner, implicated events attribute to the
-honest **candidate set**, and **registry uncertainty withholds permissions, never content** (closes
-#154 structurally; discharges the #172 sync-door half). Adjudication = the existing `supersede` by
-audited human ceremony (join / per-key fork / revoke+cascade); conflicting adjudications honestly
-re-derive as disputed — never auto-resolved (benign-dominant threat model: the locum-at-two-sites
-case is the common path). Named follow-ons: #94 + the key-loss ceremony ADR; the rotate-key local
-door. Spec homes: security §7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10. Design/plan docs
-under `docs/superpowers/`. **Next:** the remaining P6 queue (#206/#200/#208/#216/#217) or the
-now-unblocked feature work.
+**Session (2026-07-20, latest) — the #206 design session: ADR-0055 distribution-plane trust-root
+governance (spec v0.57; ROADMAP Slice 47; the second Priority-6 item).** Finding C5 (a single
+steward key signs the highest-blast-radius artifact — native extensions in the DB trusted base)
+resolves by applying the corpus's own anchor doctrine to the steward: **no privileged root on the
+distribution plane** — a **channel** `{trust-root chain, transparency log, release stream}` is the
+trust unit; the root is provisioning config on the ADR-0017 spectrum (the steward is only the
+official channel's default anchor; a deployment repoints without forking). Mechanism: a **chained,
+content-addressed trust-root document** (version N+1 signed by ≥ M_root of version N; explicit
+TUF-shape multi-sig, N=1/M=1 first-class; monotonic pin; **no expiry** — availability floor,
+compensated by retirement key-destruction + log/gossip fork detection), a **root/release role
+split** (constitution key vs daily pen), a **fork-freeze rule** (two verifiable successors ⇒
+security incident + ceremony, never arrival-order), the **verify-or-refuse load gate** (newest-root
+rule; practice-manager-legible refusals; co-signer floor), the **transparency log** (ADR-0027
+shape, self-hostable; rebuilder attestations = co-signatures; limits honestly stated), an **honest
+N=1 posture with a ratchet tripwire** (≥ 2-of-3 before the first production deployment outside the
+steward's control; ADR-0026 escrow floor), and **one root shape for §7.6/§7.9/§7.7**. Code vs
+content plane now carry opposite postures (verifies-or-refuses vs admits-and-disputes — the
+ADR-0054 contrast completed). Follow-ons: #257/#258/#259/#260 + #261 (sync-auth onboarding UX).
+Spec homes: security §7.6 (rewrite) + §7.7/§7.9, sync §6.5. Design/plan docs under
+`docs/superpowers/`. **Next:** the remaining P6 queue (#200/#208/#216/#217) or the now-unblocked
+feature work.
+
+**Session (2026-07-19) — the #205 design session: ADR-0054 actor-registry federation (spec v0.56;
+ROADMAP Slice 46).** The C4 contradiction resolves as **admit-and-dispute**: a signed actor-event
+wire shape on the node plane; a **derived disputed state over live bindings** (no winner picked,
+candidate-set attribution; **registry uncertainty withholds permissions, never content** — closes
+#154 structurally, discharges the #172 sync-door half; pre-wire unsigned rows never sync — wipe dev
+rigs); adjudication = the existing `supersede` by audited human ceremony, never auto-resolved.
+Named follow-ons: #94 + the key-loss ceremony ADR; the rotate-key local door. Spec homes: security
+§7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10. Full detail: ROADMAP Slice 46 + the ADR.
 
 **Session (2026-07-19, earlier) — the P5 process-mechanization session: #212 + #213 + #214 + #215,
 closing the whole review course (PRs #253 + #255, merged; full detail in ROADMAP Slice 45).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
@@ -415,6 +433,7 @@ ADR before reopening any of these.
 | [0052](spec/decisions/0052-born-sealed-clinical-bodies.md) | Born-sealed clinical bodies: every clinical JSONB body sealed at write under a per-event DEK held by the node (erasability substrate, not confidentiality); erase ladder always reachable; two doors enforce sealed⇒clinical scope; custody plane + custody sidecar + rung-3 shred | §3.5/§3.8/§5.9 (refines 0005/0006/0026/0048/0051) |
 | [0053](spec/decisions/0053-per-write-human-authorship.md) | Per-write human authorship: `{human,authored}`+`{node,recorded}`, human signs while the node seals + holds the DEK; `cairn_authorship_bound` strict-door binding; apply admits + grades | §3.9/§3.10 (refines 0007/0008/0028/0051/0052) |
 | [0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation is admit-and-dispute: signed actor-event wire shape on the node plane; derived live-bindings disputed state; content never waits, permissions always wait; adjudication = supersede by human ceremony, never auto-resolved | §7.5/§6.9/§3.12/§5.10 (refines 0011/0044/0046) |
+| [0055](spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: no privileged root — channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze never-silently-pick; transparency log by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | §7.6/§7.9/§7.7/§6.5 (refines 0012/0024; applies 0017/0018) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
