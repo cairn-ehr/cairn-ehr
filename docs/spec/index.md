@@ -6,7 +6,7 @@ Offline-first, vendor-independent electronic health record. Keeps working throug
 outage, runs anywhere from a Raspberry Pi to a hospital cluster, and belongs to no vendor.
 
 **Status:** Architecture spec essentially complete (all open questions resolved) and viability proven by proof-of-concept spikes (walking skeleton, WAN sync, a first federating node, Postgres-on-Android). The **first production clinical surface is under construction** on `cairn-node`: the demographics subsystem (§4.4 identifiers, §4.2 DOB/sex-at-birth/names/administrative-sex/gender-identity, §4.3 address), the advisory §5.2 matcher, the §5.7 identity core and §5.4 John-Doe subsystem, the first clinical-content stream `clinical.medication` (§3.3, five slices: assert/cease, dose timeline, reconciliation, attestation, per-field correction) under born-sealed bodies (§3.5/ADR-0052) with per-write human authorship (§3.9/ADR-0053), and the first slice of the reference-UI shell (Tauri 2, an L3 choice below the §9.5 compatibility boundary).
-**Spec version:** 0.56 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
+**Spec version:** 0.57 · **License target:** AGPL-3.0 (all components AGPL-3.0-compatible).
 **Core constraint:** full clinical functionality must survive loss of internet *and* intranet,
 degrading gracefully down to a single workstation.
 
