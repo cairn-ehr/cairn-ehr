@@ -11,28 +11,37 @@ re-propagates, and exports it byte-for-byte — never rejecting, dropping, down-
 re-serializing it." That is the mechanism by which the two planes move independently and there is
 **no lockstep fleet upgrade** ([ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)).
 
-The implementation contradicts it. `db/020_apply_remote_event.sql:163-167` fails closed on an
-`event_type` absent from `event_type_class` — correct-looking for the safety floor, since
-additive-vs-suppressing cannot be guessed for an unknown type ([ADR-0010](0010-additive-vs-suppressing-classification.md)),
-but it means the event is **never stored at all**. The invariant holds for unknown *fields* under a
-known type; for unknown *types* it is false. `event_type_class` is populated by migrations only, so
-every new slice's events are refused by any peer that has not taken the code-plane update.
+The implementation contradicts it. The classification step of `apply_remote_event`
+(`db/020_apply_remote_event.sql`) fails closed on an `event_type` absent from `event_type_class` —
+correct-looking for the safety floor, since additive-vs-suppressing cannot be guessed for an unknown
+type ([ADR-0010](0010-additive-vs-suppressing-classification.md)), but it means the event is **never
+stored at all**. The invariant holds for unknown *fields* under a known type; for unknown *types* it
+is false. `event_type_class` is populated by migrations only, so every new slice's events are refused
+by any peer that has not taken the code-plane update.
 
 Two further gaps sit underneath it. [§6.3](../sync.md#63-failure-modes-designed-for) claims refused
-bytes "are quarantined *verbatim* by digest"; both pens hold **unverifiable** bytes only, so a door
-refusal on verifiable bytes persists nothing (`crates/cairn-sync/tests/clinical_pull.rs:766-769`
-asserts exactly this). And the two planes diverge: the node plane skips-and-advances
-(`crates/cairn-node/src/sync.rs:680-685`, re-offered only on the 10-cycle sweep) while the clinical
-plane freezes its cursor and **still exits success** (`crates/cairn-sync/src/main.rs:1697-1716`;
-`PullIntegrityError` at `main.rs:1834` never fires on a freeze). One unclassifiable event from an
-upgraded peer therefore wedges the whole clinical pull from that peer, silently.
+bytes "are quarantined *verbatim* by digest"; both pens (`sync_quarantine`, `node_event_quarantine`)
+hold **unverifiable** bytes only, so a door refusal on verifiable bytes persists nothing — the
+clinical-pull test asserting `penned == 0` on verifying bytes
+(`crates/cairn-sync/tests/clinical_pull.rs`) states exactly this. And the two planes diverge: the
+node plane's skip-and-advance arm for a deliberate (`P0001`) door refusal re-offers only on the
+`FULL_SWEEP_EVERY` sweep (`crates/cairn-node/src/sync.rs`), while the clinical puller's freeze arm
+halts its cursor and **still exits success** — its `PullIntegrityError` condition tests only
+`skipped_unverifiable` and `pen_refused`, never `frozen` (`crates/cairn-sync/src/main.rs`). One
+unclassifiable event from an upgraded peer therefore wedges the whole clinical pull from that peer,
+silently.
+
+*(Code is cited by symbol here, not by line: this ADR is immutable, and the very line that carries
+the contradiction is the one [#265](https://github.com/cairn-ehr/cairn-ehr/issues/265) deletes. The
+line-level evidence as investigated sits in the dated design note under `docs/superpowers/specs/`.)*
 
 **The failure that decided this.** Under fail-closed refusal, a phone-tier node carrying a chart
 between two upgraded facilities — the [§6.1](../sync.md#61-mechanism) sneakernet "carry the chart
 with the patient" path, paper-parity-exact and the case Cairn exists for — acquires **nothing** past
 the first unknown-type event. A future `clinical.medication.recall` is not merely unrendered in that
-chart; it is absent. This is not a rendering limitation: `cairn_twin_skeleton`
-(`db/005_submit.sql:96-119`) already yields a mechanical twin for *any* type, registered or not.
+chart; it is absent. This is not a rendering limitation: `cairn_event_twin` already falls through to
+`cairn_twin_skeleton` (`db/005_submit.sql`), which yields a mechanical twin for *any* type,
+registered or not.
 
 The 2026-07-15 review filed this as finding B5 / issue [#200](https://github.com/cairn-ehr/cairn-ehr/issues/200),
 supposing the intended design was "refusal + durable re-offer **is** the contract." It is not — that
@@ -54,19 +63,39 @@ code-plane property rather than something a writer can invent at runtime.
 
 **3. The floor gates effect, not presence.** For a type-unknown event:
 
-- **Still refuses, regardless of type:** invalid signature; unenrolled or revoked signer; malformed
-  envelope; `t_effective` after the `t_recorded` HLC ceiling ([ADR-0003](0003-bitemporal-time-and-acknowledged-uncertainty.md)
-  tier-1); sealed-scope violation; never-lawful contributor shapes
-  ([ADR-0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)).
+- **The remote door still refuses, regardless of type:** invalid signature; unenrolled or revoked
+  signer; malformed envelope; oversize beyond the admission ceiling; `t_effective` after the
+  `t_recorded` HLC ceiling ([ADR-0003](0003-bitemporal-time-and-acknowledged-uncertainty.md)
+  tier-1); never-lawful contributor shapes
+  ([ADR-0051](0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md)). Each is
+  decidable from the envelope alone, with no reference to the type's classification.
+- **Not a remote-door refusal — strict door only:** the born-sealed scope rule
+  ([ADR-0052](0052-born-sealed-clinical-bodies.md)). `submit_event` refuses a sealed non-`clinical.*`
+  body and an unopenable sealed body; `apply_remote_event` deliberately does **not** mirror either,
+  because a refusal there would freeze the watermark on a verifiable event — the same reasoning this
+  ADR generalises. A foreign or pre-ADR-0052 plaintext clinical body is likewise admitted. Custody,
+  not admission, is what a missing DEK withholds.
 - **Moot:** the suppressing⇒attestation gate, because suppressing power is withheld anyway. An
   unclassified event cannot suppress, so it cannot suppress unattested.
 
 **4. Power is granted at reclassification, never retroactively assumed.** When the node takes the
-code-plane update that classifies the type, it reprojects. An event that turns out to be
-**suppressing without a valid attestation** stays powerless and is flagged legibly; it is never
-silently promoted. So *no unattested suppression* holds **at every instant** — it is never
-violated-then-repaired. This is the [#208](https://github.com/cairn-ehr/cairn-ehr/issues/208)
-reprojection mechanism doing its ordinary job: a classification fix ships with its backfill.
+code-plane update that classifies the type, it **re-runs the floor checks that classification gates,
+and only then reprojects.** The order is load-bearing and the checks are not optional: admitting an
+event uninterpreted necessarily *skips* every refusal derived from its mode or its target
+relationship — the attestation gate, the overlay-target-exists check, and the ADR-0043 cross-author
+suppression refusal among them. Those are deferred with the interpretation, not waived by it, so
+reclassification is **re-adjudication first, backfill second**; a reprojection that only rebuilt
+rows would grant power that never passed the gate. An event that then proves to be **suppressing
+without a valid attestation**, or to target an event this node does not hold, stays powerless and is
+flagged legibly; it is never silently promoted. So *no unattested suppression* holds **at every
+instant** — it is never violated-then-repaired. This is the
+[#208](https://github.com/cairn-ehr/cairn-ehr/issues/208) reprojection mechanism doing its ordinary
+job, with the deferred gates run ahead of it: a classification fix ships with its backfill.
+
+Corollary for implementations: the deferred state must be **explicit**, never inferred from a null
+classification lookup falling through the gates by three-valued logic. A node records that an event
+was admitted uninterpreted, and that marker — not the absence of a row — is what reclassification
+consumes.
 
 **5. Where refusal genuinely remains, the contract is refusal + durable re-offer.** For the point-3
 refusals: the bytes are penned verbatim by digest, the refusal is answered legibly, and the

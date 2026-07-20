@@ -51,9 +51,27 @@ Smaller than expected. Everything in the remote door except one line is already 
 | Concern | Status | Evidence |
 |---|---|---|
 | Re-propagation | free — `serve` reads `event_log` unconditionally | `main.rs:2634` |
-| Sealed-scope | already type-independent (`clinical.%` string prefix) | `db/005_submit.sql:662,679` |
+| Sealed-scope | **not enforced at this door at all** — strict-door-only by design | `db/020:229-234`, `db/005:658-661` |
 | Twin rendering | already degrades for unregistered types | `db/005_submit.sql:96-119` |
 | Classification | **the only fail-closed line** | `db/020:163-167` |
+
+Two corrections to an earlier draft of this table, from the PR #271 review:
+
+- **Sealed-scope is not a remote-door concern.** The row previously read "already type-independent
+  (`clinical.%` string prefix)", citing `db/005:662`. That is the **strict** door. `apply_remote_event`
+  deliberately mirrors neither the born-sealed scope rule nor the unopenable-body refusal —
+  `db/020:229-234` says so outright (*"only the STRICT door enforces born-sealed"*), and
+  `db/005:658-661` gives the reason: *"a refusal there would freeze the seq watermark on a verifiable
+  event."* That is this ADR's own argument, already applied. Listing it among the remote door's
+  refusals would have pointed the #265 implementer straight at the failure `db/005`'s comment exists
+  to prevent.
+- **"One fail-closed line" is true of the deletion, not of the change.** Deleting the `db/020:166`
+  RAISE leaves `v_mode` and `v_targets_other` NULL, which silently short-circuits the
+  `IF v_targets_other THEN` branch at `db/020:207` — so the overlay-target-exists refusal
+  (`db/020:210`) and the ADR-0043 cross-author-suppression refusal (`db/020:218`) stop running for
+  deferred events. Today that is harmless (a powerless event's dangling target has no effect), but it
+  is correct *by three-valued logic*, not by design, and it is a trap at reclassification: those
+  gates were skipped, so they must be re-run before power is granted. See §5(d).
 
 ## 4. Options considered
 
@@ -78,18 +96,30 @@ closed** — a node may not *author* a type it has no code for. That asymmetry i
 strict-submit/lenient-apply applied to types.
 
 **(b) The floor gates effect, not presence.** Still refusing regardless of type: bad signature,
-unenrolled or revoked signer, malformed envelope, `t_effective` past the HLC ceiling, sealed-scope
-violation, never-lawful contributor shapes. Moot for an unclassified event: the
-suppressing⇒attestation gate, since suppressing power is withheld anyway.
+unenrolled or revoked signer, malformed envelope, oversize past the admission ceiling, `t_effective`
+past the HLC ceiling, never-lawful contributor shapes — each decidable from the envelope alone.
+**Not** on that list (corrected post-review): sealed-scope, which is strict-door-only by deliberate
+design (see §3). Moot for an unclassified event: the suppressing⇒attestation gate, since suppressing
+power is withheld anyway.
 
 **(c) Where refusal genuinely remains, the contract is refusal + durable re-offer** — #200's
 original claim, kept as the *residual* rule rather than the general one, and today only half-built
 (F2, F3).
 
+**(d) Reclassification is re-adjudication first, backfill second.** Admitting uninterpreted skips
+every refusal derived from the type's mode or its target relationship (attestation gate,
+overlay-target-exists, ADR-0043 cross-author suppression). Those are *deferred with* the
+interpretation, not waived by it. So when classifying code arrives the node re-runs those gates and
+only then reprojects — a reprojection that merely rebuilt rows would grant power that never passed
+the gate. The deferred state must be recorded **explicitly**, not left implicit in a NULL
+classification lookup.
+
 **Why admission is safe.** Effect is derived at projection time, not granted at admission time. On
-upgrade the node reclassifies; an event that turns out to be suppressing without a valid attestation
-stays powerless and is flagged legibly. "No unattested suppression" therefore holds at every
-instant — it is never violated-then-repaired. And the failure direction is the safe one: an old node
+upgrade the node re-adjudicates (§5(d)) and then reprojects; an event that turns out to be
+suppressing without a valid attestation stays powerless and is flagged legibly. "No unattested
+suppression" therefore holds at every instant — it is never violated-then-repaired. The load-bearing
+step is (d): the guarantee is a property of *re-running the deferred gates*, not of reprojection by
+itself. And the failure direction is the safe one: an old node
 shows *more* than a new one, which is what paper does (a struck-through entry stays visible with its
 strike).
 
@@ -117,9 +147,11 @@ plane never refuses verifiable history; the code plane always does.
 
 ## 8. Follow-on issues to file
 
-1. Remove the `db/020` unknown-type fail-closed; admit uninterpreted, no projection rows.
-2. Door refusals on verifiable bytes must pen verbatim (closes the F2 inaccuracy).
-3. A frozen clinical watermark must fail loud, not exit success (F3).
-4. Align the node-plane P0001 skip-and-advance with the ratified contract (F3).
-5. Reclassify-on-upgrade: deferred events gain power via reprojection (couples to #208).
-6. Test gap: no test covers a node-plane skipped event later healing via full sweep.
+1. Remove the `db/020` unknown-type fail-closed; admit uninterpreted, no projection rows. Record the
+   deferred state **explicitly** (not via NULL fall-through) — see §3's second correction. → #265
+2. Door refusals on verifiable bytes must pen verbatim (closes the F2 inaccuracy). → #267
+3. A frozen clinical watermark must fail loud, not exit success (F3). → #270
+4. Align the node-plane P0001 skip-and-advance with the ratified contract (F3). → #268
+5. Reclassify-on-upgrade: **re-run the deferred classification-gated floor checks, then** reproject
+   (§5(d); couples to #208). → #266
+6. Test gap: no test covers a node-plane skipped event later healing via full sweep. → #269

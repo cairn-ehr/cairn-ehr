@@ -44,7 +44,9 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
   (admit-and-defer; spec v0.58). The filed premise was **inverted**: the spec was right, the code
   was wrong, so the fix is code catching up rather than the promise shrinking. Follow-ons filed:
   [#265](https://github.com/cairn-ehr/cairn-ehr/issues/265) (door admits uninterpreted),
-  [#266](https://github.com/cairn-ehr/cairn-ehr/issues/266) (mark + reproject on classification),
+  [#266](https://github.com/cairn-ehr/cairn-ehr/issues/266) (re-adjudicate the deferred gates, *then*
+  reproject — retitled in the PR #271 review; reprojection alone would grant power that never passed
+  the attestation / target-exists / cross-author-suppression gates),
   [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267) (pen door refusals verbatim),
   [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) (align node-plane skip),
   [#269](https://github.com/cairn-ehr/cairn-ehr/issues/269) (node-plane heal test gap),
@@ -118,13 +120,28 @@ sneakernet) acquires *nothing* past the first unknown type — a future `clinica
 would be **absent**, not merely unrendered. Resolution — **admit-and-defer**: unknown type is not a
 refusal (verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); strict
 door keeps failing closed (carry what you cannot author); the **floor gates effect, not presence**
-(enumerated survivors); power granted only at reclassification, so *no unattested suppression* holds
-at every instant; refusal + durable re-offer survives as the **residual** contract. No wire change
-(ADR-0010 derived-not-declared stands). **The posture triad completes:** content plane
-admits-and-disputes (0054) *and* admits-and-defers (0056); code plane verifies-or-refuses (0055).
-Cost is small — **one fail-closed line** stands between the tree and the contract (`serve` already
-reads `event_log` unconditionally; sealed-scope is already a string prefix; `cairn_event_twin`
-already degrades). Follow-ons: #265–#270. Spec homes: sync §6.5/§6.3, data-model §3.13.
+(enumerated survivors); power granted only at reclassification — which **re-adjudicates the deferred
+gates before reprojecting** — so *no unattested suppression* holds at every instant; refusal +
+durable re-offer survives as the **residual** contract. No wire change (ADR-0010 derived-not-declared
+stands). **The posture triad completes:** content plane admits-and-disputes (0054) *and*
+admits-and-defers (0056); code plane verifies-or-refuses (0055). Cost is small — **one fail-closed
+line** stands between the tree and the contract (`serve` already reads `event_log` unconditionally;
+sealed-scope is not a remote-door concern at all; `cairn_event_twin` already degrades). Follow-ons:
+#265–#270. Spec homes: sync §6.5/§6.3, data-model §3.13.
+
+**PR #271 review, folded in before merge.** Three corrections, all in the ADR + design note + Slice 48:
+(i) decision 3 wrongly listed **sealed-scope** among the remote door's refusals — `apply_remote_event`
+deliberately mirrors neither the born-sealed scope rule nor the unopenable-body refusal, because
+(`db/005`) *"a refusal there would freeze the seq watermark on a verifiable event"* — ADR-0056's own
+argument, and leaving it would have aimed #265 straight at that failure; (ii) decision 4 said only
+"reprojects", but admitting uninterpreted **skips** the attestation, target-exists and ADR-0043
+cross-author-suppression gates (all NULL-short-circuited downstream of the classification lookup), so
+reclassification must re-adjudicate first — #266 retitled/rescoped, and #265 told to record the
+deferred state *explicitly* rather than lean on NULL fall-through; (iii) ADR-0056 was the only ADR
+citing `file:line` — converted to symbol-level, since ADRs are immutable and #265 deletes the cited
+line. The same review found the ROADMAP prune had dropped **open** issues #141 and #184 out of every
+tracked file, plus a dozen unfiled deferred items — all restored to the Slices 13–35 "still open"
+block, which is now enumerated in full rather than curated.
 **Next:** #208 (now load-bearing for #266), then #216/#217, or the unblocked feature work.
 
 **Session (2026-07-20, earlier) — the #206 design session: ADR-0055 distribution-plane trust-root

@@ -92,12 +92,42 @@ The identity/John-Doe/medication build-out and the review course's Priority-1 sl
   the responsibility↔attester binding. Follow-up [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) remains
   (the #190 veto is link-arrival-only).
 
-**Still open from these slices.** Identity **C5+** — `reattribute` (§5.5 event-granular strike-through of clinical
-documentation) **waits on a clinical-note surface**; the §5.12 push-alert and the §5.3/§5.8 search-before-create
-funnel are the non-structural John-Doe remainder. Matcher: a **large hand-crafted gold set** to re-run the learner
-for authoritative magnitudes; locale comparator packs; the hub-tier duplicate sweep; proposal retraction; a
-veto-aware scorer mode; variable cluster size / hard negatives in the volume generator; a `compare_address`
-comparator; a CLI sweep entry; B2 Minors → [issue #79](https://github.com/cairn-ehr/cairn-ehr/issues/79).
+**Still open from these slices.** Condensing 13–35 must not lose the open remainder, so it is enumerated in full
+here (a PR #271 review finding: the first pass dropped two *open* issues out of every tracked file).
+
+- **Filed and open.** [#141](https://github.com/cairn-ehr/cairn-ehr/issues/141) — photo evidence has no size guard
+  on the local blob-store path (§6.6 byte-tier slice). [#184](https://github.com/cairn-ehr/cairn-ehr/issues/184) —
+  a non-array `contributors` yields a cryptic scalar-extract error at **both** submit doors, all event types.
+  [#163](https://github.com/cairn-ehr/cairn-ehr/issues/163) (demographics currency),
+  [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168) (entity→role-actor 1:many),
+  [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (cross-thread dose-correction suppression vector —
+  needs a PK/design decision), [#79](https://github.com/cairn-ehr/cairn-ehr/issues/79) (B2 Minors),
+  [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) (the #190 veto is link-arrival-only).
+- **Identity C5+.** `reattribute` (§5.5 event-granular strike-through of clinical documentation) **waits on a
+  clinical-note surface**; a reversal / de-repudiation event; a chart-history VIEW rendering struck names (the data
+  is already present); an accept-at-cap boundary test for the oversize guard; the §5.2 coherence feedback loop;
+  notification / contamination cascade on dispute; person-level trust aggregation. The §5.12 push-alert and the
+  §5.3/§5.8 search-before-create funnel are the non-structural John-Doe remainder.
+- **Matcher (advisory tier).** A **large hand-crafted gold set** to re-run the learner for authoritative magnitudes;
+  **full §7.5 matcher actor registration** (the matcher's contributor identity lives in a provenance string for
+  now); **no recovery escrow for the sealed matcher key** (regenerable today, so this is a convenience gap, not a
+  data-loss one); no background scheduler (operator-invoked CLI only); locale comparator packs; the hub-tier
+  aggressive duplicate sweep; a veto-aware scorer mode; fuzzy/edit-distance alias recognition and a dedicated
+  `alias` blocking pass; fuzzy near-window softening; variable cluster size / hard negatives in the volume
+  generator; a `compare_address` comparator; a CLI sweep entry; the B3 mirror still ignores the block-size cap.
+- **Medication (slices 30b–34).** Automated reconciliation **detection** — the human-driven *resolution* exists,
+  fuzzy/automatic detection plus a Tier-A dictionary is the gap; a partially-attested-group read surface (which
+  member is stale); a whole-list sign-off summary event; statement-level `started`-date correction and per-field
+  merge across corrections of the same point; a rendering-suppression visibility overlay for `delete`; structured
+  sig/frequency; a separate `route` field; prefer-INN display term.
+- **Attachments (slice 26).** Bytes are local only — **cross-node fetch deferred**; the residual DO-UPDATE
+  overwrites a caller-supplied `media_type` (benign).
+- **Accepted risk with a named remedy.** The `enroll_actor` dual-mapping guard's TOCTOU window
+  ([#166](https://github.com/cairn-ehr/cairn-ehr/issues/166), closed as *accepted*): the durable fix is a
+  floor-level per-key guard in `db/004`. Recorded here so the accepted risk keeps its remedy attached.
+
+*Done, not open* (called out because an earlier condensation listed it as outstanding): stale forced-REVIEW
+proposal **retraction** — [#135](https://github.com/cairn-ehr/cairn-ehr/issues/135), closed by PR #151.
 
 **Slice 36 — sync-convergence CI (2026-07-16; the review course, Priority 2 opener; issue #199 [B4], covers the
 #176 deferred branch; branch `feat/sync-convergence-ci-199`, PR #221; no ADR/spec/SCHEMA/event-type change —
@@ -564,20 +594,37 @@ already renders any type). Resolution — **admit-and-defer**: an unknown type i
 (stored verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); the
 **strict door keeps failing closed** (carry a type you cannot author — ADR-0051's
 strict-submit/lenient-apply applied to types); the **floor gates effect, not presence** (enumerated:
-signature/enrollment/envelope/`t_effective` ceiling/sealed-scope/never-lawful contributor shapes
-still refuse; the suppressing⇒attestation gate is moot since suppressing power is withheld); **power
-is granted at reclassification, never retroactively assumed**, so *no unattested suppression* holds
-at every instant rather than violated-then-repaired (couples to #208); and **refusal + durable
-re-offer survives as the residual contract** for genuine refusals. **No wire change** — ADR-0010's
-derived-not-declared stands, so no self-declared mode field (a declaration can lie).
+signature/enrollment/envelope/oversize/`t_effective` ceiling/never-lawful contributor shapes still
+refuse — each decidable from the envelope alone; the suppressing⇒attestation gate is moot since
+suppressing power is withheld); **power is granted at reclassification, never retroactively
+assumed** — classification arrival **re-runs the deferred classification-gated checks and only then
+reprojects**, so *no unattested suppression* holds at every instant rather than
+violated-then-repaired (couples to #208); and **refusal + durable re-offer survives as the residual
+contract** for genuine refusals. **No wire change** — ADR-0010's derived-not-declared stands, so no
+self-declared mode field (a declaration can lie).
 **The posture triad completes:** content plane admits-and-disputes (0054) *and* admits-and-defers
 (0056); code plane verifies-or-refuses (0055) — content withheld is a safety failure, code admitted
 is a compromise. Cost is small: `serve` already reads `event_log` unconditionally, sealed-scope is
-already a `clinical.%` string prefix, and `cairn_event_twin` already degrades — **one fail-closed
-line** stands between the tree and the contract. Follow-ons filed: #265 (door admits uninterpreted),
-#266 (mark + reproject on classification), #267 (pen door refusals verbatim), #268 (align node-plane
-skip), #269 (node-plane heal test gap), #270 (frozen watermark must fail loud). Design doc under
-`docs/superpowers/specs/`.
+**not enforced at the remote door at all** (strict-door-only by design — `db/020:229-234`), and
+`cairn_event_twin` already degrades — **one fail-closed line** stands between the tree and the
+contract. Follow-ons filed: #265 (door admits uninterpreted), #266 (re-adjudicate + reproject on
+classification), #267 (pen door refusals verbatim), #268 (align node-plane skip), #269 (node-plane
+heal test gap), #270 (frozen watermark must fail loud). Design doc under `docs/superpowers/specs/`.
+
+**PR #271 review corrections (2026-07-20; folded in before merge).** Three findings against the
+first draft, all fixed here and in the ADR: (i) the enumerated floor list wrongly named **sealed-scope**
+as a remote-door refusal — `apply_remote_event` deliberately mirrors neither the born-sealed scope
+rule nor the unopenable-body refusal (`db/020:229-234`, reason at `db/005:658-661`: *"a refusal there
+would freeze the seq watermark on a verifiable event"* — ADR-0056's own argument), and leaving it
+would have pointed #265's implementer at exactly that failure; (ii) decision 4 said only
+"reprojects", but admitting uninterpreted **skips** the attestation gate, the overlay-target-exists
+check and the ADR-0043 cross-author-suppression refusal (all downstream of the NULL `v_mode` /
+`v_targets_other`), so reclassification must **re-adjudicate before backfilling** or power is granted
+that never passed a gate — #266 retitled and rescoped accordingly, and the deferred state must be
+recorded *explicitly* rather than inferred from NULL fall-through (noted on #265); (iii) ADR-0056 was
+the only ADR in the corpus citing `file:line` — converted to symbol-level references, since ADRs are
+immutable and #265 deletes the very line the central claim cited. Line-level evidence stays in the
+mutable design note and here.
 
 ## Phase 5 — Security & compliance core
 
