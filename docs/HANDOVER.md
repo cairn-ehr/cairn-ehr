@@ -214,7 +214,8 @@ improvise it). **Team/scope:** the easyGP co-author may return to lead **GP-faci
 designs **ED & ward** once core infra is nailed down; the shell's role-manifest layer is the seam
 (uniform core, plural edges — ADR-0021 working as intended).
 
-**Sessions (2026-07-16, condensed — full detail in ROADMAP Slices 36–41 + the PRs + git):** the P1
+**Sessions (2026-07-16, condensed — full detail in ROADMAP Slices 36–41 + the PRs + git; the P1 slice
+itself now sits in ROADMAP's condensed "Slices 13–35" block):** the P1
 floor-hardening slice (PR #219), the full P2 arc (PRs #221–#225), and **#203+#96/ADR-0051** — the
 contributor-role vocabulary floor (Slice 41, PR #229): 12 ratified members (6 bearing + 6
 contributory incl. `recorded`), `{held_by, on_behalf_of?}` responsibility objects, future members
@@ -223,7 +224,7 @@ pre-ADR-0051 event logs (old `role:"author"`-without-actor_id, flat-string respo
 db/020 — **wipe dev/PoC rigs** (replication-failover demo, spike rigs), never sync them through.
 
 **Earlier sessions (2026-07-09 → 07-15), condensed — full detail in git + the PRs + the linked ADRs +
-ROADMAP Slices 26–34:** **medication slices 1–5** (assert/cease + E1 flag · bitemporal dose timeline `db/032`
+ROADMAP's condensed "Slices 13–35" block:** **medication slices 1–5** (assert/cease + E1 flag · bitemporal dose timeline `db/032`
 · cross-thread reconciliation ADR-0047 `db/033` · attestation overlay ADR-0049 `db/034` · per-field dose
 correction ADR-0050 `db/035`; open [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) db/032
 suppression PK-eviction) · the **twin-check registry refactor** (ADR-0048) · the **reference-UI verdict**
