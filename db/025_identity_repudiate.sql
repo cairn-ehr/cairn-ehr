@@ -147,17 +147,26 @@ CREATE INDEX IF NOT EXISTS name_repudiation_value_idx ON name_repudiation (value
 -- overlays atomically only when the incoming HLC is strictly greater (ON CONFLICT … WHERE),
 -- so out-of-order arrival / re-assert converges to the highest-HLC assertion,
 -- arrival-order-independent (the db/024 chart_identity_state shape).
-CREATE OR REPLACE FUNCTION name_repudiation_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS name_repudiation_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS name_repudiation_apply();
+
+CREATE OR REPLACE FUNCTION name_repudiation_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p jsonb := NEW.body;
+    p jsonb := e.body;
     v_cur record;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- #157: detect a Byzantine HLC-triple collision against the current repudiation of this exact
     -- (subject, value) and record an advisory signal before overlaying the winning `reason`. Note
     -- the SUPPRESSION decision itself is value-keyed + idempotent (see the #69 note below), so this
@@ -167,19 +176,19 @@ BEGIN
       FROM name_repudiation
       WHERE subject = (p ->> 'subject')::uuid AND value = p ->> 'value';
     IF FOUND AND cairn_hlc_triple_collision(
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
             v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
         PERFORM cairn_record_hlc_collision(
             'name_repudiation', (p ->> 'subject') || '|' || (p ->> 'value'),
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-            NEW.content_address, v_cur.content_address);
+            e.hlc_wall, e.hlc_counter, e.node_origin,
+            e.content_address, v_cur.content_address);
     END IF;
 
     INSERT INTO name_repudiation
         (subject, value, reason, hlc_wall, hlc_counter, origin, content_address)
     VALUES
         ((p ->> 'subject')::uuid, p ->> 'value', p ->> 'reason',
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (subject, value) DO UPDATE SET
         reason      = EXCLUDED.reason,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -197,15 +206,13 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         name_repudiation.hlc_wall, name_repudiation.hlc_counter, name_repudiation.origin,
         name_repudiation.content_address);
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS name_repudiation_apply_trg ON event_log;
-CREATE TRIGGER name_repudiation_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'identity.repudiate.asserted')
-    EXECUTE FUNCTION name_repudiation_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION name_repudiation_apply(event_log) FROM PUBLIC;
 
 -- 5. patient_name_current: rework db/012's display winner to ANTI-JOIN the overlay. Column
 --    list + ORDER BY are copied VERBATIM from db/012 (including its ADR-0045 (#69) COLLATE
@@ -260,5 +267,21 @@ SELECT subject AS patient_id, value, hlc_wall, hlc_counter, origin, updated_at
 FROM name_repudiation;
 
 GRANT SELECT ON patient_name_current, patient_alias_pool TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). patient_name_current and patient_alias_pool are VIEWs recomposed
+-- above (recomputed on read), not tables written by this fn, so they are correctly absent
+-- from projection_tables — only the base overlay this fn actually INSERTs into belongs
+-- here. #214 + steady-state discipline: converge this row to the migration text on every
+-- connect, but stay write-free once already converged (no dead tuples, no validate-trigger
+-- fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
+VALUES ('identity.repudiate.asserted', 'name_repudiation_apply', ARRAY['name_repudiation'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

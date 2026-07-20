@@ -146,6 +146,13 @@ CREATE TABLE IF NOT EXISTS identity_projection_flag (
     flagged_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON identity_projection_flag TO cairn_agent;
+-- Natural-key uniqueness so a heal-mode replay of the IDENTICAL skip (same seed,
+-- same observed size, same cap) converges instead of appending a duplicate alarm
+-- row every reproject run; a genuinely NEW observation (the component grew
+-- further, or the cap changed) still gets its own row (ADR-0057 replay-idempotency
+-- — see the ON CONFLICT on the INSERT below).
+CREATE UNIQUE INDEX IF NOT EXISTS identity_projection_flag_natural_idx
+    ON identity_projection_flag (seed, observed_size, cap);
 
 -- Recompute the connected component around one seed UUID over the STANDING link edges
 -- (state='link'), and rewrite person_member for every member to point at the min-UUID
@@ -180,8 +187,11 @@ BEGIN
     --     (person_member stays stale-but-honest); the flag row is the alarm/worklist.
     IF array_length(v_members, 1) > cairn_max_component_size() THEN
         IF current_setting('cairn.remote_apply', true) = 'on' THEN
+            -- ADR-0057 replay-idempotency: a heal-mode reproject re-running this SAME
+            -- skipped recompute must not append a duplicate worklist alarm.
             INSERT INTO identity_projection_flag (seed, observed_size, cap)
-            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size());
+            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size())
+            ON CONFLICT (seed, observed_size, cap) DO NOTHING;
             RETURN;
         END IF;
         RAISE EXCEPTION
@@ -225,10 +235,19 @@ CREATE TABLE IF NOT EXISTS link_veto_flag (
 );
 GRANT SELECT ON link_veto_flag TO cairn_agent;
 
-CREATE OR REPLACE FUNCTION patient_link_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS patient_link_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS patient_link_apply();
+
+CREATE OR REPLACE FUNCTION patient_link_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p       jsonb := NEW.body;
+    p       jsonb := e.body;
     -- a/b/lo/hi are NOT initialized in DECLARE: DECLARE initializers run at block entry,
     -- BEFORE the seal guard below can return, so a `(p ->> 'subject_a')::uuid` cast here
     -- would raise `invalid input syntax for type uuid` on a wrongly-sealed row whose ciphertext
@@ -241,7 +260,7 @@ DECLARE
     b       uuid;
     lo      uuid;
     hi      uuid;
-    v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
+    v_state text  := CASE WHEN e.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
     v_cur   record;
     -- The STANDING overlay winner for (lo, hi), read back AFTER the upsert below so the
     -- #190 flag lifecycle keys on what actually won, not on the arriving event (finding 1).
@@ -250,11 +269,11 @@ DECLARE
     v_win_attested boolean;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak). This guard MUST
     -- precede the subject_a/subject_b casts below (they are deliberately not in DECLARE, see there).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- Canonical (lo, hi) pair — cast here, AFTER the seal guard, so a sealed row never reaches
     -- these strict UUID casts (the floor already validated subject_a/subject_b for an UNSEALED
     -- link via cairn_check_link_assertion at both doors).
@@ -283,26 +302,26 @@ BEGIN
       INTO v_cur
       FROM patient_link WHERE low = lo AND high = hi;
     IF FOUND AND cairn_hlc_triple_collision(
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
             v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
         PERFORM cairn_record_hlc_collision(
             'patient_link', lo::text || '|' || hi::text,
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-            NEW.content_address, v_cur.content_address);
+            e.hlc_wall, e.hlc_counter, e.node_origin,
+            e.content_address, v_cur.content_address);
     END IF;
 
     -- #190 hard-veto floor AT THE DOOR (finding A2; principle 12 — the veto was
     -- previously enforced only in the Rust auto-apply seam, so an enrolled agent with
     -- raw SQL could merge two hard-vetoed charts through submit_event unflagged).
     -- Contract: the veto FORCES A HUMAN DECISION, never auto-rejects one — so a
-    -- human-attested link (NEW.attester_key set: the stored, verified vouch) passes;
+    -- human-attested link (e.attester_key set: the stored, verified vouch) passes;
     -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door only —
     -- nothing has been accepted yet, so fail loud at source. On the sync-apply path the
     -- event is admitted (the verdict reads node-local demographic state, so a remote
     -- refusal would fork honest nodes) and the merge is caught by the flag lifecycle
     -- AFTER the overlay below. The Rust auto-apply pre-check stays as the polite early
     -- skip; this is the floor behind it.
-    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
+    IF v_state = 'link' AND e.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
        AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         RAISE EXCEPTION
             'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
@@ -313,8 +332,8 @@ BEGIN
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,
          content_address)
     VALUES
-        (lo, hi, v_state, NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-         p ->> 'provenance', p ->> 'confidence', NEW.content_address)
+        (lo, hi, v_state, e.hlc_wall, e.hlc_counter, e.node_origin,
+         p ->> 'provenance', p ->> 'confidence', e.content_address)
     ON CONFLICT (low, high) DO UPDATE SET
         state       = EXCLUDED.state,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -364,15 +383,13 @@ BEGIN
     -- previously-connected node is reachable from one of them.
     PERFORM cairn_recompute_component(lo);
     PERFORM cairn_recompute_component(hi);
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS patient_link_apply_trg ON event_log;
-CREATE TRIGGER patient_link_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type IN ('identity.link.asserted', 'identity.unlink.asserted'))
-    EXECUTE FUNCTION patient_link_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION patient_link_apply(event_log) FROM PUBLIC;
 
 -- 6. Demonstrated unified-read VIEW (§5.1 "the unified chart unions the event streams
 --    of all member UUIDs"). Thin by design: every patient_chart row is tagged with its
@@ -406,5 +423,23 @@ CREATE OR REPLACE VIEW person_chart AS
     LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id;
 
 GRANT SELECT ON person_chart TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). Both verbs share the ONE fn and the SAME projection_tables list
+-- (link and unlink fold into the same overlay + component recompute + worklist tables).
+-- #214 + steady-state discipline: converge these rows to the migration text on every
+-- connect, but stay write-free once already converged (no dead tuples, no validate-
+-- trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('identity.link.asserted',   'patient_link_apply',
+     ARRAY['patient_link', 'person_member', 'link_veto_flag', 'identity_projection_flag'], 10, TRUE),
+    ('identity.unlink.asserted', 'patient_link_apply',
+     ARRAY['patient_link', 'person_member', 'link_veto_flag', 'identity_projection_flag'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;
