@@ -163,10 +163,13 @@ BEGIN
                 -- #208: cairn_recompute_medication_group (db/033) gained a p_ca
                 -- (content_address) parameter for the oversize-flag dedup key. NULL
                 -- here is honest degradation (db/033's own documented stance for a
-                -- caller with no triggering-event context): a shred only ever REMOVES
-                -- a reconciled edge, so this recompute can never GROW a component —
-                -- the oversize branch this dedup key guards can never actually fire
-                -- from an erasure-driven recompute.
+                -- caller with no triggering-event context). A shred only ever REMOVES
+                -- a reconciled edge, so this recompute cannot GROW a component; the
+                -- oversize branch is therefore extremely unlikely here — but NOT
+                -- proven impossible (removing one edge of a redundant/cyclic
+                -- component can leave the remainder still above the cap, and on the
+                -- local door that branch RAISEs, aborting the shred). Pre-existing
+                -- raise-vs-flag asymmetry, unchanged by #208.
                 PERFORM cairn_recompute_medication_group(v_lo, NULL);
                 PERFORM cairn_recompute_medication_group(v_hi, NULL);
             END IF;
