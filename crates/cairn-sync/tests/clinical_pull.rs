@@ -35,19 +35,67 @@ fn cs_b() -> Option<String> {
     std::env::var("CAIRN_TEST_PG2").ok()
 }
 
-/// Fixed local ports for A's serve loop — ONE PER TEST in this file. The serial
-/// guard means at most one DB-gated test runs at a time, and the guard below kills
-/// the child on drop; but a test re-binding the PREVIOUS test's port can still hit
-/// EADDRINUSE from a lingering TIME_WAIT socket of the killed child (std's
-/// TcpListener does not set SO_REUSEADDR), so each test owns its own port.
-const LISTEN_CONVERGE: &str = "127.0.0.1:39717";
-const LISTEN_FREEZE: &str = "127.0.0.1:39718";
-const LISTEN_LOWHLC: &str = "127.0.0.1:39719";
-const LISTEN_SWEEP: &str = "127.0.0.1:39720";
-const LISTEN_REPULL: &str = "127.0.0.1:39721";
-const LISTEN_SEALED: &str = "127.0.0.1:39722";
-const LISTEN_GUARD: &str = "127.0.0.1:39723";
-const LISTEN_SEALSCOPE: &str = "127.0.0.1:39724";
+/// Fixed local ports for A's serve loop — ONE PER TEST in this file, and ALL
+/// BELOW the ephemeral-port floor. Two separate constraints meet here:
+/// - ONE PER TEST: the serial guard means at most one DB-gated test runs at a
+///   time, and the guard below kills the child on drop; but a test re-binding
+///   the PREVIOUS test's port can still hit EADDRINUSE from a lingering
+///   TIME_WAIT socket of the killed child (std's TcpListener does not set
+///   SO_REUSEADDR), so each test owns its own port.
+/// - BELOW THE EPHEMERAL FLOOR (issue #263): the kernel assigns local ports for
+///   ordinary outbound connections from its ephemeral range (Linux 32768–60999,
+///   macOS 49152–65535). The previous 397xx ports sat inside Linux's range, so
+///   on CI any transient outbound connection could hold one at bind time — the
+///   serve child died with EADDRINUSE and the test burned the full
+///   wait_listening ceiling. Ports below 32768 are never auto-assigned; the
+///   guard test below enforces the floor.
+const LISTEN_CONVERGE: &str = "127.0.0.1:25717";
+const LISTEN_FREEZE: &str = "127.0.0.1:25718";
+const LISTEN_LOWHLC: &str = "127.0.0.1:25719";
+const LISTEN_SWEEP: &str = "127.0.0.1:25720";
+const LISTEN_REPULL: &str = "127.0.0.1:25721";
+const LISTEN_SEALED: &str = "127.0.0.1:25722";
+const LISTEN_GUARD: &str = "127.0.0.1:25723";
+const LISTEN_SEALSCOPE: &str = "127.0.0.1:25724";
+
+/// Every fixed listen port in this file — a NEW test's port must be added here so
+/// the ephemeral-range guard below covers it.
+const ALL_LISTEN: [&str; 8] = [
+    LISTEN_CONVERGE,
+    LISTEN_FREEZE,
+    LISTEN_LOWHLC,
+    LISTEN_SWEEP,
+    LISTEN_REPULL,
+    LISTEN_SEALED,
+    LISTEN_GUARD,
+    LISTEN_SEALSCOPE,
+];
+
+/// Guard for issue #263: a fixed listen port must sit BELOW every kernel's
+/// ephemeral-port floor (Linux defaults to 32768–60999, macOS to 49152–65535).
+/// The kernel hands out local ports from that range to ORDINARY OUTBOUND
+/// connections — the wait_listening probes, the pull clients, every Postgres
+/// session — so a fixed listener inside it can find its port already taken the
+/// moment it binds: the serve child dies with EADDRINUSE and the test burns the
+/// full wait_listening ceiling before panicking. Ports below the floor can only
+/// collide with an explicit listener, which nothing on a CI runner is.
+/// Runs without the DB gate, so it holds even where CAIRN_TEST_PG is unset.
+#[test]
+fn listen_ports_sit_below_every_ephemeral_floor() {
+    for addr in ALL_LISTEN {
+        let port: u16 = addr
+            .rsplit(':')
+            .next()
+            .expect("addr has a port")
+            .parse()
+            .expect("port parses");
+        assert!(
+            port < 32768,
+            "{addr}: port {port} is inside an ephemeral range (Linux floor 32768); \
+             an outbound connection can steal it before the serve child binds (issue #263)"
+        );
+    }
+}
 
 /// A realistic PAST HLC wall (ms since epoch, ≈ 2026-06-20) — safely below "now",
 /// so A's remote-apply door accepts it (the drift ceiling bounds FUTURE walls only).
