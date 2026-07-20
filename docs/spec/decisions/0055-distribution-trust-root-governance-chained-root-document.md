@@ -11,9 +11,9 @@ base — against **a single steward key**, with no threshold signing, no rotatio
 recovery, and no succession story. Meanwhile mere timestamps got threshold multi-anchor treatment
 ([ADR-0027](0027-trusted-time-anchoring.md)) and federation credentials got explicit no-single-root
 doctrine ([ADR-0017](0017-federation-admission-sovereignty-peering-and-trust-anchors.md)/[ADR-0018](0018-federation-revocation-cascade-and-the-anchor-as-power.md):
-*"never mandate a single anchor — that builds the kill-switch"*; *"a trust anchor is a position of
-power"*). [Security §7.9](../security.md#79-hard-policy-expression-projection-and-enforcement)
-notes the policy-authority root bootstraps "the same as the steward key," inheriting the gap.
+*"never mandate a single anchor"* — the deployment that does has *built* the kill-switch; *"a
+trust anchor is a position of power"*). [Security §7.9](../security.md#79-hard-policy-expression-projection-and-enforcement)
+notes the policy-authority root shares "the same bootstrap as the steward key," inheriting the gap.
 
 A steward-key compromise is **signed remote-code-execution into every upgrading node**; steward
 capture is the mission's own named adversary. The corpus applies anti-capture everywhere except the
@@ -49,7 +49,12 @@ trust_root = {
 ```
 
 Verifiable with **zero database and zero network** — a bare installer or a phone can verify it
-(the registry-as-DB-state alternative fails exactly there; see point 10). Version 1 is the
+(the registry-as-DB-state alternative fails exactly there; see point 10). Root signatures are
+**detached** — they travel beside the document, as release signatures do beside the manifest —
+and the **content address covers the payload alone**, so a document's identity never varies with
+which signature subset accompanies it: point 5's "two distinct verifiable successors" means two
+distinct *payloads* each carrying ≥ M_root valid signatures, never one payload seen with
+different signature sets. Version 1 is the
 self-signed genesis distributed at provisioning; every version N+1 must carry **≥ M_root
 signatures from version N's `root_signers`** (chain-of-custody rotation, the TUF root-role shape,
 as explicit multi-signature — which signers signed is public evidence, and **N=1/M=1 is
@@ -107,7 +112,12 @@ Rust/in-DB, reviewer-legible): verify root chain from the pin → verify release
 every artifact digest → only then load. Release signatures verify against **the release set of the
 newest verified root version** — `root_version_ref` is diagnostic, never authoritative: a manifest
 can never elect an older root's release set, so a rotated-out release key is dead the moment the
-node sees the rotation. Never partial-load; release versions monotonic per channel. **Refusals
+node sees the rotation — and, stated honestly, live until then: a stale node that has not yet
+seen root version N+1 still accepts new releases signed by a key N+1 rotated out (an attacker
+simply withholds the newer chain segment). This revocation-latency window is the concrete price
+of dropping TUF's expiring freshness roles (point 2), named in Consequences; point 7's
+root-pin/checkpoint gossip and the §7.9 freshness rung bound it. Never partial-load; release
+versions monotonic per channel. **Refusals
 speak practice-manager language** — *what is pinned, what this bundle needs, what is missing, what
 to do next* — never "signature verification failed." Provisioning config may require **K
 additional named co-signers** before load (a hospital security team, a national authority, an
@@ -197,7 +207,11 @@ argument working as intended).
   (small, reviewer-legible, [§9.1](../language-substrate.md#91-selection-rule-by-defect-blast-radius));
   the signing ceremonies (procedural discipline); the log role (fit-for-purpose server software).
 - **Honest weaknesses carried:** no-expiry ⇒ immortal retired keys (compensated by the destruction
-  ceremony + standing fork detection); genesis TOFU (procedural); early-fleet log-monitor scarcity
+  ceremony + standing fork detection) **and a release-key revocation window** — a stale node
+  accepts new releases from a rotated-out release key until the rotation reaches it, and an
+  unlogged poisoned bundle is caught retrospectively by gossip/monitors, never blocked by the
+  load gate (compensated by root-pin/checkpoint gossip + the §7.9 freshness rung); genesis TOFU
+  (procedural); early-fleet log-monitor scarcity
   (reproducible builds carry the weight); N=1 today (declared, ratcheted, escrowed).
 - **Operational:** no §7.6 code exists yet — the verifier, load gate, bundle format, and log role
   are future TDD feature work; the root-document and bundle shapes above are the day-one,

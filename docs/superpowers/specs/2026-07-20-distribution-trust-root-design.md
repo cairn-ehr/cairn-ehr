@@ -85,7 +85,10 @@ trust_root = {
 - Content-addressed, self-contained, verifiable with **zero DB and zero network** — a bare
   installer or a phone can verify it. Version 1 is the self-signed genesis distributed at
   provisioning; every version N+1 must carry **≥ M_root signatures from version N's
-  `root_signers`** (chain-of-custody rotation).
+  `root_signers`** (chain-of-custody rotation). Signatures are **detached** (beside the document,
+  as in the release bundle) and the **content address covers the payload alone** — successor
+  distinctness for the §3.3 fork rule means payload distinctness, never one payload seen with
+  different signature subsets. *(Clarified in review of PR #262; ADR-0055 point 2 is canonical.)*
 - **Role split (amendment):** the **root role** signs only root-document versions — rare,
   high-ceremony, offline keys: the constitution. The **release role** signs day-to-day release
   manifests — the daily pen, cheaply revoked or rotated by publishing root version N+1 *without
