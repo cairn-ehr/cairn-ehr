@@ -146,19 +146,60 @@ CREATE TABLE IF NOT EXISTS identity_projection_flag (
     flagged_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON identity_projection_flag TO cairn_agent;
--- Natural-key uniqueness so a heal-mode replay of the IDENTICAL skip (same seed,
--- same observed size, same cap) converges instead of appending a duplicate alarm
--- row every reproject run; a genuinely NEW observation (the component grew
--- further, or the cap changed) still gets its own row (ADR-0057 replay-idempotency
--- — see the ON CONFLICT on the INSERT below).
+-- The triggering event's identity (review finding, replacing an earlier 3-column-key
+-- attempt): NULL for pre-ADR-0057 rows (flagged before this column existed), populated
+-- for every row flagged from here on. Why this column exists at all is explained next
+-- to the unique index below.
+ALTER TABLE identity_projection_flag ADD COLUMN IF NOT EXISTS content_address BYTEA;
+-- Upgrade heal: an EARLIER pass of this fix shipped a 3-column unique index (seed,
+-- observed_size, cap) under this same name. That key is purely OBSERVATIONAL — it
+-- would silently swallow a genuinely NEW pathological occurrence weeks later that
+-- happens to reobserve the same seed/size/cap, muting a real alarm on an append-only
+-- "loud alarm" table (review finding). CREATE ... IF NOT EXISTS cannot upgrade an
+-- existing index by NAME regardless of a column-shape mismatch, so any DB that already
+-- ran that earlier pass (including this branch's own shared dev/test DB) would keep the
+-- wrong 3-column index forever without this heal. Drop it ONCE if its definition does
+-- not already mention content_address; steady-state loads (already 4-column) never drop.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'identity_projection_flag_natural_idx'
+          AND indexdef NOT LIKE '%content_address%'
+    ) THEN
+        DROP INDEX identity_projection_flag_natural_idx;
+    END IF;
+END $$;
+-- Natural-key uniqueness keyed on EVENT identity, not observation shape: a heal-mode
+-- replay of the IDENTICAL event (same content_address) converges instead of appending a
+-- duplicate alarm row every reproject run; a genuinely NEW event that independently
+-- reobserves the same (seed, observed_size, cap) — e.g. the component grew back to
+-- exactly the same size weeks later — still gets its own row, because Postgres's
+-- default NULLS DISTINCT lets legacy pre-ADR-0057 rows (content_address NULL) coexist
+-- without colliding, and a fresh event's real address is (near-certainly) unique too.
+-- This is also why the CREATE below builds cleanly even on a DB already holding
+-- pre-fix duplicate (seed, observed_size, cap) rows: those legacy rows all carry NULL
+-- content_address, and NULL never equals NULL for uniqueness purposes — no row is
+-- deleted or rewritten to make room for the new index (verified on the scratch rig;
+-- see the Task-5 fix report). ADR-0057 replay-idempotency (see the ON CONFLICT on the
+-- INSERT below, which now keys on the same four columns).
 CREATE UNIQUE INDEX IF NOT EXISTS identity_projection_flag_natural_idx
-    ON identity_projection_flag (seed, observed_size, cap);
+    ON identity_projection_flag (seed, observed_size, cap, content_address);
 
 -- Recompute the connected component around one seed UUID over the STANDING link edges
 -- (state='link'), and rewrite person_member for every member to point at the min-UUID
 -- representative. Cost is bounded by the touched component's size, not the table's —
 -- keeping chart reads O(1) (the ADR-0001/Bet-B incremental-projection discipline).
-CREATE OR REPLACE FUNCTION cairn_recompute_component(p_seed uuid)
+--
+-- p_ca (review finding): the triggering event's content_address, threaded through so an
+-- oversize-component skip can be flagged by EVENT identity rather than by observation
+-- shape alone (see identity_projection_flag's unique index above). CREATE OR REPLACE
+-- cannot add a parameter (it would overload, not replace), so the old 1-arg signature
+-- is dropped explicitly first — same idiom as every trigger-fn-to-apply-fn conversion
+-- in this file.
+DROP FUNCTION IF EXISTS cairn_recompute_component(uuid);
+CREATE OR REPLACE FUNCTION cairn_recompute_component(p_seed uuid, p_ca bytea)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_members uuid[];
@@ -187,11 +228,20 @@ BEGIN
     --     (person_member stays stale-but-honest); the flag row is the alarm/worklist.
     IF array_length(v_members, 1) > cairn_max_component_size() THEN
         IF current_setting('cairn.remote_apply', true) = 'on' THEN
-            -- ADR-0057 replay-idempotency: a heal-mode reproject re-running this SAME
-            -- skipped recompute must not append a duplicate worklist alarm.
-            INSERT INTO identity_projection_flag (seed, observed_size, cap)
-            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size())
-            ON CONFLICT (seed, observed_size, cap) DO NOTHING;
+            -- ADR-0057 replay-idempotency, keyed on EVENT identity, never on observation
+            -- shape: a heal-mode reproject re-running this SAME event (same p_ca) must not
+            -- append a duplicate worklist alarm, but a genuinely NEW event that independently
+            -- reobserves the same (seed, observed_size, cap) — e.g. the component grows back
+            -- to exactly this size weeks later — is a REAL new occurrence and must still
+            -- alarm. A p_ca of NULL (no event context available to the caller) relies on
+            -- NULLS DISTINCT to always insert — the honest degradation for that path, never
+            -- a silent dedup it has no basis for. A reproject over legacy-era events may thus
+            -- add one CA-bearing sibling row next to an old NULL-CA legacy row for the same
+            -- (seed, observed_size, cap) — bounded, honest, advisory-tier; this table is an
+            -- append-only alarm log, not a current-state projection.
+            INSERT INTO identity_projection_flag (seed, observed_size, cap, content_address)
+            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size(), p_ca)
+            ON CONFLICT (seed, observed_size, cap, content_address) DO NOTHING;
             RETURN;
         END IF;
         RAISE EXCEPTION
@@ -381,8 +431,8 @@ BEGIN
     -- correct: a link merges (both endpoints reach the same union); an unlink splits
     -- into at most the piece containing `lo` and the piece containing `hi`, and every
     -- previously-connected node is reachable from one of them.
-    PERFORM cairn_recompute_component(lo);
-    PERFORM cairn_recompute_component(hi);
+    PERFORM cairn_recompute_component(lo, e.content_address);
+    PERFORM cairn_recompute_component(hi, e.content_address);
     RETURN;
 END;
 $$;
