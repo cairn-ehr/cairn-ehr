@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Next: continue the Priority-6 design queue (#205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200/#208/#216/#217 remain) — or the feature work below, now unblocked
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Next: continue the Priority-6 design queue (#205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208/#216/#217 remain**) — or the feature work below, now unblocked. **#208 is now the natural next one** — ADR-0056's reclassify-then-reproject path depends on it.
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -40,10 +40,18 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
   role), [#259](https://github.com/cairn-ehr/cairn-ehr/issues/259) (reproducibility CI),
   [#260](https://github.com/cairn-ehr/cairn-ehr/issues/260) (freshness rung),
   [#261](https://github.com/cairn-ehr/cairn-ehr/issues/261) (sync-auth onboarding UX design session).
-- **#200 (B5)** — an ADR stating "refusal + durable re-offer *is* the sync contract for unknown
-  types"; correct the `sync.md` §6.5 over-promise. Pairs with the code-plane work (#188).
+- **#200 (B5) ✅ 2026-07-20** — resolved by [ADR-0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md)
+  (admit-and-defer; spec v0.58). The filed premise was **inverted**: the spec was right, the code
+  was wrong, so the fix is code catching up rather than the promise shrinking. Follow-ons filed:
+  [#265](https://github.com/cairn-ehr/cairn-ehr/issues/265) (door admits uninterpreted),
+  [#266](https://github.com/cairn-ehr/cairn-ehr/issues/266) (mark + reproject on classification),
+  [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267) (pen door refusals verbatim),
+  [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) (align node-plane skip),
+  [#269](https://github.com/cairn-ehr/cairn-ehr/issues/269) (node-plane heal test gap),
+  [#270](https://github.com/cairn-ehr/cairn-ehr/issues/270) (frozen watermark must fail loud).
 - **#208 (D3)** — a generic reprojection mechanism + the written "a projection fix ships with its
-  backfill" rule + one measured full-replay number at Bet-B volume.
+  backfill" rule + one measured full-replay number at Bet-B volume. **Now load-bearing for ADR-0056**
+  (#266's reclassify-then-reproject path is exactly this mechanism).
 - **#216** — decide the `t_effective` ceiling semantics against ADR-0027's graded interval
   (write-door bound + remote-door quarantine-vs-reject).
 - **#217** — make the §1.2 paper-parity benchmark a required section of every clinical-surface
@@ -56,13 +64,15 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-20, latest (the #206 design session → ADR-0055 distribution trust root;
+**Session date:** 2026-07-20, latest (the #200 design session → ADR-0056 admit-and-defer; earlier
+the same day the #206 design session → ADR-0055 distribution trust root, plus PR #264 moving the
+`clinical_pull` listen ports below the ephemeral floor, issue #263;
 2026-07-19 had the #205 design session → ADR-0054, the P5 process-mechanization session
 #212/#213/#214/#215 closing the review course, and the P4 tech-debt slice PR #251; 2026-07-18 had
 #204 ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.57 (through
-ADR-0055) · **Phase:** architecture complete (every original §11 question closed);
+regeneration 2026-07-14) · **Spec/ADRs:** v0.58 (through
+ADR-0056) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -94,7 +104,30 @@ pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**Session (2026-07-20, latest) — the #206 design session: ADR-0055 distribution-plane trust-root
+**Session (2026-07-20, latest) — the #200 design session: ADR-0056 unknown event types admitted
+uninterpreted (spec v0.58; ROADMAP Slice 48; the third Priority-6 item).** Finding B5 filed #200 as a
+spec *over-promise* needing only a ratifying ADR. **Investigation inverted the premise: the spec was
+right and the code was wrong.** §6.5's lossless-forwarding invariant ("never rejecting, dropping…")
+is **contradicted** by `db/020:163-167`'s fail-closed on an unclassifiable `event_type` — it holds
+for unknown *fields*, never unknown *types*. Two further gaps: §6.3's "quarantined *verbatim*" is
+false for **verifiable** bytes (both pens hold *unverifiable* bytes only), and the planes diverge
+with the clinical one failing **quietly** — it freezes its cursor and still **exits success**, so one
+unclassifiable event from an upgraded peer silently wedges that peer's whole pull. The deciding
+failure: under fail-closed a phone-tier node carrying a chart between two upgraded facilities (§6.1
+sneakernet) acquires *nothing* past the first unknown type — a future `clinical.medication.recall`
+would be **absent**, not merely unrendered. Resolution — **admit-and-defer**: unknown type is not a
+refusal (verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); strict
+door keeps failing closed (carry what you cannot author); the **floor gates effect, not presence**
+(enumerated survivors); power granted only at reclassification, so *no unattested suppression* holds
+at every instant; refusal + durable re-offer survives as the **residual** contract. No wire change
+(ADR-0010 derived-not-declared stands). **The posture triad completes:** content plane
+admits-and-disputes (0054) *and* admits-and-defers (0056); code plane verifies-or-refuses (0055).
+Cost is small — **one fail-closed line** stands between the tree and the contract (`serve` already
+reads `event_log` unconditionally; sealed-scope is already a string prefix; `cairn_event_twin`
+already degrades). Follow-ons: #265–#270. Spec homes: sync §6.5/§6.3, data-model §3.13.
+**Next:** #208 (now load-bearing for #266), then #216/#217, or the unblocked feature work.
+
+**Session (2026-07-20, earlier) — the #206 design session: ADR-0055 distribution-plane trust-root
 governance (spec v0.57; ROADMAP Slice 47; the second Priority-6 item).** Finding C5 (a single
 steward key signs the highest-blast-radius artifact — native extensions in the DB trusted base)
 resolves by applying the corpus's own anchor doctrine to the steward: **no privileged root on the
@@ -434,6 +467,7 @@ ADR before reopening any of these.
 | [0053](spec/decisions/0053-per-write-human-authorship.md) | Per-write human authorship: `{human,authored}`+`{node,recorded}`, human signs while the node seals + holds the DEK; `cairn_authorship_bound` strict-door binding; apply admits + grades | §3.9/§3.10 (refines 0007/0008/0028/0051/0052) |
 | [0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation is admit-and-dispute: signed actor-event wire shape on the node plane; derived live-bindings disputed state; content never waits, permissions always wait; adjudication = supersede by human ceremony, never auto-resolved | §7.5/§6.9/§3.12/§5.10 (refines 0011/0044/0046) |
 | [0055](spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: no privileged root — channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze never-silently-pick; transparency log by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | §7.6/§7.9/§7.7/§6.5 (refines 0012/0024; applies 0017/0018) |
+| [0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes (carry what you cannot author); the floor gates effect not presence; refusal + durable re-offer kept as the residual contract | §6.5/§6.3/§3.13 (refines 0012/0022; extends 0054; upholds 0010/0051) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

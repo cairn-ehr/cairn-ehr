@@ -160,6 +160,7 @@ nav:
       - ADR-0053 · Per-write human authorship — authoring signature, binding & confidence grade: spec/decisions/0053-per-write-human-authorship.md
       - ADR-0054 · Actor-registry federation — admit-and-dispute: spec/decisions/0054-actor-registry-federation-admit-and-dispute.md
       - ADR-0055 · Distribution trust root — channels & chained root document: spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md
+      - ADR-0056 · Unknown event types admitted uninterpreted: spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

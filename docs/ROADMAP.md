@@ -1125,6 +1125,42 @@ admits-and-disputes — the ADR-0054 contrast completed). Follow-ons filed: #257
 code), #258 (transparency-log role), #259 (reproducibility CI), #260 (freshness rung), #261
 (sync-auth onboarding UX design session). Design/plan docs under `docs/superpowers/`.
 
+**Slice 48 — the #200 design session: ADR-0056 unknown event types admitted uninterpreted
+(2026-07-20; P6 design queue, third item; spec v0.58; docs-only — code slices filed as
+follow-ons).** Review finding B5 filed #200 as a spec *over-promise* ("refusal + durable re-offer
+*is* the contract, it just needs stating"). Investigation found the opposite: the **spec was right
+and the code was wrong**. Three findings, all verified — (F1) `sync.md` §6.5's lossless-forwarding
+invariant ("stores, re-propagates and exports byte-for-byte — never rejecting") is **contradicted**,
+not merely imprecise, by `db/020:163-167`'s fail-closed on an unclassifiable `event_type`; it holds
+for unknown *fields*, never for unknown *types*. (F2) §6.3's claim that refused bytes "are
+quarantined *verbatim* by digest" is **false for verifiable bytes** — both pens hold *unverifiable*
+bytes only (`clinical_pull.rs:766-769` asserts `penned == 0`). (F3) the two planes diverge and the
+clinical one fails **quietly**: node plane skips-and-advances (10-cycle sweep re-offer,
+`sync.rs:680-685`), clinical plane freezes its cursor and **still exits success**
+(`main.rs:1697-1716`, `PullIntegrityError` at `:1834` never fires on a freeze) — so one
+unclassifiable event from an upgraded peer silently wedges a whole peer's pull.
+**The deciding failure:** under fail-closed, a phone-tier node carrying a chart between two upgraded
+facilities (§6.1 sneakernet) acquires *nothing* past the first unknown type — a future
+`clinical.medication.recall` would be **absent**, not merely unrendered (`cairn_twin_skeleton`
+already renders any type). Resolution — **admit-and-defer**: an unknown type is *not a refusal*
+(stored verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); the
+**strict door keeps failing closed** (carry a type you cannot author — ADR-0051's
+strict-submit/lenient-apply applied to types); the **floor gates effect, not presence** (enumerated:
+signature/enrollment/envelope/`t_effective` ceiling/sealed-scope/never-lawful contributor shapes
+still refuse; the suppressing⇒attestation gate is moot since suppressing power is withheld); **power
+is granted at reclassification, never retroactively assumed**, so *no unattested suppression* holds
+at every instant rather than violated-then-repaired (couples to #208); and **refusal + durable
+re-offer survives as the residual contract** for genuine refusals. **No wire change** — ADR-0010's
+derived-not-declared stands, so no self-declared mode field (a declaration can lie).
+**The posture triad completes:** content plane admits-and-disputes (0054) *and* admits-and-defers
+(0056); code plane verifies-or-refuses (0055) — content withheld is a safety failure, code admitted
+is a compromise. Cost is small: `serve` already reads `event_log` unconditionally, sealed-scope is
+already a `clinical.%` string prefix, and `cairn_event_twin` already degrades — **one fail-closed
+line** stands between the tree and the contract. Follow-ons filed: #265 (door admits uninterpreted),
+#266 (mark + reproject on classification), #267 (pen door refusals verbatim), #268 (align node-plane
+skip), #269 (node-plane heal test gap), #270 (frozen watermark must fail loud). Design doc under
+`docs/superpowers/specs/`.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
