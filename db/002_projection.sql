@@ -156,4 +156,13 @@ BEGIN
 END;
 $$;
 
+-- A trigger-shaped fn (the old signature) could never be called directly by a client —
+-- only the trigger manager fired it. This apply-fn shape is a PLAIN function, so PUBLIC
+-- gets EXECUTE by default; lock it down like every privileged fn in db/005
+-- (cairn_event_twin, submit_event, ...). Only cairn_projection_dispatch's dynamic EXECUTE
+-- calls it, running as the same owner that defined it (implicit owner EXECUTE survives
+-- the REVOKE). This REVOKE is the template every later projection-apply-fn conversion
+-- copies (#208/ADR-0057).
+REVOKE EXECUTE ON FUNCTION patient_chart_apply(event_log) FROM PUBLIC;
+
 COMMIT;

@@ -107,3 +107,60 @@ async fn dispatcher_routes_patient_created_to_patient_chart() {
     // No cleanup: event_log is append-only (BEFORE UPDATE/DELETE guard) — the
     // probe event stays, which is fine on the shared test DB (fresh UUID each run).
 }
+
+/// Steady-state replay must not rewrite the three seeded patient_chart_apply rows
+/// (modeled on twin_registry.rs's steady_state_replay_leaves_registry_rows_untouched).
+/// connect_and_load_schema replays db/005's registration INSERT on every connect; without
+/// the `WHERE ... IS DISTINCT FROM` guard, an unconditional DO UPDATE writes a new row
+/// version (dead tuple + validate-trigger fire) for all three rows on EVERY connect. Pin
+/// that via xmin (the row version's inserting/updating txid), which only changes if the
+/// row is actually rewritten.
+#[tokio::test]
+async fn steady_state_replay_leaves_projection_rows_untouched() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+
+    // First connect converges the three rows (whatever state the shared DB was in).
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let rows_before = c
+        .query(
+            "SELECT event_type, xmin::text FROM cairn_projection_apply \
+             WHERE apply_fn = 'patient_chart_apply' ORDER BY event_type",
+            &[],
+        )
+        .await
+        .unwrap();
+    let mut before: Vec<(String, String)> = rows_before
+        .iter()
+        .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+        .collect();
+    before.sort();
+    assert_eq!(
+        before.len(),
+        3,
+        "expected the 3 seeded patient_chart_apply registration rows"
+    );
+    drop(c);
+
+    // Second connect replays over already-converged rows: no write may occur.
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let rows_after = c2
+        .query(
+            "SELECT event_type, xmin::text FROM cairn_projection_apply \
+             WHERE apply_fn = 'patient_chart_apply' ORDER BY event_type",
+            &[],
+        )
+        .await
+        .unwrap();
+    let mut after: Vec<(String, String)> = rows_after
+        .iter()
+        .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+        .collect();
+    after.sort();
+
+    assert_eq!(
+        before, after,
+        "steady-state replay rewrote an already-converged cairn_projection_apply row \
+         (the ON CONFLICT DO UPDATE arm must be guarded by IS DISTINCT FROM)"
+    );
+}

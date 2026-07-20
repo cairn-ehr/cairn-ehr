@@ -91,8 +91,13 @@ CREATE TABLE IF NOT EXISTS cairn_projection_apply (
 -- the apply fn must exist with the unified (event_log) signature, and every
 -- projection_tables entry must be a real relation (it is rebuild-scope metadata
 -- — a typo would silently exempt the real table from rebuild's refusal check).
+-- `SET search_path = public` pinned (same discipline as cairn_event_twin below):
+-- the to_regprocedure/to_regclass resolution must never be shadowed by a caller's
+-- search_path, regardless of who fires this validation trigger.
 CREATE OR REPLACE FUNCTION cairn_check_projection_registry_fn()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public
+AS $$
 DECLARE v_tbl text;
 BEGIN
     IF to_regprocedure(NEW.apply_fn || '(event_log)') IS NULL THEN
@@ -129,14 +134,27 @@ REVOKE INSERT, UPDATE, DELETE ON cairn_projection_apply FROM PUBLIC;
 -- a door was adjudicated by that door.
 CREATE OR REPLACE FUNCTION cairn_replay_eligible(e event_log)
 RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT TRUE $$;
+-- Locked down like every predicate in this file: cairn_reproject (db/039) calls it as
+-- the migration-defining owner, so no runtime role needs a grant, and PUBLIC's default
+-- EXECUTE would let any connected role probe/depend on a predicate that becomes a real
+-- safety-relevant filter under #265.
+REVOKE EXECUTE ON FUNCTION cairn_replay_eligible(event_log) FROM PUBLIC;
 
 -- The ONE projection trigger: look up the registered apply fns for this event's
 -- type and run each. Deterministic order (run_order, then name — mirrors the
 -- old alphabetical trigger-name firing order). Types with no registered rows
 -- (e.g. carried-not-projected federation types, ADR-0012) dispatch nothing —
 -- the same behavior the old WHEN-filtered triggers gave them.
+--
+-- `SET search_path = public` pinned here exactly like cairn_event_twin's dynamic
+-- dispatch further down this file: the %I-quoted apply_fn EXECUTE must never resolve
+-- into an attacker-shadowed schema regardless of who/what fired the AFTER INSERT
+-- trigger that invokes this function — the dynamic-dispatch safety argument stays
+-- self-contained here, not dependent on the firing role's search_path.
 CREATE OR REPLACE FUNCTION cairn_projection_dispatch()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public
+AS $$
 DECLARE r record;
 BEGIN
     FOR r IN
@@ -874,13 +892,21 @@ GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
 -- this registry exists). note.added is heal_safe=false BY SHAPE: note_count is
 -- a counter — replaying an already-counted event would increment again. It
 -- heals only via rebuild (truncate-then-replay). See ADR-0057.
-INSERT INTO cairn_projection_apply (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+--
+-- DO UPDATE, not DO NOTHING (#214 idiom, see db/031's medication registrations):
+-- the loader replays this file on every connect, so a stale/tampered row heals to the
+-- migration text. The IS DISTINCT FROM guard keeps the steady-state replay write-free —
+-- without it every connect rewrites all three rows (dead tuple + validate-trigger fire)
+-- even when nothing changed.
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
     ('patient.created', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
     ('patient.amended', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
     ('note.added',      'patient_chart_apply', ARRAY['patient_chart'], 10, FALSE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET
     projection_tables = EXCLUDED.projection_tables,
     run_order         = EXCLUDED.run_order,
-    heal_safe         = EXCLUDED.heal_safe;
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;
