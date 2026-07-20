@@ -160,8 +160,15 @@ BEGIN
             DELETE FROM medication_reconciliation WHERE content_address = v_ca
                 RETURNING low, high INTO v_lo, v_hi;
             IF v_lo IS NOT NULL AND to_regclass('public.medication_group_member') IS NOT NULL THEN
-                PERFORM cairn_recompute_medication_group(v_lo);
-                PERFORM cairn_recompute_medication_group(v_hi);
+                -- #208: cairn_recompute_medication_group (db/033) gained a p_ca
+                -- (content_address) parameter for the oversize-flag dedup key. NULL
+                -- here is honest degradation (db/033's own documented stance for a
+                -- caller with no triggering-event context): a shred only ever REMOVES
+                -- a reconciled edge, so this recompute can never GROW a component —
+                -- the oversize branch this dedup key guards can never actually fire
+                -- from an erasure-driven recompute.
+                PERFORM cairn_recompute_medication_group(v_lo, NULL);
+                PERFORM cairn_recompute_medication_group(v_hi, NULL);
             END IF;
         END IF;
         -- Attestation overlay (db/034): attester identity + reviewed commitment/count.

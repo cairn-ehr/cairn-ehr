@@ -156,68 +156,90 @@ GRANT SELECT ON medication_dose_correction TO cairn_agent;
 -- 7. Seed point 0 from the assert (a SECOND, additive trigger on the assert type; the
 --    slice-1 statement/cessation triggers are untouched). dose_event_id = the assert's
 --    event_id; effective = the assert's `started`.
-CREATE OR REPLACE FUNCTION medication_dose_seed_initial()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_dose_seed_initial_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_dose_seed_initial();
+
+CREATE OR REPLACE FUNCTION medication_dose_seed_initial(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
 -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
 -- sealed without custody here: nothing to project — honest degradation.
-DECLARE p jsonb := cairn_clear_payload(NEW);
+DECLARE p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     INSERT INTO medication_dose_event
         (dose_event_id, medication_id, patient_id, amount, unit,
          effective_value, effective_precision, is_initial, info_source, reason,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        NEW.event_id, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        e.event_id, (p ->> 'medication_id')::uuid, e.patient_id,
         p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit',
         p -> 'started' ->> 'value', p -> 'started' ->> 'precision',
         TRUE, p ->> 'info_source', NULL,
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (dose_event_id) DO NOTHING;
-    RETURN NULL;
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_dose_seed_initial_trg ON event_log;
-CREATE TRIGGER medication_dose_seed_initial_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication.asserted')
-    EXECUTE FUNCTION medication_dose_seed_initial();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_dose_seed_initial(event_log) FROM PUBLIC;
 
 -- 8. Fold a dose change into a new timeline point.
-CREATE OR REPLACE FUNCTION medication_dose_change_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_dose_change_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_dose_change_apply();
+
+CREATE OR REPLACE FUNCTION medication_dose_change_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
 -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
 -- sealed without custody here: nothing to project — honest degradation.
-DECLARE p jsonb := cairn_clear_payload(NEW);
+DECLARE p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     -- #192 thread patient-consistency (shared guard, db/031): a dose row carries its
     -- own patient_id, so a wrong-patient dose event would mis-attribute the dose
-    -- history. Local fail-loud / remote converge-and-flag / unknown passes.
+    -- history. Local fail-loud / remote converge-and-flag / unknown passes. NOTE
+    -- this guard can ALSO insert into medication_patient_conflict_flag on a
+    -- remote-apply conflict — see this fn's registration row below, which lists
+    -- that table too (same recipe/inventory-doc gap noted in db/031's cessation
+    -- trigger, caught while converting this file).
     PERFORM cairn_guard_medication_patient(
-        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
 
     INSERT INTO medication_dose_event
         (dose_event_id, medication_id, patient_id, amount, unit,
          effective_value, effective_precision, is_initial, info_source, reason,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        NEW.event_id, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        e.event_id, (p ->> 'medication_id')::uuid, e.patient_id,
         p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit',
         p -> 'effective' ->> 'value', p -> 'effective' ->> 'precision',
         FALSE, p ->> 'info_source', p ->> 'reason',
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (dose_event_id) DO NOTHING;
-    RETURN NULL;
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_dose_change_apply_trg ON event_log;
-CREATE TRIGGER medication_dose_change_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-dose-change.asserted')
-    EXECUTE FUNCTION medication_dose_change_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_dose_change_apply(event_log) FROM PUBLIC;
 
 -- 9. Effective per-point value = the correction's value IF a correction row exists,
 --    ELSE the event's value. Keyed on PRESENCE (not COALESCE) so a correct-to-unknown
@@ -301,26 +323,41 @@ GRANT SELECT ON patient_medication_past TO cairn_agent;
 
 -- 12. Fold a correction as an HLC-winning overlay keyed by the TARGET dose event.
 --     Offline-first: no check that the target exists locally (it may replicate later).
-CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--     NOTE: db/035 later REDEFINES this fn's body (a per-field patch, ADR-0050) via
+--     CREATE OR REPLACE on the SAME (event_log) signature — db/035 owns none of the
+--     DROP/REVOKE/registration scaffolding below; this file (the fn's FIRST definer)
+--     does, per the db/013-style redefinition convention.
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_dose_correction_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_dose_correction_apply();
+
+CREATE OR REPLACE FUNCTION medication_dose_correction_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
 -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
 -- sealed without custody here: nothing to project — honest degradation.
-DECLARE p jsonb := cairn_clear_payload(NEW);
+DECLARE p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     -- #192 thread patient-consistency (shared guard, db/031) — same contract as the
     -- dose-change trigger above.
     PERFORM cairn_guard_medication_patient(
-        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
 
     INSERT INTO medication_dose_correction
         (corrected_dose_event_id, medication_id, patient_id, amount, unit, reason, info_source,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        (p ->> 'corrects')::uuid, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        (p ->> 'corrects')::uuid, (p ->> 'medication_id')::uuid, e.patient_id,
         p -> 'dose' ->> 'amount', p -> 'dose' ->> 'unit', p ->> 'reason', p ->> 'info_source',
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (corrected_dose_event_id) DO UPDATE SET
         medication_id   = EXCLUDED.medication_id,
         patient_id      = EXCLUDED.patient_id,
@@ -337,13 +374,38 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         medication_dose_correction.hlc_wall, medication_dose_correction.hlc_counter,
         medication_dose_correction.origin, medication_dose_correction.content_address);
-    RETURN NULL;
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_dose_correction_apply_trg ON event_log;
-CREATE TRIGGER medication_dose_correction_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-dose-correction.asserted')
-    EXECUTE FUNCTION medication_dose_correction_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_dose_correction_apply(event_log) FROM PUBLIC;
+
+-- Registered apply fns for the #208/ADR-0057 generic dispatcher (db/005) +
+-- cairn_reproject heal/rebuild (db/039). medication_dose_seed_initial runs BEFORE
+-- medication_statement_apply (db/031, run_order 20) for the SAME event type
+-- (clinical.medication.asserted) — mirrors the old alphabetical trigger-name firing
+-- order (dose_seed < statement) and is hygiene, not correctness (neither fn reads the
+-- other's projection table). medication_dose_change_apply's/medication_dose_correction_apply's
+-- projection_tables: dose-change ALSO lists medication_patient_conflict_flag (the shared
+-- guard can write there on a remote-apply conflict — see that fn's comment above);
+-- dose-correction does NOT, because its body (as it stands after db/035's redefinition,
+-- which is what's actually live on a fully-migrated node) does not call the guard at all
+-- — see db/035's header note. #214 + steady-state discipline: converge these rows to the
+-- migration text on every connect, but stay write-free once already converged (no dead
+-- tuples, no validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication.asserted',                 'medication_dose_seed_initial',
+     ARRAY['medication_dose_event'], 10, TRUE),
+    ('clinical.medication-dose-change.asserted',     'medication_dose_change_apply',
+     ARRAY['medication_dose_event', 'medication_patient_conflict_flag'], 10, TRUE),
+    ('clinical.medication-dose-correction.asserted', 'medication_dose_correction_apply',
+     ARRAY['medication_dose_correction'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

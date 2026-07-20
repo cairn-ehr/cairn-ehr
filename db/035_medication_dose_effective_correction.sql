@@ -145,13 +145,18 @@ $$;
 --    struck / untouched (the view uses the flag, never the raw NULL, to decide). HLC-wins
 --    wholesale on a re-correction of the same point (ON CONFLICT). Offline-first: the
 --    target need not exist locally.
-CREATE OR REPLACE FUNCTION medication_dose_correction_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- #208/ADR-0057: this redefines ONLY the (event_log)-signature body db/032 first
+-- defined — db/032 owns the DROP TRIGGER/DROP FUNCTION preamble, the REVOKE, and the
+-- cairn_projection_apply registration row (same db/013-style redefinition convention:
+-- the fn's FIRST definer owns that scaffolding, a later redefiner touches only the body).
+CREATE OR REPLACE FUNCTION medication_dose_correction_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
     -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
     -- sealed without custody here: nothing to project — honest degradation.
-    p jsonb := cairn_clear_payload(NEW);
+    p jsonb := cairn_clear_payload(e);
     v_dose_set     boolean := p ? 'dose';
     v_eff_set      boolean := p ? 'effective';
     v_reason_set   boolean := p ? 'reason';
@@ -159,14 +164,14 @@ DECLARE
     v_eff_struck    boolean := COALESCE(p -> 'strike' ? 'effective', FALSE);
     v_reason_struck boolean := COALESCE(p -> 'strike' ? 'reason', FALSE);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     INSERT INTO medication_dose_correction
         (corrected_dose_event_id, medication_id, patient_id,
          amount, unit, effective_value, effective_precision, reason, note, info_source,
          dose_corrected, effective_corrected, reason_corrected,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        (p ->> 'corrects')::uuid, (p ->> 'medication_id')::uuid, NEW.patient_id,
+        (p ->> 'corrects')::uuid, (p ->> 'medication_id')::uuid, e.patient_id,
         CASE WHEN v_dose_set THEN p -> 'dose' ->> 'amount' END,
         CASE WHEN v_dose_set THEN p -> 'dose' ->> 'unit'   END,
         CASE WHEN v_eff_set  THEN p -> 'effective' ->> 'value'     END,
@@ -177,7 +182,7 @@ BEGIN
         (v_dose_set OR v_dose_struck),
         (v_eff_set OR v_eff_struck),
         (v_reason_set OR v_reason_struck),
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (corrected_dose_event_id) DO UPDATE SET
         medication_id       = EXCLUDED.medication_id,
         patient_id          = EXCLUDED.patient_id,
@@ -200,11 +205,20 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         medication_dose_correction.hlc_wall, medication_dose_correction.hlc_counter,
         medication_dose_correction.origin, medication_dose_correction.content_address);
-    RETURN NULL;
+    RETURN;
 END;
 $$;
--- (db/032 already created medication_dose_correction_apply_trg on the same fn name; no
---  trigger DDL is needed here — the trigger picks up the replaced body.)
+-- (db/032 already created the (event_log)-signature fn + its REVOKE + its
+--  cairn_projection_apply registration row; no scaffolding is needed here — the
+--  dispatcher picks up this replaced body via the same registered fn name.)
+--
+-- NOTE (discrepancy observed while converting, NOT introduced by this conversion —
+-- see the task report): db/032's original medication_dose_correction_apply body called
+-- cairn_guard_medication_patient (the #192 thread patient-consistency guard shared with
+-- the assert/cessation/dose-change triggers). This redefinition does NOT call it — the
+-- guard call was already absent from this fn's body before this task touched the file.
+-- Preserved verbatim (zero logic drift is this task's mandate); flagged here for a human
+-- to decide whether that's an intentional ADR-0050 narrowing or a pre-existing gap.
 
 -- 5. Rework the two dose-timeline views to read corrected effective/reason via the
 --    touched-flags. SAME column sets as db/032 (no widening — replay-safe). The effective
