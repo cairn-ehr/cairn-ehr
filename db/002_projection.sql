@@ -67,21 +67,32 @@ CREATE TABLE IF NOT EXISTS patient_chart (
 -- a total write outage at trigger depth. Guarded by migration_replay_widening.rs.
 ALTER TABLE patient_chart ADD COLUMN IF NOT EXISTS demo_content_address BYTEA;
 
--- Incremental maintenance: AFTER INSERT on event_log, fold exactly the one new
--- event into the projection. No full recompute — that is the whole point of the
--- measurement. "Latest demographic wins by HLC order" is an overlay, never an
--- edit to the log (principle #2): superseded versions remain in event_log.
-CREATE OR REPLACE FUNCTION patient_chart_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- Incremental maintenance: called by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057) for exactly the one new event, folding it into the projection. No
+-- full recompute — that is the whole point of the measurement. "Latest
+-- demographic wins by HLC order" is an overlay, never an edit to the log
+-- (principle #2): superseded versions remain in event_log.
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply there.
+DROP TRIGGER IF EXISTS event_log_project ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS patient_chart_apply();
+
+CREATE OR REPLACE FUNCTION patient_chart_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_cur record;  -- current demographic winner, for #157 collision detection
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
-    IF NEW.event_type IN ('patient.created', 'patient.amended') THEN
+    IF e.sealed THEN RETURN; END IF;
+    IF e.event_type IN ('patient.created', 'patient.amended') THEN
         -- #157: before overlaying, detect a Byzantine HLC-triple collision against the current
         -- demographic winner and record an advisory signal. Reads the demo_* provenance columns
         -- aliased to the predicate's parameter names; a note-only row has null demo_* → the
@@ -89,14 +100,14 @@ BEGIN
         SELECT demo_hlc_wall AS hlc_wall, demo_hlc_count AS hlc_counter,
                demo_origin AS origin, demo_content_address AS content_address
           INTO v_cur
-          FROM patient_chart WHERE patient_id = NEW.patient_id;
+          FROM patient_chart WHERE patient_id = e.patient_id;
         IF FOUND AND cairn_hlc_triple_collision(
-                NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                 v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
             PERFORM cairn_record_hlc_collision(
-                'patient_chart', NEW.patient_id::text,
-                NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-                NEW.content_address, v_cur.content_address);
+                'patient_chart', e.patient_id::text,
+                e.hlc_wall, e.hlc_counter, e.node_origin,
+                e.content_address, v_cur.content_address);
         END IF;
 
         INSERT INTO patient_chart AS pc (
@@ -104,49 +115,45 @@ BEGIN
             demo_hlc_wall, demo_hlc_count, demo_origin, demo_content_address,
             last_activity, updated_at)
         VALUES (
-            NEW.patient_id,
-            NEW.body ->> 'name', NEW.body ->> 'dob', NEW.body ->> 'sex',
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
-            NEW.recorded_at, clock_timestamp())
+            e.patient_id,
+            e.body ->> 'name', e.body ->> 'dob', e.body ->> 'sex',
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
+            e.recorded_at, clock_timestamp())
         ON CONFLICT (patient_id) DO UPDATE SET
             -- Only overlay if this event is HLC-later than the current winner.
-            name           = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            name           = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.body ->> 'name' ELSE pc.name END,
-            dob            = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                  THEN e.body ->> 'name' ELSE pc.name END,
+            dob            = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.body ->> 'dob' ELSE pc.dob END,
-            sex            = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                  THEN e.body ->> 'dob' ELSE pc.dob END,
+            sex            = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.body ->> 'sex' ELSE pc.sex END,
-            demo_content_address = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                  THEN e.body ->> 'sex' ELSE pc.sex END,
+            demo_content_address = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.content_address ELSE pc.demo_content_address END,
-            demo_hlc_wall  = GREATEST(pc.demo_hlc_wall, NEW.hlc_wall),
-            demo_hlc_count = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                  THEN e.content_address ELSE pc.demo_content_address END,
+            demo_hlc_wall  = GREATEST(pc.demo_hlc_wall, e.hlc_wall),
+            demo_hlc_count = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.hlc_counter ELSE pc.demo_hlc_count END,
-            demo_origin    = CASE WHEN cairn_hlc_overlay_wins(NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+                                  THEN e.hlc_counter ELSE pc.demo_hlc_count END,
+            demo_origin    = CASE WHEN cairn_hlc_overlay_wins(e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
                                      pc.demo_hlc_wall, pc.demo_hlc_count, pc.demo_origin, pc.demo_content_address)
-                                  THEN NEW.node_origin ELSE pc.demo_origin END,
-            last_activity  = GREATEST(pc.last_activity, NEW.recorded_at),
+                                  THEN e.node_origin ELSE pc.demo_origin END,
+            last_activity  = GREATEST(pc.last_activity, e.recorded_at),
             updated_at     = clock_timestamp();
 
-    ELSIF NEW.event_type = 'note.added' THEN
+    ELSIF e.event_type = 'note.added' THEN
         INSERT INTO patient_chart AS pc (patient_id, note_count, last_activity, updated_at)
-        VALUES (NEW.patient_id, 1, NEW.recorded_at, clock_timestamp())
+        VALUES (e.patient_id, 1, e.recorded_at, clock_timestamp())
         ON CONFLICT (patient_id) DO UPDATE SET
             note_count    = pc.note_count + 1,
-            last_activity = GREATEST(pc.last_activity, NEW.recorded_at),
+            last_activity = GREATEST(pc.last_activity, e.recorded_at),
             updated_at    = clock_timestamp();
     END IF;
 
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
-
-DROP TRIGGER IF EXISTS event_log_project ON event_log;
-CREATE TRIGGER event_log_project AFTER INSERT ON event_log
-    FOR EACH ROW EXECUTE FUNCTION patient_chart_apply();
 
 COMMIT;

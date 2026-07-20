@@ -64,6 +64,97 @@ CREATE TRIGGER cairn_event_twin_check_validate
 -- cairn_agent needs no grant.
 REVOKE INSERT, UPDATE, DELETE ON cairn_event_twin_check FROM PUBLIC;
 
+-- ---------------------------------------------------------------------------
+-- The projection registry (#208 / ADR-0057): registration IS the wiring.
+-- A projection lives only in its registered apply function; ONE dispatcher
+-- trigger (below) replaces every per-type projection trigger, and
+-- cairn_reproject (db/039) heals/rebuilds by replaying the IDENTICAL dispatch.
+-- Same discipline as cairn_event_twin_check above (ADR-0048): register-by-row
+-- in the migration that defines the fn, fail closed at registration time.
+--
+-- heal_safe: TRUE iff replaying an event through this fn over an EXISTING
+-- projection converges (insert-or-better winner logic). A counter-shaped
+-- projection (patient_chart.note_count) is NOT: replay would increment again.
+-- Heal-mode reproject skips heal_safe=false rows with a notice; rebuild mode
+-- (truncate-then-replay) handles them. New projections should be idempotent;
+-- heal_safe=false needs a comment justifying the shape.
+CREATE TABLE IF NOT EXISTS cairn_projection_apply (
+    event_type        TEXT    NOT NULL,
+    apply_fn          TEXT    NOT NULL,
+    projection_tables TEXT[]  NOT NULL,
+    run_order         INTEGER NOT NULL DEFAULT 100,
+    heal_safe         BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY (event_type, apply_fn)
+);
+
+-- Fail closed at REGISTRATION time, exactly like cairn_check_twin_registry_fn:
+-- the apply fn must exist with the unified (event_log) signature, and every
+-- projection_tables entry must be a real relation (it is rebuild-scope metadata
+-- — a typo would silently exempt the real table from rebuild's refusal check).
+CREATE OR REPLACE FUNCTION cairn_check_projection_registry_fn()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_tbl text;
+BEGIN
+    IF to_regprocedure(NEW.apply_fn || '(event_log)') IS NULL THEN
+        RAISE EXCEPTION
+            'cairn_projection_apply: apply_fn %(event_log) does not exist (fail closed)',
+            NEW.apply_fn;
+    END IF;
+    FOREACH v_tbl IN ARRAY NEW.projection_tables LOOP
+        IF to_regclass(v_tbl) IS NULL THEN
+            RAISE EXCEPTION
+                'cairn_projection_apply: projection table "%" does not exist (fail closed)',
+                v_tbl;
+        END IF;
+    END LOOP;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cairn_projection_apply_validate ON cairn_projection_apply;
+CREATE TRIGGER cairn_projection_apply_validate
+    BEFORE INSERT OR UPDATE ON cairn_projection_apply
+    FOR EACH ROW EXECUTE FUNCTION cairn_check_projection_registry_fn();
+
+-- Safety surface: a row pointing a type's projection at a no-op would silently
+-- stop materialization. Locked down like cairn_event_twin_check.
+REVOKE INSERT, UPDATE, DELETE ON cairn_projection_apply FROM PUBLIC;
+
+-- The #266 safety seam (ADR-0056 decision 4): cairn_reproject routes every
+-- candidate event through this predicate. Constantly TRUE today — no deferred
+-- events can exist while the remote door still fail-closes on unknown types.
+-- #265's explicit deferred marker hooks in HERE and only here, so a manual
+-- mid-upgrade reproject can never grant power to an unadjudicated deferred
+-- event. The live-insert path needs no filter: an event being inserted through
+-- a door was adjudicated by that door.
+CREATE OR REPLACE FUNCTION cairn_replay_eligible(e event_log)
+RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT TRUE $$;
+
+-- The ONE projection trigger: look up the registered apply fns for this event's
+-- type and run each. Deterministic order (run_order, then name — mirrors the
+-- old alphabetical trigger-name firing order). Types with no registered rows
+-- (e.g. carried-not-projected federation types, ADR-0012) dispatch nothing —
+-- the same behavior the old WHEN-filtered triggers gave them.
+CREATE OR REPLACE FUNCTION cairn_projection_dispatch()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE r record;
+BEGIN
+    FOR r IN
+        SELECT apply_fn FROM cairn_projection_apply
+        WHERE event_type = NEW.event_type
+        ORDER BY run_order, apply_fn
+    LOOP
+        EXECUTE format('SELECT %I($1)', r.apply_fn) USING NEW;
+    END LOOP;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cairn_projection_dispatch_trg ON event_log;
+CREATE TRIGGER cairn_projection_dispatch_trg
+    AFTER INSERT ON event_log
+    FOR EACH ROW EXECUTE FUNCTION cairn_projection_dispatch();
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
@@ -778,5 +869,18 @@ REVOKE INSERT, UPDATE, DELETE ON event_type_class FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea, bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea, bytea) TO cairn_agent;
 GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
+
+-- db/002's patient_chart projection rows (registered here: db/002 loads before
+-- this registry exists). note.added is heal_safe=false BY SHAPE: note_count is
+-- a counter — replaying an already-counted event would increment again. It
+-- heals only via rebuild (truncate-then-replay). See ADR-0057.
+INSERT INTO cairn_projection_apply (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('patient.created', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
+    ('patient.amended', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
+    ('note.added',      'patient_chart_apply', ARRAY['patient_chart'], 10, FALSE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe;
 
 COMMIT;
