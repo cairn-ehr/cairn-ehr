@@ -55,10 +55,11 @@ A new registry table **`cairn_projection_apply`**:
 
 | column | meaning |
 |---|---|
-| `event_type` | exact type, or the reserved `'*'` for type-independent projections |
+| `event_type` | exact type (no wildcard — planning amendment 2026-07-20, see below) |
 | `apply_fn` | name of a `fn(event_log) RETURNS void` — the projection's entire fold step |
 | `projection_tables text[]` | the tables this fn writes (rebuild-mode scope metadata) |
 | `run_order` | deterministic dispatch order among one event's several projections |
+| `heal_safe` | **planning amendment**: TRUE iff replaying over an existing projection converges (insert-or-better). Counter-shaped applies (`patient_chart.note_count` increments) are FALSE: heal mode *skips* them with a logged notice, rebuild mode (replay-from-truncate) heals them. New projections should be idempotent; `heal_safe = false` needs a justifying comment |
 
 PK `(event_type, apply_fn)` — one type may feed several projections (e.g.
 `clinical.medication.asserted` → `medication_statement` *and* the dose-timeline seed) and one fn
@@ -69,11 +70,16 @@ row-count guard mirrored in Rust + SQL (the #212 pattern).
 
 **One dispatcher trigger** replaces all per-type projection triggers:
 `AFTER INSERT ON event_log FOR EACH ROW EXECUTE FUNCTION cairn_projection_dispatch()` — look up
-registry rows for `NEW.event_type` plus `'*'`, call each `apply_fn(NEW)` in `run_order`. The
+registry rows for `NEW.event_type`, call each `apply_fn(NEW)` in `run_order`. The
 existing trigger functions are mechanically refactored to callable form (`NEW` → parameter `e`;
-bodies otherwise unchanged), the per-type triggers and their `WHEN` clauses are dropped. The
-`'*'` rows carry the type-independent projections: the `db/002` twin materialization and the
-`db/008` surrogate interning.
+bodies otherwise unchanged), the per-type triggers and their `WHEN` clauses are dropped.
+
+**Planning amendment (2026-07-20): no `'*'` rows.** The legibility twin turned out to be
+door-materialized (a column on `event_log`, written by both admission doors), not a trigger
+projection — there is *no* type-independent projection. `db/002` (`patient_chart_apply`) and
+`db/008` (`surrogate_project_apply`, spike-only) branch internally on exactly
+`patient.created`/`patient.amended`/`note.added`, so they register under those exact types and
+the wildcard mechanism is dropped (YAGNI).
 
 An unregistered projection has no way to exist: nothing else fires on `event_log` insert.
 
@@ -89,8 +95,17 @@ node-local **`reproject_log`** table (the operational record and the test observ
 - **Rebuild mode** (wrote-garbage defects only): `TRUNCATE` a registered projection table only
   when **every** registry row referencing that table falls inside `p_prefix`; otherwise refuse
   with a legible message ("widen the scope or use heal"). This keeps rebuild generic while making
-  it impossible to wipe a shared table (e.g. `cairn_event_twin`, owned by `'*'`) under a narrow
-  prefix and silently lose the unmatched types' rows.
+  it impossible to wipe a shared table (e.g. `patient_chart`, fed by all three walking-skeleton
+  types) under a narrow prefix and silently lose the unmatched types' rows.
+
+**Planning amendment (2026-07-20): replay runs in the lenient-apply posture.** The #192
+patient-consistency helper and the component-size caps RAISE on pathology unless the
+transaction-local GUC `cairn.remote_apply = 'on'` (set by `apply_remote_event`). Replayed
+events include remotely-admitted ones, so `cairn_reproject` does
+`SET LOCAL cairn.remote_apply = 'on'`: events a door already admitted stay admitted — replay
+heals and clamps-and-flags, doors refuse (the ADR-0056 gate-effect-not-presence logic applied
+to replay). Heal mode additionally *skips* `heal_safe = false` rows, reporting them in
+`reproject_log.skipped_fns` — honest degradation is only honest if visible.
 
 **New index:** `event_log (event_type text_pattern_ops)` — serves prefix-scoped replay, #266's
 exact-type scans, and the twin worklist.
