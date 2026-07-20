@@ -396,6 +396,23 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("recording schema generation: {e}"))?;
+    // #208/ADR-0057: heal replay on generation CHANGE only. New projection
+    // capability (and any projection-logic fix) arrives only via a code-plane
+    // update — i.e. a generation change — so an unchanged generation means
+    // there is nothing to heal and the connect path does zero reprojection
+    // work (the old db/013 every-connect backfill is retired). An UNKNOWN
+    // recorded generation (fresh DB: free no-op; hand-built rig: converges
+    // once) errs toward healing. Runs inside SCHEMA_LOAD_LOCK: concurrent
+    // loaders serialize, and the second sees the stamped generation.
+    if recorded != Some(embedded) {
+        client
+            .execute(
+                "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
+                &[],
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {e}"))?;
+    }
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",

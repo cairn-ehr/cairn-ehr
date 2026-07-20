@@ -695,15 +695,20 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
     let table_exists: bool = client
         .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])?
         .get(0);
+    // Hoisted to fn scope (was a block-local inside the `if let` below) so the
+    // SAME generation reading can drive the gated heal after the stamp, further
+    // down this function — without a second round-trip to node_schema.
+    let mut recorded: Option<i32> = None;
     if table_exists {
         // query_opt: an absent ROW is a legitimate "generation unknown", but a real
         // query error must still fail loudly.
         if let Some(row) = client.query_opt("SELECT version FROM node_schema", &[])? {
-            let recorded: i32 = row.get(0);
-            if recorded > embedded {
+            let v: i32 = row.get(0);
+            recorded = Some(v);
+            if v > embedded {
                 return Err(format!(
                     "refusing to load schema: this database was last loaded at schema \
-                     generation {recorded}, but this binary embeds only generation \
+                     generation {v}, but this binary embeds only generation \
                      {embedded}. Replaying an older schema would silently downgrade \
                      the in-DB safety floor (issue #188 / ADR-0012). Upgrade this \
                      binary, or point it at a database of its own generation."
@@ -727,6 +732,16 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
             &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
         ],
     )?;
+    // #208/ADR-0057: same gated heal as cairn-node's loader. On this SUBSET
+    // database only the subset-registered projections exist (db/002's rows);
+    // the registry makes that automatic — replay heals exactly what is
+    // registered here, nothing more.
+    if recorded != Some(embedded) {
+        client.execute(
+            "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
+            &[],
+        )?;
+    }
     Ok(())
 }
 

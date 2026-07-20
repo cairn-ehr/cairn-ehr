@@ -847,6 +847,20 @@ enum Cmd {
         #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
         attest_passphrase: Option<String>,
     },
+
+    /// Replay event_log through the registered projection apply fns (#208 /
+    /// ADR-0057): heal a projection after a logic fix, or rebuild after a
+    /// wrote-garbage defect. Needs an owner-privileged --conn (like `init`) —
+    /// the runtime role deliberately cannot execute it.
+    Reproject {
+        /// Event-type prefix to replay ('' = everything).
+        #[arg(long, default_value = "")]
+        prefix: String,
+        /// TRUNCATE the in-scope projection tables first (refuses if a table
+        /// is also fed by out-of-prefix types). Default is heal (no deletes).
+        #[arg(long)]
+        rebuild: bool,
+    },
 }
 
 #[tokio::main]
@@ -2077,6 +2091,34 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("shredded {event}; tombstone event {shred_event_id}");
+        }
+        Cmd::Reproject { prefix, rebuild } => {
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            let rows = db
+                .query(
+                    "SELECT event_type, events_replayed FROM cairn_reproject($1, $2, 'cli')",
+                    &[&prefix, &rebuild],
+                )
+                .await?;
+            let mut total: i64 = 0;
+            for r in &rows {
+                let ty: String = r.get(0);
+                let n: i64 = r.get(1);
+                total += n;
+                println!("{ty:<55} {n:>10}");
+            }
+            let log = db
+                .query_one(
+                    "SELECT elapsed_ms, skipped_fns FROM reproject_log ORDER BY id DESC LIMIT 1",
+                    &[],
+                )
+                .await?;
+            let ms: i64 = log.get(0);
+            let skipped: Vec<String> = log.get(1);
+            println!("replayed {total} events in {ms} ms");
+            if !skipped.is_empty() {
+                println!("skipped (heal_safe = false — rebuild to heal these): {skipped:?}");
+            }
         }
     }
     Ok(())

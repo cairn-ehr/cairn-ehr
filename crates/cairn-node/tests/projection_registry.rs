@@ -414,3 +414,53 @@ async fn replay_respects_eligibility_seam() {
         .get(0);
     assert_eq!(healed, "Eligible Winner");
 }
+
+/// The loader runs a full heal replay ONLY when the recorded generation differs
+/// from the embedded one — never on an ordinary same-generation reconnect.
+/// This is the #208 headline fix: the old db/013 backfill ran on EVERY connect.
+#[tokio::test]
+async fn loader_heals_on_generation_change_only() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    // Connect once so the DB is at the embedded generation.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let n0: i64 = c
+        .query_one(
+            "SELECT count(*) FROM reproject_log WHERE source = 'loader'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    drop(c);
+    // Same-generation reconnect: NO new loader-sourced run.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let n1: i64 = c
+        .query_one(
+            "SELECT count(*) FROM reproject_log WHERE source = 'loader'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n0, n1, "same-generation reconnect must not reproject");
+    // Simulate an upgrade: knock the recorded generation back one.
+    c.execute("UPDATE node_schema SET version = version - 1", &[])
+        .await
+        .unwrap();
+    drop(c);
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let n2: i64 = c
+        .query_one(
+            "SELECT count(*) FROM reproject_log WHERE source = 'loader'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n2,
+        n1 + 1,
+        "generation change must trigger exactly one heal replay"
+    );
+}
