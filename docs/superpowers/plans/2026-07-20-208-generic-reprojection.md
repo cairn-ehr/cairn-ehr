@@ -112,12 +112,20 @@ DROP TRIGGER IF EXISTS <trg> ON event_log;
 DROP FUNCTION IF EXISTS <fn>();
 CREATE OR REPLACE FUNCTION <fn>(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$ ... e.<col> ... END $$;   -- body: NEW→e, RETURN NULL→RETURN (or drop)
-INSERT INTO cairn_projection_apply (event_type, apply_fn, projection_tables, run_order, heal_safe)
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION <fn>(event_log) FROM PUBLIC;
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
 VALUES ('<type>', '<fn>', ARRAY['<tbl>', ...], <n>, true)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET
     projection_tables = EXCLUDED.projection_tables,
     run_order         = EXCLUDED.run_order,
-    heal_safe         = EXCLUDED.heal_safe;   -- #214: replay must converge rows to migration text
+    heal_safe         = EXCLUDED.heal_safe
+-- #214 + steady-state discipline (copy the exact WHERE idiom from db/031's twin-check
+-- registration): converge rows to the migration text, but keep the every-connect
+-- replay WRITE-FREE when nothing changed (no dead tuples, no validate-trigger fire).
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 ```
 
 Files that *redefine* an earlier file's fn (`db/013` → `patient_demographic_apply`,
@@ -716,7 +724,11 @@ CREATE OR REPLACE FUNCTION cairn_reproject(
     p_rebuild boolean DEFAULT false,
     p_source  text    DEFAULT 'manual'
 ) RETURNS TABLE(event_type text, events_replayed bigint)
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+-- Pinned like cairn_event_twin's dynamic dispatch (Task-1 review): the %I EXECUTE
+-- below must never resolve into an attacker-shadowed schema, regardless of caller.
+SET search_path = public
+AS $$
 DECLARE
     v_started timestamptz := clock_timestamp();
     v_tbl     text;
