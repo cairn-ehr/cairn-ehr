@@ -342,24 +342,34 @@ async fn backfill_projects_carried_events_after_upgrade() {
         "precondition: carried-not-projected (no projection row)"
     );
 
-    // The db/013 catch-up re-folds the retained set into the projection (idempotent).
-    c.execute("SELECT cairn_demographic_backfill()", &[])
-        .await
-        .unwrap();
+    // The generic cairn_reproject (db/039, ADR-0057) re-folds the retained set into the
+    // projection (idempotent) — it replaces the bespoke, db/013-only
+    // cairn_demographic_backfill() this test used to call (#208): same heal semantics,
+    // driven through the registered patient_demographic_apply fn instead of a
+    // hand-duplicated re-projection query.
+    c.execute(
+        "SELECT count(*) FROM cairn_reproject('demographic.field', false, 'test')",
+        &[],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         winner(&c, &p, "gender-identity").await,
         "non-binary",
-        "backfill restores the policy-correct (recency-first) winner from event_log"
+        "reproject restores the policy-correct (recency-first) winner from event_log"
     );
 
     // Idempotent: a second run does not change or downgrade the healed winner.
-    c.execute("SELECT cairn_demographic_backfill()", &[])
-        .await
-        .unwrap();
+    c.execute(
+        "SELECT count(*) FROM cairn_reproject('demographic.field', false, 'test')",
+        &[],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         winner(&c, &p, "gender-identity").await,
         "non-binary",
-        "backfill is idempotent — re-running yields the same winner"
+        "reproject is idempotent — re-running yields the same winner"
     );
 }
 

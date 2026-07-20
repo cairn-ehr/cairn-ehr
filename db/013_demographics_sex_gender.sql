@@ -35,31 +35,35 @@ $$;
 -- patient_name, not here). One row per (patient, field) holds the current DISPLAY winner;
 -- full assertion history stays in event_log as the matching evidence (principle 2 — an
 -- overlay, never an edit). event_log.body holds b->'payload' (see db/005 submit_event).
-CREATE OR REPLACE FUNCTION patient_demographic_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- No DROP TRIGGER/DROP FUNCTION pair here: db/011 (the first file to define this fn) already
+-- owns them, and CREATE OR REPLACE below reuses the SAME (event_log)-signature object db/011
+-- created — including its REVOKE EXECUTE, which CREATE OR REPLACE preserves across a body
+-- swap (same OID, same ACL). This file only redefines the policy-driven body.
+CREATE OR REPLACE FUNCTION patient_demographic_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p      jsonb := NEW.body;
+    p      jsonb := e.body;
     fld    text  := p ->> 'field';
     v_rank int   := cairn_provenance_rank(p ->> 'provenance');
     policy text  := cairn_demographic_field_policy(fld);
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- Projection gate: a field with no winner policy is not projected (it is still in
     -- event_log and legible via its twin). Replaces slice-2's hard-coded field list.
     IF policy IS NULL THEN
-        RETURN NULL;
+        RETURN;
     END IF;
 
     INSERT INTO patient_demographic AS pd
         (patient_id, field, value, facets, provenance, provenance_rank,
          asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
     VALUES
-        (NEW.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        (e.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
+         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     -- Winner ordering by policy. BOTH tuples are TOTAL orders (node_origin is the final
     -- deterministic tiebreak), so every node converges to the same winner regardless of
     -- apply order.
@@ -104,103 +108,25 @@ BEGIN
              pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
              pd.content_address)
     END;
-    RETURN NULL;
+    RETURN;
 END;
 $$;
 
--- The trigger binding is unchanged from db/011 (same WHEN, same function name); only the
--- function body above changed. Re-create defensively so a fresh load is order-independent.
+-- Defensive tombstone only: db/011 already drops this trigger (the per-type trigger is
+-- superseded by cairn_projection_dispatch_trg, db/005, ADR-0057); kept here so an
+-- upgraded-in-place database that somehow still carries this trigger name sheds it
+-- regardless of which of db/011/db/013 it last loaded. The CREATE TRIGGER that used to
+-- follow is gone — dispatch is now the single db/005 dispatcher reading
+-- cairn_projection_apply (db/011's registration row), not a per-type trigger.
 DROP TRIGGER IF EXISTS patient_demographic_apply_trg ON event_log;
-CREATE TRIGGER patient_demographic_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'demographic.field.asserted')
-    EXECUTE FUNCTION patient_demographic_apply();
 
--- One-time catch-up for events ALREADY in event_log when this node gains projection
--- capability for a field. The apply trigger only fires for NEW inserts, so a field that
--- was *carried-not-projected* under an earlier schema (db/011 recognised only
--- dob/sex-at-birth; a federated node can already hold gender-identity/administrative-sex
--- assertions synced forward from a newer peer — exactly the ADR-0012 federation degrade)
--- would otherwise stay invisible in patient_demographic until the next fresh assertion
--- happened to arrive. That silently breaks the ADR-0012 promise of "carry now, project
--- once the node understands the field". This re-folds the retained set so the projection
--- catches up on the load that introduces the policy.
---
--- It is a pure function of event_log + the (immutable) policy, so it is idempotent and
--- convergent: it recomputes the SAME policy-correct winner every node would. The
--- ON CONFLICT guard is the SAME winner comparison as the trigger, so an already-correct
--- projection row incurs no write (cheap on every reload — connect_and_load_schema replays
--- every file), a missing row is inserted, and a stale row is healed. Never a downgrade.
-CREATE OR REPLACE FUNCTION cairn_demographic_backfill()
-RETURNS void LANGUAGE sql AS $$
-    INSERT INTO patient_demographic AS pd
-        (patient_id, field, value, facets, provenance, provenance_rank,
-         asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
-    SELECT DISTINCT ON (patient_id, field)
-        patient_id, field, value, facets, provenance, provenance_rank,
-        hlc_wall, hlc_counter, node_origin, content_address
-    FROM (
-        SELECT
-            e.patient_id,
-            e.body ->> 'field'                                 AS field,
-            e.body ->> 'value'                                 AS value,
-            e.body -> 'facets'                                 AS facets,
-            e.body ->> 'provenance'                            AS provenance,
-            cairn_provenance_rank(e.body ->> 'provenance')     AS provenance_rank,
-            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
-            cairn_demographic_field_policy(e.body ->> 'field') AS policy
-        FROM event_log e
-        WHERE e.event_type = 'demographic.field.asserted'
-          -- only fields this node now projects; carried-not-projected stays carried.
-          AND cairn_demographic_field_policy(e.body ->> 'field') IS NOT NULL
-    ) s
-    -- DISTINCT ON keeps the policy-winner per (patient, field): the SAME tuple order as
-    -- the trigger, expressed as a per-policy sort. recency-first leads with HLC;
-    -- provenance-first leads with rank; node_origin is the final deterministic tiebreak.
-    ORDER BY patient_id, field,
-        (CASE WHEN policy = 'recency-first' THEN hlc_wall        ELSE provenance_rank END) DESC,
-        (CASE WHEN policy = 'recency-first' THEN hlc_counter     ELSE hlc_wall END)        DESC,
-        (CASE WHEN policy = 'recency-first' THEN provenance_rank ELSE hlc_counter END)     DESC,
-        -- COLLATE "C" per ADR-0045 (#69): must match the trigger's byte-order tiebreak
-        -- (below) so DISTINCT ON picks the SAME row the trigger would have converged on.
-        node_origin COLLATE "C" DESC,
-        -- `value` then `content_address` are the final total-order tiebreaks (see 011 /
-        -- #194): guarantee a display-convergent winner even if a buggy node minted a
-        -- duplicate HLC tuple, including two events sharing (triple, value).
-        value COLLATE "C" DESC,
-        content_address DESC
-    ON CONFLICT (patient_id, field) DO UPDATE SET
-        value              = EXCLUDED.value,
-        facets             = EXCLUDED.facets,
-        provenance         = EXCLUDED.provenance,
-        provenance_rank    = EXCLUDED.provenance_rank,
-        asserted_hlc_wall  = EXCLUDED.asserted_hlc_wall,
-        asserted_hlc_count = EXCLUDED.asserted_hlc_count,
-        asserted_origin    = EXCLUDED.asserted_origin,
-        content_address    = EXCLUDED.content_address,
-        updated_at         = clock_timestamp()
-    -- COLLATE "C" tiebreak per ADR-0045 (#69) — same rationale as the trigger above: the
-    -- origin/value keys must order by raw byte value so this one-time catch-up converges
-    -- on the identical winner the trigger would have picked, regardless of node locale.
-    -- content_address is the final tiebreak (#194), same as the trigger.
-    WHERE CASE cairn_demographic_field_policy(pd.field)
-        WHEN 'recency-first' THEN
-            (EXCLUDED.asserted_hlc_wall, EXCLUDED.asserted_hlc_count,
-             EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
-             EXCLUDED.content_address)
-          > (pd.asserted_hlc_wall, pd.asserted_hlc_count,
-             pd.provenance_rank, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
-             pd.content_address)
-        ELSE
-            (EXCLUDED.provenance_rank, EXCLUDED.asserted_hlc_wall,
-             EXCLUDED.asserted_hlc_count, EXCLUDED.asserted_origin COLLATE "C", EXCLUDED.value COLLATE "C",
-             EXCLUDED.content_address)
-          > (pd.provenance_rank, pd.asserted_hlc_wall,
-             pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
-             pd.content_address)
-    END;
-$$;
-
-SELECT cairn_demographic_backfill();
+-- The one-time carried-not-projected catch-up that lived here (a bespoke
+-- cairn_demographic_backfill(), run on EVERY connect) is retired by ADR-0057:
+-- the generic cairn_reproject (db/039) replays through the SAME apply fn the
+-- trigger uses (one winner-logic implementation, zero drift), and the loader
+-- runs it exactly when new projection capability can arrive — on a schema-
+-- generation change — instead of on every connect (#208). The DROP below is
+-- the tombstone that sheds the fn from upgraded-in-place databases.
+DROP FUNCTION IF EXISTS cairn_demographic_backfill();
 
 COMMIT;

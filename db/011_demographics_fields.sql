@@ -131,33 +131,43 @@ ALTER TABLE patient_demographic ADD COLUMN IF NOT EXISTS content_address BYTEA;
 
 -- Incremental maintenance: fold exactly the one new field event into the projection.
 -- event_log.body holds b->'payload' (see db/005 submit_event INSERT).
-CREATE OR REPLACE FUNCTION patient_demographic_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS patient_demographic_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS patient_demographic_apply();
+
+CREATE OR REPLACE FUNCTION patient_demographic_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p      jsonb := NEW.body;
+    p      jsonb := e.body;
     fld    text  := p ->> 'field';
     v_rank int   := cairn_provenance_rank(p ->> 'provenance');
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- Projection gate: only known single-valued fields project. An unknown field
     -- (e.g. a newer node's gender-identity) is already in event_log and legible via
     -- its twin; it simply has no projection policy here. Required for set-union
     -- federation (ADR-0012) — never reject (that is the floor's job and it doesn't),
     -- never project a field we have no winner-policy for.
     IF fld NOT IN ('dob', 'sex-at-birth') THEN
-        RETURN NULL;
+        RETURN;
     END IF;
 
     INSERT INTO patient_demographic AS pd
         (patient_id, field, value, facets, provenance, provenance_rank,
          asserted_hlc_wall, asserted_hlc_count, asserted_origin, content_address)
     VALUES
-        (NEW.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        (e.patient_id, fld, p ->> 'value', p -> 'facets', p ->> 'provenance', v_rank,
+         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     -- Winner = max (provenance_rank, then HLC recency, then node_origin). Provenance
     -- beats recency (rank leads the tuple), so a later lower-provenance assertion
     -- cannot displace an earlier higher-provenance one ("verified value locks"); a
@@ -189,16 +199,27 @@ BEGIN
         > (pd.provenance_rank, pd.asserted_hlc_wall,
            pd.asserted_hlc_count, pd.asserted_origin COLLATE "C", pd.value COLLATE "C",
            pd.content_address);
-    RETURN NULL;
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS patient_demographic_apply_trg ON event_log;
-CREATE TRIGGER patient_demographic_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'demographic.field.asserted')
-    EXECUTE FUNCTION patient_demographic_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION patient_demographic_apply(event_log) FROM PUBLIC;
 
 GRANT SELECT ON patient_demographic TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). #214 + steady-state discipline: converge this row to the migration
+-- text on every connect, but stay write-free once already converged (no dead tuples, no
+-- validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
+VALUES ('demographic.field.asserted', 'patient_demographic_apply', ARRAY['patient_demographic'], 20, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;
