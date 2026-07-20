@@ -116,6 +116,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "038_node_schema",
         include_str!("../../../db/038_node_schema.sql"),
     ),
+    // #208/ADR-0057: cairn_reproject + reproject_log + the event_type index. In
+    // BOTH lists: each loader's gated heal step (generation change) calls it.
+    (
+        "039_projection_registry",
+        include_str!("../../../db/039_projection_registry.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
