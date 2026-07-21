@@ -85,6 +85,14 @@ DECLARE
 BEGIN
     PERFORM set_config('cairn.remote_apply', 'on', true);  -- true = SET LOCAL
 
+    -- p_prefix is used un-escaped in every LIKE below, so a literal '_'/'%' in it
+    -- acts as a wildcard. Accepted deliberately (2026-07-21 final review): event
+    -- types are dot-segment words (no metacharacters), callers are owner-only
+    -- (loader ''/CLI), and every LIKE here uses the IDENTICAL predicate — the
+    -- rebuild truncate-scope, its refusal check, and the replay stay exact
+    -- complements, so over-matching can only over-HEAL (extra work), never let
+    -- a truncate outrun its replay. Revisit only if p_prefix ever takes
+    -- less-trusted input (then add ESCAPE).
     IF p_rebuild THEN
         FOR v_tbl IN
             SELECT DISTINCT unnest(r.projection_tables)
