@@ -113,6 +113,13 @@ CREATE TABLE IF NOT EXISTS chart_note_u (
     recorded_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS chart_note_u_patient_idx ON chart_note_u (patient_id);
+-- #208/ADR-0057: the PK is the surrogate note_seq (an identity column), not event_id,
+-- so a replayed note.added event (heal-mode reproject, or the same event redelivered)
+-- would otherwise INSERT a second row for the SAME event — the note_seq identity has
+-- no natural-key protection of its own. event_id is the natural key (one row per
+-- event); unique-index it so the apply fn's ON CONFLICT (event_id) below can dedup by
+-- EVENT identity, making this projection heal-safe.
+CREATE UNIQUE INDEX IF NOT EXISTS chart_note_u_event_idx ON chart_note_u (event_id);
 
 CREATE TABLE IF NOT EXISTS chart_note_s (
     note_seq     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -121,6 +128,8 @@ CREATE TABLE IF NOT EXISTS chart_note_s (
     recorded_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS chart_note_s_patient_idx ON chart_note_s (patient_lref);
+-- Same #208/ADR-0057 replay-idempotency fix as chart_note_u above.
+CREATE UNIQUE INDEX IF NOT EXISTS chart_note_s_event_idx ON chart_note_s (event_id);
 
 -- Egress view: how a sync-emit / API read of the surrogate-keyed child looks. It
 -- joins back to the anchor and exposes the canonical UUID only — the surrogate
@@ -133,32 +142,75 @@ CREATE OR REPLACE VIEW chart_note_s_egress AS
     JOIN patient_ref r ON r.local_ref = s.patient_lref;
 
 -- ---------------------------------------------------------------------------
--- Incremental maintenance, AFTER INSERT on event_log — the same trigger-driven,
--- no-full-recompute path as 002 (ADR-0001). It interns the patient (ingress
+-- Incremental maintenance — the same trigger-driven, no-full-recompute path as
+-- 002 (ADR-0001), now folded into the #208/ADR-0057 generic dispatcher (db/005)
+-- rather than its own bespoke per-type trigger. It interns the patient (ingress
 -- chokepoint) and folds the event into both child projections so B5 measures the
 -- two shapes under an identical write stream.
+--
+-- The old bespoke trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208) —
+-- registered IN THIS FILE (not db/005) because db/008 is spike-only and loaded by
+-- neither product loader (crates/cairn-node/src/db.rs, crates/cairn-sync/src/main.rs),
+-- only by scripts/run-db-sql-tests.sh's throwaway rig.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION surrogate_project_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+DROP TRIGGER IF EXISTS event_log_project_surrogate ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS surrogate_project_apply();
+
+CREATE OR REPLACE FUNCTION surrogate_project_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE v_lref BIGINT;
 BEGIN
-    IF NEW.event_type IN ('patient.created', 'patient.amended') THEN
+    IF e.event_type IN ('patient.created', 'patient.amended') THEN
         -- Establish the anchor binding as soon as the patient is first seen.
-        PERFORM intern_patient(NEW.patient_id);
+        -- intern_patient is idempotent-by-design (ON CONFLICT (patient_id) DO NOTHING +
+        -- read-back, db/008 part "Ingress" above) — no further replay guard needed here.
+        PERFORM intern_patient(e.patient_id);
 
-    ELSIF NEW.event_type = 'note.added' THEN
-        v_lref := intern_patient(NEW.patient_id);
+    ELSIF e.event_type = 'note.added' THEN
+        v_lref := intern_patient(e.patient_id);
+        -- ON CONFLICT (event_id) DO NOTHING: chart_note_u/chart_note_s are keyed by the
+        -- surrogate note_seq identity column, not event_id, so without this a heal-mode
+        -- reproject (or any redelivery of the same event) would insert a SECOND row for
+        -- the same note — dedup by EVENT identity via the unique indexes added above.
         INSERT INTO chart_note_u (patient_id, event_id, recorded_at)
-            VALUES (NEW.patient_id, NEW.event_id, NEW.recorded_at);
+            VALUES (e.patient_id, e.event_id, e.recorded_at)
+            ON CONFLICT (event_id) DO NOTHING;
         INSERT INTO chart_note_s (patient_lref, event_id, recorded_at)
-            VALUES (v_lref, NEW.event_id, NEW.recorded_at);
+            VALUES (v_lref, e.event_id, e.recorded_at)
+            ON CONFLICT (event_id) DO NOTHING;
     END IF;
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION surrogate_project_apply(event_log) FROM PUBLIC;
 
-DROP TRIGGER IF EXISTS event_log_project_surrogate ON event_log;
-CREATE TRIGGER event_log_project_surrogate AFTER INSERT ON event_log
-    FOR EACH ROW EXECUTE FUNCTION surrogate_project_apply();
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
+-- cairn_reproject heal/rebuild (db/039) — registered HERE (not db/005) because this
+-- migration is spike-only (see the header note above): only a rig that loads db/008
+-- ever sees these three rows, which is exactly right (the product loaders' registry
+-- stays at its product-scope row count). run_order 20 (after db/005's own
+-- patient_chart_apply registration at run_order 10 for the SAME three event types) —
+-- both fire per event, patient_chart_apply first, mirroring the old alphabetical
+-- trigger-name firing order. #214 + steady-state discipline: converge these rows to
+-- the migration text on every connect, but stay write-free once already converged
+-- (no dead tuples, no validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('patient.created', 'surrogate_project_apply', ARRAY['patient_ref'], 20, TRUE),
+    ('patient.amended', 'surrogate_project_apply', ARRAY['patient_ref'], 20, TRUE),
+    ('note.added',      'surrogate_project_apply', ARRAY['patient_ref', 'chart_note_u', 'chart_note_s'], 20, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

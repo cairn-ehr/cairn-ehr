@@ -6,7 +6,7 @@
 //! set:
 //!
 //!   * `cairn-node` (`db::connect_and_load_schema`) embeds the FULL migration list;
-//!   * `cairn-sync` (`init` → `load_schema`) embeds a deliberate SUBSET — 14 of the 38
+//!   * `cairn-sync` (`init` → `load_schema`) embeds a deliberate SUBSET — 15 of the 39
 //!     files today, skipping `007`, `009`, `010`–`019`, `022`–`025`, `028`, `030`–`035`.
 //!     That subset is a load-bearing guarantee in its own right (issue #198: it must
 //!     satisfy both write doors standing alone), so it must stay free to lag.
@@ -15,10 +15,11 @@
 //! generation recorded in the database. If each loader derived that number from *its own
 //! list*, the two binaries would disagree the moment a migration landed in one list only
 //! — which is the normal case, since most new migrations are clinical or node-only and
-//! never enter cairn-sync's subset. Concretely: a node-only `db/039_*` makes `cairn-node`
-//! report 39 and stamp every database it touches at 39, while `cairn-sync` still reports
-//! 38 — so `cairn-sync init` refuses every database in the fleet and the federation
-//! daemon stops. A downgrade guard that bricks the sync daemon is worse than no guard.
+//! never enter cairn-sync's subset. Concretely: a node-only `db/040_*` (a future migration
+//! neither loader's subset happens to carry) would make `cairn-node` report 40 and stamp
+//! every database it touches at 40, while `cairn-sync` still reports 39 — so `cairn-sync
+//! init` refuses every database in the fleet and the federation daemon stops. A downgrade
+//! guard that bricks the sync daemon is worse than no guard.
 //!
 //! So the generation is a property of **the repo build**, not of a loader's subset: one
 //! constant, used by both doors. Each loader still replays only its own list; they just
@@ -29,18 +30,18 @@
 //! It is hand-maintained by exactly one line — and `schema_generation.rs`'s companion
 //! guard (`crates/cairn-event/tests/schema_generation.rs`) reads `db/` at test time and
 //! fails if this constant is not the newest migration's numeric prefix. Forgetting to
-//! bump it when adding `db/039_*` is therefore a CI failure, not a silent drift. That is
-//! the same register-and-guard discipline the twin-check registry uses (ADR-0048): a
-//! hand-written value is safe when a test derives the truth independently.
+//! bump it when adding the next `db/*.sql` file is therefore a CI failure, not a silent
+//! drift. That is the same register-and-guard discipline the twin-check registry uses
+//! (ADR-0048): a hand-written value is safe when a test derives the truth independently.
 //!
 //! This is a node-LOCAL operational number. It never appears in a signed body and never
 //! travels the wire core (principle 12) — it lives here only because `cairn-event` is the
 //! crate both loaders already depend on.
 
-/// The numeric prefix of the newest migration in `db/` (`db/038_node_schema.sql` → 38).
+/// The numeric prefix of the newest migration in `db/` (`db/039_projection_registry.sql` → 39).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 38;
+pub const SCHEMA_GENERATION: i32 = 39;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.

@@ -146,12 +146,60 @@ CREATE TABLE IF NOT EXISTS identity_projection_flag (
     flagged_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON identity_projection_flag TO cairn_agent;
+-- The triggering event's identity (review finding, replacing an earlier 3-column-key
+-- attempt): NULL for pre-ADR-0057 rows (flagged before this column existed), populated
+-- for every row flagged from here on. Why this column exists at all is explained next
+-- to the unique index below.
+ALTER TABLE identity_projection_flag ADD COLUMN IF NOT EXISTS content_address BYTEA;
+-- Upgrade heal: an EARLIER pass of this fix shipped a 3-column unique index (seed,
+-- observed_size, cap) under this same name. That key is purely OBSERVATIONAL — it
+-- would silently swallow a genuinely NEW pathological occurrence weeks later that
+-- happens to reobserve the same seed/size/cap, muting a real alarm on an append-only
+-- "loud alarm" table (review finding). CREATE ... IF NOT EXISTS cannot upgrade an
+-- existing index by NAME regardless of a column-shape mismatch, so any DB that already
+-- ran that earlier pass (including this branch's own shared dev/test DB) would keep the
+-- wrong 3-column index forever without this heal. Drop it ONCE if its definition does
+-- not already mention content_address; steady-state loads (already 4-column) never drop.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'identity_projection_flag_natural_idx'
+          AND indexdef NOT LIKE '%content_address%'
+    ) THEN
+        DROP INDEX identity_projection_flag_natural_idx;
+    END IF;
+END $$;
+-- Natural-key uniqueness keyed on EVENT identity, not observation shape: a heal-mode
+-- replay of the IDENTICAL event (same content_address) converges instead of appending a
+-- duplicate alarm row every reproject run; a genuinely NEW event that independently
+-- reobserves the same (seed, observed_size, cap) — e.g. the component grew back to
+-- exactly the same size weeks later — still gets its own row, because Postgres's
+-- default NULLS DISTINCT lets legacy pre-ADR-0057 rows (content_address NULL) coexist
+-- without colliding, and a fresh event's real address is (near-certainly) unique too.
+-- This is also why the CREATE below builds cleanly even on a DB already holding
+-- pre-fix duplicate (seed, observed_size, cap) rows: those legacy rows all carry NULL
+-- content_address, and NULL never equals NULL for uniqueness purposes — no row is
+-- deleted or rewritten to make room for the new index (verified on the scratch rig;
+-- see the Task-5 fix report). ADR-0057 replay-idempotency (see the ON CONFLICT on the
+-- INSERT below, which now keys on the same four columns).
+CREATE UNIQUE INDEX IF NOT EXISTS identity_projection_flag_natural_idx
+    ON identity_projection_flag (seed, observed_size, cap, content_address);
 
 -- Recompute the connected component around one seed UUID over the STANDING link edges
 -- (state='link'), and rewrite person_member for every member to point at the min-UUID
 -- representative. Cost is bounded by the touched component's size, not the table's —
 -- keeping chart reads O(1) (the ADR-0001/Bet-B incremental-projection discipline).
-CREATE OR REPLACE FUNCTION cairn_recompute_component(p_seed uuid)
+--
+-- p_ca (review finding): the triggering event's content_address, threaded through so an
+-- oversize-component skip can be flagged by EVENT identity rather than by observation
+-- shape alone (see identity_projection_flag's unique index above). CREATE OR REPLACE
+-- cannot add a parameter (it would overload, not replace), so the old 1-arg signature
+-- is dropped explicitly first — same idiom as every trigger-fn-to-apply-fn conversion
+-- in this file.
+DROP FUNCTION IF EXISTS cairn_recompute_component(uuid);
+CREATE OR REPLACE FUNCTION cairn_recompute_component(p_seed uuid, p_ca bytea)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_members uuid[];
@@ -180,8 +228,20 @@ BEGIN
     --     (person_member stays stale-but-honest); the flag row is the alarm/worklist.
     IF array_length(v_members, 1) > cairn_max_component_size() THEN
         IF current_setting('cairn.remote_apply', true) = 'on' THEN
-            INSERT INTO identity_projection_flag (seed, observed_size, cap)
-            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size());
+            -- ADR-0057 replay-idempotency, keyed on EVENT identity, never on observation
+            -- shape: a heal-mode reproject re-running this SAME event (same p_ca) must not
+            -- append a duplicate worklist alarm, but a genuinely NEW event that independently
+            -- reobserves the same (seed, observed_size, cap) — e.g. the component grows back
+            -- to exactly this size weeks later — is a REAL new occurrence and must still
+            -- alarm. A p_ca of NULL (no event context available to the caller) relies on
+            -- NULLS DISTINCT to always insert — the honest degradation for that path, never
+            -- a silent dedup it has no basis for. A reproject over legacy-era events may thus
+            -- add one CA-bearing sibling row next to an old NULL-CA legacy row for the same
+            -- (seed, observed_size, cap) — bounded, honest, advisory-tier; this table is an
+            -- append-only alarm log, not a current-state projection.
+            INSERT INTO identity_projection_flag (seed, observed_size, cap, content_address)
+            VALUES (p_seed, array_length(v_members, 1), cairn_max_component_size(), p_ca)
+            ON CONFLICT (seed, observed_size, cap, content_address) DO NOTHING;
             RETURN;
         END IF;
         RAISE EXCEPTION
@@ -225,10 +285,19 @@ CREATE TABLE IF NOT EXISTS link_veto_flag (
 );
 GRANT SELECT ON link_veto_flag TO cairn_agent;
 
-CREATE OR REPLACE FUNCTION patient_link_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS patient_link_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS patient_link_apply();
+
+CREATE OR REPLACE FUNCTION patient_link_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p       jsonb := NEW.body;
+    p       jsonb := e.body;
     -- a/b/lo/hi are NOT initialized in DECLARE: DECLARE initializers run at block entry,
     -- BEFORE the seal guard below can return, so a `(p ->> 'subject_a')::uuid` cast here
     -- would raise `invalid input syntax for type uuid` on a wrongly-sealed row whose ciphertext
@@ -241,7 +310,7 @@ DECLARE
     b       uuid;
     lo      uuid;
     hi      uuid;
-    v_state text  := CASE WHEN NEW.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
+    v_state text  := CASE WHEN e.event_type = 'identity.link.asserted' THEN 'link' ELSE 'unlink' END;
     v_cur   record;
     -- The STANDING overlay winner for (lo, hi), read back AFTER the upsert below so the
     -- #190 flag lifecycle keys on what actually won, not on the arriving event (finding 1).
@@ -250,11 +319,11 @@ DECLARE
     v_win_attested boolean;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak). This guard MUST
     -- precede the subject_a/subject_b casts below (they are deliberately not in DECLARE, see there).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- Canonical (lo, hi) pair — cast here, AFTER the seal guard, so a sealed row never reaches
     -- these strict UUID casts (the floor already validated subject_a/subject_b for an UNSEALED
     -- link via cairn_check_link_assertion at both doors).
@@ -283,26 +352,26 @@ BEGIN
       INTO v_cur
       FROM patient_link WHERE low = lo AND high = hi;
     IF FOUND AND cairn_hlc_triple_collision(
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
             v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
         PERFORM cairn_record_hlc_collision(
             'patient_link', lo::text || '|' || hi::text,
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-            NEW.content_address, v_cur.content_address);
+            e.hlc_wall, e.hlc_counter, e.node_origin,
+            e.content_address, v_cur.content_address);
     END IF;
 
     -- #190 hard-veto floor AT THE DOOR (finding A2; principle 12 — the veto was
     -- previously enforced only in the Rust auto-apply seam, so an enrolled agent with
     -- raw SQL could merge two hard-vetoed charts through submit_event unflagged).
     -- Contract: the veto FORCES A HUMAN DECISION, never auto-rejects one — so a
-    -- human-attested link (NEW.attester_key set: the stored, verified vouch) passes;
+    -- human-attested link (e.attester_key set: the stored, verified vouch) passes;
     -- an UN-ATTESTED link that trips the veto is refused on the LOCAL door only —
     -- nothing has been accepted yet, so fail loud at source. On the sync-apply path the
     -- event is admitted (the verdict reads node-local demographic state, so a remote
     -- refusal would fork honest nodes) and the merge is caught by the flag lifecycle
     -- AFTER the overlay below. The Rust auto-apply pre-check stays as the polite early
     -- skip; this is the floor behind it.
-    IF v_state = 'link' AND NEW.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
+    IF v_state = 'link' AND e.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
        AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         RAISE EXCEPTION
             'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
@@ -313,8 +382,8 @@ BEGIN
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,
          content_address)
     VALUES
-        (lo, hi, v_state, NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-         p ->> 'provenance', p ->> 'confidence', NEW.content_address)
+        (lo, hi, v_state, e.hlc_wall, e.hlc_counter, e.node_origin,
+         p ->> 'provenance', p ->> 'confidence', e.content_address)
     ON CONFLICT (low, high) DO UPDATE SET
         state       = EXCLUDED.state,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -362,17 +431,15 @@ BEGIN
     -- correct: a link merges (both endpoints reach the same union); an unlink splits
     -- into at most the piece containing `lo` and the piece containing `hi`, and every
     -- previously-connected node is reachable from one of them.
-    PERFORM cairn_recompute_component(lo);
-    PERFORM cairn_recompute_component(hi);
-    RETURN NULL;  -- AFTER trigger
+    PERFORM cairn_recompute_component(lo, e.content_address);
+    PERFORM cairn_recompute_component(hi, e.content_address);
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS patient_link_apply_trg ON event_log;
-CREATE TRIGGER patient_link_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type IN ('identity.link.asserted', 'identity.unlink.asserted'))
-    EXECUTE FUNCTION patient_link_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION patient_link_apply(event_log) FROM PUBLIC;
 
 -- 6. Demonstrated unified-read VIEW (§5.1 "the unified chart unions the event streams
 --    of all member UUIDs"). Thin by design: every patient_chart row is tagged with its
@@ -406,5 +473,23 @@ CREATE OR REPLACE VIEW person_chart AS
     LEFT JOIN person_member pm ON pm.patient_id = pc.patient_id;
 
 GRANT SELECT ON person_chart TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). Both verbs share the ONE fn and the SAME projection_tables list
+-- (link and unlink fold into the same overlay + component recompute + worklist tables).
+-- #214 + steady-state discipline: converge these rows to the migration text on every
+-- connect, but stay write-free once already converged (no dead tuples, no validate-
+-- trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('identity.link.asserted',   'patient_link_apply',
+     ARRAY['patient_link', 'person_member', 'link_veto_flag', 'identity_projection_flag'], 10, TRUE),
+    ('identity.unlink.asserted', 'patient_link_apply',
+     ARRAY['patient_link', 'person_member', 'link_veto_flag', 'identity_projection_flag'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

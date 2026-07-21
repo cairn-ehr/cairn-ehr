@@ -301,23 +301,25 @@ async fn name_display_value_tiebreak_is_collation_independent() {
     }
 }
 
-/// #69 review: `cairn_demographic_backfill()` (db/013) re-projects `demographic.field.asserted`
-/// events straight from `event_log` — a SEPARATE code path from the `patient_demographic_apply()`
-/// trigger exercised above, used for one-time catch-up when a node gains projection capability
-/// for a field it previously only carried. It got the identical `COLLATE "C"` fix in its
-/// `DISTINCT ON ... ORDER BY node_origin COLLATE "C" DESC, value COLLATE "C" DESC` and in both
-/// branches of its `ON CONFLICT ... WHERE` CASE, but shipped without a test — this closes that
-/// gap. We truncate `patient_demographic` after the trigger has already populated it (from the
-/// same two submitted events) so that the read-back value can ONLY have come from the backfill
-/// re-projection, never a trigger leftover, isolating the path under test.
+/// #69 review, updated for #208/ADR-0057: `cairn_reproject('demographic.field', false, 'test')`
+/// (db/039) is the generic replay that superseded db/013's bespoke, connect-time-only
+/// `cairn_demographic_backfill()`. It re-projects `demographic.field.asserted` events straight
+/// from `event_log`, dispatching through the SAME registered `patient_demographic_apply(event_log)`
+/// fn the live trigger uses — not a separate hand-duplicated re-projection query — so it is used
+/// for one-time catch-up when a node gains projection capability for a field it previously only
+/// carried, on demand rather than on every connect. Because reproject calls the identical apply
+/// fn, its `COLLATE "C"` winner tiebreak is the SAME code as the trigger's (one implementation,
+/// zero drift) — but that replay path had no test targeting it directly — this closes that gap.
+/// We truncate `patient_demographic` after the trigger has already populated it (from the same
+/// two submitted events) so that the read-back value can ONLY have come from the reproject
+/// replay, never a trigger leftover, isolating the path under test.
 ///
-/// Scope note: with `patient_demographic` truncated first, the backfill INSERT lands into an
-/// empty table, so this exercises the backfill's `DISTINCT ON ... ORDER BY ... COLLATE "C"`
-/// winner-selection — NOT its `ON CONFLICT ... WHERE` branch (which fires only on an idempotent
-/// re-run against already-projected rows). That WHERE tuple is byte-identical to the trigger's
-/// `ON CONFLICT ... WHERE` (both CASE branches), which IS covered by
-/// `demographic_value_tiebreak_is_collation_independent_both_branches` above, so the logic is
-/// under test even though the backfill's specific call-site is not.
+/// Scope note: with `patient_demographic` truncated first and two same-field events present,
+/// reproject's per-event replay both INSERTs the first (empty table) and then folds the second
+/// through the SAME `ON CONFLICT ... WHERE` winner tiebreak the trigger uses — there is no
+/// second, backfill-only code path left to distinguish; `demographic_value_tiebreak_is_collation_independent_both_branches`
+/// above already covers that WHERE CASE directly against the trigger, and this test confirms
+/// cairn_reproject drives the replayed events through the identical collation-safe logic.
 #[tokio::test]
 async fn backfill_value_tiebreak_is_collation_independent() {
     let Some(base) = cs() else {
@@ -359,15 +361,18 @@ async fn backfill_value_tiebreak_is_collation_independent() {
         )
         .await;
 
-        // Clear what the trigger just projected so only the backfill re-projection below
-        // can repopulate the row — proving the assertion exercises cairn_demographic_backfill(),
-        // not a trigger leftover.
+        // Clear what the trigger just projected so only the cairn_reproject replay below
+        // can repopulate the row — proving the assertion exercises the generic reproject
+        // replay, not a trigger leftover.
         c.execute("TRUNCATE patient_demographic", &[])
             .await
             .unwrap();
-        c.execute("SELECT cairn_demographic_backfill()", &[])
-            .await
-            .unwrap();
+        c.execute(
+            "SELECT count(*) FROM cairn_reproject('demographic.field', false, 'test')",
+            &[],
+        )
+        .await
+        .unwrap();
 
         let value: String = c
             .query_one(
@@ -380,7 +385,7 @@ async fn backfill_value_tiebreak_is_collation_independent() {
             .get(0);
         assert_eq!(
             value, "a",
-            "backfill: C byte-order winner for {first}->{second}"
+            "reproject: C byte-order winner for {first}->{second}"
         );
     }
 }

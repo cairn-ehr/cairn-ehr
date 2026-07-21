@@ -110,23 +110,32 @@ CREATE INDEX IF NOT EXISTS chart_dispute_open_subject_idx
 -- whole row overlays atomically only when the incoming HLC is strictly greater than the
 -- stored one (ON CONFLICT ... WHERE) — so out-of-order arrival (a resolution landing
 -- before the open it closes) converges to the highest-HLC assertion.
-CREATE OR REPLACE FUNCTION chart_dispute_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS chart_dispute_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS chart_dispute_apply();
+
+CREATE OR REPLACE FUNCTION chart_dispute_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p        jsonb := NEW.body;
-    v_state  text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved' THEN 'resolved' ELSE 'open' END;
+    p        jsonb := e.body;
+    v_state  text  := CASE WHEN e.event_type = 'identity.dispute.resolved' THEN 'resolved' ELSE 'open' END;
     -- The descriptive field's key differs by type (reason opens, resolution closes);
     -- store whichever one this assertion carries in the neutrally-named `detail` column
     -- so the overlay row is self-describing without a misleading column name.
-    v_detail text  := CASE WHEN NEW.event_type = 'identity.dispute.resolved'
+    v_detail text  := CASE WHEN e.event_type = 'identity.dispute.resolved'
                            THEN p ->> 'resolution' ELSE p ->> 'reason' END;
     v_cur record;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- #157: detect a Byzantine HLC-triple collision against the current dispute state and record
     -- an advisory signal before overlaying. Placed before the subject-consistency guard so the
     -- collision is observed regardless of which door (local submit / remote apply) we are on.
@@ -134,12 +143,12 @@ BEGIN
       INTO v_cur
       FROM chart_dispute WHERE dispute_id = (p ->> 'dispute_id')::uuid;
     IF FOUND AND cairn_hlc_triple_collision(
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address,
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
             v_cur.hlc_wall, v_cur.hlc_counter, v_cur.origin, v_cur.content_address) THEN
         PERFORM cairn_record_hlc_collision(
             'chart_dispute', p ->> 'dispute_id',
-            NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-            NEW.content_address, v_cur.content_address);
+            e.hlc_wall, e.hlc_counter, e.node_origin,
+            e.content_address, v_cur.content_address);
     END IF;
 
     -- Subject-consistency guard, split exactly like C1's oversize guard (db/018):
@@ -166,7 +175,7 @@ BEGIN
         (dispute_id, subject, state, detail, hlc_wall, hlc_counter, origin, content_address)
     VALUES
         ((p ->> 'dispute_id')::uuid, (p ->> 'subject')::uuid, v_state, v_detail,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (dispute_id) DO UPDATE SET
         subject     = EXCLUDED.subject,
         state       = EXCLUDED.state,
@@ -182,15 +191,13 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         chart_dispute.hlc_wall, chart_dispute.hlc_counter, chart_dispute.origin,
         chart_dispute.content_address);
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS chart_dispute_apply_trg ON event_log;
-CREATE TRIGGER chart_dispute_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type IN ('identity.dispute.asserted', 'identity.dispute.resolved'))
-    EXECUTE FUNCTION chart_dispute_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION chart_dispute_apply(event_log) FROM PUBLIC;
 
 -- 5. chart_trust: the §5.7 effective trust-state projection (confirmed / under-review).
 --    Delivered as a thin VIEW — consistent with db/018's person_chart being a VIEW and
@@ -258,5 +265,20 @@ CREATE OR REPLACE VIEW person_chart_trust AS
     LEFT JOIN chart_trust ct ON ct.patient_id = pc.patient_id;
 
 GRANT SELECT ON person_chart_trust TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). Both verbs share the ONE fn and the SAME projection_tables list
+-- (assert and resolve both fold into the same chart_dispute overlay). #214 + steady-state
+-- discipline: converge these rows to the migration text on every connect, but stay
+-- write-free once already converged (no dead tuples, no validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('identity.dispute.asserted', 'chart_dispute_apply', ARRAY['chart_dispute'], 10, TRUE),
+    ('identity.dispute.resolved', 'chart_dispute_apply', ARRAY['chart_dispute'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

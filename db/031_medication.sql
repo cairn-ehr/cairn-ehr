@@ -101,6 +101,20 @@ CREATE TABLE IF NOT EXISTS medication_patient_conflict_flag (
     flagged_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON medication_patient_conflict_flag TO cairn_agent;
+-- Natural-key uniqueness keyed on EVENT identity (content_address), not observation
+-- shape (medication_id/standing_patient/asserted_patient alone) — the same discipline
+-- as db/018's identity_projection_flag (Task-5-adjudicated pattern): a heal-mode
+-- reproject replaying the IDENTICAL contradicting event must converge, not append a
+-- duplicate alarm row every run, while a genuinely NEW event that independently
+-- reobserves the same (medication_id, standing_patient, asserted_patient) triple
+-- (e.g. the same wrong-chart mistake recurring later) still gets its own row, because
+-- its content_address differs. content_address is NOT NULL on this table from day
+-- one (unlike identity_projection_flag's pre-ADR-0057 legacy rows), so no stale-index
+-- migration heal is needed here — this is the first unique index this table has ever
+-- carried.
+CREATE UNIQUE INDEX IF NOT EXISTS medication_patient_conflict_flag_natural_idx
+    ON medication_patient_conflict_flag
+    (medication_id, standing_patient, asserted_patient, content_address);
 
 -- The thread's standing patient claim: the statement's patient when asserted, else an
 -- orphan cessation's (a cessation claims the thread for its chart too), else NULL —
@@ -130,9 +144,16 @@ BEGIN
         RETURN;
     END IF;
     IF current_setting('cairn.remote_apply', true) = 'on' THEN
+        -- ADR-0057 replay-idempotency, keyed on EVENT identity (content_address), never
+        -- on observation shape: a heal-mode reproject re-running this SAME contradicting
+        -- event (same p_ca) must not append a duplicate worklist alarm, but a genuinely
+        -- NEW event that independently reobserves the same triple is a REAL new
+        -- occurrence and must still alarm (see the unique index's comment above).
         INSERT INTO medication_patient_conflict_flag
             (medication_id, standing_patient, asserted_patient, content_address)
-        VALUES (p_med, v_standing, p_patient, p_ca);
+        VALUES (p_med, v_standing, p_patient, p_ca)
+        ON CONFLICT (medication_id, standing_patient, asserted_patient, content_address)
+            DO NOTHING;
         RETURN;
     END IF;
     RAISE EXCEPTION
@@ -164,29 +185,40 @@ CREATE TABLE IF NOT EXISTS medication_statement (
 GRANT SELECT ON medication_statement TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_statement_patient_idx ON medication_statement (patient_id);
 
--- 5. Fold clinical.medication.asserted into medication_statement. NEW.body is the
+-- 5. Fold clinical.medication.asserted into medication_statement. e.body is the
 --    payload; patient_id is a column. Overlay-winner keeps set-union convergence.
-CREATE OR REPLACE FUNCTION medication_statement_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_statement_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_statement_apply();
+
+CREATE OR REPLACE FUNCTION medication_statement_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
     -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
     -- sealed without custody here: nothing to project — honest degradation.
-    p jsonb := cairn_clear_payload(NEW);
+    p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     -- #192 thread patient-consistency: local fail-loud / remote converge-and-flag.
     -- Guarded HERE (not also in the dose-seed trigger that fires on this same event),
     -- so a remote contradiction is flagged exactly once per event.
     PERFORM cairn_guard_medication_patient(
-        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
 
     INSERT INTO medication_statement
         (medication_id, patient_id, term, inn_code, formulation,
          dose_amount, dose_unit, sig, info_source, started_value, started_precision,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        (p ->> 'medication_id')::uuid, NEW.patient_id,
+        (p ->> 'medication_id')::uuid, e.patient_id,
         p -> 'substance' ->> 'term',
         p -> 'substance' ->> 'inn_code',
         p -> 'substance' ->> 'formulation',
@@ -196,7 +228,7 @@ BEGIN
         p ->> 'info_source',
         p -> 'started' ->> 'value',
         p -> 'started' ->> 'precision',
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id        = EXCLUDED.patient_id,
         term              = EXCLUDED.term,
@@ -217,14 +249,12 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         medication_statement.hlc_wall, medication_statement.hlc_counter,
         medication_statement.origin, medication_statement.content_address);
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_statement_apply_trg ON event_log;
-CREATE TRIGGER medication_statement_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication.asserted')
-    EXECUTE FUNCTION medication_statement_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_statement_apply(event_log) FROM PUBLIC;
 
 -- 7. Cessation projection. A SEPARATE table (not an UPDATE of medication_statement)
 --    makes the fold arrival-order-independent: an orphan cessation (assert not yet
@@ -243,29 +273,43 @@ CREATE TABLE IF NOT EXISTS medication_cessation (
 );
 GRANT SELECT ON medication_cessation TO cairn_agent;
 
-CREATE OR REPLACE FUNCTION medication_cessation_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_cessation_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_cessation_apply();
+
+CREATE OR REPLACE FUNCTION medication_cessation_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
     -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
     -- sealed without custody here: nothing to project — honest degradation.
-    p jsonb := cairn_clear_payload(NEW);
+    p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     -- #192 thread patient-consistency (see the guard's comment above). An ORPHAN
-    -- cessation (no standing claim at all) still passes — offline-first.
+    -- cessation (no standing claim at all) still passes — offline-first. NOTE this
+    -- guard can ALSO insert into medication_patient_conflict_flag on a remote-apply
+    -- conflict (same as the assert trigger above) — see this fn's registration row
+    -- below, which lists that table too (a recipe/inventory-doc gap caught while
+    -- converting this file: the original draft listed only medication_cessation).
     PERFORM cairn_guard_medication_patient(
-        (p ->> 'medication_id')::uuid, NEW.patient_id, NEW.content_address);
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
 
     INSERT INTO medication_cessation
         (medication_id, patient_id, stopped_value, stopped_precision, reason,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        (p ->> 'medication_id')::uuid, NEW.patient_id,
+        (p ->> 'medication_id')::uuid, e.patient_id,
         p -> 'stopped' ->> 'value',
         p -> 'stopped' ->> 'precision',
         p ->> 'reason',
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id        = EXCLUDED.patient_id,
         stopped_value     = EXCLUDED.stopped_value,
@@ -280,14 +324,12 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         medication_cessation.hlc_wall, medication_cessation.hlc_counter,
         medication_cessation.origin, medication_cessation.content_address);
-    RETURN NULL;
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_cessation_apply_trg ON event_log;
-CREATE TRIGGER medication_cessation_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-cessation.asserted')
-    EXECUTE FUNCTION medication_cessation_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_cessation_apply(event_log) FROM PUBLIC;
 
 -- 8. Unified list: statement LEFT JOIN cessation → status derived. An orphan
 --    cessation (no matching statement) yields NO row here (nothing to render);
@@ -344,5 +386,27 @@ FROM patient_medication_current
 GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
 HAVING count(*) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
+
+-- 10. Registered apply fns for the #208/ADR-0057 generic dispatcher (db/005) +
+--     cairn_reproject heal/rebuild (db/039). Both verbs' projection_tables lists
+--     include medication_patient_conflict_flag: cairn_guard_medication_patient
+--     (shared by both triggers, part 3b above) can insert a row there on a
+--     remote-apply patient conflict — omitting it from either list would let a
+--     narrow cairn_reproject rebuild truncate that table without knowing this
+--     event type also feeds it (rebuild-scope metadata must be exhaustive, never
+--     knowingly incomplete). #214 + steady-state discipline: converge these rows
+--     to the migration text on every connect, but stay write-free once already
+--     converged (no dead tuples, no validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication.asserted',           'medication_statement_apply',
+     ARRAY['medication_statement', 'medication_patient_conflict_flag'], 20, TRUE),
+    ('clinical.medication-cessation.asserted', 'medication_cessation_apply',
+     ARRAY['medication_cessation', 'medication_patient_conflict_flag'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

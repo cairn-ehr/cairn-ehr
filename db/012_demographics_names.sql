@@ -36,26 +36,36 @@ CREATE TABLE IF NOT EXISTS patient_name (
 
 -- Incremental maintenance: fold exactly the one new name event into the retained set.
 -- event_log.body holds b->'payload' (see db/005 submit_event INSERT).
-CREATE OR REPLACE FUNCTION patient_name_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below.
+DROP TRIGGER IF EXISTS patient_name_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly
+-- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
+DROP FUNCTION IF EXISTS patient_name_apply();
+
+CREATE OR REPLACE FUNCTION patient_name_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    p      jsonb := NEW.body;
+    p      jsonb := e.body;
     fld    text  := p ->> 'field';
     v_use  text  := NULLIF(trim(p -> 'facets' ->> 'use'), '');
     v_key  text;
     v_rank int;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
-    -- in NEW.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
+    -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
-    IF NEW.sealed THEN RETURN NULL; END IF;
+    IF e.sealed THEN RETURN; END IF;
     -- Only NAME events project here. dob/sex-at-birth (db/011) and any unknown field
-    -- are ignored — names get their own multi-valued shape. (This trigger and the
-    -- patient_demographic trigger both fire on demographic.field.asserted; each gates
-    -- to its own fields and writes a different table, so order is irrelevant.)
+    -- are ignored — names get their own multi-valued shape. (This fn and the
+    -- patient_demographic apply fn both dispatch on demographic.field.asserted; each
+    -- gates to its own fields and writes a different table, so order is irrelevant.)
     IF fld <> 'name' THEN
-        RETURN NULL;
+        RETURN;
     END IF;
     -- Lower-case the key: `use` is open vocabulary, so "Legal"==="legal" as a category.
     -- Folding here makes the legal-tier display test case-insensitive and collapses
@@ -72,8 +82,8 @@ BEGIN
         (patient_id, use_key, value, use_raw, provenance, provenance_rank,
          last_hlc_wall, last_hlc_count, asserted_origin)
     VALUES
-        (NEW.patient_id, v_key, p ->> 'value', v_use, p ->> 'provenance', v_rank,
-         NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin)
+        (e.patient_id, v_key, p ->> 'value', v_use, p ->> 'provenance', v_rank,
+         e.hlc_wall, e.hlc_counter, e.node_origin)
     -- Per (patient, use, value) member, keep the MOST-RECENT assertion as its
     -- representative (recency-first tuple, matching the display rule). The compare is a
     -- deterministic, apply-order-independent function of the member's assertion set, so
@@ -91,15 +101,13 @@ BEGIN
            EXCLUDED.provenance_rank, EXCLUDED.asserted_origin COLLATE "C")
         > (pn.last_hlc_wall, pn.last_hlc_count,
            pn.provenance_rank, pn.asserted_origin COLLATE "C");
-    RETURN NULL;
+    RETURN;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS patient_name_apply_trg ON event_log;
-CREATE TRIGGER patient_name_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'demographic.field.asserted')
-    EXECUTE FUNCTION patient_name_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION patient_name_apply(event_log) FROM PUBLIC;
 
 -- The §4.2 display-winner: one row per patient, selected from the retained set with NO
 -- stored pointer. The ORDER BY is the whole rule:
@@ -144,5 +152,18 @@ ORDER BY patient_id,
          use_key COLLATE "C" DESC, value COLLATE "C" DESC;
 
 GRANT SELECT ON patient_name, patient_name_current TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) + cairn_reproject
+-- heal/rebuild (db/039). #214 + steady-state discipline: converge this row to the migration
+-- text on every connect, but stay write-free once already converged (no dead tuples, no
+-- validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
+VALUES ('demographic.field.asserted', 'patient_name_apply', ARRAY['patient_name'], 30, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

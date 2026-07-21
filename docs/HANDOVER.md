@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Next: continue the Priority-6 design queue (#205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208/#216/#217 remain**) — or the feature work below, now unblocked. **#208 is now the natural next one** — ADR-0056's reclassify-then-reproject path depends on it.
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Priority-6 design queue: #205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208 ✅ → [ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md)** (generic reprojection — one registered apply fn per projection + a single dispatcher replacing the ~15 per-type triggers; `cairn_reproject` heal/rebuild run gen-gated by the loader; the every-connect `cairn_demographic_backfill` retired; measured at Bet-B volume; follow-ons [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272) Pi5 re-run + [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) a pre-existing db/035 #192-guard gap + [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277) the DO-NOTHING heal-vs-rebuild caveat; #266 consumes it). **#216/#217 remain** — or the feature work below, now unblocked.
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -66,15 +66,16 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-20, latest (the #200 design session → ADR-0056 admit-and-defer; earlier
-the same day the #206 design session → ADR-0055 distribution trust root, plus PR #264 moving the
-`clinical_pull` listen ports below the ephemeral floor, issue #263;
+**Session date:** 2026-07-21, latest (the #208 generic-reprojection build → ADR-0057, spec v0.59, a
+brainstorm→spec→plan→TDD subagent-driven build; 2026-07-20 had the #200 design session → ADR-0056
+admit-and-defer and, earlier, the #206 design session → ADR-0055 distribution trust root plus PR #264
+moving the `clinical_pull` listen ports below the ephemeral floor, issue #263;
 2026-07-19 had the #205 design session → ADR-0054, the P5 process-mechanization session
 #212/#213/#214/#215 closing the review course, and the P4 tech-debt slice PR #251; 2026-07-18 had
 #204 ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.58 (through
-ADR-0056) · **Phase:** architecture complete (every original §11 question closed);
+regeneration 2026-07-14) · **Spec/ADRs:** v0.59 (through
+ADR-0057) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -102,78 +103,82 @@ medication verbs seal-at-write, custody sidecar + rung-3 shred CLI; twin registr
 `{human,authored}`+`{node,recorded}`, human signs / node holds custody; `cairn_authorship_bound` strict-door
 binding; db/020 admits+grades; `--author-as`) ·
 the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar,
-pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174).
+pivot to **Tauri 2**, an L3 choice below the compatibility boundary; PR #174) ·
+**generic reprojection** (ADR-0057, spec v0.59 — one registered `cairn_projection_apply` fn per
+projection + a single `cairn_projection_dispatch` trigger replacing the ~15 per-type projection
+triggers; `cairn_reproject` heal/rebuild run gen-gated by both loaders; the every-connect
+`cairn_demographic_backfill` retired; measured at Bet-B volume).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**Session (2026-07-20, latest) — the #200 design session: ADR-0056 unknown event types admitted
-uninterpreted (spec v0.58; ROADMAP Slice 48; the third Priority-6 item).** Finding B5 filed #200 as a
-spec *over-promise* needing only a ratifying ADR. **Investigation inverted the premise: the spec was
-right and the code was wrong.** §6.5's lossless-forwarding invariant ("never rejecting, dropping…")
-is **contradicted** by `db/020:163-167`'s fail-closed on an unclassifiable `event_type` — it holds
-for unknown *fields*, never unknown *types*. Two further gaps: §6.3's "quarantined *verbatim*" is
-false for **verifiable** bytes (both pens hold *unverifiable* bytes only), and the planes diverge
-with the clinical one failing **quietly** — it freezes its cursor and still **exits success**, so one
-unclassifiable event from an upgraded peer silently wedges that peer's whole pull. The deciding
-failure: under fail-closed a phone-tier node carrying a chart between two upgraded facilities (§6.1
-sneakernet) acquires *nothing* past the first unknown type — a future `clinical.medication.recall`
-would be **absent**, not merely unrendered. Resolution — **admit-and-defer**: unknown type is not a
-refusal (verbatim, re-propagated, skeleton-twin rendered, **no projection rows, no power**); strict
-door keeps failing closed (carry what you cannot author); the **floor gates effect, not presence**
-(enumerated survivors); power granted only at reclassification — which **re-adjudicates the deferred
-gates before reprojecting** — so *no unattested suppression* holds at every instant; refusal +
-durable re-offer survives as the **residual** contract. No wire change (ADR-0010 derived-not-declared
-stands). **The posture triad completes:** content plane admits-and-disputes (0054) *and*
-admits-and-defers (0056); code plane verifies-or-refuses (0055). Cost is small — **one fail-closed
-line** stands between the tree and the contract (`serve` already reads `event_log` unconditionally;
-sealed-scope is not a remote-door concern at all; `cairn_event_twin` already degrades). Follow-ons:
-#265–#270. Spec homes: sync §6.5/§6.3, data-model §3.13.
+**Session (2026-07-20→21) — the #208 generic-reprojection build: ADR-0057 (spec v0.59; ROADMAP
+Slice 49; the fourth Priority-6 item, but taken all the way to product code —
+brainstorm→spec→plan→subagent-driven TDD build, Tasks 0–10).** The ~15 per-type projection triggers
+each healed only *future* inserts (a `CREATE OR REPLACE` left every already-materialised row wrong —
+ADR-0045's read-side-only winner fix was the worked example), and the tree's one bespoke
+`cairn_demographic_backfill()` re-expressed its trigger's winner logic twice more and scanned the whole
+log on **every connect**. Replaced by ONE code path: a locked `cairn_projection_apply` registry + a
+single `cairn_projection_dispatch` trigger (each former trigger body refactored to `fn(event_log)`; an
+unregistered projection cannot fire) + `cairn_reproject(prefix, rebuild, source)` feeding `event_log`
+through the *identical* dispatch (heal = no-delete wrong-winner convergence; rebuild = TRUNCATE+replay
+for the wrote-garbage class, refusing a narrow prefix over a multi-type table). The every-connect
+backfill is deleted; both loaders run a gen-gated `cairn_reproject('', false, 'loader')` only on a
+schema-generation change. `cairn_replay_eligible(e)` is the #265/#266 seam (constantly `true` until
+#265). **Three planning amendments mid-build, all ratified:** the Task-1 registration recipe (per-fn
+REVOKE + IS-DISTINCT-FROM steady-state guard + `search_path` pin), the Task-4 premise correction
+(`cairn_reproject` is registry-driven, so swapped test calls stay RED until the demographic rows
+register — a stronger pin than the plan expected), and the Task-8 stop-gate (rebuild tripped the
+~30-min gate → optimise the per-event loop to set-based invocation, re-measure, *then* ADR).
+**Review-caught fixes:** heal-**before**-stamp in both loaders (a failed heal withholds the stamp → the
+next connect retries → the silent-stale window a stamp-then-heal would open is closed); the three
+append-only alarm tables (`identity_projection_flag`, `medication_projection_flag`,
+`medication_patient_conflict_flag`) dedup replay by **event identity** (`content_address` +
+`NULLS DISTINCT`), never by observation shape; heal mode **skips** the `heal_safe=false` counter-shaped
+`patient_chart_apply` note-count increment and reports it in `reproject_log.skipped_fns`. **Measured at
+Bet-B volume** (Mac dev box, 2,006,000 events / 200 patients): write-path through the live dispatcher
+p50 0.076 / p95 0.236 ms (~17× under the Pi B1 budget); heal of the 200,580 applicable events in
+2.098 s (~95.6k ev/s set-based, a 5.8× speedup over the 12.2 s per-event PL/pgSQL loop); rebuild of all
+2,006,000 in 54:32 — **loop-invariant by construction** (rebuild ≈ re-ingest cost, the live per-row
+ingest ran ~1.2 ms/ev on the same corpus; honestly a rare human-supervised recovery op, **not** a
+low-latency SLA). The Mac numbers are cross-rig — the authoritative same-rig A/B is the Pi5/NVMe re-run,
+[#272](https://github.com/cairn-ehr/cairn-ehr/issues/272). Structural guards: a sole-dispatcher catalog
+test (the only `AFTER INSERT` trigger on `event_log` is the dispatcher) + 22/25 registry row-count pins
+mirrored in Rust **and** SQL (the #212 two-place pattern). **Follow-ons:** #272 (Pi re-run) +
+**[#273](https://github.com/cairn-ehr/cairn-ehr/issues/273)** — a pre-existing db/035 gap the conversion
+surfaced (the dose-correction apply fn's live body lost the #192 patient-consistency guard call db/032's
+original carried; house rule 5, flagged in-file) + **[#277](https://github.com/cairn-ehr/cairn-ehr/issues/277)**
+— the loader's gen-change heal cannot re-derive `ON CONFLICT DO NOTHING` projections (`medication_dose_*`,
+`medication_attestation`) after an extraction-logic fix (`heal_safe=TRUE` is replay-safe, not
+auto-healable; caveat now documented at db/005's `heal_safe` definition, surfaced in this PR's review) —
+and #266's reclassify-then-reproject path **consumes** this mechanism through the `cairn_replay_eligible`
+seam. **Next:** #216/#217, or the unblocked feature work.
 
-**PR #271 review, folded in before merge.** Three corrections, all in the ADR + design note + Slice 48:
-(i) decision 3 wrongly listed **sealed-scope** among the remote door's refusals — `apply_remote_event`
-deliberately mirrors neither the born-sealed scope rule nor the unopenable-body refusal, because
-(`db/005`) *"a refusal there would freeze the seq watermark on a verifiable event"* — ADR-0056's own
-argument, and leaving it would have aimed #265 straight at that failure; (ii) decision 4 said only
-"reprojects", but admitting uninterpreted **skips** the attestation, target-exists and ADR-0043
-cross-author-suppression gates (all NULL-short-circuited downstream of the classification lookup), so
-reclassification must re-adjudicate first — #266 retitled/rescoped, and #265 told to record the
-deferred state *explicitly* rather than lean on NULL fall-through; (iii) ADR-0056 was the only ADR
-citing `file:line` — converted to symbol-level, since ADRs are immutable and #265 deletes the cited
-line. The same review found the ROADMAP prune had dropped **open** issues #141 and #184 out of every
-tracked file, plus a dozen unfiled deferred items — all restored to the Slices 13–35 "still open"
-block, which is now enumerated in full rather than curated.
-**Next:** #208 (now load-bearing for #266), then #216/#217, or the unblocked feature work.
-
-**Session (2026-07-20, earlier) — the #206 design session: ADR-0055 distribution-plane trust-root
-governance (spec v0.57; ROADMAP Slice 47; the second Priority-6 item).** Finding C5 (a single
-steward key signs the highest-blast-radius artifact — native extensions in the DB trusted base)
-resolves by applying the corpus's own anchor doctrine to the steward: **no privileged root on the
-distribution plane** — a **channel** `{trust-root chain, transparency log, release stream}` is the
-trust unit; the root is provisioning config on the ADR-0017 spectrum (the steward is only the
-official channel's default anchor; a deployment repoints without forking). Mechanism: a **chained,
-content-addressed trust-root document** (version N+1 signed by ≥ M_root of version N; explicit
-TUF-shape multi-sig, N=1/M=1 first-class; monotonic pin; **no expiry** — availability floor,
-compensated by retirement key-destruction + log/gossip fork detection), a **root/release role
-split** (constitution key vs daily pen), a **fork-freeze rule** (two verifiable successors ⇒
-security incident + ceremony, never arrival-order), the **verify-or-refuse load gate** (newest-root
-rule; practice-manager-legible refusals; co-signer floor), the **transparency log** (ADR-0027
-shape, self-hostable; rebuilder attestations = co-signatures; limits honestly stated), an **honest
-N=1 posture with a ratchet tripwire** (≥ 2-of-3 before the first production deployment outside the
-steward's control; ADR-0026 escrow floor), and **one root shape for §7.6/§7.9/§7.7**. Code vs
-content plane now carry opposite postures (verifies-or-refuses vs admits-and-disputes — the
-ADR-0054 contrast completed). Follow-ons: #257/#258/#259/#260 + #261 (sync-auth onboarding UX).
-Spec homes: security §7.6 (rewrite) + §7.7/§7.9, sync §6.5. Design/plan docs under
-`docs/superpowers/`. **Next:** the remaining P6 queue (#200/#208/#216/#217) or the now-unblocked
-feature work.
-
-**Session (2026-07-19) — the #205 design session: ADR-0054 actor-registry federation (spec v0.56;
-ROADMAP Slice 46).** The C4 contradiction resolves as **admit-and-dispute**: a signed actor-event
-wire shape on the node plane; a **derived disputed state over live bindings** (no winner picked,
-candidate-set attribution; **registry uncertainty withholds permissions, never content** — closes
-#154 structurally, discharges the #172 sync-door half; pre-wire unsigned rows never sync — wipe dev
-rigs); adjudication = the existing `supersede` by audited human ceremony, never auto-resolved.
-Named follow-ons: #94 + the key-loss ceremony ADR; the rotate-key local door. Spec homes: security
-§7.5, sync §6.3+§6.9, data-model §3.12, identity §5.10. Full detail: ROADMAP Slice 46 + the ADR.
+**P6 design sessions (2026-07-19 → 07-20), condensed — full detail in ROADMAP Slices 46–48 + the
+ADRs + git; the open follow-ons are also in the ⇒ NEXT block above.** Three consecutive docs-only
+sessions cleared the review-course design queue ahead of #208. **#205 → ADR-0054** actor-registry
+federation (spec v0.56, Slice 46): admit-and-dispute — a signed actor-event wire shape on the node
+plane, a **derived disputed state over live bindings** under which registry uncertainty withholds
+*permissions* never *content*; adjudication = `supersede` by human ceremony, never auto-resolved;
+closes #154 structurally, discharges the #172 sync-door half. Open follow-ons: #94 + the key-loss
+ceremony ADR + the rotate-key local door. **Operational caveat:** pre-wire unsigned actor rows never
+sync — **wipe dev rigs**. **#206 → ADR-0055** distribution-plane trust-root governance (spec v0.57,
+Slice 47): no privileged root — a **channel** `{trust-root chain, transparency log, release stream}`
+is the trust unit, the steward only the official channel's default anchor; a chained content-addressed
+root document (N=1/M=1 first-class, monotonic pin, no expiry), a root/release role split, a fork-freeze
+rule, a verify-or-refuse newest-root load gate, and an honest N=1 posture with a ≥2-of-3 ratchet
+tripwire before the first outside-steward deployment. Follow-ons: #257/#258/#259/#260 + #261 (sync-auth
+onboarding UX). **#200 → ADR-0056** unknown event types admitted uninterpreted (spec v0.58, Slice 48):
+the filed premise was **inverted** — the spec was right, the code fail-closed at `db/020`.
+Admit-and-defer — an unknown type is stored verbatim, re-propagated, skeleton-twin rendered, **no
+projection rows / no power**; the strict door keeps failing closed (carry what you cannot author);
+power is granted only at reclassification, which **re-adjudicates the deferred gates before
+reprojecting** — so *no unattested suppression* holds at every instant (this couples to #208/ADR-0057).
+PR #271's review folded three corrections into ADR-0056 (sealed-scope is **not** a remote-door refusal
+— a refusal there would freeze the seq watermark on a verifiable event; reclassification must
+re-adjudicate the attestation/target-exists/cross-author-suppression gates, not merely reproject; the
+ADR converted from `file:line` to symbol-level since #265 deletes the cited line) and restored open
+#141/#184 the first ROADMAP prune had dropped. Follow-ons: #265–#270. **The posture triad:** content
+plane admits-and-disputes (0054) *and* admits-and-defers (0056); code plane verifies-or-refuses (0055).
 
 **Session (2026-07-19, earlier) — the P5 process-mechanization session: #212 + #213 + #214 + #215,
 closing the whole review course (PRs #253 + #255, merged; full detail in ROADMAP Slice 45).** Highlights: **#214** — the medication §3.15/§3.16→§3.3 mislabel fixed across
@@ -486,6 +491,7 @@ ADR before reopening any of these.
 | [0054](spec/decisions/0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation is admit-and-dispute: signed actor-event wire shape on the node plane; derived live-bindings disputed state; content never waits, permissions always wait; adjudication = supersede by human ceremony, never auto-resolved | §7.5/§6.9/§3.12/§5.10 (refines 0011/0044/0046) |
 | [0055](spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: no privileged root — channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze never-silently-pick; transparency log by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | §7.6/§7.9/§7.7/§6.5 (refines 0012/0024; applies 0017/0018) |
 | [0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes (carry what you cannot author); the floor gates effect not presence; refusal + durable re-offer kept as the residual contract | §6.5/§6.3/§3.13 (refines 0012/0022; extends 0054; upholds 0010/0051) |
+| [0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md) | Generic reprojection: a projection lives only in its registered apply fn; one dispatcher replaces the ~15 per-type triggers; `cairn_reproject` heal/rebuild is generic replay, run by the loader on a schema-generation change (every-connect backfill retired); `cairn_replay_eligible` is the #266 seam | §9.4/§9.1 (refines 0048/0045; upholds 0056; load-bearing for #266) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

@@ -77,6 +77,7 @@ was made — the context, the choice, and its consequences. Aspect documents in
 | [0054](0054-actor-registry-federation-admit-and-dispute.md) | Actor-registry federation: admit-and-dispute; signed actor-event wire shape on the node plane; derived live-bindings disputed state — content never waits, permissions always wait; adjudication = supersede by human ceremony | Accepted (refines 0011/0044/0046) | 2026-07-19 |
 | [0055](0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze; transparency by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | Accepted (refines 0012/0024; applies 0017/0018) | 2026-07-20 |
 | [0056](0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes; refusal + durable re-offer kept as the residual contract | Accepted (refines 0012/0022; extends 0054; upholds 0010/0051) | 2026-07-20 |
+| [0057](0057-generic-reprojection-registered-apply-dispatch.md) | Generic reprojection: a projection lives only in its registered apply function; healing is generic replay run by the loader on generation change; heal/rebuild semantics; the `cairn_replay_eligible` #266 seam | Accepted (refines 0048/0045; upholds 0056 decision 4) | 2026-07-21 |
 
 ## Template
 

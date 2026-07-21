@@ -225,25 +225,36 @@ GRANT SELECT ON medication_attestation TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_attestation_thread_idx
     ON medication_attestation (medication_id);
 
--- 6. Apply trigger: fold each attestation event into the overlay (door-agnostic —
+-- 6. Apply fn: fold each attestation event into the overlay (door-agnostic —
 --    fires for both the local submit door and the db/020 remote-apply door). Append
 --    a row keyed by the event's own id; a re-delivered event is deduped by the PK.
-CREATE OR REPLACE FUNCTION medication_attestation_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_attestation_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_attestation_apply();
+
+CREATE OR REPLACE FUNCTION medication_attestation_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
     -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
     -- sealed without custody here: nothing to project — honest degradation.
-    p jsonb := cairn_clear_payload(NEW);
+    p jsonb := cairn_clear_payload(e);
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     INSERT INTO medication_attestation
         (event_id, medication_id, patient_id, attester_kid, reviewed_commitment,
          reviewed_count, hlc_wall, hlc_counter, origin, content_address)
     VALUES (
-        NEW.event_id,
+        e.event_id,
         (p ->> 'medication_id')::uuid,
-        NEW.patient_id,
+        e.patient_id,
         -- attester_kid is read from attester_key (the VERIFIED responsible human the
         -- db/005 gate stored), NOT signer_key_id. This is deliberate: responsibility is
         -- SEPARABLE from authorship (principle 10 / ADR-0007) — signature proves origin,
@@ -256,19 +267,17 @@ BEGIN
         -- always carries a responsibility contributor (enforced by the M1 floor check
         -- above), which trips the db/005 gate that populates attester_key; the M1 check
         -- turns a would-be NULL into a legible floor rejection long before this trigger.
-        encode(NEW.attester_key, 'hex'),
+        encode(e.attester_key, 'hex'),
         decode(p ->> 'reviewed_commitment', 'hex'),
         (p ->> 'reviewed_count')::integer,
-        NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin, NEW.content_address)
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (event_id) DO NOTHING;                    -- append-only, idempotent
-    RETURN NULL;  -- AFTER trigger
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_attestation_apply_trg ON event_log;
-CREATE TRIGGER medication_attestation_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type = 'clinical.medication-attestation.asserted')
-    EXECUTE FUNCTION medication_attestation_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_attestation_apply(event_log) FROM PUBLIC;
 
 -- 7. Per-thread standing attestation: the LATEST vouch per thread (by its own
 --    convergent position), with the staleness verdict = "the thread's current
@@ -322,5 +331,19 @@ FROM medication_thread_group g
 LEFT JOIN medication_thread_attestation ta ON ta.medication_id = g.medication_id
 GROUP BY g.group_id, g.patient_id;
 GRANT SELECT ON medication_group_attestation TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
+-- cairn_reproject heal/rebuild (db/039). #214 + steady-state discipline: converge
+-- this row to the migration text on every connect, but stay write-free once already
+-- converged (no dead tuples, no validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
+VALUES ('clinical.medication-attestation.asserted', 'medication_attestation_apply',
+        ARRAY['medication_attestation'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;

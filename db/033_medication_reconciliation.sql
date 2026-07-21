@@ -131,12 +131,52 @@ CREATE TABLE IF NOT EXISTS medication_projection_flag (
     flagged_at    TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON medication_projection_flag TO cairn_agent;
+-- The triggering event's identity (Task-5-adjudicated pattern, mirroring db/018's
+-- identity_projection_flag fix EXACTLY): NULL for a row flagged before this column
+-- existed (none are known to exist on this branch — medication_projection_flag has
+-- never shipped a unique index before now — but the column stays nullable so a
+-- hand-seeded or pre-#208 row degrades honestly rather than violating NOT NULL).
+ALTER TABLE medication_projection_flag ADD COLUMN IF NOT EXISTS content_address BYTEA;
+-- Upgrade heal, mirroring db/018's identity_projection_flag guard: if some earlier
+-- pass of this table ever shipped a NARROWER unique index under this same name
+-- (observationally keyed, no content_address), drop it once so the natural-key index
+-- below can be created with its intended (wider) definition. No such narrower index
+-- is known to exist for medication_projection_flag on this branch — this file is
+-- the FIRST to add a unique index to it — but the guard costs nothing and keeps this
+-- fix byte-for-byte parallel with the db/018 precedent (defense in depth against a
+-- stray hand-created index on a dev DB).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'medication_projection_flag_natural_idx'
+          AND indexdef NOT LIKE '%content_address%'
+    ) THEN
+        DROP INDEX medication_projection_flag_natural_idx;
+    END IF;
+END $$;
+-- Natural-key uniqueness keyed on EVENT identity, never on observation shape: a
+-- heal-mode reproject replaying the IDENTICAL event converges instead of appending a
+-- duplicate alarm row every run; a genuinely NEW event that independently reobserves
+-- the same (seed, observed_size, cap) still gets its own row (NULLS DISTINCT lets
+-- legacy NULL-content_address rows coexist without colliding).
+CREATE UNIQUE INDEX IF NOT EXISTS medication_projection_flag_natural_idx
+    ON medication_projection_flag (seed, observed_size, cap, content_address);
 
 -- Recompute the connected component around one seed thread over the STANDING
 -- reconciled edges, rewriting medication_group_member to the min-UUID representative.
 -- Cost bounded by the touched component, not the table (ADR-0001 incremental
 -- discipline). Mirrors cairn_recompute_component.
-CREATE OR REPLACE FUNCTION cairn_recompute_medication_group(p_seed uuid)
+--
+-- p_ca: the triggering event's content_address, threaded through (mirroring db/018's
+-- cairn_recompute_component fix) so an oversize-component skip can be flagged by EVENT
+-- identity rather than by observation shape alone (see the unique index above).
+-- CREATE OR REPLACE cannot add a parameter (it would overload, not replace), so the
+-- old 1-arg signature is dropped explicitly first — same idiom as every apply-fn
+-- conversion in this task.
+DROP FUNCTION IF EXISTS cairn_recompute_medication_group(uuid);
+CREATE OR REPLACE FUNCTION cairn_recompute_medication_group(p_seed uuid, p_ca bytea)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_members uuid[];
@@ -154,8 +194,17 @@ BEGIN
 
     IF array_length(v_members, 1) > cairn_max_medication_group_size() THEN
         IF current_setting('cairn.remote_apply', true) = 'on' THEN
-            INSERT INTO medication_projection_flag (seed, observed_size, cap)
-            VALUES (p_seed, array_length(v_members, 1), cairn_max_medication_group_size());
+            -- ADR-0057 replay-idempotency, keyed on EVENT identity, never on observation
+            -- shape (mirrors db/018's identity_projection_flag insert exactly): a heal-mode
+            -- reproject re-running this SAME event (same p_ca) must not append a duplicate
+            -- worklist alarm, but a genuinely NEW event that independently reobserves the
+            -- same (seed, observed_size, cap) is a REAL new occurrence and must still alarm.
+            -- A p_ca of NULL (no event context available to the caller — e.g. an
+            -- erasure-driven recompute, db/037) relies on NULLS DISTINCT to always insert —
+            -- honest degradation, never a silent dedup it has no basis for.
+            INSERT INTO medication_projection_flag (seed, observed_size, cap, content_address)
+            VALUES (p_seed, array_length(v_members, 1), cairn_max_medication_group_size(), p_ca)
+            ON CONFLICT (seed, observed_size, cap, content_address) DO NOTHING;
             RETURN;
         END IF;
         RAISE EXCEPTION
@@ -178,23 +227,34 @@ $$;
 -- Fold one reconciliation/separation event into the edge overlay, then recompute the
 -- component around both endpoints. A txn-scoped advisory lock serializes recomputes
 -- (the db/018 read-modify-write race). #157 collision recording is deferred (design §10).
-CREATE OR REPLACE FUNCTION medication_reconciliation_apply()
-RETURNS trigger LANGUAGE plpgsql AS $$
+--
+-- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
+-- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).
+DROP TRIGGER IF EXISTS medication_reconciliation_apply_trg ON event_log;
+-- The old zero-arg trigger-function signature is superseded by the (event_log)
+-- apply-fn signature below; CREATE OR REPLACE cannot change a function's arg
+-- list (it would overload, not replace), so drop the old signature explicitly —
+-- without it an upgraded-in-place DB keeps BOTH the zero-arg trigger fn and its
+-- trigger, double-firing every projection (ADR-0057).
+DROP FUNCTION IF EXISTS medication_reconciliation_apply();
+
+CREATE OR REPLACE FUNCTION medication_reconciliation_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives
     -- in event_clear (populated by the door BEFORE this row, same txn). NULL =
     -- sealed without custody here: nothing to project — honest degradation.
-    p       jsonb := cairn_clear_payload(NEW);
+    p       jsonb := cairn_clear_payload(e);
     a       uuid  := (p ->> 'subject_a')::uuid;
     b       uuid  := (p ->> 'subject_b')::uuid;
     lo      uuid  := LEAST(a, b);
     hi      uuid  := GREATEST(a, b);
-    v_state text  := CASE WHEN NEW.event_type = 'clinical.medication-reconciliation.asserted'
+    v_state text  := CASE WHEN e.event_type = 'clinical.medication-reconciliation.asserted'
                           THEN 'reconciled' ELSE 'separated' END;
     v_pa    uuid;
     v_pb    uuid;
 BEGIN
-    IF p IS NULL THEN RETURN NULL; END IF;
+    IF p IS NULL THEN RETURN; END IF;
     PERFORM pg_advisory_xact_lock(x'4341524E4D52'::bigint);  -- 'CARNMR'
 
     -- Cross-patient reconciliation guard (#192 scenario B, resolving the #177 design
@@ -221,8 +281,8 @@ BEGIN
     INSERT INTO medication_reconciliation
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, content_address)
     VALUES
-        (lo, hi, v_state, NEW.hlc_wall, NEW.hlc_counter, NEW.node_origin,
-         p ->> 'provenance', NEW.content_address)
+        (lo, hi, v_state, e.hlc_wall, e.hlc_counter, e.node_origin,
+         p ->> 'provenance', e.content_address)
     ON CONFLICT (low, high) DO UPDATE SET
         state       = EXCLUDED.state,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -238,17 +298,16 @@ BEGIN
 
     -- Recompute BOTH endpoints (a reconcile merges; a separation splits into at most
     -- the piece with lo and the piece with hi — both reachable from these seeds).
-    PERFORM cairn_recompute_medication_group(lo);
-    PERFORM cairn_recompute_medication_group(hi);
-    RETURN NULL;  -- AFTER trigger
+    -- e.content_address threads the triggering event's identity into the oversize-flag
+    -- dedup key (see cairn_recompute_medication_group's p_ca comment above).
+    PERFORM cairn_recompute_medication_group(lo, e.content_address);
+    PERFORM cairn_recompute_medication_group(hi, e.content_address);
+    RETURN;
 END;
 $$;
-DROP TRIGGER IF EXISTS medication_reconciliation_apply_trg ON event_log;
-CREATE TRIGGER medication_reconciliation_apply_trg
-    AFTER INSERT ON event_log
-    FOR EACH ROW WHEN (NEW.event_type IN
-        ('clinical.medication-reconciliation.asserted', 'clinical.medication-separation.asserted'))
-    EXECUTE FUNCTION medication_reconciliation_apply();
+-- A trigger fn could never be called directly; a plain fn gets PUBLIC EXECUTE by
+-- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
+REVOKE EXECUTE ON FUNCTION medication_reconciliation_apply(event_log) FROM PUBLIC;
 
 COMMIT;
 
@@ -468,5 +527,25 @@ WHERE tp.patient_id IS NOT NULL
 GROUP BY gm.group_id
 HAVING count(DISTINCT tp.patient_id) > 1;
 GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
+
+-- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
+-- cairn_reproject heal/rebuild (db/039). Both verbs share the ONE fn and the SAME
+-- projection_tables list (reconciliation and separation fold into the same edge
+-- overlay + component recompute + oversize worklist tables) — mirrors db/018's
+-- identity.link.asserted/identity.unlink.asserted registration exactly. #214 +
+-- steady-state discipline: converge these rows to the migration text on every
+-- connect, but stay write-free once already converged (no dead tuples, no
+-- validate-trigger fire).
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication-reconciliation.asserted', 'medication_reconciliation_apply',
+     ARRAY['medication_reconciliation', 'medication_group_member', 'medication_projection_flag'], 10, TRUE),
+    ('clinical.medication-separation.asserted',     'medication_reconciliation_apply',
+     ARRAY['medication_reconciliation', 'medication_group_member', 'medication_projection_flag'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
 COMMIT;
