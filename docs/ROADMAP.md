@@ -626,6 +626,51 @@ the only ADR in the corpus citing `file:line` — converted to symbol-level refe
 immutable and #265 deletes the very line the central claim cited. Line-level evidence stays in the
 mutable design note and here.
 
+**Slice 49 — the #208 generic-reprojection slice: ADR-0057 (2026-07-20→21; P6 design queue, fourth
+item — but taken brainstorm→spec→plan→TDD build end-to-end, subagent-driven Tasks 0–10; branch
+`design/208-generic-reprojection`;
+[ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md), spec v0.59).** The
+~15 per-type `AFTER INSERT … FOR EACH ROW WHEN (event_type = …)` projection triggers each healed only
+*future* inserts — a `CREATE OR REPLACE` left every already-materialised row wrong (ADR-0045's
+read-side-only winner fix was the worked example; the tree's one bespoke `cairn_demographic_backfill()`
+re-expressed its trigger's winner logic twice more and ran a full `event_log` scan on **every
+connect**). Replaced by **one code path**: a locked registry `cairn_projection_apply(event_type,
+apply_fn, projection_tables, run_order, heal_safe, PK(event_type,apply_fn))` (fail-closed load-time
+validation, `REVOKE`d, ADR-0048 discipline) + **one dispatcher** `cairn_projection_dispatch`
+(`AFTER INSERT ON event_log`) that calls each registered `apply_fn(NEW)` in `run_order` — every former
+trigger body mechanically refactored to `fn(event_log) RETURNS void`, the `WHEN` clauses dropped; an
+unregistered projection cannot fire. **`cairn_reproject(prefix, rebuild, source)`** feeds `event_log`
+through the *identical* dispatch (single logic path for replay too), recording per-type counts in a
+node-local `reproject_log`: **heal** (default, no deletes — converges the wrong-winner class by
+arrival-order-independence) vs **rebuild** (`TRUNCATE`+replay, wrote-garbage class, refuses a narrow
+prefix over a multi-type table). The generic mechanism **subsumes** `cairn_demographic_backfill()` and
+its every-connect call (both deleted); both loaders instead run `cairn_reproject('', false, 'loader')`
+**only on a schema-generation change**. `cairn_replay_eligible(e)` is the #265/#266 seam (constantly
+`true` today — no deferred events can exist until #265). **Review-caught corrections:** (i) the loader
+heal runs **before** the `node_schema` generation stamp in both loaders — a failed heal withholds the
+stamp and the next connect retries, closing the silent-stale window a stamp-then-heal would open
+(load-bearing, not cosmetic); (ii) the three append-only alarm tables (`identity_projection_flag`,
+`medication_projection_flag`, `medication_patient_conflict_flag`) dedup replay by **event identity** —
+`content_address` added to their unique key with `NULLS DISTINCT` — never by observation shape (a
+blanket `ON CONFLICT DO NOTHING` on the natural key would have collapsed two genuinely distinct events;
+`NULLS DISTINCT` leaves pre-fix legacy rows untouched, *never erase*); (iii) heal mode **skips**
+`heal_safe = false` rows (the counter-shaped `patient_chart_apply` note-count increment, which would
+double-count) and reports them in `reproject_log.skipped_fns` — rebuild heals them. **Structural
+guards:** a catalog test asserting the *only* `AFTER INSERT` trigger on `event_log` is the dispatcher;
+22/25 registry row-count pins mirrored in Rust **and** SQL (the #212 two-place pattern). **Measured at
+Bet-B volume** (Mac dev box, 2,006,000 events / 200 patients): write-path through the live dispatcher
+**p50 0.076 / p95 0.236 ms** (~17× under the Pi B1 budget); heal replay of the 200,580 applicable
+events in **2.098 s** (~95.6k ev/s, set-based — a **5.8×** speedup over the 12.2 s per-event PL/pgSQL
+loop it replaced, the Task-8 stop-gate resolution); rebuild of all 2,006,000 in **54:32**,
+**loop-invariant by construction** — its cost is the apply fns' own write work, so rebuild ≈ re-ingest
+cost (the live per-row ingest path ran ~1.2 ms/ev on the same corpus) and rebuild is explicitly **not**
+under a low-latency SLA. **Follow-ons:** [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272) (the
+authoritative Pi5/NVMe same-rig A/B re-run — the Mac numbers establish shape and clear budget but are
+cross-rig), [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) (a pre-existing db/035 gap
+surfaced during the conversion: the dose-correction apply fn's live body lost the #192
+patient-consistency guard call — house rule 5), and #266's reclassify-then-reproject path **consumes**
+this mechanism through the `cairn_replay_eligible` seam.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
