@@ -245,7 +245,8 @@ All figures were cross-verified read-only against the persisted `reproject_log` 
   invokes it at Bet-B-or-larger volume, that path needs its own budget, and 49–54 min at 2M events is
   the honest number to size against.
 - **The Pi5/NVMe re-run is the authoritative follow-on** (the Bet-B B1 rig, so numbers are
-  comparable), tracked by a filed issue. These Mac numbers establish the shape and clear the budget
+  comparable), tracked as [issue #272](https://github.com/cairn-ehr/cairn-ehr/issues/272). These
+  Mac numbers establish the shape and clear the budget
   by a wide margin; they are not the same-rig A/B the write-path claim ultimately rests on.
 
 **Implementation anchors:** the registry, dispatcher, load-time validation, and eligibility seam
