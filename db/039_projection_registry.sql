@@ -78,7 +78,6 @@ DECLARE
     v_type    text;
     v_fns     text[];
     v_fn      text;
-    v_e       event_log;
     v_n       bigint;
     v_total   bigint := 0;
     v_skipped text[] := '{}';
@@ -122,15 +121,41 @@ BEGIN
         END IF;
         v_n := 0;
         IF v_fns IS NOT NULL THEN
-            FOR v_e IN
-                SELECT el.* FROM event_log el
-                WHERE el.event_type = v_type AND cairn_replay_eligible(el)
-                ORDER BY el.hlc_wall, el.hlc_counter, el.node_origin
-            LOOP
-                FOREACH v_fn IN ARRAY v_fns LOOP
-                    EXECUTE format('SELECT %I($1)', v_fn) USING v_e;
-                END LOOP;
-                v_n := v_n + 1;
+            -- Set-based apply, one full-table pass per (type, fn) — replaces the former
+            -- per-event PL/pgSQL loop (measured at ~25% of a 2M-event rebuild's cost: the
+            -- Bet-B run clocked a full rebuild at 49 min before this change). count(*)
+            -- wraps a subquery whose target list calls the apply fn: the fn is VOLATILE,
+            -- so the planner can never prune it from the scan — it still runs exactly once
+            -- per eligible row — but the row-by-row plpgsql FOR loop, the per-event dynamic
+            -- re-EXECUTE, and the composite-value marshalling into a loop variable are all
+            -- gone; Postgres streams rows through the aggregate itself instead. Do NOT drop
+            -- the aggregate and EXECUTE a bare 'SELECT fn(el) FROM event_log ...' — without
+            -- it SPI materializes the whole result set in memory before returning, a real
+            -- risk at 2M+ rows on the resource-constrained node floor (ADR-0001 Bet B, the
+            -- Pi target).
+            --
+            -- ORDER BY is deliberately DROPPED (the old per-event loop replayed in HLC
+            -- order): every projection is arrival-order-independent by construction (#115;
+            -- set-union sync requires it, and the multi-node convergence suites in
+            -- overlay_tiebreaker.rs pin it), so heal/rebuild converges to the same winner
+            -- regardless of scan order — a sequential/index scan needs no sort to get there.
+            --
+            -- Interleaving also changes: the old loop ran every fn for event 1, then every
+            -- fn for event 2, .... This runs fn1 over ALL events, then fn2 over all events.
+            -- Licensed because sibling apply fns registered for the same event_type write
+            -- DISJOINT projection tables and never read each other's output (verified at
+            -- planning time and re-verified in the Task 4-6 conversions), so there is no
+            -- ordering dependency between fn1's full pass and fn2's full pass to preserve.
+            --
+            -- events_replayed for this type = v_n from the LAST fn's pass. Every fn for the
+            -- same type scans the identical WHERE (event_type, eligibility), so every pass
+            -- counts the same eligible rows; taking the last is equivalent to taking any.
+            FOREACH v_fn IN ARRAY v_fns LOOP
+                EXECUTE format(
+                    'SELECT count(*) FROM (SELECT %I(el) FROM event_log el '
+                    'WHERE el.event_type = $1 AND cairn_replay_eligible(el)) AS replay',
+                    v_fn)
+                USING v_type INTO v_n;
             END LOOP;
         END IF;
         event_type      := v_type;
