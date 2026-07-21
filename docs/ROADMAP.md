@@ -668,8 +668,11 @@ under a low-latency SLA. **Follow-ons:** [#272](https://github.com/cairn-ehr/cai
 authoritative Pi5/NVMe same-rig A/B re-run — the Mac numbers establish shape and clear budget but are
 cross-rig), [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) (a pre-existing db/035 gap
 surfaced during the conversion: the dose-correction apply fn's live body lost the #192
-patient-consistency guard call — house rule 5), and #266's reclassify-then-reproject path **consumes**
-this mechanism through the `cairn_replay_eligible` seam.
+patient-consistency guard call — house rule 5), and [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277)
+(the loader's gen-change heal cannot re-derive `ON CONFLICT DO NOTHING` projections — `medication_dose_*`,
+`medication_attestation` — after an extraction-logic fix: `heal_safe=TRUE` means replay-safe, not
+auto-healable; caveat documented at db/005's `heal_safe` definition, surfaced in the PR #274 review).
+#266's reclassify-then-reproject path **consumes** this mechanism through the `cairn_replay_eligible` seam.
 
 ## Phase 5 — Security & compliance core
 

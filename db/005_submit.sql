@@ -78,6 +78,14 @@ REVOKE INSERT, UPDATE, DELETE ON cairn_event_twin_check FROM PUBLIC;
 -- Heal-mode reproject skips heal_safe=false rows with a notice; rebuild mode
 -- (truncate-then-replay) handles them. New projections should be idempotent;
 -- heal_safe=false needs a comment justifying the shape.
+--
+-- CAVEAT (#277): heal_safe=TRUE means "replay won't corrupt", NOT "replay
+-- re-derives". An append-only fn keyed on event identity with ON CONFLICT
+-- DO NOTHING (medication_dose_*, medication_attestation) is heal_safe=TRUE
+-- because replay is idempotent — but heal leaves an already-materialised row
+-- UNTOUCHED, so a fix to how that fn EXTRACTS a value from the body is NOT
+-- healed by the loader's generation-change heal; only `reproject --rebuild`
+-- re-extracts. Weigh this when shipping such a fix (see #277 for the options).
 CREATE TABLE IF NOT EXISTS cairn_projection_apply (
     event_type        TEXT    NOT NULL,
     apply_fn          TEXT    NOT NULL,
