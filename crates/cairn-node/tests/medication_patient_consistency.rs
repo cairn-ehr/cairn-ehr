@@ -23,9 +23,9 @@
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_assert_body, build_dose_change_body, cease_medication,
-    reconcile_medications, separate_medications, AssertMedicationInput, CeaseMedicationInput,
-    ChangeDoseInput, ReconcileInput,
+    assert_medication, build_assert_body, build_dose_change_body, build_dose_correction_body,
+    cease_medication, reconcile_medications, separate_medications, AssertMedicationInput,
+    CeaseMedicationInput, ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -651,5 +651,189 @@ async fn separation_of_cross_patient_group_still_accepted() {
     assert_eq!(
         n, 0,
         "after separation the cross-patient flag view is clear"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #273 — the dose-CORRECTION verb must carry the same #192 guard as the other
+// verbs. db/035's redefinition of medication_dose_correction_apply (file replay
+// order) shadowed the guard call #192 added to db/032's body, so a wrong-chart
+// correction was admitted silently — on the one verb whose corrected value
+// drives current-dose winner selection (ADR-0050).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn local_dose_correction_under_different_patient_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // A correction targeting SOME dose event of A's thread, but stamped with B's
+    // chart (the classic wrong-chart-open slip). The target may be any UUID —
+    // corrections are offline-first (the target need not exist locally), so the
+    // guard must bind on the THREAD's standing patient, not on target existence.
+    let input = CorrectDoseInput {
+        dose_amount: Some("60"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: Some("mis-keyed"),
+        info_source: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body = build_dose_correction_body(
+        Uuid::now_v7(),
+        med,
+        patient_b,
+        Uuid::now_v7(),
+        &input,
+        &kid,
+        hlc,
+    );
+    let r = seal_and_submit(&c, &sk, body).await;
+    let err = match r {
+        Err(e) => e,
+        Ok(_) => panic!(
+            "a dose correction naming another patient for the thread must be refused locally (#273)"
+        ),
+    };
+    // The refusal must be the #192 contract, not an incidental failure.
+    let msg = db_msg(&err);
+    assert!(
+        msg.contains("patient cannot change"),
+        "unexpected refusal: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn remote_dose_correction_converges_and_flags() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // The same wrong-chart correction arriving over sync: the apply door stays
+    // lenient (set-union — peers already hold the signed event), so it must be
+    // ADMITTED, and the contradiction must land on the advisory worklist.
+    let input = CorrectDoseInput {
+        dose_amount: Some("60"),
+        dose_unit: Some("mg"),
+        effective: None,
+        effective_precision: None,
+        reason: None,
+        strike: &[],
+        note: Some("mis-keyed"),
+        info_source: None,
+    };
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body = build_dose_correction_body(
+        Uuid::now_v7(),
+        med,
+        patient_b,
+        Uuid::now_v7(),
+        &input,
+        &kid,
+        hlc,
+    );
+    let signed = sign(&body, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the apply door must admit the replicated correction (converge, never fork)");
+
+    // Lossless convergence: the correction row still lands...
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_dose_correction WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 1, "the correction must still converge");
+
+    // ...and the cross-patient contradiction is flagged, never silent.
+    let flags: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_patient_conflict_flag WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 1,
+        "the cross-patient correction must be flagged, never silent (#273)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #273 inventory pin — because the correction body now writes
+// medication_patient_conflict_flag via the shared #192 guard (on remote-apply),
+// that table MUST appear in the fn's cairn_projection_apply row. The rebuild
+// truncate-scope and its shared-table refusal guard (db/039) reason from this
+// inventory, and there is no other CI net for its completeness — an omission is
+// exactly how the guard shadowing (#273) stayed silent. This pins the "two places
+// agree" discipline the twin registry already enforces via its SQL mirror.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn dose_correction_registration_lists_the_conflict_flag_table() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let tables: Vec<String> = c
+        .query_one(
+            "SELECT projection_tables FROM cairn_projection_apply \
+             WHERE apply_fn = 'medication_dose_correction_apply'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        tables
+            .iter()
+            .any(|t| t == "medication_patient_conflict_flag"),
+        "the correction fn writes medication_patient_conflict_flag via the #192 guard, \
+         so its rebuild inventory must list it — got {tables:?} (#273)"
     );
 }

@@ -165,6 +165,13 @@ DECLARE
     v_reason_struck boolean := COALESCE(p -> 'strike' ? 'reason', FALSE);
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
+    -- #192 thread patient-consistency (shared guard, db/031) — same contract as the
+    -- assert/cessation/dose-change verbs: fail loud locally, converge-and-flag on
+    -- sync. Restored by #273: this redefinition had silently shadowed the guard call
+    -- #192 added to db/032's body (file replay order), leaving the one verb whose
+    -- corrected value drives current-dose winner selection (ADR-0050) unguarded.
+    PERFORM cairn_guard_medication_patient(
+        (p ->> 'medication_id')::uuid, e.patient_id, e.content_address);
     INSERT INTO medication_dose_correction
         (corrected_dose_event_id, medication_id, patient_id,
          amount, unit, effective_value, effective_precision, reason, note, info_source,
@@ -212,13 +219,14 @@ $$;
 --  cairn_projection_apply registration row; no scaffolding is needed here — the
 --  dispatcher picks up this replaced body via the same registered fn name.)
 --
--- NOTE (discrepancy observed while converting, NOT introduced by this conversion —
--- see the task report): db/032's original medication_dose_correction_apply body called
--- cairn_guard_medication_patient (the #192 thread patient-consistency guard shared with
--- the assert/cessation/dose-change triggers). This redefinition does NOT call it — the
--- guard call was already absent from this fn's body before this task touched the file.
--- Preserved verbatim (zero logic drift is this task's mandate); flagged here for a human
--- to decide whether that's an intentional ADR-0050 narrowing or a pre-existing gap.
+-- NOTE (history): this redefinition originally shipped (2026-07-15) WITHOUT the #192
+-- patient-consistency guard — #192 landed a day later and patched db/032's body, not
+-- knowing this file replaces that fn later in replay order, so the guard was silently
+-- shadowed. Discovered during the #208 zero-drift conversion audit; restored by #273
+-- (the PERFORM cairn_guard_medication_patient call in the body above). Because the live
+-- body now writes medication_patient_conflict_flag on a remote-apply conflict, that table
+-- is listed in this fn's cairn_projection_apply row (db/032) — the rebuild inventory
+-- tracks the fn's live behavior, not the file that adds the guard line.
 
 -- 5. Rework the two dose-timeline views to read corrected effective/reason via the
 --    touched-flags. SAME column sets as db/032 (no widening — replay-safe). The effective

@@ -387,11 +387,12 @@ REVOKE EXECUTE ON FUNCTION medication_dose_correction_apply(event_log) FROM PUBL
 -- (clinical.medication.asserted) — mirrors the old alphabetical trigger-name firing
 -- order (dose_seed < statement) and is hygiene, not correctness (neither fn reads the
 -- other's projection table). medication_dose_change_apply's/medication_dose_correction_apply's
--- projection_tables: dose-change ALSO lists medication_patient_conflict_flag (the shared
--- guard can write there on a remote-apply conflict — see that fn's comment above);
--- dose-correction does NOT, because its body (as it stands after db/035's redefinition,
--- which is what's actually live on a fully-migrated node) does not call the guard at all
--- — see db/035's header note. #214 + steady-state discipline: converge these rows to the
+-- projection_tables: BOTH list medication_patient_conflict_flag (the shared #192 guard can
+-- write there on a remote-apply conflict — see each fn's comment above). dose-correction's
+-- guard call physically lives in db/035's redefinition of the fn body (restored by #273
+-- after it was silently shadowed — see db/035's header note), but this inventory describes
+-- the fn's LIVE runtime behavior, not which file adds the guard line, so the table belongs
+-- here regardless. #214 + steady-state discipline: converge these rows to the
 -- migration text on every connect, but stay write-free once already converged (no dead
 -- tuples, no validate-trigger fire).
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
@@ -400,7 +401,7 @@ INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables
     ('clinical.medication-dose-change.asserted',     'medication_dose_change_apply',
      ARRAY['medication_dose_event', 'medication_patient_conflict_flag'], 10, TRUE),
     ('clinical.medication-dose-correction.asserted', 'medication_dose_correction_apply',
-     ARRAY['medication_dose_correction'], 10, TRUE)
+     ARRAY['medication_dose_correction', 'medication_patient_conflict_flag'], 10, TRUE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET
     projection_tables = EXCLUDED.projection_tables,
     run_order         = EXCLUDED.run_order,
