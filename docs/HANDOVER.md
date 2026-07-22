@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Priority-6 design queue: #205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208 ✅ → [ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md)** (generic reprojection — one registered apply fn per projection + a single dispatcher replacing the ~15 per-type triggers; `cairn_reproject` heal/rebuild run gen-gated by the loader; the every-connect `cairn_demographic_backfill` retired; measured at Bet-B volume; follow-ons [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272) Pi5 re-run + [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) a pre-existing db/035 #192-guard gap + [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277) the DO-NOTHING heal-vs-rebuild caveat; #266 consumes it). **#216/#217 remain** — or the feature work below, now unblocked.
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Priority-6 design queue: #205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208 ✅ → [ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md)** (generic reprojection — one registered apply fn per projection + a single dispatcher replacing the ~15 per-type triggers; `cairn_reproject` heal/rebuild run gen-gated by the loader; the every-connect `cairn_demographic_backfill` retired; measured at Bet-B volume; follow-ons [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272) Pi5 re-run + [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) ✅ a pre-existing db/035 #192-guard gap (fixed, PR #278) + [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277) the DO-NOTHING heal-vs-rebuild caveat; #266 consumes it). **#216/#217 remain** — or the feature work below, now unblocked.
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -144,9 +144,12 @@ low-latency SLA). The Mac numbers are cross-rig — the authoritative same-rig A
 [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272). Structural guards: a sole-dispatcher catalog
 test (the only `AFTER INSERT` trigger on `event_log` is the dispatcher) + 22/25 registry row-count pins
 mirrored in Rust **and** SQL (the #212 two-place pattern). **Follow-ons:** #272 (Pi re-run) +
-**[#273](https://github.com/cairn-ehr/cairn-ehr/issues/273)** — a pre-existing db/035 gap the conversion
-surfaced (the dose-correction apply fn's live body lost the #192 patient-consistency guard call db/032's
-original carried; house rule 5, flagged in-file) + **[#277](https://github.com/cairn-ehr/cairn-ehr/issues/277)**
+**[#273](https://github.com/cairn-ehr/cairn-ehr/issues/273)** ✅ RESOLVED (PR #278) — the pre-existing
+db/035 gap the conversion surfaced: the dose-correction apply fn's live body had lost the #192
+patient-consistency guard call db/032's original carried. Guard restored in db/035's body; and the fn's
+`medication_patient_conflict_flag` write (via that guard, on remote-apply) is now declared in its
+`cairn_projection_apply` inventory (db/032) — pinned by a registry-completeness test + two behavioral
+(local-refuse / remote-converge-and-flag) tests + **[#277](https://github.com/cairn-ehr/cairn-ehr/issues/277)**
 — the loader's gen-change heal cannot re-derive `ON CONFLICT DO NOTHING` projections (`medication_dose_*`,
 `medication_attestation`) after an extraction-logic fix (`heal_safe=TRUE` is replay-safe, not
 auto-healable; caveat now documented at db/005's `heal_safe` definition, surfaced in this PR's review) —

@@ -223,7 +223,10 @@ $$;
 -- patient-consistency guard — #192 landed a day later and patched db/032's body, not
 -- knowing this file replaces that fn later in replay order, so the guard was silently
 -- shadowed. Discovered during the #208 zero-drift conversion audit; restored by #273
--- (the PERFORM cairn_guard_medication_patient call in the body above).
+-- (the PERFORM cairn_guard_medication_patient call in the body above). Because the live
+-- body now writes medication_patient_conflict_flag on a remote-apply conflict, that table
+-- is listed in this fn's cairn_projection_apply row (db/032) — the rebuild inventory
+-- tracks the fn's live behavior, not the file that adds the guard line.
 
 -- 5. Rework the two dose-timeline views to read corrected effective/reason via the
 --    touched-flags. SAME column sets as db/032 (no widening — replay-safe). The effective

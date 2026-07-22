@@ -802,3 +802,38 @@ async fn remote_dose_correction_converges_and_flags() {
         "the cross-patient correction must be flagged, never silent (#273)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #273 inventory pin — because the correction body now writes
+// medication_patient_conflict_flag via the shared #192 guard (on remote-apply),
+// that table MUST appear in the fn's cairn_projection_apply row. The rebuild
+// truncate-scope and its shared-table refusal guard (db/039) reason from this
+// inventory, and there is no other CI net for its completeness — an omission is
+// exactly how the guard shadowing (#273) stayed silent. This pins the "two places
+// agree" discipline the twin registry already enforces via its SQL mirror.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn dose_correction_registration_lists_the_conflict_flag_table() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let tables: Vec<String> = c
+        .query_one(
+            "SELECT projection_tables FROM cairn_projection_apply \
+             WHERE apply_fn = 'medication_dose_correction_apply'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        tables
+            .iter()
+            .any(|t| t == "medication_patient_conflict_flag"),
+        "the correction fn writes medication_patient_conflict_flag via the #192 guard, \
+         so its rebuild inventory must list it — got {tables:?} (#273)"
+    );
+}
