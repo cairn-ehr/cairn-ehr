@@ -147,8 +147,8 @@ direct-DB per Spike-0002) — it would only punish the honest dead-RTC clinician
 protection comes from the **grade**, not from blocking the write. On a genuinely-synced node the
 ceiling regains teeth *and* the records carry real timestamp weight.
 
-**(e) The clock-health honesty read.** A pure DB function beside `hlc_state` in `db/001`, `GRANT`ed
-to the read/agent role like the flag tables:
+**(e) The clock-health honesty read.** A pure DB function in `db/040` reading `hlc_state` (db/001),
+`GRANT`ed to the read/agent role like the flag tables:
 
 ```
 cairn_clock_health() →
@@ -167,24 +167,30 @@ shape as sync-freshness and backup-health (ADR-0027 §7). The CLI `status` rende
 the Tauri UI reads the row through the native API (principle 12: one fact, plural front-ends). No
 door calls it.
 
-**(f) The advisory clash-flag.** `t_effective_ceiling_flag`, append-only alarm table on the
+**(f) The advisory clash-flag — a door-side write, not a registered projection.**
+`t_effective_ceiling_flag`, append-only alarm table on the
 [`identity_projection_flag`](../../../db/018_identity_linkage.sql#L141-L188) pattern: `flag_id`
 identity PK, the classification + `hlc_wall` + `t_effective` + `clock_grade`, `flagged_at`, and a
-`content_address BYTEA` keyed by a NULLS-DISTINCT unique index for ADR-0057 replay-idempotency.
-Registered as a `cairn_projection_apply` fn (`heal_safe = true` — a pure derivation of the event) so
-reprojection converges it. `GRANT SELECT` to `cairn_agent`.
+`content_address BYTEA` keyed by a NULLS-DISTINCT unique index (`ON CONFLICT DO NOTHING`) for
+set-union re-delivery idempotency. **Both doors write it via a shared helper**
+`cairn_record_ceiling_flag(...)` on a `flag`/`reject` verdict — *not* an ADR-0057 registered
+projection, because [`cairn_projection_dispatch`](../../../db/005_submit.sql#L162-L177) keys strictly
+on `event_type` and the ceiling is **cross-type** (any event with a `t_effective`). The floor/door
+layer is where a cross-type envelope check belongs. It survives `cairn_reproject` untouched: rebuild
+replays `event_log` through the *dispatch*, never the doors, so an arrival-recorded flag is permanent
+and correct (its inputs — `hlc_wall`/`clock_grade`/`t_effective` — are immutable). No twin/registry
+row-count bump (no new event type). `GRANT SELECT` to `cairn_agent`.
 
 ## 6. Components changed
 
 | Layer | Change |
 |---|---|
 | `cairn-event` (`lib.rs`) | `ClockGrade` enum + a **mandatory** `clock_grade` field appended to `EventBody`; CBOR/additive-only (existing signed bytes never re-encoded → still verify; `#[serde(default)]` reads legacy as `unknown`); minted `self-asserted` |
-| `db/001` | `clock_grade` column on `event_log`; an ordered grade domain + `W(grade)` table (dormant for high grades); `cairn_ceiling_classify(...)`; `cairn_clock_health()` |
-| `db/005` (strict) | require + validate `clock_grade`; classify; reject only on `reject`; else flag |
-| `db/020` (lenient) | delete the ceiling `RAISE`; admit unchanged; classify; flag; never reject on the ceiling |
-| `t_effective_ceiling_flag` | new append-only alarm table + registered ADR-0057 apply fn |
+| **new `db/040_clock_confidence_grade.sql`** | the ordered `cairn_clock_grade` domain + rank; `cairn_ceiling_upper_ms`/`cairn_ceiling_classify(...)`; `cairn_record_ceiling_flag(...)`; `cairn_clock_health()`; `ALTER TABLE event_log ADD COLUMN clock_grade … DEFAULT 'unknown'`; the `t_effective_ceiling_flag` table. **Bumps `SCHEMA_GENERATION` 39→40**; **added to cairn-sync's `SCHEMA` subset** (db/020 references the helpers + flag) |
+| `db/005` (strict) | require + validate `clock_grade` from the body; classify; reject only on `reject`; else record flag; add `clock_grade` to the `event_log` INSERT |
+| `db/020` (lenient) | delete the ceiling `RAISE` ([db/020:124-129](../../../db/020_apply_remote_event.sql#L124-L129)); admit unchanged; classify; record flag; never reject on the ceiling; absent grade → `unknown`; add `clock_grade` to the INSERT |
 | emit paths (`cairn-node`/`cairn-sync`) | mint `clock_grade = self-asserted` at write (higher grades unreachable until a verified source lands) |
-| legibility twin | render the grade honestly (one line); +1 twin/registry row-count in **both** `twin_registry.rs` and `db/tests/034` |
+| legibility twin | render the grade honestly (one line in the generic twin renderer — **no** registry row-count change; not a new event type) |
 
 ## 7. Data flow
 
@@ -201,7 +207,8 @@ reprojection converges it. `GRANT SELECT` to `cairn_agent`.
   grade → strict-door refusal.
 - `cairn-event`: `clock_grade` CBOR round-trip; a legacy signed blob still verifies (additive-only);
   legacy body deserializes to `unknown`.
-- `t_effective_ceiling_flag`: replay-idempotency (content_address dedup); ADR-0057 heal converges.
+- `t_effective_ceiling_flag`: set-union re-delivery idempotency (content_address dedup, `ON CONFLICT
+  DO NOTHING`); survives a `cairn_reproject` rebuild untouched (arrival-recorded, door not re-run).
 - `cairn_clock_health()`: detects a provably-behind clock (RTC forced behind `hlc_state.wall`).
 - twin renders the grade; registry row-count pinned in both mirrors (the #212 two-place pattern).
 
@@ -215,8 +222,10 @@ reprojection converges it. `GRANT SELECT` to `cairn_agent`.
   truthful clinician. Verified higher grades arrive with the deferred anchor planes.
 - **Ordering is untouched.** ADR-0027 §1: the HLC stays the sole basis for causal *ordering*; the
   graded interval is orthogonal wall-clock *truth*. No projection `ORDER BY hlc_wall` changes.
-- **Couples to ADR-0057.** The clash-flag is a registered projection; #208's "a projection fix ships
-  with its backfill" rule governs it.
+- **New migration file.** `db/040_clock_confidence_grade.sql` bumps `SCHEMA_GENERATION` 39→40 (the
+  #188 downgrade guard) and joins cairn-sync's `SCHEMA` subset (db/020 references its helpers + flag
+  table via PL/pgSQL late-binding, so it must load in that subset). The `event_log` column is added by
+  `ALTER … ADD COLUMN IF NOT EXISTS` for existing DBs (#207 paired-ALTER discipline).
 - **Deferred (follow-on issues to file):**
   1. Anchor/notary planes — clock-setting (NTS/Roughtime/GNSS/TPM) + existence-proof
      (transparency-log/FROST) + the overlay grade-upgrade tokens (nothing *produces* a grade above
