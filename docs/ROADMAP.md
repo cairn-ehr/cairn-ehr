@@ -676,6 +676,35 @@ and [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277)
 auto-healable; caveat documented at db/005's `heal_safe` definition, surfaced in the PR #274 review).
 #266's reclassify-then-reproject path **consumes** this mechanism through the `cairn_replay_eligible` seam.
 
+**Slice 50 — the #216 grade-gated `t_effective` ceiling: ADR-0058 (2026-07-22→23; P6 queue, fifth item,
+brainstorm→spec→plan→subagent-driven-TDD Tasks 1–8; branch `design/216-grade-gated-teffective-ceiling`;
+[ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md), spec v0.60).** The bitemporal ceiling
+`t_effective ≤ t_recorded` was enforced as a **binary check against the point HLC wall** at both doors —
+two coupled defects (2026-07-15 review I3/G): (1) a **principle-4 violation** — a node whose clock reads
+behind true time (a slow RTC, a misconfigured TZ, or a **dead/absent RTC** — the freshly-booted offline
+Pi, months-to-decades off) rejected a *truthful* clinician's forward `t_effective`, manufacturing a
+falsification finding; (2) a **live sync-wedge DoS** — the remote door's hard-`RAISE` on a *verifiable*
+forward-dated event set `do_pull`'s `frozen=true` and halted the seq cursor, so one signed event (Spike-0002
+threat model) wedged all clinical replication from that peer. Fix: a **born `clock_grade`** (ADR-0027
+ladder, mandatory `EventBody` field, mint constrained to `self-asserted`) **gates the ceiling's rejecting
+power** via one pure classifier `cairn_ceiling_classify(hlc_wall, grade, t_eff) → ok|flag|reject` (db/040):
+at `unknown`/`self-asserted` (every node today) the upper bound is **open**, so a forward `t_effective` is
+**flagged, never rejected**; the **write door** (strict) rejects only on a credible-grade `reject` verdict
+(production-unreachable this slice, tested by synthesis), the **remote door** (lenient) **never rejects on
+the ceiling** — it admits unchanged and records an advisory `t_effective_ceiling_flag` row (cross-type
+door-side write, not an ADR-0057 projection), closing the DoS by mirroring the door's own HLC-drift
+clamp-and-admit rule. Corrects ADR-0027 §6 `upper=RTC`→`RTC+W(grade)`. Adds `cairn_clock_health()`
+(SECURITY DEFINER, ADR-0027 §7 honest-assembly read: RTC-vs-HLC-floor, `is_behind`, `effective_lower_bound`)
+surfaced in `status`. `SCHEMA_GENERATION` 39→40 (db/040 in both loader lists). The headline test is the
+`do_pull` wedge regression (a forward-dated event no longer freezes the pull). Mint constrained to
+self-asserted, so no config-declared grade can re-arm the reject. Deferred (filed): [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)
+anchor/notary planes + overlay grade-upgrade, [#280](https://github.com/cairn-ehr/cairn-ehr/issues/280)
+causal lower-bound tightening, [#281](https://github.com/cairn-ehr/cairn-ehr/issues/281) UI clock alert,
+[#282](https://github.com/cairn-ehr/cairn-ehr/issues/282) auto-downgrade, [#283](https://github.com/cairn-ehr/cairn-ehr/issues/283)
+twin grade-line, [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284) SCHEMA-list cross-check. **Operational
+caveat:** the mandatory born field means pre-slice dev/PoC rigs read `unknown` — **wipe rigs**; and a
+cairn_pgx built before the `clock_grade` field silently drops it (rebuild required).
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

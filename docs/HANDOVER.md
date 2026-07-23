@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 all done). Priority-6 design queue: #205 ✅ → ADR-0054; #206 ✅ → ADR-0055; #200 ✅ → ADR-0056; **#208 ✅ → [ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md)** (generic reprojection — one registered apply fn per projection + a single dispatcher replacing the ~15 per-type triggers; `cairn_reproject` heal/rebuild run gen-gated by the loader; the every-connect `cairn_demographic_backfill` retired; measured at Bet-B volume; follow-ons [#272](https://github.com/cairn-ehr/cairn-ehr/issues/272) Pi5 re-run + [#273](https://github.com/cairn-ehr/cairn-ehr/issues/273) ✅ a pre-existing db/035 #192-guard gap (fixed, PR #278) + [#277](https://github.com/cairn-ehr/cairn-ehr/issues/277) the DO-NOTHING heal-vs-rebuild caveat; #266 consumes it). **#216/#217 remain** — or the feature work below, now unblocked.
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **Only #217 remains** (paper-parity benchmark as a required slice-plan section) — or the feature work below (matcher #209/#210/#211, medication slices 6+), now unblocked.
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -66,7 +66,10 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-21, latest (the #208 generic-reprojection build → ADR-0057, spec v0.59, a
+**Session date:** 2026-07-22→23, latest (the #216 grade-gated `t_effective` ceiling build → ADR-0058,
+spec v0.60, a brainstorm→spec→plan→subagent-driven-TDD build, Tasks 1–8; born `clock_grade` wire field
++ `db/040` grade-gated classifier + both doors reworked + `cairn_clock_health` + `t_effective_ceiling_flag`;
+2026-07-21 had the #208 generic-reprojection build → ADR-0057, spec v0.59, a
 brainstorm→spec→plan→TDD subagent-driven build; 2026-07-20 had the #200 design session → ADR-0056
 admit-and-defer and, earlier, the #206 design session → ADR-0055 distribution trust root plus PR #264
 moving the `clinical_pull` listen ports below the ephemeral floor, issue #263;
@@ -74,8 +77,8 @@ moving the `clinical_pull` listen ports below the ephemeral floor, issue #263;
 #212/#213/#214/#215 closing the review course, and the P4 tech-debt slice PR #251; 2026-07-18 had
 #204 ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.59 (through
-ADR-0057) · **Phase:** architecture complete (every original §11 question closed);
+regeneration 2026-07-14) · **Spec/ADRs:** v0.60 (through
+ADR-0058) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -495,6 +498,7 @@ ADR before reopening any of these.
 | [0055](spec/decisions/0055-distribution-trust-root-governance-chained-root-document.md) | Distribution trust root: no privileged root — channels with the steward as default anchor; chained threshold-capable root document (N=1 first-class, no expiry); root/release role split; fork-freeze never-silently-pick; transparency log by ADR-0027 reuse; one root shape for §7.6/§7.9/§7.7 | §7.6/§7.9/§7.7/§6.5 (refines 0012/0024; applies 0017/0018) |
 | [0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes (carry what you cannot author); the floor gates effect not presence; refusal + durable re-offer kept as the residual contract | §6.5/§6.3/§3.13 (refines 0012/0022; extends 0054; upholds 0010/0051) |
 | [0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md) | Generic reprojection: a projection lives only in its registered apply fn; one dispatcher replaces the ~15 per-type triggers; `cairn_reproject` heal/rebuild is generic replay, run by the loader on a schema-generation change (every-connect backfill retired); `cairn_replay_eligible` is the #266 seam | §9.4/§9.1 (refines 0048/0045; upholds 0056; load-bearing for #266) |
+| [0058](spec/decisions/0058-grade-gated-teffective-ceiling.md) | Grade-gated `t_effective` ceiling: a born `clock_grade` bounds the ceiling's rejecting power — `self-asserted`/`unknown` flag-never-reject (principle-4 fix for slow/dead clocks), remote door admits-and-flags never rejects (closes a sync-wedge DoS), interval derived not stored, mint constrained to self-asserted, gate-effect-not-presence; `cairn_clock_health` honest-assembly read; corrects ADR-0027 §6 `upper=RTC`→`RTC+W` | §3.6/§3.17 (refines 0003/0027; upholds 0051/0056) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).
