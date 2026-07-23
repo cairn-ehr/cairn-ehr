@@ -96,17 +96,32 @@ $$;
 -- The honest-assembly clock-health read (ADR-0027 §7): compares the RTC to hlc_state.wall,
 -- which the HLC A3 merge keeps >= every accepted event. A live derived read — never stored,
 -- never an event, never synced. The CLI `status` renders it; any client reads the row.
+--
+-- hlc_state is deliberately door-only (db/007_node_federation.sql: "the runtime ticks via
+-- the door only — never raw DML on the table") — even cairn_node has no grant on it. So this
+-- read is itself a door: SECURITY DEFINER lets it run as its owner (who can read hlc_state)
+-- while callers need only EXECUTE (granted below to cairn_agent); we do NOT add a direct
+-- SELECT grant on hlc_state, which would be the first crack in that door-only posture.
+-- search_path is pinned for the same reason every SECURITY DEFINER function pins it (see
+-- cairn_projection_dispatch): an unpinned search_path lets a caller-controlled schema shadow
+-- an unqualified identifier and hijack the definer's elevated privilege.
+--
+-- clock_timestamp() is sampled ONCE via the `t` CTE — it is volatile and re-evaluated on
+-- every bare reference, so referencing it four times in one SELECT could report a rtc_now
+-- microseconds apart from the value actually used to derive behind_by_ms/is_behind/
+-- effective_lower_bound. Sampling once keeps all four columns mutually consistent.
 CREATE OR REPLACE FUNCTION cairn_clock_health()
 RETURNS TABLE(rtc_now timestamptz, hlc_floor timestamptz, behind_by_ms bigint,
               is_behind boolean, effective_lower_bound timestamptz, default_grade text)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    WITH t AS (SELECT clock_timestamp() AS now)
     SELECT
-        clock_timestamp(),
+        t.now,
         to_timestamp(s.hlc_wall / 1000.0),
-        GREATEST(0, s.hlc_wall - (extract(epoch FROM clock_timestamp()) * 1000)::bigint),
-        (s.hlc_wall - (extract(epoch FROM clock_timestamp()) * 1000)::bigint) > 1000,
-        GREATEST(clock_timestamp(), to_timestamp(s.hlc_wall / 1000.0)),
+        GREATEST(0, s.hlc_wall - (extract(epoch FROM t.now) * 1000)::bigint),
+        (s.hlc_wall - (extract(epoch FROM t.now) * 1000)::bigint) > 1000,
+        GREATEST(t.now, to_timestamp(s.hlc_wall / 1000.0)),
         'self-asserted'::text
-    FROM hlc_state s WHERE s.id;
+    FROM hlc_state s, t WHERE s.id;
 $$;
 GRANT EXECUTE ON FUNCTION cairn_clock_health() TO cairn_agent;
