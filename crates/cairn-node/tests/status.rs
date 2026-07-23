@@ -179,6 +179,18 @@ async fn status_flags_a_clock_behind_its_own_hlc() {
         "a clock an hour behind its own HLC must report BEHIND, got: {:?}",
         st.clock_health
     );
+
+    // Restore the baseline (PR #285 review): hlc_state survives TRUNCATEs (the db/007
+    // seed is first-load-only) and the suite shares one serialized DB, so leaving the
+    // wall an hour in the future would leak into whichever test file runs next — safe
+    // today (#187's drift bound is 24h and measures against clock_timestamp()), but a
+    // latent pollution trap. Mirror the companion test's explicit reset.
+    db.execute(
+        "UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0 WHERE id",
+        &[],
+    )
+    .await
+    .unwrap();
 }
 
 /// The companion clean case: a clock that has NOT fallen behind its own HLC must

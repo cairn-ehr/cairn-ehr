@@ -4,8 +4,12 @@
 //! standing a clock has to call a forward-dated claim impossible: at unknown/self-asserted
 //! (ranks 0-1 — the only grades any node currently mints) the ceiling is OPEN ABOVE, so a
 //! forward `t_effective` is ADMITTED + FLAGGED, never rejected (principle 4 — a slow/dead
-//! clock must not force fabrication). Only a credible high-grade clock can REJECT; no emit
-//! path mints one this slice, so that arm is exercised here by synthesis.
+//! clock must not force fabrication). Grades ABOVE self-asserted are not mintable this
+//! slice (no verified clock source exists — ADR-0058 decision 1), so the strict door
+//! refuses them outright: a self-declared high grade at the authoring door can only be a
+//! forged trust brand (PR #285 review finding 1). The ceiling classifier's dormant
+//! `reject` arm stays covered by the SQL truth table (db/tests/040) until #279 makes
+//! high grades legitimately mintable.
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide via
 //! `db::test_serial_guard` (shared-DB + TRUNCATE pattern — mirrors hlc_drift.rs). Keys are
@@ -82,9 +86,9 @@ async fn clinical_setup(c: &Client) -> (SigningKey, String) {
 }
 
 /// Build a signed `note.added` `EventBody` whose `t_effective` sits `offset_secs` away
-/// from the fixed `WALL_MS` ceiling, carrying `grade` as its born clock-confidence grade —
-/// the one axis this suite drives.
-fn forward_note(
+/// from the fixed `WALL_MS` ceiling (negative = backdate, positive = forward-date),
+/// carrying `grade` as its born clock-confidence grade — the two axes this suite drives.
+fn offset_note(
     kid: &str,
     patient: Uuid,
     event_id: Uuid,
@@ -111,13 +115,13 @@ fn forward_note(
     }
 }
 
-/// Sign + submit a `forward_note` through the real strict door (`submit_event`) and return
+/// Sign + submit an `offset_note` through the real strict door (`submit_event`) and return
 /// the row identity `(client, event_id, content_address)` on success, or the raw
 /// `tokio_postgres::Error` on refusal — the one shared implementation both
-/// `submit_forward_effective` and `try_submit_forward_effective` wrap. `base` is the
+/// `submit_with_offset` and `try_submit_with_offset` wrap. `base` is the
 /// `$CAIRN_TEST_PG` connection string; the caller holds its own `db::test_serial_guard`
 /// for the test's full duration (mirrors every other DB-gated test file in this crate).
-async fn try_submit_forward_effective(
+async fn try_submit_with_offset(
     base: &str,
     grade: ClockGrade,
     offset_secs: i64,
@@ -127,7 +131,7 @@ async fn try_submit_forward_effective(
 
     let patient = Uuid::now_v7();
     let event_id = Uuid::now_v7();
-    let body = forward_note(&kid, patient, event_id, grade, offset_secs);
+    let body = offset_note(&kid, patient, event_id, grade, offset_secs);
     let signed = sign(&body, &sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
 
@@ -138,12 +142,12 @@ async fn try_submit_forward_effective(
 
 /// Convenience wrapper for the two admit-path tests: unwraps, since a submit failure there
 /// is a test bug, not the behavior under test.
-async fn submit_forward_effective(
+async fn submit_with_offset(
     base: &str,
     grade: ClockGrade,
     offset_secs: i64,
 ) -> (Client, Uuid, Vec<u8>) {
-    try_submit_forward_effective(base, grade, offset_secs)
+    try_submit_with_offset(base, grade, offset_secs)
         .await
         .expect("submit_event must admit this event (see the test body for the flag assertion)")
 }
@@ -179,8 +183,7 @@ async fn self_asserted_forward_t_effective_is_admitted_and_flagged() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
 
-    let (client, event_id, ca) =
-        submit_forward_effective(&base, ClockGrade::SelfAsserted, 3600).await; // hlc_wall + 1h
+    let (client, event_id, ca) = submit_with_offset(&base, ClockGrade::SelfAsserted, 3600).await; // hlc_wall + 1h
     assert_event_present(&client, event_id).await;
     let flags: i64 = client
         .query_one(
@@ -206,8 +209,7 @@ async fn clean_backdate_writes_no_flag() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
 
-    let (client, _event_id, ca) =
-        submit_forward_effective(&base, ClockGrade::SelfAsserted, -3600).await; // hlc_wall - 1h
+    let (client, _event_id, ca) = submit_with_offset(&base, ClockGrade::SelfAsserted, -3600).await; // hlc_wall - 1h
     let flags: i64 = client
         .query_one(
             "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1",
@@ -219,23 +221,78 @@ async fn clean_backdate_writes_no_flag() {
     assert_eq!(flags, 0, "a clean backdate must not be flagged");
 }
 
-/// The dormant reject arm, exercised by SYNTHESIS: a hardware-sourced clock genuinely
-/// knows the time, so a t_effective far past its tight bound (W=5s) IS prima-facie
-/// forward-dating. No emit path mints hardware-sourced this slice — the door still
-/// classifies whatever grade the signed body carries.
+/// The ADR-0058 decision-1 MINT CONSTRAINT, floor-enforced (PR #285 review finding 1):
+/// no verified clock source exists this slice, so a ratified grade above `self-asserted`
+/// arriving at the LOCAL authoring door can only be a forged trust brand — a hostile
+/// enrolled writer (Spike-0002 threat model) signing e.g. `multi-anchor-corroborated`
+/// to mint a falsely *trusted* timestamp. The strict door must refuse it regardless of
+/// where `t_effective` sits; without this gate a high grade with a plausible
+/// (backdated) `t_effective` was admitted carrying the highest trust brand on the
+/// ladder. The remote door (db/020) stays verbatim-admit — a future upgraded peer
+/// mints higher grades legitimately (#279).
 #[tokio::test]
-async fn high_grade_far_forward_is_rejected_at_the_strict_door() {
+async fn above_self_asserted_grade_is_refused_at_the_strict_door() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
 
-    let err = try_submit_forward_effective(&base, ClockGrade::HardwareSourced, 3600) // +1h >> 5s
+    // The forged-brand vector the gate exists for: a plausible BACKDATED t_effective
+    // under the highest grade — pre-gate this was admitted with the false brand.
+    let err = try_submit_with_offset(&base, ClockGrade::MultiAnchorCorroborated, -3600)
         .await
-        .unwrap_err();
+        .expect_err("a non-mintable grade must be refused even with a plausible t_effective");
     let m = db_msg(&err);
-    assert!(m.contains("grade-gated"), "got: {m}");
+    assert!(m.contains("mintable"), "cites the mint constraint: {m}");
+
+    // And forward-dated under a high grade is refused by the same gate (it fires before
+    // the ceiling classify ever runs — the classifier's reject arm stays covered by the
+    // SQL truth table in db/tests/040).
+    let err = try_submit_with_offset(&base, ClockGrade::HardwareSourced, 3600)
+        .await
+        .expect_err("a non-mintable grade must be refused when forward-dated too");
+    let m = db_msg(&err);
+    assert!(m.contains("mintable"), "cites the mint constraint: {m}");
+}
+
+/// Rust↔SQL rank agreement (PR #285 review): `ClockGrade` derives `Ord` (declaration
+/// order) and db/040 has `cairn_clock_grade_rank`; nothing else pins them together, so a
+/// reorder on either side would drift silently. Serialize each variant to its kebab-case
+/// wire string and assert the SQL ranks are strictly increasing in the Rust `Ord` order.
+#[tokio::test]
+async fn rust_ord_and_sql_rank_agree_on_the_grade_ladder() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    let ladder = [
+        ClockGrade::Unknown,
+        ClockGrade::SelfAsserted,
+        ClockGrade::NetworkSynced,
+        ClockGrade::HardwareSourced,
+        ClockGrade::ExternallyAnchored,
+        ClockGrade::MultiAnchorCorroborated,
+    ];
+    assert!(ladder.windows(2).all(|w| w[0] < w[1]), "Rust Ord order");
+    let mut prev_rank: i32 = -1;
+    for grade in ladder {
+        let wire = serde_json::to_value(grade).unwrap();
+        let wire = wire.as_str().unwrap();
+        let rank: i32 = c
+            .query_one("SELECT cairn_clock_grade_rank($1)", &[&wire])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(
+            rank > prev_rank,
+            "SQL rank for {wire:?} ({rank}) must exceed the previous Rust-Ord grade's ({prev_rank})"
+        );
+        prev_rank = rank;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,10 +308,10 @@ async fn high_grade_far_forward_is_rejected_at_the_strict_door() {
 // crates/cairn-sync/tests/clinical_pull.rs::forward_dated_event_does_not_wedge_the_pull).
 // ---------------------------------------------------------------------------
 
-/// Sign + apply a `forward_note` through the REMOTE door (`apply_remote_event`) instead
+/// Sign + apply an `offset_note` through the REMOTE door (`apply_remote_event`) instead
 /// of the local authoring door — the sync-plane entry point this task fixes. Mirrors
-/// `try_submit_forward_effective` exactly except for which door is called.
-async fn try_apply_forward_effective(
+/// `try_submit_with_offset` exactly except for which door is called.
+async fn try_apply_with_offset(
     base: &str,
     grade: ClockGrade,
     offset_secs: i64,
@@ -264,7 +321,7 @@ async fn try_apply_forward_effective(
 
     let patient = Uuid::now_v7();
     let event_id = Uuid::now_v7();
-    let body = forward_note(&kid, patient, event_id, grade, offset_secs);
+    let body = offset_note(&kid, patient, event_id, grade, offset_secs);
     let signed = sign(&body, &sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
 
@@ -284,7 +341,7 @@ async fn remote_forward_t_effective_is_admitted_and_flagged_never_rejected() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
 
-    let (client, event_id, ca) = try_apply_forward_effective(&base, ClockGrade::Unknown, 3600) // hlc_wall + 1h
+    let (client, event_id, ca) = try_apply_with_offset(&base, ClockGrade::Unknown, 3600) // hlc_wall + 1h
         .await
         .expect("apply_remote_event must admit a forward-dated event, never RAISE (ADR-0058)");
     assert_event_present(&client, event_id).await;

@@ -4,10 +4,12 @@
 -- file MUST be in cairn-sync's SCHEMA list. Additive-only; adding this file bumps
 -- SCHEMA_GENERATION to 40 (the #188 downgrade guard).
 
--- The ratified grade vocabulary (STRICT-door gate). The COLUMN is plain text, never a
--- closed CHECK domain: a FUTURE grade value from an upgraded peer must be ADMITTED
--- verbatim at the lenient door (additive-only, principle 11), while a node may not AUTHOR
--- one it does not know (strict-submit / lenient-apply, ADR-0051).
+-- The ratified grade vocabulary — a tooling/UI helper (and the #279 seam), consumed by
+-- NO door: the strict door's mint gate (db/005 step 1b') is RANK-based (refuses ratified
+-- grades above self-asserted, ADR-0058 decision 1), and an UNRECOGNIZED value is admitted
+-- reading as rank 0 (gate effect, not presence — ADR-0058 decision 5). The COLUMN is
+-- plain text, never a closed CHECK domain: a FUTURE grade value from an upgraded peer
+-- must be ADMITTED verbatim at the lenient door (additive-only, principle 11).
 CREATE OR REPLACE FUNCTION cairn_clock_grade_is_ratified(g text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
     SELECT g IN ('unknown','self-asserted','network-synced',
@@ -110,10 +112,14 @@ $$;
 -- every bare reference, so referencing it four times in one SELECT could report a rtc_now
 -- microseconds apart from the value actually used to derive behind_by_ms/is_behind/
 -- effective_lower_bound. Sampling once keeps all four columns mutually consistent.
+--
+-- VOLATILE, honestly (PR #285 review): the function wraps clock_timestamp(), so two calls
+-- in one statement legitimately differ — STABLE would overpromise for zero gain on a
+-- probe called once per status read.
 CREATE OR REPLACE FUNCTION cairn_clock_health()
 RETURNS TABLE(rtc_now timestamptz, hlc_floor timestamptz, behind_by_ms bigint,
               is_behind boolean, effective_lower_bound timestamptz, default_grade text)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public AS $$
     WITH t AS (SELECT clock_timestamp() AS now)
     SELECT
         t.now,

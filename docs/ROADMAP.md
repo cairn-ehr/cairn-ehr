@@ -689,15 +689,20 @@ threat model) wedged all clinical replication from that peer. Fix: a **born `clo
 ladder, mandatory `EventBody` field, mint constrained to `self-asserted`) **gates the ceiling's rejecting
 power** via one pure classifier `cairn_ceiling_classify(hlc_wall, grade, t_eff) → ok|flag|reject` (db/040):
 at `unknown`/`self-asserted` (every node today) the upper bound is **open**, so a forward `t_effective` is
-**flagged, never rejected**; the **write door** (strict) rejects only on a credible-grade `reject` verdict
-(production-unreachable this slice, tested by synthesis), the **remote door** (lenient) **never rejects on
+**flagged, never rejected**; the **write door** (strict) additionally **floor-enforces the mint
+constraint** (PR #285 review finding 1: any ratified grade above `self-asserted` is refused outright —
+a self-declared high grade at the authoring door can only be a forged trust brand; the classifier's
+dormant `reject` arm stays covered by the SQL truth table until #279 makes high grades mintable), the
+**remote door** (lenient) **never rejects on
 the ceiling** — it admits unchanged and records an advisory `t_effective_ceiling_flag` row (cross-type
 door-side write, not an ADR-0057 projection), closing the DoS by mirroring the door's own HLC-drift
-clamp-and-admit rule. Corrects ADR-0027 §6 `upper=RTC`→`RTC+W(grade)`. Adds `cairn_clock_health()`
+clamp-and-admit rule; `emit_event`'s direct author-side INSERT runs the same classify+flag (PR #285
+finding 2), so the author's flag ledger matches its peers'. Corrects ADR-0027 §6 `upper=RTC`→`RTC+W(grade)`. Adds `cairn_clock_health()`
 (SECURITY DEFINER, ADR-0027 §7 honest-assembly read: RTC-vs-HLC-floor, `is_behind`, `effective_lower_bound`)
 surfaced in `status`. `SCHEMA_GENERATION` 39→40 (db/040 in both loader lists). The headline test is the
 `do_pull` wedge regression (a forward-dated event no longer freezes the pull). Mint constrained to
-self-asserted, so no config-declared grade can re-arm the reject. Deferred (filed): [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)
+self-asserted — floor-enforced at the strict door, so no config-declared or hostile-signed grade can
+either re-arm the reject or mint a falsely trusted timestamp. Deferred (filed): [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)
 anchor/notary planes + overlay grade-upgrade, [#280](https://github.com/cairn-ehr/cairn-ehr/issues/280)
 causal lower-bound tightening, [#281](https://github.com/cairn-ehr/cairn-ehr/issues/281) UI clock alert,
 [#282](https://github.com/cairn-ehr/cairn-ehr/issues/282) auto-downgrade, [#283](https://github.com/cairn-ehr/cairn-ehr/issues/283)

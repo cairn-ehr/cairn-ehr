@@ -657,11 +657,30 @@ BEGIN
     --      (a mandatory EventBody field — compile-time guaranteed for conforming clients; an absent
     --      or unrecognized value reads as the safe 'unknown', rank 0) gates the ceiling's rejecting
     --      power: at unknown/self-asserted the upper bound is OPEN, so a forward t_effective is
-    --      FLAGGED, never rejected (principle 4 — a slow/dead clock must not force fabrication). The
-    --      'reject' arm fires only for a credible high grade — production-unreachable this slice (no
-    --      node mints above self-asserted; exercised by synthesis in the tests). The door gates
-    --      EFFECT not PRESENCE (ADR-0056): a missing grade is admitted as 'unknown', never refused.
+    --      FLAGGED, never rejected (principle 4 — a slow/dead clock must not force fabrication).
+    --      The door gates EFFECT not PRESENCE (ADR-0056 / ADR-0058 decision 5): a missing or
+    --      unrecognized grade is admitted as/like 'unknown', never refused.
     v_grade := COALESCE(b ->> 'clock_grade', 'unknown');
+
+    --      Mint constraint (ADR-0058 decision 1, floor-enforced — PR #285 review finding 1):
+    --      self-asserted is the SOLE grade any node may AUTHOR this slice — no verified clock
+    --      source exists yet, so a RATIFIED grade above rank 1 arriving at the LOCAL authoring
+    --      door can only be a forged trust brand: a hostile enrolled writer (Spike-0002 threat
+    --      model) claiming e.g. 'multi-anchor-corroborated' would mint a falsely TRUSTED
+    --      timestamp — the exact fraud the grade exists to brand away ("you cannot forge a
+    --      trusted timestamp on an untrusted clock" holds only if this gate does). Strict-submit /
+    --      lenient-apply (ADR-0051): the REMOTE door (db/020) admits any grade verbatim, since a
+    --      future upgraded peer mints higher grades legitimately. An unrecognized value ranks 0
+    --      and passes this gate (decision 5, above). When #279's verified producers land, this
+    --      refusal is replaced by anchor-token verification of the claimed grade.
+    IF cairn_clock_grade_rank(v_grade) > 1 THEN
+        RAISE EXCEPTION 'submit_event: clock_grade "%" is not mintable — no verified clock source exists this slice; only unknown/self-asserted may be authored (ADR-0058 mint constraint, #279)',
+            v_grade;
+    END IF;
+
+    --      The classifier's 'reject' arm is now unreachable at THIS door (the mint gate above
+    --      refuses every grade that could produce it); it is kept live for when #279 makes high
+    --      grades mintable, and stays covered by the SQL truth table (db/tests/040).
     v_verdict := cairn_ceiling_classify((b -> 'hlc' ->> 'wall')::bigint, v_grade, v_t_eff);
     IF v_verdict = 'reject' THEN
         RAISE EXCEPTION 'submit_event: t_effective (%) exceeds the ceiling for a "%" clock (ADR-0058 grade-gated)',

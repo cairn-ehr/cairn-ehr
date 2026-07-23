@@ -888,6 +888,26 @@ fn emit_event(
             &grade,
         ],
     )?;
+
+    // PR #285 review finding 2: this direct INSERT bypasses both doors, so the
+    // grade-gated ceiling classify (db/005 step 1b' / db/020 step 1b') never runs for
+    // locally-authored events — without this, a forward-dated `t_effective` authored
+    // here would carry NO advisory `t_effective_ceiling_flag` row on the author's own
+    // node while every peer that pulls the same signed event through db/020 records
+    // one (the same cross-node inconsistency the explicit `clock_grade` column above
+    // exists to prevent). Run the SAME in-DB classifier + t_effective parser + recorder
+    // the doors use (one implementation, one dedup rule), in the same transaction.
+    tx.execute(
+        "SELECT cairn_record_ceiling_flag($1, $2::bigint, cairn_t_effective($3::text), $4::text, v.verdict) \
+           FROM (SELECT cairn_ceiling_classify($2::bigint, $4::text, cairn_t_effective($3::text)) AS verdict) v \
+          WHERE v.verdict IN ('flag', 'reject')",
+        &[
+            &signed.content_address,
+            &body.hlc.wall,
+            &body.t_effective,
+            &grade,
+        ],
+    )?;
     tx.commit()?;
     Ok(body)
 }
@@ -4419,6 +4439,76 @@ mod quarantine_tests {
             grade, "self-asserted",
             "the author's own row must store the minted grade, not the 'unknown' default"
         );
+    }
+
+    /// PR #285 review finding 2: `emit_event`'s direct INSERT bypasses both doors, so
+    /// the grade-gated ceiling classify (db/005 step 1b' / db/020) never ran for
+    /// locally-authored events — a forward-dated `t_effective` authored here got NO
+    /// advisory `t_effective_ceiling_flag` row on the author's own node, while every
+    /// peer that pulls the same signed event through db/020 records one. That is the
+    /// same class of cross-node metadata inconsistency Task 6 fixed for the
+    /// `clock_grade` column, reproduced for the flag ledger. `emit_event` must classify
+    /// and flag exactly as the doors do.
+    #[test]
+    fn emit_event_flags_its_own_forward_dated_t_effective() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        let patient_id = uuid::Uuid::now_v7().to_string();
+
+        // Forward-dated: far after the HLC wall emit_event mints (~now) → one flag row.
+        let forward = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "forward flag check"}),
+            Some("2099-01-01T00:00:00Z".to_string()),
+        )
+        .expect("emit_event authors and stores the forward-dated event");
+        let flags: i64 = c
+            .query_one(
+                "SELECT count(*) FROM t_effective_ceiling_flag f \
+                   JOIN event_log e USING (content_address) \
+                  WHERE e.event_id = $1::text::uuid",
+                &[&forward.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            flags, 1,
+            "the author's own node must record the advisory ceiling flag its peers will"
+        );
+
+        // Backdated: the everyday legitimate case → clean, no flag.
+        let past = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "backdate no-flag check"}),
+            Some("2001-01-01T00:00:00Z".to_string()),
+        )
+        .expect("emit_event authors and stores the backdated event");
+        let flags: i64 = c
+            .query_one(
+                "SELECT count(*) FROM t_effective_ceiling_flag f \
+                   JOIN event_log e USING (content_address) \
+                  WHERE e.event_id = $1::text::uuid",
+                &[&past.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(flags, 0, "a backdated t_effective must not be flagged");
     }
 }
 
