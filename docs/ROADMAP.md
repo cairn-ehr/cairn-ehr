@@ -710,6 +710,38 @@ twin grade-line, [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284) SCHEM
 caveat:** the mandatory born field means pre-slice dev/PoC rigs read `unknown` — **wipe rigs**; and a
 cairn_pgx built before the `clock_grade` field silently drops it (rebuild required).
 
+**Slice 51 — matcher review-follow-ons #209 + #210 (2026-07-23; advisory Python tier; branch
+`fix/matcher-threshold-anchor-209-stale-proposal-210`; no ADR/spec/SCHEMA/event-type change — a TDD
+bugfix wholly inside `matcher/`).** **#209 (learner safety anchor):**
+`eval/learner.derive_thresholds` fell back to `review = min(match)` when the labelled scores contained
+no non-match pair — anchoring `auto` to the WEAKEST true match, so ordinary shared-name-token
+non-matches band AUTO_CANDIDATE on held-out data (a false auto-link) while `collided` stayed trivially
+False, vacating the documented "auto = max(non-match)+margin ⇒ zero false auto-links" invariant with no
+warning. Now **fails closed** (raises: with zero impostors the anchor-to-the-strongest-impostor
+contract is unsatisfiable), and `eval/crossval.kfold_lift` gains a `_has_nonmatch_pairs` guard that
+**skips-and-counts** a fold whose training partition has no non-match pairs (symmetric with the existing
+no-match-pairs skip), so a single degenerate fold never aborts a run; the `learn.py` CLI already wraps
+the raise into a clean exit 2. **#210 (stale-proposal leak, the #135 hazard one layer deeper):** a
+PENDING proposal whose pair dropped OUT of the blocking universe (a John Doe forced to REVIEW while
+unconfirmed, then fully identified — its year-range DOB replaced by a point date, so no pass regenerates
+the pair) was never re-scored, so `retract_pending_proposal` (only called inside `propose()` for
+currently-generated pairs) never fired: a stale REVIEW row grouped a resolved chart under a nonexistent
+Doe indefinitely. `pipeline/sweep.sweep` now runs a **reconciliation pass** — re-`propose()`s every
+currently-PENDING pair the sweep did NOT regenerate (new `db.pending_proposal_pairs` reader, read in the
+same closed-before-write snapshot; new `SweepResult.reconciled` + `reconciled_retracted` counters — the
+re-scored total vs. the withdrawn subset, the pass's health signal), reusing propose()'s existing
+band-None retract path. Re-scoring rather than blindly deleting is deliberate: a pair withheld only by a
+block-size cap re-bands and is re-persisted, never wrongly withdrawn; a human/auto disposition is doubly
+protected (`retract_pending_proposal`'s `WHERE status='pending'` + `upsert_proposal`'s
+retracted→pending arm). TDD RED-first for both fixes; the #210 test guards that the pair genuinely left
+the blocking universe (the INVERSE of the #135 end-to-end test's still-blocks guard) so only the new
+pass can retract it. Full matcher suite **386/0** + ruff clean + independent code-review passes; the
+self-review lodged the `reconciled_retracted` counter split and follow-on
+[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287) (a hub-scale reconciliation re-scoring-cost
+note — correct behavior, a future optimization, not a defect). Open follow-ons:
+**[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (four minor matcher logic gaps — the E3
+batch) and **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** remain.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

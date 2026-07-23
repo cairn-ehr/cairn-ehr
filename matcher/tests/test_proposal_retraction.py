@@ -14,6 +14,7 @@ Gated on CAIRN_TEST_PG via pg_conn's internal skip; psycopg-touching imports sta
 the test functions so the pure `uv run pytest` run still collects this module cleanly.
 """
 
+import json
 import uuid
 
 from tests.conftest import seed_identity_pending, seed_patient
@@ -50,6 +51,39 @@ def _identify(conn, subject) -> None:
     resolved trust state, the same rationale as conftest.seed_identity_pending."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM chart_identity_state WHERE subject=%s", (subject,))
+    conn.commit()
+
+
+def _fully_identify(conn, subject, *, point_dob="2001-06-15", legal_name="Jane Smith") -> None:
+    """Simulate FULL identification: clear the unconfirmed flag AND replace the estimated
+    year-range DOB with a real point date and add a real legal name — so the chart shares no
+    blocking key with its former range-overlap candidates and the pair LEAVES the blocking
+    universe. This is the sharper #210 case: _identify (above) leaves the range DOB in place,
+    so the pair keeps blocking and the main sweep loop revisits it; here nothing regenerates
+    the pair, so only sweep()'s reconciliation pass can retract the orphan. Bypasses the
+    identity floor on purpose — same rationale as _identify / conftest.seed_identity_pending."""
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM chart_identity_state WHERE subject=%s", (subject,))
+        # Range DOB -> real point date. A non-year-range precision means the anchored
+        # dob-range pass no longer anchors on this chart, and a year far from any candidate's
+        # means the point passes (exact-DOB, dob+first-initial) never re-key the pair either.
+        cur.execute(
+            "DELETE FROM patient_demographic WHERE patient_id=%s AND field='dob'", (subject,)
+        )
+        cur.execute(
+            "INSERT INTO patient_demographic (patient_id, field, value, facets, provenance, "
+            "provenance_rank, asserted_hlc_wall, asserted_hlc_count, asserted_origin) "
+            "VALUES (%s,'dob',%s,%s,'seed',80,1,0,'seed')",
+            (subject, point_dob, json.dumps({"precision": "day"})),
+        )
+        # A real legal name whose tokens are disjoint from the candidate's, so the name and
+        # name+sex passes never re-key the pair through the new name either.
+        cur.execute(
+            "INSERT INTO patient_name (patient_id, use_key, value, use_raw, provenance, "
+            "provenance_rank, last_hlc_wall, last_hlc_count, asserted_origin) "
+            "VALUES (%s,'legal',%s,'legal','seed',80,1,0,'seed') ON CONFLICT DO NOTHING",
+            (subject, legal_name),
+        )
     conn.commit()
 
 
@@ -159,3 +193,48 @@ def test_sweep_retracts_forced_review_after_identification_end_to_end(pg_conn):
     # pass for the wrong reason.
     assert result.generated >= 1
     assert _proposal_status(pg_conn, low, high) == "retracted"
+
+
+def test_sweep_reconciles_a_pending_pair_that_left_the_blocking_universe(pg_conn):
+    """Issue #210: a pending forced-REVIEW row must be reconciled even when full
+    identification drops the pair OUT of the blocking universe, so the main sweep loop never
+    revisits it (the #135 test above keeps the pair blocking; this one does not). Here the Doe
+    is FULLY identified — range DOB -> point date, real name added — so no blocking pass
+    regenerates the pair, and only sweep()'s reconciliation pass can retract the orphan that
+    would otherwise group a resolved chart under a nonexistent Doe forever."""
+    from cairn_matcher.pipeline import db
+    from cairn_matcher.pipeline.runner import canonical_pair
+    from cairn_matcher.pipeline.sweep import sweep
+
+    doe, prior = _seed_forced_review_pair(pg_conn)
+    seed_identity_pending(pg_conn, doe)
+
+    # Sweep 1: the §5.4 forcing surfaces the sub-threshold pair as a pending REVIEW row.
+    assert sweep(pg_conn).errors == []
+    low, high = canonical_pair(doe, prior)
+    assert _proposal_status(pg_conn, low, high) == "pending"
+
+    _fully_identify(pg_conn, doe)
+
+    # Guard (the INVERSE of the #135 test's guard): prove the pair has genuinely LEFT the
+    # blocking universe, so the main loop cannot be what retracts it — the fix is exercised
+    # only if this holds.
+    generated, _ = db.generate_candidate_pairs(pg_conn)
+    pg_conn.rollback()
+    assert (low, high) not in set(generated), (
+        "test setup is wrong: the pair still blocks, so a pass would go through the main loop"
+    )
+
+    # Sweep 2: only the reconciliation pass revisits the orphaned pending row -> retracted.
+    result = sweep(pg_conn)
+    assert result.errors == []
+    # The observability counters must reflect the one orphan re-scored (nothing else pends) and,
+    # since it left the blocking universe as a genuine non-match, that it was WITHDRAWN — the
+    # pass's headline health signal (how many stale rows this sweep actually retracted, as
+    # opposed to re-affirmed) must be legible on its own, not buried in the re-scored total.
+    assert result.reconciled == 1
+    assert result.reconciled_retracted == 1
+    assert _proposal_status(pg_conn, low, high) == "retracted", (
+        "a pending row whose pair left the blocking universe must be reconciled, not left "
+        "grouping a resolved chart under a nonexistent Doe"
+    )

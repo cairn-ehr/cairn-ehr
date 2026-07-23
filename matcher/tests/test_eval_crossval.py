@@ -65,6 +65,18 @@ def test_kfold_lift_skips_a_fold_whose_training_has_no_match_pairs():
     assert report.before.pair_count == report.after.pair_count
 
 
+def test_kfold_lift_skips_a_fold_whose_training_has_no_nonmatch_pairs():
+    # 2-fold on a 2-cluster dataset gives each fold a SINGLE-cluster training partition: match
+    # pairs exist (that one cluster's within-cluster pair) but ZERO non-match pairs, so
+    # derive_thresholds has no impostor to anchor to (issue #209). The fold must be skipped —
+    # honest, not a silently mis-calibrated model, and not a crash from derive_thresholds now
+    # raising on the empty non-match set. Symmetric with the no-match-pairs skip above.
+    report = kfold_lift(_synthetic(2), folds=2)
+    assert report.skipped_folds == 2
+    # both folds skipped -> nothing learned or measured; before/after pool over zero pairs.
+    assert report.before.pair_count == report.after.pair_count
+
+
 def test_format_lift_shows_both_blocks():
     text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
     assert "BEFORE" in text and "AFTER" in text
