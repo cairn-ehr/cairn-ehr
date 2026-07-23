@@ -58,3 +58,55 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
         ELSE 'reject'
     END;
 $$;
+
+-- The born grade column on the append-only log. Plain text (admits future grades), NOT
+-- NULL DEFAULT 'unknown' so existing rows + any omitting writer read honestly as unknown.
+-- Added by ALTER for existing DBs (#207 paired-ALTER discipline); event_log's canonical
+-- CREATE lives in db/001.
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS clock_grade text NOT NULL DEFAULT 'unknown';
+
+-- The advisory clash record — a cross-type DOOR-side write, NOT an ADR-0057 projection
+-- (cairn_projection_dispatch keys on event_type; the ceiling is type-independent). Both
+-- doors call cairn_record_ceiling_flag on a flag/reject verdict. Append-only; keyed by the
+-- flagged event's content_address so set-union re-delivery is idempotent. Survives a
+-- cairn_reproject rebuild untouched (rebuild replays through the dispatch, never the doors,
+-- and the inputs are immutable). A future grade we do not recognize is still recorded.
+CREATE TABLE IF NOT EXISTS t_effective_ceiling_flag (
+    flag_id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    content_address BYTEA,                          -- flagged event identity (dedup key)
+    hlc_wall        BIGINT      NOT NULL,
+    t_effective     TIMESTAMPTZ NOT NULL,
+    clock_grade     TEXT        NOT NULL,
+    verdict         TEXT        NOT NULL,           -- 'flag' | 'reject'
+    flagged_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+-- NULLS DISTINCT (default): a pre-column NULL never collides; a real address is unique.
+CREATE UNIQUE INDEX IF NOT EXISTS t_effective_ceiling_flag_ca_idx
+    ON t_effective_ceiling_flag (content_address);
+GRANT SELECT ON t_effective_ceiling_flag TO cairn_agent;
+
+CREATE OR REPLACE FUNCTION cairn_record_ceiling_flag(
+    p_ca bytea, p_hlc_wall bigint, p_t_eff timestamptz, p_grade text, p_verdict text)
+RETURNS void LANGUAGE sql AS $$
+    INSERT INTO t_effective_ceiling_flag (content_address, hlc_wall, t_effective, clock_grade, verdict)
+    VALUES (p_ca, p_hlc_wall, p_t_eff, p_grade, p_verdict)
+    ON CONFLICT (content_address) DO NOTHING;
+$$;
+
+-- The honest-assembly clock-health read (ADR-0027 §7): compares the RTC to hlc_state.wall,
+-- which the HLC A3 merge keeps >= every accepted event. A live derived read — never stored,
+-- never an event, never synced. The CLI `status` renders it; any client reads the row.
+CREATE OR REPLACE FUNCTION cairn_clock_health()
+RETURNS TABLE(rtc_now timestamptz, hlc_floor timestamptz, behind_by_ms bigint,
+              is_behind boolean, effective_lower_bound timestamptz, default_grade text)
+LANGUAGE sql STABLE AS $$
+    SELECT
+        clock_timestamp(),
+        to_timestamp(s.hlc_wall / 1000.0),
+        GREATEST(0, s.hlc_wall - (extract(epoch FROM clock_timestamp()) * 1000)::bigint),
+        (s.hlc_wall - (extract(epoch FROM clock_timestamp()) * 1000)::bigint) > 1000,
+        GREATEST(clock_timestamp(), to_timestamp(s.hlc_wall / 1000.0)),
+        'self-asserted'::text
+    FROM hlc_state s WHERE s.id;
+$$;
+GRANT EXECUTE ON FUNCTION cairn_clock_health() TO cairn_agent;

@@ -26,3 +26,29 @@ BEGIN
         THEN RAISE EXCEPTION 'FAIL: hardware far past W must reject'; END IF;
     RAISE NOTICE 'PASS: cairn_ceiling_classify truth table';
 END $$;
+
+DO $$
+DECLARE ca bytea := '\x1220'::bytea || digest('ceiling-flag-test', 'sha256'); n int;
+BEGIN
+    PERFORM cairn_record_ceiling_flag(ca, 1_700_000_000_000, to_timestamp(1_700_000_060.0), 'self-asserted', 'flag');
+    PERFORM cairn_record_ceiling_flag(ca, 1_700_000_000_000, to_timestamp(1_700_000_060.0), 'self-asserted', 'flag');
+    SELECT count(*) INTO n FROM t_effective_ceiling_flag WHERE content_address = ca;
+    IF n <> 1 THEN RAISE EXCEPTION 'FAIL: content_address dedup expected 1 row, got %', n; END IF;
+    -- clock_health returns exactly one row with the expected column set
+    PERFORM 1 FROM cairn_clock_health();
+    IF NOT FOUND THEN RAISE EXCEPTION 'FAIL: cairn_clock_health returned no row'; END IF;
+    RAISE NOTICE 'PASS: flag dedup + clock_health';
+END $$;
+
+-- #207 paired-ALTER discipline: event_log's canonical CREATE lives in db/001, but
+-- clock_grade is added by an ALTER here in db/040. Assert it actually landed after
+-- a full replay, so a future refactor that drops/reorders this ALTER fails loudly
+-- instead of drifting the column out of existence silently.
+DO $$
+DECLARE t text;
+BEGIN
+    SELECT data_type INTO t FROM information_schema.columns
+      WHERE table_name='event_log' AND column_name='clock_grade';
+    IF t IS NULL THEN RAISE EXCEPTION 'FAIL: event_log.clock_grade missing after replay (#207)'; END IF;
+    RAISE NOTICE 'PASS: event_log.clock_grade present';
+END $$;
