@@ -636,36 +636,43 @@ git commit -m "fix(#216): lenient door admits+flags, never rejects — closes th
 
 ---
 
-## Task 6: emit paths mint `self-asserted` + the twin renders the grade
+## Task 6: `emit_event` stores `clock_grade` on the author's own row
+
+> **Scope refinement:** Task 1 already mints `clock_grade: SelfAsserted` in every `EventBody` literal
+> (incl. `emit_event`'s body at `main.rs:843`), so the *signed body* and every submit-door path
+> (db/005, Task 4) are already correct. The one remaining gap: `emit_event` (`main.rs:794`) does a
+> **direct** `INSERT INTO event_log` (line ~855) whose column list omits `clock_grade`, so the
+> author's OWN row stores the default `'unknown'` while peers (via db/020) store the signed
+> `'self-asserted'` — a cross-node metadata inconsistency. Fix that INSERT. **The twin grade-line is
+> DEFERRED** (a follow-on issue — see the design doc §9.6): it needs the Rust `plaintext_twin` and the
+> SQL `cairn_twin_skeleton`/`cairn_event_twin` floor changed in lockstep or the demographic twin-match
+> floor refuses, for a cosmetic gain (the grade is already legible via the column + `cairn_clock_health`).
 
 **Files:**
-- Modify: `crates/cairn-sync/src/main.rs` (`emit_event` EventBody + its direct `event_log` INSERT if present)
-- Modify: `crates/cairn-event/src/lib.rs` (`materialise_generic_twin` / twin renderer — one grade line)
-- Modify: `db/005_submit.sql` twin hook if the twin is DB-rendered (verify which path renders)
-- Test: extend `crates/cairn-event/tests/clock_grade.rs`
+- Modify: `crates/cairn-sync/src/main.rs` (`emit_event`'s direct `event_log` INSERT, ~line 855)
+- Test: extend `crates/cairn-sync/tests/clinical_pull.rs` (or the nearest emit-path test) — author via `emit_event`/`write` and assert the stored `clock_grade`
 
-- [ ] **Step 1: Failing twin test** — append to `clock_grade.rs`:
+- [ ] **Step 1: Failing test.** Add a focused test that authors an event through the same path `emit_event` uses (mirror an existing `emit_event`/`cmd_write` test in the crate) and asserts the stored column:
 
 ```rust
-#[test]
-fn generic_twin_names_the_clock_grade() {
-    let b = materialise_generic_twin(body(ClockGrade::SelfAsserted));
-    let twin = b.plaintext_twin.expect("twin materialised");
-    assert!(twin.contains("self-asserted"), "twin must name the grade honestly: {twin}");
-}
+// After authoring one event via emit_event on node A:
+let grade: String = client
+    .query_one("SELECT clock_grade FROM event_log WHERE event_id = $1::text::uuid", &[&event_id])
+    .unwrap().get(0);
+assert_eq!(grade, "self-asserted", "the author's own row must store the minted grade, not the 'unknown' default");
 ```
 
-- [ ] **Step 2: Run — expect FAIL.** Run: `cargo test -p cairn-event --test clock_grade generic_twin`. Expected: FAIL (grade absent from twin).
+- [ ] **Step 2: Run — expect FAIL** (the direct INSERT omits `clock_grade`, so the column defaults to `'unknown'`).
 
-- [ ] **Step 3:** In `materialise_generic_twin` (lib.rs ~464), append the grade to the derived twin text (one honest line, e.g. ` · clock: {grade}`). Confirm all Task-1 emit sites already set `clock_grade: SelfAsserted` (they do); if `emit_event` has a direct `event_log` INSERT, add `clock_grade` to that column list with value `"self-asserted"`.
+- [ ] **Step 3:** In `emit_event`'s `INSERT INTO event_log (...)` (`main.rs:855`), add `clock_grade` to the column list (after `attachments` or anywhere — column order in an explicit-column INSERT is free) and bind a value. Since the body carries the grade, serialize it: add `clock_grade` to the columns and pass the grade string as a new bind parameter, e.g. `let grade = serde_json::to_value(&body.clock_grade)?.as_str().unwrap().to_string();` then bind `&grade` at the new `$15` (renumber the `'[]'::jsonb` attachments literal is unaffected — it's a literal, not a bind). Simplest: append `,clock_grade` to the column list and `,$15` to VALUES with `&grade` appended to the params array.
 
-- [ ] **Step 4: Run — expect PASS.** Run: `cargo test -p cairn-event --test clock_grade`. Expected: all pass.
+- [ ] **Step 4: Run — expect PASS.**
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/cairn-event/src/lib.rs crates/cairn-sync/src/main.rs db/005_submit.sql
-git commit -m "feat(#216): mint self-asserted in emit paths; twin names the grade"
+git add crates/cairn-sync/src/main.rs crates/cairn-sync/tests/clinical_pull.rs
+git commit -m "feat(#216): emit_event stores clock_grade on the author's own row"
 ```
 
 ---

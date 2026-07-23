@@ -196,8 +196,8 @@ row-count bump (no new event type). `GRANT SELECT` to `cairn_agent`.
 | **new `db/040_clock_confidence_grade.sql`** | the ordered `cairn_clock_grade` domain + rank; `cairn_ceiling_upper_ms`/`cairn_ceiling_classify(...)`; `cairn_record_ceiling_flag(...)`; `cairn_clock_health()`; `ALTER TABLE event_log ADD COLUMN clock_grade … DEFAULT 'unknown'`; the `t_effective_ceiling_flag` table. **Bumps `SCHEMA_GENERATION` 39→40**; **added to cairn-sync's `SCHEMA` subset** (db/020 references the helpers + flag) |
 | `db/005` (strict) | require + validate `clock_grade` from the body; classify; reject only on `reject`; else record flag; add `clock_grade` to the `event_log` INSERT |
 | `db/020` (lenient) | delete the ceiling `RAISE` ([db/020:124-129](../../../db/020_apply_remote_event.sql#L124-L129)); admit unchanged; classify; record flag; never reject on the ceiling; absent grade → `unknown`; add `clock_grade` to the INSERT |
-| emit paths (`cairn-node`/`cairn-sync`) | mint `clock_grade = self-asserted` at write (higher grades unreachable until a verified source lands) |
-| legibility twin | render the grade honestly (one line in the generic twin renderer — **no** registry row-count change; not a new event type) |
+| emit paths (`cairn-node`/`cairn-sync`) | mint `clock_grade = self-asserted` at write (Task 1 set it in every `EventBody`; Task 6 also adds it to `emit_event`'s direct `event_log` INSERT so the author's own row matches the signed body). Higher grades unreachable until a verified source lands |
+| ~~legibility twin~~ | **DEFERRED** to a follow-on — rendering the grade in the twin means changing the Rust `plaintext_twin` *and* the SQL `cairn_twin_skeleton`/`cairn_event_twin` floor in lockstep or the demographic twin-match floor refuses; cosmetic gain (the grade is already legible via the `clock_grade` column + `cairn_clock_health`), not worth the desync risk this slice |
 
 ## 7. Data flow
 
@@ -217,7 +217,7 @@ row-count bump (no new event type). `GRANT SELECT` to `cairn_agent`.
 - `t_effective_ceiling_flag`: set-union re-delivery idempotency (content_address dedup, `ON CONFLICT
   DO NOTHING`); survives a `cairn_reproject` rebuild untouched (arrival-recorded, door not re-run).
 - `cairn_clock_health()`: detects a provably-behind clock (RTC forced behind `hlc_state.wall`).
-- twin renders the grade; registry row-count pinned in both mirrors (the #212 two-place pattern).
+- `emit_event` stores `clock_grade` on the author's own row (matches the signed body). (Twin grade-line deferred — see §9.)
 
 ## 9. Scope boundaries
 
@@ -242,6 +242,9 @@ row-count bump (no new event type). `GRANT SELECT` to `cairn_agent`.
   3. The UI clock-sanity alert (reference-UI; reads `clock_grade` + `cairn_clock_health()` + the flag).
   4. Auto-**downgrade** the grade when a node detects its own clock failed.
   5. Exercise the numeric `W(grade)` table once real sources exist.
+  6. Render the clock grade in the legibility twin (needs the Rust `plaintext_twin` and the SQL
+     `cairn_twin_skeleton`/`cairn_event_twin` floor changed in lockstep so the demographic twin-match
+     floor still passes).
 
 ## 10. Spec homes
 
