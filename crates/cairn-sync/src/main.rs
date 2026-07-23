@@ -122,6 +122,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "039_projection_registry",
         include_str!("../../../db/039_projection_registry.sql"),
     ),
+    // db/040 (issue #216): the grade-gated ceiling helpers + t_effective_ceiling_flag +
+    // cairn_clock_health. db/020 in this subset references cairn_ceiling_classify /
+    // cairn_record_ceiling_flag via late-binding — omitting this file would fail the FIRST
+    // apply of a forward-dated event on a fresh `cairn-sync init` DB (the #198 trap).
+    (
+        "040_clock_confidence_grade",
+        include_str!("../../../db/040_clock_confidence_grade.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
