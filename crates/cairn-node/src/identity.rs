@@ -269,6 +269,15 @@ pub struct Status {
     /// backup medium. Node-local, never an event. Honest-degrades to the "no escrow"
     /// warning when absent.
     pub local_state: String,
+    /// The ADR-0027 §7 honest-assembly clock fact: a one-line rendering of
+    /// `cairn_clock_health()` (db/040), which compares this node's real-time clock
+    /// against `hlc_state.hlc_wall` (a floor the HLC merge only ever ratchets forward —
+    /// see `node_hlc_tick`/A3 merge). A node whose RTC has fallen behind its own HLC
+    /// (e.g. a dead RTC that has nonetheless synced a later event from a peer) cannot
+    /// self-correct this from inside the DB; `status` is where an operator learns to
+    /// go check the physical clock. Never an event, never signed, never replicated —
+    /// a live derived read, like `db_floor_enforced`.
+    pub clock_health: String,
 }
 
 /// Assemble the node's current status without erroring on a missing keystore.
@@ -391,6 +400,32 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
     });
     let local_state = crate::localstate::describe_local_state(lsk_present, export_present);
 
+    // ADR-0027 §7 honest-assembly clock fact (db/040): read the one-row
+    // `cairn_clock_health()` and render it as a single human line. The function is
+    // SECURITY DEFINER (hlc_state itself stays door-only, per db/007) so this SELECT
+    // works regardless of which role `status` is connected as; a permission error here
+    // would mean the GRANT EXECUTE in db/040 is missing, not that this call is wrong.
+    let clock = db
+        .query_one(
+            "SELECT behind_by_ms, is_behind, effective_lower_bound, default_grade \
+             FROM cairn_clock_health()",
+            &[],
+        )
+        .await?;
+    let is_behind: bool = clock.get("is_behind");
+    let default_grade: String = clock.get("default_grade");
+    let clock_health = if is_behind {
+        let behind_by_ms: i64 = clock.get("behind_by_ms");
+        format!("{default_grade} · BEHIND its own HLC by {behind_by_ms}ms (check the node clock)")
+    } else {
+        let effective_lower_bound: std::time::SystemTime = clock.get("effective_lower_bound");
+        let secs = effective_lower_bound
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        format!("{default_grade} · ok (effective lower bound unix {secs})")
+    };
+
     Ok(Status {
         // When un-provisioned, surface a legible sentinel rather than a blank
         // node_id, and flag `initialized=false` so callers can prompt for `init`.
@@ -410,6 +445,7 @@ pub async fn status(db: &Client, key_path: &Path) -> anyhow::Result<Status> {
         last_backup,
         supersedes,
         local_state,
+        clock_health,
     })
 }
 

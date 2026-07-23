@@ -134,6 +134,97 @@ async fn status_reports_peers_and_keystore_health() {
     let _ = sk_c;
 }
 
+/// Issue #216 / ADR-0058 — `status` surfaces `cairn_clock_health()`'s honest read of
+/// whether this node's local clock has fallen behind its own HLC (e.g. a dead RTC that
+/// has nonetheless synced a later event from a peer — HLC merge only ever ratchets
+/// `hlc_state.hlc_wall` forward, so this is the one direction the DB alone cannot
+/// self-correct). Forcing `hlc_state.hlc_wall` an hour ahead of the real clock
+/// simulates exactly that condition; `status()` must surface it in `clock_health`
+/// rather than silently treating `hlc_floor` as trustworthy (the ADR-0027 §7
+/// honest-assembly fact this task exists to surface).
+#[tokio::test]
+async fn status_flags_a_clock_behind_its_own_hlc() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let db = db::connect_and_load_schema(&base).await.unwrap();
+    db.batch_execute("TRUNCATE node_event, local_node")
+        .await
+        .ok();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let key_path = tmp.path().join("node.key");
+    let (sk, kid) = keystore::generate_plaintext(&key_path).unwrap();
+    identity::provision(&db, &sk, &kid, "A", "127.0.0.1:7910")
+        .await
+        .unwrap();
+
+    // Force hlc_state.hlc_wall an hour ahead of the real clock — hlc_state is a
+    // singleton row (db/007_node_federation.sql, `WHERE id` selects the sole TRUE row).
+    // The test connection loaded the schema (owner-level), so it can write directly
+    // here even though the runtime `cairn_node` role cannot (db/007's door-only rule).
+    db.execute(
+        "UPDATE hlc_state SET hlc_wall = (extract(epoch FROM clock_timestamp()) * 1000)::bigint + 3_600_000 WHERE id",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let st = identity::status(&db, &key_path).await.unwrap();
+    eprintln!("status (clock behind): {:?}", st);
+    assert!(
+        st.clock_health.contains("BEHIND"),
+        "a clock an hour behind its own HLC must report BEHIND, got: {:?}",
+        st.clock_health
+    );
+}
+
+/// The companion clean case: a clock that has NOT fallen behind its own HLC must
+/// report an honest "ok" reading, never the BEHIND warning — the same false-positive
+/// concern every honest-degradation field in `Status` is held to elsewhere in this file.
+#[tokio::test]
+async fn status_reports_clock_ok_when_not_behind() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let db = db::connect_and_load_schema(&base).await.unwrap();
+    db.batch_execute("TRUNCATE node_event, local_node")
+        .await
+        .ok();
+    // hlc_state resets to (TRUE, 0, 0) via db/007's ON CONFLICT DO NOTHING seed only on
+    // first load; TRUNCATE does not touch it, so explicitly reset it here for a
+    // deterministic "not behind" baseline regardless of what earlier tests left behind.
+    db.execute(
+        "UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0 WHERE id",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let key_path = tmp.path().join("node.key");
+    let (sk, kid) = keystore::generate_plaintext(&key_path).unwrap();
+    identity::provision(&db, &sk, &kid, "A", "127.0.0.1:7911")
+        .await
+        .unwrap();
+
+    let st = identity::status(&db, &key_path).await.unwrap();
+    eprintln!("status (clock ok): {:?}", st);
+    assert!(
+        !st.clock_health.contains("BEHIND"),
+        "a clock at/behind wall-clock time must not report BEHIND, got: {:?}",
+        st.clock_health
+    );
+    assert!(
+        !st.clock_health.is_empty(),
+        "clock_health must be populated"
+    );
+}
+
 /// `status` must NOT crash when run before `init` (no `local_node` row yet).
 /// An operator inspecting a freshly-created-but-unprovisioned node should get an
 /// honest "uninitialized" reading, not a `query_one` "expected one row" error —
