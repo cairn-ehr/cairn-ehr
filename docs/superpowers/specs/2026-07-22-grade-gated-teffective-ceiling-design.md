@@ -123,11 +123,18 @@ ceiling is **flag-never-reject** — no truthful clinician is blocked, whether t
 or 40 years off.
 
 **(c) The action differs by door (strict-submit / lenient-apply, ADR-0051).**
-- **Write door** (`db/005`, strict): require `clock_grade` present + a valid ladder value; classify;
-  `reject` only on a `reject` verdict (**production-unreachable this slice** — no node mints above
-  `self-asserted`, so the arm is dormant + tested by synthesis until verified sources land); else
-  write the flag. The existing malformed-`t_effective` wire-pin ([`db/001` `cairn_t_effective`](../../../db/001_envelope.sql#L158))
+- **Write door** (`db/005`, strict): read the grade (an absent or unrecognized value → `unknown`,
+  which the mandatory Rust `EventBody` field already prevents for any conforming client — the
+  born-grade invariant is enforced at **compile time**, strictly stronger than a runtime DB check, and
+  the door **gates effect, not presence**, per ADR-0056); classify; `reject` only on a `reject` verdict
+  (**production-unreachable this slice** — no node mints above `self-asserted`, so the arm is dormant +
+  tested by synthesis until verified sources land); else write the flag. The existing
+  malformed-`t_effective` wire-pin ([`db/001` `cairn_t_effective`](../../../db/001_envelope.sql#L158))
   is unchanged — that is the only "type-impossible" refusal.
+  *(Refinement found during Task-4 planning: an earlier draft had the strict door RAISE on an
+  absent/unratified grade. Dropped — a mandatory typed field cannot be omitted by a conforming client,
+  so that RAISE only ever fired for a raw/hostile submitter, whom `unknown` handles safely; keeping it
+  would have forced a raw-CBOR signing seam into the safety-critical crate for no safety gain.)*
 - **Remote door** (`db/020`, lenient): **delete the hard-`RAISE`.** Admit the event unchanged,
   classify, write a clash-flag row on `flag`/`reject`, **never reject on the ceiling** (F1/F2). Absent
   grade → `unknown`. This mirrors the drift clamp-and-admit already in the same door.
@@ -203,8 +210,8 @@ row-count bump (no new event type). `GRANT SELECT` to `cairn_agent`.
 - **Headline (the DoS fix):** `db/020` — a signed `t_effective > hlc_wall` event **applies** (no
   `RAISE`) + a flag row is written; `do_pull` does **not** freeze the cursor (regression against F1).
 - `db/005`: self-asserted forward `t_effective` → admit + flag (**currently RED**: rejects);
-  synthesized high-grade above `W` → reject; within `W` → flag; clean backdate → no flag; missing/invalid
-  grade → strict-door refusal.
+  synthesized high-grade above `W` → reject; within `W` → flag; clean backdate → no flag. (The
+  born-grade invariant is a compile-time Rust guarantee — no strict-door presence RAISE to test.)
 - `cairn-event`: `clock_grade` CBOR round-trip; a legacy signed blob still verifies (additive-only);
   legacy body deserializes to `unknown`.
 - `t_effective_ceiling_flag`: set-union re-delivery idempotency (content_address dedup, `ON CONFLICT

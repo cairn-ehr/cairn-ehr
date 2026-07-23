@@ -440,14 +440,20 @@ git commit -m "feat(#216): event_log.clock_grade column, ceiling flag table, clo
 
 ---
 
-## Task 4: strict door (db/005) — require + validate grade, classify, reject/flag
+## Task 4: strict door (db/005) — grade-gated ceiling, classify + reject/flag
+
+> **Refinement (ratified mid-build):** the strict door does NOT RAISE on an absent/unratified
+> `clock_grade`. `clock_grade` is a mandatory Rust `EventBody` field, so a conforming client can never
+> omit it (compile-time born-grade guarantee); a raw/hostile submitter omitting it is handled safely by
+> defaulting to `unknown` (rank 0 → open-above → never rejects). The door **gates effect, not presence**
+> (ADR-0056). This also removes the need for a raw-CBOR signing seam in the safety-critical crate.
 
 **Files:**
-- Modify: `db/005_submit.sql:649-664` (the ceiling block) + the DECLARE block + the INSERT col list (`:822-830`)
+- Modify: `db/005_submit.sql` (the tier-1 ceiling block — **locate by content**: the `IF v_t_eff IS NOT NULL AND v_t_eff > to_timestamp(...hlc...wall...)` block that `RAISE`s "prima-facie forward-dating"; line numbers may have drifted) + the DECLARE block + the `INSERT INTO event_log` column list (ends `... actor_id, sealed)`)
 - Test: `crates/cairn-node/tests/teffective_ceiling.rs` (create; strict-door cases)
 
 **Interfaces:**
-- Consumes: `cairn_ceiling_classify`, `cairn_record_ceiling_flag`, `cairn_clock_grade_is_ratified` (Task 2/3).
+- Consumes: `cairn_ceiling_classify`, `cairn_record_ceiling_flag` (Task 2/3). (`cairn_clock_grade_is_ratified` is intentionally NOT consumed here — the born-grade invariant is type-enforced; the predicate stays as a public tooling helper.)
 
 - [ ] **Step 1: Write the failing Rust db-gated test** — `crates/cairn-node/tests/teffective_ceiling.rs` (strict-door half; use the crate's existing submit test helpers — mirror `crates/cairn-node/tests/hlc_drift.rs` for wiring, deriving keys at runtime per house rule 6):
 
@@ -460,8 +466,8 @@ git commit -m "feat(#216): event_log.clock_grade column, ceiling flag table, clo
 #[test]
 fn self_asserted_forward_t_effective_is_admitted_and_flagged() {
     // RED today: db/005 RAISEs on t_effective > hlc_wall. After the fix it must ADMIT and
-    // write a t_effective_ceiling_flag row (the honest slow-clock clinician).
-    let (client, event_id, ca) = submit_forward_effective(ClockGrade::SelfAsserted); // hlc_wall + 1h
+    // write a t_effective_ceiling_flag row (the honest slow-clock clinician). Principle-4.
+    let (client, event_id, ca) = submit_forward_effective(ClockGrade::SelfAsserted, 3600); // hlc_wall + 1h
     assert_event_present(&client, event_id);
     let flags: i64 = client.query_one(
         "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1", &[&ca]
@@ -470,36 +476,45 @@ fn self_asserted_forward_t_effective_is_admitted_and_flagged() {
 }
 
 #[test]
-fn missing_clock_grade_is_refused_at_the_strict_door() {
-    let err = submit_body_without_grade().unwrap_err();
-    assert!(err.to_string().contains("clock_grade is mandatory"), "got: {err}");
+fn clean_backdate_writes_no_flag() {
+    // t_effective before hlc_wall (normal backdating) → 'ok', no flag row.
+    let (client, _event_id, ca) = submit_forward_effective(ClockGrade::SelfAsserted, -3600); // hlc_wall - 1h
+    let flags: i64 = client.query_one(
+        "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1", &[&ca]
+    ).unwrap().get(0);
+    assert_eq!(flags, 0, "a clean backdate must not be flagged");
+}
+
+#[test]
+fn high_grade_far_forward_is_rejected_at_the_strict_door() {
+    // The dormant reject arm, exercised by SYNTHESIS: a hardware-sourced clock genuinely knows
+    // the time, so a t_effective far past its tight bound (W=5s) IS prima-facie forward-dating.
+    // (No emit path mints hardware-sourced this slice; the door still classifies whatever grade
+    // the signed body carries.)
+    let err = try_submit_forward_effective(ClockGrade::HardwareSourced, 3600).unwrap_err(); // +1h ≫ 5s
+    assert!(err.to_string().contains("grade-gated"), "got: {err}");
 }
 ```
+
+(Helper contract for this file: `submit_forward_effective(grade, offset_secs) -> (Client, event_id, content_address)` signs an `EventBody` whose `t_effective = hlc_wall + offset_secs` with the given `clock_grade`, submits it through `submit_event`, and returns the row identity; `try_submit_forward_effective(...)` is the same but returns the `Result` so a reject can be asserted. Build the signed body + `submit_event` call by mirroring `crates/cairn-node/tests/hlc_drift.rs` verbatim; derive keys at runtime via `generate_key()` (house rule 6); connect via `db::connect_and_load_schema(&cs)`.)
 
 - [ ] **Step 2: Run — expect FAIL** (the first test fails because db/005 currently rejects):
 
 Run: `CAIRN_TEST_PG=… cargo test -p cairn-node --test teffective_ceiling`
 Expected: FAIL — submit RAISEs "prima-facie forward-dating".
 
-- [ ] **Step 3: Edit `db/005_submit.sql`.** In the DECLARE block add `v_grade text; v_verdict text;`. Replace the ceiling block at lines 654-664 with:
+- [ ] **Step 3: Edit `db/005_submit.sql`.** In the DECLARE block add `v_grade text; v_verdict text;`. Replace the existing tier-1 ceiling block (the `IF v_t_eff IS NOT NULL AND v_t_eff > to_timestamp((b -> 'hlc' ->> 'wall')::bigint / 1000.0) THEN RAISE EXCEPTION '...prima-facie forward-dating...'` block) with:
 
 ```sql
-    -- 1b'. Born clock-confidence grade (ADR-0058, issue #216). STRICT door: the grade is
-    --      MANDATORY and must be a ratified value — a node may not AUTHOR a grade it cannot
-    --      name (strict-submit; the lenient door admits foreign/future grades).
-    IF b ->> 'clock_grade' IS NULL THEN
-        RAISE EXCEPTION 'submit_event: clock_grade is mandatory (ADR-0058 born clock-confidence grade)';
-    END IF;
-    v_grade := b ->> 'clock_grade';
-    IF NOT cairn_clock_grade_is_ratified(v_grade) THEN
-        RAISE EXCEPTION 'submit_event: clock_grade "%" is not a ratified clock-confidence grade (ADR-0058)', v_grade;
-    END IF;
-
-    -- Grade-GATED bitemporal ceiling (ADR-0058 refines ADR-0003 §3.6). The node may call a
-    -- t_effective "impossible" only to the extent it can prove it knows the time: at
-    -- self-asserted/unknown the upper bound is open, so a forward t_effective is FLAGGED,
-    -- never rejected (principle 4 — a slow/dead clock must not force fabrication). A reject
-    -- verdict is production-unreachable this slice (no node mints above self-asserted).
+    -- 1b'. Grade-gated bitemporal ceiling (ADR-0058 refines ADR-0003 §3.6). The born clock_grade
+    --      (a mandatory EventBody field — compile-time guaranteed for conforming clients; an absent
+    --      or unrecognized value reads as the safe 'unknown', rank 0) gates the ceiling's rejecting
+    --      power: at unknown/self-asserted the upper bound is OPEN, so a forward t_effective is
+    --      FLAGGED, never rejected (principle 4 — a slow/dead clock must not force fabrication). The
+    --      'reject' arm fires only for a credible high grade — production-unreachable this slice (no
+    --      node mints above self-asserted; exercised by synthesis in the tests). The door gates
+    --      EFFECT not PRESENCE (ADR-0056): a missing grade is admitted as 'unknown', never refused.
+    v_grade := COALESCE(b ->> 'clock_grade', 'unknown');
     v_verdict := cairn_ceiling_classify((b -> 'hlc' ->> 'wall')::bigint, v_grade, v_t_eff);
     IF v_verdict = 'reject' THEN
         RAISE EXCEPTION 'submit_event: t_effective (%) exceeds the ceiling for a "%" clock (ADR-0058 grade-gated)',
@@ -509,17 +524,17 @@ Expected: FAIL — submit RAISEs "prima-facie forward-dating".
     END IF;
 ```
 
-Then add `clock_grade` to the INSERT — column list (after `sealed`) and VALUES (`v_grade`):
+Then add `clock_grade` to the `INSERT INTO event_log` — append it to the column list (after `sealed`) and append `v_grade` to the matching VALUES tuple:
 
 ```sql
          signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed, clock_grade)
 ```
-…and the matching `, v_grade` in the VALUES tuple.
+…and the matching `, v_grade` in the VALUES tuple (same ordinal position).
 
 - [ ] **Step 4: Run the strict-door tests — expect PASS:**
 
 Run: `CAIRN_TEST_PG=… cargo test -p cairn-node --test teffective_ceiling`
-Expected: both strict-door tests PASS.
+Expected: all three strict-door tests PASS (forward→flag, backdate→no-flag, high-grade→reject).
 
 - [ ] **Step 5: Regression — existing submit tests still green:**
 
