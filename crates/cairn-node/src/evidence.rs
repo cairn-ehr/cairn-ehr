@@ -90,6 +90,7 @@ pub fn build_estimated_dob_event(
             YEAR_RANGE_PRECISION,
             CLINICIAN_OBSERVED_PROVENANCE,
         )),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -117,6 +118,7 @@ pub fn build_observed_sex_event(
             value,
             CLINICIAN_OBSERVED_PROVENANCE,
         )),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

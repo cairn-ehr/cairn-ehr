@@ -56,6 +56,7 @@ async fn submit_field(
         payload,
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -463,6 +464,7 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
         payload: id_body,
         attachments: vec![],
         plaintext_twin: Some("nhs-number, document-verified: 943 476 5919".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -511,6 +513,7 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
         payload: serde_json::json!({"name":"A B","dob":"1980","sex":"x"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed2 = sign(&body2, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed2.signed_bytes])

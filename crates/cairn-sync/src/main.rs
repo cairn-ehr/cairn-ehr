@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
-    verify_self_described, AttestationBody, EventBody, Hlc, SigningKey, CTX_EVENT,
+    verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
 };
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,14 @@ const SCHEMA: &[(&str, &str)] = &[
     (
         "039_projection_registry",
         include_str!("../../../db/039_projection_registry.sql"),
+    ),
+    // db/040 (issue #216): the grade-gated ceiling helpers + t_effective_ceiling_flag +
+    // cairn_clock_health. db/020 in this subset references cairn_ceiling_classify /
+    // cairn_record_ceiling_flag via late-binding — omitting this file would fail the FIRST
+    // apply of a forward-dated event on a fresh `cairn-sync init` DB (the #198 trap).
+    (
+        "040_clock_confidence_grade",
+        include_str!("../../../db/040_clock_confidence_grade.sql"),
     ),
 ];
 
@@ -832,6 +840,7 @@ fn emit_event(
         payload,
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: ClockGrade::SelfAsserted,
     };
 
     // ADR-0039: globalise the authored twin — materialise it into the body BEFORE signing, so
@@ -841,14 +850,26 @@ fn emit_event(
     let body_json = serde_json::to_string(&body.payload)?;
     let contributors_json = serde_json::to_string(&body.contributors)?;
     let twin = resolve_twin(&body);
+    // Issue #216 (ADR-0058) Task 6: this INSERT is the author's OWN write path — it
+    // never crosses the apply_remote_event door (db/020), so that door's grade-storing
+    // logic never runs for locally-authored events. Without stamping the column
+    // explicitly here, the author's own row would silently fall back to the table's
+    // 'unknown' DEFAULT even though the signed body carries the minted grade — a
+    // cross-node metadata inconsistency versus every peer that later pulls this same
+    // event through db/020. Serialize ClockGrade to its kebab-case wire string (e.g.
+    // "self-asserted") so the column matches exactly what the signed body asserts.
+    let grade = serde_json::to_value(body.clock_grade)?
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
 
     tx.execute(
         "INSERT INTO event_log
            (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
             node_origin, t_effective, signed_bytes, content_address, body, contributors,
-            signer_key_id, plaintext_twin, attachments)
+            signer_key_id, plaintext_twin, attachments, clock_grade)
          VALUES ($1::text::uuid,$2::text::uuid,$3,$4,$5,$6,$7,$8::text::timestamptz,$9,$10,
-                 $11::text::jsonb,$12::text::jsonb,$13,$14,'[]'::jsonb)",
+                 $11::text::jsonb,$12::text::jsonb,$13,$14,'[]'::jsonb,$15)",
         &[
             &body.event_id,
             &body.patient_id,
@@ -864,6 +885,27 @@ fn emit_event(
             &contributors_json,
             &body.signer_key_id,
             &twin,
+            &grade,
+        ],
+    )?;
+
+    // PR #285 review finding 2: this direct INSERT bypasses both doors, so the
+    // grade-gated ceiling classify (db/005 step 1b' / db/020 step 1b') never runs for
+    // locally-authored events — without this, a forward-dated `t_effective` authored
+    // here would carry NO advisory `t_effective_ceiling_flag` row on the author's own
+    // node while every peer that pulls the same signed event through db/020 records
+    // one (the same cross-node inconsistency the explicit `clock_grade` column above
+    // exists to prevent). Run the SAME in-DB classifier + t_effective parser + recorder
+    // the doors use (one implementation, one dedup rule), in the same transaction.
+    tx.execute(
+        "SELECT cairn_record_ceiling_flag($1, $2::bigint, cairn_t_effective($3::text), $4::text, v.verdict) \
+           FROM (SELECT cairn_ceiling_classify($2::bigint, $4::text, cairn_t_effective($3::text)) AS verdict) v \
+          WHERE v.verdict IN ('flag', 'reject')",
+        &[
+            &signed.content_address,
+            &body.hlc.wall,
+            &body.t_effective,
+            &grade,
         ],
     )?;
     tx.commit()?;
@@ -3458,6 +3500,7 @@ mod quarantine_tests {
             payload: serde_json::json!({"text": "replicated note"}),
             attachments: vec![],
             plaintext_twin: Some("Progress note: replicated note".into()),
+            clock_grade: ClockGrade::SelfAsserted,
         };
         sign(&body, sk).unwrap().signed_bytes
     }
@@ -4353,6 +4396,120 @@ mod quarantine_tests {
         let mut c = locked_client(&base);
         assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
     }
+
+    /// Issue #216 (ADR-0058) Task 6: `emit_event` performs its OWN direct `INSERT INTO
+    /// event_log` (it never routes through the apply_remote_event door a peer's pull
+    /// uses), so Task 1 minting `clock_grade: SelfAsserted` into every authored
+    /// `EventBody` is not enough on its own — the direct INSERT's explicit column list
+    /// must also carry the column, or the author's own row silently stores the table's
+    /// `'unknown'` DEFAULT while every peer that later pulls the same signed event
+    /// (through db/020, which DOES read the body's grade) stores `'self-asserted'` —
+    /// a cross-node metadata inconsistency for one and the same event.
+    #[test]
+    fn emit_event_stores_self_asserted_clock_grade_on_its_own_row() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        let patient_id = uuid::Uuid::now_v7().to_string();
+
+        let body = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "grade check"}),
+            None,
+        )
+        .expect("emit_event authors and stores the event");
+
+        let grade: String = c
+            .query_one(
+                "SELECT clock_grade FROM event_log WHERE event_id = $1::text::uuid",
+                &[&body.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            grade, "self-asserted",
+            "the author's own row must store the minted grade, not the 'unknown' default"
+        );
+    }
+
+    /// PR #285 review finding 2: `emit_event`'s direct INSERT bypasses both doors, so
+    /// the grade-gated ceiling classify (db/005 step 1b' / db/020) never ran for
+    /// locally-authored events — a forward-dated `t_effective` authored here got NO
+    /// advisory `t_effective_ceiling_flag` row on the author's own node, while every
+    /// peer that pulls the same signed event through db/020 records one. That is the
+    /// same class of cross-node metadata inconsistency Task 6 fixed for the
+    /// `clock_grade` column, reproduced for the flag ledger. `emit_event` must classify
+    /// and flag exactly as the doors do.
+    #[test]
+    fn emit_event_flags_its_own_forward_dated_t_effective() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        let patient_id = uuid::Uuid::now_v7().to_string();
+
+        // Forward-dated: far after the HLC wall emit_event mints (~now) → one flag row.
+        let forward = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "forward flag check"}),
+            Some("2099-01-01T00:00:00Z".to_string()),
+        )
+        .expect("emit_event authors and stores the forward-dated event");
+        let flags: i64 = c
+            .query_one(
+                "SELECT count(*) FROM t_effective_ceiling_flag f \
+                   JOIN event_log e USING (content_address) \
+                  WHERE e.event_id = $1::text::uuid",
+                &[&forward.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            flags, 1,
+            "the author's own node must record the advisory ceiling flag its peers will"
+        );
+
+        // Backdated: the everyday legitimate case → clean, no flag.
+        let past = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "backdate no-flag check"}),
+            Some("2001-01-01T00:00:00Z".to_string()),
+        )
+        .expect("emit_event authors and stores the backdated event");
+        let flags: i64 = c
+            .query_one(
+                "SELECT count(*) FROM t_effective_ceiling_flag f \
+                   JOIN event_log e USING (content_address) \
+                  WHERE e.event_id = $1::text::uuid",
+                &[&past.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(flags, 0, "a backdated t_effective must not be flagged");
+    }
 }
 
 /// PR #225 review — the fingerprint consts must EXECUTE, not just string-match.
@@ -4495,6 +4652,7 @@ mod schema_subset_tests {
             payload: serde_json::json!({"name": name, "dob": "1980-01-01", "sex": "U"}),
             attachments,
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         // ADR-0039: author the twin into the signed body, as every production author does.
         let body = materialise_generic_twin(body);

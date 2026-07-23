@@ -89,6 +89,7 @@ async fn submit_dob(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall:
         payload: dob_assertion_body(value, "day", Some("document"), "document-verified"),
         attachments: vec![],
         plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -169,6 +170,7 @@ fn link_body(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -42,6 +42,7 @@ async fn admission_admits_trusted_peer_genesis_and_rejects_strangers() {
         payload: serde_json::json!({"display_name":"B","address":"127.0.0.1:7801"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let b_node_id = hex::encode(event_address(&signed_b.signed_bytes));
@@ -142,6 +143,7 @@ async fn admission_rejects_peer_event_from_an_unknown_signer() {
         }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_z = sign(&body_z, &sk_z).unwrap();
     let bytes = signed_z.signed_bytes.clone();
@@ -206,6 +208,7 @@ async fn admission_rejects_genesis_when_pinned_pubkey_mismatches_signer() {
         payload: serde_json::json!({"display_name": "B", "address": "127.0.0.1:7821"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let b_node_id = hex::encode(event_address(&signed_b.signed_bytes));
@@ -273,6 +276,7 @@ async fn admission_rejects_genesis_when_pinned_pubkey_mismatches_signer() {
         payload: serde_json::json!({"display_name": "A2", "address": "127.0.0.1:7822"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_a2 = sign(&body_a2, &sk_a2).unwrap();
     let a2_bytes = signed_a2.signed_bytes.clone();
@@ -350,6 +354,7 @@ async fn admission_admits_supersede_from_an_active_peer() {
         payload: serde_json::json!({"display_name": "B", "address": "127.0.0.1:7831"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let b_node_id = hex::encode(event_address(&signed_b.signed_bytes));
@@ -393,6 +398,7 @@ async fn admission_admits_supersede_from_an_active_peer() {
         payload: serde_json::json!({ "superseded_node_id_hex": dead_node_id_hex }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_sup = sign(&body_sup, &sk_b).unwrap();
     let bytes = signed_sup.signed_bytes.clone();
@@ -443,6 +449,7 @@ async fn admission_admits_supersede_from_an_active_peer() {
         payload: serde_json::json!({ "superseded_node_id_hex": dead_node_id_hex }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed_z = sign(&body_z, &sk_z).unwrap();
     let bytes = signed_z.signed_bytes.clone();

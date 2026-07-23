@@ -65,6 +65,7 @@ pub fn build_attested_link_body(
         payload: link_assertion_body(&la),
         attachments: vec![],
         plaintext_twin: Some(render_link_twin(&la)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -187,6 +187,7 @@ pub fn build_self_attestation(
         }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     // A signing failure here is a programming error (bad key), not a runtime condition.
     sign(&body, sk)
@@ -465,6 +466,7 @@ mod tests {
             payload: serde_json::json!({ "display_name": name, "address": "10.0.0.1:7843" }),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
         };
         sign(&body, sk).unwrap().signed_bytes
     }

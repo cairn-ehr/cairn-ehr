@@ -131,7 +131,7 @@ async fn erasure_shred_type_is_registered_and_twin_checked() {
 /// composite-type cast against a SYNTHESIZED (never-inserted) event_log row —
 /// no event_log INSERT is needed, so it's safe to run standalone. Column order
 /// is transcribed from `\d event_log` (db/001 + its ALTER ADD COLUMNs + db/036's
-/// `seq`). The GENERATED ALWAYS seq column does not fight this: identity
+/// `seq` + db/040's trailing `clock_grade`). The GENERATED ALWAYS seq column does not fight this: identity
 /// generation is an INSERT-time constraint, not enforced on a bare composite
 /// cast (confirmed empirically against CAIRN_TEST_PG before writing this in).
 #[tokio::test]
@@ -149,7 +149,8 @@ async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
             "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
                 'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
                 '\\x00'::bytea, '\\x00'::bytea, '{\"k\":1}'::jsonb, '[]'::jsonb, 'k', 'stub',
-                FALSE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL)::event_log)::text",
+                FALSE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL,
+                'unknown')::event_log)::text",
             &[],
         )
         .await
@@ -170,7 +171,8 @@ async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
             "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
                 'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
                 '\\x00'::bytea, '\\x00'::bytea, '{}'::jsonb, '[]'::jsonb, 'k', 'stub',
-                TRUE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL)::event_log) IS NULL",
+                TRUE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL,
+                'unknown')::event_log) IS NULL",
             &[],
         )
         .await

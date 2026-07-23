@@ -628,6 +628,7 @@ async fn submit_plaintext_note(c: &Client, sk: &SigningKey, kid: &str, patient: 
         payload: serde_json::json!({"text": "a plaintext clinician note"}),
         attachments: vec![],
         plaintext_twin: Some("a plaintext clinician note".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     let id: String = c

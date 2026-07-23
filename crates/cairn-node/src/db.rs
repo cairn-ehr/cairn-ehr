@@ -211,6 +211,15 @@ const SCHEMA: &[(&str, &str)] = &[
         "039_projection_registry",
         include_str!("../../../db/039_projection_registry.sql"),
     ),
+    // db/040 (issue #216): the grade-gated ceiling helpers + t_effective_ceiling_flag +
+    // born clock-confidence grade. Must land in BOTH lists (this one and cairn-sync's) —
+    // this is the full list the SCHEMA_GENERATION guard test below pins against, so a
+    // node started fresh at generation 40 without this entry never loads the ceiling
+    // helpers Tasks 4/5 depend on.
+    (
+        "040_clock_confidence_grade",
+        include_str!("../../../db/040_clock_confidence_grade.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

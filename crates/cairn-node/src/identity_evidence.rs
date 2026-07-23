@@ -123,6 +123,7 @@ pub fn build_text_evidence_body(
         payload: text_evidence_body(kind, description, basis),
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -81,6 +81,7 @@ fn note_with(contributors: serde_json::Value, signer_kid: &str, patient: Uuid) -
         payload: serde_json::json!({"text": "role-vocabulary floor probe"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -86,6 +86,7 @@ fn note(patient: Uuid, kid: &str, wall: i64) -> EventBody {
         payload: serde_json::json!({ "text": "seen, stable" }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

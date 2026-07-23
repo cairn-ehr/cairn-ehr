@@ -430,6 +430,7 @@ async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
         payload: serde_json::json!({"text": "not a node event"}),
         attachments: vec![],
         plaintext_twin: Some("a valid but non-node event".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap().signed_bytes;
     // Raw-insert as a served node_event row (op is just the table's column; the gate

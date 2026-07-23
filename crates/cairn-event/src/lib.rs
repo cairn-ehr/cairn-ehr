@@ -232,6 +232,23 @@ pub struct Hlc {
     pub node_origin: String,
 }
 
+/// The ADR-0027 clock-confidence ladder (issue #216, ADR-0058): how far this node's
+/// wall clock can be trusted as wall-clock truth for `t_recorded`. Ordered,
+/// best-corroboration-wins. `Unknown` is the honest read of an event that declares no
+/// grade (foreign / pre-slice); `SelfAsserted` (RTC only) is the sole *minted* value
+/// until a verified clock source lands (deferred). Serialized as its kebab-case name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClockGrade {
+    #[default]
+    Unknown,
+    SelfAsserted,
+    NetworkSynced,
+    HardwareSourced,
+    ExternallyAnchored,
+    MultiAnchorCorroborated,
+}
+
 /// The canonical event body — the thing that is CBOR-encoded and signed. Field
 /// order here IS the canonical encoding order (structural move 1): one writer,
 /// one serialization; verifiers byte-compare and never re-encode.
@@ -256,6 +273,12 @@ pub struct EventBody {
     /// principle 11 / ADR-0012).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plaintext_twin: Option<String>,
+    /// ADR-0027 clock-confidence grade — born on every event (issue #216 / ADR-0058).
+    /// Mandatory on new mints; `#[serde(default)]` reads a legacy/foreign body lacking it
+    /// as `Unknown`. Appended (trailing) so existing signed bytes are never re-encoded and
+    /// still verify (additive-only, principle 11 / ADR-0012).
+    #[serde(default)]
+    pub clock_grade: ClockGrade,
 }
 
 /// A signed event ready to enter `event_log`: the verbatim signed bytes plus
@@ -771,6 +794,7 @@ mod tests {
             payload: json!({"name": "Test Patient", "dob": "1980-01-01", "sex": "F"}),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         }
     }
 
@@ -1014,6 +1038,11 @@ mod tests {
 
     // A None authored-twin must NOT change the wire bytes vs. the pre-field shape,
     // so every existing event's content-address is preserved (append-only, principle 1).
+    // `clock_grade` (issue #216 / ADR-0058) is mandatory (no skip_serializing_if), so it
+    // is carried on BOTH sides here — this test is specifically about `plaintext_twin`'s
+    // optional-trailing-field pattern, not clock_grade's, so clock_grade is held constant
+    // and appended last on `LegacyBody` too (matching EventBody's true field order once
+    // the absent `plaintext_twin` slot is skipped).
     #[test]
     fn twin_absent_is_wire_identical_to_pre_field_shape() {
         #[derive(serde::Serialize)]
@@ -1028,6 +1057,7 @@ mod tests {
             contributors: &'a serde_json::Value,
             payload: &'a serde_json::Value,
             attachments: &'a Vec<Attachment>,
+            clock_grade: ClockGrade,
         }
         let hlc = Hlc {
             wall: 1,
@@ -1048,6 +1078,7 @@ mod tests {
             contributors: &contributors,
             payload: &payload,
             attachments: &attachments,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let body = EventBody {
             event_id: "e".into(),
@@ -1061,6 +1092,7 @@ mod tests {
             payload: payload.clone(),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let mut legacy_bytes = Vec::new();
         ciborium::into_writer(&legacy, &mut legacy_bytes).unwrap();
@@ -1068,6 +1100,81 @@ mod tests {
             canonical_cbor(&body).unwrap(),
             legacy_bytes,
             "None twin must encode byte-identically to the pre-field shape"
+        );
+    }
+
+    // Issue #216 review (Finding 1): the additive-only guarantee for `clock_grade` must
+    // be proven against a GENUINE field-absent wire blob, not a current-shape body that
+    // already carries the field (the bug in the old
+    // `tests/clock_grade.rs::absent_grade_deserializes_to_unknown`, which signed a body
+    // that already had `clock_grade` set, so it proved nothing about a pre-#216 blob).
+    // Because `EventBody` now has `clock_grade` as a mandatory (non-`Option`) field,
+    // there is no way to construct a field-absent body via the typed `EventBody`
+    // literal — the only way to get a genuine field-absent CBOR encoding is a private
+    // struct that mirrors `EventBody` exactly minus `clock_grade`, same pattern as
+    // `twin_absent_is_wire_identical_to_pre_field_shape` above. Sign the resulting
+    // bytes through the SAME private `cose_sign1_in_context` call `sign()` makes (not a
+    // higher-level helper), so this is a real COSE_Sign1 over a field-absent payload —
+    // then verify it through the real `verify_self_described` wire path and check the
+    // decoded body reads `Unknown`.
+    #[test]
+    fn pre_216_signed_blob_without_clock_grade_verifies_and_defaults_to_unknown() {
+        #[derive(serde::Serialize)]
+        struct LegacyBody<'a> {
+            event_id: &'a str,
+            patient_id: &'a str,
+            event_type: &'a str,
+            schema_version: &'a str,
+            hlc: &'a Hlc,
+            t_effective: Option<String>,
+            signer_key_id: &'a str,
+            contributors: &'a serde_json::Value,
+            payload: &'a serde_json::Value,
+            attachments: &'a Vec<Attachment>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            plaintext_twin: Option<&'a str>,
+            // NOTE: deliberately no `clock_grade` field — this is the pre-#216 wire
+            // shape the real fleet has millions of bytes of on disk already.
+        }
+
+        // Derived at runtime, not a literal (house rule 6).
+        let (sk, kid) = generate_key().unwrap();
+        let hlc = Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "n".into(),
+        };
+        let contributors = serde_json::json!([{"actor_id": "k", "role": "recorded"}]);
+        let payload = serde_json::json!({"text": "a pre-existing note"});
+        let attachments: Vec<Attachment> = vec![];
+        let legacy = LegacyBody {
+            event_id: "e",
+            patient_id: "p",
+            event_type: "note.added",
+            schema_version: "advisory/1",
+            hlc: &hlc,
+            t_effective: None,
+            signer_key_id: &kid,
+            contributors: &contributors,
+            payload: &payload,
+            attachments: &attachments,
+            plaintext_twin: None,
+        };
+
+        // Same canonical-CBOR encode path `canonical_cbor` uses, then sign the raw
+        // payload bytes via the same private call `sign()` makes.
+        let mut payload_bytes = Vec::new();
+        ciborium::into_writer(&legacy, &mut payload_bytes).unwrap();
+        let signed_bytes = cose_sign1_in_context(payload_bytes, &sk, CTX_EVENT).unwrap();
+
+        // A blob predating the field must still verify — additive-only in fact, not
+        // merely in the doc comment.
+        let decoded = verify_self_described(&signed_bytes)
+            .expect("a pre-#216 signed blob (no clock_grade key at all) must still verify");
+        assert_eq!(
+            decoded.clock_grade,
+            ClockGrade::Unknown,
+            "a field-absent body must read clock_grade as Unknown off the real wire path"
         );
     }
 
@@ -1143,6 +1250,7 @@ mod tests {
             payload: serde_json::json!({"kind":"photo"}),
             attachments: vec![att.clone()],
             plaintext_twin: Some("t".into()),
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let bytes = canonical_cbor(&body).unwrap();
         let back: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
@@ -1198,6 +1306,7 @@ mod tests {
             payload: serde_json::json!({"text": "BP 120/80, afebrile"}),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         }
     }
 

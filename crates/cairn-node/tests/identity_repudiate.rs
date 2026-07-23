@@ -86,6 +86,7 @@ async fn submit_name(
         payload: name_assertion_body(value, Some(use_), prov),
         attachments: vec![],
         plaintext_twin: Some(render_name_twin(value, Some(use_), prov)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -128,6 +129,7 @@ fn repudiation_body(
         } else {
             None
         },
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -657,6 +659,7 @@ async fn bad_subject_is_rejected() {
         payload: serde_json::json!({"subject": "not-a-uuid", "value": "X", "reason": "r"}),
         attachments: vec![],
         plaintext_twin: Some("name repudiated: x — \"X\" (r)".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk_a).unwrap();
     let ca = event_address(&signed.signed_bytes);

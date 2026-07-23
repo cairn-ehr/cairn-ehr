@@ -51,6 +51,7 @@ pub fn build_identify_body(
         payload: identify_assertion_body(&a),
         attachments: vec![],
         plaintext_twin: Some(render_identify_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -1068,6 +1068,7 @@ async fn main() -> anyhow::Result<()> {
             println!("recovery_esc  {}", st.recovery_escrow);
             println!("last_backup   {}", st.last_backup);
             println!("local_state   {}", st.local_state);
+            println!("clock         {}", st.clock_health);
             if let Some(old) = &st.supersedes {
                 println!("supersedes    {old}");
             }

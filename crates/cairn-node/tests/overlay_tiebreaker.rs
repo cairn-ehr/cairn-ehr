@@ -259,6 +259,7 @@ fn link_event(kid: &str, a: Uuid, b: Uuid, link: bool, wall: i64, counter: i32) 
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -387,6 +388,7 @@ fn dispute_event(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -513,6 +515,7 @@ fn identity_state_event(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -622,6 +625,7 @@ fn repudiation_event(
         payload: repudiation_assertion_body(&a),
         attachments: vec![],
         plaintext_twin: Some(render_repudiate_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -746,6 +750,7 @@ fn amended_event(kid: &str, patient: Uuid, name: &str, wall: i64, counter: i32) 
         payload: serde_json::json!({"name": name}),
         attachments: vec![],
         plaintext_twin: Some(format!("patient amended: {name}")),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -983,6 +988,7 @@ fn identifier_event(kid: &str, patient: Uuid, use_: &str, wall: i64, counter: i3
         payload: cairn_event::demographics::identifier_assertion_body(&ia),
         attachments: vec![],
         plaintext_twin: Some(cairn_event::demographics::render_identifier_twin(&ia)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -1063,6 +1069,7 @@ fn dob_event(kid: &str, patient: Uuid, basis: &str, wall: i64, counter: i32) -> 
             "day",
             "document-verified",
         )),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

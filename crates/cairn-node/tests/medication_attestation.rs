@@ -160,6 +160,7 @@ fn build_attestation_body_with_contributors(
         payload,
         attachments: vec![],
         plaintext_twin: Some("reviewed and attested the medication thread".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

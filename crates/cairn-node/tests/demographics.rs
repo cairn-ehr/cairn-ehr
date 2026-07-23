@@ -17,9 +17,12 @@ fn cs() -> Option<String> {
 
 /// Truncate the clinical tables and enroll one agent signer. Returns (sk, kid).
 async fn setup(c: &Client) -> (SigningKey, String) {
-    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart, patient_identifier CASCADE")
-        .await
-        .unwrap();
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
+         t_effective_ceiling_flag CASCADE",
+    )
+    .await
+    .unwrap();
     let (sk, kid) = generate_key().unwrap();
     c.execute(
         "SELECT enroll_actor('agent', '{\"model\":\"reg-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
@@ -54,6 +57,7 @@ async fn assert_identifier(
         payload: identifier_assertion_body(a),
         attachments: vec![],
         plaintext_twin: Some(render_identifier_twin(a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -236,6 +240,7 @@ async fn submit_raw_demographic(
         payload,
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -385,6 +390,7 @@ async fn legacy_patient_created_still_uses_derived_twin() {
         payload: serde_json::json!({"name":"A B","dob":"1980","sex":"x"}),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -477,7 +483,7 @@ async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
     }
 }
 
-// ── Review fix A3: bitemporal tier-1 ceiling (t_effective ≤ t_recorded) ──
+// ── Review fix A3 / issue #216 (ADR-0058): grade-gated bitemporal ceiling ──
 
 /// Build + sign one identifier assertion with an explicit `t_effective` and a chosen
 /// HLC wall (ms), so we can drive the ceiling both ways. Returns the raw submit result.
@@ -513,6 +519,7 @@ async fn submit_with_t_effective(
         payload: identifier_assertion_body(&a),
         attachments: vec![],
         plaintext_twin: Some(render_identifier_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -520,7 +527,7 @@ async fn submit_with_t_effective(
 }
 
 #[tokio::test]
-async fn t_effective_after_t_recorded_is_rejected_but_backdating_is_accepted() {
+async fn self_asserted_forward_t_effective_is_admitted_and_flagged_but_backdating_is_accepted() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -530,9 +537,15 @@ async fn t_effective_after_t_recorded_is_rejected_but_backdating_is_accepted() {
     let (sk, kid) = setup(&c).await;
 
     // t_recorded ceiling ≈ 2020-09-13 (wall = 1_600_000_000_000 ms). Forward-dating the
-    // effective time to 2031 is prima-facie falsification and must be REJECTED.
+    // effective time to 2031 with a SELF-ASSERTED clock (this fixture's grade — see
+    // submit_with_t_effective) is ADMITTED + FLAGGED, never rejected: ADR-0058 refines
+    // the old unconditional ADR-0003 tier-1 reject into a grade-gated ceiling, and a
+    // self-asserted (RTC-only) clock has no standing to call ANY forward claim
+    // impossible (principle 4 — a slow/dead clock must not force fabrication). The
+    // 'reject' arm survives only for a credible high-grade clock — see
+    // teffective_ceiling.rs for that dormant-this-slice case, exercised by synthesis.
     let p_future = Uuid::now_v7();
-    let r = submit_with_t_effective(
+    submit_with_t_effective(
         &c,
         &sk,
         &kid,
@@ -540,11 +553,8 @@ async fn t_effective_after_t_recorded_is_rejected_but_backdating_is_accepted() {
         1_600_000_000_000,
         "2031-01-01T00:00:00Z",
     )
-    .await;
-    assert!(
-        r.is_err(),
-        "t_effective after t_recorded must be rejected (ADR-0003 tier-1)"
-    );
+    .await
+    .expect("a self-asserted forward t_effective must be admitted, never rejected (ADR-0058)");
     let n: i64 = c
         .query_one(
             "SELECT count(*) FROM event_log WHERE patient_id::text=$1",
@@ -553,10 +563,23 @@ async fn t_effective_after_t_recorded_is_rejected_but_backdating_is_accepted() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 0, "a forward-dated event must not be appended");
+    assert_eq!(n, 1, "the admitted forward-dated event must be appended");
+    let flags: i64 = c
+        .query_one(
+            "SELECT count(*) FROM t_effective_ceiling_flag WHERE hlc_wall = $1",
+            &[&1_600_000_000_000i64],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 1,
+        "a self-asserted forward t_effective must be recorded as an advisory flag (ADR-0058)"
+    );
 
     // Backdating (effective time in the PAST relative to t_recorded) is legitimate and
-    // must be ACCEPTED — the whole point of a freely-backdatable t_effective.
+    // must be ACCEPTED, cleanly (no flag) — the whole point of a freely-backdatable
+    // t_effective.
     let p_past = Uuid::now_v7();
     submit_with_t_effective(
         &c,

@@ -40,7 +40,8 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic, patient_link, person_member, identity_projection_flag CASCADE",
+         patient_demographic, patient_link, person_member, identity_projection_flag, \
+         t_effective_ceiling_flag CASCADE",
     )
     .await
     .unwrap();
@@ -80,6 +81,7 @@ fn note(kid: &str, patient: Uuid, wall: i64, t_effective: Option<&str>) -> Event
         payload: serde_json::json!({"text": "arrived by sync"}),
         attachments: vec![],
         plaintext_twin: Some("Progress note: arrived by sync".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -385,6 +387,7 @@ async fn twinless_demographic_is_refused_at_apply_like_submit() {
         }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = apply(&c, &signed.signed_bytes).await.unwrap_err();
@@ -513,7 +516,7 @@ async fn explicit_offset_t_effective_is_stored_timezone_independently() {
 }
 
 #[tokio::test]
-async fn forward_dated_t_effective_is_refused_at_apply() {
+async fn forward_dated_t_effective_is_admitted_and_flagged_at_apply() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -522,17 +525,36 @@ async fn forward_dated_t_effective_is_refused_at_apply() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _, _) = setup(&c).await;
     let p = Uuid::now_v7();
-    // t_effective AFTER the event's own t_recorded ceiling: prima-facie falsification
-    // (ADR-0003 tier-1). Deterministic on every node, so refusing at apply cannot
-    // diverge honest nodes.
+    // t_effective AFTER the event's own t_recorded ceiling, self-asserted grade (this
+    // fixture's grade — see `note`). Pre-ADR-0058 this unconditionally RAISEd here
+    // (prima-facie falsification, ADR-0003 tier-1); the LENIENT remote door must now
+    // NEVER reject on the ceiling (issue #216 F1/F2): a refusal of a verifiable event
+    // freezes the puller's seq watermark and WEDGES clinical sync from one bad/forward
+    // clock — see the do_pull regression in
+    // crates/cairn-sync/tests/clinical_pull.rs::forward_dated_event_does_not_wedge_the_pull.
+    // Admitted unchanged instead, and recorded as an advisory ceiling-flag row.
     let b = note(&kid, p, 1_000_000_000_000, Some("2026-06-20T10:00:00Z")); // recorded 2001
-    let err = apply(&c, &sign(&b, &sk).unwrap().signed_bytes)
+    let signed = sign(&b, &sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    apply(&c, &signed.signed_bytes).await.expect(
+        "a forward-dated t_effective must be admitted, never rejected (ADR-0058 lenient door)",
+    );
+    assert_eq!(
+        event_count(&c, p).await,
+        1,
+        "the admitted forward-dated event must be appended"
+    );
+    let flags: i64 = c
+        .query_one(
+            "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1",
+            &[&ca],
+        )
         .await
-        .unwrap_err();
-    assert!(
-        db_msg(&err).contains("t_recorded"),
-        "cites the ceiling: {}",
-        db_msg(&err)
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 1,
+        "a forward-dated event must be recorded as an advisory ceiling flag, never rejected"
     );
 }
 
@@ -565,6 +587,7 @@ fn link_event(kid: &str, a: Uuid, b: Uuid, wall: i64) -> EventBody {
         payload: link_assertion_body(&la),
         attachments: vec![],
         plaintext_twin: Some(render_link_twin(&la)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

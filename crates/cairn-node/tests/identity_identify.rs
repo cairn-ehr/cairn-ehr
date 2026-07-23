@@ -105,6 +105,7 @@ async fn submit_identity_state(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -195,6 +196,7 @@ async fn submit_dispute(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -258,6 +260,7 @@ async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid,
         payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
         attachments: vec![],
         plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -549,6 +552,7 @@ async fn missing_twin_is_rejected() {
         payload: pending_assertion_body(&pa),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c
@@ -585,6 +589,7 @@ async fn bad_subject_is_rejected() {
         payload: serde_json::json!({"subject": "not-a-uuid", "basis": "b"}),
         attachments: vec![],
         plaintext_twin: Some("identity pending: x — b".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c
@@ -620,6 +625,7 @@ async fn missing_subject_is_rejected() {
         payload: serde_json::json!({"basis": "b"}), // no subject
         attachments: vec![],
         plaintext_twin: Some("identity pending: ? — b".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c

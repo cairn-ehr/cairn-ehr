@@ -52,6 +52,7 @@ fn build_reconcile_like_body(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

@@ -54,6 +54,7 @@ pub fn build_dose_change_body(
         payload: dose_change_body(&d),
         attachments: vec![],
         plaintext_twin: Some(render_dose_change_twin(&d)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -137,6 +138,7 @@ pub fn build_dose_correction_body(
         payload: dose_correction_body(&d),
         attachments: vec![],
         plaintext_twin: Some(render_dose_correction_twin(&d)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
