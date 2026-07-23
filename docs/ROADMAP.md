@@ -728,15 +728,19 @@ the pair) was never re-scored, so `retract_pending_proposal` (only called inside
 currently-generated pairs) never fired: a stale REVIEW row grouped a resolved chart under a nonexistent
 Doe indefinitely. `pipeline/sweep.sweep` now runs a **reconciliation pass** — re-`propose()`s every
 currently-PENDING pair the sweep did NOT regenerate (new `db.pending_proposal_pairs` reader, read in the
-same closed-before-write snapshot; new `SweepResult.reconciled` counter), reusing propose()'s existing
+same closed-before-write snapshot; new `SweepResult.reconciled` + `reconciled_retracted` counters — the
+re-scored total vs. the withdrawn subset, the pass's health signal), reusing propose()'s existing
 band-None retract path. Re-scoring rather than blindly deleting is deliberate: a pair withheld only by a
 block-size cap re-bands and is re-persisted, never wrongly withdrawn; a human/auto disposition is doubly
 protected (`retract_pending_proposal`'s `WHERE status='pending'` + `upsert_proposal`'s
 retracted→pending arm). TDD RED-first for both fixes; the #210 test guards that the pair genuinely left
 the blocking universe (the INVERSE of the #135 end-to-end test's still-blocks guard) so only the new
-pass can retract it. Full matcher suite **386/0** + ruff clean + an independent code-review pass (no
-defects). Open follow-on: **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (four minor
-matcher logic gaps — the E3 batch) remains.
+pass can retract it. Full matcher suite **386/0** + ruff clean + independent code-review passes; the
+self-review lodged the `reconciled_retracted` counter split and follow-on
+[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287) (a hub-scale reconciliation re-scoring-cost
+note — correct behavior, a future optimization, not a defect). Open follow-ons:
+**[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (four minor matcher logic gaps — the E3
+batch) and **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** remain.
 
 ## Phase 5 — Security & compliance core
 

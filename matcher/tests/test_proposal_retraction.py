@@ -228,8 +228,12 @@ def test_sweep_reconciles_a_pending_pair_that_left_the_blocking_universe(pg_conn
     # Sweep 2: only the reconciliation pass revisits the orphaned pending row -> retracted.
     result = sweep(pg_conn)
     assert result.errors == []
-    # The observability counter must reflect the one orphan re-scored (nothing else pends).
+    # The observability counters must reflect the one orphan re-scored (nothing else pends) and,
+    # since it left the blocking universe as a genuine non-match, that it was WITHDRAWN — the
+    # pass's headline health signal (how many stale rows this sweep actually retracted, as
+    # opposed to re-affirmed) must be legible on its own, not buried in the re-scored total.
     assert result.reconciled == 1
+    assert result.reconciled_retracted == 1
     assert _proposal_status(pg_conn, low, high) == "retracted", (
         "a pending row whose pair left the blocking universe must be reconciled, not left "
         "grouping a resolved chart under a nonexistent Doe"

@@ -51,6 +51,9 @@ class SweepResult:
     review: int                                      # proposals written in the REVIEW band
     below_threshold: int                             # pairs that persisted nothing
     reconciled: int = 0                              # orphaned pending pairs re-scored (issue #210)
+    reconciled_retracted: int = 0                    # of those, the subset re-scored below the
+                                                     # review floor -> withdrawn (the pass's health
+                                                     # signal: stale rows actually cleared, #210)
     skipped_blocks: list[SkippedBlock] = field(default_factory=list)
     errors: list[SweepError] = field(default_factory=list)
 
@@ -125,16 +128,26 @@ def sweep(
     # orphan's patients need not be in this sweep's candidate set.
     generated = set(pairs)
     reconciled = 0
+    reconciled_retracted = 0
     for low, high in pending:
         if (low, high) in generated:
-            continue  # already re-scored by the main loop above
+            # The main loop above owns every generated pair (it re-scored it, or recorded its
+            # propose() error and will retry next sweep) — reconciliation is only for orphans
+            # the loop never saw, so a generated pair is never double-processed here.
+            continue
         try:
-            propose(conn, low, high, thresholds=thresholds, weights=weights)
+            outcome = propose(conn, low, high, thresholds=thresholds, weights=weights)
         except Exception as exc:  # noqa: BLE001 — one bad pair must not abort reconciliation
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
             continue
         reconciled += 1
+        # propose() returns None when the re-scored pair no longer bands (it took the band-None
+        # retract path — the orphan withdrawn); a Band means it still warrants a proposal and was
+        # re-persisted. Counting the None outcomes gives the "stale rows cleared this sweep"
+        # health signal directly, instead of conflating it with the re-affirmed pairs (#210).
+        if outcome is None:
+            reconciled_retracted += 1
 
     return SweepResult(
         generated=len(pairs),
@@ -142,6 +155,7 @@ def sweep(
         review=review,
         below_threshold=below,
         reconciled=reconciled,
+        reconciled_retracted=reconciled_retracted,
         skipped_blocks=skipped_blocks,
         errors=errors,
     )

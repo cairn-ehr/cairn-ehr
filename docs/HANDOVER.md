@@ -131,13 +131,16 @@ unconfirmed, then fully identified — year-range DOB → point date — so no p
 never re-scored, so `retract_pending_proposal` (only called inside `propose()` for currently-generated
 pairs) never fired: a stale REVIEW row grouped a resolved chart under a nonexistent Doe forever. Now
 `pipeline/sweep.sweep` runs a **reconciliation pass** — re-`propose()`s every currently-PENDING pair the
-sweep did NOT regenerate (new `db.pending_proposal_pairs` reader; new `SweepResult.reconciled` counter),
+sweep did NOT regenerate (new `db.pending_proposal_pairs` reader; new `SweepResult.reconciled` +
+`reconciled_retracted` counters — total re-scored vs. the withdrawn subset, the pass's health signal),
 reusing propose()'s existing band-None retract path. Re-scoring (not blindly deleting) is deliberate: a
 pair withheld only by a block-size cap re-bands and is re-persisted, never wrongly withdrawn; human/auto
 dispositions are doubly protected (`WHERE status='pending'` + the retracted→pending upsert arm). TDD
 RED-first for both; the #210 test guards that the pair genuinely left the blocking universe (the inverse
 of the #135 test's guard) so only the new pass can retract it. Full matcher suite **386/0** + ruff clean +
-an independent code-review pass (no defects). **Remaining:** #211 (minor batch), #217, medication 6+.
+independent code-review passes (self-review lodged the `reconciled_retracted` split + follow-on #287 — a
+hub-scale re-scoring-cost note, correct-behavior not a defect). **Remaining:** #211 (minor batch), #287
+(future opt), #217, medication 6+.
 
 **Session (2026-07-20→21) — the #208 generic-reprojection build: ADR-0057 (spec v0.59; ROADMAP
 Slice 49; the fourth Priority-6 item, but taken all the way to product code —
