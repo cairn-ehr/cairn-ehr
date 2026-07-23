@@ -850,14 +850,26 @@ fn emit_event(
     let body_json = serde_json::to_string(&body.payload)?;
     let contributors_json = serde_json::to_string(&body.contributors)?;
     let twin = resolve_twin(&body);
+    // Issue #216 (ADR-0058) Task 6: this INSERT is the author's OWN write path — it
+    // never crosses the apply_remote_event door (db/020), so that door's grade-storing
+    // logic never runs for locally-authored events. Without stamping the column
+    // explicitly here, the author's own row would silently fall back to the table's
+    // 'unknown' DEFAULT even though the signed body carries the minted grade — a
+    // cross-node metadata inconsistency versus every peer that later pulls this same
+    // event through db/020. Serialize ClockGrade to its kebab-case wire string (e.g.
+    // "self-asserted") so the column matches exactly what the signed body asserts.
+    let grade = serde_json::to_value(body.clock_grade)?
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
 
     tx.execute(
         "INSERT INTO event_log
            (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
             node_origin, t_effective, signed_bytes, content_address, body, contributors,
-            signer_key_id, plaintext_twin, attachments)
+            signer_key_id, plaintext_twin, attachments, clock_grade)
          VALUES ($1::text::uuid,$2::text::uuid,$3,$4,$5,$6,$7,$8::text::timestamptz,$9,$10,
-                 $11::text::jsonb,$12::text::jsonb,$13,$14,'[]'::jsonb)",
+                 $11::text::jsonb,$12::text::jsonb,$13,$14,'[]'::jsonb,$15)",
         &[
             &body.event_id,
             &body.patient_id,
@@ -873,6 +885,7 @@ fn emit_event(
             &contributors_json,
             &body.signer_key_id,
             &twin,
+            &grade,
         ],
     )?;
     tx.commit()?;
@@ -4362,6 +4375,50 @@ mod quarantine_tests {
         };
         let mut c = locked_client(&base);
         assert_pgx_floor(&mut c).expect("the installed cairn_pgx meets the required floor");
+    }
+
+    /// Issue #216 (ADR-0058) Task 6: `emit_event` performs its OWN direct `INSERT INTO
+    /// event_log` (it never routes through the apply_remote_event door a peer's pull
+    /// uses), so Task 1 minting `clock_grade: SelfAsserted` into every authored
+    /// `EventBody` is not enough on its own — the direct INSERT's explicit column list
+    /// must also carry the column, or the author's own row silently stores the table's
+    /// `'unknown'` DEFAULT while every peer that later pulls the same signed event
+    /// (through db/020, which DOES read the body's grade) stores `'self-asserted'` —
+    /// a cross-node metadata inconsistency for one and the same event.
+    #[test]
+    fn emit_event_stores_self_asserted_clock_grade_on_its_own_row() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = cairn_event::generate_key().unwrap();
+        let patient_id = uuid::Uuid::now_v7().to_string();
+
+        let body = emit_event(
+            &mut c,
+            "test-node",
+            &sk,
+            &kid,
+            "note.added",
+            &patient_id,
+            "note/1",
+            serde_json::json!({"text": "grade check"}),
+            None,
+        )
+        .expect("emit_event authors and stores the event");
+
+        let grade: String = c
+            .query_one(
+                "SELECT clock_grade FROM event_log WHERE event_id = $1::text::uuid",
+                &[&body.event_id],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            grade, "self-asserted",
+            "the author's own row must store the minted grade, not the 'unknown' default"
+        );
     }
 }
 
