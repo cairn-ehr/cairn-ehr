@@ -68,6 +68,22 @@ BEGIN
 END $$;
 RESET ROLE;
 
+-- Final-review finding: after REVOKE EXECUTE FROM PUBLIC the daemon's runtime role (which
+-- INHERITS cairn_node) must still reach the function, or `status` breaks in production. The
+-- Rust status test connects as the superuser owner, so it CANNOT catch a missing cairn_node
+-- grant — this SET ROLE cairn_node check is the guard against exactly that owner-hides-the-gap
+-- trap. (cairn_node is NOLOGIN; SET ROLE reaches it from the owning session.)
+SET ROLE cairn_node;
+DO $$
+BEGIN
+    PERFORM 1 FROM cairn_clock_health();
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'FAIL: cairn_clock_health unreachable as cairn_node (status would break)';
+    END IF;
+    RAISE NOTICE 'PASS: cairn_clock_health reachable as cairn_node';
+END $$;
+RESET ROLE;
+
 -- Review finding 3b: the unique index on content_address is NULLS DISTINCT (the default),
 -- so multiple flag rows with a NULL content_address must coexist rather than collapse to
 -- one via ON CONFLICT (content_address) DO NOTHING. Only a real (non-NULL) address dedups.

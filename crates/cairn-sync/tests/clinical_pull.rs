@@ -1992,7 +1992,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
 }
 
 /// Build + LOCALLY AUTHOR (via `submit_event`, the STRICT door — already grade-gated by
-/// ADR-0058 and unaffected by this fix) a `note.added` whose `t_effective` is a decade
+/// ADR-0058 and unaffected by this fix) a `note.added` whose `t_effective` is ~4.5 years
 /// after its own HLC wall, self-asserted grade. A legitimately HOLDS this event so it can
 /// SERVE it to B; the door UNDER TEST below is B's REMOTE apply (db/020) when it pulls
 /// this event over the wire. Returns the signed bytes + event_id.
@@ -2101,7 +2101,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     .await
     .unwrap();
 
-    // seq 2: the forward-dated event — self-asserted grade, t_effective a decade past its
+    // seq 2: the forward-dated event — self-asserted grade, t_effective ~4.5 years past its
     // own HLC wall. A legitimately holds it (admitted at the already grade-gated STRICT
     // door); B's REMOTE apply is the door under test when it pulls it over the wire.
     let (signed_forward, forward_event_id) =

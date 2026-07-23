@@ -124,4 +124,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
         'self-asserted'::text
     FROM hlc_state s, t WHERE s.id;
 $$;
-GRANT EXECUTE ON FUNCTION cairn_clock_health() TO cairn_agent;
+-- SECURITY DEFINER hygiene (final-review finding): this function runs as its owner to
+-- read the door-only hlc_state, so — like every other SECURITY DEFINER door in the tree
+-- (submit_event db/005, apply_remote_event db/020) — its EXECUTE must be REVOKEd from
+-- PUBLIC and granted only to the roles that legitimately call it, or any connected role
+-- could read the HLC floor through it. Grant to BOTH cairn_agent (UI/tooling) AND
+-- cairn_node (the daemon's runtime login role inherits it — `status` calls this), since
+-- the caller of a SECURITY DEFINER function still needs its own EXECUTE right.
+REVOKE EXECUTE ON FUNCTION cairn_clock_health() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_clock_health() TO cairn_agent, cairn_node;
