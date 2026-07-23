@@ -237,3 +237,64 @@ async fn high_grade_far_forward_is_rejected_at_the_strict_door() {
     let m = db_msg(&err);
     assert!(m.contains("grade-gated"), "got: {m}");
 }
+
+// ---------------------------------------------------------------------------
+// The LENIENT remote door (db/020 `apply_remote_event`) — issue #216 F1/F2.
+//
+// Pre-fix, db/020 unconditionally RAISEd on ANY forward `t_effective`, regardless of
+// clock_grade. A refusal of a still-VALIDLY-SIGNED event at the sync-plane door freezes
+// the puller's seq watermark (cairn-sync's do_pull), so one forward-dated event wedges
+// ALL subsequent clinical sync from that peer — a denial-of-service. The fix mirrors the
+// strict door's grade-gated classify, but NEVER rejects even on a hypothetical 'reject'
+// verdict: a flag/reject verdict is recorded as an advisory row and the event admitted
+// regardless (the wedge regression at the do_pull level lives in
+// crates/cairn-sync/tests/clinical_pull.rs::forward_dated_event_does_not_wedge_the_pull).
+// ---------------------------------------------------------------------------
+
+/// Sign + apply a `forward_note` through the REMOTE door (`apply_remote_event`) instead
+/// of the local authoring door — the sync-plane entry point this task fixes. Mirrors
+/// `try_submit_forward_effective` exactly except for which door is called.
+async fn try_apply_forward_effective(
+    base: &str,
+    grade: ClockGrade,
+    offset_secs: i64,
+) -> Result<(Client, Uuid, Vec<u8>), tokio_postgres::Error> {
+    let c = db::connect_and_load_schema(base).await.unwrap();
+    let (sk, kid) = clinical_setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    let event_id = Uuid::now_v7();
+    let body = forward_note(&kid, patient, event_id, grade, offset_secs);
+    let signed = sign(&body, &sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await?;
+    Ok((c, event_id, ca))
+}
+
+/// The headline remote-door case: a SIGNED foreign event with `t_effective` after its
+/// own HLC-wall ceiling must APPLY (no RAISE) and be recorded as exactly one advisory
+/// flag — the lenient door never rejects on the ceiling.
+#[tokio::test]
+async fn remote_forward_t_effective_is_admitted_and_flagged_never_rejected() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+
+    let (client, event_id, ca) = try_apply_forward_effective(&base, ClockGrade::Unknown, 3600) // hlc_wall + 1h
+        .await
+        .expect("apply_remote_event must admit a forward-dated event, never RAISE (ADR-0058)");
+    assert_event_present(&client, event_id).await;
+    let flags: i64 = client
+        .query_one(
+            "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(flags, 1, "remote forward must admit + flag, never reject");
+}

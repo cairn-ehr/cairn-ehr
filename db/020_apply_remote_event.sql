@@ -75,6 +75,8 @@ DECLARE
     v_target_id     UUID;
     v_twin          TEXT;
     v_t_eff         TIMESTAMPTZ;
+    v_grade         text;              -- ADR-0058 born clock-confidence grade (issue #216)
+    v_verdict       text;              -- cairn_ceiling_classify result: ok | flag | reject
     v_att           BYTEA;
     v_att_key       BYTEA;
     v_actor_ids     BYTEA[];
@@ -118,14 +120,20 @@ BEGIN
     -- event_address() in cairn-event and the db/001 CHECK.
     v_ca       := '\x1220'::bytea || digest(p_signed, 'sha256');
 
-    -- 1b. t_effective wire pin (H4) + bitemporal tier-1 ceiling (ADR-0003 §3.6), via
-    --     the same db/001 validator submit_event uses. Both checks are deterministic
-    --     functions of the signed bytes: every honest node refuses the same events.
+    -- 1b. t_effective wire pin (H4), via the same db/001 validator submit_event uses:
+    --     deterministic on the signed bytes, so every honest node parses the same instant.
     v_t_eff := cairn_t_effective(b ->> 't_effective');
-    IF v_t_eff IS NOT NULL
-       AND v_t_eff > to_timestamp((b -> 'hlc' ->> 'wall')::bigint / 1000.0) THEN
-        RAISE EXCEPTION 'apply_remote_event: t_effective (%) is after t_recorded ceiling (HLC wall % ms) — prima-facie forward-dating / falsification (ADR-0003 tier-1)',
-            b ->> 't_effective', b -> 'hlc' ->> 'wall';
+
+    -- 1b'. Grade-gated ceiling (ADR-0058). LENIENT door: NEVER reject on the ceiling — a
+    --      refusal of a verifiable event freezes the puller's seq watermark and WEDGES
+    --      clinical sync (issue #216 F1/F2), the same rule the HLC-drift clamp further
+    --      down already honors. Admit UNCHANGED; a flag/reject verdict is recorded as an
+    --      advisory clash row. Absent grade (foreign/pre-slice) → 'unknown'; a future
+    --      grade is admitted verbatim and ranks 0 in the classifier (safe).
+    v_grade := COALESCE(b ->> 'clock_grade', 'unknown');
+    v_verdict := cairn_ceiling_classify((b -> 'hlc' ->> 'wall')::bigint, v_grade, v_t_eff);
+    IF v_verdict IN ('flag', 'reject') THEN
+        PERFORM cairn_record_ceiling_flag(v_ca, (b -> 'hlc' ->> 'wall')::bigint, v_t_eff, v_grade, v_verdict);
     END IF;
 
     -- 1c. Contributor-set floor (ADR-0051, issues #203/#96): the LENIENT door — role
@@ -292,7 +300,8 @@ BEGIN
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
-         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed)
+         signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed,
+         clock_grade)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
@@ -311,7 +320,7 @@ BEGIN
         CASE WHEN v_sealed THEN COALESCE(NULLIF(v_twin_stub, ''), cairn_twin_skeleton(v_type, b))
              ELSE v_twin END,
         COALESCE(b -> 'attachments','[]'::jsonb),
-        v_att, v_att_key, v_actor_id, v_sealed)
+        v_att, v_att_key, v_actor_id, v_sealed, v_grade)
     ON CONFLICT (event_id) DO NOTHING;
     -- Capture the insert outcome BEFORE the set_config below: PERFORM overwrites
     -- FOUND, which would silently disable the substitution guard.

@@ -15,7 +15,7 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
-use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, cease_medication, change_dose, reconcile_medications, AssertMedicationInput,
@@ -57,10 +57,11 @@ const LISTEN_REPULL: &str = "127.0.0.1:25721";
 const LISTEN_SEALED: &str = "127.0.0.1:25722";
 const LISTEN_GUARD: &str = "127.0.0.1:25723";
 const LISTEN_SEALSCOPE: &str = "127.0.0.1:25724";
+const LISTEN_FORWARD: &str = "127.0.0.1:25725";
 
 /// Every fixed listen port in this file — a NEW test's port must be added here so
 /// the ephemeral-range guard below covers it.
-const ALL_LISTEN: [&str; 8] = [
+const ALL_LISTEN: [&str; 9] = [
     LISTEN_CONVERGE,
     LISTEN_FREEZE,
     LISTEN_LOWHLC,
@@ -69,6 +70,7 @@ const ALL_LISTEN: [&str; 8] = [
     LISTEN_SEALED,
     LISTEN_GUARD,
     LISTEN_SEALSCOPE,
+    LISTEN_FORWARD,
 ];
 
 /// Guard for issue #263: a fixed listen port must sit BELOW every kernel's
@@ -1986,5 +1988,239 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         snapshot(&a).await,
         snapshot(&b).await,
         "A and B converge — the sealed non-clinical event synced as lossless ciphertext noise"
+    );
+}
+
+/// Build + LOCALLY AUTHOR (via `submit_event`, the STRICT door — already grade-gated by
+/// ADR-0058 and unaffected by this fix) a `note.added` whose `t_effective` is a decade
+/// after its own HLC wall, self-asserted grade. A legitimately HOLDS this event so it can
+/// SERVE it to B; the door UNDER TEST below is B's REMOTE apply (db/020) when it pulls
+/// this event over the wire. Returns the signed bytes + event_id.
+async fn author_forward_dated_note(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    patient: Uuid,
+    wall: i64,
+) -> (Vec<u8>, String) {
+    let event_id = Uuid::now_v7().to_string();
+    let body = EventBody {
+        event_id: event_id.clone(),
+        patient_id: patient.to_string(),
+        event_type: "note.added".into(),
+        schema_version: "note/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "node-a".into(),
+        },
+        t_effective: Some("2031-01-01T00:00:00Z".into()),
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"text": "forward-dated probe"}),
+        attachments: vec![],
+        plaintext_twin: Some("Progress note: forward-dated probe".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&body, sk).unwrap().signed_bytes;
+    c.execute("SELECT submit_event($1)", &[&signed])
+        .await
+        .expect(
+            "A holds the forward-dated event (grade-gated STRICT door already admits+flags it)",
+        );
+    (signed, event_id)
+}
+
+/// Issue #216 F1/F2 — the sync-wedge denial-of-service this task closes. Pre-fix,
+/// db/020's LENIENT remote-apply door unconditionally RAISEd on ANY signed event whose
+/// `t_effective` sits after its own HLC-wall ceiling, regardless of clock_grade. A single
+/// such (still VALIDLY SIGNED) event served by a peer made B's apply of it fail, which
+/// FREEZES `do_pull`'s seq cursor forever — one forward-dated event wedges ALL
+/// subsequent clinical sync from that peer. The fix makes db/020 grade-gated (mirroring
+/// db/005 and the pre-existing HLC-drift clamp a few lines below it in db/020): a
+/// self-asserted/unknown clock has no standing to call a forward claim impossible, so it
+/// is ADMITTED + FLAGGED, never rejected.
+///
+/// Mirrors `sealed_non_clinical_pull_does_not_freeze_the_watermark`'s two-node harness
+/// exactly: seq 1 is a legit medication, seq 2 is the pathological event, seq 3 is a
+/// SUBSEQUENT legit medication whose arrival on B is the proof the watermark never froze.
+///
+/// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
+#[tokio::test]
+async fn forward_dated_event_does_not_wedge_the_pull() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+    let mut a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    // Both nodes know the authors (the owner ceremony a real site performs): we want B to
+    // APPLY the events, so the freeze under test is the CEILING wedge, not unknown-author.
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    // The medication events are BORN-SEALED (ADR-0052): without B's own unwrap key
+    // registered, its apply door admits them but withholds custody, so NEITHER
+    // medication projects on B (a different failure than the one under test) —
+    // exactly why the sealed test above registers it too.
+    register_unwrap_key(&b, &sk_b).await;
+
+    let patient = Uuid::now_v7();
+
+    // seq 1: a legit medication, authored + projected on A.
+    assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "metformin",
+            inn_code: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("500"),
+            dose_unit: Some("mg"),
+            sig: Some("one BD"),
+            info_source: "patient-reported",
+            started: Some("2023"),
+            started_precision: Some("year"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // seq 2: the forward-dated event — self-asserted grade, t_effective a decade past its
+    // own HLC wall. A legitimately holds it (admitted at the already grade-gated STRICT
+    // door); B's REMOTE apply is the door under test when it pulls it over the wire.
+    let (signed_forward, forward_event_id) =
+        author_forward_dated_note(&a, &sk_d, &kid_d, patient, WALL).await;
+    let forward_ca = event_address(&signed_forward);
+
+    // seq 3: the SUBSEQUENT legit medication that must still reach B if sync is unwedged.
+    assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "ibuprofen",
+            inn_code: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("200"),
+            dose_unit: Some("mg"),
+            sig: Some("PRN"),
+            info_source: "patient-reported",
+            started: Some("2024"),
+            started_precision: Some("year"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Serve A, pull B once over real TCP.
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_FORWARD,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_FORWARD);
+    let pull = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_FORWARD,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run pull");
+    assert!(
+        pull.status.success(),
+        "pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull.stdout),
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    // The watermark sailed past the forward-dated event: B holds the SUBSEQUENT
+    // ibuprofen (seq 3), so the seq cursor was never frozen at seq 2. Pre-fix it froze
+    // there and ibuprofen never arrived — the #216 F1/F2 DoS.
+    let ibuprofen_on_b: i64 = b
+        .query_one(
+            "SELECT count(*) FROM medication_statement \
+             WHERE patient_id = $1::text::uuid AND term = 'ibuprofen'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        ibuprofen_on_b, 1,
+        "the medication authored AFTER the forward-dated event reached B — \
+         the watermark never froze (issue #216 F1/F2)",
+    );
+
+    // The forward-dated event itself APPLIED on B (admitted, never silently dropped)...
+    let forward_on_b: i64 = b
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&forward_event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        forward_on_b, 1,
+        "the forward-dated event itself applied on B"
+    );
+
+    // ...and was recorded as exactly one advisory ceiling flag on B, proving the LENIENT
+    // remote door (not just the strict local one) ran the grade-gated classify.
+    let flags_on_b: i64 = b
+        .query_one(
+            "SELECT count(*) FROM t_effective_ceiling_flag WHERE content_address = $1",
+            &[&forward_ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags_on_b, 1,
+        "B's remote apply door recorded the advisory ceiling flag, never rejected"
+    );
+
+    // Full convergence: identical event set + medication projections on both nodes.
+    assert_eq!(
+        snapshot(&a).await,
+        snapshot(&b).await,
+        "A and B converge — the forward-dated event synced and was admitted identically on both"
     );
 }
