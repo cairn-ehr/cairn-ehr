@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
-    verify_self_described, AttestationBody, EventBody, Hlc, SigningKey, CTX_EVENT,
+    verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
 };
 use serde::{Deserialize, Serialize};
 
@@ -832,6 +832,7 @@ fn emit_event(
         payload,
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: ClockGrade::SelfAsserted,
     };
 
     // ADR-0039: globalise the authored twin — materialise it into the body BEFORE signing, so
@@ -3458,6 +3459,7 @@ mod quarantine_tests {
             payload: serde_json::json!({"text": "replicated note"}),
             attachments: vec![],
             plaintext_twin: Some("Progress note: replicated note".into()),
+            clock_grade: ClockGrade::SelfAsserted,
         };
         sign(&body, sk).unwrap().signed_bytes
     }
@@ -4495,6 +4497,7 @@ mod schema_subset_tests {
             payload: serde_json::json!({"name": name, "dob": "1980-01-01", "sex": "U"}),
             attachments,
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         // ADR-0039: author the twin into the signed body, as every production author does.
         let body = materialise_generic_twin(body);

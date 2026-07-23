@@ -70,6 +70,7 @@ pub fn build_photo_evidence_body(
         payload: photo_evidence_body(basis),
         attachments: vec![attachment],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

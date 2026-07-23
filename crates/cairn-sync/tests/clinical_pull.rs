@@ -124,6 +124,7 @@ fn foreign_note(sk: &SigningKey, kid: &str, wall: i64, text: &str) -> (Vec<u8>, 
         payload: serde_json::json!({"text": text}),
         attachments: vec![],
         plaintext_twin: Some(format!("Progress note: {text}")),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     (sign(&body, sk).unwrap().signed_bytes, event_id)
 }
@@ -1803,6 +1804,7 @@ fn sealed_demographic(sk: &SigningKey, kid: &str, patient: Uuid, wall: i64) -> V
         plaintext_twin: Some(cairn_event::seal::seal_stub_twin(
             "demographic.field.asserted",
         )),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     sign(&body, sk).unwrap().signed_bytes
 }

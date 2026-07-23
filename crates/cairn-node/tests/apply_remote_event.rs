@@ -80,6 +80,7 @@ fn note(kid: &str, patient: Uuid, wall: i64, t_effective: Option<&str>) -> Event
         payload: serde_json::json!({"text": "arrived by sync"}),
         attachments: vec![],
         plaintext_twin: Some("Progress note: arrived by sync".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -385,6 +386,7 @@ async fn twinless_demographic_is_refused_at_apply_like_submit() {
         }),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = apply(&c, &signed.signed_bytes).await.unwrap_err();
@@ -565,6 +567,7 @@ fn link_event(kid: &str, a: Uuid, b: Uuid, wall: i64) -> EventBody {
         payload: link_assertion_body(&la),
         attachments: vec![],
         plaintext_twin: Some(render_link_twin(&la)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

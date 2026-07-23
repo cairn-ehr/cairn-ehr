@@ -108,6 +108,7 @@ async fn submit_dispute(
         payload,
         attachments: vec![],
         plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -201,6 +202,7 @@ async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid,
         payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
         attachments: vec![],
         plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -495,6 +497,7 @@ async fn missing_twin_is_rejected() {
         payload: dispute_assertion_body(&da),
         attachments: vec![],
         plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c
@@ -533,6 +536,7 @@ async fn bad_dispute_id_is_rejected() {
         payload: serde_json::json!({"dispute_id": "not-a-uuid", "subject": subj.to_string(), "reason": "r"}),
         attachments: vec![],
         plaintext_twin: Some("dispute opened: x — r (dispute x)".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c
@@ -569,6 +573,7 @@ async fn missing_subject_is_rejected() {
         payload: serde_json::json!({"dispute_id": d.to_string(), "reason": "r"}), // no subject
         attachments: vec![],
         plaintext_twin: Some("dispute opened: ? — r (dispute d)".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c

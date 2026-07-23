@@ -85,6 +85,7 @@ pub fn build_callsign_name_body(
             Some(CALLSIGN_USE),
             CALLSIGN_PROVENANCE,
         )),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
@@ -115,6 +116,7 @@ pub fn build_pending_body(
         payload: pending_assertion_body(&a),
         attachments: vec![],
         plaintext_twin: Some(render_pending_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

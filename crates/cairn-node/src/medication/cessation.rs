@@ -43,6 +43,7 @@ pub fn build_cease_body(
         payload: medication_cessation_body(&csn),
         attachments: vec![],
         plaintext_twin: Some(render_medication_cessation_twin(&csn)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 

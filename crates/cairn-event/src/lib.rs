@@ -232,6 +232,23 @@ pub struct Hlc {
     pub node_origin: String,
 }
 
+/// The ADR-0027 clock-confidence ladder (issue #216, ADR-0058): how far this node's
+/// wall clock can be trusted as wall-clock truth for `t_recorded`. Ordered,
+/// best-corroboration-wins. `Unknown` is the honest read of an event that declares no
+/// grade (foreign / pre-slice); `SelfAsserted` (RTC only) is the sole *minted* value
+/// until a verified clock source lands (deferred). Serialized as its kebab-case name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClockGrade {
+    #[default]
+    Unknown,
+    SelfAsserted,
+    NetworkSynced,
+    HardwareSourced,
+    ExternallyAnchored,
+    MultiAnchorCorroborated,
+}
+
 /// The canonical event body — the thing that is CBOR-encoded and signed. Field
 /// order here IS the canonical encoding order (structural move 1): one writer,
 /// one serialization; verifiers byte-compare and never re-encode.
@@ -256,6 +273,12 @@ pub struct EventBody {
     /// principle 11 / ADR-0012).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plaintext_twin: Option<String>,
+    /// ADR-0027 clock-confidence grade — born on every event (issue #216 / ADR-0058).
+    /// Mandatory on new mints; `#[serde(default)]` reads a legacy/foreign body lacking it
+    /// as `Unknown`. Appended (trailing) so existing signed bytes are never re-encoded and
+    /// still verify (additive-only, principle 11 / ADR-0012).
+    #[serde(default)]
+    pub clock_grade: ClockGrade,
 }
 
 /// A signed event ready to enter `event_log`: the verbatim signed bytes plus
@@ -771,6 +794,7 @@ mod tests {
             payload: json!({"name": "Test Patient", "dob": "1980-01-01", "sex": "F"}),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         }
     }
 
@@ -1014,6 +1038,11 @@ mod tests {
 
     // A None authored-twin must NOT change the wire bytes vs. the pre-field shape,
     // so every existing event's content-address is preserved (append-only, principle 1).
+    // `clock_grade` (issue #216 / ADR-0058) is mandatory (no skip_serializing_if), so it
+    // is carried on BOTH sides here — this test is specifically about `plaintext_twin`'s
+    // optional-trailing-field pattern, not clock_grade's, so clock_grade is held constant
+    // and appended last on `LegacyBody` too (matching EventBody's true field order once
+    // the absent `plaintext_twin` slot is skipped).
     #[test]
     fn twin_absent_is_wire_identical_to_pre_field_shape() {
         #[derive(serde::Serialize)]
@@ -1028,6 +1057,7 @@ mod tests {
             contributors: &'a serde_json::Value,
             payload: &'a serde_json::Value,
             attachments: &'a Vec<Attachment>,
+            clock_grade: ClockGrade,
         }
         let hlc = Hlc {
             wall: 1,
@@ -1048,6 +1078,7 @@ mod tests {
             contributors: &contributors,
             payload: &payload,
             attachments: &attachments,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let body = EventBody {
             event_id: "e".into(),
@@ -1061,6 +1092,7 @@ mod tests {
             payload: payload.clone(),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let mut legacy_bytes = Vec::new();
         ciborium::into_writer(&legacy, &mut legacy_bytes).unwrap();
@@ -1143,6 +1175,7 @@ mod tests {
             payload: serde_json::json!({"kind":"photo"}),
             attachments: vec![att.clone()],
             plaintext_twin: Some("t".into()),
+            clock_grade: ClockGrade::SelfAsserted,
         };
         let bytes = canonical_cbor(&body).unwrap();
         let back: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
@@ -1198,6 +1231,7 @@ mod tests {
             payload: serde_json::json!({"text": "BP 120/80, afebrile"}),
             attachments: vec![],
             plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
         }
     }
 

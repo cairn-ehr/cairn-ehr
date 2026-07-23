@@ -69,6 +69,7 @@ pub fn build_assert_body(
         payload: medication_assertion_body(&a),
         attachments: vec![],
         plaintext_twin: Some(render_medication_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
     }
 }
 
