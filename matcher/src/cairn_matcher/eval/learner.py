@@ -116,8 +116,15 @@ def derive_thresholds(
         never below it (a review below the top non-match would flood the worklist with
         impostor-grade pairs — the opposite of safety-first). Strictly below auto whenever
         margin > 0, so review <= auto always holds — no inversion, no clamp, however well or
-        poorly the classes separate. (No non-matches at all -> fall back to the match range:
-        review = min(match), auto = max(match) + margin.)
+        poorly the classes separate.
+
+    Requires at least one non-match pair: with zero impostors the "anchor to the strongest
+    impostor" contract is unsatisfiable, so this RAISES rather than fall back to the match
+    range (issue #209). The old fallback anchored auto to the WEAKEST true match, which bands
+    ordinary shared-name-token non-matches AUTO_CANDIDATE on held-out data — a false
+    auto-link, the matcher's stated dangerous rate — while 'collided' stayed trivially False,
+    so nothing flagged it. Failing closed is the honest response; kfold_lift skips such folds
+    up front so a single degenerate partition never aborts a cross-validation run.
 
     margin must be > 0: a non-positive margin collapses (margin == 0) or inverts
     (margin < 0) the review < auto safety gap, which can produce a false auto-link.
@@ -141,10 +148,15 @@ def derive_thresholds(
     if not match_scores:
         raise ValueError("derive_thresholds needs at least one true-match pair")
 
-    if nonmatch_scores:
-        review = max(nonmatch_scores)
-    else:
-        review = min(match_scores)
+    if not nonmatch_scores:
+        raise ValueError(
+            "derive_thresholds needs at least one non-match pair: review/auto anchor to the "
+            "strongest impostor, so with zero non-matches there is no safe anchor and the "
+            "'zero false auto-links' guarantee cannot be established (a threshold anchored to "
+            "the weakest true match would auto-link ordinary non-matches on held-out data — "
+            "issue #209)"
+        )
+    review = max(nonmatch_scores)
     auto = review + margin
 
     surfaced = sum(1 for s in match_scores if s >= review)

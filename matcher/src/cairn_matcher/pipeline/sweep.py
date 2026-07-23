@@ -50,6 +50,7 @@ class SweepResult:
     auto_candidate: int                              # proposals written in the AUTO_CANDIDATE band
     review: int                                      # proposals written in the REVIEW band
     below_threshold: int                             # pairs that persisted nothing
+    reconciled: int = 0                              # orphaned pending pairs re-scored (issue #210)
     skipped_blocks: list[SkippedBlock] = field(default_factory=list)
     errors: list[SweepError] = field(default_factory=list)
 
@@ -82,6 +83,11 @@ def sweep(
     # Pre-load the §5.4 trust states for the candidate set in the same ONE-query style;
     # propose() then reads trust from this map, not the DB (see the aliases preload above).
     trust = db.load_trust_for(conn, candidate_patients)
+    # Snapshot the currently-PENDING proposal pairs (issue #210) in the same read transaction,
+    # for the reconciliation pass after the main loop. A pending row whose pair the blocking
+    # passes no longer generate is never revisited by the loop below and would otherwise
+    # linger forever.
+    pending = db.pending_proposal_pairs(conn)
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 
@@ -105,11 +111,37 @@ def sweep(
             review += 1
         else:
             below += 1
+
+    # Reconciliation pass (issue #210). A John Doe identified since the last sweep — its
+    # year-range DOB replaced by a point date — no longer shares a blocking key with the
+    # candidates that forced it to REVIEW, so the pair is absent from `pairs` and the loop
+    # above never revisits its stale pending row. Re-score each such orphan through the SAME
+    # propose() path: a pair that is genuinely no longer a match hits propose()'s existing
+    # band-None retract path (pending -> retracted); one still warranting a proposal is
+    # re-persisted unchanged (a human disposition is preserved by upsert_proposal either way).
+    # Re-scoring rather than blindly deleting means a pair withheld only by a block-size cap
+    # this run is never wrongly withdrawn — propose() recomputes the verdict. propose() owns
+    # its own per-pair transaction boundary, and aliases/trust load on demand because an
+    # orphan's patients need not be in this sweep's candidate set.
+    generated = set(pairs)
+    reconciled = 0
+    for low, high in pending:
+        if (low, high) in generated:
+            continue  # already re-scored by the main loop above
+        try:
+            propose(conn, low, high, thresholds=thresholds, weights=weights)
+        except Exception as exc:  # noqa: BLE001 — one bad pair must not abort reconciliation
+            conn.rollback()
+            errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
+            continue
+        reconciled += 1
+
     return SweepResult(
         generated=len(pairs),
         auto_candidate=auto,
         review=review,
         below_threshold=below,
+        reconciled=reconciled,
         skipped_blocks=skipped_blocks,
         errors=errors,
     )

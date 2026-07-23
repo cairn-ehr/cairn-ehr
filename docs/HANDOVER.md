@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **Only #217 remains** (paper-parity benchmark as a required slice-plan section) — or the feature work below (matcher #209/#210/#211, medication slices 6+), now unblocked.
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **Only #217 remains** from the review course (paper-parity benchmark as a required slice-plan section). Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Remaining feature work now unblocked: matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (minor batch of 4 logic gaps), medication slices 6+.
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -66,7 +66,10 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-22→23, latest (the #216 grade-gated `t_effective` ceiling build → ADR-0058,
+**Session date:** 2026-07-23, latest (matcher review-follow-ons **#209 + #210** — an advisory-tier,
+ADR-free TDD bugfix wholly inside `matcher/`; no spec/SCHEMA/wire/ADR change; Slice 51 below; full
+matcher suite 386/0 + ruff clean + independent code-review pass. 2026-07-22→23 was the #216 grade-gated
+`t_effective` ceiling build → ADR-0058,
 spec v0.60, a brainstorm→spec→plan→subagent-driven-TDD build, Tasks 1–8; born `clock_grade` wire field
 + `db/040` grade-gated classifier + both doors reworked + `cairn_clock_health` + `t_effective_ceiling_flag`;
 2026-07-21 had the #208 generic-reprojection build → ADR-0057, spec v0.59, a
@@ -113,6 +116,28 @@ triggers; `cairn_reproject` heal/rebuild run gen-gated by both loaders; the ever
 `cairn_demographic_backfill` retired; measured at Bet-B volume).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**Session (2026-07-23) — matcher review-follow-ons #209 + #210 (advisory Python tier, ROADMAP Slice
+51; no spec/SCHEMA/wire/ADR change — TDD bugfix wholly inside `matcher/`).** **#209:**
+`eval/learner.derive_thresholds` silently fell back to `review = min(match)` when the labelled scores
+held NO non-match pair — anchoring the auto threshold to the *weakest true match*, so ordinary
+non-matches band AUTO_CANDIDATE on held-out data (a false auto-link, the matcher's stated dangerous
+rate), with `collided` trivially False so nothing flagged it. Now **fails closed** (raises: no impostor ⇒
+no safe anchor), and `eval/crossval.kfold_lift` **skips-and-counts** a fold whose training partition has
+no non-match pairs (new `_has_nonmatch_pairs`, symmetric with the existing no-match skip), so one
+degenerate fold never aborts a cross-validation run — the CLI already turned the raise into a clean exit
+2. **#210:** a PENDING proposal whose pair **left the blocking universe** (a Doe forced to REVIEW while
+unconfirmed, then fully identified — year-range DOB → point date — so no pass regenerates the pair) was
+never re-scored, so `retract_pending_proposal` (only called inside `propose()` for currently-generated
+pairs) never fired: a stale REVIEW row grouped a resolved chart under a nonexistent Doe forever. Now
+`pipeline/sweep.sweep` runs a **reconciliation pass** — re-`propose()`s every currently-PENDING pair the
+sweep did NOT regenerate (new `db.pending_proposal_pairs` reader; new `SweepResult.reconciled` counter),
+reusing propose()'s existing band-None retract path. Re-scoring (not blindly deleting) is deliberate: a
+pair withheld only by a block-size cap re-bands and is re-persisted, never wrongly withdrawn; human/auto
+dispositions are doubly protected (`WHERE status='pending'` + the retracted→pending upsert arm). TDD
+RED-first for both; the #210 test guards that the pair genuinely left the blocking universe (the inverse
+of the #135 test's guard) so only the new pass can retract it. Full matcher suite **386/0** + ruff clean +
+an independent code-review pass (no defects). **Remaining:** #211 (minor batch), #217, medication 6+.
 
 **Session (2026-07-20→21) — the #208 generic-reprojection build: ADR-0057 (spec v0.59; ROADMAP
 Slice 49; the fourth Priority-6 item, but taken all the way to product code —

@@ -54,14 +54,23 @@ def _has_match_pairs(ds: LabelledDataset) -> bool:
     return any(len(e.records) >= 2 for e in ds.entities)
 
 
+def _has_nonmatch_pairs(ds: LabelledDataset) -> bool:
+    """True iff >= 2 non-empty clusters exist — any two records from different clusters are a
+    non-match (impostor) pair. Without one, derive_thresholds has no impostor to anchor the
+    thresholds to and now raises (issue #209), so kfold must skip such a training partition
+    rather than learn a mis-calibrated model or let the raise abort the whole run."""
+    return sum(1 for e in ds.entities if e.records) >= 2
+
+
 @dataclass(frozen=True)
 class LiftReport:
     """Pooled held-out before/after metrics from k-fold learning.
 
     before = the shipped defaults; after = the learned model. Both are computed on exactly
     the same held-out pairs, so the two ScorerMetrics are directly comparable. skipped_folds
-    counts folds whose training partition had no match pairs to learn from (honest, not a
-    crash) — those folds contribute to neither before nor after.
+    counts folds whose training partition could not be learned from — either no match pairs
+    (no positive signal) OR no non-match pairs (no impostor anchor for the thresholds, issue
+    #209). Honest, not a crash: those folds contribute to neither before nor after.
     """
 
     folds: int
@@ -81,7 +90,8 @@ def kfold_lift(
 ) -> LiftReport:
     """Learn on k-1 folds, measure on the held-out fold; pool held-out outcomes across all
     folds and report before (shipped defaults) vs after (learned). Never reports train-set
-    metrics. A fold whose training partition has no match pairs is skipped and counted.
+    metrics. A fold whose training partition cannot be learned from — no match pairs or no
+    non-match pairs (issue #209) — is skipped and counted.
     """
     parts = split_clusters(ds, folds)
     before: list[PairOutcome] = []
@@ -89,7 +99,7 @@ def kfold_lift(
     skipped = 0
     for i, test in enumerate(parts):
         train = _union([p for j, p in enumerate(parts) if j != i], name=f"{ds.name}#train{i}")
-        if not _has_match_pairs(train):
+        if not _has_match_pairs(train) or not _has_nonmatch_pairs(train):
             skipped += 1
             continue
         model = learn_model(

@@ -59,6 +59,18 @@ def test_no_match_pair_raises():
         derive_thresholds([(False, 1.0), (False, 2.0)])
 
 
+def test_no_nonmatch_pair_raises():
+    # With ZERO non-match (impostor) pairs there is no safe anchor for review/auto: the whole
+    # contract of the function is "anchor to the strongest impostor", which is unsatisfiable
+    # here. A threshold anchored instead to the weakest true match (the old min(match)
+    # fallback) would band ordinary shared-name-token non-matches AUTO_CANDIDATE on held-out
+    # data — a false auto-link, the matcher's stated dangerous rate — and nothing flagged it
+    # (`collided` is trivially False). Fail loudly rather than emit a falsely-calibrated
+    # model (issue #209).
+    with pytest.raises(ValueError):
+        derive_thresholds([(True, 5.0), (True, 3.0)])
+
+
 def test_recall_target_out_of_range_raises():
     with pytest.raises(ValueError):
         derive_thresholds([(True, 1.0)], recall_target=1.5)

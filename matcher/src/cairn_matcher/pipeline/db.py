@@ -511,3 +511,26 @@ def retract_pending_proposal(conn, low, high) -> int:
             (low, high),
         )
         return cur.rowcount
+
+
+def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
+    """Every advisory proposal still awaiting a human decision (status='pending').
+
+    Returns canonical (patient_low, patient_high) lowercase-uuid TEXT tuples — the same shape
+    generate_candidate_pairs and canonical_pair produce, so a caller can compare the two sets
+    directly. The sweep's reconciliation pass (issue #210) re-scores any pending pair the
+    current blocking passes no longer generate — a pair that has dropped out of the blocking
+    universe, e.g. a John Doe whose year-range DOB anchor was replaced by a point date on
+    identification — so a stale REVIEW row is not left grouping a resolved chart under a
+    nonexistent Doe. Only 'pending' rows are returned: a human disposition or a matcher
+    auto-application is never a reconciliation candidate.
+
+    Read-only — opens a read transaction the CALLER must close (the sweep already closes its
+    read snapshot before the write loop).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT patient_low::text, patient_high::text FROM match_proposal "
+            "WHERE status='pending'"
+        )
+        return [(low, high) for low, high in cur.fetchall()]
