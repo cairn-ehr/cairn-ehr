@@ -1,7 +1,5 @@
 //! Issue #216 — the born clock-confidence grade on the wire (ADR-0058).
-use cairn_event::{
-    canonical_cbor, generate_key, sign, verify_self_described, ClockGrade, EventBody, Hlc,
-};
+use cairn_event::{canonical_cbor, ClockGrade, EventBody, Hlc};
 
 /// A minimal body helper — derives its own key material (house rule 6: no literals).
 fn body(grade: ClockGrade) -> EventBody {
@@ -41,26 +39,30 @@ fn clock_grade_serializes_as_kebab_string() {
 
 #[test]
 fn absent_grade_deserializes_to_unknown() {
-    // A legacy/foreign body encoded WITHOUT clock_grade must read as Unknown, and
-    // must still verify (additive-only: existing signed bytes are never re-encoded).
-    let (sk, kid) = generate_key().unwrap();
-    // Build a legacy body by round-tripping through a map that omits clock_grade.
-    // signer_key_id is set to the actual signing key's hex (must match what
-    // verify_self_described derives from the COSE header — its SignerKeyMismatch
-    // gate — see lib.rs's `body.signer_key_id != hex::encode(key_bytes)` check;
-    // the brief's verbatim helper leaves it as an empty string, which fails that
-    // gate regardless of clock_grade, so it is set here to make the body signable).
-    let mut b = body(ClockGrade::SelfAsserted);
-    b.signer_key_id = kid;
-    let mut map: serde_json::Value = serde_json::to_value(&b).unwrap();
-    map.as_object_mut().unwrap().remove("clock_grade");
-    let legacy: EventBody = serde_json::from_value(map).unwrap();
+    // A body encoded WITHOUT the `clock_grade` key must deserialize with the field
+    // defaulted to Unknown (`#[serde(default)]`). This is a serde-default check via
+    // the crate's real CBOR wire format (ciborium), not serde_json (Finding 2) — the
+    // genuine "a pre-#216 signed blob still verifies AND reads Unknown" proof (the
+    // additive-only guarantee end to end, wire-signing included) lives in
+    // `cairn_event::tests::pre_216_signed_blob_without_clock_grade_verifies_and_defaults_to_unknown`
+    // in lib.rs, which reaches the private `cose_sign1_in_context` to sign a struct
+    // that mirrors `EventBody` exactly minus `clock_grade` — the typed `EventBody`
+    // literal can't itself omit the field, since it is now mandatory.
+    let b = body(ClockGrade::SelfAsserted);
+    let bytes = canonical_cbor(&b).unwrap();
+    let mut value: ciborium::value::Value = ciborium::from_reader(&bytes[..]).unwrap();
+    match &mut value {
+        ciborium::value::Value::Map(entries) => {
+            entries.retain(|(k, _)| k.as_text() != Some("clock_grade"));
+        }
+        _ => panic!("canonical_cbor did not encode EventBody as a CBOR map"),
+    }
+    let mut without_grade = Vec::new();
+    ciborium::into_writer(&value, &mut without_grade).unwrap();
+    let legacy: EventBody = ciborium::from_reader(&without_grade[..]).unwrap();
     assert_eq!(
         legacy.clock_grade,
         ClockGrade::Unknown,
         "absent → Unknown default"
     );
-    // And a real signed legacy blob still verifies after the field is added.
-    let signed = sign(&b, &sk).unwrap();
-    assert!(verify_self_described(&signed.signed_bytes).is_ok());
 }
