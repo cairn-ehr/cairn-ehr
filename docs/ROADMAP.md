@@ -757,6 +757,38 @@ Filed **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)** — the med-
 UI obligation (one human gesture; the architecture already permits it, `M=1`), the rule's first live
 entry, owed by the Tauri med-list slice. **The 2026-07-15 review course is now FULLY closed.**
 
+**Slice 53 — matcher four-gap batch #211 (2026-07-25; advisory Python tier; branch
+`fix/matcher-four-gaps-211`; no ADR/spec/SCHEMA/event-type change — a TDD bugfix + doc-honesty
+correction wholly inside `matcher/`; the E3 batch from the 2026-07-15 review).** Four minor logic
+gaps, each RED-first (+9 tests; suite 386→**395/0**, ruff clean). **Gap 1** (`pipeline/runner.py`): the
+alias-map lookup used the caller's RAW id text (`aliases.get(str(a))`) while the trust-map lookup
+canonicalizes via `str(UUID(...))` — so a batch caller passing an uppercase/braced uuid silently missed
+every alias and the §5.5(a) known-alias REVIEW forcing quietly did not fire (a latent safety-invariant
+bypass; unreachable via `sweep`, which is already canonical). One canonical `key_a,key_b` now hoisted
+above the alias block feeds the alias lookup, the `known_alias_evidence` labels (so the persisted
+`alias_of` is canonical too), and the trust lookup. **Gap 2** (`pipeline/banding.py`): `Thresholds`
+gained a `__post_init__` refusing an inverted `review > auto` pair — a swapped-kwargs typo that silently
+deletes the REVIEW band and auto-links every score ≥ review; `<=` allows the degenerate `review == auto`,
+and the learner never emits an inversion (`auto = review + margin`, margin > 0). **Gap 3** (`pipeline/
+adapter.py` + `db.py`, doc-only): the SQL blocking tokenizer folds case with `lower()` while the scorer
+`casefold()`s (Postgres has no casefold), diverging on ß/ligatures ("Weiß"/"WEISS" score EXACT but never
+share a blocking token) — recall-loss-only, the designed limit of the deliberately-simple tokenizer with
+the §5.13 hub sweep as declared backstop; the adapter docstring's "applies the matching normalization"
+overclaim is corrected (no behavior change; folding down to `lower()` would drop the correct EXACT match,
+so it is explicitly warned against). **Gap 4** (`eval/generator.py` + `eval/dataset.py`): `_repair`
+injects a VERBATIM seed name into the hardest clones to keep them blockable, inflating the learner's name
+m-probabilities and making held-out lift optimistic; the repaired clone now carries `repaired: True`,
+`DatasetRecord` gained a `repaired: bool = False` field (the loader coerces + preserves it — a bare dict
+key would be dropped by the fixed-field dataclass), and a pure `dataset.repaired_record_ids(ds)` helper
+lets an eval consumer quantify/exclude the artificially-easy pairs. A **review pass** (independent
+code-reviewer subagent) found no issue at/above threshold; its one actionable sub-threshold note — the
+now-redundant inverted-thresholds guard in `eval/model_io.py`, made dead by the gap-2 `__post_init__` —
+was removed in-branch (behavior unchanged; the existing `test_inverted_thresholds_rejected` still pins
+the ModelIOError). Matcher follow-ons: **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)**
+closed by this slice; **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale
+reconciliation re-scoring cost) and new **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290)**
+(wire `repaired_record_ids` into eval lift reporting — the gap-4 seam's consumer) remain.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).

@@ -109,3 +109,23 @@ def test_propose_reads_preloaded_aliases_not_the_db(pg_conn, monkeypatch):
 
     _, evidence = _evidence(pg_conn)
     assert {"kind": "known_alias", "value": FALSE_NAME, "alias_of": A} in evidence
+
+
+def test_propose_canonicalizes_the_alias_map_lookup_for_noncanonical_ids(pg_conn):
+    # issue #211 gap 1: the alias-map lookup used the caller's RAW id text while the trust-map
+    # lookup canonicalizes via str(UUID(...)). load_aliases_for keys the map by canonical
+    # lowercase uuid text, so a batch caller passing an UPPERCASE (or braced) uuid silently
+    # missed every alias — the §5.5(a) known-alias REVIEW forcing quietly did NOT fire, a
+    # latent safety-invariant bypass (not reachable via sweep today, which is already canonical).
+    seed_patient(pg_conn, A, names=[("Jane Realname", 20), (FALSE_NAME, 20)])
+    seed_patient(pg_conn, B, names=[(FALSE_NAME, 20)])
+    preloaded = {A: frozenset({FALSE_NAME})}       # canonical lowercase key (as the loader emits)
+    a_upper, b_upper = A.upper(), B.upper()        # a non-canonical caller
+
+    result = propose(pg_conn, a_upper, b_upper, aliases=preloaded)
+    assert result is Band.REVIEW                    # the known-alias forcing must still fire
+
+    _, evidence = _evidence(pg_conn)
+    # The persisted alias_of is the CANONICAL lowercase id, never the uppercase input — the
+    # marker is canonical exactly like the trust marker (runner canonicalizes both now).
+    assert {"kind": "known_alias", "value": FALSE_NAME, "alias_of": A} in evidence

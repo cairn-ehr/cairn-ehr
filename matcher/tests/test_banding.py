@@ -7,6 +7,8 @@ threshold nothing is proposed (the noise floor; the B3 hub sweep is the declared
 backstop for missed signal).
 """
 
+import pytest
+
 from cairn_matcher.agreement import AgreementLevel
 from cairn_matcher.pipeline.banding import (
     Band,
@@ -24,6 +26,30 @@ def _score(total: float) -> MatchScore:
     return MatchScore(total=total, fields=(
         FieldEvidence("name", AgreementLevel.EXACT, 60, total),
     ))
+
+
+# --- Thresholds review<=auto invariant (issue #211 gap 2) --------------------------------
+# band() treats [review, auto) as REVIEW and [auto, inf) as AUTO_CANDIDATE, so an inverted
+# Thresholds(review > auto) makes the REVIEW band VANISH: every un-vetoed score >= review
+# lands in AUTO_CANDIDATE. That is a swapped-kwargs typo waiting to auto-link. The dataclass
+# must refuse the inversion at construction so it can never reach band().
+
+
+def test_thresholds_rejects_inverted_review_above_auto():
+    with pytest.raises(ValueError, match="review"):
+        Thresholds(review=5.0, auto=3.0)
+
+
+def test_thresholds_allows_review_equal_auto():
+    # Equal is the degenerate-but-coherent boundary (no REVIEW band, no inversion); the
+    # learner never emits it — auto = review + margin, margin > 0 — but it is not unsafe,
+    # so the invariant is `<=`, not `<`, and must not raise here.
+    assert Thresholds(review=4.0, auto=4.0).review == 4.0
+
+
+def test_thresholds_allows_ordinary_review_below_auto():
+    t = Thresholds(review=3.0, auto=8.0)
+    assert (t.review, t.auto) == (3.0, 8.0)
 
 
 def test_high_score_no_veto_is_auto_candidate():

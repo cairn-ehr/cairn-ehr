@@ -125,3 +125,40 @@ def test_sab_vs_admin_pair_grades_sex_via_the_composite_fallback():
     a, b = (record_to_candidate(r) for r in ds.entities[0].records)
     by_field = {c.field: c for c in field_comparisons(a, b, DEFAULT_CONFIG)}
     assert by_field["sex"].level is AgreementLevel.EXACT
+
+
+# --- repaired marker round-trip + quantify helper (issue #211 gap 4) ---------------------
+# The generator's _repair injects a verbatim EXACT name into the hardest clones to keep them
+# blockable. DatasetRecord must carry that marker through the loader (a bare dict key would be
+# silently dropped by the fixed-field dataclass), and a pure helper must let eval consumers
+# COUNT the repair-influenced records so held-out lift can be reported honestly.
+from cairn_matcher.eval import dataset as _dataset  # noqa: E402
+
+
+def test_dataset_record_repaired_defaults_false():
+    # A record with no marker is not repair-influenced — the default must be a plain False.
+    assert DatasetRecord(record_id="r").repaired is False
+
+
+def test_load_dataset_preserves_repaired_marker():
+    ds = load_dataset({
+        "entities": [{"entity_id": "e1", "records": [
+            {"record_id": "seed"},
+            {"record_id": "clone", "repaired": True},
+        ]}],
+    })
+    by_id = {r.record_id: r for e in ds.entities for r in e.records}
+    assert by_id["clone"].repaired is True     # marker survived the loader
+    assert by_id["seed"].repaired is False     # unmarked record stays False
+
+
+def test_repaired_record_ids_enumerates_only_marked_records():
+    ds = load_dataset({
+        "entities": [
+            {"entity_id": "e1", "records": [
+                {"record_id": "s1"}, {"record_id": "c1", "repaired": True}]},
+            {"entity_id": "e2", "records": [
+                {"record_id": "s2"}, {"record_id": "c2"}]},
+        ],
+    })
+    assert _dataset.repaired_record_ids(ds) == frozenset({"c1"})

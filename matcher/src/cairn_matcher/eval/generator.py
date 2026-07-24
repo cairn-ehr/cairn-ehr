@@ -412,12 +412,21 @@ def _repair(seed, clone):
     """Guarantee the seed<->clone pair stays blockable: if corruptions destroyed every
     blocking key (symmetric AND anchored-range alike), append the seed's primary name
     (verbatim) to the clone's retained names, restoring a shared name token. Every seed
-    has >=1 name, so this always succeeds. Pure (returns new)."""
+    has >=1 name, so this always succeeds. Pure (returns new).
+
+    The repaired clone is MARKED `repaired: True` (issue #211 gap 4). The injected name is a
+    VERBATIM copy of the seed's, so it grades EXACT and lands on exactly the hardest pairs —
+    the ones every other blocking key already failed to recover. Left invisible, that inflates
+    the learner's name m-probabilities and makes held-out lift optimistic. The marker lets an
+    eval consumer count (or exclude) these synthetically-easy pairs via
+    `dataset.repaired_record_ids`. An already-blockable clone is returned UNTOUCHED (no marker),
+    so a consumer never over-counts and the identity-unchanged no-op contract is preserved."""
     if shares_blocking_key(seed, clone):
         return clone
     out = _clone(clone)
     out.setdefault("names", [])
     out["names"].append(dict(seed["names"][0]))
+    out["repaired"] = True
     return out
 
 

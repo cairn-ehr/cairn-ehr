@@ -7,6 +7,7 @@ import random
 from cairn_matcher.eval.dataset import load_dataset, truth_pairs
 from cairn_matcher.eval.generator import (
     GenSpec,
+    _repair,
     corrupt_dob_format,
     corrupt_dob_typo,
     corrupt_identifier,
@@ -167,3 +168,35 @@ def test_every_true_pair_shares_a_blocking_key():
     for ent in ds_dict["entities"]:
         for a, b in itertools.combinations(ent["records"], 2):
             assert shares_blocking_key(a, b), f"unrecoverable pair in {ent['entity_id']}"
+
+
+# --- _repair injects a verbatim EXACT name; it must self-mark (issue #211 gap 4) ----------
+# When corruption destroys every blocking key, _repair appends the seed's primary name
+# VERBATIM to the clone to keep the pair recoverable. That injects an EXACT name-token match
+# on exactly the hardest pairs, inflating the learner's name m-probabilities and making
+# held-out lift optimistic. The repaired clone must carry a marker so eval consumers can
+# quantify (and exclude) these synthetically-easy pairs, instead of the injection being
+# invisible.
+
+
+def test_repair_marks_the_repaired_clone():
+    # A seed and clone that share NO blocking key (different name, different point DOB, no
+    # identifier) — so _repair must inject the seed's name and mark the record.
+    seed = {"record_id": "s", "names": [{"value": "Zed Q", "provenance_rank": 20}],
+            "dob": {"value": "1990-05-12", "precision": "day"}}
+    clone = {"record_id": "c", "names": [{"value": "Xavier"}],
+             "dob": {"value": "1970-01-01", "precision": "day"}}
+    assert not shares_blocking_key(seed, clone)   # precondition: a genuine repair case
+    repaired = _repair(seed, clone)
+    assert repaired["repaired"] is True
+    assert "Zed Q" in [n["value"] for n in repaired["names"]]   # the injected verbatim name
+
+
+def test_repair_leaves_an_already_blockable_clone_unmarked():
+    # Sharing a name token means no repair is needed: _repair returns the clone untouched,
+    # so no marker is added (a consumer counting repaired records must not over-count).
+    seed = {"record_id": "s", "names": [{"value": "Alex Nguyen"}]}
+    clone = {"record_id": "c", "names": [{"value": "Alex Other"}]}
+    assert shares_blocking_key(seed, clone)       # precondition: no repair needed
+    result = _repair(seed, clone)
+    assert "repaired" not in result

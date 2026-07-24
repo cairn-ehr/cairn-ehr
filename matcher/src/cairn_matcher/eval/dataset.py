@@ -38,6 +38,10 @@ class DatasetRecord:
          facet a clinician-observed sex lands on (slice D's composite-sex fallback input)
     names: tuple of {"value": display str, "provenance_rank": int}
     identifiers: tuple of {"system": str, "match_key": str, "value": str}
+    repaired: True on a synthetic clone whose blocking key the generator RESTORED by
+         injecting a verbatim EXACT name (generator._repair, issue #211 gap 4). Defaults
+         False; a real (non-synthetic) record never carries it. Lets an eval consumer
+         quantify the pairs the generator made artificially easy (repaired_record_ids).
     """
 
     record_id: str
@@ -46,6 +50,7 @@ class DatasetRecord:
     administrative_sex: Mapping | None = None
     names: tuple[Mapping, ...] = ()
     identifiers: tuple[Mapping, ...] = ()
+    repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,9 @@ def _record_from(obj: Mapping) -> DatasetRecord:
         administrative_sex=obj.get("administrative_sex"),
         names=names,
         identifiers=identifiers,
+        # Coerce to a plain bool so a truthy-but-non-bool JSON value can't leak into the type
+        # (the marker is a strict flag). Absent -> False (a real record is never repaired).
+        repaired=bool(obj.get("repaired", False)),
     )
 
 
@@ -200,3 +208,16 @@ def all_pairs(ds: LabelledDataset) -> list[tuple[str, str]]:
     """The full comparison universe: every unordered record pair, canonicalised."""
     ids = [r.record_id for r in ds.all_records()]
     return [canonical_label_pair(a, b) for a, b in itertools.combinations(ids, 2)]
+
+
+def repaired_record_ids(ds: LabelledDataset) -> frozenset[str]:
+    """The record_ids the generator REPAIRED by injecting a verbatim EXACT name (#211 gap 4).
+
+    A repaired clone (generator._repair) carries a synthetically-easy name match on exactly
+    the hardest pairs, so a learner/scorer eval that treats it like an ordinary pair reports
+    optimistic held-out lift. This is the quantify seam: an eval consumer can size the effect
+    (len of the returned set) or drop the true pairs that touch a repaired record before
+    measuring. On a real (non-synthetic) dataset every record is unmarked, so this is the
+    empty set — the honest 'nothing to discount'. Pure: no I/O.
+    """
+    return frozenset(r.record_id for r in ds.all_records() if r.repaired)
