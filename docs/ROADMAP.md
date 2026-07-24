@@ -786,8 +786,27 @@ now-redundant inverted-thresholds guard in `eval/model_io.py`, made dead by the 
 was removed in-branch (behavior unchanged; the existing `test_inverted_thresholds_rejected` still pins
 the ModelIOError). Matcher follow-ons: **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)**
 closed by this slice; **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale
-reconciliation re-scoring cost) and new **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290)**
-(wire `repaired_record_ids` into eval lift reporting — the gap-4 seam's consumer) remain.
+reconciliation re-scoring cost) remains; new **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290)**
+(wire `repaired_record_ids` into eval lift reporting — the gap-4 seam's consumer) closed by Slice 54.
+
+**Slice 54 — matcher #290: wire `repaired_record_ids` into eval reporting (2026-07-25; advisory Python
+tier; branch `fix/matcher-repaired-pair-reporting-290`; no ADR/spec/SCHEMA/event-type change — an additive
+TDD change wholly inside `matcher/eval/`; consumes the Slice-53 gap-4 seam).** The generator's `_repair`
+marks a clone `repaired: True` when it injects a VERBATIM seed name to keep a corrupted true pair
+blockable; it grades EXACT, so held-out recall/F1 is optimistically inflated on exactly the hardest pairs.
+#211.4 made it measurable; no eval consumer consumed it. **Decision** ([design](superpowers/specs/2026-07-25-repaired-pair-eval-reporting-290.md)):
+REPORT the count everywhere (approach b), never exclude, never change the learned model — a repaired true
+pair is a genuine match the matcher *should* recover, so dropping it understates coverage; disclosing lets
+a reader discount (crossval's disclose-don't-hide ethos). One shared pure primitive
+`dataset.repaired_truth_pairs(ds)` (the within-cluster true pairs touching a repaired record; empty on real
+data) feeds additive count fields: `ScorerMetrics.repaired_match_pairs` — via a new `PairOutcome.repaired`
+flag set in `scorer_outcomes`, so it flows through k-fold pooling for free — plus
+`LiftReport.held_out_repaired_pairs` and `LearnMetadata.train_repaired_pairs` (round-tripped through
+`model_io`, whose `_META_FIELDS` gained the field; the 5 bad-fixtures gained the now-required key so each
+still fails for its ORIGINAL reason, non-vacuously), all rendered in `report.py`. Every count is 0 on an
+unmarked (real) dataset. TDD RED-first (+14 tests, suite 395→**409/0**, ruff clean). Independent
+code-review pass: **clean, no finding at/above threshold** (verified the two counting paths provably agree).
+Remaining matcher follow-on: only [#287](https://github.com/cairn-ehr/cairn-ehr/issues/287).
 
 ## Phase 5 — Security & compliance core
 
