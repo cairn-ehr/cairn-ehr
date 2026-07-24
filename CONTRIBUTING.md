@@ -48,3 +48,55 @@ Two things that have bitten us, so they are worth stating outright:
 See [GOVERNANCE.md](docs/principles/GOVERNANCE.md) for the rest — how decisions are made, the
 defect-blast-radius rule for code, stewardship of the name, the code of conduct, and responsible
 disclosure.
+
+## Paper-parity benchmark — a required slice-plan section
+
+Paper-parity is the [governing law](docs/spec/vision.md#12-the-paper-parity-test-normative): §1.2
+makes it **falsifiable** — *every clinical workflow must name its paper-era equivalent and benchmark
+against it in time, steps, and cognitive load; a workflow that loses to paper is a design defect and
+is tracked as one.* To keep that from being enforced by taste, **every slice plan for a slice that
+adds or changes a clinical workflow — at any layer, the in-DB floor and event core included — must
+carry a Paper-parity benchmark section:**
+
+```markdown
+## Paper-parity benchmark (§1.2)
+
+- **Paper counterpart:** <named concretely — e.g. "the drug chart: one signature, one form, one act">
+- **Steps (paper → Cairn):** paper N human acts → architecture forces M → UI bundling target K.
+  <If M > N: "FAILS parity (architecture defect) → tracked as #NNN.">
+- **Time + cognitive load:** budget — <e.g. "re-attest a 6-thread list in ≤ 1 gesture, ≤ 2 s">.
+  Unmeasured (no runnable surface); measurement owed by <the slice that first exposes one>.
+```
+
+Copy the three limb labels (**Paper counterpart**, **Steps**, **Time + cognitive load**) verbatim —
+the enforcing guard matches them exactly, so a re-worded label reads as a *missing* section and fails
+the check (loudly and safely — a false-fail is never a false-pass, but it is an avoidable surprise).
+
+Three things make this honest rather than ceremonial:
+
+- **Steps are judged on what the architecture *forecloses*, not on rendered gestures.** Bundling N
+  events into one human gesture is a UI/policy job ([ADR-0021](docs/spec/decisions/0021-layering-the-node-api-and-ui-pluralism.md));
+  the architecture's duty is only to *not foreclose* it (and ideally promote it). So `M` is the human
+  acts the design **forces** — the floor no UI can bundle away. **`M > N` is an architecture defect**
+  (file an issue, per §1.2 and house rule 5). `M ≤ N` but a UI exposing more than `K` is a **UI**
+  defect, tracked against that UI slice.
+- **Only the step-count is binding at plan time.** Steps are countable from the design; *time* and
+  *cognitive load* need a runnable workflow. So the section states a step-count claim now and a
+  time/load *budget* now, with the measurement owed (and named) by the first slice that ships a
+  runnable surface. Declaring a budget we cannot yet measure — rather than fabricating a number — is
+  acknowledged uncertainty (principle 4) applied to our own process.
+- **Below-the-clinical-surface plans take a forced-rationale escape,** not a checkbox. One line:
+
+  ```markdown
+  Paper-parity: not clinical-surface — <substantive recorded reason>.
+  ```
+
+  A confirmation-style "N/A" is refused; the reason must be substantive (this is §1.2's own permitted
+  friction — a forced-rationale gate, never a click-through — applied to the plan document).
+
+**Enforcement.** A no-DB source-guard test
+([`crates/cairn-node/tests/paper_parity_plan_section.rs`](crates/cairn-node/tests/paper_parity_plan_section.rs))
+runs inside the existing `cargo test` gate and fails any plan dated on/after 2026-07-24 that carries
+neither the section nor a substantive escape line. It is **forward-only** — the plans written before
+the rule are the historical record and are left untouched (principle 2). The Tauri reference-client
+slice is the first plan it binds.

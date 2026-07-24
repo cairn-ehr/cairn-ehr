@@ -742,6 +742,21 @@ note — correct behavior, a future optimization, not a defect). Open follow-ons
 **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (four minor matcher logic gaps — the E3
 batch) and **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** remain.
 
+**Slice 52 — the #217 paper-parity plan-section rule (2026-07-24; the last open 2026-07-15
+review-course item; branch `feat/paper-parity-plan-section-217`; no spec/ADR/wire/SCHEMA change — a
+process rule + a no-DB source guard).** §1.2 paper-parity was normative but enforced by taste. Now
+every clinical-surface slice plan (all layers, forward-only from 2026-07-24) must carry a falsifiable
+`## Paper-parity benchmark (§1.2)` section — named paper counterpart + a step count judged on what the
+architecture *forecloses* (gesture bundling is a layer-3/4 job, ADR-0021; `M > N` = architecture
+defect) + a time/cognitive-load budget whose measurement is owed by the first runnable surface — or a
+forced-rationale `Paper-parity: not clinical-surface — <reason>` escape. Three layers:
+`CONTRIBUTING.md` rule text, `CLAUDE.md` house rule 7, and
+`crates/cairn-node/tests/paper_parity_plan_section.rs` (pure `plan_date`/`classify_declaration`/
+`verdict`, fixture-pinned against vacuity, riding the existing `cargo test` gate — no new workflow).
+Filed **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)** — the med-list whole-list sign-off
+UI obligation (one human gesture; the architecture already permits it, `M=1`), the rule's first live
+entry, owed by the Tauri med-list slice. **The 2026-07-15 review course is now FULLY closed.**
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
