@@ -121,7 +121,8 @@ every `cargo test` and CI pass.
   - `Missing` — neither.
 - `verdict(date, cutoff, declaration) -> Verdict` — a plan dated `< cutoff` is `Exempt` (forward-only);
   a plan dated `≥ cutoff` passes on `Benchmark`, or `NotClinical` **with a substantive reason**
-  (`reason.trim().len() >= 30`), else `Fail`.
+  (`reason.chars().count() >= 30` — Unicode scalar count, not byte length, so a reason in non-ASCII
+  script is measured fairly), else `Fail`.
 
 **Substantive-reason proxy — stated honestly.** The `≥ 30 chars` floor is a *crude* proxy. It defeats
 silence and one-word checkboxes; it **cannot** detect bad faith — human/agent review does that. Its

@@ -56,6 +56,12 @@ fn plans_dir() -> PathBuf {
 /// does not is a LOUD `Err` naming the file — never a silent skip, which would be a free way to dodge
 /// the guard by mis-naming a plan. Operates on bytes: the prefix is ASCII, and byte checks avoid any
 /// char-boundary panic on an unexpected multibyte name.
+///
+/// Validates SHAPE only (four digits, dash, two digits, dash, two digits, dash) — NOT that the month
+/// is 1..=12 or the day 1..=31. A mis-ranged date like `2026-13-45-x.md` is an author error, and it is
+/// loudly visible right there in the filename (the diff a reviewer reads). Its sole consumer is the
+/// `date < cutoff` tuple comparison in `verdict`; keeping the parse shape-only avoids pulling in a
+/// calendar dependency to police typos a human already sees in the plan's own name.
 fn plan_date(filename: &str) -> Result<(i32, u32, u32), String> {
     let b = filename.as_bytes();
     let shape_ok = b.len() >= 11
@@ -89,16 +95,16 @@ enum Declaration {
     Missing,
 }
 
-/// The reason text following the escape prefix on its line, with leading dashes / em-dash / colon /
-/// whitespace stripped. `None` if the plan has no escape line. Forgiving of `—`, `--`, or `:` as the
-/// separator so an author is not tripped by punctuation choice.
+/// The reason text following the escape prefix on its line, with leading dashes / em-dash / en-dash /
+/// colon / whitespace stripped. `None` if the plan has no escape line. Forgiving of `—` (em), `–` (en),
+/// `--`, or `:` as the separator so an author is not tripped by punctuation choice.
 fn escape_reason(contents: &str) -> Option<String> {
     for line in contents.lines() {
         if let Some(idx) = line.find(ESCAPE_PREFIX) {
             let after = &line[idx + ESCAPE_PREFIX.len()..];
             let reason = after
                 .trim_start_matches(|c: char| {
-                    c == '-' || c == '\u{2014}' || c == ':' || c.is_whitespace()
+                    c == '-' || c == '\u{2014}' || c == '\u{2013}' || c == ':' || c.is_whitespace()
                 })
                 .trim();
             return Some(reason.to_string());
@@ -184,6 +190,18 @@ fn classify_recognises_a_full_benchmark_section() {
 fn classify_recognises_the_escape_line() {
     let plan = "## Global Constraints\n\
                 Paper-parity: not clinical-surface — pure sync-cursor bookkeeping, no workflow.\n";
+    match classify_declaration(plan) {
+        Declaration::NotClinical { reason } => assert!(reason.starts_with("pure sync-cursor")),
+        other => panic!("expected NotClinical, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_strips_an_en_dash_separator() {
+    // An author who types an en-dash `–` (U+2013) instead of the template's em-dash `—` (U+2014)
+    // must not have the stray dash folded into the reason. Guards escape_reason's separator set.
+    let plan = "## Global Constraints\n\
+                Paper-parity: not clinical-surface – pure sync-cursor bookkeeping, no workflow.\n";
     match classify_declaration(plan) {
         Declaration::NotClinical { reason } => assert!(reason.starts_with("pure sync-cursor")),
         other => panic!("expected NotClinical, got {other:?}"),
