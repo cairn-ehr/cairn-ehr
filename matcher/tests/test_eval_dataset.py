@@ -162,3 +162,25 @@ def test_repaired_record_ids_enumerates_only_marked_records():
         ],
     })
     assert _dataset.repaired_record_ids(ds) == frozenset({"c1"})
+
+
+def test_repaired_truth_pairs_selects_only_true_pairs_touching_a_repaired_record():
+    ds = load_dataset({
+        "entities": [
+            {"entity_id": "e1", "records": [
+                {"record_id": "s1"}, {"record_id": "c1", "repaired": True}]},
+            {"entity_id": "e2", "records": [
+                {"record_id": "s2"}, {"record_id": "c2"}]},
+        ],
+    })
+    # e1's within-cluster pair is eased (c1 repaired); e2's is not; no cross-cluster
+    # (non-match) pair is ever included even though c1 appears in some of them.
+    assert _dataset.repaired_truth_pairs(ds) == frozenset({("c1", "s1")})
+
+
+def test_repaired_truth_pairs_empty_on_an_unmarked_dataset():
+    ds = load_dataset({
+        "entities": [{"entity_id": "e1", "records": [
+            {"record_id": "r1"}, {"record_id": "r2"}]}],
+    })
+    assert _dataset.repaired_truth_pairs(ds) == frozenset()
