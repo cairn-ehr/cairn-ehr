@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **Only #217 remains** from the review course (paper-parity benchmark as a required slice-plan section). Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Remaining feature work now unblocked: matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (minor batch of 4 logic gaps), medication slices 6+.
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 + the whole Priority-6 queue + #217). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **#217 ✅** (paper-parity benchmark now a required slice-plan section, ROADMAP Slice 52) — **the review course is FULLY closed; nothing remains open from 2026-07-15.** Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Remaining feature work now unblocked: matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211)** (minor batch of 4 logic gaps), medication slices 6+, **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale reconciliation re-scoring-cost note), plus the new UI-slice obligation **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)** (med-list whole-list sign-off must collapse to one human gesture, owed by the future Tauri med-list slice).
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -116,6 +116,20 @@ triggers; `cairn_reproject` heal/rebuild run gen-gated by both loaders; the ever
 `cairn_demographic_backfill` retired; measured at Bet-B volume).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+**Session (2026-07-24) — the #217 paper-parity plan-section rule (process + tooling; ROADMAP Slice
+52; no spec/ADR/wire/SCHEMA change; branch `feat/paper-parity-plan-section-217`).** §1.2 paper-parity
+was normative but enforced by taste, not the falsifiable form the spec mandates (2026-07-15 review
+finding I9/G). Now every clinical-surface slice plan must carry a `## Paper-parity benchmark (§1.2)`
+section — named paper counterpart + a step count judged on what the architecture *forecloses* (`M > N`
+= architecture defect; ADR-0021 draws the gesture-bundling line) + a time/cognitive-load budget — or a
+forced-rationale `Paper-parity: not clinical-surface — <reason>` escape. Rule text in
+`CONTRIBUTING.md`, a pointer as CLAUDE.md house rule 7, and a no-DB source guard
+`crates/cairn-node/tests/paper_parity_plan_section.rs` (pure `plan_date`/`classify_declaration`/
+`verdict`, fixture-pinned against vacuity, forward-only from a fixed 2026-07-24 cutoff, riding the
+existing `cargo test` gate — no new workflow). Filed **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)**
+— the med-list whole-list sign-off UI obligation, the rule's first live entry. **The 2026-07-15 review
+course is now FULLY closed.**
 
 **Session (2026-07-23) — matcher review-follow-ons #209 + #210 (advisory Python tier, ROADMAP Slice
 51; no spec/SCHEMA/wire/ADR change — TDD bugfix wholly inside `matcher/`).** **#209:**
