@@ -34,7 +34,7 @@ def _repaired_line(metrics: ScorerMetrics) -> str:
     )
     if metrics.repaired_match_pairs:
         line += (
-            f"  — recall/f1 above optimistic by up to "
+            f"  — recall/f1 above are optimistic by up to "
             f"{metrics.repaired_match_pairs} true pair(s)"
         )
     return line

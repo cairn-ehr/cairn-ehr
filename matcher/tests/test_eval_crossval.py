@@ -103,5 +103,8 @@ def test_format_lift_shows_both_blocks():
 
 def test_format_lift_shows_held_out_repaired_pairs():
     text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
-    assert "repaired" in text.lower()
-    assert "0" in text  # _synthetic clusters carry no repaired marker
+    # Pin the standalone held-out line specifically. "held-out repaired" is unique to
+    # format_lift — the BEFORE/AFTER scorer sub-blocks say "repaired match pairs" — so this
+    # fails if the held_out_repaired_pairs line is dropped, unlike a bare "repaired"/"0" check
+    # which the sub-blocks would satisfy on their own. 0: _synthetic carries no repaired marker.
+    assert "held-out repaired pairs (synthetically eased): 0" in text
