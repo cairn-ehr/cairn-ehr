@@ -187,6 +187,16 @@ These are load-bearing working agreements — hold to them on proof-of-concept s
    positive that blocks the scan until a human dismisses it (issue #146). Deriving keeps the fixture deterministic
    while presenting no hard-coded value to the scanner, and it keeps the query live for *production* code, where it
    is a real defense (production derives all key material from `rand_bytes`).
+7. **Every clinical-surface slice plan carries a falsifiable paper-parity benchmark (§1.2).** A plan
+   for a slice that adds or changes a clinical workflow — at ANY layer, the in-DB floor and event core
+   included — must carry a `## Paper-parity benchmark (§1.2)` section: the named paper counterpart, the
+   step count (paper *N* human acts → architecture-forced *M* → UI bundling target *K*; **`M > N` is an
+   architecture defect** — file it, per rule 5), and a time/cognitive-load *budget* whose measurement is
+   owed by the slice that first exposes a runnable surface. A below-the-surface plan takes the
+   forced-rationale escape instead — one line, `Paper-parity: not clinical-surface — <substantive
+   reason>`. Gesture bundling is a UI/policy job (ADR-0021) — the architecture must merely not foreclose
+   it. Enforced forward-only by `crates/cairn-node/tests/paper_parity_plan_section.rs` (rides the
+   existing `cargo test` gate) and stated in `CONTRIBUTING.md`. (2026-07-15 review finding I9/G, #217.)
 
 ## Working conventions
 
