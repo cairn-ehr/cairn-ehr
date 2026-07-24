@@ -79,3 +79,21 @@ def test_empty_outcomes_are_safe():
     m = scorer_metrics([])
     assert m.pair_count == 0
     assert m.match_scores.count == 0
+
+
+def test_pair_outcome_repaired_defaults_false():
+    assert PairOutcome(is_match=True, score_total=1.0, band=None).repaired is False
+
+
+def test_scorer_metrics_counts_only_repaired_true_matches():
+    outcomes = [
+        PairOutcome(is_match=True, score_total=9.0, band=Band.AUTO_CANDIDATE, repaired=True),
+        PairOutcome(is_match=True, score_total=8.0, band=Band.AUTO_CANDIDATE),  # match, unmarked
+        PairOutcome(is_match=False, score_total=1.0, band=None, repaired=True),  # non-match: excluded
+    ]
+    assert scorer_metrics(outcomes).repaired_match_pairs == 1
+
+
+def test_scorer_metrics_repaired_zero_when_nothing_marked():
+    m = scorer_metrics([PairOutcome(is_match=True, score_total=8.0, band=None)])
+    assert m.repaired_match_pairs == 0
