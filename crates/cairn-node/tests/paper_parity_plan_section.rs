@@ -252,7 +252,11 @@ fn every_bound_plan_declares_paper_parity() {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .expect("dir entry has a file name")
+            .to_string_lossy()
+            .into_owned();
         // A mis-named .md is a loud failure, not a silent skip.
         let date = plan_date(&name).expect("plan filename must be YYYY-MM-DD-<slug>.md");
         let contents = fs::read_to_string(&path).expect("read plan");

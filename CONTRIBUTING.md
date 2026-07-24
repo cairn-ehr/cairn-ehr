@@ -68,6 +68,10 @@ carry a Paper-parity benchmark section:**
   Unmeasured (no runnable surface); measurement owed by <the slice that first exposes one>.
 ```
 
+Copy the three limb labels (**Paper counterpart**, **Steps**, **Time + cognitive load**) verbatim —
+the enforcing guard matches them exactly, so a re-worded label reads as a *missing* section and fails
+the check (loudly and safely — a false-fail is never a false-pass, but it is an avoidable surprise).
+
 Three things make this honest rather than ceremonial:
 
 - **Steps are judged on what the architecture *forecloses*, not on rendered gestures.** Bundling N

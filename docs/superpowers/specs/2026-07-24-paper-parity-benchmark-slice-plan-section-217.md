@@ -104,9 +104,10 @@ Paper-parity: not clinical-surface — <substantive recorded reason, ≥ 30 char
 
 ## The CI guard — mechanics
 
-Lands as `crates/cairn-node/tests/paper_parity_plan_section.rs` (a test file sits at the same crate
-depth as `src/`, so `../../../docs/superpowers/plans/` reaches the plans directory the same way
-`name_winner_order_drift.rs` reaches `db/`). No database; runs in every `cargo test` and CI pass.
+Lands as `crates/cairn-node/tests/paper_parity_plan_section.rs`. It resolves the plans directory at
+runtime as `env!("CARGO_MANIFEST_DIR").join("../../docs/superpowers/plans")` — two levels up from the
+crate root — the same idiom as `twin_dispatch_single_source.rs`'s `db_dir()`. No database; runs in
+every `cargo test` and CI pass.
 
 **Pure helpers (unit-tested off synthetic strings, house rule 1):**
 
