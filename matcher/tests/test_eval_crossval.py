@@ -99,3 +99,9 @@ def test_kfold_lift_reports_held_out_repaired_pairs():
 def test_format_lift_shows_both_blocks():
     text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
     assert "BEFORE" in text and "AFTER" in text
+
+
+def test_format_lift_shows_held_out_repaired_pairs():
+    text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
+    assert "repaired" in text.lower()
+    assert "0" in text  # _synthetic clusters carry no repaired marker

@@ -139,6 +139,10 @@ def format_lift(report: LiftReport, *, dataset_name: str = "") -> str:
             "--- AFTER (learned) ---",
             format_scorer(report.after),
             (
+                f"held-out repaired pairs (synthetically eased): "
+                f"{report.held_out_repaired_pairs}"
+            ),
+            (
                 "NOTE: PoC — advisory, not shipped weights; synthetic data reflects the "
                 + "generator's corruption model. See design 2026-07-06 §8 for honest limits."
             ),
