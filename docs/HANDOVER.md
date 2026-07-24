@@ -51,13 +51,14 @@ every finding is filed as a GitHub issue (#187–#217) with a finding→issue ma
   [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) (align node-plane skip),
   [#269](https://github.com/cairn-ehr/cairn-ehr/issues/269) (node-plane heal test gap),
   [#270](https://github.com/cairn-ehr/cairn-ehr/issues/270) (frozen watermark must fail loud).
-- **#208 (D3)** — a generic reprojection mechanism + the written "a projection fix ships with its
-  backfill" rule + one measured full-replay number at Bet-B volume. **Now load-bearing for ADR-0056**
-  (#266's reclassify-then-reproject path is exactly this mechanism).
-- **#216** — decide the `t_effective` ceiling semantics against ADR-0027's graded interval
-  (write-door bound + remote-door quarantine-vs-reject).
-- **#217** — make the §1.2 paper-parity benchmark a required section of every clinical-surface
-  slice plan, starting with the Tauri client.
+- **#208 (D3) ✅ 2026-07-21** — resolved by [ADR-0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md)
+  (generic reprojection; spec v0.59; ROADMAP Slice 49; PRs #274/#278); the #266 reclassify-then-reproject
+  path consumes this mechanism.
+- **#216 ✅ 2026-07-23** — resolved by [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)
+  (grade-gated `t_effective` ceiling; spec v0.60; ROADMAP Slice 50; PR #285).
+- **#217 ✅ 2026-07-24** — the §1.2 paper-parity benchmark is now a required slice-plan section
+  (ROADMAP Slice 52; CONTRIBUTING.md + CLAUDE.md house rule 7 + a no-DB source guard); filed the first
+  live entry [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288). **The 2026-07-15 review course is fully closed.**
 
 **Explicitly deprioritized behind P6, now UNBLOCKED (P1–P5 closed; the "before slice 5" guards —
 #214's label fix and the verb-then-vouch factoring — are in):** matcher #209/#210/#211,
