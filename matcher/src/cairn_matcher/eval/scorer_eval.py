@@ -17,6 +17,7 @@ from cairn_matcher.eval.dataset import (
     LabelledDataset,
     all_pairs,
     record_to_candidate,
+    repaired_record_ids,
     truth_pairs,
 )
 from cairn_matcher.eval.metrics import PairOutcome, ScorerMetrics, scorer_metrics
@@ -40,6 +41,7 @@ def scorer_outcomes(
     """
     candidates = {r.record_id: record_to_candidate(r) for r in ds.all_records()}
     truth = truth_pairs(ds)
+    repaired_ids = repaired_record_ids(ds)  # #290: flag pairs a synthetic repair eased
 
     outcomes: list[PairOutcome] = []
     for low, high in all_pairs(ds):
@@ -50,6 +52,7 @@ def scorer_outcomes(
                 is_match=(low, high) in truth,
                 score_total=match_score.total,
                 band=band(match_score, (), thresholds),
+                repaired=low in repaired_ids or high in repaired_ids,
             )
         )
     return outcomes
