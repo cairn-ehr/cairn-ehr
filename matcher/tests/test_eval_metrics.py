@@ -89,7 +89,7 @@ def test_scorer_metrics_counts_only_repaired_true_matches():
     outcomes = [
         PairOutcome(is_match=True, score_total=9.0, band=Band.AUTO_CANDIDATE, repaired=True),
         PairOutcome(is_match=True, score_total=8.0, band=Band.AUTO_CANDIDATE),  # match, unmarked
-        PairOutcome(is_match=False, score_total=1.0, band=None, repaired=True),  # non-match: excluded
+        PairOutcome(is_match=False, score_total=1.0, band=None, repaired=True),  # non-match: skip
     ]
     assert scorer_metrics(outcomes).repaired_match_pairs == 1
 
