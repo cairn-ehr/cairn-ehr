@@ -33,13 +33,24 @@ def test_file_round_trip(tmp_path):
     assert restored.metadata == model.metadata
 
 
+def test_round_trip_preserves_train_repaired_pairs():
+    # learn_model on gold gives train_repaired_pairs == 0; force a non-zero via a dict edit to
+    # prove the field survives to_json/from_json, not just the 0 default.
+    model = learn_model(load_bundled_gold())
+    obj = model_to_json(model)
+    obj["metadata"]["train_repaired_pairs"] = 3
+    restored = model_from_json(obj)
+    assert restored.metadata.train_repaired_pairs == 3
+
+
 def test_unknown_agreement_level_rejected():
     bad = {
         "weights": {"dob": {"NOT_A_LEVEL": 1.0}},
         "thresholds": {"review": 1.0, "auto": 2.0},
         "metadata": {
             "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
-            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+            "train_pairs": 1, "train_matches": 1, "train_repaired_pairs": 0,
+            "review_auto_collided": False,
         },
     }
     with pytest.raises(ModelIOError):
@@ -57,7 +68,8 @@ def test_non_numeric_weight_value_rejected():
         "thresholds": {"review": 1.0, "auto": 2.0},
         "metadata": {
             "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
-            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+            "train_pairs": 1, "train_matches": 1, "train_repaired_pairs": 0,
+            "review_auto_collided": False,
         },
     }
     with pytest.raises(ModelIOError):
@@ -70,7 +82,8 @@ def test_non_mapping_weights_rejected():
         "thresholds": {"review": 1.0, "auto": 2.0},
         "metadata": {
             "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
-            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+            "train_pairs": 1, "train_matches": 1, "train_repaired_pairs": 0,
+            "review_auto_collided": False,
         },
     }
     with pytest.raises(ModelIOError):
@@ -85,7 +98,8 @@ def test_non_numeric_threshold_value_rejected():
         "thresholds": {"review": "nope", "auto": 2.0},
         "metadata": {
             "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
-            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+            "train_pairs": 1, "train_matches": 1, "train_repaired_pairs": 0,
+            "review_auto_collided": False,
         },
     }
     with pytest.raises(ModelIOError):
@@ -100,7 +114,8 @@ def test_inverted_thresholds_rejected():
         "thresholds": {"review": 9.0, "auto": 2.0},
         "metadata": {
             "alpha": 0.5, "recall_target": 0.99, "margin": 0.5,
-            "train_pairs": 1, "train_matches": 1, "review_auto_collided": False,
+            "train_pairs": 1, "train_matches": 1, "train_repaired_pairs": 0,
+            "review_auto_collided": False,
         },
     }
     with pytest.raises(ModelIOError):

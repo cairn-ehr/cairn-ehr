@@ -19,6 +19,7 @@ from cairn_matcher.eval.dataset import (
     LabelledDataset,
     all_pairs,
     record_to_candidate,
+    repaired_truth_pairs,
     truth_pairs,
 )
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, field_comparisons
@@ -168,13 +169,21 @@ def derive_thresholds(
 
 @dataclass(frozen=True)
 class LearnMetadata:
-    """Provenance of a learned model: the knobs + training-set size + collision flag."""
+    """Provenance of a learned model: the knobs + training-set size + repaired-pair count
+    (#290) + collision flag.
+
+    train_repaired_pairs is how many of the training true-match pairs a synthetic repair made
+    artificially easy (generator._repair injected a verbatim seed name, #211 gap 4) — reported,
+    not excluded: the learned weights are unchanged, but a reader knows how much of the training
+    signal was synthetically easy. 0 on a real (unmarked) dataset.
+    """
 
     alpha: float
     recall_target: float
     margin: float
     train_pairs: int
     train_matches: int
+    train_repaired_pairs: int
     review_auto_collided: bool
 
 
@@ -218,6 +227,7 @@ def learn_model(
         margin=margin,
         train_pairs=len(labelled),
         train_matches=sum(1 for is_m, _ in labelled if is_m),
+        train_repaired_pairs=len(repaired_truth_pairs(ds)),
         review_auto_collided=collided,
     )
     return LearnedModel(weights=weights, thresholds=thresholds, metadata=metadata)
