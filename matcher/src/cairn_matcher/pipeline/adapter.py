@@ -41,8 +41,18 @@ def _normalize_token(token: str) -> str:
     vs NFD decomposed) for the SAME name — "Jón" can arrive either way. Without this,
     the two forms are different code points end to end: they grade DISAGREE and produce
     different blocking tokens, so a true duplicate is never even generated. NFC + casefold
-    is culture-NEUTRAL (not the anglo transliteration ADR-0014 forbids); the SQL blocking
-    tokenizer applies the matching `lower(normalize(value,'NFC'))`.
+    is culture-NEUTRAL (not the anglo transliteration ADR-0014 forbids).
+
+    The SQL blocking tokenizer (pipeline/db.py `_NAME_TOKENS_CTE`) applies the SAME NFC fold
+    but `lower()`, NOT `casefold()` — Postgres has no casefold. The two AGREE on the ASCII and
+    accented-Latin names this pool carries, but DIVERGE where casefold expands a code point
+    that lower() leaves alone: "Weiß".casefold() == "weiss" (matches "WEISS") while
+    "Weiß".lower() == "weiß"; ligatures ("ﬀ" -> "ff") behave the same way. So such a pair
+    scores EXACT in this scorer yet never shares a blocking token, and the true pair is never
+    generated (issue #211 gap 3). This is recall loss ONLY — never a false match — and it is
+    the *designed* limit of a deliberately-simple SQL tokenizer (db.py), whose declared
+    backstop is the §5.13 hub duplicate sweep. Do NOT "align" the two by folding this to
+    lower(): that would drop the correct "Weiß"/"WEISS" EXACT match the scorer should make.
     """
     return unicodedata.normalize("NFC", token).casefold()
 

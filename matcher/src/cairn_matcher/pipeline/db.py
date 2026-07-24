@@ -192,8 +192,13 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
 _NAME_TOKENS_CTE = """name_tokens AS (
     -- normalize(value, NFC) so a name recorded decomposed (NFD) on one feed and
     -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
-    -- are different code points and a true duplicate is never even grouped. Mirrors the
-    -- adapter's _normalize_token (NFC) on the Python comparison side.
+    -- are different code points and a true duplicate is never even grouped. Mirrors the NFC
+    -- fold of the adapter's _normalize_token; but this side folds case with lower() while the
+    -- scorer casefold()s (Postgres has no casefold), so the two DIVERGE where casefold expands
+    -- a code point lower() leaves alone ("Weiß".casefold()=="weiss" vs "Weiß".lower()=="weiß";
+    -- ligatures likewise). Such a pair scores EXACT but never shares a token here — recall loss
+    -- only (never a false group), the designed limit of this deliberately-simple tokenizer;
+    -- the §5.13 hub duplicate sweep is the declared backstop (issue #211 gap 3, adapter.py).
     -- Exclude placeholder-use names (callsigns) from BLOCKING (§5.4). A callsign is a
     -- single whitespace-free token, so this bites only when two callsign STRINGS are
     -- identical (the rare same-suffix collision) — defense-in-depth, not what keeps two

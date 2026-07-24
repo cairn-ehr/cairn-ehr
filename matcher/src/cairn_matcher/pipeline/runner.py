@@ -64,19 +64,29 @@ def propose(
     match_score = score(comparisons, weights)
     vetoes = db.match_veto(conn, a, b)
 
+    # The alias/trust map keys AND the persisted alias/trust markers all use canonical
+    # lowercase uuid text, whatever id type/casing the caller passed (uuid.UUID round-trip =
+    # the canonical_pair rule). load_aliases_for / load_trust_for key their maps this way, so a
+    # non-canonical caller (an uppercase or braced uuid) must be canonicalized HERE or it
+    # silently misses every map entry — for aliases that meant the §5.5(a) known-alias REVIEW
+    # forcing quietly did not fire (issue #211 gap 1). Computed once for both lookups + labels.
+    key_a, key_b = (str(UUID(str(p))) for p in (a, b))
+
     # §5.5(a) known-alias recognition: does the pair match (partly) on a name a chart has
     # REPUDIATED as known-false? This is advisory evidence for the human reviewer — never a
     # suppression and never an auto-link (banding forces REVIEW when present). Aliases come
-    # from the caller's preloaded map when batching, else a single-pair on-demand load.
+    # from the caller's preloaded map when batching, else a single-pair on-demand load. The
+    # map lookup uses the canonical key; the single-pair load passes `a`/`b` straight to the DB
+    # (Postgres canonicalizes the uuid parameter itself, so no pre-canonicalization is needed).
     if aliases is None:
         aliases_a = db.load_aliases(conn, a)
         aliases_b = db.load_aliases(conn, b)
     else:
-        aliases_a = aliases.get(str(a), frozenset())
-        aliases_b = aliases.get(str(b), frozenset())
+        aliases_a = aliases.get(key_a, frozenset())
+        aliases_b = aliases.get(key_b, frozenset())
     alias_evidence = known_alias_evidence(
-        str(a), rec_a.names.value if rec_a.names else None, aliases_a,
-        str(b), rec_b.names.value if rec_b.names else None, aliases_b,
+        key_a, rec_a.names.value if rec_a.names else None, aliases_a,
+        key_b, rec_b.names.value if rec_b.names else None, aliases_b,
     )
     # §5.4 identity-pending trust: an *unconfirmed* chart (a standing John Doe) needs human
     # identification effort, so banding may force its corroborated pairs to REVIEW (design
@@ -84,9 +94,8 @@ def propose(
     # per-pair on-demand loads (same seam as aliases).
     if trust is None:
         trust = db.load_trust_for(conn, (a, b))
-    # The map keys AND the persisted marker use canonical lowercase uuid text, whatever
-    # id type/casing the caller passed (uuid.UUID round-trip = the canonical_pair rule).
-    key_a, key_b = (str(UUID(str(p))) for p in (a, b))
+    # key_a/key_b (the canonical lowercase uuid text) were computed above the alias block and
+    # are reused here — the trust map is keyed canonically exactly like the alias map.
     trust_a = trust.get(key_a)
     trust_b = trust.get(key_b)
     unconfirmed_ids = sorted(

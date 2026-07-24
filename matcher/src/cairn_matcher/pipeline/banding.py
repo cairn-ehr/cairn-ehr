@@ -42,10 +42,29 @@ class VetoFinding:
 
 @dataclass(frozen=True)
 class Thresholds:
-    """The two conservative score cut-offs. review < auto. Defaults below; B3 learns."""
+    """The two conservative score cut-offs. review <= auto. Defaults below; B3 learns."""
 
     review: float
     auto: float
+
+    def __post_init__(self) -> None:
+        """Refuse an inverted (review > auto) pair at construction (issue #211 gap 2).
+
+        band() reads [review, auto) as REVIEW and [auto, inf) as AUTO_CANDIDATE, so an
+        inverted pair — a swapped-kwargs typo in a future caller, `Thresholds(review=5,
+        auto=3)` — silently DELETES the REVIEW band: every un-vetoed score >= review bands
+        AUTO_CANDIDATE, an un-attested auto-link the matcher's whole design exists to avoid.
+        The learner never produces one (auto = review + margin, margin > 0), but a hand- or
+        config-built Thresholds could, so the type enforces the invariant band() assumes.
+        `<=` (not `<`): review == auto is degenerate-but-coherent (an empty REVIEW band, no
+        inversion), so it is allowed — only the genuine inversion raises.
+        """
+        if self.review > self.auto:
+            raise ValueError(
+                f"Thresholds requires review <= auto (an inverted pair deletes the REVIEW "
+                f"band and auto-links every score >= review); got review={self.review}, "
+                f"auto={self.auto}"
+            )
 
 
 DEFAULT_THRESHOLDS = Thresholds(review=3.0, auto=8.0)

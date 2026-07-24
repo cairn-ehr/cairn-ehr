@@ -75,21 +75,17 @@ def model_from_json(obj: Mapping) -> LearnedModel:
             raise ModelIOError(f"model JSON missing top-level key {key!r}")
     thr = obj["thresholds"]
     meta = obj["metadata"]
-    # ValueError is included so a present-but-non-numeric threshold (float("nope")) is wrapped
-    # as ModelIOError like the weights path does, not leaked as a bare float() ValueError.
+    # ValueError is caught so two malformed-file cases surface as ModelIOError rather than leak
+    # raw: a non-numeric threshold (float("nope")), AND — since Thresholds.__post_init__ now
+    # enforces the band() invariant at construction (issue #211 gap 2) — an INVERTED review > auto
+    # pair (a hand-edited/corrupted file that would collapse the REVIEW band). Both are rejected
+    # loudly here instead of reconstructing a model that silently mis-bands; the dedicated
+    # review>auto guard that once lived below is now redundant with that construction-time check.
     try:
         thresholds = Thresholds(review=float(thr["review"]), auto=float(thr["auto"]))
         metadata = LearnMetadata(**{f: meta[f] for f in _META_FIELDS})
     except (KeyError, TypeError, ValueError) as exc:
         raise ModelIOError(f"malformed thresholds/metadata: {exc}") from exc
-    # review must not exceed auto (the band() invariant). derive_thresholds guarantees this by
-    # construction, but a hand-edited/corrupted file could invert them and collapse the REVIEW
-    # band — reject loudly rather than reconstruct a model that silently mis-bands.
-    if thresholds.review > thresholds.auto:
-        raise ModelIOError(
-            f"review threshold {thresholds.review} exceeds auto {thresholds.auto} "
-            "(inverts the band invariant review <= auto)"
-        )
     return LearnedModel(
         weights=_weights_from_json(obj["weights"]),
         thresholds=thresholds,
