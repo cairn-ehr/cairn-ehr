@@ -19,6 +19,27 @@ def _op_line(op: OperatingPoint) -> str:
             f"recall={op.recall:.3f} f1={op.f1:.3f}")
 
 
+def _repaired_line(metrics: ScorerMetrics) -> str:
+    """The #290 honesty line: how many true pairs a synthetic repair made artificially easy.
+
+    N of M where M = total true pairs (all confusion match cells). When N > 0 it appends the
+    optimism this implies (recall/f1 above are inflated by up to N EXACT-graded true pairs); at
+    N == 0 (every real dataset) the bare 'N of M' reads as the honest 'nothing to discount'.
+    """
+    c = metrics.confusion
+    true_total = c.match_auto + c.match_review + c.match_none
+    line = (
+        f"  repaired match pairs (synthetically eased): "
+        f"{metrics.repaired_match_pairs} of {true_total}"
+    )
+    if metrics.repaired_match_pairs:
+        line += (
+            f"  — recall/f1 above are optimistic by up to "
+            f"{metrics.repaired_match_pairs} true pair(s)"
+        )
+    return line
+
+
 def format_scorer(metrics: ScorerMetrics, *, dataset_name: str = "") -> str:
     """Render scorer metrics: confusion, both operating points, the danger rates, spread."""
     c = metrics.confusion
@@ -39,6 +60,7 @@ def format_scorer(metrics: ScorerMetrics, *, dataset_name: str = "") -> str:
         f"  non-match scores: n={metrics.nonmatch_scores.count} "
         f"min={metrics.nonmatch_scores.minimum:.2f} med={metrics.nonmatch_scores.median:.2f} "
         f"max={metrics.nonmatch_scores.maximum:.2f}",
+        _repaired_line(metrics),
         _CAVEAT,
     ]
     return "\n".join(lines)

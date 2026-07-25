@@ -77,6 +77,34 @@ def test_kfold_lift_skips_a_fold_whose_training_has_no_nonmatch_pairs():
     assert report.before.pair_count == report.after.pair_count
 
 
+def test_kfold_lift_reports_held_out_repaired_pairs():
+    # Six 2-record clusters; each clone marked repaired -> every held-out true pair is eased.
+    ents = tuple(
+        EntityCluster(entity_id=f"e{i}", records=(
+            DatasetRecord(record_id=f"e{i}-a", names=({"value": f"Name{i} Fam{i}"},)),
+            DatasetRecord(record_id=f"e{i}-b", names=({"value": f"Name{i} Fam{i}"},),
+                          repaired=True),
+        ))
+        for i in range(6)
+    )
+    report = kfold_lift(LabelledDataset(name="repaired", entities=ents), folds=3)
+    # before/after measure the SAME held-out pairs -> identical repaired counts
+    assert report.before.repaired_match_pairs == report.after.repaired_match_pairs
+    assert report.held_out_repaired_pairs == report.after.repaired_match_pairs
+    # no fold skipped (4-cluster training has match + non-match pairs) -> all 6 true pairs
+    # are measured and every one is repair-eased
+    assert report.held_out_repaired_pairs == 6
+
+
 def test_format_lift_shows_both_blocks():
     text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
     assert "BEFORE" in text and "AFTER" in text
+
+
+def test_format_lift_shows_held_out_repaired_pairs():
+    text = format_lift(kfold_lift(_synthetic(6), folds=3), dataset_name="synthetic")
+    # Pin the standalone held-out line specifically. "held-out repaired" is unique to
+    # format_lift — the BEFORE/AFTER scorer sub-blocks say "repaired match pairs" — so this
+    # fails if the held_out_repaired_pairs line is dropped, unlike a bare "repaired"/"0" check
+    # which the sub-blocks would satisfy on their own. 0: _synthetic carries no repaired marker.
+    assert "held-out repaired pairs (synthetically eased): 0" in text

@@ -71,12 +71,18 @@ class LiftReport:
     counts folds whose training partition could not be learned from — either no match pairs
     (no positive signal) OR no non-match pairs (no impostor anchor for the thresholds, issue
     #209). Honest, not a crash: those folds contribute to neither before nor after.
+
+    held_out_repaired_pairs counts, among the measured held-out true pairs, those a synthetic
+    repair made artificially easy (#211 gap 4 / #290) — 0 on real data. before and after
+    measure the identical pairs, so it equals either's repaired_match_pairs; it reflects only
+    measured (non-skipped) folds, so a reader can discount the reported recall/F1 by it.
     """
 
     folds: int
     skipped_folds: int
     before: ScorerMetrics
     after: ScorerMetrics
+    held_out_repaired_pairs: int
 
 
 def kfold_lift(
@@ -109,11 +115,16 @@ def kfold_lift(
         after += scorer_outcomes(
             test, weights=model.weights, thresholds=model.thresholds, config=config
         )
+    before_metrics = scorer_metrics(before)
+    after_metrics = scorer_metrics(after)
     return LiftReport(
         folds=folds,
         skipped_folds=skipped,
-        before=scorer_metrics(before),
-        after=scorer_metrics(after),
+        before=before_metrics,
+        after=after_metrics,
+        # before/after pool the identical held-out pairs, so either's repaired count is the
+        # held-out figure; take after's (#290).
+        held_out_repaired_pairs=after_metrics.repaired_match_pairs,
     )
 
 
@@ -127,6 +138,10 @@ def format_lift(report: LiftReport, *, dataset_name: str = "") -> str:
             format_scorer(report.before),
             "--- AFTER (learned) ---",
             format_scorer(report.after),
+            (
+                f"held-out repaired pairs (synthetically eased): "
+                f"{report.held_out_repaired_pairs}"
+            ),
             (
                 "NOTE: PoC — advisory, not shipped weights; synthetic data reflects the "
                 + "generator's corruption model. See design 2026-07-06 §8 for honest limits."

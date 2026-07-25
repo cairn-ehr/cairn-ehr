@@ -15,7 +15,8 @@ from cairn_matcher.pipeline.banding import Thresholds
 from cairn_matcher.scoring import FieldWeights, Weights
 
 _META_FIELDS = (
-    "alpha", "recall_target", "margin", "train_pairs", "train_matches", "review_auto_collided",
+    "alpha", "recall_target", "margin", "train_pairs", "train_matches",
+    "train_repaired_pairs", "review_auto_collided",
 )
 
 

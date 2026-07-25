@@ -1,5 +1,6 @@
 """Tests for learn_model — estimate weights then derive the thresholds that go with them."""
 
+from cairn_matcher.eval.dataset import load_dataset, repaired_truth_pairs
 from cairn_matcher.eval.learner import LearnedModel, learn_model
 from cairn_matcher.eval.loader import load_bundled_gold
 from cairn_matcher.eval.scorer_eval import evaluate_scorer
@@ -38,3 +39,28 @@ def test_learned_thresholds_on_gold_are_ordered_and_flag_the_overlap():
     model = learn_model(load_bundled_gold())
     assert model.thresholds.review < model.thresholds.auto
     assert model.metadata.review_auto_collided is True
+
+
+def test_learn_model_reports_train_repaired_pairs():
+    ds = load_dataset({
+        "entities": [
+            {"entity_id": "p", "records": [
+                {"record_id": "p-1", "names": [{"value": "Ana Silva"}],
+                 "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70}},
+                {"record_id": "p-2", "names": [{"value": "Ana Silva"}], "repaired": True,
+                 "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70}},
+            ]},
+            {"entity_id": "q", "records": [
+                {"record_id": "q-1", "names": [{"value": "Wei Nguyen"}],
+                 "dob": {"value": "1970-01-01", "precision": "day", "provenance_rank": 70}},
+                {"record_id": "q-2", "names": [{"value": "Wei Nguyen"}],
+                 "dob": {"value": "1970-01-01", "precision": "day", "provenance_rank": 70}},
+            ]},
+        ],
+    })
+    model = learn_model(ds)
+    assert model.metadata.train_repaired_pairs == len(repaired_truth_pairs(ds)) == 1
+
+
+def test_learn_model_train_repaired_zero_on_gold():
+    assert learn_model(load_bundled_gold()).metadata.train_repaired_pairs == 0

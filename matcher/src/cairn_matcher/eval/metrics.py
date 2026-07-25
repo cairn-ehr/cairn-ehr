@@ -18,11 +18,19 @@ from cairn_matcher.pipeline.banding import Band
 
 @dataclass(frozen=True)
 class PairOutcome:
-    """One evaluated pair: whether it is truly a match, its score, and its band."""
+    """One evaluated pair: whether it is truly a match, its score, and its band.
+
+    repaired is True when at least one endpoint is a synthetically-REPAIRED record
+    (generator._repair injected a verbatim seed name, #211 gap 4); set by
+    scorer_eval.scorer_outcomes. Only a true within-cluster pair is eased by that injection,
+    so scorer_metrics reports the is_match AND repaired subset. Default False keeps every real
+    dataset and hand-built outcome honest (nothing repaired).
+    """
 
     is_match: bool
     score_total: float
     band: Band | None
+    repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,7 @@ class ScorerMetrics:
     match_scores: ScoreStats
     nonmatch_scores: ScoreStats
     pair_count: int
+    repaired_match_pairs: int
 
 
 def _ratio(numerator: float, denominator: float) -> float:
@@ -145,6 +154,11 @@ def scorer_metrics(outcomes: Sequence[PairOutcome]) -> ScorerMetrics:
     total_auto = confusion.match_auto + confusion.nonmatch_auto
     total_true = confusion.match_auto + confusion.match_review + confusion.match_none
 
+    # Report (never drop) the true pairs a synthetic repair made artificially easy (#290): the
+    # metric intersects the structural `repaired` flag with is_match, so a repaired record's
+    # cross-cluster non-match pairs never inflate the count.
+    repaired_match_pairs = sum(1 for o in outcomes if o.is_match and o.repaired)
+
     return ScorerMetrics(
         confusion=confusion,
         strict=strict,
@@ -154,4 +168,5 @@ def scorer_metrics(outcomes: Sequence[PairOutcome]) -> ScorerMetrics:
         match_scores=_score_stats(match_scores),
         nonmatch_scores=_score_stats(nonmatch_scores),
         pair_count=len(outcomes),
+        repaired_match_pairs=repaired_match_pairs,
     )

@@ -221,3 +221,22 @@ def repaired_record_ids(ds: LabelledDataset) -> frozenset[str]:
     empty set — the honest 'nothing to discount'. Pure: no I/O.
     """
     return frozenset(r.record_id for r in ds.all_records() if r.repaired)
+
+
+def repaired_truth_pairs(ds: LabelledDataset) -> frozenset[tuple[str, str]]:
+    """The true-match pairs the generator made artificially easy via a verbatim-name repair.
+
+    A true pair (both records in one cluster) is 'eased' when at least one endpoint was
+    REPAIRED — generator._repair injected an exact seed name (#211 gap 4) so the pair grades
+    EXACT and is trivially recovered. This is the subset of truth_pairs an eval consumer
+    reports so a reader can discount the optimistic recall/F1 it produces. Cross-cluster
+    (non-match) pairs are never included even when they touch a repaired record: the injection
+    only eases the within-cluster true pair. Empty on a real (unmarked) dataset — the honest
+    'nothing to discount'. Pure: no I/O.
+    """
+    repaired = repaired_record_ids(ds)
+    if not repaired:
+        return frozenset()
+    return frozenset(
+        pair for pair in truth_pairs(ds) if pair[0] in repaired or pair[1] in repaired
+    )
