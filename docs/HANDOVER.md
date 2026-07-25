@@ -134,22 +134,42 @@ Picked up as "medication slice 6"; the user pointed at the sister service [`drug
 **settle the coding contract as an ADR before writing code** (the wire-content shape is retrofit-hard).
 ADR-0059 is the drug-axis companion to ADR-0025: anchor a medication's drug identity on the immortal
 `moiety_uuid` (never the INN name, principle 2); a structured `substance.coding {system, code, display}`
-generalizes the reserved `inn_code` slot (`system` names the drugref tree level — `drugref-moiety` today,
+**replaces** the reserved `inn_code` slot (`system` names the drugref tree level — `drugref-moiety` today,
 clinical-drug/product reserved; `display` = INN label captured at coding time for honest degradation);
 coding is a **separately-authored** act — inline on the assert **or** a later
-`clinical.medication-coding.asserted`/`.corrected` overlay by a pharmacist/coder (ADR-0007), *offered
-never forced* (principle 4). **The crux (deliberate divergence from ICD-11's always-present pivot):**
+`clinical.medication-coding.asserted` overlay by a pharmacist/coder (ADR-0007), *offered never forced*
+(principle 4). **The crux (deliberate divergence from ICD-11's always-present pivot):**
 drugref is a separable service a node may lack, so its coding is **advisory + honest-degrading** — a
-drugref-absent node still reads/syncs/lists/reconciles a coded med (via `display`+`term`), the baseline
-§5.9 safety projection never depends on drugref, drugref DDI/fuzzy is enrichment-when-present (§9 advisory
-tier; never on the wire, principle 12). Advisorily sharpens the E1 dup-key + reconciled-group INN display
-(ADR-0047). Edits: new ADR-0059, data-model §3.16 drug-axis paragraph + `IMPORTANT` divergence callout,
+drugref-absent node still reads/syncs/lists/reconciles a coded med (via `display`+`term`), and drugref
+DDI/fuzzy is enrichment-when-present (§9 advisory tier; the *dataset* never on the wire, principle 12).
+Advisorily sharpens the E1 dup-key + reconciled-group INN display (ADR-0047).
+**A code review then sharpened five things before merge (ADRs are immutable once merged, so this was the
+last cheap moment) — worth knowing because each one binds the code slice:**
+(1) **the §5.9 safety class is *carried*, not re-derived.** §5.9 derives the safety projection's drug class
+from the code (*"a coded drug's interaction class is a property of the code"*) — a knowledge lookup, so
+"derivable from the event's own fields" cannot mean the *reader* re-derives it without drugref. It is now
+computed **pre-seal on the coding node** (which by construction had an authority in hand) and travels on the
+projection §5.9 already replicates in the clear; the class field belongs to the safety-projection shape, owed
+by that slice. (2) **the dup-key claim was overstated** — a `coalesce` picks per row, so coded and uncoded
+rows still key differently; the anchor closes **coded↔coded** only (brand↔generic once both coded), and the
+cross-state case closes by *coding* the uncoded member or via the later drug-matcher. (3) the key is
+`(system, code)` **as a pair**, never a bare `code`, else the reserved finer tree levels re-split the same
+substance cross-node. (4) **`inn_code` is retired**, not kept alongside — payload slot gone, projection
+column deprecated-in-place (the `db/036 sync_state.hlc_wall` treatment); safe *only* because pre-clinical,
+and it is the last non-additive moment. (5) the correction type is
+**`clinical.medication-coding-correction.asserted`** — the corpus's noun-stream grammar (every registered
+clinical type ends `.asserted`; `clinical.medication-dose-correction.asserted` is the precedent), not a
+`.corrected` verb. Plus ADR-0052/0057 born-sealed custody now stated in-body (decision 8) rather than only
+claimed in the frontmatter, and the ADR-0025 "INN anchor" quote corrected to its real wording + its real
+origin (ecosystem eval 0003).
+Edits: new ADR-0059, data-model §3.16 drug-axis paragraph + `IMPORTANT` divergence callout,
 §3.3 pointer, index v0.61, README + mkdocs-nav ADR-index rows; **strict `mkdocs build` green.** **Unblocked
 follow-on (next session):** the `clinical.medication` **code slice** (brainstorm→plan→TDD) — build the
 `substance.coding` shape (cairn-event assert/twin + db/031 floor/projection), the two coding event types
 (+twin-registry BOTH places, +authorship binding at both doors), the widened dup-key + `medication_group_display`
 winner, and the runnable §1.2 paper-parity benchmark; **drugref-absent honest degradation is a first-class
-test obligation.**
+test obligation — specifically, the §5.9 projection must fire on a drugref-less node from the captured
+class, proving the floor never re-derives.**
 
 **Session (2026-07-25, earlier) — matcher #290: wire `repaired_record_ids` into eval reporting (advisory
 Python tier, ROADMAP Slice 54; no spec/SCHEMA/wire/ADR change — an additive TDD change wholly inside
@@ -612,7 +632,7 @@ ADR before reopening any of these.
 | [0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes (carry what you cannot author); the floor gates effect not presence; refusal + durable re-offer kept as the residual contract | §6.5/§6.3/§3.13 (refines 0012/0022; extends 0054; upholds 0010/0051) |
 | [0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md) | Generic reprojection: a projection lives only in its registered apply fn; one dispatcher replaces the ~15 per-type triggers; `cairn_reproject` heal/rebuild is generic replay, run by the loader on a schema-generation change (every-connect backfill retired); `cairn_replay_eligible` is the #266 seam | §9.4/§9.1 (refines 0048/0045; upholds 0056; load-bearing for #266) |
 | [0058](spec/decisions/0058-grade-gated-teffective-ceiling.md) | Grade-gated `t_effective` ceiling: a born `clock_grade` bounds the ceiling's rejecting power — `self-asserted`/`unknown` flag-never-reject (principle-4 fix for slow/dead clocks), remote door admits-and-flags never rejects (closes a sync-wedge DoS), interval derived not stored, mint constrained to self-asserted, gate-effect-not-presence; `cairn_clock_health` honest-assembly read; corrects ADR-0027 §6 `upper=RTC`→`RTC+W` | §3.6/§3.17 (refines 0003/0027; upholds 0051/0056) |
-| [0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) | Medication drug-identity coding (drug-axis companion to 0025): anchor on `drugref`'s immortal `moiety_uuid` (INN is display, never key); structured `substance.coding {system, code, display}` generalizing the reserved `inn_code` slot; separately-authored inline-or-overlay coding act (`clinical.medication-coding.asserted`/`.corrected`); **advisory + honest-degrading** — drugref-absent nodes still read/sync/reconcile, baseline safety projection never depends on drugref; design-only (code slice deferred) | §3.16/§3.3 (refines 0025/0047; applies 0007/0014/0052) |
+| [0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) | Medication drug-identity coding (drug-axis companion to 0025): anchor on `drugref`'s immortal `moiety_uuid` (INN is display, never key); structured `substance.coding {system, code, display}` **replacing** the reserved `inn_code` slot; separately-authored inline-or-overlay coding act (`clinical.medication-coding.asserted` + `-correction.asserted`); **advisory + honest-degrading** — drugref-absent nodes still read/sync/reconcile, and the §5.9 safety class is **captured pre-seal on the coding node and carried**, never re-derived by the reader; dup-key on `(system, code)`, closing coded↔coded only; design-only (code slice deferred) | §3.16/§3.3 (refines 0025/0047; applies 0007/0014/0052/0057) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

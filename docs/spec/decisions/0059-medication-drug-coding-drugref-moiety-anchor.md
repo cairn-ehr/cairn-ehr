@@ -5,21 +5,27 @@
 - **Refines:** [ADR-0025](0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md) (the drug-axis
   companion), [ADR-0047](0047-medication-reconciliation-resolution.md) (sharpens the dup-key + group
   display); applies [ADR-0007](0007-authorship-and-accountability.md), [ADR-0014](0014-locale-pluggable-matcher-comparators.md),
-  [ADR-0052](0052-born-sealed-clinical-bodies.md).
+  [ADR-0052](0052-born-sealed-clinical-bodies.md) (decision 8), [ADR-0057](0057-generic-reprojection-registered-apply-dispatch.md)
+  (decision 8); upholds the [identity §5.9](../identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)
+  safety floor (decision 4).
 
 ## Context
 
 [ADR-0025](0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md) settled the **disease**
 axis — code on a stable identifier, never a free-text name, with the clinician's own term retained and a
-map-once-remember-forever ergonomic — and noted in passing that *"drug substance identity anchors on the
-WHO INN by the same discipline."* This ADR settles that **drug** axis concretely, and it is a **design-only
-decision**: it fixes the wire-content **shape** of a medication's drug coding before any code carries it,
-because that shape is expensive to retrofit on an append-only clinical stream (the whole reason it is done
-first).
+map-once-remember-forever ergonomic — and recorded in passing that the drug axis had already *"resolved
+this by anchoring substance identity on the WHO INN,"* citing
+[ecosystem eval 0003](../../ecosystem/0003-reference-data-sourcing-medicines-and-terminologies.md) (the
+evaluation that fed ADR-0025 and is where that INN position actually originates). This ADR settles the
+**drug** axis concretely and **refines that position**: the anchor becomes an immortal identifier and the
+INN demotes to display. It is a **design-only decision** — it fixes the wire-content **shape** of a
+medication's drug coding before any code carries it, because that shape is expensive to retrofit on an
+append-only clinical stream (the whole reason it is done first).
 
 Three things have changed since ADR-0025 that make this a real decision now, not a restatement:
 
-- **The reserved slot exists but is under-specified.** The [medication-recording design](../../superpowers/specs/2026-07-11-medication-recording-design.md)
+- **The reserved slot exists but is under-specified.** The medication-recording design note
+  (`docs/superpowers/specs/2026-07-11-medication-recording-design.md`, working scaffolding, not published)
   deliberately shipped *without* a Tier-A drug dictionary and left `substance.inn_code` as *"the stable
   anchor slot — NULLABLE = not-yet-coded,"* with Tier-A named as future **overlay enrichment (coding a
   previously-uncoded substance), never a wire change.** But it typed that slot as a bare *"INN id"* string.
@@ -48,7 +54,10 @@ Two concrete gaps in the built medication surface motivate closing this now rath
 - **The reconciliation dup-key blind spot.** `db/031` already records that
   the E1 duplicate-detection key `coalesce(inn_code, normalize(term))` *"prefers `inn_code` when present, so
   the SAME substance asserted once coded and once uncoded lands under two different keys and is NOT
-  flagged … Cross-coding-state matching waits on the [dictionary]."* drugref **is** that dictionary.
+  flagged … Cross-coding-state matching waits on the [dictionary]."* drugref **is** that dictionary — though
+  note carefully what it does and does not close (decision 5): a shared anchor closes *coded↔coded*
+  immediately; resolving an **uncoded** member's free text to a moiety needs term→anchor lookup, which is the
+  later drug-matcher slice, not the key itself.
 - **The reconciled-group display is arbitrary.** After a clinician links `Lipitor ↔ atorvastatin`, the
   `medication_group_display` projection (`db/033`) shows
   whichever member's UUID sorts lowest — possibly the brand, possibly *"little white pill."* There is no
@@ -64,12 +73,14 @@ Canonical home: **[data-model §3.16](../data-model.md#316-clinical-concept-codi
 [§3.3](../data-model.md#33-mutable-non-demographic-state).
 
 1. **The drug-identity anchor is drugref's immortal `moiety_uuid`, never a free-text name** (principle 2).
-   INN is the **display**, never the key. The event carries the clinician's **coding *claim*** (an
-   identifier plus the label as resolved at coding time) — it **never embeds drugref's data.** The immortal
+   INN is the **display**, never the key. The event carries the clinician's **coding *claim*** — an
+   identifier plus the small values resolved at coding time — never drugref's **dataset** (see decision 7,
+   which draws that line precisely, because a naive *"no drugref data"* reading would forbid the very
+   captured fields that make honest degradation work). The immortal
    UUID makes this axis *more* stable than the ICD-11 axis: the identifier itself never revises (drugref
    pins on first sight); only labels and derived crosswalks refine.
 
-2. **The coding is a structured `substance.coding` object `{ system, code, display }`, generalizing the
+2. **The coding is a structured `substance.coding` object `{ system, code, display }`, *replacing* the
    reserved `inn_code` slot.**
    - `system` names the drugref composition-tree level: **`drugref-moiety`** is the only value today (the
      only level drugref has built), with `drugref-clinical-drug` / `drugref-product` **reserved** for later
@@ -80,20 +91,33 @@ Canonical home: **[data-model §3.16](../data-model.md#316-clinical-concept-codi
      legibility twin (principle 11): a node without drugref still shows the preferred name.
    - `substance.term` (the clinician's own words) **stays mandatory** and is the ultimate legibility floor;
      the coding never replaces it. Uncoded — `coding` absent — stays fully valid (principle 4, the *"little
-     white pill"* floor). This shapes the reserved slot for the first time; there is no production data to
-     migrate ([pre-clinical posture](../../HANDOVER.md)), and the discipline is *additive-only from here*.
+     white pill"* floor).
+   - **`inn_code` is retired, not kept alongside.** `coding` *replaces* the reserved slot rather than joining
+     it: the payload builder stops emitting `substance.inn_code`, and nothing — dup-key, projection winner,
+     display — reads it again. This is safe precisely because the slot was reserved and never populated in
+     anger: the project is **pre-clinical** (no production events exist to migrate, see `docs/HANDOVER.md`),
+     so this shapes the slot for the first time rather than changing a shape in flight. The *projection*
+     column `patient_medication.inn_code` is nevertheless **deprecated in place and never dropped** — the
+     `sync_state.hlc_wall` treatment in `db/036` — because a DROP is the non-additive move ADR-0012 /
+     principle 11 forbid. From here the discipline is **additive-only**; this is the last non-additive
+     moment, and it is available only because nothing has been written yet.
 
 3. **Coding is a separable, separately-authored act** ([§3.9](../data-model.md#39-authorship-and-accountability)
    compositional authorship, [ADR-0007](0007-authorship-and-accountability.md)). It may appear **inline on
    the assertion** (auto-filled from a drugref type-ahead at authoring time) **or as a later
-   coding-overlay event** — a new event type **`clinical.medication-coding.asserted`** (correctable by
-   **`clinical.medication-coding.corrected`**, never erased, always overlaid) — authored by **whoever codes
-   it**: the clinician at point of care, or a pharmacist / professional coder later, as a *distinct
+   coding-overlay event** — a new event type **`clinical.medication-coding.asserted`**, corrected by a
+   **`clinical.medication-coding-correction.asserted`** overlay (never erased, always overlaid) — authored by
+   **whoever codes it**: the clinician at point of care, or a pharmacist / professional coder later, as a *distinct
    contributor* whose coding claim never overwrites the clinician's clinical claim. **Map-once-remember-
    forever, *offered* never forced** (the ADR-0025 Norway ergonomic): a novel term offers a one-time
    binding, then auto-fills silently; the clinician may always decline and leave the coding **deliberately
    open** — an honest *not-yet-coded* state routed to a coder worklist, never a forced guess that becomes
    coding debt.
+   Both names follow the corpus's existing event-type grammar rather than coining a new one: a correction is
+   **its own noun stream ending in `.asserted`** — exactly as `clinical.medication-dose-correction.asserted`
+   already is (ADR-0050) — never a `.corrected` verb. Every registered clinical type in `db/` ends in
+   `.asserted`; the only non-`.asserted` verb anywhere in the corpus is `identity.dispute.resolved`. Both
+   names also sit under the `clinical.%` prefix the `db/005` submit gate keys on.
 
 4. **The coding is advisory and honest-degrading — the deliberate divergence from ADR-0025.** Because
    drugref is a separable service a node may lack, **drugref-*the-service* is node-local advisory
@@ -105,36 +129,94 @@ Canonical home: **[data-model §3.16](../data-model.md#316-clinical-concept-codi
      like the [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md) byte tier and the
      [ADR-0014](0014-locale-pluggable-matcher-comparators.md) missing-comparator case: uncertainty can only
      *withhold* an advisory, never block the record.
-   - The baseline **safety projection** ([identity §5.9](../identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope))
-     must remain derivable from the event's **own** coded fields; drugref *may enrich* it locally where
-     present, but the floor never *depends* on drugref being installed. This keeps drug decision-support in
-     the [§9](../language-substrate.md) advisory tier (a defect mis-advises and is caught by the clinician;
-     it cannot corrupt or wedge the signed record).
+   - **The [§5.9](../identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)
+     safety projection is derived at *coding* time on the *coding* node, and travels — it is never
+     re-derived by the reader.** §5.9 specifies that projection's content as coarse safety **classes**
+     (interaction/allergy class, contraindication flags) and states the mechanism plainly: *"a coded drug's
+     interaction class is a property of the code."* A property *of the code* is a drug-knowledge lookup — so
+     "derivable from the event's own fields" cannot mean the **reader** re-derives it, which would make the
+     §5.9 floor depend on drugref after all. The resolution is the same move decision 2 already makes for
+     `display`, and it works because **a node that could produce a coding necessarily had a coding authority
+     at that moment**: the class is computed *pre-seal on the coding node* (§5.9 already calls this "a normal
+     pre-seal projection step"), captured, and carried on the projection, which §5.9 replicates **in the
+     clear**. A drugref-less node therefore honours the §5.9 floor for a **coded** medication without ever
+     holding drugref.
+   - **What the floor does and does not promise.** For an **uncoded** medication there is no class on *any*
+     node, drugref present or not — that is the principle-4 *"little white pill"* floor being honest, not a
+     degradation drugref's absence caused. Where a deployment's coding authority (decision 7 permits others)
+     supplies identifiers but **no** class, the signal **coarsens down the §5.9 disclosure ladder** — it
+     never disappears: §5.9's safety-floor invariant is that grade and gaps control the projection's
+     *coarseness, never its existence*. **Carrying the class, rather than expecting the reader to compute
+     it, is the load-bearing constraint this ADR fixes; the class field itself belongs to the safety-
+     projection shape (a separate de-identified signal beside the sealed body, §5.9) and is owed by the
+     safety-projection slice — not to `substance.coding`, which stays the clinician's identity claim.**
+   - Everything *beyond* that floor — DDI alerting, brand↔generic resolution, fuzzy matching — stays
+     [§9](../language-substrate.md) advisory tier, present-node-only (a defect mis-advises and is caught by
+     the clinician; it cannot corrupt or wedge the signed record).
 
-5. **The anchor sharpens reconciliation — advisorily.** The E1 dup-key becomes
-   `coalesce(moiety_uuid, inn_code, normalize(term))`, so the *"same substance coded once and uncoded once"*
-   cross-state miss `db/031` records is now catchable — as an **advisory
-   flag**, never an auto-merge (reconciliation stays a human link, [ADR-0047](0047-medication-reconciliation-resolution.md)).
+5. **The anchor sharpens reconciliation — advisorily, and only on the coded↔coded path.** The E1 dup-key
+   becomes `coalesce((system, code), normalize(term))` — the coding slot **as a pair**, else the normalized
+   term — never a bare `code`. Keying on `(system, code)` is what keeps the reserved levels of decision 2
+   safe: once `drugref-clinical-drug` exists, the same substance coded at *moiety* level on one node and at
+   *clinical-drug* level on another would otherwise split under a bare-`code` key — the same blind spot one
+   level up, and a **cross-node** one. Finer levels are compared by **rolling up to their moiety ancestor**
+   before keying (a drugref-present enrichment; a node lacking drugref cannot roll up and honestly declines
+   to match rather than guessing — [ADR-0014](0014-locale-pluggable-matcher-comparators.md)'s
+   *no-data-is-never-disagreement*).
+   **Be precise about what this closes.** A `coalesce` picks per row, so a coded row keys on its anchor and
+   an uncoded row keys on its term: this closes **coded↔coded** — including the genuinely valuable
+   `Lipitor`↔`atorvastatin` case *once both are coded* — and it does **not**, by itself, close the
+   *"same substance asserted once coded and once uncoded"* miss `db/031` records. That case closes when the
+   uncoded member **gets coded** (a workflow act — *offered, never forced*, decision 3), or later by
+   term→anchor resolution in the drug-matcher slice. Claiming the key alone closes it would be the same
+   overstatement one level up, so this ADR does not claim it. Full fuzzy brand↔generic/typo/salt matching
+   likewise waits on that matcher; this ADR fixes only the exact-anchor path.
+   All of it is **advisory** — a flag, never an auto-merge (reconciliation stays a human link,
+   [ADR-0047](0047-medication-reconciliation-resolution.md)).
    The reconciled-group display **prefers a coded member** and shows its INN `display`, with a deterministic
-   tiebreak (`moiety_uuid` then `medication_id`, `COLLATE "C"`, [ADR-0045](0045-collation-independent-projection-tiebreaks.md)).
-   **Two *different* `moiety_uuid`s inside one reconciled group is an advisory *possible-mis-reconciliation*
-   signal — surfaced, never silently resolved.** Full fuzzy brand↔generic/typo/salt matching still waits on
-   the drug-matcher (a later advisory slice); this ADR fixes only the exact-anchor path.
+   tiebreak (`(system, code)` then `medication_id`, `COLLATE "C"`, [ADR-0045](0045-collation-independent-projection-tiebreaks.md)).
+   **Two *different* anchors inside one reconciled group is an advisory *possible-mis-reconciliation*
+   signal — surfaced, never silently resolved.**
 
 6. **Bitemporal coding views** ([§3.6](../data-model.md#36-bitemporal-event-time-recording-time-vs-effective-time),
    [ADR-0003](0003-bitemporal-time-and-acknowledged-uncertainty.md)), mirroring ADR-0025 decision 6 but
-   simpler because the identifier is immortal: the event pins the **as-asserted** coding (`moiety_uuid` +
-   `display` + the drugref release that produced it) immutably; a **current-best** display / crosswalk is
-   re-derived through the *live* drugref where present. Since `moiety_uuid` never re-keys, only labels and
+   simpler because the identifier is immortal: the event pins the **as-asserted** coding — exactly the
+   `{system, code, display}` of decision 2, nothing more — immutably; a **current-best** display / crosswalk
+   is re-derived through the *live* drugref where present. Since `moiety_uuid` never re-keys, only labels and
    derived data can refine — the anchor never moves beneath a historical event.
+   **Deliberately *not* in the shape: a stamp of the drugref release that produced the label.** It would be
+   useful provenance ("this display came from a release that later corrected it"), but it is not needed by
+   any decision here, and — unlike the shape itself — adding it later is a plain **additive** field that
+   ADR-0012 / principle 11 permit outright. It is therefore not retrofit-hard and does not have to be paid
+   for now. Keep the shape minimal; earn the field when a case demands it.
 
-7. **Wire and licence posture** (principle 12; ADR-0025 decision 8; drugref's own invariant): drugref data
-   **never rides Cairn's inter-node wire** — only the clinician's coding claim (`{system, code, display}`)
-   does, the same *verbatim-codes-in, no-bundled-data-out* posture as ICD-11. **Policy-neutral**
-   (principle 9): Cairn ships the coding mechanism, the honest-degradation floor, and the bitemporal
-   projection, and mandates none of it. drugref is the **reference** drug-identity authority, **not a
-   mandated dependency** — a deployment may plug a different authority so long as it presents stable
-   identifiers with captured display labels; nothing on the wire assumes drugref specifically.
+7. **Wire and licence posture** (principle 12; ADR-0025 decision 8; drugref's own invariant): drugref's
+   **dataset** — its tables, crosswalks, interaction matrices — **never rides Cairn's inter-node wire.** Only
+   the coding *claim* does, the same *verbatim-codes-in, no-bundled-data-out* posture as ICD-11.
+   - **The explicit carve-out: a small *derived value captured at coding time* is part of the claim, not
+     bundled data.** The `display` label of decision 2 and the §5.9 safety class of decision 4 are both
+     drugref-*derived*, and both must travel — otherwise the reader has to hold drugref, which is the exact
+     failure this ADR exists to prevent. Naming this carve-out matters because a naive reading of
+     *"no drugref data on the wire"* would forbid the very fields that make honest degradation work.
+   - **It is licence-clean for a reason ICD-11's was not.** ADR-0025's tighter *no-bundled-crosswalks* rule
+     is forced by ICD-11 being **CC BY-ND 3.0 IGO** — no derivatives, so Cairn may not ship its own
+     crosswalks. drugref is **AGPL-3.0** with no ND clause, so a captured derived label or class carries no
+     equivalent restriction. The limit here is architectural (do not turn the wire into a replication channel
+     for a drug database), not licensing.
+   - **Policy-neutral** (principle 9): Cairn ships the coding mechanism, the honest-degradation floor, and
+     the bitemporal projection, and mandates none of it. drugref is the **reference** drug-identity
+     authority, **not a mandated dependency** — a deployment may plug a different authority so long as it
+     presents stable identifiers with captured display labels; nothing on the wire assumes drugref
+     specifically.
+
+8. **The coding events are born-sealed clinical bodies** ([ADR-0052](0052-born-sealed-clinical-bodies.md)):
+   they are `clinical.%` content and take the same custody treatment as the assertion they code. Two
+   consequences shape the code slice enough to state here. **First**, the captured `display` (and the
+   decision-4 class) are what a reader still has when it can read a projection but not unseal a body — which
+   is *why* they are captured upstream rather than re-derived downstream. **Second**, a node that installs
+   drugref *later* backfills nothing from the wire: because the as-asserted coding is immutable (decision 6)
+   and no peer re-sends a richer version, later enrichment is re-derived **locally**, by replaying that
+   node's own events through `cairn_reproject` ([ADR-0057](0057-generic-reprojection-registered-apply-dispatch.md)).
 
 ## Paper-parity benchmark (§1.2)
 
@@ -155,14 +237,16 @@ constraint so that slice cannot regress it:
 
 - **Easier:** one coherent *"stable identifier underneath, plural naming on top"* story across the disease
   (ICD-11) and drug (drugref-moiety) axes; reconciled-group display gains a sensible canonical drug identity;
-  the coded-vs-uncoded duplicate blind spot becomes an advisory catch; and independent nodes agree on the
-  anchor with no coordination (deterministic `UUIDv5`).
+  brand↔generic duplicates become an advisory catch **once both members are coded** (the coded↔uncoded case
+  still waits on coding or the matcher, decision 5); and independent nodes agree on the anchor with no
+  coordination (deterministic `UUIDv5`).
 - **Harder / trusted surface:** the **honest-degradation floor** is the safety-critical part and must be
   built as such ([§9](../language-substrate.md)) — a coded medication must read, sync, list, and reconcile
-  on a node with **no** drugref, and the baseline safety projection must fire without it. The advisory
-  enrichment (DDI, fuzzy matching) is fit-for-purpose. The coding-overlay event and its compositional
-  authorship join the trusted write path (a new closed-enum event type + its authorship binding at both
-  doors) — which is exactly why the shape is fixed here, before code.
+  on a node with **no** drugref, and the §5.9 safety projection must fire on such a reader *because the class
+  was captured upstream at coding time*, never because the reader re-derived it (decision 4). The advisory
+  enrichment (DDI, fuzzy matching) is fit-for-purpose. The two coding event types and their compositional
+  authorship join the trusted write path (closed-enum types + twin registration in **both** places +
+  authorship binding at both doors) — which is exactly why the shape is fixed here, before code.
 - **The bet:** that drugref's `moiety_uuid` stability and separable-service availability degrade gracefully
   in the field (a node offline from drugref loses alerts, never legibility); that coding-as-optional-auto-fill
   stays *welcome* rather than resented (the validated ADR-0025 ergonomic); and that anchoring on the moiety
@@ -177,10 +261,21 @@ constraint so that slice cannot regress it:
 
 ## Follow-on (the code slice this ADR unblocks — not built here)
 
-A future `clinical.medication` code slice, taken brainstorm→plan→TDD, will: add the `substance.coding`
-`{system, code, display}` shape to the `cairn-event` builder + twin + the db/031 floor and projection; add
-the `clinical.medication-coding.asserted` / `.corrected` event types (with twin-registry registration in
-**both** places and their authorship binding at both doors); widen the E1 dup-key and the
-`medication_group_display` winner to prefer the coded anchor; and carry the runnable **§1.2 paper-parity
-benchmark** measurement owed above. Cross-node convergence and honest-degradation (drugref-absent) are
-first-class test obligations.
+A future `clinical.medication` code slice, taken brainstorm→plan→TDD, will:
+
+- add the `substance.coding` `{system, code, display}` shape to the `cairn-event` builder + twin + the
+  `db/031` floor and projection, **retiring `substance.inn_code` from the builder** while leaving the
+  projection column deprecated-in-place (decision 2);
+- add the `clinical.medication-coding.asserted` and `clinical.medication-coding-correction.asserted` event
+  types — twin-registry registration in **both** places (the Rust registry *and* its `db/tests` mirror) and
+  authorship binding at both doors;
+- widen the E1 dup-key to `coalesce((system, code), normalize(term))` and the `medication_group_display`
+  winner to prefer the coded anchor (decision 5) — **without** claiming the coded↔uncoded catch the key does
+  not deliver;
+- carry the runnable **§1.2 paper-parity benchmark** measurement owed above.
+
+Cross-node convergence and honest degradation are **first-class test obligations**: a drugref-absent node
+must read, sync, list and reconcile a coded medication, and — the load-bearing one — the §5.9 safety
+projection must fire on that node from the **captured** class, proving the floor never re-derives. The
+safety-class capture itself is owed by the safety-projection slice (decision 4), which this ADR constrains
+but does not build.

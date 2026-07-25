@@ -815,20 +815,32 @@ nullable `inn_code` slot (2026-07-11 design) but under-typed it as a bare INN st
 [`drugref`](https://github.com/cairn-ehr/drugref) has since shipped an immortal `moiety_uuid`
 (`UUIDv5` from UNII, INN as display-not-key). [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
 — the drug-axis companion to ADR-0025 — settles the coding contract: anchor on the immortal `moiety_uuid`
-(never the name, principle 2); a structured `substance.coding {system, code, display}` generalizing the
+(never the name, principle 2); a structured `substance.coding {system, code, display}` **replacing** the
 slot (`system` names the drugref tree level, `display` = INN label captured at coding time for honest
-degradation); coding is separately-authored — inline **or** a `clinical.medication-coding.asserted`/
-`.corrected` overlay by a pharmacist/coder (ADR-0007), *offered never forced* (principle 4, the
+degradation); coding is separately-authored — inline **or** a `clinical.medication-coding.asserted`
+overlay by a pharmacist/coder (ADR-0007), *offered never forced* (principle 4, the
 "little white pill" floor). **The crux (divergence from ICD-11):** drugref is a separable service a node
 may lack, so its coding is **advisory + honest-degrading** — a drugref-absent node still reads/syncs/
-lists/reconciles a coded med, the baseline §5.9 safety projection never depends on drugref, and drugref
-DDI/fuzzy is enrichment-when-present (§9 advisory tier; never on the wire, principle 12). Advisorily
-sharpens the E1 dup-key + reconciled-group INN display (ADR-0047). Edits: new ADR-0059, data-model §3.16
+lists/reconciles a coded med, and drugref DDI/fuzzy is enrichment-when-present (§9 advisory tier; the
+*dataset* never on the wire, principle 12). Advisorily sharpens the E1 dup-key + reconciled-group INN
+display (ADR-0047). **A pre-merge code review then sharpened five binding points** (ADRs are immutable
+once merged): the **§5.9 safety class is computed pre-seal on the coding node and *carried*, never
+re-derived by a drugref-less reader** (§5.9 derives the class *from the code* — a knowledge lookup, so the
+original "derivable from the event's own fields" would have made the floor depend on drugref after all);
+the dup-key closes **coded↔coded only** (a `coalesce` picks per row — the coded↔uncoded case closes by
+coding the uncoded member or via the later drug-matcher, not by the key); the key is **`(system, code)`
+as a pair**, never a bare `code`, else the reserved finer tree levels re-split the same substance
+cross-node; **`inn_code` is retired** from the payload with its projection column deprecated-in-place
+(the `db/036` treatment — safe only because pre-clinical, the last non-additive moment); and the
+correction type is **`clinical.medication-coding-correction.asserted`**, the corpus's noun-stream grammar
+(`clinical.medication-dose-correction.asserted` is the precedent), not a `.corrected` verb. Born-sealed
+custody (ADR-0052/0057) is now stated in-body as decision 8. Edits: new ADR-0059, data-model §3.16
 drug-axis paragraph + `IMPORTANT` divergence callout, §3.3 pointer, index v0.61, README/nav ADR-index
 rows; strict `mkdocs build` green. **Follow-on (unblocked, next session):** the `clinical.medication`
 code slice (brainstorm→plan→TDD) implementing the `substance.coding` shape, the two coding event types
 (+twin-registry both places, +authorship binding), the widened dup-key/group-display, and the runnable
-§1.2 paper-parity benchmark; drugref-absent honest degradation is a first-class test obligation.
+§1.2 paper-parity benchmark; drugref-absent honest degradation is a first-class test obligation — the
+§5.9 projection must fire on a drugref-less node from the captured class.
 
 ## Phase 5 — Security & compliance core
 
