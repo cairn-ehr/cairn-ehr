@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 + the whole Priority-6 queue + #217). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **#217 ✅** (paper-parity benchmark now a required slice-plan section, ROADMAP Slice 52) — **the review course is FULLY closed; nothing remains open from 2026-07-15.** Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211) ✅ 2026-07-25** (the E3 four-gap batch — advisory-tier TDD bugfix + doc-honesty, Slice 53). Matcher **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290) ✅ 2026-07-25** (the #211.4 seam's consumer — eval consumers now REPORT the repaired-pair count, advisory-tier additive TDD, Slice 54). Remaining feature work now unblocked: medication slices 6+, **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale reconciliation re-scoring-cost note), plus the new UI-slice obligation **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)** (med-list whole-list sign-off must collapse to one human gesture, owed by the future Tauri med-list slice).
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 + the whole Priority-6 queue + #217). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **#217 ✅** (paper-parity benchmark now a required slice-plan section, ROADMAP Slice 52) — **the review course is FULLY closed; nothing remains open from 2026-07-15.** Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211) ✅ 2026-07-25** (the E3 four-gap batch — advisory-tier TDD bugfix + doc-honesty, Slice 53). Matcher **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290) ✅ 2026-07-25** (the #211.4 seam's consumer — eval consumers now REPORT the repaired-pair count, advisory-tier additive TDD, Slice 54). Medication slice 6 opened as the **Cairn↔drugref drug-coding seam → [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)** (2026-07-25, design-only, spec v0.61, Slice 55 — the coding wire-shape fixed **before** code; anchor on drugref's immortal `moiety_uuid`, advisory + honest-degrading; detail in the session block). **The unblocked next step is the `clinical.medication` code slice that implements ADR-0059** (the `substance.coding` shape + the two coding event types + the widened dup-key/group-display + a runnable §1.2 benchmark; drugref-absent degradation a first-class test). Other unblocked feature work: further medication slices, **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale reconciliation re-scoring-cost note), plus the UI-slice obligation **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)** (med-list whole-list sign-off must collapse to one human gesture, owed by the future Tauri med-list slice).
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
@@ -67,7 +67,9 @@ well-drilled; nothing above is blocked on them and they get no more expensive by
 
 ---
 
-**Session date:** 2026-07-25, latest (matcher **#290** — the #211.4 seam's consumer: the eval consumers
+**Session date:** 2026-07-25, latest (**ADR-0059** — the Cairn↔drugref medication drug-coding seam, a
+**design-only** ADR fixing the coding wire-shape before code, spec v0.61, ROADMAP Slice 55; detail in the
+session block below. Earlier 2026-07-25 was matcher **#290** — the #211.4 seam's consumer: the eval consumers
 now REPORT how many measured/trained true-match pairs a synthetic verbatim-name repair made artificially
 easy, so a reader discounts the optimistic recall/F1. Advisory-tier, ADR-free, additive TDD wholly inside
 `matcher/`; no spec/SCHEMA/wire/ADR change; Slice 54 below; suite 395→409/0 + ruff clean + independent
@@ -88,8 +90,8 @@ moving the `clinical_pull` listen ports below the ephemeral floor, issue #263;
 #212/#213/#214/#215 closing the review course, and the P4 tech-debt slice PR #251; 2026-07-18 had
 #204 ADR-0053 + the PR #246 fix pass + the GUI/L3 easyGP editing-area mining; 2026-07-17 #189+#92
 ADR-0052; 2026-07-16 ADR-0051 + the full P2 arc + the P1 floor-hardening slice; last full
-regeneration 2026-07-14) · **Spec/ADRs:** v0.60 (through
-ADR-0058) · **Phase:** architecture complete (every original §11 question closed);
+regeneration 2026-07-14) · **Spec/ADRs:** v0.61 (through
+ADR-0059) · **Phase:** architecture complete (every original §11 question closed);
 **first production clinical surface under construction** on `cairn-node`. Built so far
 (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names ·
@@ -125,7 +127,31 @@ triggers; `cairn_reproject` heal/rebuild run gen-gated by both loaders; the ever
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
-**Session (2026-07-25, later) — matcher #290: wire `repaired_record_ids` into eval reporting (advisory
+**Session (2026-07-25, latest) — the Cairn↔drugref medication drug-coding seam → [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
+(design-only, spec v0.61, ROADMAP Slice 55; NO code; branch `design/medication-drug-coding-drugref-anchor-0059`).**
+Picked up as "medication slice 6"; the user pointed at the sister service [`drugref`](https://github.com/cairn-ehr/drugref)
+(slice 1+ merged: an immortal `moiety_uuid` = `UUIDv5` from UNII, INN as display-not-key) and chose to
+**settle the coding contract as an ADR before writing code** (the wire-content shape is retrofit-hard).
+ADR-0059 is the drug-axis companion to ADR-0025: anchor a medication's drug identity on the immortal
+`moiety_uuid` (never the INN name, principle 2); a structured `substance.coding {system, code, display}`
+generalizes the reserved `inn_code` slot (`system` names the drugref tree level — `drugref-moiety` today,
+clinical-drug/product reserved; `display` = INN label captured at coding time for honest degradation);
+coding is a **separately-authored** act — inline on the assert **or** a later
+`clinical.medication-coding.asserted`/`.corrected` overlay by a pharmacist/coder (ADR-0007), *offered
+never forced* (principle 4). **The crux (deliberate divergence from ICD-11's always-present pivot):**
+drugref is a separable service a node may lack, so its coding is **advisory + honest-degrading** — a
+drugref-absent node still reads/syncs/lists/reconciles a coded med (via `display`+`term`), the baseline
+§5.9 safety projection never depends on drugref, drugref DDI/fuzzy is enrichment-when-present (§9 advisory
+tier; never on the wire, principle 12). Advisorily sharpens the E1 dup-key + reconciled-group INN display
+(ADR-0047). Edits: new ADR-0059, data-model §3.16 drug-axis paragraph + `IMPORTANT` divergence callout,
+§3.3 pointer, index v0.61, README + mkdocs-nav ADR-index rows; **strict `mkdocs build` green.** **Unblocked
+follow-on (next session):** the `clinical.medication` **code slice** (brainstorm→plan→TDD) — build the
+`substance.coding` shape (cairn-event assert/twin + db/031 floor/projection), the two coding event types
+(+twin-registry BOTH places, +authorship binding at both doors), the widened dup-key + `medication_group_display`
+winner, and the runnable §1.2 paper-parity benchmark; **drugref-absent honest degradation is a first-class
+test obligation.**
+
+**Session (2026-07-25, earlier) — matcher #290: wire `repaired_record_ids` into eval reporting (advisory
 Python tier, ROADMAP Slice 54; no spec/SCHEMA/wire/ADR change — an additive TDD change wholly inside
 `matcher/eval/`; consumes the #211.4 quantify seam; branch `fix/matcher-repaired-pair-reporting-290`).**
 The generator's `_repair` marks a clone `repaired: True` when it injects a VERBATIM seed name to keep a
@@ -586,6 +612,7 @@ ADR before reopening any of these.
 | [0056](spec/decisions/0056-unknown-event-types-admitted-uninterpreted.md) | Unknown event types are admitted uninterpreted: custody total, interpretation deferred, power earned; strict door still fail-closes (carry what you cannot author); the floor gates effect not presence; refusal + durable re-offer kept as the residual contract | §6.5/§6.3/§3.13 (refines 0012/0022; extends 0054; upholds 0010/0051) |
 | [0057](spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md) | Generic reprojection: a projection lives only in its registered apply fn; one dispatcher replaces the ~15 per-type triggers; `cairn_reproject` heal/rebuild is generic replay, run by the loader on a schema-generation change (every-connect backfill retired); `cairn_replay_eligible` is the #266 seam | §9.4/§9.1 (refines 0048/0045; upholds 0056; load-bearing for #266) |
 | [0058](spec/decisions/0058-grade-gated-teffective-ceiling.md) | Grade-gated `t_effective` ceiling: a born `clock_grade` bounds the ceiling's rejecting power — `self-asserted`/`unknown` flag-never-reject (principle-4 fix for slow/dead clocks), remote door admits-and-flags never rejects (closes a sync-wedge DoS), interval derived not stored, mint constrained to self-asserted, gate-effect-not-presence; `cairn_clock_health` honest-assembly read; corrects ADR-0027 §6 `upper=RTC`→`RTC+W` | §3.6/§3.17 (refines 0003/0027; upholds 0051/0056) |
+| [0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) | Medication drug-identity coding (drug-axis companion to 0025): anchor on `drugref`'s immortal `moiety_uuid` (INN is display, never key); structured `substance.coding {system, code, display}` generalizing the reserved `inn_code` slot; separately-authored inline-or-overlay coding act (`clinical.medication-coding.asserted`/`.corrected`); **advisory + honest-degrading** — drugref-absent nodes still read/sync/reconcile, baseline safety projection never depends on drugref; design-only (code slice deferred) | §3.16/§3.3 (refines 0025/0047; applies 0007/0014/0052) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

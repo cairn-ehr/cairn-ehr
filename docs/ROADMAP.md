@@ -808,6 +808,28 @@ unmarked (real) dataset. TDD RED-first (+14 tests, suite 395→**409/0**, ruff c
 code-review pass: **clean, no finding at/above threshold** (verified the two counting paths provably agree).
 Remaining matcher follow-on: only [#287](https://github.com/cairn-ehr/cairn-ehr/issues/287).
 
+**Slice 55 — the Cairn↔drugref medication drug-coding seam: ADR-0059 (2026-07-25; design-only, spec
+v0.61; branch `design/medication-drug-coding-drugref-anchor-0059`; NO code — the wire-content shape is
+retrofit-hard, so the contract is fixed before the code slice).** The medication surface reserved a
+nullable `inn_code` slot (2026-07-11 design) but under-typed it as a bare INN string; the sister service
+[`drugref`](https://github.com/cairn-ehr/drugref) has since shipped an immortal `moiety_uuid`
+(`UUIDv5` from UNII, INN as display-not-key). [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
+— the drug-axis companion to ADR-0025 — settles the coding contract: anchor on the immortal `moiety_uuid`
+(never the name, principle 2); a structured `substance.coding {system, code, display}` generalizing the
+slot (`system` names the drugref tree level, `display` = INN label captured at coding time for honest
+degradation); coding is separately-authored — inline **or** a `clinical.medication-coding.asserted`/
+`.corrected` overlay by a pharmacist/coder (ADR-0007), *offered never forced* (principle 4, the
+"little white pill" floor). **The crux (divergence from ICD-11):** drugref is a separable service a node
+may lack, so its coding is **advisory + honest-degrading** — a drugref-absent node still reads/syncs/
+lists/reconciles a coded med, the baseline §5.9 safety projection never depends on drugref, and drugref
+DDI/fuzzy is enrichment-when-present (§9 advisory tier; never on the wire, principle 12). Advisorily
+sharpens the E1 dup-key + reconciled-group INN display (ADR-0047). Edits: new ADR-0059, data-model §3.16
+drug-axis paragraph + `IMPORTANT` divergence callout, §3.3 pointer, index v0.61, README/nav ADR-index
+rows; strict `mkdocs build` green. **Follow-on (unblocked, next session):** the `clinical.medication`
+code slice (brainstorm→plan→TDD) implementing the `substance.coding` shape, the two coding event types
+(+twin-registry both places, +authorship binding), the widened dup-key/group-display, and the runnable
+§1.2 paper-parity benchmark; drugref-absent honest degradation is a first-class test obligation.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
