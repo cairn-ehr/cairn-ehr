@@ -13,7 +13,7 @@
 - **Tier:** advisory Python (§9 fit-for-purpose). `matcher/` only — **no** spec/ADR/SCHEMA/wire/DB change.
 - **AGPL-3.0**; zero new runtime dependencies (the matcher core is dependency-free).
 - **TDD**, RED before GREEN. Pure functions, explicit inputs/outputs.
-- **Paper-parity (§1.2):** not clinical-surface — offline eval tooling. (No plan section owed; noted here per house rule 7.)
+- Paper-parity: not clinical-surface — offline eval tooling (advisory §9 matcher eval); it ships no clinician-reachable clinical workflow, so §1.2's time/steps/cognitive-load benchmark does not apply to this plan. (Forced-rationale escape, house rule 7.)
 - **Run tests from `matcher/`:** pure suite is `cd matcher && uv run pytest` (never venv/pip). Lint: `cd matcher && uv run ruff check`.
 - Every new count field is `int`; on a real (unmarked) dataset it is `0` — the honest "nothing to discount."
 
