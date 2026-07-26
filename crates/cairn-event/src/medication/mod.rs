@@ -17,7 +17,9 @@ pub mod cessation;
 pub mod dose;
 pub mod reconciliation;
 
-pub use assert::{medication_assertion_body, render_medication_twin, MedicationAssertion};
+pub use assert::{
+    medication_assertion_body, render_medication_twin, MedicationAssertion, SubstanceCoding,
+};
 pub use attestation::{
     medication_attestation_body, render_medication_attestation_twin, MedicationAttestation,
 };

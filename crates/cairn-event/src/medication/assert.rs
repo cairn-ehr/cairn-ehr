@@ -4,6 +4,23 @@
 //! existing event's content address (principle 11).
 use serde_json::{json, Value};
 
+/// A drug-identity coding claim, captured at coding time (ADR-0059).
+///
+/// The anchor is an *immortal identifier* — drugref's `moiety_uuid` — never a name:
+/// keying on a label (even an INN) repeats the founding wound (principle 2). All three
+/// fields travel together because `display` is the honest-degradation label: a node
+/// without drugref still shows the preferred name, so it is never optional *within*
+/// the object. The object as a whole stays optional — uncoded is first-class.
+pub struct SubstanceCoding<'a> {
+    /// The drugref composition-tree level. `drugref-moiety` today; the finer
+    /// `drugref-clinical-drug` / `drugref-product` levels are reserved.
+    pub system: &'a str,
+    /// The immortal identifier itself (a `moiety_uuid`, UUIDv5 from the UNII).
+    pub code: &'a str,
+    /// The INN-preferred label as it read at coding time.
+    pub display: &'a str,
+}
+
 /// A medication statement (the "start" verb). `term` is the one mandatory
 /// clinical field (may be vague, e.g. "little white pill"); every `Option`
 /// field is omitted from the payload when `None`.
@@ -12,8 +29,9 @@ pub struct MedicationAssertion<'a> {
     pub medication_id: &'a str,
     /// As-asserted substance term — mandatory, non-empty.
     pub term: &'a str,
-    /// Stable INN anchor; `None` = not-yet-coded (usual in slice 1, no dictionary).
-    pub inn_code: Option<&'a str>,
+    /// Drug-identity coding, when someone has coded it; `None` = not-yet-coded, which
+    /// is a permanently valid state (the "little white pill" floor, principle 4).
+    pub coding: Option<SubstanceCoding<'a>>,
     /// Formulation enum token (tablet, capsule, liquid, patch, …) or `None` = unknown.
     pub formulation: Option<&'a str>,
     /// Dose magnitude as a decimal string; `None` = unknown.
@@ -38,8 +56,11 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
     let mut substance = json!({ "term": a.term });
     {
         let s = substance.as_object_mut().expect("json! built an object");
-        if let Some(c) = a.inn_code {
-            s.insert("inn_code".into(), json!(c));
+        if let Some(c) = &a.coding {
+            s.insert(
+                "coding".into(),
+                json!({ "system": c.system, "code": c.code, "display": c.display }),
+            );
         }
         if let Some(f) = a.formulation {
             s.insert("formulation".into(), json!(f));
@@ -98,6 +119,14 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     if let Some(v) = a.started {
         s.push_str(&format!(", started {v}"));
     }
+    // ADR-0059 / principle 11: the captured display is what a reader without drugref
+    // still has. Repeat it only when it adds something — a clinician who typed the
+    // generic name already wrote it (case-folded compare, so "Atorvastatin" counts).
+    if let Some(c) = &a.coding {
+        if !c.display.eq_ignore_ascii_case(a.term) {
+            s.push_str(&format!(" [{}]", c.display));
+        }
+    }
     s
 }
 
@@ -108,8 +137,12 @@ mod tests {
     fn full_assertion() -> MedicationAssertion<'static> {
         MedicationAssertion {
             medication_id: "11111111-1111-7111-8111-111111111111",
-            term: "atorvastatin",
-            inn_code: Some("INN:atorvastatin"),
+            term: "Lipitor",
+            coding: Some(SubstanceCoding {
+                system: "drugref-moiety",
+                code: "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01",
+                display: "atorvastatin",
+            }),
             formulation: Some("tablet"),
             dose_amount: Some("40"),
             dose_unit: Some("mg"),
@@ -121,18 +154,31 @@ mod tests {
     }
 
     #[test]
-    fn assertion_body_carries_all_present_fields() {
+    fn assertion_body_carries_the_coding_triple() {
         let v = medication_assertion_body(&full_assertion());
-        assert_eq!(v["medication_id"], "11111111-1111-7111-8111-111111111111");
-        assert_eq!(v["substance"]["term"], "atorvastatin");
-        assert_eq!(v["substance"]["inn_code"], "INN:atorvastatin");
-        assert_eq!(v["substance"]["formulation"], "tablet");
-        assert_eq!(v["dose"]["amount"], "40");
-        assert_eq!(v["dose"]["unit"], "mg");
-        assert_eq!(v["sig"], "one BD");
-        assert_eq!(v["info_source"], "patient-reported");
-        assert_eq!(v["started"]["value"], "2024");
-        assert_eq!(v["started"]["precision"], "year");
+        assert_eq!(v["substance"]["term"], "Lipitor");
+        assert_eq!(v["substance"]["coding"]["system"], "drugref-moiety");
+        assert_eq!(
+            v["substance"]["coding"]["code"],
+            "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"
+        );
+        assert_eq!(v["substance"]["coding"]["display"], "atorvastatin");
+    }
+
+    #[test]
+    fn assertion_body_omits_absent_coding_and_never_emits_the_retired_slot() {
+        let mut a = full_assertion();
+        a.coding = None;
+        let v = medication_assertion_body(&a);
+        let subst = v["substance"].as_object().unwrap();
+        assert!(
+            !subst.contains_key("coding"),
+            "absent coding must be omitted, not null (principle 4: uncoded is first-class)"
+        );
+        assert!(
+            !subst.contains_key("inn_code"),
+            "the reserved inn_code slot is retired (ADR-0059 decision 2)"
+        );
     }
 
     #[test]
@@ -141,7 +187,7 @@ mod tests {
         let a = MedicationAssertion {
             medication_id: "22222222-2222-7222-8222-222222222222",
             term: "little white pill",
-            inn_code: None,
+            coding: None,
             formulation: None,
             dose_amount: None,
             dose_unit: None,
@@ -153,8 +199,8 @@ mod tests {
         let v = medication_assertion_body(&a);
         let subst = v["substance"].as_object().unwrap();
         assert!(
-            !subst.contains_key("inn_code"),
-            "absent inn_code must be omitted, not null"
+            !subst.contains_key("coding"),
+            "absent coding must be omitted, not null"
         );
         assert!(!subst.contains_key("formulation"));
         let obj = v.as_object().unwrap();
@@ -188,11 +234,43 @@ mod tests {
     }
 
     #[test]
+    fn twin_appends_the_display_when_it_differs_from_the_term() {
+        let s = render_medication_twin(&full_assertion());
+        assert!(s.starts_with("Lipitor"));
+        assert!(
+            s.ends_with("[atorvastatin]"),
+            "the captured display is the honest-degradation label a drugref-less \
+             reader still sees, got: {s}"
+        );
+    }
+
+    #[test]
+    fn twin_does_not_repeat_a_display_equal_to_the_term() {
+        // Case-folded compare: the clinician typed the generic name the coding resolves to.
+        let mut a = full_assertion();
+        a.term = "Atorvastatin";
+        let s = render_medication_twin(&a);
+        assert!(
+            !s.contains('['),
+            "a display equal to the term (case-insensitively) must add nothing, got: {s}"
+        );
+    }
+
+    #[test]
+    fn twin_of_an_uncoded_assertion_is_unchanged() {
+        let mut a = full_assertion();
+        a.coding = None;
+        let s = render_medication_twin(&a);
+        assert!(!s.contains('['), "no coding, no bracket: {s}");
+        assert!(s.starts_with("Lipitor"));
+    }
+
+    #[test]
     fn assertion_twin_nonempty_for_vague_term_only() {
         let a = MedicationAssertion {
             medication_id: "22222222-2222-7222-8222-222222222222",
             term: "little white pill",
-            inn_code: None,
+            coding: None,
             formulation: None,
             dose_amount: None,
             dose_unit: None,
