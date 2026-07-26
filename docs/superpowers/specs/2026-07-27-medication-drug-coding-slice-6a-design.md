@@ -1,6 +1,6 @@
 # Design — `clinical.medication` slice 6a: the inline `substance.coding` shape
 
-- **Date:** 2026-07-26
+- **Date:** 2026-07-27
 - **Implements:** [ADR-0059](../../spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
   (decisions 1, 2, 4-partial, 5, 7) — the first half of the code slice that ADR unblocks.
 - **Status:** design agreed; implementation plan to follow.
