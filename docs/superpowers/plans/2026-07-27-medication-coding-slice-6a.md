@@ -1112,9 +1112,28 @@ view select lists, and extend the CRITICAL comment above them:
 --     appended at the END in db/031, db/032 and db/033 alike.
 ```
 
-In `db/033_medication_reconciliation.sql`, append `, d.coding_system, d.coding_code, d.coding_display`
-to both view select lists (they select from `medication_group_display d`, which Task 5 widens — write
-this step and Task 5's `medication_group_display` change together if the loader complains).
+In `db/033_medication_reconciliation.sql`, **first** widen `medication_group_display` itself — columns
+only; its winner ordering is Task 5's job and stays untouched here:
+
+```sql
+CREATE OR REPLACE VIEW medication_group_display AS
+SELECT DISTINCT ON (g.group_id)
+    g.group_id, g.patient_id, s.term, s.inn_code, s.formulation, s.sig, s.info_source,
+    s.started_value, s.started_precision,
+    to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
+    s.dose_amount, s.dose_unit,
+    mc.coding_system, mc.coding_code, mc.coding_display
+FROM medication_statement s
+JOIN medication_thread_group g ON g.medication_id = s.medication_id
+LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
+ORDER BY g.group_id, (s.medication_id = g.group_id) DESC, s.medication_id;
+GRANT SELECT ON medication_group_display TO cairn_agent;
+```
+
+Then append `, d.coding_system, d.coding_code, d.coding_display` to the `patient_medication_current` and
+`patient_medication_past` select lists in the same file (they select from `medication_group_display d`).
+Doing the display view first is not optional: the loader runs these top to bottom, so a current/past view
+referencing `d.coding_system` before that column exists fails the connect.
 
 - [ ] **Step 5: Add the TRUNCATE line to the medication test helpers**
 
@@ -1404,6 +1423,9 @@ GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 ```
 
 - [ ] **Step 4: Rework `medication_group_display` and the group-level flag, and add the conflict view (db/033)**
+
+Task 4 already widened `medication_group_display` with the three coding columns; this step changes only
+its **winner ordering** (and then the group-level flag + the new conflict view):
 
 ```sql
 CREATE OR REPLACE VIEW medication_group_display AS
