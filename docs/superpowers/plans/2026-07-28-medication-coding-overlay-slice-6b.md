@@ -1006,7 +1006,13 @@ $$;
 REVOKE EXECUTE ON FUNCTION cairn_check_coding_object(jsonb, text) FROM PUBLIC;
 ```
 
-Then replace the body of `cairn_check_medication_coding(p jsonb)` with a thin delegation, keeping its own message prefix so slice 6a's refusal texts stay byte-identical (its tests assert on them):
+Then replace the body of `cairn_check_medication_coding(p jsonb)` with a thin delegation. The
+structural-tier messages come out byte-identical to slice 6a's; the two registry-tier messages gain the
+`substance.coding` path in their prefix (`medication assertion: substance.coding: unknown coding
+system …` where 6a said `medication assertion: unknown coding system …`). That is acceptable and
+deliberate — slice 6a's tests assert on substrings that survive the change (`national-formulary-xyz`,
+`requires a uuid code`, `canonical`), and naming the field in a refusal is an improvement, not drift.
+Do not contort the prefix to chase byte-identity:
 
 ```sql
 CREATE OR REPLACE FUNCTION cairn_check_medication_coding(p jsonb)
