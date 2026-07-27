@@ -447,22 +447,27 @@ SELECT medication_id, patient_id, term, inn_code, formulation,
 FROM patient_medication WHERE ceased;
 GRANT SELECT ON patient_medication_past TO cairn_agent;
 
--- 9. E1 reconciliation flag (advisory, never auto-merges). >=2 ACTIVE threads for
---    one patient sharing coalesce(inn_code, normalized term). Deterministic — no
---    fuzzy matching (brand<->generic/typos are deferred to the Tier-A drug matcher).
---    COLLATE "C" pins the normalized-term key for cross-node determinism (ADR-0045).
---    Resolution is ceasing the redundant thread (no new event type).
---    Known blind spot (deferred, not a bug): the key prefers inn_code when present,
---    so the SAME substance asserted once coded and once uncoded lands under two
---    different keys and is NOT flagged. Cross-coding-state matching waits on the
---    Tier-A dictionary, same as brand<->generic.
+-- 9. E1 reconciliation flag (advisory, never auto-merges). >=2 ACTIVE threads for one
+--    patient sharing the dup-key. ADR-0059: the key is the coding PAIR when coded, else
+--    the normalized term. The PAIR, never a bare code — once the reserved finer drugref
+--    levels exist, the same substance coded at moiety level on one node and clinical-drug
+--    level on another would split under a bare-code key (the same blind spot one level up,
+--    and a CROSS-NODE one). Each branch is prefixed so a free-text term can never collide
+--    with a code key. COLLATE "C" on both branches pins cross-node determinism (ADR-0045).
+--    WHAT THIS CLOSES: coded<->coded, including Lipitor<->atorvastatin once BOTH are coded.
+--    WHAT IT DOES NOT: coalesce picks per ROW, so a coded and an uncoded row still key
+--    apart. That case closes when the uncoded member gets CODED (offered, never forced),
+--    or later by term->anchor resolution in the drug-matcher slice.
 CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
 SELECT patient_id,
-       coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,
-       count(*)                                           AS thread_count,
-       array_agg(medication_id ORDER BY medication_id)    AS medication_ids
+       coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                'term:' || lower(btrim(term) COLLATE "C")) AS dup_key,
+       count(*)                                            AS thread_count,
+       array_agg(medication_id ORDER BY medication_id)     AS medication_ids
 FROM patient_medication_current
-GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
+GROUP BY patient_id,
+         coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                  'term:' || lower(btrim(term) COLLATE "C"))
 HAVING count(*) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 

@@ -601,3 +601,212 @@ async fn the_assert_verb_registers_medication_coding_in_its_rebuild_scope() {
         "medication_coding must be in the assert verb's rebuild-scope inventory, got {tables:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 5 (ADR-0059 decision 5): the (system, code) PAIR dup-key, prefer-coded
+// group display, and the anchor-conflict advisory view.
+// ---------------------------------------------------------------------------
+
+async fn dup_keys(c: &Client, patient: Uuid) -> Vec<(String, i64)> {
+    c.query(
+        "SELECT dup_key, thread_count FROM patient_medication_reconciliation_flag \
+           WHERE patient_id = $1::text::uuid ORDER BY dup_key",
+        &[&patient.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1)))
+    .collect()
+}
+
+#[tokio::test]
+async fn two_coded_threads_sharing_an_anchor_raise_one_flag() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    // The case ADR-0059 exists for: brand and generic, different words, same substance.
+    for term in ["Lipitor", "atorvastatin"] {
+        assert_medication(
+            &mut c,
+            &sk,
+            &kid,
+            "test-node",
+            patient,
+            &coded_input(term, MOIETY_ATORVASTATIN),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let flags = dup_keys(&c, patient).await;
+    assert_eq!(flags.len(), 1, "one duplicate group, got {flags:?}");
+    assert_eq!(flags[0].1, 2);
+    assert!(
+        flags[0].0.starts_with("code:drugref-moiety|"),
+        "the key is the (system, code) PAIR, never a bare code: {:?}",
+        flags[0].0
+    );
+}
+
+#[tokio::test]
+async fn a_coded_and_an_uncoded_thread_still_key_apart() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("atorvastatin", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut uncoded = coded_input("atorvastatin", MOIETY_ATORVASTATIN);
+    uncoded.coding = None;
+    assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &uncoded,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // ADR-0059 decision 5 is explicit: a coalesce picks PER ROW, so this case is NOT
+    // closed by the key. It closes when the uncoded member gets coded, or later by the
+    // drug-matcher. Claiming otherwise is the overstatement the ADR review caught.
+    assert!(
+        dup_keys(&c, patient).await.is_empty(),
+        "coded and uncoded key apart — the honest, documented blind spot"
+    );
+}
+
+#[tokio::test]
+async fn a_reconciled_group_displays_its_coded_member() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let mut vague = coded_input("little white pill", MOIETY_ATORVASTATIN);
+    vague.coding = None;
+    let m_vague = assert_medication(&mut c, &sk, &kid, "test-node", patient, &vague, None, None)
+        .await
+        .unwrap();
+    let m_coded = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    cairn_node::medication::reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        m_vague,
+        m_coded,
+        &cairn_node::medication::ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let display: String = c
+        .query_one(
+            "SELECT coding_display FROM medication_group_display \
+               WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        display, "atorvastatin",
+        "the group takes its identity from the coded member, not from \"little white pill\""
+    );
+}
+
+#[tokio::test]
+async fn two_anchors_in_one_group_raise_a_conflict() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
+    let m1 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let m2 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Diabex", MOIETY_METFORMIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    cairn_node::medication::reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        m1,
+        m2,
+        &cairn_node::medication::ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("reconciliation is a human judgment — never auto-refused over a coding");
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_group_coding_conflict", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 1,
+        "two different anchors in one group is a possible-mis-reconciliation signal — \
+         surfaced, never silently resolved"
+    );
+}
