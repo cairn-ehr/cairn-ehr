@@ -53,6 +53,17 @@ BEGIN
            OR length(btrim(p ->> 'info_source')) = 0 THEN
             RAISE EXCEPTION 'medication assertion: info_source must be a non-empty string';
         END IF;
+        -- ADR-0059 decision 2: the reserved inn_code slot is RETIRED. Fail loud at the
+        -- authoring door (a caller still emitting it is a bug at source); ignore it on
+        -- the apply path — a refusal on a verifiable peer event is the sync-wedge
+        -- ADR-0056 forbids, and the slot is simply never read again.
+        IF (p -> 'substance') ? 'inn_code'
+           AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+            RAISE EXCEPTION 'medication assertion: substance.inn_code is retired — carry substance.coding {system, code, display} instead (ADR-0059 decision 2)';
+        END IF;
+        -- The coding floor lives in db/041 (a floor change needs its own generation
+        -- bump, #188); plpgsql resolves the call at execution, so the later file is fine.
+        PERFORM cairn_check_medication_coding(p);
     END IF;
     -- The cessation verb carries only medication_id (+ optional stopped/reason) — done.
 END;

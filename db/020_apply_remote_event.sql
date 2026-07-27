@@ -256,6 +256,33 @@ BEGIN
     END IF;
     v_twin_stub := b ->> 'plaintext_twin';
 
+    -- Raise the transaction-local remote-apply marker HERE — before step 8, not only
+    -- before the INSERT below. The marker's window used to start right before the
+    -- event_log INSERT (so it covered only the AFTER-INSERT projection triggers); that
+    -- placement was never a deliberate "validation is always strict" decision, it was
+    -- just incidental to projections being the marker's first consumers (db/018's
+    -- component-size clamp, db/031's thread-patient guard, db/033's reconciliation
+    -- guard — all projection-apply functions, all fired during the INSERT). But by the
+    -- time execution reaches this line, the node genuinely IS on the sync-apply path —
+    -- this whole function exists for nothing else — so the marker should have covered
+    -- the WHOLE apply, validation included, from the start.
+    --
+    -- Widening the window to also cover step 8 (the cairn_event_twin per-type floor
+    -- dispatch, immediately below) is the point of moving it: db/041's
+    -- cairn_check_medication_coding is the first per-type check_fn to read this marker,
+    -- and step 8 runs BEFORE the old marker placement — so a registry-derived coding
+    -- check could never tell "local" from "remote" and refused a verifiable peer event
+    -- outright, which is exactly the sync-watermark freeze ADR-0056 forbids. Confirmed
+    -- safe to widen: every EXISTING reader of this marker (db/018:230, db/018:375,
+    -- db/023's dispute projection-apply, db/031:157, db/033:196/271) already lives in
+    -- the projection-apply layer and fires strictly after this new, earlier line — none
+    -- of them change behaviour. No registered check_fn read it before db/041, so there
+    -- is nothing upstream of step 8 to regress either.
+    --
+    -- Still cleared at the SAME place as before (right after the INSERT, below) — a
+    -- later submit_event in the same transaction keeps its veto, unchanged.
+    PERFORM set_config('cairn.remote_apply', 'on', true);
+
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
     --    as submit_event — one floor renderer, so a twin-less demographic event is
     --    refused identically at both doors (closes the M8 asymmetry). A sealed event with
@@ -291,12 +318,10 @@ BEGIN
         END IF;
     END IF;
 
-    -- Raise the transaction-local remote-apply marker so projection triggers with
-    -- node-local-config guards clamp-and-flag instead of vetoing (A5b; db/018 reads
-    -- it). Cleared right after the INSERT (AFTER-ROW triggers run within the INSERT
-    -- statement), so a later submit_event in the same transaction keeps its veto.
-    PERFORM set_config('cairn.remote_apply', 'on', true);
-
+    -- cairn.remote_apply was already raised above (before step 8), so it is already
+    -- 'on' here — no second set_config needed. It stays 'on' through this INSERT's
+    -- AFTER-ROW projection triggers (clamp-and-flag instead of vetoing, A5b; db/018/
+    -- db/031/db/033 read it there) and is cleared immediately below.
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,

@@ -220,6 +220,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "040_clock_confidence_grade",
         include_str!("../../../db/040_clock_confidence_grade.sql"),
     ),
+    // db/041 (ADR-0059): the medication coding-system vocabulary registry + the
+    // substance.coding floor check db/031's per-type check calls. cairn-sync's list
+    // carries no medication files at all and legitimately lags (#284).
+    (
+        "041_medication_coding",
+        include_str!("../../../db/041_medication_coding.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
