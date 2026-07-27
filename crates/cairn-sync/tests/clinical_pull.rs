@@ -15,6 +15,7 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
+use cairn_event::medication::SubstanceCoding;
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
@@ -486,10 +487,19 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     )
     .await
     .unwrap();
-    // A ceased thread (exercises the past view across the wire).
+    // A ceased thread (exercises the past view across the wire). Also carries a
+    // drug-identity coding (ADR-0059) so this test proves the OTHER half of decision
+    // 4 alongside no_drugref_dependency.rs's structural proof: a coded medication's
+    // substance.coding converges to a second node exactly like every other fact does,
+    // even though drugref itself never appears anywhere on this wire or in this tree.
     let atorva = AssertMedicationInput {
         term: "atorvastatin",
         dose_amount: Some("40"),
+        coding: Some(SubstanceCoding {
+            system: "drugref-moiety",
+            code: "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01",
+            display: "atorvastatin",
+        }),
         ..metformin
     };
     let med2 = assert_medication(
@@ -628,6 +638,20 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         gids[0], gids[1],
         "both duplicate threads collapsed into the SAME group:\n{joined}"
     );
+
+    // The coded medication's substance.coding converged to B too — queried directly
+    // (not via `snapshot`, which the assert_eq! above already proved byte-identical
+    // between A and B) so the failure message names B specifically if this regresses.
+    let coding_row = b
+        .query_one(
+            "SELECT coding_system, coding_code, coding_display \
+               FROM medication_coding WHERE medication_id = $1::text::uuid",
+            &[&med2.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(coding_row.get::<_, String>(0), "drugref-moiety");
+    assert_eq!(coding_row.get::<_, String>(2), "atorvastatin");
 
     // The quarantine stayed empty: nothing on this wire needed penning.
     let penned: i64 = b
