@@ -640,9 +640,16 @@ enum Cmd {
         /// As-asserted substance term (required, may be vague).
         #[arg(long)]
         term: String,
-        /// Stable INN code, if known (usually absent in slice 1 — no dictionary yet).
+        /// Drug-identity coding system — `drugref-moiety` today (ADR-0059).
+        /// Supply all three --coding-* flags together, or none at all.
         #[arg(long)]
-        inn_code: Option<String>,
+        coding_system: Option<String>,
+        /// The immortal drug identifier (a drugref moiety_uuid).
+        #[arg(long)]
+        coding_code: Option<String>,
+        /// The INN-preferred label as it reads at coding time.
+        #[arg(long)]
+        coding_display: Option<String>,
         /// Formulation (tablet, capsule, liquid, patch, …).
         #[arg(long)]
         formulation: Option<String>,
@@ -1759,7 +1766,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::MedicationAssert {
             patient,
             term,
-            inn_code,
+            coding_system,
+            coding_code,
+            coding_display,
             formulation,
             dose_amount,
             dose_unit,
@@ -1778,7 +1787,11 @@ async fn main() -> anyhow::Result<()> {
             ensure_registration_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::AssertMedicationInput {
                 term: &term,
-                inn_code: inn_code.as_deref(),
+                coding: cairn_node::medication::coding_from_parts(
+                    coding_system.as_deref(),
+                    coding_code.as_deref(),
+                    coding_display.as_deref(),
+                )?,
                 formulation: formulation.as_deref(),
                 dose_amount: dose_amount.as_deref(),
                 dose_unit: dose_unit.as_deref(),

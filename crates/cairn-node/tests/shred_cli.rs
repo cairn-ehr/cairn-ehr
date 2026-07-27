@@ -91,7 +91,7 @@ async fn setup_node_and_human(c: &Client) -> (SigningKey, String, SigningKey, St
 fn sample_input() -> AssertMedicationInput<'static> {
     AssertMedicationInput {
         term: "atorvastatin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("40"),
         dose_unit: Some("mg"),

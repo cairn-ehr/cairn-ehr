@@ -444,7 +444,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -688,7 +688,7 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -1202,7 +1202,7 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1538,7 +1538,7 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1654,7 +1654,7 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1857,7 +1857,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -1898,7 +1898,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         patient,
         &AssertMedicationInput {
             term: "ibuprofen",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("200"),
             dose_unit: Some("mg"),
@@ -2086,7 +2086,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -2117,7 +2117,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
         patient,
         &AssertMedicationInput {
             term: "ibuprofen",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("200"),
             dose_unit: Some("mg"),

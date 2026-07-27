@@ -108,7 +108,7 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
 fn sample_assert(term: &'static str) -> AssertMedicationInput<'static> {
     AssertMedicationInput {
         term,
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("40"),
         dose_unit: Some("mg"),

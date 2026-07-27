@@ -11,6 +11,15 @@ use serde_json::{json, Value};
 /// fields travel together because `display` is the honest-degradation label: a node
 /// without drugref still shows the preferred name, so it is never optional *within*
 /// the object. The object as a whole stays optional — uncoded is first-class.
+///
+/// `Debug` is derived so callers (the Task 2 `coding_from_parts` tests, in particular)
+/// can use `expect_err` on a `Result<Option<SubstanceCoding>, _>` — Rust requires the Ok
+/// side to be `Debug` even though the assertion only ever inspects the `Err`.
+/// `Clone`/`Copy` are derived because this holds nothing but borrowed `&str`s (like the
+/// `inn_code: Option<&str>` slot it replaces, which was `Copy` too) — callers build test
+/// fixtures with `..base` struct-update syntax reused across several literals, which
+/// needs every field to be `Copy`, not moved-from-under the original on first use.
+#[derive(Debug, Clone, Copy)]
 pub struct SubstanceCoding<'a> {
     /// The drugref composition-tree level. `drugref-moiety` today; the finer
     /// `drugref-clinical-drug` / `drugref-product` levels are reserved.
@@ -163,6 +172,21 @@ mod tests {
             "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"
         );
         assert_eq!(v["substance"]["coding"]["display"], "atorvastatin");
+    }
+
+    #[test]
+    fn assertion_body_carries_all_present_fields() {
+        // Restores coverage dropped by Task 1's edits (#0059 review finding): every
+        // present optional field must actually reach the payload, not just the coding
+        // triple (which `assertion_body_carries_the_coding_triple` already covers).
+        let v = medication_assertion_body(&full_assertion());
+        assert_eq!(v["medication_id"], "11111111-1111-7111-8111-111111111111");
+        assert_eq!(v["substance"]["formulation"], "tablet");
+        assert_eq!(v["dose"]["amount"], "40");
+        assert_eq!(v["dose"]["unit"], "mg");
+        assert_eq!(v["sig"], "one BD");
+        assert_eq!(v["started"]["value"], "2024");
+        assert_eq!(v["started"]["precision"], "year");
     }
 
     #[test]
