@@ -842,6 +842,41 @@ code slice (brainstorm→plan→TDD) implementing the `substance.coding` shape, 
 §1.2 paper-parity benchmark; drugref-absent honest degradation is a first-class test obligation — the
 §5.9 projection must fire on a drugref-less node from the captured class.
 
+**Slice 56 — `clinical.medication` slice 6a: the inline `substance.coding` shape (2026-07-27; branch
+`feat/medication-coding-slice-6a-0059`; implements [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
+— no new spec/ADR change; six tasks, each independently reviewed clean).** `SubstanceCoding {system,
+code, display}` replaces the reserved `inn_code` slot (`b44d56b`; the legibility twin appends the
+captured INN label only when it differs from the clinician's own term); the node surface gains a pure
+all-or-nothing `coding_from_parts` + `--coding-system/--coding-code/--coding-display` CLI flags swept
+across ~25 call sites (`ace041b`). `db/041_medication_coding.sql` (`ca7d5ea`/`e2d8ced`) adds the
+`medication_coding_system` registry (register-by-row — substituting a drug-identity authority is a row,
+not a patch) and a **two-tier** floor: structural gaps (empty system/code/display) refuse at BOTH doors
+like `substance.term`; registry-derived checks (unknown system, non-canonical uuid spelling) are
+strict-submit/lenient-apply (ADR-0056 wedge avoidance). `SCHEMA_GENERATION` 40→41. `medication_coding`
+lands as its own **projection table** — not columns on `medication_statement`, so slice 6b's overlays add
+rows instead of rewriting view bodies — with `coding_system/coding_code/coding_display` widened
+coherently across the db/031/032/033 read views, and retraction-safety pinned: an uncoded re-assert, or
+an explicit JSON `"coding": null`, can never silently clear an existing coding (`f7b8d76`/`5594ab2`). The
+E1 dup-key becomes `coalesce('code:'||system||'|'||code, 'term:'||normalized-term)` — the **pair**, never
+a bare code, else the reserved finer drugref tree levels re-split the same substance cross-node;
+`medication_group_display` now prefers a coded member; a new advisory
+`medication_group_coding_conflict` view surfaces two different anchors inside one reconciled group
+(`6e777c4`). Honest degradation is proven **by construction**: a source guard (three review rounds
+narrowing string/macro exemptions down to a structural residue check) pins that no `db/`,
+`crates/*/src`, or `extensions/` file references drugref executably, plus a `clinical_pull` cross-node
+coding-convergence assertion (`fb30ce9`/`d92ad8a`/`93ee103`/`c44b311`). **Two findings changed shipped
+behaviour:** db/020's `cairn.remote_apply` marker moved to precede the floor dispatch (it previously
+fired after, so no twin check_fn could ever see it at the remote door — verified no existing registered
+check_fn read it); and the canonical UUID form is now pinned at the strict door (Postgres accepts
+braced/uppercase/unhyphenated spellings, which the TEXT-compared dup-key would otherwise split
+permanently once frozen into a signed body). Filed **[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)**
+— the §5.9 safety projection must *carry* the coding-derived drug class (ADR-0059 decision 4) rather
+than re-derive it, owed by the future safety-projection slice (blocked on #232). **Deliberately NOT
+done:** the two coding-overlay event types (`clinical.medication-coding.asserted` + its correction) are
+**slice 6b**; the coded↔uncoded duplicate case is not closed (only coded↔coded is); no drugref code
+exists in the tree; the §5.9 safety class is not captured. **Unblocked follow-on: slice 6b** — the
+coding-overlay event types, routing the same column set through an effective-coding view.
+
 ## Phase 5 — Security & compliance core
 
 - **Erasure = key-custody redistribution / crypto-shred** on the severity ladder ([ADR-0005](spec/decisions/0005-erasure-key-custody-and-crypto-shredding.md), principle 9).
