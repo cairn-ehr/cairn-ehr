@@ -339,6 +339,75 @@ async fn a_non_canonical_uuid_spelling_is_refused_locally() {
     }
 }
 
+/// Final-review finding 2: `code_format = 'opaque'` is admitted by the CHECK constraint
+/// and is the ENTIRE mechanism behind ADR-0059 decision 7's claim — repeated in db/041's
+/// comments, the ROADMAP, and the HANDOVER — that a deployment may plug a different
+/// drug-identity authority as a REGISTRY ROW, never a patch to this file (principle 9).
+/// Every other coding test in this file anchors on `drugref-moiety` ('uuid'); nothing
+/// proved an 'opaque' system is actually accepted at the strict local door. This test
+/// registers a stand-in national-formulary row with a non-uuid code and proves it is
+/// accepted and projects exactly like a uuid-format coding does.
+#[tokio::test]
+async fn an_opaque_format_system_is_accepted_and_projects() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    const OPAQUE_SYSTEM: &str = "test-national-formulary";
+    // setup_node's TRUNCATE list does not cover medication_coding_system (checked: it
+    // truncates event_log/actor_event/patient_chart/the custody plane/medication_*, never
+    // the registry) — by design, so the seeded drugref-* rows survive every test. This
+    // test-only row is therefore inserted and removed explicitly rather than relying on
+    // TRUNCATE. ON CONFLICT DO UPDATE (the same #214 convergence idiom db/041 uses for its
+    // own seed rows) keeps a re-run safe even if a prior run's cleanup below never fired
+    // (e.g. the process was killed mid-test) — a bare INSERT would fail that re-run with a
+    // duplicate-key error on this same primary key.
+    c.execute(
+        "INSERT INTO medication_coding_system AS r (system, code_format, note) \
+           VALUES ($1, 'opaque', 'test-only row for the opaque-format floor test (finding 2)') \
+           ON CONFLICT (system) DO UPDATE SET code_format = EXCLUDED.code_format, note = EXCLUDED.note",
+        &[&OPAQUE_SYSTEM],
+    )
+    .await
+    .unwrap();
+
+    let input = AssertMedicationInput {
+        term: "Diabex",
+        coding: Some(SubstanceCoding {
+            system: OPAQUE_SYSTEM,
+            code: "A10BA02", // an ATC-shaped code — deliberately NOT a uuid
+            display: "metformin",
+        }),
+        formulation: Some("tablet"),
+        dose_amount: Some("500"),
+        dose_unit: Some("mg"),
+        sig: Some("one BD"),
+        info_source: "patient-reported",
+        started: Some("2024"),
+        started_precision: Some("year"),
+    };
+    let patient = Uuid::now_v7();
+    let med = assert_medication(&mut c, &sk, &kid, "test-node", patient, &input, None, None)
+        .await
+        .expect("a registered opaque-format system must be accepted at the strict local door");
+    assert_eq!(
+        coding_row(&c, med).await,
+        Some((
+            OPAQUE_SYSTEM.to_string(),
+            "A10BA02".to_string(),
+            "metformin".to_string()
+        )),
+        "an opaque-format coding must project exactly like a uuid-format one"
+    );
+
+    c.execute(
+        "DELETE FROM medication_coding_system WHERE system = $1",
+        &[&OPAQUE_SYSTEM],
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn the_retired_inn_code_slot_is_refused_locally_and_ignored_remotely() {
     let Some(base) = cs() else { return };
@@ -735,17 +804,25 @@ async fn a_reconciled_group_displays_its_coded_member() {
     )
     .await
     .unwrap();
-    let display: String = c
+    let row = c
         .query_one(
-            "SELECT coding_display FROM medication_group_display \
+            "SELECT term, coding_display FROM medication_group_display \
                WHERE patient_id = $1::text::uuid",
             &[&patient.to_string()],
         )
         .await
-        .unwrap()
-        .get(0);
+        .unwrap();
+    // Pins the BREADTH the db/033 comment now states: the coded member wins the whole
+    // row, not just the coding — `term` must read "Lipitor" (the coded member's), never
+    // "little white pill" (the vague member's), even though both threads share one group.
     assert_eq!(
-        display, "atorvastatin",
+        row.get::<_, String>(0),
+        "Lipitor",
+        "the group's term comes from the coded member too, not just its coding_display"
+    );
+    assert_eq!(
+        row.get::<_, String>(1),
+        "atorvastatin",
         "the group takes its identity from the coded member, not from \"little white pill\""
     );
 }

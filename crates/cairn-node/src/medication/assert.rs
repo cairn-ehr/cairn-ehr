@@ -2,8 +2,13 @@
 //! Device-additive: signed by the node/clinician key with a `recorded`
 //! contributor and NO responsibility attestation (mirrors identify.rs).
 use cairn_event::medication::{
-    medication_assertion_body, render_medication_twin, MedicationAssertion, SubstanceCoding,
+    medication_assertion_body, render_medication_twin, MedicationAssertion,
 };
+// Re-exported (not just used internally): a caller building `coding_from_parts`'/
+// `AssertMedicationInput::coding`'s value needs to name this type too (final-review
+// finding 5) — without `pub` here, `mod.rs`'s `pub use assert::{.., SubstanceCoding}`
+// cannot reach it, forcing every caller to depend on cairn-event directly instead.
+pub use cairn_event::medication::SubstanceCoding;
 use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
@@ -87,11 +92,9 @@ pub fn build_assert_body(
     let a = MedicationAssertion {
         medication_id: &mid,
         term: input.term,
-        coding: input.coding.as_ref().map(|c| SubstanceCoding {
-            system: c.system,
-            code: c.code,
-            display: c.display,
-        }),
+        // SubstanceCoding is Copy (borrowed &str fields only), so the Option copies
+        // whole — no need to rebuild it field-by-field (house rule 4).
+        coding: input.coding,
         formulation: input.formulation,
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,

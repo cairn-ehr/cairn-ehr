@@ -131,7 +131,9 @@ pub fn render_medication_twin(a: &MedicationAssertion) -> String {
     // ADR-0059 / principle 11: the captured display is what a reader without drugref
     // still has. Repeat it only when it adds something — a clinician who typed the
     // generic name already wrote it (case-folded compare, so "Atorvastatin" counts).
-    if let Some(c) = &a.coding {
+    // SubstanceCoding is Copy, so `a.coding` reads out a value directly through the
+    // `&MedicationAssertion` — no need to borrow it (house rule 4).
+    if let Some(c) = a.coding {
         if !c.display.eq_ignore_ascii_case(a.term) {
             s.push_str(&format!(" [{}]", c.display));
         }

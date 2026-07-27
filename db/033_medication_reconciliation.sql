@@ -427,6 +427,12 @@ LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
 -- Then the ADR's tiebreak (system, code), then the pre-0059 keys unchanged — for a group
 -- with no coded member at all the ordering degenerates to exactly what it was.
 -- COLLATE "C" keeps the tiebreak collation-independent (ADR-0045).
+-- BREADTH, STATED (final-review finding 3): this ORDER BY picks the DISTINCT ON winner
+-- for the WHOLE ROW, not just the coding triple — term, formulation, sig, info_source,
+-- started_value/_precision, asserted_at, AND the dose_amount/dose_unit fallback all move
+-- together to the coded member's statement. That is the intent, not a side effect: a
+-- reconciled group is meant to read as ONE coherent statement (the coded member's), never
+-- a patchwork of one member's coding stitched onto another member's term/dose/sig.
 ORDER BY g.group_id,
          (mc.medication_id IS NOT NULL) DESC,
          mc.coding_system COLLATE "C", mc.coding_code COLLATE "C",
@@ -558,15 +564,22 @@ GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
 -- link, ADR-0047). Read-time and arrival-order independent, like
 -- medication_group_cross_patient above: it lights up whenever the second coding lands
 -- and clears when a separation or a coding correction repairs it.
+-- ADR-0045 / final-review finding 1: count(DISTINCT ...) over a bare RECORD compares at
+-- the database's DEFAULT collation, not "C" — a node with a non-deterministic ICU default
+-- collation could then read two anchors differing only in case as EQUAL, so the second
+-- anchor never bumps anchor_count/HAVING even though `anchors` (built with an explicit
+-- COLLATE "C" concat+compare) would list both. Concatenating the pair into one COLLATE "C"
+-- text expression BEFORE the DISTINCT — in both the select list and the HAVING, so the two
+-- agree — pins the same collation the `anchors` array already uses.
 CREATE OR REPLACE VIEW medication_group_coding_conflict AS
 SELECT gm.group_id,
-       count(DISTINCT (mc.coding_system, mc.coding_code)) AS anchor_count,
+       count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchor_count,
        array_agg(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C"
                  ORDER BY (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchors
 FROM medication_group_member gm
 JOIN medication_coding mc ON mc.medication_id = gm.medication_id
 GROUP BY gm.group_id
-HAVING count(DISTINCT (mc.coding_system, mc.coding_code)) > 1;
+HAVING count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") > 1;
 GRANT SELECT ON medication_group_coding_conflict TO cairn_agent;
 
 -- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
