@@ -277,10 +277,49 @@ async fn a_non_uuid_code_is_refused_locally_and_admitted_remotely() {
     let e = submit_raw_substance(&c, &sk, kid.as_str(), "submit_event", bad.clone())
         .await
         .expect_err("a drugref-moiety code must be a uuid");
-    assert!(db_msg(&e).contains("uuid"), "{}", db_msg(&e));
+    // Pin the specific message, not just any mention of "uuid" — the canonical-form
+    // refusal below also mentions "uuid", and a weaker pin would pass against either.
+    assert!(
+        db_msg(&e).contains("requires a uuid code"),
+        "{}",
+        db_msg(&e)
+    );
     submit_raw_substance(&c, &sk, kid.as_str(), "apply_remote_event", bad)
         .await
         .expect("the registry-derived tier is lenient at the apply door");
+}
+
+#[tokio::test]
+async fn a_non_canonical_uuid_spelling_is_refused_locally() {
+    // uuid_in accepts braces, uppercase, and a missing-hyphens spelling — all three
+    // PARSE, but none is the canonical form the dup-key (Task 5) will compare as TEXT.
+    // Two events naming the SAME moiety in different spellings must not key apart, and
+    // the spelling can never be fixed after the fact (it is inside a signed body), so
+    // the strict door must catch this, not just "is it a uuid at all".
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    for spelling in [
+        "{0F8C4B1E-1B7A-5C2D-9A3E-2B6F7C8D9E01}", // braced + uppercase
+        "0F8C4B1E-1B7A-5C2D-9A3E-2B6F7C8D9E01",   // uppercase only
+        "0f8c4b1e1b7a5c2d9a3e2b6f7c8d9e01",       // hyphens stripped
+    ] {
+        let bad = serde_json::json!({
+            "term": "Lipitor",
+            "coding": {"system": "drugref-moiety", "code": spelling, "display": "atorvastatin"}
+        });
+        let e = submit_raw_substance(&c, &sk, kid.as_str(), "submit_event", bad)
+            .await
+            .expect_err(&format!(
+                "non-canonical spelling {spelling} must be refused"
+            ));
+        assert!(
+            db_msg(&e).contains("canonical"),
+            "the refusal must name the canonical-form requirement: {}",
+            db_msg(&e)
+        );
+    }
 }
 
 #[tokio::test]
@@ -293,8 +332,29 @@ async fn the_retired_inn_code_slot_is_refused_locally_and_ignored_remotely() {
     let e = submit_raw_substance(&c, &sk, kid.as_str(), "submit_event", retired.clone())
         .await
         .expect_err("the retired slot must fail loud at the source");
-    assert!(db_msg(&e).contains("substance.coding"), "{}", db_msg(&e));
+    // Pin the actual offending key, not merely a substring ("substance.coding" happens
+    // to also appear in this message's suggested replacement, so it would pass even if
+    // the retired-slot check silently stopped firing and a DIFFERENT check's message
+    // coincidentally matched).
+    assert!(db_msg(&e).contains("inn_code"), "{}", db_msg(&e));
     submit_raw_substance(&c, &sk, kid.as_str(), "apply_remote_event", retired)
         .await
         .expect("a verifiable peer event is never refused over a retired slot");
+}
+
+#[tokio::test]
+async fn an_explicit_null_coding_is_admitted_at_the_apply_door() {
+    // jsonb_typeof(c) = 'null' for an explicit JSON `"coding": null`, distinct from the
+    // key being absent altogether (c IS NULL) but meaning the SAME thing: nobody has
+    // coded this yet. A peer whose serializer emits explicit nulls for absent optionals
+    // must not have an otherwise-verifiable event refused over that encoding choice —
+    // exactly the ADR-0056 watermark-freeze failure mode this file exists to prevent.
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let explicit_null = serde_json::json!({"term": "Lipitor", "coding": null});
+    submit_raw_substance(&c, &sk, kid.as_str(), "apply_remote_event", explicit_null)
+        .await
+        .expect("an explicit null coding must be treated as absent, never refused");
 }

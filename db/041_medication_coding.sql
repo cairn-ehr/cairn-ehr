@@ -69,7 +69,14 @@ DECLARE
     v_format text;
 BEGIN
     -- Uncoded is a permanently valid state (principle 4, the "little white pill" floor).
-    IF c IS NULL THEN
+    -- Absent (c IS NULL, the key was never set) and an EXPLICIT JSON null are the SAME
+    -- honest-unknown claim, not two different shapes: jsonb_typeof(c) = 'null' is how an
+    -- explicit `"coding": null` reads once extracted with `->` (jsonb_typeof('null'::jsonb)
+    -- is the string 'null', not SQL NULL). A peer whose serializer emits explicit nulls
+    -- for absent optionals must not have an otherwise-verifiable event refused at the
+    -- apply door over a JSON-encoding style choice — that refusal is the exact
+    -- ADR-0056 watermark freeze this file exists to argue against.
+    IF c IS NULL OR jsonb_typeof(c) = 'null' THEN
         RETURN;
     END IF;
     IF jsonb_typeof(c) IS DISTINCT FROM 'object' THEN
@@ -99,13 +106,31 @@ BEGIN
             c ->> 'system';
     END IF;
     IF v_format = 'uuid' THEN
-        BEGIN
-            PERFORM (c ->> 'code')::uuid;
-        EXCEPTION WHEN others THEN
+        -- pg_input_is_valid (PG18+) checks parseability without a subtransaction and
+        -- without a catch-all `WHEN others` that would relabel an unrelated internal
+        -- error (out-of-memory, whatever) as "requires a uuid code" — the exception
+        -- handler this replaced could not tell "malformed input" from "something else
+        -- broke" apart, and always blamed the caller.
+        IF NOT pg_input_is_valid(c ->> 'code', 'uuid') THEN
             RAISE EXCEPTION
                 'medication assertion: coding system "%" requires a uuid code, got "%" (a drugref moiety id is a UUIDv5)',
                 c ->> 'system', c ->> 'code';
-        END;
+        END IF;
+        -- Canonical form only, not merely "parses": uuid_in accepts braces, uppercase,
+        -- and a missing-hyphens spelling, so "{0F8C4B1E-...}" and "0f8c4b1e1b7a..."
+        -- both parse today. The dup-key that will consume this anchor (Task 5) compares
+        -- the CODE as text, so two events naming the SAME moiety in different uuid
+        -- spellings would key apart — quietly defeating the immortal-anchor point of
+        -- ADR-0059 — and it cannot be fixed after the fact, because the spelling is
+        -- inside an already-signed body. Round-tripping the text through ::uuid::text
+        -- yields Postgres' own canonical lowercase-hyphenated-no-braces form; comparing
+        -- that against the original text catches every non-canonical spelling at the
+        -- one door that can still refuse it.
+        IF (c ->> 'code') IS DISTINCT FROM ((c ->> 'code')::uuid)::text THEN
+            RAISE EXCEPTION
+                'medication assertion: coding system "%" requires the canonical lowercase-hyphenated uuid form, got "%" (use % instead)',
+                c ->> 'system', c ->> 'code', ((c ->> 'code')::uuid)::text;
+        END IF;
     END IF;
 END;
 $$;

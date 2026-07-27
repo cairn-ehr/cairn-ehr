@@ -22,11 +22,17 @@
 --   * projection maintenance must never veto a validly-signed event peers accepted:
 --     this door raises the transaction-local `cairn.remote_apply` marker, and any
 --     node-local-config projection guard (db/018 component cap) CLAMPS-AND-FLAGS
---     instead of RAISE-ing (review A5b). Note the distinction: the door's OWN checks
---     (signature, enrollment, classification, attestation, twin, t_effective) are
---     deterministic functions of the signed bytes — every honest node computes the
---     same verdict, so refusing cannot fork the fleet; a GUC-dependent guard is not,
---     so it must not refuse.
+--     instead of RAISE-ing (review A5b). Most of the door's OWN checks (signature,
+--     enrollment, classification, attestation, t_effective) are deterministic
+--     functions of the signed bytes — every honest node computes the same verdict,
+--     so refusing cannot fork the fleet. `twin` is the ONE exception (since ADR-0059,
+--     db/041): the per-type structural floor it dispatches to may carry a lenient,
+--     node-local sub-tier (a coding-vocabulary registry a peer may run newer or
+--     locally-extended) that must RETURN rather than refuse on this door — the same
+--     GUC-like-dependency reasoning as a projection guard, just living one layer
+--     earlier, inside `cairn_event_twin`'s dispatch instead of after it. A future
+--     per-type check_fn is free to add its own such sub-tier; it must not assume the
+--     whole twin dispatch is refusal-safe to fork on.
 --
 -- KNOWN LIMITATION (deliberate, documented): actor enrollment is resolved against the
 -- LOCAL registry (actor_current), exactly as at the authoring door. Actor-registry
@@ -273,14 +279,29 @@ BEGIN
     -- and step 8 runs BEFORE the old marker placement — so a registry-derived coding
     -- check could never tell "local" from "remote" and refused a verifiable peer event
     -- outright, which is exactly the sync-watermark freeze ADR-0056 forbids. Confirmed
-    -- safe to widen: every EXISTING reader of this marker (db/018:230, db/018:375,
-    -- db/023's dispute projection-apply, db/031:157, db/033:196/271) already lives in
-    -- the projection-apply layer and fires strictly after this new, earlier line — none
-    -- of them change behaviour. No registered check_fn read it before db/041, so there
-    -- is nothing upstream of step 8 to regress either.
+    -- safe to widen: every EXISTING READER of this marker (cairn_recompute_component and
+    -- patient_link_apply in db/018, chart_dispute_apply in db/023,
+    -- cairn_guard_medication_patient in db/031, medication_reconciliation_apply in
+    -- db/033 — named, not line-numbered, since line numbers rot on the next edit)
+    -- already lives in the projection-apply layer and fires strictly after this new,
+    -- earlier line — none of them change behaviour. No registered check_fn read it
+    -- before db/041, so there is nothing upstream of step 8 to regress either.
+    --
+    -- The one other WRITER is worth naming too: `cairn_reproject` (db/039) raises this
+    -- same marker for its whole heal/rebuild run and never clears it — before this
+    -- change that only ever relaxed projection guards during a heal. Now it also
+    -- relaxes this door's validation tier for anything that runs inside the SAME
+    -- transaction as a reproject call (e.g. `BEGIN; SELECT cairn_reproject(...);
+    -- SELECT submit_event(<event with an unregistered coding system>); COMMIT;` would
+    -- be admitted). `cairn_reproject` is owner-only (REVOKE ... FROM PUBLIC in db/039),
+    -- so this is not a runtime-role bypass — an operator with EXECUTE on it already has
+    -- the standing to load arbitrary schema — but it is a real widening of what that
+    -- marker now means, so a future reader extending either function should know the
+    -- two are now coupled.
     --
     -- Still cleared at the SAME place as before (right after the INSERT, below) — a
-    -- later submit_event in the same transaction keeps its veto, unchanged.
+    -- later submit_event in the same transaction (outside a reproject) keeps its veto,
+    -- unchanged.
     PERFORM set_config('cairn.remote_apply', 'on', true);
 
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
