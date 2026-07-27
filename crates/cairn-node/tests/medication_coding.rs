@@ -358,3 +358,101 @@ async fn an_explicit_null_coding_is_admitted_at_the_apply_door() {
         .await
         .expect("an explicit null coding must be treated as absent, never refused");
 }
+
+async fn coding_row(c: &Client, med: Uuid) -> Option<(String, String, String)> {
+    c.query_opt(
+        "SELECT coding_system, coding_code, coding_display \
+           FROM medication_coding WHERE medication_id = $1::text::uuid",
+        &[&med.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| (r.get(0), r.get(1), r.get(2)))
+}
+
+#[tokio::test]
+async fn a_coded_assertion_projects_its_coding() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        coding_row(&c, med).await,
+        Some((
+            "drugref-moiety".to_string(),
+            MOIETY_ATORVASTATIN.to_string(),
+            "atorvastatin".to_string()
+        ))
+    );
+    // The honest-degradation read: the med list itself carries the label, so a node
+    // with no drug database still shows the preferred name (ADR-0059 decision 4).
+    let row = c
+        .query_one(
+            "SELECT term, coding_display FROM patient_medication_current \
+               WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "Lipitor");
+    assert_eq!(row.get::<_, String>(1), "atorvastatin");
+}
+
+#[tokio::test]
+async fn an_uncoded_assertion_projects_no_coding_row() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let mut input = coded_input("little white pill", MOIETY_ATORVASTATIN);
+    input.coding = None;
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        Uuid::now_v7(),
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        coding_row(&c, med).await,
+        None,
+        "no coding claimed, no coding row — and nothing to clear later"
+    );
+}
+
+#[tokio::test]
+async fn the_deprecated_inn_code_column_survives_unread() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    // ADR-0059 decision 2: deprecated IN PLACE, never dropped — a DROP is the
+    // non-additive move principle 11 forbids (the db/036 sync_state.hlc_wall treatment).
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM information_schema.columns \
+              WHERE table_name = 'medication_statement' AND column_name = 'inn_code'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 1, "the deprecated column stays");
+}

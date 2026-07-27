@@ -32,6 +32,7 @@ async fn setup(
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
          END $$;",
     )
     .await

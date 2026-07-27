@@ -91,6 +91,7 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
            IF to_regclass('public.medication_group_member') IS NOT NULL THEN TRUNCATE medication_group_member; END IF; \
            IF to_regclass('public.medication_projection_flag') IS NOT NULL THEN TRUNCATE medication_projection_flag; END IF; \
            IF to_regclass('public.medication_patient_conflict_flag') IS NOT NULL THEN TRUNCATE medication_patient_conflict_flag; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
          END $$;",
     )
     .await

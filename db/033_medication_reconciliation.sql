@@ -417,9 +417,11 @@ SELECT DISTINCT ON (g.group_id)
     g.group_id, g.patient_id, s.term, s.inn_code, s.formulation, s.sig, s.info_source,
     s.started_value, s.started_precision,
     to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
-    s.dose_amount, s.dose_unit
+    s.dose_amount, s.dose_unit,
+    mc.coding_system, mc.coding_code, mc.coding_display
 FROM medication_statement s
 JOIN medication_thread_group g ON g.medication_id = s.medication_id
+LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
 ORDER BY g.group_id, (s.medication_id = g.group_id) DESC, s.medication_id;
 GRANT SELECT ON medication_group_display TO cairn_agent;
 
@@ -445,7 +447,8 @@ CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
        CASE WHEN cd.group_id IS NOT NULL THEN cd.amount ELSE d.dose_amount END AS dose_amount,
        CASE WHEN cd.group_id IS NOT NULL THEN cd.unit   ELSE d.dose_unit   END AS dose_unit,
-       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at
+       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
+       d.coding_system, d.coding_code, d.coding_display
 FROM medication_group_display d
 JOIN medication_group_status st ON st.group_id = d.group_id
 LEFT JOIN medication_group_current_dose cd ON cd.group_id = d.group_id
@@ -457,7 +460,8 @@ SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulat
        CASE WHEN ld.group_id IS NOT NULL THEN ld.amount ELSE d.dose_amount END AS dose_amount,
        CASE WHEN ld.group_id IS NOT NULL THEN ld.unit   ELSE d.dose_unit   END AS dose_unit,
        d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
-       gc.stopped_value, gc.stopped_precision, gc.reason
+       gc.stopped_value, gc.stopped_precision, gc.reason,
+       d.coding_system, d.coding_code, d.coding_display
 FROM medication_group_display d
 JOIN medication_group_status st ON st.group_id = d.group_id
 LEFT JOIN medication_group_last_dose ld ON ld.group_id = d.group_id
