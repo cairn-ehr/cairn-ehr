@@ -13,27 +13,38 @@
 //! build output and test-only code may legitimately NAME drugref in prose.
 //!
 //! WHAT COUNTS AS AN OFFENDER: a "drugref" mention that is neither (a) inside a
-//! comment, (b) inside a recognised DIAGNOSTIC-MESSAGE string (the argument of
-//! `RAISE EXCEPTION`/`RAISE NOTICE`/`RAISE WARNING` in SQL, or `assert!`/`assert_eq!`/
-//! `panic!`/`format!`/`eprintln!`/`.expect(` and kin in Rust — see `residue_lines`'s doc
-//! for the exact list), (c) inside the ONE statement that seeds the ADR-0059
-//! coding-system registry (`db/041`'s `INSERT INTO medication_coding_system`, where the
-//! `note` column legitimately narrates drugref in prose next to the tokens it defines),
-//! or (d) itself exactly one of the three registered coding-system tokens
-//! (`drugref-moiety` / `drugref-clinical-drug` / `drugref-product`) — those are DATA,
-//! not a dependency, wherever a test fixture or the registry names them. A drugref
-//! mention inside any OTHER string — a URL, a connection string, a shelled-out command
-//! — is NOT exempt and fails the guard, same as it would in bare code.
+//! comment, (b) inside a recognised DIAGNOSTIC-MESSAGE call's argument list (SQL
+//! `RAISE EXCEPTION`/`RAISE NOTICE`/`RAISE WARNING`, or Rust `assert!`/`debug_assert!`/
+//! `panic!`/`unreachable!`/`format!`/`eprintln!`/`println!`/`write!`/`writeln!`/
+//! `.expect(` — see `RUST_SPAN_TRIGGERS`'s doc for exactly which macros and why
+//! `assert_eq!`/`assert_ne!`/`debug_assert_eq!` are deliberately NOT in this list), (c)
+//! inside the ONE statement that seeds the ADR-0059 coding-system registry (`db/041`'s
+//! `INSERT INTO medication_coding_system`, where the `note` column legitimately
+//! narrates drugref in prose next to the tokens it defines), or (d) itself exactly one
+//! of the three registered coding-system tokens (`drugref-moiety` /
+//! `drugref-clinical-drug` / `drugref-product`) — those are DATA, not a dependency,
+//! wherever a test fixture or the registry names them. A drugref mention inside any
+//! OTHER string — a URL, a connection string, a shelled-out command, an `assert_eq!`'s
+//! compared value — is NOT exempt and fails the guard, same as it would in bare code.
 //!
-//! WHAT THIS GUARD CANNOT SEE: a dependency declared in a `Cargo.toml` under an alias
-//! (e.g. `drug_db = { package = "drugref-client", … }`) — manifests are never read
-//! here. Nor does it do full Rust/SQL lexing: raw strings (`r"…"`, `r#"…"#`), `/* */`
-//! block comments, and multi-line string forms other than the one shape actually in
-//! this tree (a Rust string continued across a line break via `\<newline>`, which IS
-//! handled) are not specially recognised. This is a source-code guard, not a
-//! supply-chain audit or a full parser — "crude but sufficient" for the shapes this
-//! tree actually contains, re-verified each time this file changes (see the non-vacuity
-//! evidence in the slice's task report).
+//! KNOWN LIMITATION, stated plainly rather than chased further (see the round-3 task
+//! report for why the natural next tightening — "blank only the message argument, not
+//! the whole call" — was NOT attempted): this guard is a line-oriented character
+//! scanner, not a lexer or a parser. For the diagnostic-message macros in (b) above, it
+//! exempts the macro's ENTIRE argument list, not just the message argument — so a
+//! drugref reference placed in a NON-message argument of one of those calls (e.g.
+//! `println!("Fetching {}", "https://api.drugref.org/lookup")`, where the URL is the
+//! second, non-message argument) is masked, not caught. It is likewise defeated by a
+//! raw string (`r"…"`) or a `/* */` block comment, neither of which it recognises. This
+//! guard is a REGRESSION NET for an *accidental* dependency, not a defence against
+//! deliberate concealment — the actual load-bearing invariant is enforced by there
+//! being no drugref client anywhere in this tree at all, which this guard corroborates
+//! by construction; it does not itself prevent a determined author from hiding one.
+//!
+//! WHAT THIS GUARD CANNOT SEE (mechanically, beyond the limitation above): a dependency
+//! declared in a `Cargo.toml` under an alias (e.g. `drug_db = { package =
+//! "drugref-client", … }`) — manifests are never read here. This is a source-code
+//! guard, not a supply-chain audit.
 //!
 //! When a later slice adds the §9 advisory-tier drugref lookup, this guard must be
 //! narrowed deliberately (to the trusted surface — db/ and the floor path), never simply
@@ -125,19 +136,26 @@ const SQL_SPAN_TRIGGERS: [&str; 4] = [
     "INSERT INTO medication_coding_system",
 ];
 
-/// Rust macros/calls whose (typically first) string argument is a diagnostic message,
-/// not a call target: assertion and panic macros, the format-string family, and the
-/// `.expect(` method (leading `.` required so this only matches the method call, not an
-/// identifier that merely contains "expect"). Each opens an EXEMPT SPAN tracked by
-/// paren depth from its own opening paren (already part of the matched text) back to 0
-/// — so a nested call inside the same argument list (e.g. `panic!(format!(...))`)
-/// correctly keeps the span open until BOTH close.
-const RUST_SPAN_TRIGGERS: [&str; 13] = [
+/// Rust macros/calls whose string argument is a diagnostic message, not a call target:
+/// plain assertion/panic macros, the format-string family, and the `.expect(` method
+/// (leading `.` required so this only matches the method call, not an identifier that
+/// merely contains "expect"). Each opens an EXEMPT SPAN tracked by paren depth from its
+/// own opening paren (already part of the matched text) back to 0 — so a nested call
+/// inside the same argument list (e.g. `panic!(format!(...))`) correctly keeps the span
+/// open until BOTH close.
+///
+/// DELIBERATELY EXCLUDED: `assert_eq!`/`assert_ne!`/`debug_assert_eq!`. Their leading
+/// arguments are the two COMPARED VALUES, not a message — a drugref mention there is
+/// exactly the kind of reference this guard should see, not exempt (this is why the
+/// span blanks the WHOLE argument list rather than just a "first string": narrowing
+/// that further, to only the true message argument, would need per-macro
+/// argument-position awareness this scanner doesn't have — see the module doc's KNOWN
+/// LIMITATION for the resulting gap on the macros kept below, e.g. `assert!`, whose
+/// message is its SECOND argument and whose first argument can itself embed an
+/// unrelated string, so "blank only the first string" would target the wrong one).
+const RUST_SPAN_TRIGGERS: [&str; 10] = [
     "assert!(",
-    "assert_eq!(",
-    "assert_ne!(",
     "debug_assert!(",
-    "debug_assert_eq!(",
     "panic!(",
     "unreachable!(",
     "format!(",
