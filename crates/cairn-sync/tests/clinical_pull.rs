@@ -651,6 +651,13 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         .await
         .unwrap();
     assert_eq!(coding_row.get::<_, String>(0), "drugref-moiety");
+    // The anchor itself: the immortal moiety_uuid is the whole point of ADR-0059, so a
+    // regression that scrambled the code while leaving system/display intact must fail
+    // here, not just look plausible.
+    assert_eq!(
+        coding_row.get::<_, String>(1),
+        "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"
+    );
     assert_eq!(coding_row.get::<_, String>(2), "atorvastatin");
 
     // The quarantine stayed empty: nothing on this wire needed penning.
