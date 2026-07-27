@@ -184,19 +184,24 @@ async fn an_uncoded_assertion_still_passes() {
 }
 
 /// Submit a raw payload at a chosen door, bypassing the Rust builder — the only way to
-/// present the malformed shapes a hostile or buggy peer could send.
-async fn submit_raw_substance(
+/// present the malformed shapes a hostile or buggy peer could send. Re-asserts the
+/// CHOSEN (medication_id, patient) pair — db::next_hlc is monotonic, so a second call
+/// against the same thread always lands at a strictly LATER hlc than the first,
+/// exercising the overlay-winner path rather than minting a fresh thread.
+async fn submit_raw_substance_for(
     c: &Client,
     sk: &SigningKey,
     kid: &str,
     door: &str,
+    med: Uuid,
+    patient: Uuid,
     substance: serde_json::Value,
 ) -> Result<u64, tokio_postgres::Error> {
     let hlc = db::next_hlc(c, "test-node").await.unwrap();
     let mut body = build_assert_body(
         Uuid::now_v7(),
-        Uuid::now_v7(),
-        Uuid::now_v7(),
+        med,
+        patient,
         &coded_input("Lipitor", MOIETY_ATORVASTATIN),
         kid,
         hlc,
@@ -210,6 +215,18 @@ async fn submit_raw_substance(
                 .await
         }
     }
+}
+
+/// The common case: a fresh thread each call, med/patient minted here. The floor/refusal
+/// tests below only care about the substance SHAPE, not thread continuity.
+async fn submit_raw_substance(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    door: &str,
+    substance: serde_json::Value,
+) -> Result<u64, tokio_postgres::Error> {
+    submit_raw_substance_for(c, sk, kid, door, Uuid::now_v7(), Uuid::now_v7(), substance).await
 }
 
 #[tokio::test]
@@ -455,4 +472,132 @@ async fn the_deprecated_inn_code_column_survives_unread() {
         .unwrap()
         .get(0);
     assert_eq!(n, 1, "the deprecated column stays");
+}
+
+// ---------------------------------------------------------------------------
+// Retraction safety: the whole reason `medication_coding` is a separate table with a
+// CONDITIONAL write is that a later uncoded re-assert must never silently clear an
+// existing coding (retracting one is slice 6b's own authored correction event). The
+// code shape (an `IF coding present THEN insert/overlay`, no `ELSE clear`) makes this
+// structurally impossible today, but nothing pinned it — a future edit to the guard
+// (e.g. "simplify" it into an unconditional upsert) would pass CI silently. These two
+// tests pin it for both shapes principle 4 treats as the SAME honest-unknown claim:
+// the key absent entirely, and an explicit JSON `"coding": null`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn an_uncoded_reassert_does_not_clear_an_existing_coding() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let original = coding_row(&c, med).await;
+    assert!(original.is_some(), "the first assert must have coded it");
+
+    // A LATER re-assert of the SAME thread (db::next_hlc is monotonic — the raw-submit
+    // helper always advances it), with the coding key ABSENT this time (the
+    // explicit-JSON-null shape is covered separately below). medication_id is the
+    // thread's immortal key, so this is a re-assertion, not a new thread.
+    submit_raw_substance_for(
+        &c,
+        &sk,
+        kid.as_str(),
+        "submit_event",
+        med,
+        patient,
+        serde_json::json!({"term": "Lipitor"}),
+    )
+    .await
+    .expect("an uncoded re-assert of an already-coded thread must still be accepted");
+
+    assert_eq!(
+        coding_row(&c, med).await,
+        original,
+        "an uncoded re-assert (coding key ABSENT) must never clear an existing coding"
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_null_reassert_does_not_clear_an_existing_coding() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let original = coding_row(&c, med).await;
+    assert!(original.is_some(), "the first assert must have coded it");
+
+    // Same path, the OTHER honest-unknown shape: an explicit JSON `"coding": null`
+    // (only reachable via a raw payload — the Rust builder always omits the key
+    // instead, see `assertion_body_omits_absent_coding_...` in cairn-event). Submitted
+    // at the lenient apply door, mirroring `an_explicit_null_coding_is_admitted_at_the_apply_door`.
+    submit_raw_substance_for(
+        &c,
+        &sk,
+        kid.as_str(),
+        "apply_remote_event",
+        med,
+        patient,
+        serde_json::json!({"term": "Lipitor", "coding": null}),
+    )
+    .await
+    .expect("an explicit null coding on a re-assert must still be admitted");
+
+    assert_eq!(
+        coding_row(&c, med).await,
+        original,
+        "an explicit-null re-assert must never clear an existing coding either"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rebuild-scope metadata must be exhaustive (db/031's own stated requirement): pin
+// that medication_coding actually appears in the registered inventory for the assert
+// verb, not just that the functional tests happen to exercise it.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_assert_verb_registers_medication_coding_in_its_rebuild_scope() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let tables: Vec<String> = c
+        .query_one(
+            "SELECT projection_tables FROM cairn_projection_apply \
+              WHERE event_type = 'clinical.medication.asserted' \
+                AND apply_fn = 'medication_statement_apply'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        tables.iter().any(|t| t == "medication_coding"),
+        "medication_coding must be in the assert verb's rebuild-scope inventory, got {tables:?}"
+    );
 }
