@@ -127,13 +127,25 @@ async fn erasure_shred_type_is_registered_and_twin_checked() {
 
 /// Task 6: every medication projection trigger now reads NEW.body through
 /// cairn_clear_payload(NEW) instead of directly. This pins the helper's two
-/// branches (Task 5, db/037) that those triggers now depend on, using a
-/// composite-type cast against a SYNTHESIZED (never-inserted) event_log row —
-/// no event_log INSERT is needed, so it's safe to run standalone. Column order
-/// is transcribed from `\d event_log` (db/001 + its ALTER ADD COLUMNs + db/036's
-/// `seq` + db/040's trailing `clock_grade`). The GENERATED ALWAYS seq column does not fight this: identity
-/// generation is an INSERT-time constraint, not enforced on a bare composite
-/// cast (confirmed empirically against CAIRN_TEST_PG before writing this in).
+/// branches (Task 5, db/037) that those triggers now depend on, against a
+/// SYNTHESIZED (never-inserted) event_log row — no event_log INSERT is needed, so it's
+/// safe to run standalone. The GENERATED ALWAYS `seq` column does not fight this:
+/// identity generation is an INSERT-time constraint, not enforced on a synthesized
+/// composite (confirmed empirically against CAIRN_TEST_PG).
+///
+/// BY NAME, NOT BY POSITION (#296). This used to build the row with a positional
+/// `ROW(...)::event_log` literal whose element order was transcribed from `\d event_log`.
+/// That made the test hostage to the physical attribute order of a SHARED test database:
+/// any other test that dropped and re-added an `event_log` column (the migrations use
+/// `ADD COLUMN IF NOT EXISTS`, which appends at the END) permanently shifted the tail, and
+/// this test then bound the wrong value into the wrong column — surfacing as
+/// `invalid input syntax for type bigint: "unknown"` on the SECOND run against the same
+/// database, far from its cause, in an unrelated crate. jsonb_populate_record binds by
+/// COLUMN NAME, so column order is irrelevant and the whole class of failure is gone. Any
+/// future synthesized event_log row here must keep using a by-name construction.
+///
+/// Omitted keys default to NULL, so only the columns this helper actually reads
+/// (`sealed`, `body`, `event_id`) plus the NOT NULL ones need naming.
 #[tokio::test]
 async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
     let Some(base) = cs() else { return };
@@ -146,11 +158,15 @@ async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
     // on the tokio-postgres serde_json feature.
     let body_text: String = c
         .query_one(
-            "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
-                'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
-                '\\x00'::bytea, '\\x00'::bytea, '{\"k\":1}'::jsonb, '[]'::jsonb, 'k', 'stub',
-                FALSE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL,
-                'unknown')::event_log)::text",
+            "SELECT cairn_clear_payload(jsonb_populate_record(NULL::event_log, jsonb_build_object(
+                'event_id', gen_random_uuid(), 'patient_id', gen_random_uuid(),
+                'event_type', 'clinical.medication.asserted',
+                'schema_version', 'clinical.medication/1',
+                'hlc_wall', 0, 'hlc_counter', 0, 'node_origin', 'n',
+                'signed_bytes', '\\x00'::bytea, 'content_address', '\\x00'::bytea,
+                'body', '{\"k\":1}'::jsonb, 'contributors', '[]'::jsonb,
+                'signer_key_id', 'k', 'plaintext_twin', 'stub', 'sealed', FALSE,
+                'attachments', '[]'::jsonb, 'clock_grade', 'unknown')))::text",
             &[],
         )
         .await
@@ -168,11 +184,15 @@ async fn clear_payload_resolves_unsealed_to_body_and_sealed_to_shadow() {
     // for via `IF p IS NULL THEN RETURN NULL; END IF;` right after BEGIN.
     let is_null: bool = c
         .query_one(
-            "SELECT cairn_clear_payload(ROW(gen_random_uuid(), gen_random_uuid(),
-                'clinical.medication.asserted', 'clinical.medication/1', 0, 0, 'n', NULL,
-                '\\x00'::bytea, '\\x00'::bytea, '{}'::jsonb, '[]'::jsonb, 'k', 'stub',
-                TRUE, NULL, '[]'::jsonb, clock_timestamp(), NULL, NULL, NULL, NULL,
-                'unknown')::event_log) IS NULL",
+            "SELECT cairn_clear_payload(jsonb_populate_record(NULL::event_log, jsonb_build_object(
+                'event_id', gen_random_uuid(), 'patient_id', gen_random_uuid(),
+                'event_type', 'clinical.medication.asserted',
+                'schema_version', 'clinical.medication/1',
+                'hlc_wall', 0, 'hlc_counter', 0, 'node_origin', 'n',
+                'signed_bytes', '\\x00'::bytea, 'content_address', '\\x00'::bytea,
+                'body', '{}'::jsonb, 'contributors', '[]'::jsonb,
+                'signer_key_id', 'k', 'plaintext_twin', 'stub', 'sealed', TRUE,
+                'attachments', '[]'::jsonb, 'clock_grade', 'unknown'))) IS NULL",
             &[],
         )
         .await

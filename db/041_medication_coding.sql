@@ -68,23 +68,32 @@ ON CONFLICT (system) DO UPDATE SET
     note        = EXCLUDED.note
 WHERE (r.code_format, r.note) IS DISTINCT FROM (EXCLUDED.code_format, EXCLUDED.note);
 
--- 2. The floor check. Called from cairn_check_medication_assertion (db/031); plpgsql
---    resolves the call at EXECUTION, so living in a later file is fine.
-CREATE OR REPLACE FUNCTION cairn_check_medication_coding(p jsonb)
+-- 2a. The coding-object checks, independent of WHERE the object sits in a payload.
+--     Slice 6a's only caller reads substance.coding on the assertion; slice 6b's overlay
+--     types (db/042) carry the SAME object at payload.coding. Extracting the checks keeps
+--     ONE definition of what a valid coding claim is — the two-tier split, the
+--     canonical-uuid pin and the strict/lenient door behaviour cannot drift apart between
+--     the inline and overlay paths.
+--
+--     p_prefix is the caller's message prefix (e.g. 'medication assertion:
+--     substance.coding'), so each caller's refusals keep naming the field the way its own
+--     authors wrote it — a coder reading "medication coding-correction: coding.display …"
+--     should not be sent looking for a `substance` object that verb does not have.
+CREATE OR REPLACE FUNCTION cairn_check_coding_object(c jsonb, p_prefix text)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    c        jsonb   := p -> 'substance' -> 'coding';
     -- db/020 sets this transaction-local marker on the sync-apply path; the same idiom
     -- cairn_guard_medication_patient uses to tell the doors apart (db/031 part 3b). This
-    -- fn is the FIRST twin-registered check_fn (cairn_event_twin_check, dispatched via
-    -- cairn_event_twin at db/020's step 8) ever to read this marker: every earlier
-    -- reader lived one layer down, in a projection-apply function fired by the
-    -- AFTER-INSERT trigger. That mattered: db/020 used to raise the marker just before
-    -- the event_log INSERT, AFTER step 8 had already run — so a check_fn reading it
-    -- here would always see it unset, unable to ever tell "remote" from "local". db/020
-    -- now raises the marker BEFORE step 8 specifically so this check can see it. A
-    -- future reader must not "tidy" that set_config back down next to the INSERT —
-    -- doing so would silently re-break this door's leniency and reintroduce the
+    -- check (via the twin-registered check_fns that call it — cairn_check_medication_coding
+    -- for the inline path, cairn_check_medication_coding_overlay in db/042 for the
+    -- overlays) was the FIRST check_fn-side reader of this marker: every earlier reader
+    -- lived one layer down, in a projection-apply function fired by the AFTER-INSERT
+    -- trigger. That mattered: db/020 used to raise the marker just before the event_log
+    -- INSERT, AFTER step 8 (the cairn_event_twin dispatch) had already run — so a check_fn
+    -- reading it here would always see it unset, unable to ever tell "remote" from
+    -- "local". db/020 now raises the marker BEFORE step 8 specifically so this check can
+    -- see it. A future reader must not "tidy" that set_config back down next to the
+    -- INSERT — doing so would silently re-break this door's leniency and reintroduce the
     -- ADR-0056 sync-watermark freeze this file exists to avoid.
     v_remote boolean := current_setting('cairn.remote_apply', true) = 'on';
     v_key    text;
@@ -102,7 +111,7 @@ BEGIN
         RETURN;
     END IF;
     IF jsonb_typeof(c) IS DISTINCT FROM 'object' THEN
-        RAISE EXCEPTION 'medication assertion: substance.coding must be an object {system, code, display} (ADR-0059)';
+        RAISE EXCEPTION '% must be an object {system, code, display} (ADR-0059)', p_prefix;
     END IF;
 
     -- Structural tier — both doors. display is NOT optional: it is the honest-degradation
@@ -111,8 +120,8 @@ BEGIN
         IF jsonb_typeof(c -> v_key) IS DISTINCT FROM 'string'
            OR length(btrim(c ->> v_key)) = 0 THEN
             RAISE EXCEPTION
-                'medication assertion: substance.coding.% must be a non-empty string (ADR-0059 decision 2 — display is the honest-degradation label)',
-                v_key;
+                '%.% must be a non-empty string (ADR-0059 decision 2 — display is the honest-degradation label)',
+                p_prefix, v_key;
         END IF;
     END LOOP;
 
@@ -124,8 +133,8 @@ BEGIN
         FROM medication_coding_system s WHERE s.system = c ->> 'system';
     IF v_format IS NULL THEN
         RAISE EXCEPTION
-            'medication assertion: unknown coding system "%" — this door only authors codings it can vouch for; register it in medication_coding_system (ADR-0059 decision 7)',
-            c ->> 'system';
+            '%: unknown coding system "%" — this door only authors codings it can vouch for; register it in medication_coding_system (ADR-0059 decision 7)',
+            p_prefix, c ->> 'system';
     END IF;
     IF v_format = 'uuid' THEN
         -- pg_input_is_valid (PG18+) checks parseability without a subtransaction and
@@ -135,8 +144,8 @@ BEGIN
         -- broke" apart, and always blamed the caller.
         IF NOT pg_input_is_valid(c ->> 'code', 'uuid') THEN
             RAISE EXCEPTION
-                'medication assertion: coding system "%" requires a uuid code, got "%" (a drugref moiety id is a UUIDv5)',
-                c ->> 'system', c ->> 'code';
+                '%: coding system "%" requires a uuid code, got "%" (a drugref moiety id is a UUIDv5)',
+                p_prefix, c ->> 'system', c ->> 'code';
         END IF;
         -- Canonical form only, not merely "parses": uuid_in accepts braces, uppercase,
         -- and a missing-hyphens spelling, so "{0F8C4B1E-...}" and "0f8c4b1e1b7a..."
@@ -150,10 +159,24 @@ BEGIN
         -- one door that can still refuse it.
         IF (c ->> 'code') IS DISTINCT FROM ((c ->> 'code')::uuid)::text THEN
             RAISE EXCEPTION
-                'medication assertion: coding system "%" requires the canonical lowercase-hyphenated uuid form, got "%" (use % instead)',
-                c ->> 'system', c ->> 'code', ((c ->> 'code')::uuid)::text;
+                '%: coding system "%" requires the canonical lowercase-hyphenated uuid form, got "%" (use % instead)',
+                p_prefix, c ->> 'system', c ->> 'code', ((c ->> 'code')::uuid)::text;
         END IF;
     END IF;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_check_coding_object(jsonb, text) FROM PUBLIC;
+
+-- 2b. The assertion's floor check — the path lookup, delegating every check above.
+--     Called from cairn_check_medication_assertion (db/031); plpgsql resolves the call at
+--     EXECUTION, so living in a later file is fine. Kept as its own function (rather than
+--     inlining the delegation into db/031) so db/031 keeps naming one stable check per
+--     concern and the twin-registry lookup test can still find it.
+CREATE OR REPLACE FUNCTION cairn_check_medication_coding(p jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM cairn_check_coding_object(
+        p -> 'substance' -> 'coding', 'medication assertion: substance.coding');
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_check_medication_coding(jsonb) FROM PUBLIC;

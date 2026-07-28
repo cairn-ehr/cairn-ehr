@@ -94,20 +94,20 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     .await
     .unwrap();
 
-    // Assert the full 19-row mapping is present so a dropped registration is caught.
+    // Assert the full 21-row mapping is present so a dropped registration is caught.
     let n: i64 = c
         .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 19, "expected 19 seeded twin-check rows");
+    assert_eq!(n, 21, "expected 21 seeded twin-check rows");
 
     // Lock the FULL registry contract. This table is now the single source of floor-wiring
     // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
     // rather than a count + one spot-check: a future slice that mis-points a check_fn or
     // mis-transcribes a twin_required_msg is caught here directly, not merely if the broad
     // behaviour suite happens to exercise that exact negative path. Strings are transcribed
-    // verbatim from the seeding migrations (db/005, db/010–033). twin_required_msg is an
+    // verbatim from the seeding migrations (db/005, db/010–042). twin_required_msg is an
     // Option: the #191 suppression rows carry a structural check but NO twin requirement
     // (a suppression keeps the honest ADR-0039 skeleton fallback).
     let mut expected: Vec<(&str, &str, Option<&str>)> = vec![
@@ -205,6 +205,16 @@ async fn registry_is_seeded_with_the_expected_mapping() {
             "clinical.medication-separation.asserted",
             "cairn_check_medication_reconciliation",
             Some("medication reconciliation requires a non-empty authored twin (§3.13/§3.3)"),
+        ),
+        (
+            "clinical.medication-coding.asserted",
+            "cairn_check_medication_coding_overlay",
+            Some("medication coding requires a non-empty authored twin (§3.13/§3.3)"),
+        ),
+        (
+            "clinical.medication-coding-correction.asserted",
+            "cairn_check_medication_coding_overlay",
+            Some("medication coding correction requires a non-empty authored twin (§3.13/§3.3)"),
         ),
     ];
     expected.sort();

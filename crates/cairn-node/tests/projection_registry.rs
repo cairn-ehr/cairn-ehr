@@ -38,7 +38,7 @@ async fn dispatcher_is_the_only_event_log_insert_trigger() {
     );
 }
 
-/// Registry membership pinned (product loader — no spike db/008): 22 rows.
+/// Registry membership pinned (product loader — no spike db/008): 24 rows.
 /// A new projection slice bumps this AND db/tests/039_projection_registry_test.sql
 /// (the #212 two-places discipline; a missed bump fails CI, not drifts).
 #[tokio::test]
@@ -57,7 +57,7 @@ async fn registry_row_count_is_pinned() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 22, "cairn_projection_apply row count drifted");
+    assert_eq!(n, 24, "cairn_projection_apply row count drifted");
 }
 
 /// A registry row naming an apply fn that does not exist with the (event_log)

@@ -938,6 +938,137 @@ async fn two_anchors_in_one_group_raise_a_conflict() {
     );
 }
 
+/// Issue #295: the anchor-conflict view's `count(DISTINCT …)` must stay `COLLATE "C"`-pinned.
+///
+/// THE HAZARD. `medication_group_coding_conflict` fires on
+/// `HAVING count(DISTINCT <flattened anchor>) > 1`. Under a NON-DETERMINISTIC collation
+/// (an ICU case-insensitive default, which a deployment is free to choose), two anchors
+/// differing only in case compare EQUAL, so the count collapses to 1 and the conflict row
+/// never appears — even though `anchors` would have listed both. That is the ADR-0045 class
+/// of bug: the winner/flag depends on a node-LOCAL collation property, so honest nodes
+/// disagree. Silently missing a mis-reconciliation signal is the bad direction.
+///
+/// This can really happen: the canonical-uuid pin only guards the STRICT door, and the
+/// registry-derived tier is deliberately lenient on remote apply (ADR-0051/0056), so a peer
+/// may legitimately hand us `0F8C4B1E-…` for a moiety we hold as `0f8c4b1e-…`.
+///
+/// TWO ASSERTIONS, because a behavioural test alone cannot discriminate on a cluster whose
+/// default collation is deterministic (as the test rig's is):
+///   1. the pin is DEMONSTRABLY load-bearing — a scratch non-deterministic ICU collation
+///      collapses the unpinned form to 1 while the pinned form correctly returns 2;
+///   2. the real view, over real events, flags case-differing anchors in one group.
+#[tokio::test]
+async fn the_anchor_conflict_count_is_collation_pinned() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+
+    // 1. The pin is load-bearing. Build the comparison BOTH ways over the same two
+    //    case-differing anchors under a non-deterministic collation. If a future Postgres
+    //    ever made these agree, this fails and tells the reader the argument has changed.
+    c.batch_execute(
+        "CREATE COLLATION IF NOT EXISTS cairn_test_ci \
+           (provider = icu, locale = 'und-u-ks-level2', deterministic = false)",
+    )
+    .await
+    .expect("the test cluster is built --with-icu");
+    let (unpinned, pinned): (i64, i64) = c
+        .query_one(
+            "WITH v(sys, code) AS (VALUES \
+                 ('drugref-moiety'::text COLLATE cairn_test_ci, \
+                  '0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01'::text COLLATE cairn_test_ci), \
+                 ('drugref-moiety'::text COLLATE cairn_test_ci, \
+                  '0F8C4B1E-1B7A-5C2D-9A3E-2B6F7C8D9E01'::text COLLATE cairn_test_ci)) \
+             SELECT count(DISTINCT (sys || '|' || code)), \
+                    count(DISTINCT ((sys || '|' || code) COLLATE \"C\")) FROM v",
+            &[],
+        )
+        .await
+        .map(|r| (r.get(0), r.get(1)))
+        .unwrap();
+    assert_eq!(
+        unpinned, 1,
+        "the hazard is real: unpinned, two case-differing anchors compare EQUAL and the \
+         HAVING never fires"
+    );
+    assert_eq!(
+        pinned, 2,
+        "COLLATE \"C\" compares the identical-on-every-node UTF-8 bytes, so the two \
+         anchors stay distinct"
+    );
+
+    // 2. The real view flags it. m1 is coded canonically through the strict door; m2 comes
+    //    in through the LENIENT remote door in an uppercase spelling — the only way this
+    //    state legitimately arises, and the reason it must be caught rather than assumed
+    //    away.
+    let patient = Uuid::now_v7();
+    let m1 = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let m2 = Uuid::now_v7();
+    submit_raw_substance_for(
+        &c,
+        &sk,
+        kid.as_str(),
+        "apply_remote_event",
+        m2,
+        patient,
+        serde_json::json!({
+            "term": "atorvastatin",
+            "coding": {
+                "system": "drugref-moiety",
+                "code": "0F8C4B1E-1B7A-5C2D-9A3E-2B6F7C8D9E01",
+                "display": "atorvastatin"
+            }
+        }),
+    )
+    .await
+    .expect("a peer's non-canonical uuid spelling is admitted at the remote door");
+    cairn_node::medication::reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        m1,
+        m2,
+        &cairn_node::medication::ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let (n, anchors): (i64, Vec<String>) = c
+        .query_one(
+            "SELECT anchor_count, anchors FROM medication_group_coding_conflict \
+               WHERE group_id IN (SELECT group_id FROM medication_group_member \
+                                   WHERE medication_id = $1::text::uuid)",
+            &[&m1.to_string()],
+        )
+        .await
+        .map(|r| (r.get(0), r.get(1)))
+        .expect("two case-differing anchors in one group must raise the conflict row");
+    assert_eq!(n, 2, "both spellings counted distinctly: {anchors:?}");
+    assert_eq!(
+        anchors.len(),
+        2,
+        "and both are listed for the human: {anchors:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // #192 thread-patient consistency, applied to the coding projection.
 // ---------------------------------------------------------------------------

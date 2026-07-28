@@ -128,17 +128,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS medication_patient_conflict_flag_natural_idx
     (medication_id, standing_patient, asserted_patient, content_address);
 
 -- The thread's standing patient claim: the statement's patient when asserted, else an
--- orphan cessation's (a cessation claims the thread for its chart too), else NULL —
--- honestly unknown. STABLE (reads the projections). plpgsql, not LANGUAGE sql: the
--- body references medication_cessation, created later in this file — a sql-language
--- body is resolved at CREATE time and would break a fresh load; plpgsql resolves at
--- first execution, by which point the whole file has loaded.
+-- orphan cessation's (a cessation claims the thread for its chart too), else an orphan
+-- coding's, else NULL — honestly unknown. STABLE (reads the projections). plpgsql, not
+-- LANGUAGE sql: the body references medication_cessation, created later in this file — a
+-- sql-language body is resolved at CREATE time and would break a fresh load; plpgsql
+-- resolves at first execution, by which point the whole file has loaded.
+--
+-- ORDER IS MEANINGFUL. The statement is the authoritative clinical claim, so it wins
+-- whenever it exists; the other two arms only speak for a thread whose assert has not
+-- arrived (or never will). The medication_coding arm was added by slice 6b (ADR-0059
+-- decision 3): a coding OVERLAY may legitimately arrive before the assert it codes, and
+-- its row must be filed under some chart (medication_coding.patient_id is NOT NULL). If
+-- that claim were invisible here, a later assert naming a DIFFERENT patient would sail
+-- past cairn_guard_medication_patient and leave medication_statement and
+-- medication_coding permanently disagreeing about which chart the thread belongs to —
+-- the exact two-projections-disagree hazard #192 exists to prevent. Making the claim
+-- visible instead means such an assert is refused loudly at the local door (and
+-- flagged, not refused, on remote apply). The trade is deliberate: a coder who codes
+-- against the wrong chart now blocks the real assert with a legible error, rather than
+-- silently splitting the thread's chart across two projections.
 CREATE OR REPLACE FUNCTION cairn_medication_thread_patient(p_med uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 BEGIN
     RETURN COALESCE(
         (SELECT patient_id FROM medication_statement WHERE medication_id = p_med),
-        (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med));
+        (SELECT patient_id FROM medication_cessation WHERE medication_id = p_med),
+        (SELECT patient_id FROM medication_coding    WHERE medication_id = p_med));
 END;
 $$;
 

@@ -15,12 +15,13 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
-use cairn_event::medication::SubstanceCoding;
+use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, cease_medication, change_dose, reconcile_medications, AssertMedicationInput,
-    AttestParams, CeaseMedicationInput, ChangeDoseInput, ReconcileInput,
+    assert_medication, cease_medication, change_dose, code_medication, correct_medication_coding,
+    reconcile_medications, AssertMedicationInput, AttestParams, CeaseMedicationInput,
+    ChangeDoseInput, CodeMedicationInput, CorrectCodingInput, ReconcileInput,
 };
 use cairn_node::shred::shred_event;
 use std::path::Path;
@@ -28,6 +29,24 @@ use std::process::{Child, Command};
 use tempfile::TempDir;
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+/// The event id of the assertion that minted a medication thread, resolved through the
+/// projection's content_address (event_log holds both). Used to give a coding correction a
+/// REAL `corrects` target when the coding it fixes rode inline on the assertion — the
+/// orchestrator returns the thread id, not the event id, and the floor deliberately does
+/// not require the target to exist, so guessing would weaken the test rather than the code.
+async fn assert_event_id(c: &Client, medication_id: Uuid) -> Uuid {
+    let row = c
+        .query_one(
+            "SELECT e.event_id::text FROM event_log e \
+               JOIN medication_statement s ON s.content_address = e.content_address \
+              WHERE s.medication_id = $1::text::uuid",
+            &[&medication_id.to_string()],
+        )
+        .await
+        .unwrap();
+    row.get::<_, String>(0).parse().unwrap()
+}
 
 fn cs_a() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
@@ -667,6 +686,111 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         .unwrap()
         .get(0);
     assert_eq!(penned, 0, "a clean pull pens nothing");
+
+    // --- slice 6b: the two coding OVERLAY verbs cross the same wire ---
+    // Coding is a separately-authored act (ADR-0059 decision 3), so both directions must
+    // converge like any other fact: coding a thread the clinician left uncoded, and
+    // STRIKING a coding back to honest not-yet-coded. The strike is the sharp one — it
+    // must arrive at B as a row with a NULL anchor and struck = TRUE, not as an absent
+    // row, because an absent row would let a lower-HLC coding arriving later win by
+    // default.
+    code_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        med1,
+        &CodeMedicationInput {
+            coding: SubstanceCoding {
+                system: "drugref-moiety",
+                code: "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33",
+                display: "metformin",
+            },
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let med2_assert_event = assert_event_id(&a, med2).await;
+    correct_medication_coding(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        med2,
+        &CorrectCodingInput {
+            // med2's coding was INLINE on its assertion, so the claim this strike fixes
+            // is the assert EVENT — resolved through the projection's content_address
+            // rather than guessed, so the correction names a real target even though the
+            // floor deliberately does not require one to exist (offline-first).
+            corrects: med2_assert_event,
+            claim: CodingClaim::Strike,
+            note: Some("not atorvastatin on review; substance unidentified"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let pull2 = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_CONVERGE,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run second pull");
+    assert!(
+        pull2.status.success(),
+        "second pull failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull2.stdout),
+        String::from_utf8_lossy(&pull2.stderr)
+    );
+
+    assert_eq!(
+        snapshot(&a).await,
+        snapshot(&b).await,
+        "A and B must still read identically after the coding overlays synced"
+    );
+    let overlaid = b
+        .query_one(
+            "SELECT coding_display, struck FROM medication_coding \
+               WHERE medication_id = $1::text::uuid",
+            &[&med1.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        overlaid.get::<_, Option<String>>(0).as_deref(),
+        Some("metformin"),
+        "the coding overlay converged to B"
+    );
+    assert!(!overlaid.get::<_, bool>(1));
+    let struck = b
+        .query_one(
+            "SELECT coding_system, coding_code, coding_display, struck FROM medication_coding \
+               WHERE medication_id = $1::text::uuid",
+            &[&med2.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(struck.get::<_, Option<String>>(0), None);
+    assert_eq!(struck.get::<_, Option<String>>(1), None);
+    assert_eq!(struck.get::<_, Option<String>>(2), None);
+    assert!(
+        struck.get::<_, bool>(3),
+        "the strike converged to B as a flagged, anchor-less row — never an absent one"
+    );
 }
 
 #[tokio::test]
