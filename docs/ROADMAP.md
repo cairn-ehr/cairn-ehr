@@ -842,8 +842,8 @@ code slice (brainstorm→plan→TDD) implementing the `substance.coding` shape, 
 §1.2 paper-parity benchmark; drugref-absent honest degradation is a first-class test obligation — the
 §5.9 projection must fire on a drugref-less node from the captured class.
 
-**Slice 56 — `clinical.medication` slice 6a: the inline `substance.coding` shape (2026-07-27; branch
-`feat/medication-coding-slice-6a-0059`; implements [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
+**Slice 56 — `clinical.medication` slice 6a: the inline `substance.coding` shape (2026-07-27; merged
+PR #297 + the shred-scrub fix PR #298; implements [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)
 — no new spec/ADR change; six tasks, each independently reviewed clean).** `SubstanceCoding {system,
 code, display}` replaces the reserved `inn_code` slot (`b44d56b`; the legibility twin appends the
 captured INN label only when it differs from the clinician's own term); the node surface gains a pure
@@ -887,7 +887,11 @@ than re-derive it, owed by the future safety-projection slice (blocked on #232).
 done:** the two coding-overlay event types (`clinical.medication-coding.asserted` + its correction) are
 **slice 6b**; the coded↔uncoded duplicate case is not closed (only coded↔coded is); no drugref code
 exists in the tree; the §5.9 safety class is not captured. **Unblocked follow-on: slice 6b** — the
-coding-overlay event types, routing the same column set through an effective-coding view.
+coding-overlay event types (see Slice 57; the design retired the "effective-coding view" guess — with the
+coding in its own table the overlays are purely additive). Two hygiene items filed out of this arc:
+[#295](https://github.com/cairn-ehr/cairn-ehr/issues/295) (untested collation pin + a half-done `Copy`
+simplification) and [#296](https://github.com/cairn-ehr/cairn-ehr/issues/296) (the `event_log` column-order
+test pollution behind the long-carried "recreate the test DBs" gotcha).
 
 ## Phase 5 — Security & compliance core
 

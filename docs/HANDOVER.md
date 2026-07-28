@@ -1,6 +1,6 @@
 # HANDOVER — Cairn
 
-## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 + the whole Priority-6 queue + #217). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **#217 ✅** (paper-parity benchmark now a required slice-plan section, ROADMAP Slice 52) — **the review course is FULLY closed; nothing remains open from 2026-07-15.** Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211) ✅ 2026-07-25** (the E3 four-gap batch — advisory-tier TDD bugfix + doc-honesty, Slice 53). Matcher **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290) ✅ 2026-07-25** (the #211.4 seam's consumer — eval consumers now REPORT the repaired-pair count, advisory-tier additive TDD, Slice 54). Medication slice 6a shipped 2026-07-27 (branch `feat/medication-coding-slice-6a-0059`, ROADMAP Slice 56 —
+## ⇒ NEXT: the 2026-07-15 review course is ✅ FULLY CLOSED (P1–P5 + the whole Priority-6 queue + #217). Priority-6 queue all done: #205 → ADR-0054; #206 → ADR-0055; #200 → ADR-0056; #208 → ADR-0057 (generic reprojection, merged PR #274); **#216 ✅ → [ADR-0058](spec/decisions/0058-grade-gated-teffective-ceiling.md)** (grade-gated `t_effective` ceiling, spec v0.60 — a born `clock_grade` gates the ceiling's rejecting power: at `self-asserted`/`unknown` (every node today) the ceiling **flags-never-rejects** a forward `t_effective` (principle-4 fix for slow/dead/absent-RTC clocks), the remote-apply door **admits-and-flags, never rejects** (closes a latent one-event sync-wedge DoS reachable by the Spike-0002 threat model), plus `cairn_clock_health()` the "clock-behind-its-own-HLC" honesty read; anchor-plane follow-ons [#279](https://github.com/cairn-ehr/cairn-ehr/issues/279)–[#283](https://github.com/cairn-ehr/cairn-ehr/issues/283) + [#284](https://github.com/cairn-ehr/cairn-ehr/issues/284)). **#217 ✅** (paper-parity benchmark now a required slice-plan section, ROADMAP Slice 52) — **the review course is FULLY closed; nothing remains open from 2026-07-15.** Matcher review-follow-ons **#209 + #210 ✅** (2026-07-23; advisory-tier ADR-free TDD bugfix, Slice 51: `derive_thresholds` now fails closed on an empty non-match set + `kfold_lift` skips such folds — no impostor ⇒ no safe auto anchor, #209; a sweep-level reconciliation pass retracts pending proposals orphaned when a pair leaves the blocking universe, e.g. a fully-identified Doe, #210). Matcher **[#211](https://github.com/cairn-ehr/cairn-ehr/issues/211) ✅ 2026-07-25** (the E3 four-gap batch — advisory-tier TDD bugfix + doc-honesty, Slice 53). Matcher **[#290](https://github.com/cairn-ehr/cairn-ehr/issues/290) ✅ 2026-07-25** (the #211.4 seam's consumer — eval consumers now REPORT the repaired-pair count, advisory-tier additive TDD, Slice 54). Medication slice 6a shipped 2026-07-27 (**merged: PR #297 + the shred-scrub fix PR #298**, ROADMAP Slice 56 —
 the `clinical.medication` code slice implementing [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)):
 the inline `substance.coding {system, code, display}` shape replacing the reserved `inn_code` slot, the
 `medication_coding_system` registry + two-tier floor (`db/041`, `SCHEMA_GENERATION` 40→41), its own
@@ -9,9 +9,12 @@ a no-drugref-reference source guard; detail in the session block. Filed
 **[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)** — the §5.9 safety projection must *carry*
 the coding-derived drug class rather than re-derive it (ADR-0059 decision 4; blocked on #232). **The
 unblocked next step is slice 6b** — the two coding-overlay event types
-(`clinical.medication-coding.asserted` + `-correction.asserted`) in a new `db/` file, re-routing the
-same-column-set read views through an effective-coding view; ledger notes bind it (full list in the
-session block): the overlay apply-write needs the same `jsonb_typeof(...) IS DISTINCT FROM 'null'` guard
+(`clinical.medication-coding.asserted` + `-correction.asserted`) in a new `db/` file. **In design
+(2026-07-27) the "re-route the read views through an effective-coding view" guess was retired:** because
+6a gave the coding its own table, both overlays write that same table under the same winner rule, so the
+slice is additive — no view is re-routed and no view's column set changes (one view *body* changes, the
+prefer-coded predicate). Ledger notes still bind it (full list in the session block): the overlay
+apply-write needs the same `jsonb_typeof(...) IS DISTINCT FROM 'null'` guard
 the assert path needed; `medication_coding` becomes a **multi-type** table once the overlays write it
 (`db/039` already refuses a narrow `cairn_reproject` prefix over one); and 6a's
 `patient_id = cairn_medication_thread_patient(...)` is NON-NULL only because the assert upserts
@@ -20,6 +23,13 @@ answer. Other unblocked feature work: further medication slices,
 **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale reconciliation re-scoring-cost
 note), plus the UI-slice obligation **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)**
 (med-list whole-list sign-off must collapse to one human gesture, owed by the future Tauri med-list slice).
+Two hygiene items filed out of the 6a arc, both still open:
+**[#295](https://github.com/cairn-ehr/cairn-ehr/issues/295)** (the shipped anchor-conflict collation pin
+carries no regression test; one `Copy`-borrow simplification left half-done) and
+**[#296](https://github.com/cairn-ehr/cairn-ehr/issues/296)** (test pollution — a `cairn-sync` test drops
+`event_log.seq` and never restores it, so the re-added column lands last and a later *positional*
+`ROW(...)::event_log` literal in `born_sealed_schema` binds `clock_grade` into `seq`; this is the root
+cause of the long-carried "recreate the test DBs" gotcha).
 
 A five-pass whole-project review ran 2026-07-15 (in-DB floor, Rust workspace, spec/ADR corpus,
 matcher, cross-cutting seams). Full report: [`docs/code_reviews/2026-07-15-whole-project-architecture-review.md`](code_reviews/2026-07-15-whole-project-architecture-review.md);
