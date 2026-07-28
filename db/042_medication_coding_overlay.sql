@@ -85,7 +85,24 @@ BEGIN
     -- serializer emits explicit nulls from having a verifiable event refused over an
     -- encoding style choice (db/041's argument, same trap).
     v_has_code := p -> 'coding' IS NOT NULL AND jsonb_typeof(p -> 'coding') IS DISTINCT FROM 'null';
-    v_strike   := coalesce((p ->> 'strike')::boolean, FALSE);
+
+    -- `strike` is pinned to a JSON BOOLEAN, absent-or-boolean and nothing else.
+    -- `(p ->> 'strike')::boolean` would have inherited Postgres's permissive boolean input
+    -- syntax instead of stating a rule: `1`, `"true"` and `"yes"` would all strike a
+    -- coding, while `"banana"` would fail with a raw `invalid input syntax for type
+    -- boolean` naming no field. Both directions are wrong for the one bit that decides
+    -- whether a drug identity is retracted — a peer whose serializer stringifies booleans
+    -- would author strikes this node never agreed to accept, and the spelling is permanent
+    -- once frozen into a signed body (db/041's canonical-uuid argument, applied to a
+    -- boolean). Structural, so this refuses at BOTH doors: it is a shape judgment, not a
+    -- registry one, exactly like substance.term.
+    IF p -> 'strike' IS NOT NULL
+       AND jsonb_typeof(p -> 'strike') NOT IN ('boolean', 'null') THEN
+        RAISE EXCEPTION 'medication coding-correction: strike must be a JSON boolean, got % (%)',
+            jsonb_typeof(p -> 'strike'), p -> 'strike';
+    END IF;
+    v_strike := coalesce((p -> 'strike')::boolean, FALSE);
+
     IF v_has_code AND v_strike THEN
         RAISE EXCEPTION 'medication coding-correction: a correction cannot both replace and strike — carry a coding OR strike, not both';
     END IF;
@@ -125,7 +142,49 @@ WHERE (r.check_fn, r.twin_required_msg)
 ALTER TABLE medication_coding ALTER COLUMN coding_system  DROP NOT NULL;
 ALTER TABLE medication_coding ALTER COLUMN coding_code    DROP NOT NULL;
 ALTER TABLE medication_coding ALTER COLUMN coding_display DROP NOT NULL;
-ALTER TABLE medication_coding ADD COLUMN IF NOT EXISTS struck BOOLEAN NOT NULL DEFAULT FALSE;
+
+--    `struck` is GENERATED, not written (PR-review finding 1). It says exactly "this thread
+--    has no drug identity", which is definitionally `coding_code IS NULL` — the floor
+--    admits a coding triple only all-three-or-none, so a NULL anchor can arise no other way
+--    than a strike. Storing that bit separately made it a THIRD thing three different apply
+--    fns each had to remember to keep in step, and one of them did not: db/031's INLINE
+--    coding upsert (`clinical.medication.asserted` writes this table too) names the anchor
+--    columns and not `struck`, so an inline coding that WON the HLC race over an
+--    earlier-arriving strike left a live anchor beside a stale `struck = TRUE`.
+--
+--    That is arrival-order dependence, the one thing set-union sync cannot tolerate: node A
+--    asserts an inline coding, node B strikes it at a lower HLC while offline, both nodes
+--    end up holding both events and the assertion wins on both — but B applied the strike
+--    first and A did not, so two honest nodes read a `cairn_agent`-readable column
+--    differently (the ADR-0045 class, same shape as the #295 collation hazard).
+--    A generated column removes the writer entirely: no apply fn can set it, so no apply fn
+--    can forget it, and a fourth writer arriving in a later slice inherits the invariant for
+--    free. Deliberately NOT a CHECK constraint — a violated CHECK would abort the projection
+--    apply and wedge that event forever, and manufacturing a new one-event sync-wedge (the
+--    hazard ADR-0058 closed) to police a redundant bit would be a bad trade.
+--
+--    The DROP-then-ADD converts a database that already loaded an earlier build of THIS
+--    unmerged migration, where `struck` landed as a plain column. It is guarded on
+--    attgenerated so it runs at most once — the migrations re-run on every connect, and an
+--    unguarded DROP/ADD would rewrite the table every time.
+--
+--    The coder worklist (part 8) reads `struck`, so on such a database it must go first;
+--    part 8 recreates it a few statements below, inside this same transaction, so there is
+--    no window where it is missing. Dropped BY NAME rather than with CASCADE deliberately:
+--    a future dependent nobody thought about must break this migration loudly instead of
+--    being silently dropped and re-created only if someone remembered to.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                    WHERE attrelid = 'medication_coding'::regclass
+                      AND attname  = 'struck'
+                      AND attgenerated = 's') THEN
+        DROP VIEW IF EXISTS patient_medication_uncoded;
+        ALTER TABLE medication_coding DROP COLUMN IF EXISTS struck;
+        ALTER TABLE medication_coding ADD COLUMN struck BOOLEAN NOT NULL
+            GENERATED ALWAYS AS (coding_code IS NULL) STORED;
+    END IF;
+END $$;
 
 -- 5. Apply the plain coding overlay. Same table, same winner rule as the INLINE coding
 --    (db/031 part 5) — that is what makes this slice additive: no view is re-routed, and
@@ -146,8 +205,10 @@ BEGIN
     -- Local door RAISEs; remote apply converges-and-flags (never refuses — ADR-0056).
     PERFORM cairn_guard_medication_patient(v_med, e.patient_id, e.content_address);
 
+    -- `struck` is absent from both lists on purpose: it is GENERATED from coding_code
+    -- (part 4), so it cannot be written and cannot be forgotten.
     INSERT INTO medication_coding
-        (medication_id, patient_id, coding_system, coding_code, coding_display, struck,
+        (medication_id, patient_id, coding_system, coding_code, coding_display,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
         v_med,
@@ -161,14 +222,12 @@ BEGIN
         p -> 'coding' ->> 'system',
         p -> 'coding' ->> 'code',
         p -> 'coding' ->> 'display',
-        FALSE,
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id      = EXCLUDED.patient_id,
         coding_system   = EXCLUDED.coding_system,
         coding_code     = EXCLUDED.coding_code,
         coding_display  = EXCLUDED.coding_display,
-        struck          = EXCLUDED.struck,
         hlc_wall        = EXCLUDED.hlc_wall,
         hlc_counter     = EXCLUDED.hlc_counter,
         origin          = EXCLUDED.origin,
@@ -183,10 +242,11 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION medication_coding_apply(event_log) FROM PUBLIC;
 
--- 6. Apply a correction: a replacement writes the new triple, a strike writes NULLs plus
---    struck = TRUE. The NULL anchor is what makes the downstream degradation automatic —
---    the E1 dup-key's coalesce falls back to the term branch on its own ('code:' || NULL
---    is NULL in SQL), and the anchor-conflict view's count(DISTINCT …) ignores NULLs.
+-- 6. Apply a correction: a replacement writes the new triple, a strike writes NULLs — and
+--    `struck` follows from the NULL anchor on its own (part 4), never written here. The NULL
+--    anchor is also what makes the downstream degradation automatic: the E1 dup-key's
+--    coalesce falls back to the term branch by itself ('code:' || NULL is NULL in SQL), and
+--    the anchor-conflict view excludes an anchor-less member outright (db/033).
 CREATE OR REPLACE FUNCTION medication_coding_correction_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -200,12 +260,12 @@ BEGIN
     -- The floor guarantees exactly one of coding / strike, so this is a clean either-or.
     -- jsonb_typeof(...) = 'null' is checked because an explicit JSON null reads as the
     -- jsonb value 'null', not SQL NULL — the same trap db/031's inline write documents, and
-    -- the reason a bare IS NULL test here would try to write a triple of SQL NULLs while
-    -- leaving struck FALSE (an anchor-less row that never says why).
+    -- the reason a bare IS NULL test here would try to write a triple of SQL NULLs for a
+    -- REPLACEMENT, silently turning it into a strike.
     v_struck := p -> 'coding' IS NULL OR jsonb_typeof(p -> 'coding') = 'null';
 
     INSERT INTO medication_coding
-        (medication_id, patient_id, coding_system, coding_code, coding_display, struck,
+        (medication_id, patient_id, coding_system, coding_code, coding_display,
          hlc_wall, hlc_counter, origin, content_address)
     VALUES (
         v_med,
@@ -213,14 +273,12 @@ BEGIN
         CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'system'  END,
         CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'code'    END,
         CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'display' END,
-        v_struck,
         e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
     ON CONFLICT (medication_id) DO UPDATE SET
         patient_id      = EXCLUDED.patient_id,
         coding_system   = EXCLUDED.coding_system,
         coding_code     = EXCLUDED.coding_code,
         coding_display  = EXCLUDED.coding_display,
-        struck          = EXCLUDED.struck,
         hlc_wall        = EXCLUDED.hlc_wall,
         hlc_counter     = EXCLUDED.hlc_counter,
         origin          = EXCLUDED.origin,

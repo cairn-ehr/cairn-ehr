@@ -2067,13 +2067,16 @@ async fn main() -> anyhow::Result<()> {
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             ensure_registration_actor(&db, &node_kid).await?;
-            // None here is exactly what a --strike wants; validate_correction_shape
-            // (inside correct_medication_coding) refuses both-and-neither.
+            // None here is exactly what a --strike wants. A command line can still spell
+            // both or neither, so this is where those are refused — coding_claim_from_parts
+            // collapses the two independent switches into the ONE claim a correction is
+            // allowed to make, and nothing downstream can represent anything else.
             let coding = cairn_node::medication::coding_from_parts(
                 coding_system.as_deref(),
                 coding_code.as_deref(),
                 coding_display.as_deref(),
             )?;
+            let claim = cairn_node::medication::coding_claim_from_parts(coding, strike)?;
             let resolved_author = resolve_author(&db, &author).await?;
             let a_params = author_params(&resolved_author);
             let event_id = cairn_node::medication::correct_medication_coding(
@@ -2085,8 +2088,7 @@ async fn main() -> anyhow::Result<()> {
                 medication_id,
                 &cairn_node::medication::CorrectCodingInput {
                     corrects,
-                    coding,
-                    strike,
+                    claim,
                     note: note.as_deref(),
                 },
                 a_params.as_ref(),

@@ -57,6 +57,7 @@
 //! narrowed deliberately (to the trusted surface — db/ and the floor path), never simply
 //! deleted: the load-bearing invariant is that the FLOOR and the PROJECTIONS never depend
 //! on a drug database, not that no client code exists anywhere.
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -347,11 +348,7 @@ fn residue_lines(text: &str, is_rust: bool) -> Vec<String> {
     out.lines().map(|l| l.to_string()).collect()
 }
 
-/// A drugref mention survives into a line's residue only when it is neither quoted-and-
-/// exempt nor commented — i.e. it is really executable code, or a string this guard has
-/// no reason to trust. Returns the ORIGINAL line text (trimmed) for a readable failure
-/// message, even though the decision was made on the blanked residue.
-/// Blank out an in-`src` `#[cfg(test)]` region, for the same reason whole `tests/`
+/// Blank out an in-`src` `#[cfg(test)] mod` region, for the same reason whole `tests/`
 /// directories are skipped: it is test-only code, never compiled into the shipped
 /// artifact, and may legitimately NAME drugref. A unit test asserting the exact rendered
 /// twin `"coded as atorvastatin [drugref-moiety]"` is not a dependency on a drug
@@ -359,22 +356,50 @@ fn residue_lines(text: &str, is_rust: bool) -> Vec<String> {
 /// which the `DATA_TOKENS` exemption cannot cover because that requires the literal to be
 /// the token EXACTLY.
 ///
-/// STATED LIMITATION, in the same spirit as this file's other honest limits: the region
-/// is taken as `#[cfg(test)]` → END OF FILE, not a brace-matched module span. This guard
-/// is a line-oriented scanner, not a parser, and Rust convention (which this repo follows
-/// everywhere) puts the test module last. Production code placed AFTER a `#[cfg(test)]`
-/// module would therefore go unscanned — a real gap, but a gap in a REGRESSION NET for an
+/// The trigger is `#[cfg(test)]` IMMEDIATELY BEFORE A MODULE, not `#[cfg(test)]` alone.
+/// That attribute is equally legal on a single item — `#[cfg(test)] use foo::bar;` near the
+/// top of a file is ordinary Rust — and treating it as the start of the tail would blank
+/// the whole file below it, silently unscanning every line of production code that
+/// followed. Nothing in the tree spells it that way today (every `#[cfg(test)]` under
+/// `crates/*/src` introduces a `mod`), which is exactly why the widening would have gone
+/// unnoticed. Intervening blank lines and further attributes are skipped, so the
+/// conventional `#[cfg(test)]` + `mod tests {` still matches however it is spaced.
+///
+/// STATED LIMITATION, in the same spirit as this file's other honest limits: the region is
+/// taken as the module's declaration → END OF FILE, not a brace-matched span. This guard is
+/// a line-oriented scanner, not a parser, and Rust convention (which this repo follows
+/// everywhere) puts the test module last. Production code placed AFTER a `#[cfg(test)] mod`
+/// would therefore go unscanned — a real gap, but a gap in a REGRESSION NET for an
 /// accidental dependency, not in a defence against deliberate concealment, which this
 /// guard has never claimed to be. Lines are blanked rather than dropped so the residue
 /// stays aligned with the original line numbering.
 fn strip_rust_cfg_test_tail(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_test_tail = false;
-    for line in text.lines() {
-        if !in_test_tail && line.trim_start().starts_with("#[cfg(test)]") {
-            in_test_tail = true;
+    let lines: Vec<&str> = text.lines().collect();
+
+    /// The first line at or after `from` that is not blank and not another attribute —
+    /// i.e. the item the `#[cfg(test)]` actually applies to.
+    fn item_line(lines: &[&str], from: usize) -> Option<usize> {
+        (from..lines.len()).find(|&i| {
+            let t = lines[i].trim_start();
+            !t.is_empty() && !t.starts_with('#')
+        })
+    }
+
+    // Where the test tail begins, if anywhere: the first `#[cfg(test)]` whose item is a
+    // module declaration.
+    let tail_start = lines.iter().enumerate().find_map(|(i, line)| {
+        if !line.trim_start().starts_with("#[cfg(test)]") {
+            return None;
         }
-        if !in_test_tail {
+        let item = item_line(&lines, i + 1)?;
+        let t = lines[item].trim_start();
+        (t.starts_with("mod ") || t.starts_with("pub mod ") || t.starts_with("pub(crate) mod "))
+            .then_some(i)
+    });
+
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in lines.iter().enumerate() {
+        if tail_start.is_none_or(|start| i < start) {
             out.push_str(line);
         }
         out.push('\n');
@@ -382,13 +407,17 @@ fn strip_rust_cfg_test_tail(text: &str) -> String {
     out
 }
 
+/// A drugref mention survives into a line's residue only when it is neither quoted-and-
+/// exempt nor commented — i.e. it is really executable code, or a string this guard has
+/// no reason to trust. Returns the ORIGINAL line text (trimmed) for a readable failure
+/// message, even though the decision was made on the blanked residue.
 fn offending_lines(path: &Path) -> Vec<String> {
     let text = fs::read_to_string(path).expect("read source");
     let is_rust = path.extension().and_then(|e| e.to_str()) == Some("rs");
-    let scanned = if is_rust {
-        strip_rust_cfg_test_tail(&text)
+    let scanned: Cow<'_, str> = if is_rust {
+        Cow::Owned(strip_rust_cfg_test_tail(&text))
     } else {
-        text.clone()
+        Cow::Borrowed(&text)
     };
     let residue = residue_lines(&scanned, is_rust);
     text.lines()
@@ -438,6 +467,41 @@ fn the_scanner_exempts_cfg_test_modules_but_not_the_code_above_them() {
         src.lines().count(),
         "blanking must keep one output line per input line"
     );
+}
+
+/// The exemption is for a `#[cfg(test)] mod`, not for the attribute on its own. On a single
+/// item — `#[cfg(test)] use …`, ordinary Rust — treating it as the start of the tail would
+/// blank every production line below it, silently unscanning the rest of the file. Nothing
+/// in the tree spells it that way today, which is precisely why nothing would have noticed.
+#[test]
+fn a_cfg_test_attribute_on_a_non_module_item_does_not_blank_the_file() {
+    let src = concat!(
+        "#[cfg(test)]\n",
+        "use std::collections::HashMap;\n",
+        "pub fn ship() { let url = \"https://drugref.example/lookup\"; }\n",
+    );
+    let residue = residue_lines(&strip_rust_cfg_test_tail(src), true).join("\n");
+    assert!(
+        residue.to_lowercase().contains("drugref"),
+        "production code below a non-module cfg(test) item must still be scanned:\n{residue}"
+    );
+}
+
+/// The conventional spelling still matches however it is spaced: a blank line, a doc
+/// comment's sibling attributes, or `pub(crate) mod` must not defeat the exemption.
+#[test]
+fn the_cfg_test_module_exemption_tolerates_spacing_and_visibility() {
+    for module_line in ["mod tests {", "pub mod tests {", "pub(crate) mod tests {"] {
+        let src = format!(
+            "pub fn ship() {{}}\n#[cfg(test)]\n\n#[allow(clippy::all)]\n{module_line}\n    \
+             fn t() {{ assert_eq!(s, \"coded as x [drugref-moiety]\"); }}\n}}\n"
+        );
+        let residue = residue_lines(&strip_rust_cfg_test_tail(&src), true).join("\n");
+        assert!(
+            !residue.to_lowercase().contains("drugref"),
+            "`{module_line}` must still be recognised as the test module:\n{residue}"
+        );
+    }
 }
 
 #[test]

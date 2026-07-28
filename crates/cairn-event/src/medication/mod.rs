@@ -29,8 +29,8 @@ pub use cessation::{
 };
 pub use coding::{
     medication_coding_body, medication_coding_correction_body,
-    render_medication_coding_correction_twin, render_medication_coding_twin, MedicationCoding,
-    MedicationCodingCorrection,
+    render_medication_coding_correction_twin, render_medication_coding_twin, CodingClaim,
+    MedicationCoding, MedicationCodingCorrection,
 };
 pub use dose::{
     dose_change_body, dose_correction_body, render_dose_change_twin, render_dose_correction_twin,

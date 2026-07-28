@@ -20,12 +20,33 @@ pub struct MedicationCoding<'a> {
     pub coding: SubstanceCoding<'a>,
 }
 
-/// Correct a coding claim — replace it, or strike it back to not-yet-coded.
+/// What a correction claims: a replacement drug identity, or a retraction of the one on
+/// record.
 ///
-/// Exactly one of `coding` / `strike` is meaningful; the in-DB floor refuses both-present
-/// and neither-present (it is the unbypassable enforcement, principle 12). The strike is
-/// EXPLICIT rather than inferred from an absent coding, so a caller who simply forgets the
-/// coding gets a refusal instead of silently un-coding a medication.
+/// A two-field `(Option<SubstanceCoding>, bool)` could spell two shapes that mean nothing —
+/// both at once, and neither — which the in-DB floor then had to refuse and this builder
+/// had to silently normalize. An enum deletes both: there is no way to hand the builder a
+/// correction that does not say exactly one thing. The floor keeps refusing the same two
+/// wire shapes regardless (it is the unbypassable enforcement, principle 12, and a peer's
+/// bytes never went through this type).
+///
+/// The strike stays EXPLICIT rather than inferred from an absent coding — a caller who
+/// simply forgot the coding must get a refusal, not a silently un-coded medication.
+///
+/// `Debug` for the same reason `SubstanceCoding` derives it — `expect_err` on a
+/// `Result<CodingClaim, _>` requires the Ok side to be `Debug`. `Clone`/`Copy` because it
+/// holds nothing but borrowed `&str`s.
+#[derive(Debug, Clone, Copy)]
+pub enum CodingClaim<'a> {
+    /// This is the drug, not the one on record.
+    Replace(SubstanceCoding<'a>),
+    /// It is NOT the drug on record, and I cannot say what it is — the acknowledged
+    /// uncertainty principle 4 protects, and the alternative to inventing a substitute
+    /// identity nobody can vouch for.
+    Strike,
+}
+
+/// Correct a coding claim — replace it, or strike it back to not-yet-coded.
 pub struct MedicationCodingCorrection<'a> {
     /// The immortal thread id whose coding is being corrected.
     pub medication_id: &'a str,
@@ -34,10 +55,8 @@ pub struct MedicationCodingCorrection<'a> {
     /// corrected event may replicate later, or never (offline-first; the same contract
     /// `clinical.medication-dose-correction.asserted` already carries).
     pub corrects: &'a str,
-    /// The replacement claim. `None` together with `strike` = strike to not-yet-coded.
-    pub coding: Option<SubstanceCoding<'a>>,
-    /// Strike the coding back to honest not-yet-coded.
-    pub strike: bool,
+    /// What this correction claims — exactly one thing, by construction.
+    pub claim: CodingClaim<'a>,
     /// Why THIS correction was made (audit) — distinct from any clinical reason.
     /// `None` omits the key rather than writing null (principle 11).
     pub note: Option<&'a str>,
@@ -66,11 +85,12 @@ pub fn medication_coding_correction_body(c: &MedicationCodingCorrection) -> Valu
         "corrects": c.corrects,
     });
     let obj = p.as_object_mut().expect("json! built an object");
-    if let Some(coding) = c.coding {
-        obj.insert("coding".into(), coding_object(&coding));
-    } else if c.strike {
-        obj.insert("strike".into(), json!(true));
-    }
+    // Exhaustive over the claim, so exactly one of the two keys is ever written — the
+    // enum is what makes that a fact rather than a convention.
+    match c.claim {
+        CodingClaim::Replace(k) => obj.insert("coding".into(), coding_object(&k)),
+        CodingClaim::Strike => obj.insert("strike".into(), json!(true)),
+    };
     if let Some(n) = c.note {
         obj.insert("note".into(), json!(n));
     }
@@ -86,9 +106,9 @@ pub fn render_medication_coding_twin(c: &MedicationCoding) -> String {
 /// The §3.13 legibility twin for a coding correction — a reader holding no drug database
 /// at all must still be able to tell a replacement from a retraction.
 pub fn render_medication_coding_correction_twin(c: &MedicationCodingCorrection) -> String {
-    let head = match c.coding {
-        Some(k) => format!("coding corrected to {} [{}]", k.display, k.system),
-        None => "coding struck — no longer coded".to_string(),
+    let head = match c.claim {
+        CodingClaim::Replace(k) => format!("coding corrected to {} [{}]", k.display, k.system),
+        CodingClaim::Strike => "coding struck — no longer coded".to_string(),
     };
     match c.note {
         Some(n) => format!("{head} — {n}"),
@@ -129,8 +149,7 @@ mod tests {
         let v = medication_coding_correction_body(&MedicationCodingCorrection {
             medication_id: MED,
             corrects: TARGET,
-            coding: Some(coding()),
-            strike: false,
+            claim: CodingClaim::Replace(coding()),
             note: Some("brand name was ambiguous"),
         });
         assert_eq!(v["corrects"], TARGET);
@@ -147,8 +166,7 @@ mod tests {
         let v = medication_coding_correction_body(&MedicationCodingCorrection {
             medication_id: MED,
             corrects: TARGET,
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: Some("not metformin; substance unidentified"),
         });
         assert_eq!(v["strike"], true);
@@ -163,8 +181,7 @@ mod tests {
         let v = medication_coding_correction_body(&MedicationCodingCorrection {
             medication_id: MED,
             corrects: TARGET,
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: None,
         });
         assert!(
@@ -187,8 +204,7 @@ mod tests {
         let replaced = render_medication_coding_correction_twin(&MedicationCodingCorrection {
             medication_id: MED,
             corrects: TARGET,
-            coding: Some(coding()),
-            strike: false,
+            claim: CodingClaim::Replace(coding()),
             note: Some("brand name was ambiguous"),
         });
         assert_eq!(
@@ -199,8 +215,7 @@ mod tests {
         let struck = render_medication_coding_correction_twin(&MedicationCodingCorrection {
             medication_id: MED,
             corrects: TARGET,
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: None,
         });
         assert_eq!(struck, "coding struck — no longer coded");

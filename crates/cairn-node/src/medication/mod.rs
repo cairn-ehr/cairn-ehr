@@ -23,8 +23,8 @@ pub use attestation::{
 };
 pub use cessation::{build_cease_body, cease_medication, CeaseMedicationInput};
 pub use coding::{
-    build_coding_body, build_coding_correction_body, code_medication, correct_medication_coding,
-    validate_correction_shape, CodeMedicationInput, CorrectCodingInput,
+    build_coding_body, build_coding_correction_body, code_medication, coding_claim_from_parts,
+    correct_medication_coding, CodeMedicationInput, CorrectCodingInput,
 };
 pub use dose::{
     build_dose_change_body, build_dose_correction_body, change_dose, correct_dose,

@@ -579,6 +579,16 @@ GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
 -- COLLATE "C" concat+compare) would list both. Concatenating the pair into one COLLATE "C"
 -- text expression BEFORE the DISTINCT — in both the select list and the HAVING, so the two
 -- agree — pins the same collation the `anchors` array already uses.
+-- SLICE 6b / PR-review finding 2: the join excludes anchor-less members EXPLICITLY. Before
+-- 6b the coding columns were NOT NULL, so the join could not feed a NULL into the
+-- aggregates; the strike's nullable widening broke that silently, because — unlike
+-- count(DISTINCT …), which skips NULLs — array_agg KEEPS them. A group of two live anchors
+-- plus one struck member then reported anchor_count = 2 beside a THREE-element `anchors`
+-- array whose third element was NULL: a blank entry in the human-readable listing this view
+-- exists to produce, and a hard deserialization failure for any client reading the column
+-- as a non-nullable text[]. Filtering in the join rather than wrapping each aggregate says
+-- the clinical thing once: a member whose drug identity has been retracted has no anchor to
+-- disagree with, so it is not part of an anchor conflict at all.
 CREATE OR REPLACE VIEW medication_group_coding_conflict AS
 SELECT gm.group_id,
        count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchor_count,
@@ -586,6 +596,7 @@ SELECT gm.group_id,
                  ORDER BY (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchors
 FROM medication_group_member gm
 JOIN medication_coding mc ON mc.medication_id = gm.medication_id
+                         AND mc.coding_code IS NOT NULL
 GROUP BY gm.group_id
 HAVING count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") > 1;
 GRANT SELECT ON medication_group_coding_conflict TO cairn_agent;

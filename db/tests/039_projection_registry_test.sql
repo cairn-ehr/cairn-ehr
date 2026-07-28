@@ -10,7 +10,7 @@ BEGIN;
 --    so the expected count here is the product count 24 + db/008's 3 = 27.
 --    (24 = 22 + the two db/042 ADR-0059 coding-overlay verbs.)
 --    Kept in lockstep with the Rust mirror
---    (projection_registry.rs::registry_row_count_is_pinned, which asserts 22 on
+--    (projection_registry.rs::registry_row_count_is_pinned, which asserts 24 on
 --    the product-loader DB that never loads db/008).
 DO $$
 DECLARE n bigint;

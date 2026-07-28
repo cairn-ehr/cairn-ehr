@@ -15,7 +15,7 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
-use cairn_event::medication::SubstanceCoding;
+use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
@@ -727,8 +727,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
             // rather than guessed, so the correction names a real target even though the
             // floor deliberately does not require one to exist (offline-first).
             corrects: med2_assert_event,
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: Some("not atorvastatin on review; substance unidentified"),
         },
         None,

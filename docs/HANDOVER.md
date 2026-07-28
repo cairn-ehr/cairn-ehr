@@ -64,14 +64,15 @@ Postgres-on-Android).
 ---
 
 **Session (2026-07-28) — `clinical.medication` slice 6b: the coding-overlay event types.** Full
-narrative in **ROADMAP Slice 57**; not restated here. The five things worth carrying forward:
+narrative in **ROADMAP Slice 57**; not restated here. The seven things worth carrying forward:
 
 1. **The slice stayed additive**, exactly as 6a's table-not-columns decision promised: both apply fns
-   write the existing `medication_coding` table under the existing winner rule, the dup-key and the
-   anchor-conflict view degrade **with no change at all** (`'code:' || NULL` is NULL;
-   `count(DISTINCT …)` ignores NULLs), and only ONE downstream predicate needed an edit.
+   write the existing `medication_coding` table under the existing winner rule, the dup-key degrades
+   with **no change at all** (`'code:' || NULL` is NULL), and only two downstream predicates needed an
+   edit.
 2. **A strike leaves a row, never deletes one** — deleting would break arrival-order independence,
    because a lower-HLC coding arriving after the strike would have nothing to lose the race against.
+   `struck` is **generated** (`coding_code IS NULL`), not written — see 7.
 3. **`cairn_medication_thread_patient` gained a `medication_coding` arm.** An overlay may legitimately
    arrive before the assert it codes; its row falls back to the coding event's own patient claim, and
    that claim must be visible to the shared #192 guard or a later assert naming a different patient
@@ -87,14 +88,30 @@ narrative in **ROADMAP Slice 57**; not restated here. The five things worth carr
    deterministic-default cluster, so the actual gate had to be a no-DB source guard.
 6. **Only `cargo test --workspace` catches guard-scope gaps.** Slice 6a's drugref guard skips `tests/`
    directories but had never met a `#[cfg(test)]` module inside a `src/` file — 6b's unit tests are the
-   first. Per-test-binary runs missed it entirely; the full run (909/0) did not. **Run the whole
+   first. Per-test-binary runs missed it entirely; the full run did not. **Run the whole
    workspace before claiming a slice is done**, and note that `cargo test | tail` masks cargo's exit
    code (an old lesson, still true).
+7. **A redundant column is a convergence hazard, not just clutter** — the PR review's sharpest finding
+   (detail in ROADMAP Slice 57's review-round paragraph; workspace now 916/0). `medication_coding.struck`
+   duplicated `coding_code IS NULL`, and the table has THREE writers: db/031's INLINE coding upsert wrote
+   the anchor columns and not `struck`, so an inline coding that WON the HLC race over an earlier-arriving
+   strike left a live anchor beside a stale `struck = TRUE` — two honest nodes reading the same events in
+   different arrival orders then disagreed. The fix deletes the writer rather than correcting it
+   (`GENERATED ALWAYS AS (coding_code IS NULL) STORED`), so a fourth writer inherits the invariant.
+   **Two generalisable rules:** when a projection column is derivable from another, generate it; and a
+   CHECK constraint is the *wrong* tool on a projection table — a violation aborts the apply and wedges
+   that event forever (the ADR-0058 hazard). The same widening also broke the anchor-conflict view's
+   `array_agg`, which — unlike `count(DISTINCT …)` — **keeps NULLs**. Nullable-widening an existing
+   column means re-reading every aggregate over it.
 
 **Deliberately NOT done, stated honestly:** no drugref code anywhere in the tree; the coded↔uncoded
 duplicate case is still open (needs term→anchor resolution); the §5.9 safety class is still owed
 (#294, blocked on #232); no coding UI, so no paper-parity *time* budget was measured — 6b exposes a CLI
-ops surface, and the budget is owed by the med-list UI slice (#288 neighbourhood).
+ops surface, and the budget is owed by the med-list UI slice (#288 neighbourhood). Left open from the
+review round: **[#300](https://github.com/cairn-ehr/cairn-ehr/issues/300)** — the coder worklist lists
+every uncoded member of an already-coded reconciled group. Duplicated coder work, but filtering them out
+could suppress the mis-reconciliation signal 6a built (an anchor never contradicted), so it wants a
+clinical opinion rather than a patch.
 
 **Earlier sessions — condensed.** ROADMAP now carries the per-slice detail (Slices 13–35, 36–56 and 57
 are each condensed there, with every still-open issue enumerated in full). The arc: demographics slices

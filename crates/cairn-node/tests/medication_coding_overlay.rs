@@ -8,7 +8,7 @@
 //! STRIKE a coding back to honest not-yet-coded. The floor tests pin the shape rules
 //! (exactly one of coding/strike; an unknown `corrects` target is LAWFUL — offline-first);
 //! the projection tests pin the winner rule and the struck degradation.
-use cairn_event::medication::SubstanceCoding;
+use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use tokio_postgres::Client;
@@ -217,6 +217,94 @@ async fn a_correction_claiming_neither_is_refused() {
     .await
     .expect_err("neither is incoherent");
     assert!(db_msg(&e).contains("strike"), "{}", db_msg(&e));
+}
+
+/// PR-review finding: `strike` must be a JSON BOOLEAN, pinned as such.
+///
+/// The floor used to read it as `(p ->> 'strike')::boolean`, which inherits Postgres's
+/// permissive boolean input syntax. That made the wire shape of an IMMORTAL, signed field
+/// depend on a cast's tolerance rather than on a stated rule: `1`, `"true"` and `"yes"` all
+/// struck a coding, while `"banana"` failed with a raw
+/// `invalid input syntax for type boolean` instead of one of this file's legible refusals.
+/// Neither direction is acceptable for a field whose only two meanings are "retract this
+/// drug identity" and "do not" — a peer whose serializer stringifies booleans would be
+/// authoring strikes this node never agreed to accept, and once frozen into a signed body
+/// that spelling is permanent (the db/041 canonical-uuid argument, applied to a boolean).
+///
+/// Structural, so refused at BOTH doors: this is a shape judgment, not a registry one.
+#[tokio::test]
+async fn a_non_boolean_strike_is_refused() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    // Each of these is accepted or rejected ARBITRARILY by a bare ::boolean cast: the
+    // first two parse to TRUE, the third parses to FALSE, the fourth raises a Postgres
+    // cast error with no mention of the field. All four must instead meet one refusal that
+    // names `strike`.
+    for spelling in [
+        serde_json::json!("true"),
+        serde_json::json!(1),
+        serde_json::json!(0),
+        serde_json::json!("banana"),
+    ] {
+        for door in ["submit_event", "apply_remote_event"] {
+            let bad = serde_json::json!({
+                "medication_id": Uuid::now_v7().to_string(),
+                "corrects": Uuid::now_v7().to_string(),
+                "strike": spelling
+            });
+            let e = submit_raw_overlay(
+                &c,
+                &sk,
+                &kid,
+                door,
+                "clinical.medication-coding-correction.asserted",
+                "clinical.medication-coding-correction/1",
+                bad,
+            )
+            .await
+            .unwrap_err();
+            let msg = db_msg(&e);
+            assert!(
+                msg.contains("strike must be a JSON boolean"),
+                "a {spelling} strike at {door} must meet the floor's own refusal, got: {msg}"
+            );
+        }
+    }
+}
+
+/// The other edge of the same pin: an explicit `"strike": false` is a WELL-FORMED claim of
+/// "not a strike", so it must fall through to the neither-replacement-nor-strike refusal
+/// rather than the shape one. Without this, tightening the type could have swallowed the
+/// legitimate spelling a serializer that always emits the key produces.
+#[tokio::test]
+async fn an_explicit_false_strike_falls_through_to_the_neither_refusal() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let bad = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "corrects": Uuid::now_v7().to_string(),
+        "strike": false
+    });
+    let e = submit_raw_overlay(
+        &c,
+        &sk,
+        &kid,
+        "submit_event",
+        "clinical.medication-coding-correction.asserted",
+        "clinical.medication-coding-correction/1",
+        bad,
+    )
+    .await
+    .expect_err("false + no coding is still neither");
+    let msg = db_msg(&e);
+    assert!(
+        msg.contains("must carry a replacement coding or strike = true"),
+        "an explicit false is well-formed and must reach the NEITHER refusal, got: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -497,12 +585,11 @@ async fn a_correction_replaces_the_claim() {
         med,
         &cairn_node::medication::CorrectCodingInput {
             corrects: coding_event,
-            coding: Some(SubstanceCoding {
+            claim: CodingClaim::Replace(SubstanceCoding {
                 system: "drugref-moiety",
                 code: MOIETY_METFORMIN,
                 display: "metformin",
             }),
-            strike: false,
             note: Some("misread the brand"),
         },
         None,
@@ -552,8 +639,7 @@ async fn a_strike_nulls_the_anchor_and_flags_the_row() {
         med,
         &cairn_node::medication::CorrectCodingInput {
             corrects: coding_event,
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: Some("not atorvastatin; substance unidentified"),
         },
         None,
@@ -743,8 +829,7 @@ async fn strike_coding(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uuid
         med,
         &cairn_node::medication::CorrectCodingInput {
             corrects: Uuid::now_v7(),
-            coding: None,
-            strike: true,
+            claim: CodingClaim::Strike,
             note: None,
         },
         None,
@@ -1077,4 +1162,266 @@ async fn a_ceased_thread_leaves_the_worklist() {
         .unwrap()
         .get(0);
     assert_eq!(after, 0, "a ceased thread drops off the coder worklist");
+}
+
+// ---------------------------------------------------------------------------
+// PR-review findings: the two hazards the nullable-anchor widening opened.
+// Both are ADR-0045-class — a projection whose state depends on something other than
+// the event SET, which is the one thing set-union sync cannot tolerate.
+// ---------------------------------------------------------------------------
+
+/// Submit a pre-built clear clinical body at a chosen HLC, sealing it like the write path.
+/// Lets a test order events by HLC independently of the order they ARRIVE in — the whole
+/// point of the two tests below, since sync delivers in arrival order and never in HLC
+/// order.
+async fn submit_at(c: &Client, sk: &SigningKey, body: EventBody) {
+    seal_and_submit(c, sk, body).await.expect("submit");
+}
+
+/// FINDING 1 — `struck` must be a function of the event SET, not of arrival order.
+///
+/// `medication_coding` is written by THREE event types, and the two 6b overlays were not
+/// the only writers of the row: db/031's INLINE coding upsert writes it too. That upsert
+/// names the three anchor columns and (before the fix) not `struck`, so an inline coding
+/// that WON the HLC race over an earlier-arriving strike left the row with a live anchor
+/// and a stale `struck = TRUE`.
+///
+/// The failure is cross-node and entirely realistic. Node A asserts a medication with an
+/// inline coding; node B, offline with a lagging clock, strikes it at a LOWER HLC. Both
+/// nodes end up holding both events, and the assertion wins on both — but B applied the
+/// strike first and A did not, so the two nodes' projections disagree about a column
+/// `cairn_agent` can read. Two honest nodes, the same events, different answers.
+///
+/// This test replays the same two events in BOTH arrival orders and demands one answer.
+#[tokio::test]
+async fn struck_is_arrival_order_independent_against_an_inline_recoding() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // One helper per thread so the two orders are otherwise identical. The strike always
+    // carries the LOWER HLC, so the inline coding always WINS — only arrival order differs.
+    let build = |med: Uuid, low: cairn_event::Hlc, high: cairn_event::Hlc| {
+        let strike = cairn_node::medication::build_coding_correction_body(
+            Uuid::now_v7(),
+            med,
+            patient,
+            &cairn_node::medication::CorrectCodingInput {
+                corrects: Uuid::now_v7(),
+                claim: CodingClaim::Strike,
+                note: None,
+            },
+            &kid,
+            low,
+        );
+        let asserted = cairn_node::medication::build_assert_body(
+            Uuid::now_v7(),
+            med,
+            patient,
+            &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+            &kid,
+            high,
+        );
+        (strike, asserted)
+    };
+
+    // Thread 1: the strike arrives FIRST (node B's order).
+    let med_strike_first = Uuid::now_v7();
+    let low = db::next_hlc(&c, "test-node").await.unwrap();
+    let high = db::next_hlc(&c, "test-node").await.unwrap();
+    let (strike, asserted) = build(med_strike_first, low, high);
+    submit_at(&c, &sk, strike).await;
+    submit_at(&c, &sk, asserted).await;
+
+    // Thread 2: the assertion arrives FIRST (node A's order). Same HLC relationship.
+    let med_assert_first = Uuid::now_v7();
+    let low = db::next_hlc(&c, "test-node").await.unwrap();
+    let high = db::next_hlc(&c, "test-node").await.unwrap();
+    let (strike, asserted) = build(med_assert_first, low, high);
+    submit_at(&c, &sk, asserted).await;
+    submit_at(&c, &sk, strike).await;
+
+    let strike_first = coding_state(&c, med_strike_first).await;
+    let assert_first = coding_state(&c, med_assert_first).await;
+    assert_eq!(
+        strike_first, assert_first,
+        "the same two events in two arrival orders must project identically — \
+         struck-first gave {strike_first:?}, assert-first gave {assert_first:?}"
+    );
+    assert_eq!(
+        strike_first,
+        Some((
+            Some("drugref-moiety".to_string()),
+            Some("atorvastatin".to_string()),
+            false
+        )),
+        "the winning inline coding is live, so the row is NOT struck"
+    );
+}
+
+/// The same invariant stated directly: nothing may ever leave a row claiming BOTH a live
+/// anchor and a strike. `struck` means exactly "this thread has no drug identity", so it is
+/// definitionally `coding_code IS NULL`; a row that says otherwise is incoherent whatever
+/// produced it. Scanned over the whole table rather than one thread, so any future writer
+/// that reintroduces the drift is caught by this test and not by a puzzled reader.
+#[tokio::test]
+async fn no_row_ever_claims_both_a_live_anchor_and_a_strike() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Exercise every writer of the table: inline (db/031), overlay (db/042 part 5),
+    // correction-replacement and correction-strike (db/042 part 6) — plus the ordering
+    // that used to drift.
+    let med = Uuid::now_v7();
+    let low = db::next_hlc(&c, "test-node").await.unwrap();
+    let high = db::next_hlc(&c, "test-node").await.unwrap();
+    submit_at(
+        &c,
+        &sk,
+        cairn_node::medication::build_coding_correction_body(
+            Uuid::now_v7(),
+            med,
+            patient,
+            &cairn_node::medication::CorrectCodingInput {
+                corrects: Uuid::now_v7(),
+                claim: CodingClaim::Strike,
+                note: None,
+            },
+            &kid,
+            low,
+        ),
+    )
+    .await;
+    submit_at(
+        &c,
+        &sk,
+        cairn_node::medication::build_assert_body(
+            Uuid::now_v7(),
+            med,
+            patient,
+            &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+            &kid,
+            high,
+        ),
+    )
+    .await;
+
+    let incoherent: i64 = c
+        .query_one(
+            "SELECT count(*) FROM medication_coding \
+               WHERE struck IS DISTINCT FROM (coding_code IS NULL)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        incoherent, 0,
+        "struck must mean exactly `coding_code IS NULL` on every row"
+    );
+}
+
+/// FINDING 2 — the anchor-conflict view must not list a struck member as a phantom anchor.
+///
+/// Before 6b the anchor columns were NOT NULL, so the view's inner JOIN could not feed a
+/// NULL into `array_agg`. Widening them broke that silently, because — unlike
+/// `count(DISTINCT …)`, which skips NULLs — `array_agg` KEEPS them. A group of two live
+/// anchors plus one struck member therefore reported `anchor_count = 2` beside an `anchors`
+/// array of three elements, one of them NULL: a blank row in the human-readable listing the
+/// view exists to produce, and a hard failure for any client reading the column as a
+/// non-nullable `text[]` (this suite's own sibling test does exactly that).
+///
+/// The three-member shape is the one the existing struck tests skip: with only two members
+/// the strike drops the count to 1 and the row vanishes before anyone can read `anchors`.
+#[tokio::test]
+async fn a_struck_member_is_not_listed_as_an_anchor_in_a_conflicted_group() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Three threads reconciled into ONE group: two distinct live anchors (the conflict
+    // itself) plus a third whose coding is struck.
+    let a = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let b = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Diabex", MOIETY_METFORMIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let third = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("little white pill", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    for other in [b, third] {
+        cairn_node::medication::reconcile_medications(
+            &mut c,
+            &sk,
+            &kid,
+            "test-node",
+            patient,
+            a,
+            other,
+            &cairn_node::medication::ReconcileInput {
+                provenance: "clinician-judgment",
+                reason: None,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    strike_coding(&mut c, &sk, &kid, patient, third).await;
+
+    // Reading `anchors` as Vec<String> is the assertion: a NULL element makes this row
+    // undeliverable to an ordinary client, which is half the defect.
+    let (n, anchors): (i64, Vec<String>) = c
+        .query_one(
+            "SELECT anchor_count, anchors FROM medication_group_coding_conflict \
+               WHERE group_id IN (SELECT group_id FROM medication_group_member \
+                                   WHERE medication_id = $1::text::uuid)",
+            &[&a.to_string()],
+        )
+        .await
+        .map(|r| (r.get(0), r.get(1)))
+        .expect("two live anchors in one group still conflict");
+    assert_eq!(n, 2, "the struck member contributes no anchor: {anchors:?}");
+    assert_eq!(
+        anchors.len(),
+        2,
+        "and it must not appear in the listing either — a struck member has no drug \
+         identity to disagree with: {anchors:?}"
+    );
 }

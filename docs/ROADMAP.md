@@ -290,14 +290,15 @@ but an event whose whole purpose is to code something has nothing to say without
 
 **The slice is additive** — the payoff of 6a's table-not-columns decision. Both apply fns write the
 **existing** `medication_coding` table under the **existing** overlay-winner rule, so no view is re-routed
-and no view's column set changes. A strike NULLs the anchor and sets `struck = TRUE` rather than deleting
-the row: deleting would break arrival-order independence, because a lower-HLC coding arriving after the
-strike would have nothing to lose the race against. The dup-key and the anchor-conflict view then degrade
-**with no change at all** (`'code:' || NULL` is NULL, so the coalesce falls to the term branch;
-`count(DISTINCT …)` ignores the NULL) — both now pinned by tests. Exactly **one** downstream predicate
-needed an edit: `medication_group_display`'s prefer-coded key tested row EXISTENCE, so a struck member kept
-winning — and because that `ORDER BY` moves the WHOLE row, the group would have gone on reading under the
-term and dose of the member whose identity was explicitly retracted. It now tests the anchor.
+and no view's column set changes. A strike NULLs the anchor rather than deleting the row: deleting would
+break arrival-order independence, because a lower-HLC coding arriving after the strike would have nothing to
+lose the race against. `struck` is a **generated** column (`coding_code IS NULL`), so no apply fn writes it
+and none can forget it — see the review round below. The dup-key degrades with **no change at all**
+(`'code:' || NULL` is NULL, so the coalesce falls to the term branch), now pinned by tests. Two downstream
+predicates needed an edit: `medication_group_display`'s prefer-coded key tested row EXISTENCE, so a struck
+member kept winning — and because that `ORDER BY` moves the WHOLE row, the group would have gone on reading
+under the term and dose of the member whose identity was explicitly retracted (it now tests the anchor);
+and the anchor-conflict view's join now excludes anchor-less members outright.
 
 Two things the slice had to answer that the plan had only flagged. **An overlay may arrive BEFORE the
 assert it codes**, where `cairn_medication_thread_patient` returns NULL and `medication_coding.patient_id`
@@ -339,7 +340,34 @@ where the token sits INSIDE a longer string and so cannot use the `DATA_TOKENS` 
 rationale for the `tests/` skip applies verbatim (a `cfg(test)` module is never compiled into the shipped
 artifact), so it now blanks that region, with the limitation stated in the file's existing honest style
 and a new unit test pinning the rule at both edges. Per-crate runs could not see this — only
-`cargo test --workspace` (909/0) did.
+`cargo test --workspace` did.
+
+**PR-review round (same branch).** Four findings, all fixed with a failing test first; workspace 909→916/0,
+re-run twice against the same databases for replay safety. **(1) `medication_coding.struck` was
+arrival-order dependent.** The table is written by THREE event types and `struck` was written by only two:
+db/031's INLINE coding upsert names the anchor columns and not `struck`, so an inline coding that WON the
+HLC race over an earlier-arriving strike left a live anchor beside a stale `struck = TRUE`. Two honest nodes
+holding the same events — A asserting the inline coding, B striking it at a lower HLC while offline — then
+read a `cairn_agent`-readable column differently, the ADR-0045 class the #295 pin exists to prevent. `struck`
+is now `GENERATED ALWAYS AS (coding_code IS NULL) STORED`: the writer is deleted rather than corrected, so a
+fourth writer in a later slice inherits the invariant for free. Deliberately *not* a CHECK — a violated
+CHECK would abort the projection apply and wedge that event forever, which is a bad trade for a redundant
+bit. **(2) The anchor-conflict view could emit a NULL anchor.** Widening the columns broke an invariant the
+inner JOIN used to guarantee: unlike `count(DISTINCT …)`, `array_agg` KEEPS NULLs, so a group of two live
+anchors plus one struck member reported `anchor_count = 2` beside a three-element `anchors` array — a blank
+entry for the human, and a hard deserialization failure for any client reading it as a non-nullable `text[]`.
+The join now excludes anchor-less members. **(3) The wire `strike` was not type-pinned** — a bare
+`::boolean` cast inherited Postgres's permissive input syntax, so `1`/`"true"`/`"yes"` all struck a coding
+while `"banana"` raised a cast error naming no field; the floor now requires a JSON boolean at both doors,
+with an explicit `false` still falling through to the neither-refusal. **(4) The Rust builder could be
+handed an incoherent correction** and silently normalized it; `CodingClaim::Replace | Strike` makes both
+states unrepresentable, with `coding_claim_from_parts` refusing them at the CLI boundary where a command
+line can still spell them. Also: the `cfg(test)` stripper now triggers only on `#[cfg(test)] mod` (on a
+single item — `#[cfg(test)] use …`, ordinary Rust — it would have blanked the whole file below it), and
+db/tests/039's lockstep comment named the pre-6b Rust count. Filed
+[#300](https://github.com/cairn-ehr/cairn-ehr/issues/300) — the worklist lists every uncoded member of an
+already-coded reconciled group; a design question (hiding them could suppress the mis-reconciliation signal
+6a built), not a defect.
 
 **Deliberately NOT done, stated honestly:** no drugref code exists anywhere in the tree (the source guard
 still passes); the **coded↔uncoded** duplicate case remains open — it needs term→anchor resolution, the

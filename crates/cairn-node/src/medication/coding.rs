@@ -11,8 +11,8 @@
 //! event being corrected has to be present locally — both may replicate later, or never.
 use cairn_event::medication::{
     medication_coding_body, medication_coding_correction_body,
-    render_medication_coding_correction_twin, render_medication_coding_twin, MedicationCoding,
-    MedicationCodingCorrection, SubstanceCoding,
+    render_medication_coding_correction_twin, render_medication_coding_twin, CodingClaim,
+    MedicationCoding, MedicationCodingCorrection, SubstanceCoding,
 };
 use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
@@ -30,30 +30,36 @@ pub struct CorrectCodingInput<'a> {
     /// The event whose coding this fixes (a prior coding overlay, or the assertion itself
     /// when the coding was inline). Not required to be present locally.
     pub corrects: Uuid,
-    /// The replacement claim; `None` with `strike` = strike to not-yet-coded.
-    pub coding: Option<SubstanceCoding<'a>>,
-    pub strike: bool,
+    /// What this correction claims — a `CodingClaim`, so "both" and "neither" cannot be
+    /// spelled at all (they used to be an `Option` beside a `bool`, which the body builder
+    /// then had to normalize by silently dropping one of them).
+    pub claim: CodingClaim<'a>,
     /// Why this correction was made (audit).
     pub note: Option<&'a str>,
 }
 
-/// Refuse an incoherent correction at the source.
+/// Turn a CLI's two independent switches — the three `--coding-*` flags and `--strike` —
+/// into the one claim a correction is allowed to make, refusing the two incoherent
+/// combinations at the source.
 ///
-/// The in-DB floor is the real, unbypassable enforcement (principle 12) and refuses the
-/// same two shapes; this exists so a caller sees the mistake where they made it, with both
-/// ways out named. Pure — no I/O, so it is cheap to call and cheap to test.
-pub fn validate_correction_shape(
-    coding: Option<&SubstanceCoding<'_>>,
+/// The type makes the invalid states unrepresentable from here ON; this is the boundary
+/// where they can still arrive, because a command line has no such guarantee. The in-DB
+/// floor remains the real, unbypassable enforcement for anything that did not come through
+/// this function (principle 12) — a peer's bytes never touch it. Pure: no I/O, so it is
+/// cheap to call and cheap to test.
+pub fn coding_claim_from_parts<'a>(
+    coding: Option<SubstanceCoding<'a>>,
     strike: bool,
-) -> anyhow::Result<()> {
-    match (coding.is_some(), strike) {
-        (true, true) => anyhow::bail!(
+) -> anyhow::Result<CodingClaim<'a>> {
+    match (coding, strike) {
+        (Some(_), true) => anyhow::bail!(
             "a coding correction cannot both replace and strike: supply the three --coding-* flags OR --strike, not both"
         ),
-        (false, false) => anyhow::bail!(
+        (None, false) => anyhow::bail!(
             "a coding correction must either carry a replacement (all three --coding-* flags) or --strike it back to not-yet-coded"
         ),
-        _ => Ok(()),
+        (Some(k), false) => Ok(CodingClaim::Replace(k)),
+        (None, true) => Ok(CodingClaim::Strike),
     }
 }
 
@@ -101,8 +107,7 @@ pub fn build_coding_correction_body(
     let c = MedicationCodingCorrection {
         medication_id: &mid,
         corrects: &target,
-        coding: input.coding,
-        strike: input.strike,
+        claim: input.claim,
         note: input.note,
     };
     EventBody {
@@ -161,7 +166,6 @@ pub async fn correct_medication_coding(
     author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
-    validate_correction_shape(input.coding.as_ref(), input.strike)?;
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let body = build_coding_correction_body(event_id, medication_id, patient, input, node_kid, hlc);
@@ -194,16 +198,22 @@ mod coding_build_tests {
     }
 
     #[test]
-    fn a_replacement_or_a_strike_is_valid() {
-        validate_correction_shape(Some(&coding()), false).expect("a replacement is valid");
-        validate_correction_shape(None, true).expect("a strike is valid");
+    fn a_replacement_or_a_strike_becomes_the_matching_claim() {
+        assert!(matches!(
+            coding_claim_from_parts(Some(coding()), false).expect("a replacement is valid"),
+            CodingClaim::Replace(k) if k.display == "atorvastatin"
+        ));
+        assert!(matches!(
+            coding_claim_from_parts(None, true).expect("a strike is valid"),
+            CodingClaim::Strike
+        ));
     }
 
     #[test]
     fn neither_is_refused_at_the_source() {
         // The DB floor refuses this too, but the caller deserves the error where the
         // mistake was made, naming the two ways out.
-        let e = validate_correction_shape(None, false).expect_err("neither must be refused");
+        let e = coding_claim_from_parts(None, false).expect_err("neither must be refused");
         let msg = e.to_string();
         assert!(
             msg.contains("--strike"),
@@ -213,7 +223,7 @@ mod coding_build_tests {
 
     #[test]
     fn both_is_refused_as_incoherent() {
-        let e = validate_correction_shape(Some(&coding()), true)
+        let e = coding_claim_from_parts(Some(coding()), true)
             .expect_err("a correction cannot both replace and strike");
         assert!(e.to_string().contains("both"), "{e}");
     }
@@ -248,8 +258,7 @@ mod coding_build_tests {
             Uuid::now_v7(),
             &CorrectCodingInput {
                 corrects,
-                coding: None,
-                strike: true,
+                claim: CodingClaim::Strike,
                 note: Some("not atorvastatin; substance unidentified"),
             },
             "kid",
