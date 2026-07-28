@@ -862,14 +862,26 @@ a bare code, else the reserved finer drugref tree levels re-split the same subst
 `medication_group_display` now prefers a coded member; a new advisory
 `medication_group_coding_conflict` view surfaces two different anchors inside one reconciled group
 (`6e777c4`). Honest degradation is proven **by construction**: a source guard (three review rounds
-narrowing string/macro exemptions down to a structural residue check) pins that no `db/`,
-`crates/*/src`, or `extensions/` file references drugref executably, plus a `clinical_pull` cross-node
-coding-convergence assertion (`fb30ce9`/`d92ad8a`/`93ee103`/`c44b311`). **Two findings changed shipped
+narrowing string/macro exemptions down to a structural residue check) pins that no `.sql`/`.rs` file
+under `db/`, `crates/` or `extensions/` (`target/` and `tests/` skipped) references drugref executably,
+plus a `clinical_pull` cross-node
+coding-convergence assertion (`fb30ce9`/`d92ad8a`/`93ee103`/`c44b311`). **Three findings changed shipped
 behaviour:** db/020's `cairn.remote_apply` marker moved to precede the floor dispatch (it previously
 fired after, so no twin check_fn could ever see it at the remote door — verified no existing registered
-check_fn read it); and the canonical UUID form is now pinned at the strict door (Postgres accepts
+check_fn read it); the canonical UUID form is now pinned at the strict door (Postgres accepts
 braced/uppercase/unhyphenated spellings, which the TEXT-compared dup-key would otherwise split
-permanently once frozen into a signed body). Filed **[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)**
+permanently once frozen into a signed body); and **a PR-review finding (critical) —
+`cairn_execute_shred` did not scrub `medication_coding`**, so a shred that reported success left the drug's
+preferred name and its immortal moiety anchor readable beside `patient_id` in a `cairn_agent`-readable
+table (the ADR-0005 rung-3 / #92(b) failure, and a recurrence of db/037's own earlier "finding #2"; the
+sibling regression test asserts an UNCODED input, so it never wrote a coding row and could not catch it).
+db/037 now scrubs by the same provenance-precise `content_address` key as the five sibling projections.
+Two review minors also changed behaviour: `medication_coding.patient_id` is sourced from the thread's
+STANDING chart (`cairn_medication_thread_patient`), so a stale cross-patient re-assert losing the
+statement's overlay race cannot file the coding under the losing event's patient (#192); and
+`medication_coding_system.system` gained a shape CHECK (non-blank, no `|`) via a paired ALTER (#207),
+since `|` is the load-bearing separator of the flattened `<system>|<code>` dup-key. Filed
+**[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)**
 — the §5.9 safety projection must *carry* the coding-derived drug class (ADR-0059 decision 4) rather
 than re-derive it, owed by the future safety-projection slice (blocked on #232). **Deliberately NOT
 done:** the two coding-overlay event types (`clinical.medication-coding.asserted` + its correction) are

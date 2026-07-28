@@ -295,13 +295,24 @@ BEGIN
     -- a bare `IS NOT NULL` guard here would still enter this branch for an explicit
     -- null and try to INSERT NULL into three NOT NULL columns. jsonb_typeof(...) =
     -- 'null' catches that shape explicitly.
+    --
+    -- patient_id is the thread's STANDING chart, NOT e.patient_id. #192 makes a
+    -- medication_id belong to one chart for life, and the statement upsert immediately
+    -- above has already settled which patient that is for this thread — including the
+    -- case where THIS event contradicted it and LOST the overlay race (remote apply
+    -- converges-and-flags rather than refusing, so a stale cross-patient re-assert still
+    -- reaches this line). Taking e.patient_id verbatim would file the coding under the
+    -- losing event's patient while the statement kept the standing one — two projections
+    -- disagreeing about the thread's chart. The statement row always exists by now (the
+    -- upsert above inserts unconditionally when absent), so this is never NULL.
     IF p -> 'substance' -> 'coding' IS NOT NULL
        AND jsonb_typeof(p -> 'substance' -> 'coding') IS DISTINCT FROM 'null' THEN
         INSERT INTO medication_coding
             (medication_id, patient_id, coding_system, coding_code, coding_display,
              hlc_wall, hlc_counter, origin, content_address)
         VALUES (
-            (p ->> 'medication_id')::uuid, e.patient_id,
+            (p ->> 'medication_id')::uuid,
+            cairn_medication_thread_patient((p ->> 'medication_id')::uuid),
             p -> 'substance' -> 'coding' ->> 'system',
             p -> 'substance' -> 'coding' ->> 'code',
             p -> 'substance' -> 'coding' ->> 'display',

@@ -108,10 +108,11 @@ ON CONFLICT (event_type) DO NOTHING;
 --    a shred (ADR-0005 rung 3 / #92(b) mandatory-index invalidation). EVERY medication
 --    verb writes derived plaintext, so EVERY verb's projection is in scope — not only the
 --    three the walking skeleton first shipped (code-review finding #2). The provenance-precise
---    key differs per table: medication_statement / medication_cessation / medication_dose_correction /
---    medication_reconciliation / medication_attestation all carry the PRODUCING event's
---    content_address (db/031/032/033/034) so they scrub by `content_address = v_ca`; the
---    initial-dose seed row is keyed by the assert event's own id (db/032); and
+--    key differs per table: medication_statement / medication_coding / medication_cessation /
+--    medication_dose_correction / medication_reconciliation / medication_attestation all carry
+--    the PRODUCING event's content_address (db/031/032/033/034) so they scrub by
+--    `content_address = v_ca`; the initial-dose seed row is keyed by the assert event's own
+--    id (db/032); and
 --    medication_group_member is a DERIVED table (recomputed from the standing reconciled
 --    edges, like person_member — db/033), so a shredded reconciliation must delete its edge
 --    AND recompute the affected component so the erased merge stops grouping the two threads.
@@ -142,6 +143,17 @@ BEGIN
     IF v_ca IS NOT NULL THEN
         IF to_regclass('public.medication_statement') IS NOT NULL THEN
             DELETE FROM medication_statement WHERE content_address = v_ca;
+        END IF;
+        -- Drug-identity coding (db/031, ADR-0059). `coding_display` is the drug's preferred
+        -- name and `coding_code` is the immortal moiety anchor — to any holder of a drug
+        -- database that IS the substance, sitting next to patient_id in a table the runtime
+        -- role can SELECT. Leaving it behind after a shred that reported success is the
+        -- rung-3 failure above, and it does NOT ride medication_statement's delete: this is
+        -- its own table precisely so slice 6b's coding overlays can write it independently.
+        -- Same provenance-precise key as its siblings, so an overlay winner from another,
+        -- unshredded event survives (never over-erase).
+        IF to_regclass('public.medication_coding') IS NOT NULL THEN
+            DELETE FROM medication_coding WHERE content_address = v_ca;
         END IF;
         IF to_regclass('public.medication_cessation') IS NOT NULL THEN
             DELETE FROM medication_cessation WHERE content_address = v_ca;

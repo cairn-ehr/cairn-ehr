@@ -10,10 +10,13 @@ a no-drugref-reference source guard; detail in the session block. Filed
 the coding-derived drug class rather than re-derive it (ADR-0059 decision 4; blocked on #232). **The
 unblocked next step is slice 6b** — the two coding-overlay event types
 (`clinical.medication-coding.asserted` + `-correction.asserted`) in a new `db/` file, re-routing the
-same-column-set read views through an effective-coding view; two ledger notes bind it: the overlay
-apply-write needs the same `jsonb_typeof(...) IS DISTINCT FROM 'null'` guard the assert path needed, and
-`medication_coding` becomes a **multi-type** table once the overlays write it (`db/039` already refuses a
-narrow `cairn_reproject` prefix over one). Other unblocked feature work: further medication slices,
+same-column-set read views through an effective-coding view; ledger notes bind it (full list in the
+session block): the overlay apply-write needs the same `jsonb_typeof(...) IS DISTINCT FROM 'null'` guard
+the assert path needed; `medication_coding` becomes a **multi-type** table once the overlays write it
+(`db/039` already refuses a narrow `cairn_reproject` prefix over one); and 6a's
+`patient_id = cairn_medication_thread_patient(...)` is NON-NULL only because the assert upserts
+`medication_statement` first — an overlay arriving BEFORE its assert gets NULL there and needs its own
+answer. Other unblocked feature work: further medication slices,
 **[#287](https://github.com/cairn-ehr/cairn-ehr/issues/287)** (hub-scale reconciliation re-scoring-cost
 note), plus the UI-slice obligation **[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)**
 (med-list whole-list sign-off must collapse to one human gesture, owed by the future Tauri med-list slice).
@@ -155,13 +158,28 @@ re-split the same substance cross-node; `medication_group_display` now prefers a
 advisory `medication_group_coding_conflict` view flags two different anchors inside one reconciled group
 (`6e777c4`). Honest degradation is proven **by construction**, not by mocking absence: a source guard
 (three review rounds narrowing string/macro exemptions down to a structural residue check) pins that no
-`db/`, `crates/*/src`, or `extensions/` file references drugref executably, plus a `clinical_pull`
-cross-node coding-convergence assertion (`fb30ce9`/`d92ad8a`/`93ee103`/`c44b311`). **Two findings changed
+`.sql`/`.rs` file under `db/`, `crates/` or `extensions/` (`target/` and `tests/` skipped) references
+drugref executably, plus a `clinical_pull`
+cross-node coding-convergence assertion (`fb30ce9`/`d92ad8a`/`93ee103`/`c44b311`). **Three findings changed
 shipped behaviour:** db/020's `cairn.remote_apply` marker was raised AFTER the twin/floor dispatch, so no
 per-type check_fn could ever see it at the remote door — moved to precede the floor call, verified
-against all 4 existing readers (all projection-layer, unaffected); and the strict door now pins the
+against all 4 existing readers (all projection-layer, unaffected); the strict door now pins the
 **canonical** UUID spelling (Postgres accepts braced/uppercase/unhyphenated forms, which the
-TEXT-compared dup-key would otherwise split permanently once frozen into a signed body). Filed
+TEXT-compared dup-key would otherwise split permanently once frozen into a signed body); and
+**PR-review finding (critical): `cairn_execute_shred` did not scrub `medication_coding`** — a shred that
+reported success left `coding_display` (the drug's preferred name) and `coding_code` (the immortal moiety
+anchor) readable next to `patient_id` in a `cairn_agent`-readable table, the ADR-0005 rung-3 / #92(b)
+failure verbatim and a recurrence of db/037's own earlier "finding #2" (which added the other four verbs'
+projections to the scrub for exactly this reason). db/037 now scrubs it by
+the same provenance-precise `content_address = v_ca` key as its five siblings, pinned by
+`shred_scrubs_the_drug_coding_projection` (the pre-existing sibling test asserts an UNCODED input, so it
+never wrote a coding row and could not have caught this). Two review minors also changed behaviour:
+`medication_coding.patient_id` is now sourced from the thread's STANDING chart
+(`cairn_medication_thread_patient`) rather than `e.patient_id`, so a stale cross-patient re-assert that
+LOSES the statement's overlay race can no longer file the coding under the losing event's patient (#192);
+and `medication_coding_system.system` gained a shape CHECK (non-blank, no `|`) via a paired ALTER (#207),
+because `|` is the load-bearing separator in the flattened `<system>|<code>` dup-key and a system named
+`a|b` would silently collide two different substances into one duplicate group. Filed
 **[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)** — the §5.9 safety projection must *carry*
 the coding-derived drug class (ADR-0059 decision 4) rather than re-derive it, owed by the future
 safety-projection slice (blocked on #232). **Deliberately NOT done, stated honestly:** the two
@@ -169,10 +187,17 @@ coding-overlay event types (`clinical.medication-coding.asserted` + its correcti
 coded↔uncoded duplicate case is not closed (only coded↔coded is); no drugref code exists anywhere in the
 tree; the §5.9 safety class is not captured. **Unblocked follow-on (next session): slice 6b** — the two
 coding-overlay event types in a new `db/` file, re-routing the same-column-set views through an
-effective-coding view. Two notes bind it: the overlay apply-write needs the same
-`jsonb_typeof(...) IS DISTINCT FROM 'null'` guard the assert path needed; and `medication_coding` becomes
+effective-coding view. Four notes bind it: the overlay apply-write needs the same
+`jsonb_typeof(...) IS DISTINCT FROM 'null'` guard the assert path needed; `medication_coding` becomes
 a **multi-type** table once the overlays write it — `db/039`'s `cairn_reproject` already refuses a narrow
-prefix over a multi-type table.
+prefix over a multi-type table; the overlay's own scrub is already covered (db/037 keys on
+`content_address`, so whichever event produced the surviving row is the one a shred erases) but any
+FURTHER coding table 6b adds must be added to `cairn_execute_shred` in the same commit; and — the sharp
+one — 6a's `patient_id = cairn_medication_thread_patient(...)` is only NON-NULL because the assert path
+upserts `medication_statement` immediately before it. A coding OVERLAY may legitimately arrive BEFORE the
+assert it codes (the table has no FK precisely for that arrival-order independence), where that lookup
+returns NULL and would violate the NOT NULL column, so 6b's apply fn needs its own answer — carry the
+overlay event's `patient_id`, or defer the row until the thread exists.
 
 **Session (2026-07-25) — the Cairn↔drugref medication drug-coding seam → [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md)**
 (design-only, spec v0.61, ROADMAP Slice 55; full narrative there — the wire-shape decisions, the ICD-11

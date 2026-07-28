@@ -32,6 +32,28 @@ CREATE TABLE IF NOT EXISTS medication_coding_system (
 GRANT SELECT ON medication_coding_system TO cairn_agent;
 REVOKE INSERT, UPDATE, DELETE ON medication_coding_system FROM PUBLIC;
 
+-- The system name's SHAPE, added by ALTER rather than inline above: `CREATE TABLE IF NOT
+-- EXISTS` is a silent no-op on a database that already has the table, so a constraint
+-- introduced after the table has ever been created can only arrive this way (#207 — the
+-- paired-ALTER rule). Guarded on pg_constraint so the whole file stays replay-idempotent.
+--
+-- WHY IT MATTERS: the E1 dup-key (db/031 + db/033) and the anchor-conflict view (db/033)
+-- both flatten an anchor to `<system>|<code>`, which makes `|` a load-bearing SEPARATOR.
+-- A system registered as `a|b` would let its codes collide with system `a`'s code `b|…`,
+-- silently keying two DIFFERENT substances as one duplicate group. Constraining the
+-- SYSTEM alone is sufficient: with systems `|`-free, the first `|` after the prefix is
+-- always the separator, so the flattened key parses unambiguously whatever the code
+-- holds — and codes cannot be constrained here anyway, they arrive inside signed bodies.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'medication_coding_system_system_shape') THEN
+        ALTER TABLE medication_coding_system
+            ADD CONSTRAINT medication_coding_system_system_shape
+            CHECK (length(btrim(system)) > 0 AND position('|' IN system) = 0);
+    END IF;
+END $$;
+
 -- Seed the drugref composition-tree levels. Only `drugref-moiety` exists today; the two
 -- finer levels are RESERVED by ADR-0059 decision 2 so strength/form-level coding lands
 -- additively later without reshaping the slot. #214 convergence: DO UPDATE (never DO

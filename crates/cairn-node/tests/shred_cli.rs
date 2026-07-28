@@ -5,6 +5,7 @@
 //!
 //! Drives `shred::shred_event` directly (not the CLI binary) — the same convention
 //! every other verb test in this crate uses (see medication.rs).
+use cairn_event::medication::SubstanceCoding;
 use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
@@ -607,6 +608,102 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
         .await,
         0,
         "the shred scrubbed the attestation (attester identity + commitment)"
+    );
+}
+
+/// The SAME defect as `shred_scrubs_every_derived_projection_not_just_statement` above,
+/// one projection later: ADR-0059 gave the ASSERT verb a SECOND derived-plaintext table,
+/// `medication_coding` (db/031), and `cairn_execute_shred` (db/037) did not scrub it. The
+/// earlier finding was "not every VERB is covered"; this one is "not every TABLE a covered
+/// verb writes is covered" — which is why enumerating verbs was not enough.
+///
+/// `coding_display` is the drug's preferred name ("atorvastatin") and `coding_code` is the
+/// immortal moiety anchor — to anyone holding a drug database that IS the substance. Both
+/// sit next to `patient_id` in a table `GRANT SELECT`-ed to `cairn_agent`, so after a shred
+/// that reported success `SELECT patient_id, coding_display FROM medication_coding` still
+/// returned the erased patient→drug link. That is the ADR-0005 rung-3 / #92(b) failure
+/// verbatim ("a shred that leaves the body's text readable in ANY projection is not a
+/// shred"), and it is NOT covered by the sibling test above because that one asserts an
+/// UNCODED `sample_input()` and so never writes a coding row at all.
+///
+/// The views hide it (they all start `FROM medication_statement`, whose row IS scrubbed),
+/// which is exactly why this needs its own pin: the leak is in the base table and on
+/// `medication_group_coding_conflict`, which joins `medication_coding` to the
+/// independently-surviving `medication_group_member`.
+#[tokio::test]
+async fn shred_scrubs_the_drug_coding_projection() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // A CODED assert — the only shape that writes medication_coding.
+    let coded = AssertMedicationInput {
+        term: "Lipitor",
+        coding: Some(SubstanceCoding {
+            system: "drugref-moiety",
+            // A moiety anchor shaped like drugref's (a UUIDv5). Not cryptographic
+            // material, so house rule 6 does not apply.
+            code: "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01",
+            display: "atorvastatin",
+        }),
+        ..sample_input()
+    };
+    let med = assert_medication(&mut c, &sk, &kid, "test-node", patient, &coded, None, None)
+        .await
+        .expect("assert a coded medication");
+
+    // Pre-shred: the coding row exists, else the post-shred assertion is vacuous.
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_coding WHERE medication_id = $1::text::uuid",
+            med
+        )
+        .await,
+        1,
+        "the coding projected before the shred"
+    );
+
+    // Resolved BEFORE the shred call: `shred_event` takes `&mut c`, so the lookup's
+    // `&c` cannot be an argument expression to it (the sibling tests above hoist the
+    // same way).
+    let assert_evt = assert_event_id(&c, med).await;
+    shred_event(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        assert_evt,
+        "retention ceiling",
+        None,
+    )
+    .await
+    .expect("shred the coded assert");
+
+    // The statement row goes (pre-existing behaviour) AND so does the coding row.
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_statement WHERE medication_id = $1::text::uuid",
+            med
+        )
+        .await,
+        0,
+        "the shred scrubbed the statement (pre-existing behaviour — pins the setup is sane)"
+    );
+    assert_eq!(
+        count(
+            &c,
+            "SELECT count(*) FROM medication_coding WHERE medication_id = $1::text::uuid",
+            med
+        )
+        .await,
+        0,
+        "the shred scrubbed the drug-identity coding (display name + immortal anchor + \
+         patient link) — ADR-0005 rung 3: a shred that leaves the body's text readable in \
+         ANY projection is not a shred"
     );
 }
 
