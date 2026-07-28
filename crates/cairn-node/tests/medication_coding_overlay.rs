@@ -8,6 +8,7 @@
 //! STRIKE a coding back to honest not-yet-coded. The floor tests pin the shape rules
 //! (exactly one of coding/strike; an unknown `corrects` target is LAWFUL — offline-first);
 //! the projection tests pin the winner rule and the struck degradation.
+use cairn_event::medication::SubstanceCoding;
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use tokio_postgres::Client;
@@ -384,4 +385,316 @@ async fn a_non_canonical_uuid_code_is_refused_at_the_strict_door() {
     .await
     .expect_err("a non-canonical uuid spelling must be refused");
     assert!(db_msg(&e).contains("canonical"), "{}", db_msg(&e));
+}
+
+// ---------------------------------------------------------------------------
+// Projection (Task 4): both apply fns write the EXISTING medication_coding table
+// under the EXISTING overlay-winner rule, which is what keeps this slice additive.
+// ---------------------------------------------------------------------------
+
+fn coding() -> SubstanceCoding<'static> {
+    SubstanceCoding {
+        system: "drugref-moiety",
+        code: MOIETY_ATORVASTATIN,
+        display: "atorvastatin",
+    }
+}
+
+/// The projected coding state of a thread: (system, display, struck), or None when no
+/// coding row exists at all. The two are clinically different — "nobody coded it" vs
+/// "a reviewer established the coding was wrong".
+async fn coding_state(c: &Client, med: Uuid) -> Option<(Option<String>, Option<String>, bool)> {
+    c.query_opt(
+        "SELECT coding_system, coding_display, struck \
+           FROM medication_coding WHERE medication_id = $1::text::uuid",
+        &[&med.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| (r.get(0), r.get(1), r.get(2)))
+}
+
+/// Assert a medication with no coding at all, and return its thread id.
+async fn assert_uncoded(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uuid) -> Uuid {
+    let input = cairn_node::medication::AssertMedicationInput {
+        term: "little white pill",
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "patient-reported",
+        started: None,
+        started_precision: None,
+    };
+    cairn_node::medication::assert_medication(c, sk, kid, "test-node", patient, &input, None, None)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_overlay_codes_a_previously_uncoded_thread() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    assert_eq!(coding_state(&c, med).await, None, "uncoded to begin with");
+
+    cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        coding_state(&c, med).await,
+        Some((
+            Some("drugref-moiety".to_string()),
+            Some("atorvastatin".to_string()),
+            false
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_correction_replaces_the_claim() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    let coding_event = cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
+    cairn_node::medication::correct_medication_coding(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CorrectCodingInput {
+            corrects: coding_event,
+            coding: Some(SubstanceCoding {
+                system: "drugref-moiety",
+                code: MOIETY_METFORMIN,
+                display: "metformin",
+            }),
+            strike: false,
+            note: Some("misread the brand"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        coding_state(&c, med).await,
+        Some((
+            Some("drugref-moiety".to_string()),
+            Some("metformin".to_string()),
+            false
+        ))
+    );
+}
+
+#[tokio::test]
+async fn a_strike_nulls_the_anchor_and_flags_the_row() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    let coding_event = cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // The clinical case: established as NOT that substance, with no replacement known.
+    cairn_node::medication::correct_medication_coding(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CorrectCodingInput {
+            corrects: coding_event,
+            coding: None,
+            strike: true,
+            note: Some("not atorvastatin; substance unidentified"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        coding_state(&c, med).await,
+        Some((None, None, true)),
+        "a strike NULLs the anchor and flags the row — the thread is honestly uncoded again"
+    );
+}
+
+#[tokio::test]
+async fn a_lower_hlc_overlay_arriving_later_does_not_win() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
+
+    // Build TWO coding bodies by hand so the HLCs are ours to order, then submit the
+    // HIGHER one first: set-union sync delivers in arrival order, never HLC order, so the
+    // winner must be decided by the HLC and not by who got there last.
+    let low = db::next_hlc(&c, "test-node").await.unwrap();
+    let high = db::next_hlc(&c, "test-node").await.unwrap();
+    const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
+    let winner = cairn_node::medication::build_coding_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &cairn_node::medication::CodeMedicationInput {
+            coding: SubstanceCoding {
+                system: "drugref-moiety",
+                code: MOIETY_METFORMIN,
+                display: "metformin",
+            },
+        },
+        &kid,
+        high,
+    );
+    let loser = cairn_node::medication::build_coding_body(
+        Uuid::now_v7(),
+        med,
+        patient,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        &kid,
+        low,
+    );
+    seal_and_submit(&c, &sk, winner).await.unwrap();
+    seal_and_submit(&c, &sk, loser).await.unwrap();
+    assert_eq!(
+        coding_state(&c, med).await,
+        Some((
+            Some("drugref-moiety".to_string()),
+            Some("metformin".to_string()),
+            false
+        )),
+        "the higher-HLC coding must keep winning after a lower one arrives"
+    );
+}
+
+#[tokio::test]
+async fn an_overlay_for_an_absent_thread_still_lands() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    // Offline-first / arrival-order independence: the assertion may replicate later, or
+    // never. The coding row's patient_id has no standing chart to read, so it falls back
+    // to the coding event's own patient claim (medication_coding.patient_id is NOT NULL).
+    let orphan = Uuid::now_v7();
+    let patient = Uuid::now_v7();
+    cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        orphan,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .expect("a coding for a not-yet-present thread must be accepted");
+    // uuid columns are read as ::text and compared as strings — the project-wide idiom
+    // (tokio-postgres has no FromSql for the uuid crate's type in this workspace).
+    let filed: Option<String> = c
+        .query_opt(
+            "SELECT patient_id::text FROM medication_coding WHERE medication_id = $1::text::uuid",
+            &[&orphan.to_string()],
+        )
+        .await
+        .unwrap()
+        .map(|r| r.get(0));
+    assert_eq!(
+        filed.as_deref(),
+        Some(patient.to_string().as_str()),
+        "an orphan coding files under its own patient claim"
+    );
+}
+
+#[tokio::test]
+async fn an_orphan_coding_claims_the_thread_for_its_chart() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    // #192: a medication_id belongs to ONE chart for life. A coding that arrives before
+    // its assert files under its own patient claim, so that claim must then be visible to
+    // the shared guard — otherwise a later assert naming a DIFFERENT patient would be
+    // admitted and the two projections would disagree about the thread's chart forever.
+    let orphan = Uuid::now_v7();
+    let coder_patient = Uuid::now_v7();
+    cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        coder_patient,
+        orphan,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let standing: Option<String> = c
+        .query_one(
+            "SELECT cairn_medication_thread_patient($1::text::uuid)::text",
+            &[&orphan.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        standing.as_deref(),
+        Some(coder_patient.to_string().as_str()),
+        "an orphan coding establishes the thread's standing chart"
+    );
 }

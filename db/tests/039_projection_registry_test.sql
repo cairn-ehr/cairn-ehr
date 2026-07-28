@@ -7,7 +7,8 @@ BEGIN;
 -- 1. Registry membership pinned. The throwaway DB this script builds loads
 --    every migration in numeric order (scripts/run-db-sql-tests.sh), including
 --    the spike-only db/008 the product loaders deliberately skip (issue #67) —
---    so the expected count here is the product count 22 + db/008's 3 = 25.
+--    so the expected count here is the product count 24 + db/008's 3 = 27.
+--    (24 = 22 + the two db/042 ADR-0059 coding-overlay verbs.)
 --    Kept in lockstep with the Rust mirror
 --    (projection_registry.rs::registry_row_count_is_pinned, which asserts 22 on
 --    the product-loader DB that never loads db/008).
@@ -15,8 +16,8 @@ DO $$
 DECLARE n bigint;
 BEGIN
     SELECT count(*) INTO n FROM cairn_projection_apply;
-    IF n <> 25 THEN
-        RAISE EXCEPTION 'cairn_projection_apply: expected 25 rows on the sqltest DB, found %', n;
+    IF n <> 27 THEN
+        RAISE EXCEPTION 'cairn_projection_apply: expected 27 rows on the sqltest DB, found %', n;
     END IF;
 END $$;
 

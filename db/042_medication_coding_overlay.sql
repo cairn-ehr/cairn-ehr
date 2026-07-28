@@ -112,4 +112,151 @@ ON CONFLICT (event_type) DO UPDATE SET
 WHERE (r.check_fn, r.twin_required_msg)
       IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
 
+-- 4. A struck coding needs a row that says "deliberately not coded" rather than no row at
+--    all. Deleting the row would break arrival-order independence: a coding event arriving
+--    AFTER the strike with a LOWER HLC would have nothing to lose the overlay race
+--    against, and would silently win. So the anchor columns become nullable and the row
+--    carries a flag.
+--
+--    Dropping NOT NULL is a WIDENING (every existing row still satisfies the looser
+--    constraint), and the ADD COLUMN is the #207 paired-ALTER an upgraded-in-place database
+--    needs — db/031's `CREATE TABLE IF NOT EXISTS` is a silent no-op there, so a column or
+--    constraint introduced after the table has ever been created can only arrive this way.
+ALTER TABLE medication_coding ALTER COLUMN coding_system  DROP NOT NULL;
+ALTER TABLE medication_coding ALTER COLUMN coding_code    DROP NOT NULL;
+ALTER TABLE medication_coding ALTER COLUMN coding_display DROP NOT NULL;
+ALTER TABLE medication_coding ADD COLUMN IF NOT EXISTS struck BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 5. Apply the plain coding overlay. Same table, same winner rule as the INLINE coding
+--    (db/031 part 5) — that is what makes this slice additive: no view is re-routed, and
+--    every consumer of medication_coding (the widened read views, the (system, code)
+--    dup-key, the prefer-coded group display, the anchor-conflict view) keeps working.
+CREATE OR REPLACE FUNCTION medication_coding_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    -- ADR-0052: sealed rows carry ciphertext in body; the clear payload lives in
+    -- event_clear (populated by the door BEFORE this row, same txn). NULL = sealed without
+    -- custody here: nothing to project — honest degradation.
+    p     jsonb := cairn_clear_payload(e);
+    v_med uuid;
+BEGIN
+    IF p IS NULL THEN RETURN; END IF;
+    v_med := (p ->> 'medication_id')::uuid;
+    -- #192: a coding event must not silently re-home a thread onto another chart.
+    -- Local door RAISEs; remote apply converges-and-flags (never refuses — ADR-0056).
+    PERFORM cairn_guard_medication_patient(v_med, e.patient_id, e.content_address);
+
+    INSERT INTO medication_coding
+        (medication_id, patient_id, coding_system, coding_code, coding_display, struck,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        v_med,
+        -- The thread's STANDING chart when one is known (#192: the same discipline db/031's
+        -- inline write follows, so a contradicting event that LOST the overlay race cannot
+        -- file the coding under its own losing patient), else this event's own claim — an
+        -- overlay may arrive BEFORE the assert it codes, when no standing chart exists yet
+        -- and patient_id is NOT NULL. cairn_medication_thread_patient reads this table too,
+        -- so that fallback claim is what a later assert is checked against.
+        coalesce(cairn_medication_thread_patient(v_med), e.patient_id),
+        p -> 'coding' ->> 'system',
+        p -> 'coding' ->> 'code',
+        p -> 'coding' ->> 'display',
+        FALSE,
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
+    ON CONFLICT (medication_id) DO UPDATE SET
+        patient_id      = EXCLUDED.patient_id,
+        coding_system   = EXCLUDED.coding_system,
+        coding_code     = EXCLUDED.coding_code,
+        coding_display  = EXCLUDED.coding_display,
+        struck          = EXCLUDED.struck,
+        hlc_wall        = EXCLUDED.hlc_wall,
+        hlc_counter     = EXCLUDED.hlc_counter,
+        origin          = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
+        updated_at      = clock_timestamp()
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        medication_coding.hlc_wall, medication_coding.hlc_counter,
+        medication_coding.origin, medication_coding.content_address);
+    RETURN;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION medication_coding_apply(event_log) FROM PUBLIC;
+
+-- 6. Apply a correction: a replacement writes the new triple, a strike writes NULLs plus
+--    struck = TRUE. The NULL anchor is what makes the downstream degradation automatic —
+--    the E1 dup-key's coalesce falls back to the term branch on its own ('code:' || NULL
+--    is NULL in SQL), and the anchor-conflict view's count(DISTINCT …) ignores NULLs.
+CREATE OR REPLACE FUNCTION medication_coding_correction_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p        jsonb := cairn_clear_payload(e);
+    v_med    uuid;
+    v_struck boolean;
+BEGIN
+    IF p IS NULL THEN RETURN; END IF;
+    v_med := (p ->> 'medication_id')::uuid;
+    PERFORM cairn_guard_medication_patient(v_med, e.patient_id, e.content_address);
+    -- The floor guarantees exactly one of coding / strike, so this is a clean either-or.
+    -- jsonb_typeof(...) = 'null' is checked because an explicit JSON null reads as the
+    -- jsonb value 'null', not SQL NULL — the same trap db/031's inline write documents, and
+    -- the reason a bare IS NULL test here would try to write a triple of SQL NULLs while
+    -- leaving struck FALSE (an anchor-less row that never says why).
+    v_struck := p -> 'coding' IS NULL OR jsonb_typeof(p -> 'coding') = 'null';
+
+    INSERT INTO medication_coding
+        (medication_id, patient_id, coding_system, coding_code, coding_display, struck,
+         hlc_wall, hlc_counter, origin, content_address)
+    VALUES (
+        v_med,
+        coalesce(cairn_medication_thread_patient(v_med), e.patient_id),
+        CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'system'  END,
+        CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'code'    END,
+        CASE WHEN v_struck THEN NULL ELSE p -> 'coding' ->> 'display' END,
+        v_struck,
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
+    ON CONFLICT (medication_id) DO UPDATE SET
+        patient_id      = EXCLUDED.patient_id,
+        coding_system   = EXCLUDED.coding_system,
+        coding_code     = EXCLUDED.coding_code,
+        coding_display  = EXCLUDED.coding_display,
+        struck          = EXCLUDED.struck,
+        hlc_wall        = EXCLUDED.hlc_wall,
+        hlc_counter     = EXCLUDED.hlc_counter,
+        origin          = EXCLUDED.origin,
+        content_address = EXCLUDED.content_address,
+        updated_at      = clock_timestamp()
+    WHERE cairn_hlc_overlay_wins(
+        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+        medication_coding.hlc_wall, medication_coding.hlc_counter,
+        medication_coding.origin, medication_coding.content_address);
+    RETURN;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION medication_coding_correction_apply(event_log) FROM PUBLIC;
+
+-- 7. Register both apply fns with the ADR-0057 dispatcher.
+--    medication_patient_conflict_flag is in both inventories because
+--    cairn_guard_medication_patient can write it on a remote-apply conflict — rebuild-scope
+--    metadata must be exhaustive, never knowingly incomplete.
+--    NOTE: medication_coding is now written by THREE event types (the assertion's inline
+--    coding plus these two), so cairn_reproject will refuse a narrow single-type prefix
+--    rebuild over it (db/039) — correct, and precisely the reason that refusal exists: a
+--    narrow rebuild would truncate the other types' rows.
+--    run_order 10 is the single-fn default: the dispatcher orders only WITHIN one
+--    event_type (db/005's FOR loop filters on event_type first), and each of these types
+--    has exactly one apply fn — db/031's 20 exists solely because
+--    clinical.medication.asserted carries two.
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
+    ('clinical.medication-coding.asserted',            'medication_coding_apply',
+     ARRAY['medication_coding', 'medication_patient_conflict_flag'], 10, TRUE),
+    ('clinical.medication-coding-correction.asserted', 'medication_coding_correction_apply',
+     ARRAY['medication_coding', 'medication_patient_conflict_flag'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
+
 COMMIT;
