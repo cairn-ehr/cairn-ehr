@@ -65,7 +65,7 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
     let mut substance = json!({ "term": a.term });
     {
         let s = substance.as_object_mut().expect("json! built an object");
-        if let Some(c) = &a.coding {
+        if let Some(c) = a.coding {
             s.insert(
                 "coding".into(),
                 json!({ "system": c.system, "code": c.code, "display": c.display }),
