@@ -8,6 +8,7 @@
 mod assert;
 mod attestation;
 mod cessation;
+mod coding;
 mod dose;
 mod reconciliation;
 mod sealed_submit;
@@ -21,6 +22,10 @@ pub use attestation::{
     AttestParams,
 };
 pub use cessation::{build_cease_body, cease_medication, CeaseMedicationInput};
+pub use coding::{
+    build_coding_body, build_coding_correction_body, code_medication, correct_medication_coding,
+    validate_correction_shape, CodeMedicationInput, CorrectCodingInput,
+};
 pub use dose::{
     build_dose_change_body, build_dose_correction_body, change_dose, correct_dose,
     resolve_correction_target, ChangeDoseInput, CorrectDoseInput,

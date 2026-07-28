@@ -1,0 +1,271 @@
+//! Medication coding *overlays* — the node authoring surface for coding as a
+//! separately-authored act (ADR-0059 decision 3, slice 6b).
+//!
+//! Slice 6a can only code a medication *inline*, at assertion time, by the clinician who
+//! recorded it. These two verbs let whoever actually codes — a pharmacist, a professional
+//! coder — code a thread later, correct a wrong coding, or **strike** a coding back to
+//! honest not-yet-coded. Signed and (with `--author-as`) authored as *theirs* (ADR-0053),
+//! never silently as the clinician's.
+//!
+//! Offline-first, like every other medication verb: neither the thread being coded nor the
+//! event being corrected has to be present locally — both may replicate later, or never.
+use cairn_event::medication::{
+    medication_coding_body, medication_coding_correction_body,
+    render_medication_coding_correction_twin, render_medication_coding_twin, MedicationCoding,
+    MedicationCodingCorrection, SubstanceCoding,
+};
+use cairn_event::{EventBody, Hlc, SigningKey};
+use uuid::Uuid;
+
+const CODING_SCHEMA_VERSION: &str = "clinical.medication-coding/1";
+const CODING_CORRECTION_SCHEMA_VERSION: &str = "clinical.medication-coding-correction/1";
+
+/// Code a thread that was not coded inline.
+pub struct CodeMedicationInput<'a> {
+    pub coding: SubstanceCoding<'a>,
+}
+
+/// Correct a coding claim: replace it, or strike it back to not-yet-coded.
+pub struct CorrectCodingInput<'a> {
+    /// The event whose coding this fixes (a prior coding overlay, or the assertion itself
+    /// when the coding was inline). Not required to be present locally.
+    pub corrects: Uuid,
+    /// The replacement claim; `None` with `strike` = strike to not-yet-coded.
+    pub coding: Option<SubstanceCoding<'a>>,
+    pub strike: bool,
+    /// Why this correction was made (audit).
+    pub note: Option<&'a str>,
+}
+
+/// Refuse an incoherent correction at the source.
+///
+/// The in-DB floor is the real, unbypassable enforcement (principle 12) and refuses the
+/// same two shapes; this exists so a caller sees the mistake where they made it, with both
+/// ways out named. Pure — no I/O, so it is cheap to call and cheap to test.
+pub fn validate_correction_shape(
+    coding: Option<&SubstanceCoding<'_>>,
+    strike: bool,
+) -> anyhow::Result<()> {
+    match (coding.is_some(), strike) {
+        (true, true) => anyhow::bail!(
+            "a coding correction cannot both replace and strike: supply the three --coding-* flags OR --strike, not both"
+        ),
+        (false, false) => anyhow::bail!(
+            "a coding correction must either carry a replacement (all three --coding-* flags) or --strike it back to not-yet-coded"
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Assemble the signed `clinical.medication-coding.asserted` EventBody. Pure.
+pub fn build_coding_body(
+    event_id: Uuid,
+    medication_id: Uuid,
+    patient: Uuid,
+    input: &CodeMedicationInput<'_>,
+    node_kid: &str,
+    hlc: Hlc,
+) -> EventBody {
+    let mid = medication_id.to_string();
+    let c = MedicationCoding {
+        medication_id: &mid,
+        coding: input.coding,
+    };
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: "clinical.medication-coding.asserted".into(),
+        schema_version: CODING_SCHEMA_VERSION.into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload: medication_coding_body(&c),
+        attachments: vec![],
+        plaintext_twin: Some(render_medication_coding_twin(&c)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    }
+}
+
+/// Assemble the signed `clinical.medication-coding-correction.asserted` EventBody. Pure.
+pub fn build_coding_correction_body(
+    event_id: Uuid,
+    medication_id: Uuid,
+    patient: Uuid,
+    input: &CorrectCodingInput<'_>,
+    node_kid: &str,
+    hlc: Hlc,
+) -> EventBody {
+    let mid = medication_id.to_string();
+    let target = input.corrects.to_string();
+    let c = MedicationCodingCorrection {
+        medication_id: &mid,
+        corrects: &target,
+        coding: input.coding,
+        strike: input.strike,
+        note: input.note,
+    };
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: "clinical.medication-coding-correction.asserted".into(),
+        schema_version: CODING_CORRECTION_SCHEMA_VERSION.into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: node_kid.into(),
+        contributors: serde_json::json!([{"actor_id": node_kid, "role": "recorded"}]),
+        payload: medication_coding_correction_body(&c),
+        attachments: vec![],
+        plaintext_twin: Some(render_medication_coding_correction_twin(&c)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    }
+}
+
+/// Code an existing medication thread. Returns the coding event's id — the value a later
+/// correction passes as `corrects`. Offline-first (no local existence check on the
+/// thread). `author` is ADR-0053's separable human-authorship overlay (`None` ⇒
+/// device-additive, the node signs and is the sole `recorded` contributor); `attest` is
+/// the separate ADR-0049 responsibility overlay for the thread.
+#[allow(clippy::too_many_arguments)] // signer + node context + patient/thread/input/author/attest, mirrors the sibling orchestrators
+pub async fn code_medication(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    medication_id: Uuid,
+    input: &CodeMedicationInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<Uuid> {
+    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let event_id = Uuid::now_v7();
+    let body = build_coding_body(event_id, medication_id, patient, input, node_kid, hlc);
+    // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door.
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
+    Ok(event_id)
+}
+
+/// Correct (replace or strike) a thread's coding. Returns the correction event's id.
+/// Offline-first: neither the thread nor the corrected event must exist locally.
+#[allow(clippy::too_many_arguments)] // as above
+pub async fn correct_medication_coding(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    medication_id: Uuid,
+    input: &CorrectCodingInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<Uuid> {
+    validate_correction_shape(input.coding.as_ref(), input.strike)?;
+    let hlc = crate::db::next_hlc(client, node_origin).await?;
+    let event_id = Uuid::now_v7();
+    let body = build_coding_correction_body(event_id, medication_id, patient, input, node_kid, hlc);
+    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+        .await?;
+    Ok(event_id)
+}
+
+#[cfg(test)]
+mod coding_build_tests {
+    use super::*;
+    use cairn_event::Hlc;
+
+    const MOIETY_ATORVASTATIN: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01";
+
+    fn hlc() -> Hlc {
+        Hlc {
+            wall: 1_700_000_000_000,
+            counter: 0,
+            node_origin: "test-node".into(),
+        }
+    }
+
+    fn coding() -> SubstanceCoding<'static> {
+        SubstanceCoding {
+            system: "drugref-moiety",
+            code: MOIETY_ATORVASTATIN,
+            display: "atorvastatin",
+        }
+    }
+
+    #[test]
+    fn a_replacement_or_a_strike_is_valid() {
+        validate_correction_shape(Some(&coding()), false).expect("a replacement is valid");
+        validate_correction_shape(None, true).expect("a strike is valid");
+    }
+
+    #[test]
+    fn neither_is_refused_at_the_source() {
+        // The DB floor refuses this too, but the caller deserves the error where the
+        // mistake was made, naming the two ways out.
+        let e = validate_correction_shape(None, false).expect_err("neither must be refused");
+        let msg = e.to_string();
+        assert!(
+            msg.contains("--strike"),
+            "the error names the escape: {msg}"
+        );
+    }
+
+    #[test]
+    fn both_is_refused_as_incoherent() {
+        let e = validate_correction_shape(Some(&coding()), true)
+            .expect_err("a correction cannot both replace and strike");
+        assert!(e.to_string().contains("both"), "{e}");
+    }
+
+    #[test]
+    fn build_coding_sets_type_schema_twin() {
+        let b = build_coding_body(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            &CodeMedicationInput { coding: coding() },
+            "kid",
+            hlc(),
+        );
+        assert_eq!(b.event_type, "clinical.medication-coding.asserted");
+        assert_eq!(b.schema_version, "clinical.medication-coding/1");
+        assert_eq!(b.payload["coding"]["code"], MOIETY_ATORVASTATIN);
+        assert_eq!(
+            b.plaintext_twin.as_deref(),
+            Some("coded as atorvastatin [drugref-moiety]")
+        );
+        assert_eq!(b.contributors[0]["role"], "recorded");
+        assert!(b.t_effective.is_none());
+    }
+
+    #[test]
+    fn build_correction_carries_the_target_and_the_strike() {
+        let corrects = Uuid::now_v7();
+        let b = build_coding_correction_body(
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            &CorrectCodingInput {
+                corrects,
+                coding: None,
+                strike: true,
+                note: Some("not atorvastatin; substance unidentified"),
+            },
+            "kid",
+            hlc(),
+        );
+        assert_eq!(
+            b.event_type,
+            "clinical.medication-coding-correction.asserted"
+        );
+        assert_eq!(b.schema_version, "clinical.medication-coding-correction/1");
+        assert_eq!(b.payload["corrects"], corrects.to_string());
+        assert_eq!(b.payload["strike"], true);
+        assert!(b
+            .plaintext_twin
+            .as_deref()
+            .unwrap()
+            .starts_with("coding struck"));
+    }
+}

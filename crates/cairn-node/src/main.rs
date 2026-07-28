@@ -773,6 +773,65 @@ enum Cmd {
         #[command(flatten)]
         author: AuthorFlags,
     },
+    /// Code an existing medication thread (clinical.medication-coding.asserted).
+    /// Coding is optional and separately authored (ADR-0059 decision 3) — a pharmacist or
+    /// coder may code a medication a clinician recorded uncoded, without touching the
+    /// clinical claim. Offline-first: does not require the thread to be present locally.
+    //
+    // Carries --author-as (ADR-0053: a coder's coding must be THEIRS) but deliberately no
+    // --attest-as: attestation is clinical responsibility for a thread's CONTENT
+    // (ADR-0049), and coding a drug identity is not a sign-off of the medication list.
+    MedicationCode {
+        /// The patient UUID this medication belongs to.
+        patient: Uuid,
+        /// The medication thread being coded (printed by `medication-assert`).
+        medication_id: Uuid,
+        /// Drug-identity coding system — `drugref-moiety` today (ADR-0059).
+        /// All three --coding-* flags are required together.
+        #[arg(long)]
+        coding_system: Option<String>,
+        /// The immortal drug identifier (a drugref moiety_uuid).
+        #[arg(long)]
+        coding_code: Option<String>,
+        /// The INN-preferred label as it reads at coding time.
+        #[arg(long)]
+        coding_display: Option<String>,
+        #[command(flatten)]
+        author: AuthorFlags,
+    },
+    /// Correct a medication's coding — replace it, or --strike it back to honest
+    /// not-yet-coded (clinical.medication-coding-correction.asserted). Additive: the
+    /// corrected claim stays in the record; this only wins the current coding.
+    MedicationCodeCorrect {
+        /// The patient UUID this medication belongs to.
+        patient: Uuid,
+        /// The medication thread whose coding is being corrected.
+        medication_id: Uuid,
+        /// The event whose coding claim this fixes (a prior coding overlay, or the
+        /// assertion itself when the coding was inline). Not required to be present
+        /// locally — it may replicate later, or never.
+        #[arg(long)]
+        corrects: Uuid,
+        /// The replacement coding system (all three --coding-* flags together).
+        #[arg(long)]
+        coding_system: Option<String>,
+        /// The replacement immortal drug identifier.
+        #[arg(long)]
+        coding_code: Option<String>,
+        /// The replacement INN-preferred label.
+        #[arg(long)]
+        coding_display: Option<String>,
+        /// Strike the coding back to honest not-yet-coded — for when a reviewer
+        /// establishes the coding is wrong but cannot say what the substance is.
+        /// Mutually exclusive with the --coding-* flags.
+        #[arg(long)]
+        strike: bool,
+        /// Why this correction was made (audit note, e.g. "misread the brand").
+        #[arg(long)]
+        note: Option<String>,
+        #[command(flatten)]
+        author: AuthorFlags,
+    },
     /// Reconcile two medication threads as the same real drug
     /// (clinical.medication-reconciliation.asserted). Symmetric, reversible, additive —
     /// both threads' histories are preserved; the current list collapses to one row.
@@ -1949,6 +2008,92 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("dose correction recorded for thread {medication_id} (target {corrects}); event {event_id}");
+        }
+        Cmd::MedicationCode {
+            patient,
+            medication_id,
+            coding_system,
+            coding_code,
+            coding_display,
+            author,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            // coding_from_parts is all-or-nothing; None means no --coding-* flag was
+            // given at all, which for THIS verb is the caller having asked to code
+            // nothing — refuse it here rather than at the DB floor.
+            let coding = cairn_node::medication::coding_from_parts(
+                coding_system.as_deref(),
+                coding_code.as_deref(),
+                coding_display.as_deref(),
+            )?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "coding a medication needs all three --coding-system/--coding-code/--coding-display flags"
+                )
+            })?;
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
+            let event_id = cairn_node::medication::code_medication(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &cairn_node::medication::CodeMedicationInput { coding },
+                a_params.as_ref(),
+                None,
+            )
+            .await?;
+            println!("coded thread {medication_id}; event {event_id}");
+        }
+        Cmd::MedicationCodeCorrect {
+            patient,
+            medication_id,
+            corrects,
+            coding_system,
+            coding_code,
+            coding_display,
+            strike,
+            note,
+            author,
+        } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &node_kid).await?;
+            // None here is exactly what a --strike wants; validate_correction_shape
+            // (inside correct_medication_coding) refuses both-and-neither.
+            let coding = cairn_node::medication::coding_from_parts(
+                coding_system.as_deref(),
+                coding_code.as_deref(),
+                coding_display.as_deref(),
+            )?;
+            let resolved_author = resolve_author(&db, &author).await?;
+            let a_params = author_params(&resolved_author);
+            let event_id = cairn_node::medication::correct_medication_coding(
+                &mut db,
+                &node_sk,
+                &node_kid,
+                &id.node_id_hex,
+                patient,
+                medication_id,
+                &cairn_node::medication::CorrectCodingInput {
+                    corrects,
+                    coding,
+                    strike,
+                    note: note.as_deref(),
+                },
+                a_params.as_ref(),
+                None,
+            )
+            .await?;
+            println!("corrected coding on thread {medication_id}; event {event_id}");
         }
         Cmd::MedicationReconcile {
             patient,
