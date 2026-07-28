@@ -11,7 +11,13 @@
 //! binary is scanned too. `extensions/` is the pgrx tree (`extensions/cairn_pgx`), the
 //! in-DB floor's OTHER home besides `db/`, and just as load-bearing. Any directory named
 //! `target/` or `tests/` is skipped at any depth — build output and test-only code may
-//! legitimately NAME drugref in prose (this file itself is the obvious case).
+//! legitimately NAME drugref in prose (this file itself is the obvious case). For the
+//! SAME reason, a `#[cfg(test)]` module inside a `src/` file is skipped too: it is not
+//! compiled into the shipped artifact at all, so a unit test asserting on a rendered twin
+//! string (`"coded as atorvastatin [drugref-moiety]"`) is exactly the prose case the
+//! `tests/` skip already allows — slice 6a simply never had one, because all of its
+//! drugref-touching tests lived under `tests/`. See `strip_rust_cfg_test_tail` for the
+//! stated limitation of how that region is found.
 //!
 //! WHAT COUNTS AS AN OFFENDER: a "drugref" mention that is neither (a) inside a
 //! comment, (b) inside a recognised DIAGNOSTIC-MESSAGE call's argument list (SQL
@@ -345,10 +351,46 @@ fn residue_lines(text: &str, is_rust: bool) -> Vec<String> {
 /// exempt nor commented — i.e. it is really executable code, or a string this guard has
 /// no reason to trust. Returns the ORIGINAL line text (trimmed) for a readable failure
 /// message, even though the decision was made on the blanked residue.
+/// Blank out an in-`src` `#[cfg(test)]` region, for the same reason whole `tests/`
+/// directories are skipped: it is test-only code, never compiled into the shipped
+/// artifact, and may legitimately NAME drugref. A unit test asserting the exact rendered
+/// twin `"coded as atorvastatin [drugref-moiety]"` is not a dependency on a drug
+/// database — it is a fixture spelling out a registered token inside a longer string,
+/// which the `DATA_TOKENS` exemption cannot cover because that requires the literal to be
+/// the token EXACTLY.
+///
+/// STATED LIMITATION, in the same spirit as this file's other honest limits: the region
+/// is taken as `#[cfg(test)]` → END OF FILE, not a brace-matched module span. This guard
+/// is a line-oriented scanner, not a parser, and Rust convention (which this repo follows
+/// everywhere) puts the test module last. Production code placed AFTER a `#[cfg(test)]`
+/// module would therefore go unscanned — a real gap, but a gap in a REGRESSION NET for an
+/// accidental dependency, not in a defence against deliberate concealment, which this
+/// guard has never claimed to be. Lines are blanked rather than dropped so the residue
+/// stays aligned with the original line numbering.
+fn strip_rust_cfg_test_tail(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_test_tail = false;
+    for line in text.lines() {
+        if !in_test_tail && line.trim_start().starts_with("#[cfg(test)]") {
+            in_test_tail = true;
+        }
+        if !in_test_tail {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn offending_lines(path: &Path) -> Vec<String> {
     let text = fs::read_to_string(path).expect("read source");
     let is_rust = path.extension().and_then(|e| e.to_str()) == Some("rs");
-    let residue = residue_lines(&text, is_rust);
+    let scanned = if is_rust {
+        strip_rust_cfg_test_tail(&text)
+    } else {
+        text.clone()
+    };
+    let residue = residue_lines(&scanned, is_rust);
     text.lines()
         .zip(residue.iter())
         .filter(|(_, residue_line)| residue_line.to_lowercase().contains("drugref"))
@@ -366,6 +408,38 @@ fn offending_lines(path: &Path) -> Vec<String> {
 /// `medication/assert.rs`), yet the trigger list originally carried only the std
 /// assertion/format macros — so the first error text to legitimately name drugref would
 /// have failed the guard spuriously.
+/// Pin the `#[cfg(test)]` exemption at BOTH edges: a drugref mention below the marker is
+/// exempt (test-only code, never shipped), one above it is not. Without this, a future
+/// edit could widen the stripper into "skip the whole file" and nothing would notice.
+#[test]
+fn the_scanner_exempts_cfg_test_modules_but_not_the_code_above_them() {
+    let src = concat!(
+        "pub fn ship() { let url = \"https://drugref.example/lookup\"; }\n",
+        "#[cfg(test)]\n",
+        "mod tests {\n",
+        "    #[test]\n",
+        "    fn t() { assert_eq!(s, \"coded as x [drugref-moiety]\"); }\n",
+        "}\n",
+    );
+    let residue = residue_lines(&strip_rust_cfg_test_tail(src), true).join("\n");
+    assert!(
+        residue.to_lowercase().contains("drugref"),
+        "production code ABOVE the cfg(test) marker must still be scanned:\n{residue}"
+    );
+    assert_eq!(
+        residue.to_lowercase().matches("drugref").count(),
+        1,
+        "the cfg(test) tail must be blanked, leaving only the production mention:\n{residue}"
+    );
+    // And the blanking must preserve line alignment, or the failure message would name
+    // the wrong line.
+    assert_eq!(
+        strip_rust_cfg_test_tail(src).lines().count(),
+        src.lines().count(),
+        "blanking must keep one output line per input line"
+    );
+}
+
 #[test]
 fn the_scanner_exempts_diagnostic_messages_but_not_ordinary_strings() {
     // Exempt: a drugref mention inside an error/diagnostic message, in each of the
