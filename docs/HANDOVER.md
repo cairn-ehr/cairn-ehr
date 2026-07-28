@@ -85,6 +85,11 @@ narrative in **ROADMAP Slice 57**; not restated here. The five things worth carr
    whole row, dragging its term and dose with it. Asserting the *term* alongside made it discriminate.
    Same lesson in #295: the behavioural collation test cannot catch a future unpinning on a
    deterministic-default cluster, so the actual gate had to be a no-DB source guard.
+6. **Only `cargo test --workspace` catches guard-scope gaps.** Slice 6a's drugref guard skips `tests/`
+   directories but had never met a `#[cfg(test)]` module inside a `src/` file — 6b's unit tests are the
+   first. Per-test-binary runs missed it entirely; the full run (909/0) did not. **Run the whole
+   workspace before claiming a slice is done**, and note that `cargo test | tail` masks cargo's exit
+   code (an old lesson, still true).
 
 **Deliberately NOT done, stated honestly:** no drugref code anywhere in the tree; the coded↔uncoded
 duplicate case is still open (needs term→anchor resolution); the §5.9 safety class is still owed

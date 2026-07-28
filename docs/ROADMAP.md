@@ -102,7 +102,10 @@ here (a PR #271 review finding: the first pass dropped two *open* issues out of 
   [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168) (entity→role-actor 1:many),
   [#185](https://github.com/cairn-ehr/cairn-ehr/issues/185) (cross-thread dose-correction suppression vector —
   needs a PK/design decision), [#79](https://github.com/cairn-ehr/cairn-ehr/issues/79) (B2 Minors),
-  [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) (the #190 veto is link-arrival-only).
+  [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) (the #190 veto is link-arrival-only),
+  [#172](https://github.com/cairn-ehr/cairn-ehr/issues/172) (the future actor-write doors —
+  rotate-key/`supersede`, actor-event sync apply — must mirror BOTH enroll collision checks; ADR-0054
+  makes this live work).
 - **Identity C5+.** `reattribute` (§5.5 event-granular strike-through of clinical documentation) **waits on a
   clinical-note surface**; a reversal / de-repudiation event; a chart-history VIEW rendering struck names (the data
   is already present); an accept-at-cap boundary test for the oversize guard; the §5.2 coherence feedback loop;
@@ -209,8 +212,14 @@ remainder (the PR #271 review finding).
   [#236](https://github.com/cairn-ehr/cairn-ehr/issues/236) (FTS/RAG must build on the `event_clear`
   shadow with shred-triggered invalidation), [#237](https://github.com/cairn-ehr/cairn-ehr/issues/237)
   (code hygiene).
-- **Authorship (ADR-0053 follow-ons).** [#242](https://github.com/cairn-ehr/cairn-ehr/issues/242)–[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245)
-  and [#247](https://github.com/cairn-ehr/cairn-ehr/issues/247). Standing notes: grading stays **half-live
+- **Authorship (ADR-0053 follow-ons).** [#242](https://github.com/cairn-ehr/cairn-ehr/issues/242) (the
+  `asserted` grade + token-backed author — verbal orders, AI-scribe, dictation),
+  [#243](https://github.com/cairn-ehr/cairn-ehr/issues/243) (point-of-care durable session-decoupled
+  drafts + `sign-as` salvage — the ADR-0008 UI half),
+  [#244](https://github.com/cairn-ehr/cairn-ehr/issues/244) (authorship + responsibility on one clinical
+  event — collapse the self-vouch case), [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) (the
+  SQL mirror of `classify_authorship_confidence` + the §5.10 authorship-confidence projection),
+  [#247](https://github.com/cairn-ehr/cairn-ehr/issues/247). Standing notes: grading stays **half-live
   until #245** wires a read path for `classify_authorship_confidence`; authorship in a contributor set is
   **key-scoped** and does not survive key rotation (#247, which constrains #245); a `--author-as` event is
   *owned* under the ADR-0043 suppression gate where a device-signed equivalent was dismissable by anyone.
@@ -321,6 +330,16 @@ unpinning (the test cluster's default collation is deterministic, so an unpinned
 so the slice ships both a demonstration that the hazard is real (a scratch non-deterministic ICU collation
 collapses the unpinned comparison while the pinned form does not) and a no-DB source guard as the actual
 gate.
+
+**One finding only the full-workspace run could catch.** Slice 6a's drugref source guard skips whole
+`tests/` directories — test-only code may legitimately NAME drugref in prose — but 6a put all of its
+drugref-touching tests under `tests/`, so the guard had never met a `#[cfg(test)]` module inside a `src/`
+file. 6b's unit tests assert on the exact rendered twin (`"coded as atorvastatin [drugref-moiety]"`),
+where the token sits INSIDE a longer string and so cannot use the `DATA_TOKENS` exemption. The guard's own
+rationale for the `tests/` skip applies verbatim (a `cfg(test)` module is never compiled into the shipped
+artifact), so it now blanks that region, with the limitation stated in the file's existing honest style
+and a new unit test pinning the rule at both edges. Per-crate runs could not see this — only
+`cargo test --workspace` (909/0) did.
 
 **Deliberately NOT done, stated honestly:** no drugref code exists anywhere in the tree (the source guard
 still passes); the **coded↔uncoded** duplicate case remains open — it needs term→anchor resolution, the
