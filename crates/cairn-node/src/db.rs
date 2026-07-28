@@ -227,6 +227,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "041_medication_coding",
         include_str!("../../../db/041_medication_coding.sql"),
     ),
+    // db/042 (ADR-0059 decision 3): the two coding-OVERLAY event types — their floor,
+    // registration, projection and the coder worklist. cairn-sync's list carries no
+    // medication files at all and legitimately lags (#284).
+    (
+        "042_medication_coding_overlay",
+        include_str!("../../../db/042_medication_coding_overlay.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

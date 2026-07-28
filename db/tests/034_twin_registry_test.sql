@@ -14,18 +14,19 @@ EXCEPTION WHEN others THEN
     END IF;
 END $$;
 
--- 2. The registry carries the full 19-row mapping (15 at #173 + the db/034 slice-4
+-- 2. The registry carries the full 21-row mapping (15 at #173 + the db/034 slice-4
 --    medication-attestation registration + the two #191 suppression-overlay rows,
 --    salience.downgrade / visibility.suppress, whose twin_required_msg is NULL) +
---    the db/037 ADR-0052 erasure.shred.asserted registration
---    (19 = 18 + 1 (ADR-0052 erasure.shred)).
+--    the db/037 ADR-0052 erasure.shred.asserted registration + the two db/042 ADR-0059
+--    coding-overlay verbs
+--    (21 = 18 + 1 (ADR-0052 erasure.shred) + 2 (ADR-0059 coding overlays)).
 --    Kept in lockstep with the Rust mirror
---    (twin_registry.rs::registry_is_seeded_with_the_expected_mapping, which asserts 19).
+--    (twin_registry.rs::registry_is_seeded_with_the_expected_mapping, which asserts 21).
 DO $$
 DECLARE n int;
 BEGIN
     SELECT count(*) INTO n FROM cairn_event_twin_check;
-    IF n <> 19 THEN RAISE EXCEPTION 'FAIL: expected 19 twin-check rows, got %', n; END IF;
+    IF n <> 21 THEN RAISE EXCEPTION 'FAIL: expected 21 twin-check rows, got %', n; END IF;
 END $$;
 
 -- 3. Dispatch runs the registered check: a self-link raises via the dispatcher.
