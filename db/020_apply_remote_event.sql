@@ -22,11 +22,17 @@
 --   * projection maintenance must never veto a validly-signed event peers accepted:
 --     this door raises the transaction-local `cairn.remote_apply` marker, and any
 --     node-local-config projection guard (db/018 component cap) CLAMPS-AND-FLAGS
---     instead of RAISE-ing (review A5b). Note the distinction: the door's OWN checks
---     (signature, enrollment, classification, attestation, twin, t_effective) are
---     deterministic functions of the signed bytes — every honest node computes the
---     same verdict, so refusing cannot fork the fleet; a GUC-dependent guard is not,
---     so it must not refuse.
+--     instead of RAISE-ing (review A5b). Most of the door's OWN checks (signature,
+--     enrollment, classification, attestation, t_effective) are deterministic
+--     functions of the signed bytes — every honest node computes the same verdict,
+--     so refusing cannot fork the fleet. `twin` is the ONE exception (since ADR-0059,
+--     db/041): the per-type structural floor it dispatches to may carry a lenient,
+--     node-local sub-tier (a coding-vocabulary registry a peer may run newer or
+--     locally-extended) that must RETURN rather than refuse on this door — the same
+--     GUC-like-dependency reasoning as a projection guard, just living one layer
+--     earlier, inside `cairn_event_twin`'s dispatch instead of after it. A future
+--     per-type check_fn is free to add its own such sub-tier; it must not assume the
+--     whole twin dispatch is refusal-safe to fork on.
 --
 -- KNOWN LIMITATION (deliberate, documented): actor enrollment is resolved against the
 -- LOCAL registry (actor_current), exactly as at the authoring door. Actor-registry
@@ -256,6 +262,48 @@ BEGIN
     END IF;
     v_twin_stub := b ->> 'plaintext_twin';
 
+    -- Raise the transaction-local remote-apply marker HERE — before step 8, not only
+    -- before the INSERT below. The marker's window used to start right before the
+    -- event_log INSERT (so it covered only the AFTER-INSERT projection triggers); that
+    -- placement was never a deliberate "validation is always strict" decision, it was
+    -- just incidental to projections being the marker's first consumers (db/018's
+    -- component-size clamp, db/031's thread-patient guard, db/033's reconciliation
+    -- guard — all projection-apply functions, all fired during the INSERT). But by the
+    -- time execution reaches this line, the node genuinely IS on the sync-apply path —
+    -- this whole function exists for nothing else — so the marker should have covered
+    -- the WHOLE apply, validation included, from the start.
+    --
+    -- Widening the window to also cover step 8 (the cairn_event_twin per-type floor
+    -- dispatch, immediately below) is the point of moving it: db/041's
+    -- cairn_check_medication_coding is the first per-type check_fn to read this marker,
+    -- and step 8 runs BEFORE the old marker placement — so a registry-derived coding
+    -- check could never tell "local" from "remote" and refused a verifiable peer event
+    -- outright, which is exactly the sync-watermark freeze ADR-0056 forbids. Confirmed
+    -- safe to widen: every EXISTING READER of this marker (cairn_recompute_component and
+    -- patient_link_apply in db/018, chart_dispute_apply in db/023,
+    -- cairn_guard_medication_patient in db/031, medication_reconciliation_apply in
+    -- db/033 — named, not line-numbered, since line numbers rot on the next edit)
+    -- already lives in the projection-apply layer and fires strictly after this new,
+    -- earlier line — none of them change behaviour. No registered check_fn read it
+    -- before db/041, so there is nothing upstream of step 8 to regress either.
+    --
+    -- The one other WRITER is worth naming too: `cairn_reproject` (db/039) raises this
+    -- same marker for its whole heal/rebuild run and never clears it — before this
+    -- change that only ever relaxed projection guards during a heal. Now it also
+    -- relaxes this door's validation tier for anything that runs inside the SAME
+    -- transaction as a reproject call (e.g. `BEGIN; SELECT cairn_reproject(...);
+    -- SELECT submit_event(<event with an unregistered coding system>); COMMIT;` would
+    -- be admitted). `cairn_reproject` is owner-only (REVOKE ... FROM PUBLIC in db/039),
+    -- so this is not a runtime-role bypass — an operator with EXECUTE on it already has
+    -- the standing to load arbitrary schema — but it is a real widening of what that
+    -- marker now means, so a future reader extending either function should know the
+    -- two are now coupled.
+    --
+    -- Still cleared at the SAME place as before (right after the INSERT, below) — a
+    -- later submit_event in the same transaction (outside a reproject) keeps its veto,
+    -- unchanged.
+    PERFORM set_config('cairn.remote_apply', 'on', true);
+
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
     --    as submit_event — one floor renderer, so a twin-less demographic event is
     --    refused identically at both doors (closes the M8 asymmetry). A sealed event with
@@ -291,12 +339,10 @@ BEGIN
         END IF;
     END IF;
 
-    -- Raise the transaction-local remote-apply marker so projection triggers with
-    -- node-local-config guards clamp-and-flag instead of vetoing (A5b; db/018 reads
-    -- it). Cleared right after the INSERT (AFTER-ROW triggers run within the INSERT
-    -- statement), so a later submit_event in the same transaction keeps its veto.
-    PERFORM set_config('cairn.remote_apply', 'on', true);
-
+    -- cairn.remote_apply was already raised above (before step 8), so it is already
+    -- 'on' here — no second set_config needed. It stays 'on' through this INSERT's
+    -- AFTER-ROW projection triggers (clamp-and-flag instead of vetoing, A5b; db/018/
+    -- db/031/db/033 read it there) and is cleared immediately below.
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,

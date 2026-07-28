@@ -1266,7 +1266,7 @@ fn representative_medication_payload() -> serde_json::Value {
         .repeat(7);
     serde_json::json!({
         "medication_id": uuid::Uuid::now_v7().to_string(),
-        "substance": {"term": "metformin", "inn_code": "6809"},
+        "substance": {"term": "metformin"},
         "formulation": "tablet",
         "dose": {"amount": "500", "unit": "mg"},
         "sig": "one BD",

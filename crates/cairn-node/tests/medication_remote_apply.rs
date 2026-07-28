@@ -83,7 +83,7 @@ async fn apply(c: &Client, signed: &[u8]) -> Result<u64, tokio_postgres::Error> 
 fn sample_assert_input() -> AssertMedicationInput<'static> {
     AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),

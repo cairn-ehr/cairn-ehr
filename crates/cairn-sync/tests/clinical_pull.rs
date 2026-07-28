@@ -15,6 +15,7 @@
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
 //! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
+use cairn_event::medication::SubstanceCoding;
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
@@ -444,7 +445,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -486,10 +487,19 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     )
     .await
     .unwrap();
-    // A ceased thread (exercises the past view across the wire).
+    // A ceased thread (exercises the past view across the wire). Also carries a
+    // drug-identity coding (ADR-0059) so this test proves the OTHER half of decision
+    // 4 alongside no_drugref_dependency.rs's structural proof: a coded medication's
+    // substance.coding converges to a second node exactly like every other fact does,
+    // even though drugref itself never appears anywhere on this wire or in this tree.
     let atorva = AssertMedicationInput {
         term: "atorvastatin",
         dose_amount: Some("40"),
+        coding: Some(SubstanceCoding {
+            system: "drugref-moiety",
+            code: "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01",
+            display: "atorvastatin",
+        }),
         ..metformin
     };
     let med2 = assert_medication(
@@ -629,6 +639,27 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
         "both duplicate threads collapsed into the SAME group:\n{joined}"
     );
 
+    // The coded medication's substance.coding converged to B too — queried directly
+    // (not via `snapshot`, which the assert_eq! above already proved byte-identical
+    // between A and B) so the failure message names B specifically if this regresses.
+    let coding_row = b
+        .query_one(
+            "SELECT coding_system, coding_code, coding_display \
+               FROM medication_coding WHERE medication_id = $1::text::uuid",
+            &[&med2.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(coding_row.get::<_, String>(0), "drugref-moiety");
+    // The anchor itself: the immortal moiety_uuid is the whole point of ADR-0059, so a
+    // regression that scrambled the code while leaving system/display intact must fail
+    // here, not just look plausible.
+    assert_eq!(
+        coding_row.get::<_, String>(1),
+        "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"
+    );
+    assert_eq!(coding_row.get::<_, String>(2), "atorvastatin");
+
     // The quarantine stayed empty: nothing on this wire needed penning.
     let penned: i64 = b
         .query_one("SELECT count(*) FROM sync_quarantine", &[])
@@ -688,7 +719,7 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -1202,7 +1233,7 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1538,7 +1569,7 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1654,7 +1685,7 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     let patient = Uuid::now_v7();
     let metformin = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("500"),
         dose_unit: Some("mg"),
@@ -1857,7 +1888,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -1898,7 +1929,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         patient,
         &AssertMedicationInput {
             term: "ibuprofen",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("200"),
             dose_unit: Some("mg"),
@@ -2086,7 +2117,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
         patient,
         &AssertMedicationInput {
             term: "metformin",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("500"),
             dose_unit: Some("mg"),
@@ -2117,7 +2148,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
         patient,
         &AssertMedicationInput {
             term: "ibuprofen",
-            inn_code: None,
+            coding: None,
             formulation: Some("tablet"),
             dose_amount: Some("200"),
             dose_unit: Some("mg"),

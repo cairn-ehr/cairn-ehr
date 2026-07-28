@@ -36,6 +36,7 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
            IF to_regclass('public.medication_cessation') IS NOT NULL THEN TRUNCATE medication_cessation; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
          END $$;",
     )
     .await
@@ -67,6 +68,7 @@ async fn setup_node_and_human(c: &Client) -> (SigningKey, String, SigningKey, St
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
            IF to_regclass('public.medication_cessation') IS NOT NULL THEN TRUNCATE medication_cessation; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
          END $$;",
     )
     .await
@@ -91,7 +93,7 @@ async fn setup_node_and_human(c: &Client) -> (SigningKey, String, SigningKey, St
 fn sample_input() -> AssertMedicationInput<'static> {
     AssertMedicationInput {
         term: "atorvastatin",
-        inn_code: None,
+        coding: None,
         formulation: Some("tablet"),
         dose_amount: Some("40"),
         dose_unit: Some("mg"),

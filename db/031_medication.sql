@@ -53,6 +53,17 @@ BEGIN
            OR length(btrim(p ->> 'info_source')) = 0 THEN
             RAISE EXCEPTION 'medication assertion: info_source must be a non-empty string';
         END IF;
+        -- ADR-0059 decision 2: the reserved inn_code slot is RETIRED. Fail loud at the
+        -- authoring door (a caller still emitting it is a bug at source); ignore it on
+        -- the apply path — a refusal on a verifiable peer event is the sync-wedge
+        -- ADR-0056 forbids, and the slot is simply never read again.
+        IF (p -> 'substance') ? 'inn_code'
+           AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+            RAISE EXCEPTION 'medication assertion: substance.inn_code is retired — carry substance.coding {system, code, display} instead (ADR-0059 decision 2)';
+        END IF;
+        -- The coding floor lives in db/041 (a floor change needs its own generation
+        -- bump, #188); plpgsql resolves the call at execution, so the later file is fine.
+        PERFORM cairn_check_medication_coding(p);
     END IF;
     -- The cessation verb carries only medication_id (+ optional stopped/reason) — done.
 END;
@@ -185,6 +196,29 @@ CREATE TABLE IF NOT EXISTS medication_statement (
 GRANT SELECT ON medication_statement TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_statement_patient_idx ON medication_statement (patient_id);
 
+-- 4b. The drug-identity coding projection (ADR-0059). A SEPARATE table, not columns on
+--     medication_statement, for two reasons: one fact gets one home (slice 6b's coding
+--     OVERLAY events write this same table under the same winner rule, so no reader ever
+--     needs a precedence rule between two homes), and it keeps 6b purely additive — rows,
+--     not rewritten view bodies. No FK to medication_statement: a coding may legitimately
+--     arrive before the assert it codes (arrival-order independence, the same reason
+--     medication_cessation is its own table).
+CREATE TABLE IF NOT EXISTS medication_coding (
+    medication_id   UUID PRIMARY KEY,
+    patient_id      UUID NOT NULL,
+    coding_system   TEXT NOT NULL,
+    coding_code     TEXT NOT NULL,
+    coding_display  TEXT NOT NULL,
+    hlc_wall        BIGINT  NOT NULL,
+    hlc_counter     INTEGER NOT NULL,
+    origin          TEXT    NOT NULL,
+    content_address BYTEA   NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON medication_coding TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_coding_anchor_idx
+    ON medication_coding (coding_system, coding_code);
+
 -- 5. Fold clinical.medication.asserted into medication_statement. e.body is the
 --    payload; patient_id is a column. Overlay-winner keeps set-union convergence.
 --
@@ -249,6 +283,44 @@ BEGIN
         EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
         medication_statement.hlc_wall, medication_statement.hlc_counter,
         medication_statement.origin, medication_statement.content_address);
+
+    -- ADR-0059: the INLINE coding claim, when the author made one. Written only when
+    -- present, so a later uncoded re-assertion can never silently clear a coding —
+    -- retracting a coding is slice 6b's correction event, an authored act.
+    --
+    -- Absent (key never set) and an EXPLICIT JSON `"coding": null` are the SAME
+    -- honest-unknown claim (db/041's cairn_check_medication_coding treats them
+    -- identically) but they are NOT the same to plain `IS NOT NULL`: extracting a JSON
+    -- null with `->` yields the jsonb value 'null', which IS DISTINCT FROM SQL NULL, so
+    -- a bare `IS NOT NULL` guard here would still enter this branch for an explicit
+    -- null and try to INSERT NULL into three NOT NULL columns. jsonb_typeof(...) =
+    -- 'null' catches that shape explicitly.
+    IF p -> 'substance' -> 'coding' IS NOT NULL
+       AND jsonb_typeof(p -> 'substance' -> 'coding') IS DISTINCT FROM 'null' THEN
+        INSERT INTO medication_coding
+            (medication_id, patient_id, coding_system, coding_code, coding_display,
+             hlc_wall, hlc_counter, origin, content_address)
+        VALUES (
+            (p ->> 'medication_id')::uuid, e.patient_id,
+            p -> 'substance' -> 'coding' ->> 'system',
+            p -> 'substance' -> 'coding' ->> 'code',
+            p -> 'substance' -> 'coding' ->> 'display',
+            e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
+        ON CONFLICT (medication_id) DO UPDATE SET
+            patient_id      = EXCLUDED.patient_id,
+            coding_system   = EXCLUDED.coding_system,
+            coding_code     = EXCLUDED.coding_code,
+            coding_display  = EXCLUDED.coding_display,
+            hlc_wall        = EXCLUDED.hlc_wall,
+            hlc_counter     = EXCLUDED.hlc_counter,
+            origin          = EXCLUDED.origin,
+            content_address = EXCLUDED.content_address,
+            updated_at      = clock_timestamp()
+        WHERE cairn_hlc_overlay_wins(
+            EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
+            medication_coding.hlc_wall, medication_coding.hlc_counter,
+            medication_coding.origin, medication_coding.content_address);
+    END IF;
     RETURN;
 END;
 $$;
@@ -350,40 +422,52 @@ SELECT s.medication_id, s.patient_id, s.term, s.inn_code, s.formulation,
        s.started_value, s.started_precision,
        to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
        (c.medication_id IS NOT NULL) AS ceased,
-       c.stopped_value, c.stopped_precision, c.reason
+       c.stopped_value, c.stopped_precision, c.reason,
+       -- ADR-0059: appended at the END. inn_code stays, deprecated in place and read by
+       -- nothing — dropping a view column would need a DROP VIEW, and a DROP is the
+       -- non-additive move principle 11 forbids.
+       mc.coding_system, mc.coding_code, mc.coding_display
 FROM medication_statement s
-LEFT JOIN medication_cessation c USING (medication_id);
+LEFT JOIN medication_cessation c USING (medication_id)
+LEFT JOIN medication_coding mc USING (medication_id);
 GRANT SELECT ON patient_medication TO cairn_agent;
 
 CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT medication_id, patient_id, term, inn_code, formulation,
-       dose_amount, dose_unit, sig, info_source, started_value, started_precision, asserted_at
+       dose_amount, dose_unit, sig, info_source, started_value, started_precision, asserted_at,
+       coding_system, coding_code, coding_display
 FROM patient_medication WHERE NOT ceased;
 GRANT SELECT ON patient_medication_current TO cairn_agent;
 
 CREATE OR REPLACE VIEW patient_medication_past AS
 SELECT medication_id, patient_id, term, inn_code, formulation,
        dose_amount, dose_unit, sig, info_source, started_value, started_precision,
-       asserted_at, stopped_value, stopped_precision, reason
+       asserted_at, stopped_value, stopped_precision, reason,
+       coding_system, coding_code, coding_display
 FROM patient_medication WHERE ceased;
 GRANT SELECT ON patient_medication_past TO cairn_agent;
 
--- 9. E1 reconciliation flag (advisory, never auto-merges). >=2 ACTIVE threads for
---    one patient sharing coalesce(inn_code, normalized term). Deterministic — no
---    fuzzy matching (brand<->generic/typos are deferred to the Tier-A drug matcher).
---    COLLATE "C" pins the normalized-term key for cross-node determinism (ADR-0045).
---    Resolution is ceasing the redundant thread (no new event type).
---    Known blind spot (deferred, not a bug): the key prefers inn_code when present,
---    so the SAME substance asserted once coded and once uncoded lands under two
---    different keys and is NOT flagged. Cross-coding-state matching waits on the
---    Tier-A dictionary, same as brand<->generic.
+-- 9. E1 reconciliation flag (advisory, never auto-merges). >=2 ACTIVE threads for one
+--    patient sharing the dup-key. ADR-0059: the key is the coding PAIR when coded, else
+--    the normalized term. The PAIR, never a bare code — once the reserved finer drugref
+--    levels exist, the same substance coded at moiety level on one node and clinical-drug
+--    level on another would split under a bare-code key (the same blind spot one level up,
+--    and a CROSS-NODE one). Each branch is prefixed so a free-text term can never collide
+--    with a code key. COLLATE "C" on both branches pins cross-node determinism (ADR-0045).
+--    WHAT THIS CLOSES: coded<->coded, including Lipitor<->atorvastatin once BOTH are coded.
+--    WHAT IT DOES NOT: coalesce picks per ROW, so a coded and an uncoded row still key
+--    apart. That case closes when the uncoded member gets CODED (offered, never forced),
+--    or later by term->anchor resolution in the drug-matcher slice.
 CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
 SELECT patient_id,
-       coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,
-       count(*)                                           AS thread_count,
-       array_agg(medication_id ORDER BY medication_id)    AS medication_ids
+       coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                'term:' || lower(btrim(term) COLLATE "C")) AS dup_key,
+       count(*)                                            AS thread_count,
+       array_agg(medication_id ORDER BY medication_id)     AS medication_ids
 FROM patient_medication_current
-GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
+GROUP BY patient_id,
+         coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                  'term:' || lower(btrim(term) COLLATE "C"))
 HAVING count(*) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 
@@ -399,7 +483,7 @@ GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 --     converged (no dead tuples, no validate-trigger fire).
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
     ('clinical.medication.asserted',           'medication_statement_apply',
-     ARRAY['medication_statement', 'medication_patient_conflict_flag'], 20, TRUE),
+     ARRAY['medication_statement', 'medication_coding', 'medication_patient_conflict_flag'], 20, TRUE),
     ('clinical.medication-cessation.asserted', 'medication_cessation_apply',
      ARRAY['medication_cessation', 'medication_patient_conflict_flag'], 10, TRUE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET

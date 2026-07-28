@@ -4,6 +4,11 @@
 use cairn_event::medication::{
     medication_assertion_body, render_medication_twin, MedicationAssertion,
 };
+// Re-exported (not just used internally): a caller building `coding_from_parts`'/
+// `AssertMedicationInput::coding`'s value needs to name this type too (final-review
+// finding 5) — without `pub` here, `mod.rs`'s `pub use assert::{.., SubstanceCoding}`
+// cannot reach it, forcing every caller to depend on cairn-event directly instead.
+pub use cairn_event::medication::SubstanceCoding;
 use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
 
@@ -13,7 +18,8 @@ const MEDICATION_SCHEMA_VERSION: &str = "clinical.medication/1";
 /// everything else is an honest Option (unknown when None).
 pub struct AssertMedicationInput<'a> {
     pub term: &'a str,
-    pub inn_code: Option<&'a str>,
+    /// Drug-identity coding (ADR-0059) — `None` when nobody has coded it yet.
+    pub coding: Option<SubstanceCoding<'a>>,
     pub formulation: Option<&'a str>,
     pub dose_amount: Option<&'a str>,
     pub dose_unit: Option<&'a str>,
@@ -34,6 +40,44 @@ pub fn validate_term(term: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Turn three independent CLI flags into an all-or-nothing coding claim.
+///
+/// Pure and total: the three flags are supplied together or not at all. A *partial*
+/// triple is a caller mistake, and this is where it is caught — the DB floor would
+/// refuse it too, but at the source the message can name the flag that is missing.
+/// Blank is not a value: `--coding-code "  "` is a missing code, not an empty one.
+pub fn coding_from_parts<'a>(
+    system: Option<&'a str>,
+    code: Option<&'a str>,
+    display: Option<&'a str>,
+) -> anyhow::Result<Option<SubstanceCoding<'a>>> {
+    let parts = [
+        ("coding-system", system),
+        ("coding-code", code),
+        ("coding-display", display),
+    ];
+    let missing: Vec<&str> = parts
+        .iter()
+        .filter(|(_, v)| v.is_none_or(|s| s.trim().is_empty()))
+        .map(|(name, _)| *name)
+        .collect();
+    if missing.len() == parts.len() {
+        return Ok(None); // not-yet-coded: a permanently valid state (principle 4)
+    }
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "a drug coding needs all three parts; missing or blank: --{}. \
+             Omit all three to record the medication uncoded (ADR-0059)",
+            missing.join(", --")
+        );
+    }
+    Ok(Some(SubstanceCoding {
+        system: system.expect("checked non-empty above").trim(),
+        code: code.expect("checked non-empty above").trim(),
+        display: display.expect("checked non-empty above").trim(),
+    }))
+}
+
 /// Assemble the signed `clinical.medication.asserted` EventBody. Pure — the caller
 /// mints `event_id`/`medication_id`, supplies the HLC, and signs.
 pub fn build_assert_body(
@@ -48,7 +92,9 @@ pub fn build_assert_body(
     let a = MedicationAssertion {
         medication_id: &mid,
         term: input.term,
-        inn_code: input.inn_code,
+        // SubstanceCoding is Copy (borrowed &str fields only), so the Option copies
+        // whole — no need to rebuild it field-by-field (house rule 4).
+        coding: input.coding,
         formulation: input.formulation,
         dose_amount: input.dose_amount,
         dose_unit: input.dose_unit,
@@ -107,4 +153,45 @@ pub async fn assert_medication(
     crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
         .await?;
     Ok(medication_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coding_from_parts_accepts_all_three_or_none() {
+        let none = coding_from_parts(None, None, None).expect("uncoded is valid");
+        assert!(none.is_none(), "no flags at all means not-yet-coded");
+
+        let some = coding_from_parts(
+            Some("drugref-moiety"),
+            Some("0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01"),
+            Some("atorvastatin"),
+        )
+        .expect("a complete triple is valid")
+        .expect("a complete triple yields a coding");
+        assert_eq!(some.system, "drugref-moiety");
+        assert_eq!(some.display, "atorvastatin");
+    }
+
+    #[test]
+    fn coding_from_parts_refuses_a_partial_triple() {
+        // A half-supplied coding must never reach the door: the DB floor would refuse
+        // it anyway, but the caller deserves the error at the source, naming the gap.
+        let e = coding_from_parts(Some("drugref-moiety"), Some("abc"), None)
+            .expect_err("a partial coding must be refused");
+        let msg = e.to_string();
+        assert!(
+            msg.contains("coding-display"),
+            "the error names the missing flag: {msg}"
+        );
+    }
+
+    #[test]
+    fn coding_from_parts_refuses_a_blank_field() {
+        let e = coding_from_parts(Some("drugref-moiety"), Some("   "), Some("atorvastatin"))
+            .expect_err("a blank field is not a value");
+        assert!(e.to_string().contains("coding-code"), "{e}");
+    }
 }

@@ -300,11 +300,14 @@ GRANT SELECT ON patient_medication_dose_history TO cairn_agent;
 --     corrected are exposed via the separate medication_current_dose view (created above),
 --     not here. A thread with NO timeline row (a pre-slice-2 assert) falls back to the
 --     as-asserted statement dose (CASE on cd presence — self-healing, no data migration).
+--     The coding triple (ADR-0059) is part of that same-column-set contract now: it is
+--     appended at the END in db/031, db/032 and db/033 alike.
 CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
-       pm.sig, pm.info_source, pm.started_value, pm.started_precision, pm.asserted_at
+       pm.sig, pm.info_source, pm.started_value, pm.started_precision, pm.asserted_at,
+       pm.coding_system, pm.coding_code, pm.coding_display
 FROM patient_medication pm
 LEFT JOIN medication_current_dose cd USING (medication_id)
 WHERE NOT pm.ceased;
@@ -315,7 +318,8 @@ SELECT pm.medication_id, pm.patient_id, pm.term, pm.inn_code, pm.formulation,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.amount ELSE pm.dose_amount END AS dose_amount,
        CASE WHEN cd.medication_id IS NOT NULL THEN cd.unit   ELSE pm.dose_unit   END AS dose_unit,
        pm.sig, pm.info_source, pm.started_value, pm.started_precision,
-       pm.asserted_at, pm.stopped_value, pm.stopped_precision, pm.reason
+       pm.asserted_at, pm.stopped_value, pm.stopped_precision, pm.reason,
+       pm.coding_system, pm.coding_code, pm.coding_display
 FROM patient_medication pm
 LEFT JOIN medication_current_dose cd USING (medication_id)
 WHERE pm.ceased;

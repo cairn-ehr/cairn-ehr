@@ -32,6 +32,7 @@ async fn setup(
     c.batch_execute(
         "DO $$ BEGIN \
            IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
          END $$;",
     )
     .await
@@ -66,7 +67,7 @@ async fn human_authored_medication_is_signed_by_the_human_node_keeps_custody() {
 
     let input = AssertMedicationInput {
         term: "atorvastatin",
-        inn_code: None,
+        coding: None,
         formulation: None,
         dose_amount: Some("40"),
         dose_unit: Some("mg"),
@@ -153,7 +154,7 @@ async fn human_authored_cessation_is_signed_by_the_human() {
 
     let input = AssertMedicationInput {
         term: "warfarin",
-        inn_code: None,
+        coding: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,
@@ -297,7 +298,7 @@ async fn device_additive_assert_still_valid_with_no_author() {
     let patient = Uuid::now_v7();
     let input = AssertMedicationInput {
         term: "metformin",
-        inn_code: None,
+        coding: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,
@@ -343,7 +344,7 @@ async fn human_author_owns_suppression_rights() {
     };
     let input = AssertMedicationInput {
         term: "lisinopril",
-        inn_code: None,
+        coding: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,
@@ -441,7 +442,7 @@ async fn author_and_attest_compose_with_different_humans_on_reconcile() {
 
     let input = AssertMedicationInput {
         term: "atorvastatin",
-        inn_code: None,
+        coding: None,
         formulation: None,
         dose_amount: None,
         dose_unit: None,

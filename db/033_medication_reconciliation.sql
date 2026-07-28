@@ -417,10 +417,27 @@ SELECT DISTINCT ON (g.group_id)
     g.group_id, g.patient_id, s.term, s.inn_code, s.formulation, s.sig, s.info_source,
     s.started_value, s.started_precision,
     to_timestamp(s.hlc_wall / 1000.0) AS asserted_at,
-    s.dose_amount, s.dose_unit
+    s.dose_amount, s.dose_unit,
+    mc.coding_system, mc.coding_code, mc.coding_display
 FROM medication_statement s
 JOIN medication_thread_group g ON g.medication_id = s.medication_id
-ORDER BY g.group_id, (s.medication_id = g.group_id) DESC, s.medication_id;
+LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
+-- ADR-0059 decision 5: PREFER A CODED MEMBER, so a reconciled group takes its identity
+-- from the member somebody actually identified rather than from "little white pill".
+-- Then the ADR's tiebreak (system, code), then the pre-0059 keys unchanged — for a group
+-- with no coded member at all the ordering degenerates to exactly what it was.
+-- COLLATE "C" keeps the tiebreak collation-independent (ADR-0045).
+-- BREADTH, STATED (final-review finding 3): this ORDER BY picks the DISTINCT ON winner
+-- for the WHOLE ROW, not just the coding triple — term, formulation, sig, info_source,
+-- started_value/_precision, asserted_at, AND the dose_amount/dose_unit fallback all move
+-- together to the coded member's statement. That is the intent, not a side effect: a
+-- reconciled group is meant to read as ONE coherent statement (the coded member's), never
+-- a patchwork of one member's coding stitched onto another member's term/dose/sig.
+ORDER BY g.group_id,
+         (mc.medication_id IS NOT NULL) DESC,
+         mc.coding_system COLLATE "C", mc.coding_code COLLATE "C",
+         (s.medication_id = g.group_id) DESC,
+         s.medication_id;
 GRANT SELECT ON medication_group_display TO cairn_agent;
 
 -- 12. Rework the current/past views to emit ONE row per group. CRITICAL: keep the
@@ -445,7 +462,8 @@ CREATE OR REPLACE VIEW patient_medication_current AS
 SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulation,
        CASE WHEN cd.group_id IS NOT NULL THEN cd.amount ELSE d.dose_amount END AS dose_amount,
        CASE WHEN cd.group_id IS NOT NULL THEN cd.unit   ELSE d.dose_unit   END AS dose_unit,
-       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at
+       d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
+       d.coding_system, d.coding_code, d.coding_display
 FROM medication_group_display d
 JOIN medication_group_status st ON st.group_id = d.group_id
 LEFT JOIN medication_group_current_dose cd ON cd.group_id = d.group_id
@@ -457,7 +475,8 @@ SELECT d.group_id AS medication_id, d.patient_id, d.term, d.inn_code, d.formulat
        CASE WHEN ld.group_id IS NOT NULL THEN ld.amount ELSE d.dose_amount END AS dose_amount,
        CASE WHEN ld.group_id IS NOT NULL THEN ld.unit   ELSE d.dose_unit   END AS dose_unit,
        d.sig, d.info_source, d.started_value, d.started_precision, d.asserted_at,
-       gc.stopped_value, gc.stopped_precision, gc.reason
+       gc.stopped_value, gc.stopped_precision, gc.reason,
+       d.coding_system, d.coding_code, d.coding_display
 FROM medication_group_display d
 JOIN medication_group_status st ON st.group_id = d.group_id
 LEFT JOIN medication_group_last_dose ld ON ld.group_id = d.group_id
@@ -482,19 +501,30 @@ GRANT SELECT ON patient_medication_past TO cairn_agent;
 --     db/031 — the identical same-column-set replay rule already applied to
 --     current/past above); only the COUNTING SEMANTICS move from per-thread to
 --     per-group, via a plain CREATE OR REPLACE (no DROP needed).
+--     ADR-0059 (Task 5): dup_key is now the SAME coalesce(code:<system>|<code>,
+--     term:<normalized>) expression as db/031's patient_medication_reconciliation_flag
+--     — see that view's comment for the full argument (the PAIR never a bare code, and
+--     the coded<->uncoded case this deliberately does NOT close). The key expression
+--     must stay byte-identical between db/031 and db/033 or the two flags could
+--     disagree about what counts as a duplicate. Only the inner subquery gains the two
+--     coding columns needed to build it; the per-group COUNTING semantics are untouched.
 CREATE OR REPLACE VIEW patient_medication_reconciliation_flag AS
 SELECT patient_id,
-       coalesce(inn_code, lower(btrim(term) COLLATE "C")) AS dup_key,
+       coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                'term:' || lower(btrim(term) COLLATE "C")) AS dup_key,
        count(DISTINCT group_id)                           AS thread_count,
        array_agg(DISTINCT medication_id ORDER BY medication_id) AS medication_ids
 FROM (
-    SELECT s.patient_id, s.medication_id, s.inn_code, s.term,
+    SELECT s.patient_id, s.medication_id, mc.coding_system, mc.coding_code, s.term,
            COALESCE(gm.group_id, s.medication_id) AS group_id
     FROM medication_statement s
     LEFT JOIN medication_group_member gm ON gm.medication_id = s.medication_id
+    LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
     WHERE NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = s.medication_id)
 ) t
-GROUP BY patient_id, coalesce(inn_code, lower(btrim(term) COLLATE "C"))
+GROUP BY patient_id,
+         coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
+                  'term:' || lower(btrim(term) COLLATE "C"))
 HAVING count(DISTINCT group_id) > 1;
 GRANT SELECT ON patient_medication_reconciliation_flag TO cairn_agent;
 
@@ -527,6 +557,30 @@ WHERE tp.patient_id IS NOT NULL
 GROUP BY gm.group_id
 HAVING count(DISTINCT tp.patient_id) > 1;
 GRANT SELECT ON medication_group_cross_patient TO cairn_agent;
+
+-- ADR-0059 decision 5: two DIFFERENT anchors inside one reconciled group is a
+-- possible-mis-reconciliation signal — two substances linked as one. Advisory worklist:
+-- surfaced, never silently resolved and never auto-separated (reconciliation is a human
+-- link, ADR-0047). Read-time and arrival-order independent, like
+-- medication_group_cross_patient above: it lights up whenever the second coding lands
+-- and clears when a separation or a coding correction repairs it.
+-- ADR-0045 / final-review finding 1: count(DISTINCT ...) over a bare RECORD compares at
+-- the database's DEFAULT collation, not "C" — a node with a non-deterministic ICU default
+-- collation could then read two anchors differing only in case as EQUAL, so the second
+-- anchor never bumps anchor_count/HAVING even though `anchors` (built with an explicit
+-- COLLATE "C" concat+compare) would list both. Concatenating the pair into one COLLATE "C"
+-- text expression BEFORE the DISTINCT — in both the select list and the HAVING, so the two
+-- agree — pins the same collation the `anchors` array already uses.
+CREATE OR REPLACE VIEW medication_group_coding_conflict AS
+SELECT gm.group_id,
+       count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchor_count,
+       array_agg(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C"
+                 ORDER BY (mc.coding_system || '|' || mc.coding_code) COLLATE "C") AS anchors
+FROM medication_group_member gm
+JOIN medication_coding mc ON mc.medication_id = gm.medication_id
+GROUP BY gm.group_id
+HAVING count(DISTINCT (mc.coding_system || '|' || mc.coding_code) COLLATE "C") > 1;
+GRANT SELECT ON medication_group_coding_conflict TO cairn_agent;
 
 -- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
 -- cairn_reproject heal/rebuild (db/039). Both verbs share the ONE fn and the SAME
