@@ -6,22 +6,23 @@
 //! other test runs under. A mocked absence could drift; this cannot.
 //!
 //! SCOPE (what this guard actually covers, so a reader can tell coverage from
-//! aspiration): every `.sql` under `db/`, every `.rs` under `crates/*/src`, and every
-//! `.sql`/`.rs` under `extensions/*` — that last one is the pgrx tree
-//! (`extensions/cairn_pgx`), the in-DB floor's OTHER home besides `db/`, and just as
-//! load-bearing. Any directory named `target/` or `tests/` is skipped at any depth —
-//! build output and test-only code may legitimately NAME drugref in prose.
+//! aspiration): every `.sql`/`.rs` anywhere under `db/`, `crates/` and `extensions/` —
+//! NOT merely `crates/*/src`, so a `build.rs`, a `benches/` harness or an `examples/`
+//! binary is scanned too. `extensions/` is the pgrx tree (`extensions/cairn_pgx`), the
+//! in-DB floor's OTHER home besides `db/`, and just as load-bearing. Any directory named
+//! `target/` or `tests/` is skipped at any depth — build output and test-only code may
+//! legitimately NAME drugref in prose (this file itself is the obvious case).
 //!
 //! WHAT COUNTS AS AN OFFENDER: a "drugref" mention that is neither (a) inside a
 //! comment, (b) inside a recognised DIAGNOSTIC-MESSAGE call's argument list (SQL
 //! `RAISE EXCEPTION`/`RAISE NOTICE`/`RAISE WARNING`, or Rust `assert!`/`debug_assert!`/
 //! `panic!`/`unreachable!`/`format!`/`eprintln!`/`println!`/`write!`/`writeln!`/
-//! `.expect(` — see `RUST_SPAN_TRIGGERS`'s doc for exactly which macros and why
-//! `assert_eq!`/`assert_ne!`/`debug_assert_eq!` are deliberately NOT in this list), (c)
-//! inside the ONE statement that seeds the ADR-0059 coding-system registry (`db/041`'s
-//! `INSERT INTO medication_coding_system`, where the `note` column legitimately
-//! narrates drugref in prose next to the tokens it defines), or (d) itself exactly one
-//! of the three registered coding-system tokens (`drugref-moiety` /
+//! `bail!`/`ensure!`/`anyhow!`/`.expect(` — see `RUST_SPAN_TRIGGERS`'s doc for exactly
+//! which macros and why `assert_eq!`/`assert_ne!`/`debug_assert_eq!` are deliberately
+//! NOT in this list), (c) inside the ONE statement that seeds the ADR-0059 coding-system
+//! registry (`db/041`'s `INSERT INTO medication_coding_system`, where the `note` column
+//! legitimately narrates drugref in prose next to the tokens it defines), or (d) itself
+//! exactly one of the three registered coding-system tokens (`drugref-moiety` /
 //! `drugref-clinical-drug` / `drugref-product`) — those are DATA, not a dependency,
 //! wherever a test fixture or the registry names them. A drugref mention inside any
 //! OTHER string — a URL, a connection string, a shelled-out command, an `assert_eq!`'s
@@ -153,7 +154,14 @@ const SQL_SPAN_TRIGGERS: [&str; 4] = [
 /// LIMITATION for the resulting gap on the macros kept below, e.g. `assert!`, whose
 /// message is its SECOND argument and whose first argument can itself embed an
 /// unrelated string, so "blank only the first string" would target the wrong one).
-const RUST_SPAN_TRIGGERS: [&str; 10] = [
+///
+/// The `anyhow` family (`bail!`/`ensure!`/`anyhow!`) is in the list because it is how
+/// THIS codebase writes a user-facing error message — `coding_from_parts` in
+/// `medication/assert.rs` is two files away. Omitting them would have made the first
+/// error text to legitimately name drugref ("register it in medication_coding_system,
+/// not in drugref") fail the guard spuriously. Each is matched WITHOUT a path prefix, so
+/// the bare and `anyhow::`-qualified spellings both hit the same trigger.
+const RUST_SPAN_TRIGGERS: [&str; 13] = [
     "assert!(",
     "debug_assert!(",
     "panic!(",
@@ -163,6 +171,9 @@ const RUST_SPAN_TRIGGERS: [&str; 10] = [
     "println!(",
     "write!(",
     "writeln!(",
+    "bail!(",
+    "ensure!(",
+    "anyhow!(",
     ".expect(",
 ];
 
@@ -343,6 +354,67 @@ fn offending_lines(path: &Path) -> Vec<String> {
         .filter(|(_, residue_line)| residue_line.to_lowercase().contains("drugref"))
         .map(|(raw, _)| raw.trim().to_string())
         .collect()
+}
+
+/// Unit-pin the scanner's exemption rule itself, not just its verdict on today's tree.
+/// `the_trusted_surface_never_calls_drugref` below passes trivially while the tree is
+/// clean, so it cannot tell a CORRECT scanner from one that exempts (or misses)
+/// everything — these cases fix both edges of the rule.
+///
+/// The `bail!`/`ensure!`/`anyhow!` cases are the ones that motivated this: they are how
+/// THIS codebase actually writes an error message (see `coding_from_parts` in
+/// `medication/assert.rs`), yet the trigger list originally carried only the std
+/// assertion/format macros — so the first error text to legitimately name drugref would
+/// have failed the guard spuriously.
+#[test]
+fn the_scanner_exempts_diagnostic_messages_but_not_ordinary_strings() {
+    // Exempt: a drugref mention inside an error/diagnostic message, in each of the
+    // anyhow forms (both bare and path-qualified — the scanner matches the macro name
+    // wherever it starts, so `anyhow::bail!` hits the same trigger as `bail!`).
+    for exempt in [
+        r#"bail!("register it in drugref first");"#,
+        r#"anyhow::bail!("register it in drugref first");"#,
+        r#"ensure!(ok, "drugref must be reachable");"#,
+        r#"anyhow::anyhow!("drugref lookup unavailable")"#,
+        r#"panic!("drugref went missing");"#,
+        r#"let x = y.expect("drugref must be present");"#,
+        r#"// a comment naming drugref"#,
+    ] {
+        let residue = residue_lines(exempt, true).join("\n");
+        assert!(
+            !residue.to_lowercase().contains("drugref"),
+            "this is a diagnostic message or comment and must be exempt: {exempt}"
+        );
+    }
+
+    // NOT exempt: a real dependency, however string-shaped. These are the cases the
+    // guard exists to catch, and blanket string-blanking would have hidden every one.
+    for offender in [
+        r#"let url = "https://api.drugref.org/lookup";"#,
+        r#"assert_eq!(system, "drugref-moiety-extended");"#,
+        r#"Command::new("drugref-cli").spawn();"#,
+    ] {
+        let residue = residue_lines(offender, true).join("\n");
+        assert!(
+            residue.to_lowercase().contains("drugref"),
+            "a real reference must survive into the residue: {offender}"
+        );
+    }
+
+    // SQL side: the RAISE message and the registry seed are exempt; a connection string
+    // is not.
+    assert!(
+        !residue_lines("RAISE EXCEPTION 'a drugref moiety id is a UUIDv5';", false)
+            .join("\n")
+            .to_lowercase()
+            .contains("drugref")
+    );
+    assert!(
+        residue_lines("PERFORM dblink('host=drugref.internal');", false)
+            .join("\n")
+            .to_lowercase()
+            .contains("drugref")
+    );
 }
 
 #[test]

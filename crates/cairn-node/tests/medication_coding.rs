@@ -77,6 +77,18 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
     )
     .await
     .unwrap();
+    // The coding-system REGISTRY is deliberately never TRUNCATEd (db/041's seeded
+    // drugref-* rows must survive every test), so a test that registers a stand-in
+    // system needs its row swept here rather than relying on its own cleanup: a run
+    // killed mid-test would otherwise leave that system permanently registered in this
+    // shared database, silently accepted at the strict door by every later run. Scoped
+    // to non-drugref rows so the seed is untouched; harmless when nothing leaked.
+    c.execute(
+        "DELETE FROM medication_coding_system WHERE system NOT LIKE 'drugref-%'",
+        &[],
+    )
+    .await
+    .unwrap();
     let (sk, kid) = generate_key().unwrap();
     c.execute(
         "SELECT enroll_actor('device', '{\"role\":\"registration-desk\"}', $1)",
@@ -306,6 +318,46 @@ async fn a_non_uuid_code_is_refused_locally_and_admitted_remotely() {
         .expect("the registry-derived tier is lenient at the apply door");
 }
 
+/// The dup-key (db/031 + db/033) and the anchor-conflict view (db/033) both flatten the
+/// anchor to `<system>|<code>`, so `|` is a load-bearing SEPARATOR, not an ordinary
+/// character. Without a constraint, registering a system named `a|b` would let its codes
+/// collide with system `a`'s code `b|…` — two DIFFERENT substances silently sharing one
+/// dup-key and reading as duplicates of each other.
+///
+/// Constraining the SYSTEM alone is sufficient: with systems guaranteed `|`-free, the
+/// first `|` after the prefix is always the separator, so the flattened key parses
+/// unambiguously no matter what the code contains (and codes are not free to be
+/// reshaped — they arrive inside signed bodies).
+#[tokio::test]
+async fn a_coding_system_name_may_not_contain_the_key_separator() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    for bad in ["pipe|system", "   "] {
+        let e = c
+            .execute(
+                "INSERT INTO medication_coding_system (system, code_format, note) \
+                   VALUES ($1, 'opaque', 'test-only row that must be refused')",
+                &[&bad],
+            )
+            .await
+            .expect_err(&format!("registering {bad:?} must be refused by the floor"));
+        assert!(
+            db_msg(&e).to_lowercase().contains("constraint")
+                || db_msg(&e).contains("medication_coding_system"),
+            "the refusal must come from the table's own shape constraint: {}",
+            db_msg(&e)
+        );
+    }
+    // The seeded systems obviously still satisfy it.
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_coding_system", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(n >= 3, "the drugref-* seed rows survive the constraint");
+}
+
 #[tokio::test]
 async fn a_non_canonical_uuid_spelling_is_refused_locally() {
     // uuid_in accepts braces, uppercase, and a missing-hyphens spelling — all three
@@ -354,14 +406,12 @@ async fn an_opaque_format_system_is_accepted_and_projects() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     const OPAQUE_SYSTEM: &str = "test-national-formulary";
-    // setup_node's TRUNCATE list does not cover medication_coding_system (checked: it
-    // truncates event_log/actor_event/patient_chart/the custody plane/medication_*, never
-    // the registry) — by design, so the seeded drugref-* rows survive every test. This
-    // test-only row is therefore inserted and removed explicitly rather than relying on
-    // TRUNCATE. ON CONFLICT DO UPDATE (the same #214 convergence idiom db/041 uses for its
-    // own seed rows) keeps a re-run safe even if a prior run's cleanup below never fired
-    // (e.g. the process was killed mid-test) — a bare INSERT would fail that re-run with a
-    // duplicate-key error on this same primary key.
+    // The registry is never TRUNCATEd (the seeded drugref-* rows must survive every
+    // test), so this test-only row is inserted explicitly. `setup_node` above has already
+    // swept any non-drugref row a previously-killed run may have left behind, which is
+    // what makes a re-run safe; the DELETE at the end of this test is the tidy path, not
+    // the load-bearing one. ON CONFLICT DO UPDATE keeps the insert itself idempotent
+    // (the same #214 convergence idiom db/041 uses for its own seed rows).
     c.execute(
         "INSERT INTO medication_coding_system AS r (system, code_format, note) \
            VALUES ($1, 'opaque', 'test-only row for the opaque-format floor test (finding 2)') \
@@ -885,5 +935,93 @@ async fn two_anchors_in_one_group_raise_a_conflict() {
         n, 1,
         "two different anchors in one group is a possible-mis-reconciliation signal — \
          surfaced, never silently resolved"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #192 thread-patient consistency, applied to the coding projection.
+// ---------------------------------------------------------------------------
+
+/// A medication_id belongs to ONE chart for life (#192). `medication_statement` enforces
+/// that by RAISE-ing locally and converge-and-flagging on remote apply, after which its
+/// `cairn_hlc_overlay_wins` guard decides whether the contradicting event actually wins
+/// the row. `medication_coding`'s upsert has its OWN, INDEPENDENT overlay race — and on a
+/// thread that has no coding row yet there is no conflict at all, so the INSERT lands
+/// unconditionally.
+///
+/// That is the divergence this pins: a remote event with an EARLIER hlc re-asserting the
+/// thread under a DIFFERENT patient LOSES the statement race (patient stays P1) but still
+/// writes the coding row — which, taking `e.patient_id` verbatim, would record P2. The two
+/// projections would then disagree about which chart the thread belongs to. Nothing reads
+/// `medication_coding.patient_id` today, so this is latent rather than exploitable — but it
+/// is a denormalised copy of a value #192 declares immortal, and slice 6b filtering codings
+/// by patient would misfile on it. The fix sources it from the thread's STANDING patient
+/// (cairn_medication_thread_patient) instead of from the event.
+#[tokio::test]
+async fn a_losing_cross_patient_reassert_cannot_misfile_the_coding_patient() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let p1 = Uuid::now_v7();
+    let p2 = Uuid::now_v7();
+
+    // Thread M, patient P1, UNCODED — so no coding row exists yet.
+    let mut uncoded = coded_input("atorvastatin", MOIETY_ATORVASTATIN);
+    uncoded.coding = None;
+    let med = assert_medication(&mut c, &sk, &kid, "test-node", p1, &uncoded, None, None)
+        .await
+        .unwrap();
+
+    // A remote re-assert of the SAME thread under P2, CODED, at an EARLIER hlc so it
+    // loses medication_statement's overlay race. build_assert_body takes the hlc
+    // verbatim, which is the only way to author a deliberately-stale event.
+    let mut hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    hlc.wall -= 60_000; // a minute behind the standing row — comfortably losing
+    let body = build_assert_body(
+        Uuid::now_v7(),
+        med,
+        p2,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        kid.as_str(),
+        hlc,
+    );
+    let signed = sign(&body, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.as_slice()],
+    )
+    .await
+    .expect("the apply door converges-and-flags a cross-patient reassert, never refuses it");
+
+    // The statement kept P1 (the stale event lost its overlay race) …
+    let standing: String = c
+        .query_one(
+            "SELECT patient_id::text FROM medication_statement WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        standing,
+        p1.to_string(),
+        "precondition: the earlier-hlc event must LOSE the statement row, else this test \
+         is not exercising the divergence it exists for"
+    );
+
+    // … so the coding row must agree, not carry the losing event's patient.
+    let coding_patient: String = c
+        .query_one(
+            "SELECT patient_id::text FROM medication_coding WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        coding_patient, standing,
+        "medication_coding.patient_id must follow the thread's STANDING chart (#192), not \
+         the patient named by an event that lost the statement's overlay race"
     );
 }
