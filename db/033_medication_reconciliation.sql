@@ -433,8 +433,16 @@ LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
 -- together to the coded member's statement. That is the intent, not a side effect: a
 -- reconciled group is meant to read as ONE coherent statement (the coded member's), never
 -- a patchwork of one member's coding stitched onto another member's term/dose/sig.
+-- SLICE 6b (ADR-0059 decision 3): the prefer-coded key tests the ANCHOR, not the mere
+-- existence of a medication_coding ROW. A STRUCK coding leaves a row behind on purpose (an
+-- absent row would let a lower-HLC coding arriving later win by default — db/042 part 4),
+-- with NULL anchor columns. Testing row existence would keep preferring that member, and
+-- because this ORDER BY moves the WHOLE ROW (see the breadth note above), the group would
+-- go on reading under the term/dose/sig of the member whose identity somebody explicitly
+-- retracted. Testing coding_code instead lets a struck member fall back to the pre-0059
+-- keys, exactly as if it had never been coded — which is what a strike means.
 ORDER BY g.group_id,
-         (mc.medication_id IS NOT NULL) DESC,
+         (mc.coding_code IS NOT NULL) DESC,
          mc.coding_system COLLATE "C", mc.coding_code COLLATE "C",
          (s.medication_id = g.group_id) DESC,
          s.medication_id;

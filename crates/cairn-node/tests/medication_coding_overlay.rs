@@ -698,3 +698,383 @@ async fn an_orphan_coding_claims_the_thread_for_its_chart() {
         "an orphan coding establishes the thread's standing chart"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Struck-aware downstream (Task 5). These are the tests that prove slice 6a's
+// table-not-columns decision paid off: the dup-key and the anchor-conflict view degrade on
+// their own through the existing coalesce, and only ONE downstream predicate needed an
+// edit — the prefer-coded group display, which tested row EXISTENCE rather than anchor
+// presence.
+// ---------------------------------------------------------------------------
+
+const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
+
+fn coded_input(
+    term: &'static str,
+    code: &'static str,
+) -> cairn_node::medication::AssertMedicationInput<'static> {
+    cairn_node::medication::AssertMedicationInput {
+        term,
+        coding: Some(SubstanceCoding {
+            system: "drugref-moiety",
+            code,
+            display: "atorvastatin",
+        }),
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "patient-reported",
+        started: None,
+        started_precision: None,
+    }
+}
+
+/// Strike a thread's coding. `corrects` names an unknown event on purpose here: the floor
+/// deliberately admits an unknown target (offline-first), and these tests are about the
+/// projection, not about target resolution.
+async fn strike_coding(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uuid, med: Uuid) {
+    cairn_node::medication::correct_medication_coding(
+        c,
+        sk,
+        kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CorrectCodingInput {
+            corrects: Uuid::now_v7(),
+            coding: None,
+            strike: true,
+            note: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
+/// The group display's (term, coding_display). BOTH matter: db/033's ORDER BY picks the
+/// DISTINCT ON winner for the WHOLE ROW, so a struck member that is still preferred drags
+/// its term along too — asserting only the coding display would pass on a NULL column while
+/// the group still read under the retracted member's identity.
+async fn group_display_row(c: &Client, patient: Uuid) -> (String, Option<String>) {
+    let r = c
+        .query_one(
+            "SELECT term, coding_display FROM medication_group_display \
+               WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap();
+    (r.get(0), r.get(1))
+}
+
+#[tokio::test]
+async fn a_struck_coding_stops_winning_the_group_display() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // A vague thread and a coded thread, reconciled into one group. Slice 6a makes the
+    // coded member the group's display; after a strike it must stop being preferred, or
+    // the group reads under a coding somebody explicitly retracted.
+    let vague = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    let coded = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    cairn_node::medication::reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        vague,
+        coded,
+        &cairn_node::medication::ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        group_display_row(&c, patient).await,
+        ("Lipitor".to_string(), Some("atorvastatin".to_string())),
+        "6a: the coded member wins the group display, term and all"
+    );
+
+    strike_coding(&mut c, &sk, &kid, patient, coded).await;
+    assert_eq!(
+        group_display_row(&c, patient).await,
+        ("little white pill".to_string(), None),
+        "a struck coding must stop being preferred: the group falls back to the pre-0059 \
+         winner (the group_id member) rather than reading under a retracted coding"
+    );
+}
+
+#[tokio::test]
+async fn a_struck_thread_returns_to_the_term_dup_key() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Two threads with the SAME term, one coded: they key apart (6a's documented
+    // coded<->uncoded blind spot). Striking the coding makes both key on the term, so the
+    // duplicate flag appears — the degradation falling out of the existing coalesce with no
+    // dup-key change at all ('code:' || NULL is NULL in SQL).
+    let mut input = coded_input("atorvastatin", MOIETY_ATORVASTATIN);
+    let coded = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    input.coding = None;
+    cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &input,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let before: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_reconciliation_flag WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        before, 0,
+        "coded and uncoded key apart (6a's documented gap)"
+    );
+
+    strike_coding(&mut c, &sk, &kid, patient, coded).await;
+    let after: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_reconciliation_flag WHERE patient_id = $1::text::uuid",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, 1,
+        "with the anchor struck, both threads key on the term again"
+    );
+}
+
+#[tokio::test]
+async fn a_struck_coding_clears_the_anchor_conflict() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    // Two DIFFERENTLY-coded threads reconciled into one group raise 6a's advisory
+    // anchor-conflict row. Striking one anchor resolves the disagreement honestly — one
+    // live anchor, one acknowledged unknown — and the count(DISTINCT ...) ignores the NULL
+    // with no view change of its own.
+    let a = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Lipitor", MOIETY_ATORVASTATIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let b = cairn_node::medication::assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &coded_input("Diabex", MOIETY_METFORMIN),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    cairn_node::medication::reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        a,
+        b,
+        &cairn_node::medication::ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    // The view is keyed on group_id (it carries no patient column), so reach it through
+    // the membership table.
+    let conflict_sql = "SELECT count(*) FROM medication_group_coding_conflict \
+                          WHERE group_id IN (SELECT group_id FROM medication_group_member \
+                                              WHERE medication_id = $1::text::uuid)";
+    let conflicts: i64 = c
+        .query_one(conflict_sql, &[&a.to_string()])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(conflicts, 1, "6a: two anchors in one group conflict");
+
+    strike_coding(&mut c, &sk, &kid, patient, b).await;
+    let after: i64 = c
+        .query_one(conflict_sql, &[&a.to_string()])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, 0,
+        "striking one of the two anchors clears the conflict — one live anchor is coherent"
+    );
+}
+
+#[tokio::test]
+async fn the_worklist_distinguishes_never_coded_from_struck() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+
+    let never = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    let struck_thread = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        struck_thread,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    strike_coding(&mut c, &sk, &kid, patient, struck_thread).await;
+
+    let coded_thread = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        coded_thread,
+        &cairn_node::medication::CodeMedicationInput { coding: coding() },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let rows = c
+        .query(
+            "SELECT medication_id::text, previously_struck FROM patient_medication_uncoded \
+               WHERE patient_id = $1::text::uuid ORDER BY previously_struck",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "the coded thread must not appear in the worklist"
+    );
+    assert_eq!(rows[0].get::<_, String>(0), never.to_string());
+    assert!(!rows[0].get::<_, bool>(1), "never coded");
+    assert_eq!(rows[1].get::<_, String>(0), struck_thread.to_string());
+    assert!(
+        rows[1].get::<_, bool>(1),
+        "a struck thread is genuinely uncoded and must stay in the queue, flagged"
+    );
+}
+
+#[tokio::test]
+async fn a_ceased_thread_leaves_the_worklist() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
+    let listed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_uncoded WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(listed, 1);
+
+    // Coding a stopped medication is work nobody needs: the worklist is a queue of live
+    // clinical identity questions, not an archive audit.
+    cairn_node::medication::cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        med,
+        &cairn_node::medication::CeaseMedicationInput {
+            stopped: Some("2026-01"),
+            stopped_precision: Some("month"),
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let after: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_medication_uncoded WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(after, 0, "a ceased thread drops off the coder worklist");
+}

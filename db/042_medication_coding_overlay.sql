@@ -259,4 +259,35 @@ ON CONFLICT (event_type, apply_fn) DO UPDATE SET
 WHERE (r.projection_tables, r.run_order, r.heal_safe)
       IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
+-- 8. The coder worklist. ADR-0059 decision 3 makes an uncoded medication "an honest
+--    not-yet-coded state routed to a coder worklist, never a forced guess" — this is that
+--    route. Active (non-ceased) threads with no LIVE anchor: either never coded (no
+--    medication_coding row at all) or struck (a row whose anchor is NULL).
+--
+--    previously_struck separates the two, and the distinction is CLINICAL, not bookkeeping:
+--    "nobody has coded this yet" invites a coder to code it, whereas "a reviewer
+--    established this is NOT what it was coded as" is a warning against re-coding it from
+--    the same weak evidence that produced the error. Both must appear — a struck coding is
+--    genuinely uncoded and must not vanish from the queue — but a coder needs to see which
+--    is which.
+--
+--    A CEASED thread is excluded: the worklist is a queue of live clinical identity
+--    questions, not an archive audit.
+--
+--    Created only HERE, in one file, so it never enters the multi-file view-replay problem
+--    (#207 — every migration re-runs on every connect, and a view defined in two files
+--    silently takes whichever definition loads last).
+CREATE OR REPLACE VIEW patient_medication_uncoded AS
+SELECT s.patient_id,
+       s.medication_id,
+       s.term,
+       coalesce(mc.struck, FALSE)         AS previously_struck,
+       to_timestamp(s.hlc_wall / 1000.0)  AS asserted_at
+FROM medication_statement s
+LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
+WHERE mc.coding_code IS NULL
+  AND NOT EXISTS (SELECT 1 FROM medication_cessation c
+                   WHERE c.medication_id = s.medication_id);
+GRANT SELECT ON patient_medication_uncoded TO cairn_agent;
+
 COMMIT;
