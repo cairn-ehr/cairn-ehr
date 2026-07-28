@@ -4358,7 +4358,17 @@ mod quarantine_tests {
         // Knock the seq cursor off event_log — the shape a pre-db/036 DB is in.
         // connect_checked only CONNECTS + probes (it does not reload the schema),
         // so the missing column is not silently re-added under it.
-        c.batch_execute("ALTER TABLE event_log DROP COLUMN seq")
+        //
+        // RENAME, NOT DROP (#296). A drop-then-re-add left the shared test database
+        // permanently reordered: the migrations re-add with `ADD COLUMN IF NOT EXISTS`,
+        // which appends at the END of the attribute list, so `seq` came back AFTER
+        // db/040's `clock_grade` and every later positional `ROW(...)::event_log`
+        // construction in any crate silently bound the wrong value into the wrong column.
+        // That is the whole cause of the long-carried "recreate the test databases"
+        // gotcha. A rename is invisible to the probe in exactly the same way (no column
+        // named `seq` exists) but preserves the column's position, its data, and its
+        // dependent objects, so renaming back is an EXACT restore.
+        c.batch_execute("ALTER TABLE event_log RENAME COLUMN seq TO seq_pre036_probe")
             .unwrap();
         // (No unwrap_err: postgres::Client is not Debug, so destructure by hand.)
         let err = match connect_checked(&base) {
@@ -4374,8 +4384,8 @@ mod quarantine_tests {
             "error must name the missing migration, got: {err}"
         );
 
-        // Restore for whatever suite runs next under the shared lock.
-        c.batch_execute(include_str!("../../../db/036_clinical_sync_seq.sql"))
+        // Restore for whatever suite runs next under the shared lock — exactly, in place.
+        c.batch_execute("ALTER TABLE event_log RENAME COLUMN seq_pre036_probe TO seq")
             .unwrap();
         assert!(
             connect_checked(&base).is_ok(),
