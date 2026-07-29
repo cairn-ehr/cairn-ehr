@@ -128,10 +128,14 @@ run_with_timeout() {
   (
     sleep "$secs"
     # Kill the process group (-$cmd_pid), not just the direct child.
-    # This ensures all descendants are reaped.
+    # This ensures all descendants are reaped. Also kill the bare PID as a
+    # fallback: if job control (set -m) somehow didn't give the child its
+    # own process group, the group kill above would miss it entirely.
     kill -TERM -- -"$cmd_pid" 2>/dev/null
+    kill -TERM "$cmd_pid" 2>/dev/null
     sleep 15
     kill -KILL -- -"$cmd_pid" 2>/dev/null
+    kill -KILL "$cmd_pid" 2>/dev/null
   ) &
   local watch_pid=$!
   local rc=0

@@ -92,9 +92,9 @@ Deliberately dumb — all intelligence is in the worker.
     waiting is capped by `--max-wait` (default 6 h; `0` = wait indefinitely, for
     weekly-cap survival) — beyond the cap, summarize and exit with a clear message.
   - timeout kill or anything else → `failed`.
-- Flags: `--max-issues N`, `--include-epics`, `--dry-run`, `--issue N` (force one
-  specific issue), `--bypass`, `--max-wait H`.
-- On any exit: run summary (merged / retried / failed / remaining) + notification.
+- Flags: `--max-issues N`, `--include-epics`, `--issue N` (force one
+  specific issue), `--bypass`, `--max-wait H`, `--timeout H`, `--smoke`, `--setup-labels`.
+- On any exit: run summary (merged / skipped / failed / iterations) + notification.
 
 The orphaned `loop:in-progress` label left by any kill (timeout, rate limit, crash) is
 the next worker's crash-recovery signal (§7 step 0).
@@ -129,7 +129,7 @@ One fresh session, one issue, full cycle. All steps leave GitHub evidence.
 9. **Docs**: HANDOVER/ROADMAP updated only if state materially changed; bundled in the
    same PR.
 10. **Merge**: `gh pr merge --auto --merge` (merge-commit convention; `--auto` waits for
-    the 5 required checks). CI red → one diagnosis-and-fix attempt, then treat as cycle
+    the required checks). CI red → one diagnosis-and-fix attempt, then treat as cycle
     failure.
 11. **Cleanup**: remove worktree + branch, verify the issue auto-closed, remove
     `loop:in-progress`, write `outcome.json`, exit.

@@ -19,7 +19,7 @@ yourself (triage only, no launch).
   running — tell the user and stop. A dead or unrelated PID is a stale
   lock; the driver reclaims it itself, so proceed.
 
-## 2. Triage (spec §5)
+## 2. Triage (design doc §5)
 
 Collect issues to classify: every OPEN issue with NO `loop:*` label, plus
 every `loop:blocked` issue (re-check whether its blocker has cleared).

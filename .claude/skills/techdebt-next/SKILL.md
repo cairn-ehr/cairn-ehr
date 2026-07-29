@@ -27,6 +27,10 @@ denied command in `detail`), `smoke-ok` (smoke mode only).
 If `TECHDEBT_OUTCOME_FILE` is unset (standalone use), skip all outcome
 writes and just report to the user in prose.
 
+Read `TECHDEBT_*` variables with the allowlisted idiom
+`jq -n 'env.TECHDEBT_OUTCOME_FILE'` (or `echo "${TECHDEBT_SMOKE:-}"`) —
+`env` and `printenv` are not on the permission allowlist.
+
 **Permission denials:** if any tool call fails because permission was
 denied, do NOT improvise around it with different commands. Roll back
 nothing, write outcome `failed-permission` with the denied command in
@@ -44,7 +48,10 @@ end your turn. Touch nothing else — no labels, no issues, no branches.
 1. `git fetch origin main`.
 2. `gh issue list --label "loop:in-progress" --state open --json number`
    — a non-empty result means a previous worker died mid-cycle. ADOPT the
-   lowest-numbered one instead of picking fresh: reconstruct its position
+   lowest-numbered one instead of picking fresh — unless `TECHDEBT_FORCE_ISSUE`
+   is set and names a DIFFERENT issue, in which case skip adoption entirely
+   and proceed to Step 1 with the forced issue (the in-progress one stays
+   claimed for the next non-forced run): reconstruct its position
    from GitHub state and resume from there:
 
    Reconstruct its position with these commands (the crashed session chose
@@ -125,7 +132,9 @@ cleverness, no hard-coded crypto material in tests.
 
 Dispatch the `pr-review-toolkit:code-reviewer` agent on your working diff
 (`git diff origin/main...HEAD`). Fix every finding it confirms; re-run the
-local gate after fixes.
+local gate after fixes. A finding genuinely out of scope for this issue
+gets a follow-up GitHub issue instead (house rule 5) — never drop it
+silently.
 
 ## Step 7 — PR + second full review
 
@@ -145,7 +154,7 @@ local gate after fixes.
    / `ROADMAP.md` in the SAME PR (keep both under 500 lines). Skip when
    nothing material changed — most tech debt.
 2. `gh pr merge <pr> --auto --merge` (merge commit; --auto waits for the
-   5 required checks).
+   required checks).
 3. Poll every 2 minutes (max 40 min per CI run — the budget restarts when
    you push a fix and re-enable auto-merge):
    `gh pr view <pr> --json state,statusCheckRollup`.
@@ -190,4 +199,4 @@ outcome `merged` (step "cleanup", pr number filled in). End your turn.
 - Never `git push --force`, never rewrite main, never merge a red PR.
 - Never touch issues without a `loop:*` label (sole exception: a
   `TECHDEBT_FORCE_ISSUE` issue — operator-chosen).
-- The outcome file write is always your last file action.
+- The outcome file write (when `TECHDEBT_OUTCOME_FILE` is set) is always your last file action.
