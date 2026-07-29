@@ -351,9 +351,10 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
         -- dismissable rule below). That is correct — an unverified token must not move the
         -- gate in EITHER direction.
         --
-        -- Two other readers of event_log.attester_key carry the same exclusion:
-        -- patient_link_apply (db/018) and medication_attestation_apply (db/034). A new
-        -- reader of these columns owes the same choice.
+        -- Two other readers of event_log.attester_key owe the same exclusion:
+        -- patient_link_apply (db/018) and medication_attestation_apply (db/034), both
+        -- fixed in the commits that follow this one. A new reader of these columns owes
+        -- the same choice.
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
           AND cairn_attestation_vouched(p_target)
