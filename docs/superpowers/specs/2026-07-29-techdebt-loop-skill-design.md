@@ -1,0 +1,172 @@
+# Tech-debt elimination loop — skill design
+
+**Date:** 2026-07-29
+**Status:** Approved design, pre-implementation
+**Owner:** HH
+
+## 1. Goal
+
+Systematically drain the GitHub issue backlog of bounded tech-debt fixes, one issue at a
+time, each through a full quality cycle (plan → TDD → review → PR → second full PR review →
+docs → merge), with a **fresh context per issue** so issue #40-in-a-row gets the same
+attention as issue #1. Runs unattended until the ready backlog is dry.
+
+## 2. Decisions made during brainstorming
+
+| Question | Decision |
+|---|---|
+| Merge policy | **Auto-merge everything** once CI is green and both reviews are clean. Branch protection (5 required checks, `enforce_admins`) is the hard backstop — nothing red can merge. |
+| Issue eligibility | **Self-triage with labels** at the start of every run; blocked issues re-examined each round (deferral to later rounds falls out naturally). |
+| Run scope | **Until dry, with safety valves** (2 consecutive cycle-failures stop the run; per-issue retry-once-then-park). |
+| Issue size | **Bounded single-PR fixes only**; multi-PR feature slices labeled `loop:epic`, eligible only with `--include-epics`. |
+| Architecture | **Outer bash driver + one fresh headless `claude -p` session per issue** (Approach A). Worker skill also usable standalone/attended. |
+| Permissions | **Allowlist-first, graduate to bypass**: project-settings allowlist + `acceptEdits`, driver flag `--bypass` for later. Permission denials stop the run without penalizing the issue. |
+
+## 3. Architecture
+
+Three committed artifacts plus a label taxonomy:
+
+| Artifact | Role |
+|---|---|
+| `.claude/skills/techdebt-next/SKILL.md` | **Worker**: does exactly one issue through the full cycle. Standalone-invocable (`/techdebt-next`) for attended runs. |
+| `.claude/skills/techdebt-loop/SKILL.md` | **Entry point**: preflight, triage pass, then launches the driver. |
+| `scripts/techdebt-loop.sh` | **Driver**: dumb bash loop; spawns worker sessions, counts failures, times out, logs, summarizes. |
+
+**Load-bearing principle: GitHub is the only state store.** Labels, issue comments, PR
+state, and CI status fully determine where the loop is. No session remembers anything;
+restarting after any crash is always just re-running the driver. This is what makes
+"clear context per issue" safe.
+
+Run logs live in `~/.cairn-loop/run-<timestamp>/`: one transcript per iteration plus the
+worker's `outcome.json` handoff files. Outside the repo.
+
+## 4. Label taxonomy
+
+| Label | Meaning | Set by |
+|---|---|---|
+| `loop:ready` | Bounded, autonomously fixable, dependencies met | Triage |
+| `loop:blocked` | Blocked by unmerged work / upstream / hardware; comment records what unblocks it. Re-examined every run. | Triage |
+| `loop:needs-human` | Needs HH's judgment (design sessions, decisions) | Triage |
+| `loop:epic` | Multi-PR feature slice; eligible only with `--include-epics` | Triage |
+| `loop:in-progress` | A worker session owns this issue right now (or crashed owning it) | Worker |
+| `loop:retry` | First cycle failed (comment has detail); one more attempt in a later round | Worker |
+| `loop:failed` | Second cycle failed; permanently parked for human triage | Worker |
+
+Labels are created idempotently on first run. Issues already carrying a `loop:*` label are
+not re-triaged, except `loop:blocked` (unblocking check) — so triage cost shrinks each run.
+
+## 5. Triage pass
+
+Runs at the start of every `/techdebt-loop` invocation, in the launching (interactive)
+session, fanning out subagents over unlabeled issues. Classification per §4. Every
+non-`ready` classification gets a one-comment justification on the issue (audit trail;
+also the input for the next run's re-check of `loop:blocked`).
+
+`--dry-run` stops after triage and prints the classification table — recommended for the
+first run so HH can sanity-check labels before any code is touched.
+
+## 6. Driver (`scripts/techdebt-loop.sh`)
+
+Deliberately dumb — all intelligence is in the worker.
+
+- **Lockfile** (`~/.cairn-loop/lock`) prevents two concurrent loops.
+- Loop body: spawn `claude -p "/techdebt-next" --permission-mode acceptEdits`
+  (or `--dangerously-skip-permissions` with `--bypass`) with a **per-iteration timeout**
+  (default 3 h), transcript teed to the run dir.
+- After each iteration, read the worker's `outcome.json`:
+  - `merged` — reset consecutive-failure counter, continue.
+  - `skipped` — worker relabeled the issue (e.g. discovered it is an epic at plan time)
+    without attempting it: continue, counter untouched.
+  - `dry` — no `loop:ready` issues remain: summarize, notify, exit 0.
+  - `failed` — increment counter; **2 consecutive failures aborts the run** (systemic
+    problem: CI infra, DB substrate, allowlist rot).
+  - `failed-permission` — **abort immediately without penalizing the issue** (its labels
+    are untouched); print the denied command so HH extends the allowlist and re-runs.
+- Flags: `--max-issues N`, `--include-epics`, `--dry-run`, `--issue N` (force one
+  specific issue), `--bypass`.
+- On any exit: run summary (merged / retried / failed / remaining) + notification.
+
+Timeout expiry counts as `failed` for that cycle; the orphaned `loop:in-progress` label is
+the next worker's crash-recovery signal (§7 step 0).
+
+## 7. Worker cycle (`/techdebt-next`)
+
+One fresh session, one issue, full cycle. All steps leave GitHub evidence.
+
+0. **Preflight & crash recovery**: fetch main. If a stale `loop:in-progress` issue
+   exists, adopt it: reconstruct position from GitHub (branch exists? PR open? CI state?
+   review posted?) and resume its cycle from there instead of picking fresh.
+1. **Pick**: lowest-numbered `loop:ready` (honoring `--issue N`); label
+   `loop:in-progress`; comment "cycle started" with session identifier.
+2. **Worktree**: branch `loop/<issue>-<slug>` off fresh `main`. Serial execution +
+   always-branch-from-merged-main = no conflict stacking.
+3. **Plan**: brief written plan posted as an issue comment (auditable design record).
+   Includes the `## Paper-parity benchmark (§1.2)` section per house rule 7 — most tech
+   debt takes the one-line not-clinical-surface escape, but the gate test
+   (`paper_parity_plan_section.rs`) applies to plan files, and clinical-surface issues
+   must genuinely address it.
+4. **TDD**: failing test first, then the fix (house rule 2).
+5. **Local gate**: full-workspace `cargo test` (never `-p`, never piped through `tail`),
+   `cargo fmt --check`, `cargo clippy`, SQL-mirror tests (`scripts/run-db-sql-tests.sh`)
+   when `db/` is touched, cairn_test DB recreation when `event_log` columns change.
+6. **Pre-PR review**: code-reviewer subagent on the working diff; fix findings.
+7. **PR**: open with `Fixes #N` + clear description.
+8. **Second, full PR review**: a *fresh-context* multi-agent review of the complete PR
+   (whole diff + tests + description — not the incremental working view; empirically it
+   still finds real issues). Findings: fix in place, or file a follow-up issue if out of
+   scope (house rule 5) — never silently dropped. (`/code-review ultra` is user-triggered
+   and billed; the loop cannot launch it and does not try.)
+9. **Docs**: HANDOVER/ROADMAP updated only if state materially changed; bundled in the
+   same PR.
+10. **Merge**: `gh pr merge --auto --merge` (merge-commit convention; `--auto` waits for
+    the 5 required checks). CI red → one diagnosis-and-fix attempt, then treat as cycle
+    failure.
+11. **Cleanup**: remove worktree + branch, verify the issue auto-closed, remove
+    `loop:in-progress`, write `outcome.json`, exit.
+
+**Failure handling**: on irrecoverable failure at any step — label `loop:retry` (first
+time) or `loop:failed` (second), post a detailed comment (step reached, error, what was
+tried), convert any open PR to draft, clean the worktree, write `outcome.json` with
+`failed` + reason, exit. A permission denial instead writes `failed-permission` + the
+denied command and leaves the issue's labels untouched.
+
+## 8. Permissions
+
+Start with a curated allowlist in project settings (git, gh, cargo, uv, psql,
+`scripts/*`; seeded via `/fewer-permission-prompts` from transcript history) and
+`--permission-mode acceptEdits`. The `failed-permission` outcome (§6) makes allowlist
+gaps cheap: the run stops, HH adds the pattern, re-runs; no issue is penalized. Once the
+allowlist has matured through a few supervised runs, graduate to `--bypass`
+(`--dangerously-skip-permissions`) for maximum unattended robustness. Branch protection
+remains the merge gate in both modes.
+
+## 9. Non-goals
+
+- No parallel issue execution (serial by design — conflict-free, reviewable, simple).
+- No autonomous work on `loop:needs-human` / `loop:blocked` / unlabeled issues.
+- No `/code-review ultra` invocation.
+- No cross-repo operation (cairn-ehr only, though nothing prevents later reuse).
+- The loop does not create architecture: an issue whose fix would require a new ADR or
+  spec change is `loop:needs-human` by triage definition.
+
+## 10. Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Worker merges something subtly wrong | Two independent reviews + TDD + full CI + HH's async audit of merged PRs; pre-clinical posture bounds blast radius |
+| Runaway loop burns tokens on a hopeless issue | Retry-once-then-park; 2-consecutive-failure abort; per-iteration timeout; `--max-issues` |
+| Allowlist gap mid-run | `failed-permission` outcome: stop, no issue penalized, exact command reported |
+| Crashed session leaves an issue claimed | `loop:in-progress` + GitHub-state reconstruction in the next session's preflight |
+| Two loops collide | Driver lockfile |
+| Shared-file churn (HANDOVER/ROADMAP) across serial PRs | Each cycle branches from freshly-merged main; docs touched only when material |
+| Triage misclassifies an epic as ready | Worker re-checks scope at plan time; if the plan exceeds single-PR size, it relabels `loop:epic`, comments, and moves on (counts as no attempt, not a failure) |
+
+## 11. Deferred to the implementation plan
+
+- Exact allowlist seed list and settings file placement.
+- Verification that `claude -p "/techdebt-next"` invokes the skill in the installed CLI
+  version, and exact flag set (output format, model).
+- Notification mechanism at run end (terminal summary at minimum).
+- `outcome.json` schema (issue, outcome, step reached, PR/commit refs, denied command).
+- Whether the second review reuses `code-review:code-review` or a purpose-built
+  multi-agent review prompt.
