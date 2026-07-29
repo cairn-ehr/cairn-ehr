@@ -985,12 +985,24 @@ async fn an_unvouched_token_never_becomes_an_attester_kid() {
     // A well-formed attested event, admitted through the normal (classified) door so its
     // token is genuinely verified and it projects a row.
     let med_id = Uuid::now_v7();
+    // medication_attestation is append-only / NOT truncated between serialized tests (no FK
+    // to event_log for setup()'s CASCADE to reach) — at least eight test binaries in this
+    // crate write it, and test_serial_guard only serializes access, never orders it. Scope
+    // both counts to THIS probe's own med_id rather than counting the whole table, or this
+    // precondition is a race against every other suite (issue #296 pattern: failure far from
+    // cause, only on some runs).
     let rows_before: i64 = c
-        .query_one("SELECT count(*) FROM medication_attestation", &[])
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&med_id.to_string()],
+        )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(rows_before, 0, "precondition: a clean projection table");
+    assert_eq!(
+        rows_before, 0,
+        "precondition: no row yet for this probe's medication_id"
+    );
 
     // Drive the ordinary attestation flow via the deferred path so we own the row: defer,
     // classify, promote. UNKNOWN_TYPE stands in for any future type that reads attester_key.
@@ -1036,7 +1048,10 @@ async fn an_unvouched_token_never_becomes_an_attester_kid() {
     .expect("the apply fn must DEGRADE (no row), never raise — a raise wedges the event");
 
     let rows_after: i64 = c
-        .query_one("SELECT count(*) FROM medication_attestation", &[])
+        .query_one(
+            "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+            &[&med_id.to_string()],
+        )
         .await
         .unwrap()
         .get(0);
