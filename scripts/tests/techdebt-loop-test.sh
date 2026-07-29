@@ -131,4 +131,43 @@ t_assert_ok "stale lock (dead pid) is reclaimed" acquire_lock
 release_lock
 t_teardown
 
+# ---- run_with_timeout: descendants killed (group kill) ----
+t_setup
+run_with_timeout 1 sh -c 'sleep 37 & wait'
+t_assert_eq "forked descendant killed with parent" "124" "$?"
+t_assert_fail "child process reaped" pgrep -f "sleep 37"
+t_teardown
+
+# ---- run_with_timeout: elapsed-time timeout (SIGTERM-trap evasion) ----
+t_setup
+run_with_timeout 1 bash -c 'trap "exit 0" TERM; while :; do sleep 1; done'
+t_assert_eq "SIGTERM trap to exit 0 still times out" "124" "$?"
+t_teardown
+
+# ---- acquire_lock: empty pid file grace period ----
+t_setup
+LOOP_HOME="$T_TMP/loophome2"
+mkdir -p "$LOOP_HOME/lock"
+# No pid file: a race-window stale lock from an in-flight write
+t_assert_ok "empty lock dir reclaimed after grace" acquire_lock
+release_lock
+t_teardown
+
+# ---- acquire_lock: PID reuse safety (unrelated process) ----
+t_setup
+LOOP_HOME="$T_TMP/loophome3"
+mkdir -p "$LOOP_HOME"
+# Start a long-lived unrelated process and grab its PID
+sleep 41 &
+UNRELATED_PID=$!
+mkdir -p "$LOOP_HOME/lock"
+echo "$UNRELATED_PID" > "$LOOP_HOME/lock/pid"
+# acquire_lock should recognize it's not our loop and reclaim the lock
+t_assert_ok "unrelated process PID treated as stale" acquire_lock
+release_lock
+# Clean up the background process
+kill "$UNRELATED_PID" 2>/dev/null || true
+wait "$UNRELATED_PID" 2>/dev/null || true
+t_teardown
+
 t_summary

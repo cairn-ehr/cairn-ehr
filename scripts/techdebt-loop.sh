@@ -117,13 +117,21 @@ compute_wait_secs() {
 # caller can tell "took too long" from the command's own failures.
 run_with_timeout() {
   local secs="$1"; shift
+  local start
+  start=$(date +%s)
+  # Enable job control so the spawned command gets its own process group
+  # (pgid == pid). This lets us kill the entire tree with a negative PID.
+  set -m
   "$@" &
   local cmd_pid=$!
+  set +m
   (
     sleep "$secs"
-    kill -TERM "$cmd_pid" 2>/dev/null
+    # Kill the process group (-$cmd_pid), not just the direct child.
+    # This ensures all descendants are reaped.
+    kill -TERM -- -"$cmd_pid" 2>/dev/null
     sleep 15
-    kill -KILL "$cmd_pid" 2>/dev/null
+    kill -KILL -- -"$cmd_pid" 2>/dev/null
   ) &
   local watch_pid=$!
   local rc=0
@@ -139,6 +147,15 @@ run_with_timeout() {
   if [ "$rc" = "143" ] || [ "$rc" = "137" ]; then
     rc=124
   fi
+  # Elapsed time is the ground truth: if the child caught SIGTERM and
+  # exited 0 anyway, elapsed time shows we timed out. Normalize to 124.
+  local now
+  now=$(date +%s)
+  if [ "$rc" != "124" ] && [ $((now - start)) -ge "$secs" ]; then
+    rc=124
+  fi
+  # Unconditionally reap the watcher to prevent zombies.
+  wait "$watch_pid" 2>/dev/null || true
   return "$rc"
 }
 
@@ -155,16 +172,43 @@ acquire_lock() {
   fi
   local oldpid
   oldpid="$(cat "$lockdir/pid" 2>/dev/null || true)"
-  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
-    return 1  # a live loop holds the lock
+  # If the pid file is empty/missing, we hit a TOCTOU race: the lock
+  # winner has created the dir but hasn't written its pid yet. Grace period:
+  # sleep and re-read. A live winner writes its pid within microseconds;
+  # a second is a generous grace.
+  if [ -z "$oldpid" ]; then
+    sleep 1
+    oldpid="$(cat "$lockdir/pid" 2>/dev/null || true)"
   fi
-  # Stale lock from a dead process: reclaim it.
+  # Check if the oldpid is a live techdebt-loop process. `kill -0` can't
+  # distinguish our loop from an unrelated process that recycled the PID,
+  # so check the command line: only a process running techdebt-loop counts.
+  if [ -n "$oldpid" ]; then
+    local cmd
+    cmd="$(ps -p "$oldpid" -o command= 2>/dev/null || true)"
+    if [ -n "$cmd" ] && echo "$cmd" | grep -q "techdebt-loop"; then
+      return 1  # a live loop holds the lock
+    fi
+  fi
+  # Stale lock from a dead process or unrelated PID: reclaim it.
   rm -rf "$lockdir"
   mkdir "$lockdir" 2>/dev/null && echo $$ > "$lockdir/pid"
 }
 
 release_lock() {
-  rm -rf "$LOOP_HOME/lock"
+  local lockdir="$LOOP_HOME/lock"
+  local pidfile="$lockdir/pid"
+  # Only remove the lock if we own it: the pid file is missing OR contains $$
+  if [ -f "$pidfile" ]; then
+    local stored_pid
+    stored_pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [ "$stored_pid" = "$$" ]; then
+      rm -rf "$lockdir"
+    fi
+  else
+    # Pid file missing: we own the lock (no one else holds it).
+    rm -rf "$lockdir"
+  fi
 }
 
 # ---- test guard: when sourced by the test harness, stop here ----
