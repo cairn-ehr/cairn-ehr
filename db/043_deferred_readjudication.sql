@@ -117,6 +117,12 @@ BEGIN
                 IF NOT cairn_responsibility_bound(b, r.attester_key) THEN
                     RAISE EXCEPTION 'a contributor claims responsibility for an actor other than the verified attester (issue #195)';
                 END IF;
+                -- VOUCHED, at last. Every check the door would have run has now run
+                -- against this token, so it stops being "carried" and becomes a real
+                -- vouch. Inside the per-row subtransaction deliberately: if a LATER
+                -- gate refuses this event, this clear rolls back with it and the token
+                -- stays honestly unvouched.
+                DELETE FROM event_attestation_unvouched WHERE event_id = r.event_id;
             END IF;
 
             -- Deferred gates 2 and 3 — overlay-target-exists and the ADR-0043 owner-gate

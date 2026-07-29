@@ -454,6 +454,16 @@ BEGIN
         INSERT INTO event_deferred (event_id, event_type)
         VALUES (v_event_id, v_type)
         ON CONFLICT (event_id) DO NOTHING;
+        -- The token stored at step 4 above was never verified (nothing here COULD verify
+        -- it — the gate is deferred with the interpretation), so name that state now.
+        -- Only when a token actually travelled: an event that carried none has nothing
+        -- unvouched about it, and a spurious row would make every reader needlessly
+        -- exclude a row whose attester_key is NULL anyway.
+        IF v_att_key IS NOT NULL OR v_att IS NOT NULL THEN
+            INSERT INTO event_attestation_unvouched (event_id)
+            VALUES (v_event_id)
+            ON CONFLICT (event_id) DO NOTHING;
+        END IF;
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy; ADR-0013,

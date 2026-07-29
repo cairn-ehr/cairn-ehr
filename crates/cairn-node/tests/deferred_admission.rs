@@ -728,3 +728,126 @@ async fn deferred_listing_query_returns_the_operator_columns() {
         "a never-adjudicated row must read as such, not as a blank refusal"
     );
 }
+
+/// The marker's LIFETIME is the whole point (design §3). `event_deferred` answers "has this
+/// been adjudicated?"; this second marker answers "is the stored attester_key vouched?" — and
+/// those two facts stop agreeing the moment promotion deletes the first. Three states:
+/// carried-and-unverified, verified-at-promotion (cleared), promoted-but-never-gated (kept).
+#[tokio::test]
+async fn an_unvouched_marker_tracks_whether_a_token_was_ever_verified() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_a, _kid_a, sk_h, kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // A token that WOULD verify, on an event that bears responsibility — so gate 1 runs.
+    let mut b = peer_event(&kid_h, p, UNKNOWN_TYPE, WALL_2026);
+    b.contributors = serde_json::json!([{
+        "actor_id": kid_h, "role": "authored",
+        "responsibility": {"held_by": kid_h}
+    }]);
+    let signed = sign(&b, &sk_h).unwrap();
+    let token = cairn_event::sign_attestation(
+        &cairn_event::event_address(&signed.signed_bytes),
+        &kid_h,
+        "attested",
+        &sk_h,
+    )
+    .unwrap();
+    let hkey = hex::decode(&kid_h).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &token, &hkey],
+    )
+    .await
+    .unwrap();
+
+    // State 1: carried, not vouched. The door stored a token it could not verify.
+    let unvouched: i64 = c
+        .query_one("SELECT count(*) FROM event_attestation_unvouched", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        unvouched, 1,
+        "a deferred event carrying a token must be marked unvouched — nothing verified it"
+    );
+
+    // State 2: gate 1 runs (the type bears responsibility) and the token verifies.
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+    c.execute("SELECT 1 FROM cairn_readjudicate_deferred()", &[])
+        .await
+        .unwrap();
+    let unvouched: i64 = c
+        .query_one("SELECT count(*) FROM event_attestation_unvouched", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        unvouched, 0,
+        "gate 1 verified the token, so the unvouched marker must be CLEARED"
+    );
+}
+
+/// The state that produced the F2 hole: an additive event bearing NO responsibility. No gate
+/// ever demands its token, so promotion must leave the unvouched marker STANDING — the marker
+/// outliving `event_deferred` is exactly what the fix depends on.
+#[tokio::test]
+async fn a_never_gated_token_stays_unvouched_after_promotion() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let b = peer_event(&kid_a, p, UNKNOWN_TYPE, WALL_2026);
+    let signed = sign(&b, &sk_a).unwrap();
+    // Keys are DERIVED, never literals (house rule 6): a blob that could never verify.
+    let bogus: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(7)).collect();
+    let akey = hex::decode(&kid_a).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &bogus, &akey],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+    c.execute("SELECT 1 FROM cairn_readjudicate_deferred()", &[])
+        .await
+        .unwrap();
+
+    let deferred: i64 = c
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 0, "precondition: an additive event promotes");
+    let unvouched: i64 = c
+        .query_one("SELECT count(*) FROM event_attestation_unvouched", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        unvouched, 1,
+        "no gate demanded this token, so nothing verified it — the marker must OUTLIVE \
+         event_deferred, which is the whole reason it is a separate table"
+    );
+}

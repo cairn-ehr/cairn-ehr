@@ -36,6 +36,41 @@ BEGIN
     END IF;
 END $$;
 
+-- 1b. The carried-not-vouched marker exists and is 1:1 with event_log. Without the PK a
+--     double-admission could double-mark, and a single clearing DELETE would leave a row
+--     behind — pinning a genuinely-vouched token as unvouched forever, which reads as
+--     over-refusal on the ADR-0043 floor rather than the over-permission F2 was.
+DO $$
+BEGIN
+    IF to_regclass('public.event_attestation_unvouched') IS NULL THEN
+        RAISE EXCEPTION 'event_attestation_unvouched is missing — an unverified carried token would be indistinguishable from a verified vouch once promotion deletes the event_deferred marker (PR #302 review finding F2)';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_index i
+        JOIN pg_class cl ON cl.oid = i.indrelid
+        WHERE cl.relname = 'event_attestation_unvouched' AND i.indisprimary
+    ) THEN
+        RAISE EXCEPTION 'event_attestation_unvouched has no primary key — the marker must be 1:1 with event_log';
+    END IF;
+    -- The shared predicate, in BOTH directions. A helper stuck at TRUE would silently
+    -- re-open F2 at all four call sites at once, which is exactly the blast radius that
+    -- makes sharing it worthwhile — and worth pinning.
+    IF NOT cairn_attestation_vouched(gen_random_uuid()) THEN
+        RAISE EXCEPTION 'cairn_attestation_vouched returned FALSE for an unmarked event — every stored attestation would be treated as unvouched, disabling the ADR-0043 owner-gate''s attester arm entirely';
+    END IF;
+    DECLARE v_probe uuid;
+    BEGIN
+        SELECT event_id INTO v_probe FROM event_log LIMIT 1;
+        IF v_probe IS NOT NULL THEN
+            INSERT INTO event_attestation_unvouched (event_id) VALUES (v_probe)
+            ON CONFLICT DO NOTHING;
+            IF cairn_attestation_vouched(v_probe) THEN
+                RAISE EXCEPTION 'cairn_attestation_vouched returned TRUE for a MARKED event — an unverified carried token would count as a real vouch (PR #302 finding F2)';
+            END IF;
+        END IF;
+    END;
+END $$;
+
 -- 2. The projection registry refuses an UNCLASSIFIED event type (fail closed). This guard is
 --    one of the two legs keeping a deferred event unprojected: the AFTER-INSERT dispatcher
 --    reads cairn_projection_apply and never consults event_type_class, so an unclassified
