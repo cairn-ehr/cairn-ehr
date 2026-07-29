@@ -347,7 +347,15 @@ main() {
         fi ;;
     esac
     if [ -n "$FORCE_ISSUE" ] || [ "$SMOKE" = "1" ]; then
-      # Single-shot modes: one real attempt, then stop.
+      # Single-shot modes: one real attempt, then stop. A scripting caller
+      # can only tell "issue fixed" from "issue failed" apart via the exit
+      # code, so it must reflect this attempt's outcome, not a blanket 0.
+      # (smoke-ok/dry/failed-permission already exited in their own arms
+      # above; rate-limited already `continue`d, so single-shot mode still
+      # waits-and-retries on a rate limit instead of landing here.)
+      if [ "$OUTCOME" = "failed" ]; then
+        summarize; exit 1
+      fi
       summarize; exit 0
     fi
   done

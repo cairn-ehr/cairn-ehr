@@ -215,6 +215,11 @@ make_stub_env() {
   echo 0 > "$COUNTER"
   cat > "$STUB/claude" <<'EOF'
 #!/bin/bash
+# Evidence trail (review finding 2): record argv + the env-var contract the
+# driver promised the worker, before doing anything else, so a wrong flag
+# or wrong var name fails a test instead of passing silently.
+echo "argv=$* smoke=${TECHDEBT_SMOKE:-} force=${TECHDEBT_FORCE_ISSUE:-} epics=${TECHDEBT_INCLUDE_EPICS:-}" \
+  >> "${CLAUDE_CALLS:?}"
 n=$(cat "${STUB_COUNTER:?}"); n=$((n + 1)); echo "$n" > "$STUB_COUNTER"
 line=$(sed -n "${n}p" "${STUB_SCENARIO:?}")
 case "$line" in
@@ -245,7 +250,9 @@ EOF
   chmod +x "$STUB/claude" "$STUB/sleep" "$STUB/osascript" "$STUB/gh"
   SLEEP_CALLS="$T_TMP/sleep-calls"
   : > "$SLEEP_CALLS"
-  export STUB_COUNTER="$COUNTER" STUB_SCENARIO="$SCENARIO" SLEEP_CALLS
+  CLAUDE_CALLS="$T_TMP/claude-calls"
+  : > "$CLAUDE_CALLS"
+  export STUB_COUNTER="$COUNTER" STUB_SCENARIO="$SCENARIO" SLEEP_CALLS CLAUDE_CALLS
 }
 
 # run_main FLAGS... — run main with the stub PATH in a subshell so each
@@ -314,6 +321,95 @@ t_setup; make_stub_env skipped dry
 run_main
 t_assert_eq "skipped continues without failure" "0" "$MAIN_RC"
 t_assert_ok "summary reports 1 skipped" grep -q "skipped: 1" "$T_TMP/main-out"
+t_teardown
+
+# ---- single-shot mode exit code reflects the sole attempt's outcome ----
+# (review finding 1: a scripting caller invoking --issue N or --smoke needs
+# a non-zero exit when that one attempt failed, not a blanket exit 0.)
+t_setup; make_stub_env failed
+run_main --issue 11
+t_assert_eq "single-shot failed exits 1" "1" "$MAIN_RC"
+t_assert_ok "summary still reports 1 failed" grep -q "failed: 1" "$T_TMP/main-out"
+t_teardown
+
+t_setup; make_stub_env merged
+run_main --issue 11
+t_assert_eq "single-shot merged exits 0" "0" "$MAIN_RC"
+t_assert_ok "--issue 11 passes force=11 to the worker" grep -q "force=11" "$CLAUDE_CALLS"
+t_teardown
+
+# ---- driver-contract fidelity (review finding 2): assert on the fake
+# claude's recorded argv/env, not just on the outcome it produces, so a
+# wrong flag name or wrong env var would fail these tests. ----
+t_setup; make_stub_env merged dry
+run_main
+t_assert_ok "default invocation calls the /techdebt-next skill" \
+  grep -q -- "-p /techdebt-next" "$CLAUDE_CALLS"
+t_assert_ok "default invocation uses --permission-mode acceptEdits" \
+  grep -q -- "--permission-mode acceptEdits" "$CLAUDE_CALLS"
+t_assert_fail "default invocation never bypasses permissions" \
+  grep -q -- "dangerously" "$CLAUDE_CALLS"
+t_teardown
+
+t_setup; make_stub_env merged dry
+run_main --bypass
+t_assert_ok "--bypass uses --dangerously-skip-permissions" \
+  grep -q -- "--dangerously-skip-permissions" "$CLAUDE_CALLS"
+t_assert_fail "--bypass does not also pass acceptEdits" \
+  grep -q -- "acceptEdits" "$CLAUDE_CALLS"
+t_teardown
+
+t_setup; make_stub_env smoke-ok
+run_main --smoke
+t_assert_ok "--smoke sets TECHDEBT_SMOKE=1 for the worker" grep -q "smoke=1" "$CLAUDE_CALLS"
+t_teardown
+
+t_setup; make_stub_env merged dry
+run_main --include-epics
+t_assert_ok "--include-epics sets TECHDEBT_INCLUDE_EPICS=1 for the worker" \
+  grep -q "epics=1" "$CLAUDE_CALLS"
+t_teardown
+
+# ---- parse_args direct unit test (review finding 3a): --timeout/--max-wait/
+# --max-issues had no direct coverage; run parse_args itself rather than
+# only inferring its effect through a full main() scenario. ----
+t_setup
+parse_args --timeout 5 --max-wait 2 --max-issues 3
+t_assert_eq "parse_args sets TIMEOUT_HOURS" "5" "$TIMEOUT_HOURS"
+t_assert_eq "parse_args sets MAX_WAIT_HOURS" "2" "$MAX_WAIT_HOURS"
+t_assert_eq "parse_args sets MAX_ISSUES" "3" "$MAX_ISSUES"
+# Reset config globals to their script defaults: this call runs in the
+# top-level test shell (not inside a run_main subshell), so leaving these
+# mutated would leak into later scenarios that rely on the defaults.
+TIMEOUT_HOURS=3; MAX_WAIT_HOURS=6; MAX_ISSUES=0
+t_teardown
+
+# ---- main --setup-labels dispatch (review finding 3b): exits 0, creates
+# all 7 labels via the stubbed gh, and never takes the run lock. ----
+t_setup
+STUB="$T_TMP/bin"
+mkdir -p "$STUB"
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+EOF
+cat > "$STUB/claude" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$STUB/gh" "$STUB/claude"
+GH_CALLS="$T_TMP/gh-calls"
+: > "$GH_CALLS"
+export GH_CALLS
+SETUP_LOOP_HOME="$T_TMP/loophome-setup"
+( PATH="$STUB:$PATH" LOOP_HOME="$SETUP_LOOP_HOME" main --setup-labels ) \
+  > "$T_TMP/setup-labels-out" 2>&1
+SETUP_RC=$?
+t_assert_eq "main --setup-labels exits 0" "0" "$SETUP_RC"
+t_assert_eq "main --setup-labels creates exactly 7 labels" "7" \
+  "$(grep -c "label create" "$GH_CALLS")"
+t_assert_fail "main --setup-labels never takes the run lock" \
+  [ -d "$SETUP_LOOP_HOME/lock" ]
 t_teardown
 
 t_summary
