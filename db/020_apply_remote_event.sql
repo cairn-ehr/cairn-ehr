@@ -95,6 +95,9 @@ DECLARE
     v_inner         JSONB;             -- {payload, plaintext_twin} recovered by cairn_unseal_body
     v_pub           BYTEA;             -- this node's X25519 unwrap-key public half
     v_twin_stub     TEXT;              -- the outer, signed mechanical stub twin (principle 11)
+    -- ADR-0056 decision 1 (issue #265): true when this node holds no classification for the
+    -- event's type. The event is ADMITTED anyway — custody is total, power is deferred.
+    v_deferred      BOOLEAN := false;
 BEGIN
     -- 0. Size ceiling (A7a): an oversized event would wedge the 8 MiB-capped wire and
     --    backup paths at its seq forever; refuse before any crypto work.
@@ -172,13 +175,34 @@ BEGIN
           AND ae.signing_key_id = b ->> 'signer_key_id';
     v_actor_id := CASE WHEN array_length(v_actor_ids, 1) = 1 THEN v_actor_ids[1] END;
 
-    -- 3. Classify (fail closed on unknown type; ADR-0010/ADR-0012 — an older node
-    --    refuses a type it cannot classify rather than guessing its mode).
+    -- 3. Classify — and ADMIT-AND-DEFER when we cannot (ADR-0056 decision 1, issue #265).
+    --
+    --    This door used to RAISE here. That made sync.md §6.5's lossless-forwarding
+    --    invariant FALSE for unknown types: a phone-tier node carrying a chart between two
+    --    upgraded facilities (the §6.1 sneakernet path, the case Cairn exists for) acquired
+    --    NOTHING past the first unknown-type event — the event was not merely unrendered,
+    --    it was absent. Admission cannot hide anything; refusal can.
+    --
+    --    A deferred event is stored verbatim, re-propagated, exported, and rendered down
+    --    the §3.13 legibility ladder by the skeleton twin. Step 8 needs no change for it:
+    --    cairn_event_twin finds no cairn_event_twin_check row for an unregistered type, so
+    --    both its check_fn and its twin_required_msg are NULL and it falls through to
+    --    cairn_twin_skeleton — it never raises.
+    --
+    --    It yields NO projection rows and confers NO power. Two independent mechanisms
+    --    enforce that, and BOTH are needed: db/005's classified-before-projected
+    --    registration guard (so the AFTER-INSERT dispatcher has nothing registered to run
+    --    for an unclassified type), and cairn_replay_eligible (so no reprojection path can
+    --    pick it up later). Power is granted only by cairn_readjudicate_deferred (db/043),
+    --    which re-runs the gates skipped below.
+    --
+    --    The STRICT door (db/005) deliberately still fails closed: a node may CARRY a type
+    --    it has no code for, never AUTHOR one (decision 2 — ADR-0051's strict-submit/
+    --    lenient-apply asymmetry applied to types, which is also what keeps classification
+    --    an honest code-plane property rather than something a writer invents at runtime).
     SELECT mode, targets_other_author INTO v_mode, v_targets_other
         FROM event_type_class WHERE event_type = v_type;
-    IF v_mode IS NULL THEN
-        RAISE EXCEPTION 'apply_remote_event: unknown event_type % (no classification — fail closed)', v_type;
-    END IF;
+    v_deferred := (v_mode IS NULL);
 
     v_bears := EXISTS (
         SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
@@ -189,7 +213,29 @@ BEGIN
     --    event's content-address. The token travelled with the event on the sync
     --    wire (db/001 columns); a peer that ships a suppress without one is refused —
     --    the exact hole review A2 flagged (un-attested visibility.suppress synced in).
-    IF v_mode = 'suppressing' OR v_bears THEN
+    -- The DEFERRED arm: store the travelling attestation token WITHOUT gating on it.
+    --
+    -- This is not an optimisation — it is what keeps admit-and-defer from silently
+    -- degrading into a slower fail-closed. A suppressing event's attestation token TRAVELS
+    -- with it on the sync wire (db/001's additive columns), and the gate below is the only
+    -- thing that ever stored it. Skip the gate naively and the token is DROPPED — so when
+    -- classifying code later arrives, cairn_readjudicate_deferred (db/043) has nothing to
+    -- verify and the event can NEVER gain power. Storing it costs nothing and is what makes
+    -- re-adjudication possible at all.
+    --
+    -- INVARIANT, and the reason db/005's cairn_suppression_author_ok had to change: an
+    -- attestation on a row that carries an event_deferred marker is CARRIED, NOT VOUCHED —
+    -- nothing has verified it. Every reader must therefore either be unreachable for
+    -- deferred rows (the projection apply fns in db/018 and db/034, kept unreachable by the
+    -- registration guard + cairn_replay_eligible) or exclude them explicitly
+    -- (cairn_suppression_author_ok, which reads the TARGET's attester_key and IS reachable).
+    -- A new reader of these columns owes that same choice.
+    IF v_deferred THEN
+        v_att     := p_attestation;
+        v_att_key := p_attester_key;
+    END IF;
+
+    IF NOT v_deferred AND (v_mode = 'suppressing' OR v_bears) THEN
         IF p_attestation IS NULL OR p_attester_key IS NULL THEN
             RAISE EXCEPTION 'apply_remote_event: % requires attestation (no token travelled with the event) — un-vouched suppress/responsibility refused', v_type;
         END IF;
@@ -218,7 +264,15 @@ BEGIN
     --    target, so the target sorts earlier and (on this full-replication plane) arrives
     --    first; a suppress whose target is still in flight from another link freezes the
     --    watermark and retries until the target lands.
-    IF v_targets_other THEN
+    --
+    -- A DEFERRED event skips this whole block. `v_targets_other` is NULL for an unclassified
+    -- type, so the branch would short-circuit anyway — but relying on three-valued logic is
+    -- exactly what ADR-0056's corollary forbids ("never inferred from a null classification
+    -- lookup falling through the gates"). Making the skip EXPLICIT lets the reader see that
+    -- the overlay-target-exists check and the ADR-0043 owner-gate are DEFERRED WITH the
+    -- interpretation, not waived by it: cairn_readjudicate_deferred (db/043) re-runs both
+    -- before any power is granted (decision 4).
+    IF NOT v_deferred AND v_targets_other THEN
         v_target_id := cairn_suppression_target_id(b);
         IF NOT EXISTS (SELECT 1 FROM event_log WHERE event_id = v_target_id) THEN
             RAISE EXCEPTION 'apply_remote_event: overlay targets unknown event %', v_target_id;
@@ -382,6 +436,24 @@ BEGIN
         IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
             RAISE EXCEPTION 'apply_remote_event: event_id % already exists with different content (substitution refused)', v_event_id;
         END IF;
+    END IF;
+
+    -- Record the deferred state EXPLICITLY (ADR-0056 decision 4's corollary): a node records
+    -- that an event was admitted uninterpreted, and that MARKER — not the absence of an
+    -- event_type_class row — is what reclassification consumes.
+    --
+    -- Written AFTER the log INSERT because of the FK. That ordering means the AFTER-INSERT
+    -- projection dispatcher firing during that INSERT cannot see the marker, which is why
+    -- db/005's classified-before-projected registration guard, not this row, is what keeps a
+    -- deferred event unprojected at admission. This row is what keeps it unprojected
+    -- FOREVER AFTER, via cairn_replay_eligible.
+    --
+    -- ON CONFLICT DO NOTHING: an idempotent re-apply of the same event must stay a silent
+    -- no-op (set-union), and must never reset a recorded adjudication_error.
+    IF v_deferred THEN
+        INSERT INTO event_deferred (event_id, event_type)
+        VALUES (v_event_id, v_type)
+        ON CONFLICT (event_id) DO NOTHING;
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy; ADR-0013,

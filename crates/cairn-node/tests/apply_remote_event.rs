@@ -148,8 +148,15 @@ async fn unenrolled_signer_is_refused_at_apply() {
     );
 }
 
+/// ADR-0056 decision 1 (issue #265): the remote door ADMITS a type it cannot classify.
+///
+/// This test previously pinned the opposite (`fail closed`) — the behaviour that made
+/// sync.md §6.5's lossless-forwarding invariant false for unknown types and turned a carrier
+/// node into a propagation barrier. The event is now stored verbatim and marked deferred; it
+/// holds no power until classifying code arrives and the deferred gates are re-run. Full
+/// coverage of that lifecycle lives in tests/deferred_admission.rs.
 #[tokio::test]
-async fn unknown_event_type_is_refused_fail_closed() {
+async fn unknown_event_type_is_admitted_uninterpreted() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -161,12 +168,23 @@ async fn unknown_event_type_is_refused_fail_closed() {
     let mut b = note(&kid, p, WALL_2026, None);
     b.event_type = "mystery.op".into();
     let signed = sign(&b, &sk).unwrap();
-    let err = apply(&c, &signed.signed_bytes).await.unwrap_err();
-    assert!(
-        db_msg(&err).contains("fail closed"),
-        "unknown type fails closed: {}",
-        db_msg(&err)
+    apply(&c, &signed.signed_bytes)
+        .await
+        .expect("an unclassifiable type is admitted uninterpreted, not refused");
+    assert_eq!(
+        event_count(&c, p).await,
+        1,
+        "an admitted-uninterpreted event must be STORED — custody is total"
     );
+    let deferred: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_deferred WHERE event_type = 'mystery.op'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 1, "admitted uninterpreted must be marked deferred");
 }
 
 #[tokio::test]
