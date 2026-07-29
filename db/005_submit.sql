@@ -140,6 +140,17 @@ BEGIN
     -- the apply_fn and projection_table checks predate this one and their refusals are
     -- pinned by name in projection_registry.rs, so a registration that is wrong in more
     -- than one way keeps reporting the SAME reason it always did.
+    --
+    -- HONEST RESIDUAL, worth knowing before relying on this: the check runs at REGISTRATION
+    -- time, so it cannot see a class row deleted AFTERWARDS. A registered-but-unclassified
+    -- type would leave the AFTER-INSERT dispatcher firing for a deferred event, because the
+    -- dispatcher reads cairn_projection_apply and never consults event_type_class. The state
+    -- is unreachable in practice for two reasons — a type's classification and its
+    -- projection registration arrive in the SAME migration, and no migration ever DELETEs
+    -- from event_type_class (every write is INSERT ... ON CONFLICT DO NOTHING) — and
+    -- event_type_class is REVOKEd from PUBLIC, so only an owner could create it by hand.
+    -- Same privilege tier as cairn_reproject. A future migration that wants to retire a type
+    -- must drop its projection registration FIRST, or restore this invariant some other way.
     IF NOT EXISTS (SELECT 1 FROM event_type_class WHERE event_type = NEW.event_type) THEN
         RAISE EXCEPTION
             'cairn_projection_apply: event_type "%" is not classified in event_type_class (fail closed) — classify it before registering a projection, or the dispatcher would project an event admitted uninterpreted',

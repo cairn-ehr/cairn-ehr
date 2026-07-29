@@ -412,6 +412,37 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             .await
             .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
+    // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
+    //
+    // A deferred event — one db/020 admitted uninterpreted (#265) — skipped the floor checks
+    // that classification gates: the suppressing⇒attestation gate, the overlay-target-exists
+    // refusal, and the ADR-0043 cross-author-suppression refusal. Those are deferred WITH the
+    // interpretation, not waived by it, so they are re-run here BEFORE anything reprojects. A
+    // reprojection that merely rebuilt rows would grant power that never passed a gate.
+    //
+    // WHY EVERY CONNECT, and not only on a generation change like the heal below:
+    // classification itself only arrives with a code-plane update, so a generation change is
+    // the right trigger for RECLASSIFICATION. But re-adjudication can FAIL for a reason that
+    // later resolves with no code change at all — `overlay targets unknown event`, where the
+    // target is still in flight from another peer. Gated on the generation, such an event
+    // would stay powerless until the next code-plane update, potentially months. The pass is
+    // driven off `event_deferred`, which is empty on a healthy node, so this costs one
+    // indexed probe per connect.
+    //
+    // Ordered before the stamp for the same reason the heal is (see the long note below): a
+    // failure here must leave the recorded generation at its OLD value so the next connect
+    // retries the whole replay-then-adjudicate-then-heal sequence.
+    let promoted: Vec<String> = client
+        .query(
+            "SELECT promoted_type FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("re-adjudicating deferred events: {e}"))?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+
     // #208/ADR-0057: heal replay on generation CHANGE only, and BEFORE the stamp
     // below. New projection capability (and any projection-logic fix) arrives only
     // via a code-plane update — i.e. a generation change — so an unchanged
@@ -434,6 +465,8 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // and the projections stay SILENTLY stale — the worst failure mode, and the
     // reason this order is load-bearing, not cosmetic.
     if recorded != Some(embedded) {
+        // A full heal already covers every type the pass above just promoted, so the
+        // targeted replay in the `else` arm would be redundant work on this path.
         client
             .execute(
                 "SELECT count(*) FROM cairn_reproject('', false, 'loader')",
@@ -441,6 +474,24 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             )
             .await
             .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {e}"))?;
+    } else {
+        // No generation change, but the pass promoted something — the target-arrived-later
+        // case described above. Those events were replay-INELIGIBLE at every previous heal,
+        // so nothing has ever projected them; heal ONLY their types (an exact event_type is
+        // a valid prefix for cairn_reproject's LIKE scan).
+        //
+        // HEAL mode, never rebuild: a narrow rebuild would hit db/039's refusal whenever the
+        // type's projection table is also fed by an out-of-prefix type — which is the normal
+        // case, not the exception (medication_coding alone has three writers since slice 6b).
+        for ty in &promoted {
+            client
+                .execute(
+                    "SELECT count(*) FROM cairn_reproject($1, false, 'readjudicate')",
+                    &[ty],
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("post-readjudication heal replay for {ty}: {e}"))?;
+        }
     }
     // Stamp only AFTER the full replay (and any heal above) succeeded: a
     // half-applied load must not claim the new generation. loaded_at defaults to

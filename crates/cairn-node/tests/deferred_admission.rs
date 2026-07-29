@@ -593,3 +593,94 @@ async fn a_travelling_token_survives_defer_then_promote() {
         "the carried token must now VERIFY and promote the event"
     );
 }
+
+/// The loader runs the pass on EVERY connect and reprojects what it promotes.
+///
+/// Pinned with a type that HAS a registered projection, so "promoted" is observable as a
+/// projection row rather than only as a deleted marker — the marker alone would pass even if
+/// the reprojection half were missing, which is the half that makes the event actually
+/// visible in a chart.
+#[tokio::test]
+async fn connect_promotes_and_reprojects_a_deferred_event() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // Simulate "this node does not yet have the code for `patient.created`" by removing BOTH
+    // things the migration that introduces a type provides: its classification AND its
+    // projection registration. Removing only the class row would be an unfaithful
+    // simulation — it produces a registered-but-unclassified state that no real node can
+    // reach (db/005 registers the projection after classifying, and class rows are never
+    // deleted by any migration), and in it the AFTER-INSERT dispatcher would still fire
+    // because it reads cairn_projection_apply, not event_type_class.
+    //
+    // Both rows are restored by the next connect's migration replay (db/005:18 and
+    // db/005:997), so this is self-healing even if the test dies partway.
+    c.execute(
+        "DELETE FROM cairn_projection_apply WHERE event_type = 'patient.created'",
+        &[],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "DELETE FROM event_type_class WHERE event_type = 'patient.created'",
+        &[],
+    )
+    .await
+    .unwrap();
+    let mut b = peer_event(&kid, p, "patient.created", WALL_2026);
+    b.payload = serde_json::json!({"name": "Deferred Then Promoted"});
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .unwrap();
+
+    let deferred: i64 = c
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 1, "precondition: the event is deferred");
+    let projected: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_chart WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(projected, 0, "a deferred event must project nothing");
+
+    // A fresh connect replays every migration (restoring the class row) and must then
+    // re-adjudicate and reproject.
+    drop(c);
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+
+    let deferred: i64 = c2
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 0, "connect must promote the now-classified event");
+    let name: Option<String> = c2
+        .query_opt(
+            "SELECT name FROM patient_chart WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .map(|r| r.get(0));
+    assert_eq!(
+        name.as_deref(),
+        Some("Deferred Then Promoted"),
+        "connect must REPROJECT what it promoted, not merely clear the marker"
+    );
+}

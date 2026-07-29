@@ -200,6 +200,17 @@ power the marker was meant to gate. The guard makes that state unreachable at mi
 than defending against it at runtime. All 17 currently-registered types already satisfy it (verified
 by comparing every `cairn_projection_apply` registration against every `event_type_class` row).
 
+**Honest residual, found by a failing test during implementation** (the first draft of this section
+overstated it as simply "unreachable"). The check runs at *registration* time, so it cannot see a
+class row deleted afterwards. A registered-but-unclassified type would leave the dispatcher firing
+for a deferred event, because the dispatcher reads `cairn_projection_apply` and never consults
+`event_type_class`. Unreachability therefore rests on **two** premises, not one: the guard, *and* the
+fact that a type's classification and its projection registration arrive in the same migration while
+no migration ever DELETEs from `event_type_class` (every write is `INSERT … ON CONFLICT DO NOTHING`).
+`event_type_class` is `REVOKE`d from PUBLIC, so only an owner could create the state by hand — the
+same privilege tier as `cairn_reproject`. A future migration retiring a type must drop its projection
+registration first. Recorded at the guard site in db/005 so the next reader inherits the caveat.
+
 ## 6. Legibility
 
 `cairn-node deferred` — a read-only subcommand listing deferred rows with type, admitted-at, and the
