@@ -684,3 +684,44 @@ async fn connect_promotes_and_reprojects_a_deferred_event() {
         "connect must REPROJECT what it promoted, not merely clear the marker"
     );
 }
+
+/// The listing query behind `cairn-node deferred`. Pinned here so a schema change that
+/// breaks the operator surface fails a test rather than only failing in the field —
+/// decision 4's "flagged legibly" is only legible if something actually reads the flag.
+#[tokio::test]
+async fn deferred_listing_query_returns_the_operator_columns() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let b = peer_event(&kid, p, UNKNOWN_TYPE, WALL_2026);
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .unwrap();
+
+    let rows = c
+        .query(
+            "SELECT event_id::text, event_type, admitted_at::text, \
+                    COALESCE(adjudication_error, '(not yet re-adjudicated)') \
+               FROM event_deferred ORDER BY admitted_at",
+            &[],
+        )
+        .await
+        .expect("the deferred listing query must run");
+    assert_eq!(rows.len(), 1);
+    let ty: String = rows[0].get(1);
+    let reason: String = rows[0].get(3);
+    assert_eq!(ty, UNKNOWN_TYPE);
+    assert_eq!(
+        reason, "(not yet re-adjudicated)",
+        "a never-adjudicated row must read as such, not as a blank refusal"
+    );
+}
