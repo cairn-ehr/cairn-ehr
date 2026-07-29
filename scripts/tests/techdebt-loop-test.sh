@@ -101,4 +101,34 @@ t_assert_eq "future epoch: delta + 5min buffer" "1300" "$(compute_wait_secs 1000
 t_assert_eq "no epoch: 30min fallback" "1800" "$(compute_wait_secs "" 1000000000)"
 t_assert_eq "past epoch: 30min fallback" "1800" "$(compute_wait_secs 999999000 1000000000)"
 
+# ---- run_with_timeout ----
+t_setup
+run_with_timeout 5 true
+t_assert_eq "fast command exit 0 passes through" "0" "$?"
+run_with_timeout 5 sh -c 'exit 7'
+t_assert_eq "fast command exit code passes through" "7" "$?"
+START=$(date +%s)
+run_with_timeout 1 sleep 30
+RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+t_assert_eq "hanging command killed with 124" "124" "$RC"
+t_assert_ok "hanging command killed promptly" [ "$ELAPSED" -lt 10 ]
+t_teardown
+
+# ---- lock ----
+t_setup
+LOOP_HOME="$T_TMP/loophome"
+mkdir -p "$LOOP_HOME"
+t_assert_ok "first acquire succeeds" acquire_lock
+t_assert_fail "second acquire fails while holder alive" acquire_lock
+release_lock
+t_assert_ok "acquire after release succeeds" acquire_lock
+release_lock
+# stale lock: a PID that cannot exist is dead; the lock must be reclaimed
+mkdir -p "$LOOP_HOME/lock"
+echo 999999 > "$LOOP_HOME/lock/pid"
+t_assert_ok "stale lock (dead pid) is reclaimed" acquire_lock
+release_lock
+t_teardown
+
 t_summary

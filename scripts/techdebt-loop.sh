@@ -109,6 +109,64 @@ compute_wait_secs() {
   fi
 }
 
+# ---- process control ----
+
+# run_with_timeout SECS CMD... — macOS has no GNU `timeout`, so we roll a
+# portable one: run CMD in the background, start a watcher that TERMs (then
+# KILLs) it after SECS, and normalize a timeout kill to exit code 124 so the
+# caller can tell "took too long" from the command's own failures.
+run_with_timeout() {
+  local secs="$1"; shift
+  "$@" &
+  local cmd_pid=$!
+  (
+    sleep "$secs"
+    kill -TERM "$cmd_pid" 2>/dev/null
+    sleep 15
+    kill -KILL "$cmd_pid" 2>/dev/null
+  ) &
+  local watch_pid=$!
+  local rc=0
+  wait "$cmd_pid" 2>/dev/null || rc=$?
+  if kill -0 "$watch_pid" 2>/dev/null; then
+    # Watcher still sleeping => the command finished on its own. Reap it.
+    kill "$watch_pid" 2>/dev/null
+    wait "$watch_pid" 2>/dev/null
+  else
+    rc=124
+  fi
+  # SIGTERM/SIGKILL exit statuses (143/137) also mean our watcher fired.
+  if [ "$rc" = "143" ] || [ "$rc" = "137" ]; then
+    rc=124
+  fi
+  return "$rc"
+}
+
+# ---- single-instance lock ----
+# Two concurrent loops would race on labels and worktrees. `mkdir` is the
+# portable atomic test-and-set; the PID file lets a later run distinguish
+# "loop still running" from "loop crashed and left its lock behind".
+
+acquire_lock() {
+  local lockdir="$LOOP_HOME/lock"
+  if mkdir "$lockdir" 2>/dev/null; then
+    echo $$ > "$lockdir/pid"
+    return 0
+  fi
+  local oldpid
+  oldpid="$(cat "$lockdir/pid" 2>/dev/null || true)"
+  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+    return 1  # a live loop holds the lock
+  fi
+  # Stale lock from a dead process: reclaim it.
+  rm -rf "$lockdir"
+  mkdir "$lockdir" 2>/dev/null && echo $$ > "$lockdir/pid"
+}
+
+release_lock() {
+  rm -rf "$LOOP_HOME/lock"
+}
+
 # ---- test guard: when sourced by the test harness, stop here ----
 if [ "${TECHDEBT_TEST:-0}" = "1" ]; then
   # shellcheck disable=SC2317 # reached when script is sourced in test mode
