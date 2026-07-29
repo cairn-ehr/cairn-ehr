@@ -38,7 +38,7 @@ Creates the marker, has db/020 write it, and has db/043 clear it when a gate act
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: table `event_attestation_unvouched (event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE)`. Tasks 2–4 read it with the predicate `EXISTS (SELECT 1 FROM event_attestation_unvouched u WHERE u.event_id = <expr>)`.
+- Produces: table `event_attestation_unvouched (event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE)` and `cairn_attestation_vouched(p_event_id uuid) RETURNS boolean` — TRUE when no unvouched marker is present. Tasks 2–4 call **only the function**, never the table directly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -216,7 +216,31 @@ In `db/001_envelope.sql`, immediately after the `event_deferred_type_idx` index 
 CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
     event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE
 );
+
+-- The ONE way to ask "is this row's stored attestation a real vouch?" (house rule 4).
+--
+-- Four readers need it — db/005's cairn_suppression_author_ok, db/018's patient_link_apply
+-- (twice) and db/034's medication_attestation_apply — and a fifth will arrive with the next
+-- type that reads event_log.attester_key. Four hand-written copies of one predicate is four
+-- places to change in step; a named function makes each call site read as the QUESTION being
+-- asked rather than the mechanism, which is the point of the marker.
+--
+-- Lives HERE, in db/001, because db/005's cairn_suppression_author_ok is LANGUAGE sql, whose
+-- body resolves table AND function names at CREATE time — the same reason the table is here.
+-- LANGUAGE sql STABLE so it INLINES: db/005's predicate still folds into cairn_reproject's
+-- per-type anti-join instead of costing a call per replayed event.
+CREATE OR REPLACE FUNCTION cairn_attestation_vouched(p_event_id uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM event_attestation_unvouched u
+                        WHERE u.event_id = p_event_id)
+$$;
+-- Locked down like cairn_replay_eligible (db/005): every caller is a SECURITY DEFINER door or
+-- a migration-owned trigger, so no runtime role needs a grant, and PUBLIC's default EXECUTE
+-- would let any connected role probe a safety predicate.
+REVOKE EXECUTE ON FUNCTION cairn_attestation_vouched(uuid) FROM PUBLIC;
 ```
+
+Note the sense: **`cairn_attestation_vouched` returns TRUE when the token is good** (no marker present), including the common case where no token was ever stored. Read it as "nothing has flagged this as unvouched", never as "a token exists".
 
 - [ ] **Step 4: Have db/020's deferred arm write it**
 
@@ -283,8 +307,27 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'event_attestation_unvouched has no primary key — the marker must be 1:1 with event_log';
     END IF;
+    -- The shared predicate, in BOTH directions. A helper stuck at TRUE would silently
+    -- re-open F2 at all four call sites at once, which is exactly the blast radius that
+    -- makes sharing it worthwhile — and worth pinning.
+    IF NOT cairn_attestation_vouched(gen_random_uuid()) THEN
+        RAISE EXCEPTION 'cairn_attestation_vouched returned FALSE for an unmarked event — every stored attestation would be treated as unvouched, disabling the ADR-0043 owner-gate''s attester arm entirely';
+    END IF;
+    DECLARE v_probe uuid;
+    BEGIN
+        SELECT event_id INTO v_probe FROM event_log LIMIT 1;
+        IF v_probe IS NOT NULL THEN
+            INSERT INTO event_attestation_unvouched (event_id) VALUES (v_probe)
+            ON CONFLICT DO NOTHING;
+            IF cairn_attestation_vouched(v_probe) THEN
+                RAISE EXCEPTION 'cairn_attestation_vouched returned TRUE for a MARKED event — an unverified carried token would count as a real vouch (PR #302 finding F2)';
+            END IF;
+        END IF;
+    END;
 END $$;
 ```
+
+The whole mirror runs inside a transaction that `ROLLBACK`s, so the probe INSERT leaves no residue — the same discipline the rest of the file already uses.
 
 - [ ] **Step 8: Run the SQL mirrors**
 
@@ -489,8 +532,7 @@ In `db/005_submit.sql`, replace the whole attester arm of the `human_authors` CT
         -- reader of these columns owes the same choice.
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM event_attestation_unvouched u
-                           WHERE u.event_id = p_target)
+          AND cairn_attestation_vouched(p_target)
 ```
 
 - [ ] **Step 4: Run the full deferred suite to verify it passes**
@@ -645,9 +687,7 @@ with:
     -- every replicated event, and a deferred event only ever arrives replicated), but a
     -- reader must not have to prove that to trust the line.
     IF v_state = 'link'
-       AND (e.attester_key IS NULL
-            OR EXISTS (SELECT 1 FROM event_attestation_unvouched u
-                        WHERE u.event_id = e.event_id))
+       AND (e.attester_key IS NULL OR NOT cairn_attestation_vouched(e.event_id))
        AND cairn_has_hard_veto(lo, hi)
        AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
 ```
@@ -673,9 +713,7 @@ with:
     -- charts reading `confirmed`. Strictly worse than the un-attested case, which is at
     -- least flagged. An unvouched vouch is not a vouch.
     SELECT pl.state, pl.content_address,
-           el.attester_key IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM event_attestation_unvouched u
-                              WHERE u.event_id = el.event_id)
+           el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id)
       INTO v_win_state, v_win_ca, v_win_attested
       FROM patient_link pl
       JOIN event_log el ON el.content_address = pl.content_address
@@ -840,7 +878,7 @@ BEGIN
     -- NO ROW rather than a false vouch — honest degradation, the §3.13 discipline, and the
     -- same shape as the p IS NULL arm above. RETURN, never RAISE: a raise here would abort
     -- the apply and wedge the event forever (the ADR-0058 hazard).
-    IF EXISTS (SELECT 1 FROM event_attestation_unvouched u WHERE u.event_id = e.event_id) THEN
+    IF NOT cairn_attestation_vouched(e.event_id) THEN
         RETURN;
     END IF;
 ```
@@ -1593,6 +1631,6 @@ Workspace 935/0; SQL mirrors, clippy, fmt, mkdocs all clean."
 
 **Spec coverage** — every section maps to a task: design §3 → Task 1; §3.1 → Tasks 2, 3, 4; §4 → Task 5; §5 → Task 6; §6 → Tasks 6 (loader) and 7 (cairn-sync); §7 → Task 8; §8 → the tests distributed across Tasks 1-7; §9 scope boundaries → no task (correctly, they are exclusions); §10 paper-parity → the Global Constraints heading.
 
-**Type consistency** — `event_attestation_unvouched(event_id)` is created in Task 1 and read with the identical `EXISTS (SELECT 1 FROM event_attestation_unvouched u WHERE u.event_id = …)` shape in Tasks 2, 3, 4. `r.el_row` is introduced in Task 5 step 3 and consumed in Task 5 step 4 (`cairn_clear_payload`) and Task 6 step 4 (`EXECUTE … USING`). `cairn_readjudicate_deferred()` keeps `RETURNS TABLE(promoted_type text, promoted_count bigint)` throughout; Task 6's loader reads both columns, Task 7's caller reads neither.
+**Type consistency** — `event_attestation_unvouched(event_id)` and `cairn_attestation_vouched(uuid) RETURNS boolean` are created together in Task 1; Tasks 2, 3 and 4 call **only the function**, never the table. Sense is uniform throughout: TRUE means *vouched* (no marker), so db/005 and db/018's flag read use it positively and db/018's door check and db/034's guard negate it. `r.el_row` is introduced in Task 5 step 3 and consumed in Task 5 step 4 (`cairn_clear_payload`) and Task 6 step 4 (`EXECUTE … USING`). `cairn_readjudicate_deferred()` keeps `RETURNS TABLE(promoted_type text, promoted_count bigint)` throughout; Task 6's loader reads both columns, Task 7's caller reads neither.
 
 **Ordering constraints, all load-bearing** — Task 1 before 2/3/4 (the table must exist). Task 5 before 6 (gate 4 consumes `r.el_row`). Task 6 before 7 (F3 would otherwise spread the wedge). Task 3's test is expected to fail *through* F1 until Task 6 lands, which is why Task 6 step 7 re-runs it.
