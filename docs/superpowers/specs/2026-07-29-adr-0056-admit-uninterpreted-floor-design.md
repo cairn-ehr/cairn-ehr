@@ -92,9 +92,37 @@ So the deferred arm stores the travelling token unconditionally, and the resulti
 
 > **An attestation on a row carrying an `event_deferred` marker is *carried*, not *vouched*.**
 
-Implementation owes an audit of every reader of `event_log.attestation` / `.attester_key` against
-that invariant; any reader treating presence as proof must exclude deferred rows. The audit result is
-recorded in the plan, not assumed here.
+### 4.2 The audit of that invariant — and the one reader it breaks
+
+Every reader of `event_log.attestation` / `.attester_key` was audited against *carried, not vouched*.
+No view reads either column. Three of the four readers are safe; one is not.
+
+**Safe — `patient_link_apply` (db/018) and `medication_attestation_apply` (db/034).** Both are
+projection *apply* functions, and a deferred row is structurally invisible to every apply function by
+two independent paths: an unclassified type can have no registered apply fn (the §5.4 registration
+guard), so the AFTER-INSERT dispatcher runs nothing at admission; and replay is filtered by
+`cairn_replay_eligible`. This is what promotes the registration guard from hygiene to load-bearing —
+it is one of the two legs that argument stands on.
+
+**Broken — `cairn_suppression_author_ok(p_target, p_attester_key)` (db/005:267).** It reads the
+**target's** `attester_key` and unions it into the target's human-author set, which is the ADR-0043
+owner-gate's whole basis. It is called by *both* doors on the target of any `targets_other_author`
+event, and a deferred event can certainly be a target — so it is reachable, unlike the apply
+functions.
+
+Failure scenario: a hostile peer ships an event of an unknown type carrying a **forged** attestation
+token naming Mallory. The node admits it deferred, storing the token unverified. Mallory then
+authors a `visibility.suppress` targeting it, and the owner-gate admits her — on the strength of a
+token nothing ever checked. The function's own header promises the opposite: *"Wrong direction is
+over-refusal, never over-permission."*
+
+**Fix:** `cairn_suppression_author_ok` ignores the `attester_key` of a target carrying an
+`event_deferred` marker — the union arm is dropped for such a target, so the gate computes exactly
+as it would have had no token travelled. Note this is deliberately *neutral*, not merely stricter:
+for a deferred event whose signer is an agent, dropping the arm empties the human-author set and the
+gate opens (the ADR-0043 agent-advisory-is-dismissable rule). That is correct — an unverified token
+must not move the gate in **either** direction. Promotion deletes the marker, at which point the
+now-verified token counts normally.
 
 ## 5. #266 — reclassification re-adjudicates, then reprojects
 
@@ -193,6 +221,8 @@ TDD throughout — failing test first. The set:
   legible `adjudication_error`;
 - the travelling attestation token survives defer→promote (the §4.1 trap, pinned so a future
   refactor cannot silently reintroduce it);
+- **a carried-not-vouched token on a deferred target does not widen the ADR-0043 owner-gate** (§4.2)
+  — the security test of this slice, and the one whose absence would make the change a net loss;
 - the registration guard refuses a `cairn_projection_apply` row for an unclassified type.
 
 ## 8. Scope boundaries
