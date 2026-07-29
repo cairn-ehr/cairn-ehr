@@ -191,6 +191,11 @@ current build state, open threads, and time-sensitive items.
   native PG 18.2 + a cross-built pgrx extension on a RedMagic 11 Pro — no Termux userland, no root, no VM
   (fractal topology at the phone tier). Runnable kit at [`poc/pg-android-kit/`](../poc/pg-android-kit/).
   Remaining non-load-bearing gaps: from-source PG build, APK/`jniLibs` packaging.
+- **Tech-debt loop** (2026-07-29): `/techdebt-loop` triages issues into
+  `loop:*` labels and drives `/techdebt-next` one fresh headless session per
+  issue until the ready backlog is dry (spec:
+  `docs/superpowers/specs/2026-07-29-techdebt-loop-skill-design.md`).
+  First run: `--dry-run`, then `--max-issues 1`, then unbounded.
 
 ---
 
