@@ -327,29 +327,36 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                         AND ae.op IN ('enroll','supersede')
                         AND ae.kind = 'human')
         UNION
-        -- ADR-0056 (issue #265): a DEFERRED target's attester_key is CARRIED, NOT VOUCHED.
+        -- ADR-0056 (issue #265, PR #302 review finding F2): count this arm only when the
+        -- stored token has actually been VOUCHED.
         --
-        -- The remote door stores the travelling token without verifying it — it cannot,
-        -- because the gate that verifies it is deferred with the interpretation. Unioning it
-        -- here would let a hostile peer put ANY key it likes inside the target's human-author
-        -- set simply by attaching a forged token to an unknown-type event, and its holder
-        -- could then suppress that event. That is over-permission on the ADR-0043 floor,
-        -- which this function's header forbids in exactly those words.
+        -- The remote door stores a deferred event's travelling token without verifying it
+        -- — it cannot, because the gate that verifies it is deferred with the
+        -- interpretation. Unioning an unverified key here would let a hostile peer put ANY
+        -- key it likes inside the target's human-author set simply by attaching a forged
+        -- token to an unknown-type event, and its holder could then suppress that event.
+        -- That is over-permission on the ADR-0043 floor, which this function's header
+        -- forbids in exactly those words.
         --
-        -- Note the fix is NEUTRAL, not merely stricter: for a deferred target signed by an
-        -- agent, dropping this arm empties human_authors and the gate OPENS (the
-        -- agent-advisory-is-dismissable rule below). That is correct — an unverified token
-        -- must not move the gate in EITHER direction. Promotion deletes the marker, after
-        -- which the now-verified token counts normally.
+        -- WHY NOT "is the target deferred?", which is what this originally asked: that is a
+        -- PROXY with the wrong lifetime. cairn_readjudicate_deferred (db/043) verifies a
+        -- token only when the type's mode DEMANDS one, so an additive event bearing no
+        -- responsibility is promoted — event_deferred row deleted — with its token never
+        -- checked. The proxy said "vouched" the instant the marker vanished. The marker
+        -- below survives promotion and is cleared only by gate 1 actually verifying, so it
+        -- answers the question this arm means to ask.
         --
-        -- This is the one reader of event_log.attester_key that is REACHABLE for a deferred
-        -- row: the other two (patient_link_apply in db/018, medication_attestation_apply in
-        -- db/034) are projection apply fns, which a deferred row never reaches — the
-        -- classified-before-projected registration guard keeps the dispatcher from running
-        -- one at admission, and cairn_replay_eligible keeps replay from running one after.
+        -- The fix is NEUTRAL, not merely stricter: for a target signed by an AGENT, dropping
+        -- this arm empties human_authors and the gate OPENS (the agent-advisory-is-
+        -- dismissable rule below). That is correct — an unverified token must not move the
+        -- gate in EITHER direction.
+        --
+        -- Two other readers of event_log.attester_key carry the same exclusion:
+        -- patient_link_apply (db/018) and medication_attestation_apply (db/034). A new
+        -- reader of these columns owes the same choice.
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM event_deferred d WHERE d.event_id = p_target)
+          AND cairn_attestation_vouched(p_target)
     )
     SELECT NOT EXISTS (SELECT 1 FROM human_authors)
         OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));

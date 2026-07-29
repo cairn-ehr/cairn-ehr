@@ -851,3 +851,114 @@ async fn a_never_gated_token_stays_unvouched_after_promotion() {
          event_deferred, which is the whole reason it is a separate table"
     );
 }
+
+/// THE F2 REGRESSION PIN (PR #302 review). The sibling test
+/// `a_carried_token_does_not_widen_the_owner_gate` covers the still-DEFERRED target. This
+/// covers the target after PROMOTION — where the original fix stopped working, because it
+/// keyed on the event_deferred marker that promotion deletes.
+///
+/// Scenario, measured before the fix: a hostile peer ships an unknown-type event signed by an
+/// honest human, carrying a GARBAGE attestation blob naming Mallory. The node admits it
+/// deferred and stores the blob unverified. The type is later classified ('additive', FALSE) —
+/// no gate demands a token, so nothing ever checks it — and promotion deletes the marker. The
+/// owner-gate then unioned Mallory's key into the target's human-author set, and she could
+/// suppress another clinician's event on the strength of a blob nothing had ever looked at.
+#[tokio::test]
+async fn a_carried_token_never_widens_the_owner_gate_after_promotion() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_a, _kid_a, sk_h, kid_h) = setup(&c).await;
+    // A SECOND enrolled human — Mallory. The pinned determinants must differ from the
+    // setup() human's, or enroll_actor refuses the pair as one actor (issue #152).
+    let (_sk_m, kid_m) = cairn_event::generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"handle\":\"mallory\"}', $1)",
+        &[&kid_m],
+    )
+    .await
+    .unwrap();
+
+    let p = Uuid::now_v7();
+    // Signed by the HONEST human, so the target's author set is non-empty via the signer arm
+    // and the gate is genuinely restrictive — not the vacuous "no human authors => anyone may
+    // suppress" branch, which would make this test pass for the wrong reason.
+    let b = peer_event(&kid_h, p, UNKNOWN_TYPE, WALL_2026);
+    let target_id = b.event_id.clone();
+    let signed = sign(&b, &sk_h).unwrap();
+    // Derived at runtime, never a literal (house rule 6): a blob that could never verify.
+    let bogus: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(7)).collect();
+    let mkey = hex::decode(&kid_m).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &bogus, &mkey],
+    )
+    .await
+    .expect("a deferred event carrying a token is still admitted");
+
+    // The code plane arrives. 'additive' + no responsibility contributor = NO gate demands a
+    // token, so promotion never verifies this one.
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+    c.execute("SELECT 1 FROM cairn_readjudicate_deferred()", &[])
+        .await
+        .unwrap();
+
+    // Preconditions — without these the test proves nothing.
+    let deferred: i64 = c
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 0, "precondition: the event was PROMOTED");
+    let stored: Option<Vec<u8>> = c
+        .query_one(
+            "SELECT attester_key FROM event_log WHERE event_id = $1::text::uuid",
+            &[&target_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        stored.as_deref(),
+        Some(mkey.as_slice()),
+        "precondition: the unverified key is still on the row (event_log is append-only, \
+         so it can never be scrubbed) — the hazard is not reproduced without it"
+    );
+
+    let widened: bool = c
+        .query_one(
+            "SELECT cairn_suppression_author_ok($1::text::uuid, $2)",
+            &[&target_id, &mkey],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !widened,
+        "a token NO gate ever demanded must not widen the ADR-0043 owner-gate after \
+         promotion — Mallory never signed, authored, or attested anything"
+    );
+
+    // Sanity: the fix narrowed only the unvouched arm; the real signer still owns the event.
+    let genuine: bool = c
+        .query_one(
+            "SELECT cairn_suppression_author_ok($1::text::uuid, $2)",
+            &[&target_id, &hex::decode(&kid_h).unwrap()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        genuine,
+        "the target's real human signer must still count as its author"
+    );
+}
