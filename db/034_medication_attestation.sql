@@ -248,6 +248,15 @@ DECLARE
     p jsonb := cairn_clear_payload(e);
 BEGIN
     IF p IS NULL THEN RETURN; END IF;
+    -- ADR-0056 / PR #302 finding F2: attester_key may hold a token the remote door CARRIED
+    -- without verifying (a deferred event's gate is deferred with the interpretation). This
+    -- fn's whole output keys on it as the responsible human, so an unvouched one must yield
+    -- NO ROW rather than a false vouch — honest degradation, the §3.13 discipline, and the
+    -- same shape as the p IS NULL arm above. RETURN, never RAISE: a raise here would abort
+    -- the apply and wedge the event forever (the ADR-0058 hazard).
+    IF NOT cairn_attestation_vouched(e.event_id) THEN
+        RETURN;
+    END IF;
     INSERT INTO medication_attestation
         (event_id, medication_id, patient_id, attester_kid, reviewed_commitment,
          reviewed_count, hlc_wall, hlc_counter, origin, content_address)
@@ -262,11 +271,15 @@ BEGIN
         -- attestation orchestrator (attestation.rs) has the human key both sign the event
         -- AND mint the token, so every test uses signer == attester; but a future flow
         -- could sign with one key and vouch with another, and this projection must key on
-        -- WHO took responsibility (attester_key), never who happened to sign. INVARIANT:
-        -- attester_key is guaranteed non-NULL here — a `-attestation.asserted` event
-        -- always carries a responsibility contributor (enforced by the M1 floor check
-        -- above), which trips the db/005 gate that populates attester_key; the M1 check
-        -- turns a would-be NULL into a legible floor rejection long before this trigger.
+        -- WHO took responsibility (attester_key), never who happened to sign.
+        -- INVARIANT, and its real basis: attester_key is non-NULL and VERIFIED here. A
+        -- `-attestation.asserted` event always carries a responsibility contributor
+        -- (enforced by the M1 floor check above), which trips the db/005 gate that populates
+        -- attester_key at the local door AND db/043's gate 1 on the deferred path — so the
+        -- token is verified on every route that reaches this fn. Note that is a property of
+        -- the EVENT TYPE, not of the column: a type bearing no responsibility can be
+        -- promoted with its carried token unchecked, which is what the unvouched guard at
+        -- the top of this fn defends against.
         encode(e.attester_key, 'hex'),
         decode(p ->> 'reviewed_commitment', 'hex'),
         (p ->> 'reviewed_count')::integer,

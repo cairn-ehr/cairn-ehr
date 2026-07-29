@@ -962,3 +962,87 @@ async fn a_carried_token_never_widens_the_owner_gate_after_promotion() {
         "the target's real human signer must still count as its author"
     );
 }
+
+/// PR #302 review finding F2, third reader — a WHITE-BOX test, and deliberately so.
+///
+/// `medication_attestation_apply` projects `encode(e.attester_key,'hex')` as `attester_kid`:
+/// the responsible human, the thing the whole ADR-0049 sign-off surface reads. Its header
+/// asserts that column is a verified vouch. That is true today only because a
+/// `-attestation.asserted` event always bears responsibility, so db/043's gate 1 always runs
+/// for it — a property of the EVENT TYPE, not of the column. This forces the state that
+/// property currently rules out, so the guard is pinned before some future type reaches it.
+#[tokio::test]
+async fn an_unvouched_token_never_becomes_an_attester_kid() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_a, _kid_a, sk_h, kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // A well-formed attested event, admitted through the normal (classified) door so its
+    // token is genuinely verified and it projects a row.
+    let med_id = Uuid::now_v7();
+    let rows_before: i64 = c
+        .query_one("SELECT count(*) FROM medication_attestation", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(rows_before, 0, "precondition: a clean projection table");
+
+    // Drive the ordinary attestation flow via the deferred path so we own the row: defer,
+    // classify, promote. UNKNOWN_TYPE stands in for any future type that reads attester_key.
+    // EVERY NOT NULL column medication_attestation demands (medication_id, patient_id,
+    // attester_kid, reviewed_commitment, reviewed_count) must be satisfiable, or the pre-fix
+    // run fails on a constraint instead of on the defect — and a test that fails for the
+    // wrong reason proves nothing. reviewed_commitment is `decode(..., 'hex')`, so the
+    // payload carries hex; derived at runtime, never a literal (house rule 6).
+    let commitment: String = (0u8..32)
+        .map(|i| format!("{:02x}", i.wrapping_mul(5)))
+        .collect();
+    let mut b = peer_event(&kid_h, p, UNKNOWN_TYPE, WALL_2026);
+    b.payload = serde_json::json!({
+        "medication_id": med_id.to_string(),
+        "reviewed_commitment": commitment,
+        "reviewed_count": 1
+    });
+    let signed = sign(&b, &sk_h).unwrap();
+    let bogus: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(13)).collect();
+    let hkey = hex::decode(&kid_h).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &bogus, &hkey],
+    )
+    .await
+    .unwrap();
+
+    // The row now holds an attester_key nothing verified, and says so.
+    let unvouched: i64 = c
+        .query_one("SELECT count(*) FROM event_attestation_unvouched", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(unvouched, 1, "precondition: the token is marked unvouched");
+
+    // Call the apply fn directly on that row — the white-box part. It must decline to
+    // project rather than mint an attester_kid from an unverified key.
+    c.execute(
+        "SELECT medication_attestation_apply(el) FROM event_log el WHERE el.event_type = $1",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .expect("the apply fn must DEGRADE (no row), never raise — a raise wedges the event");
+
+    let rows_after: i64 = c
+        .query_one("SELECT count(*) FROM medication_attestation", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        rows_after, 0,
+        "an unvouched token must never become an attester_kid — that column IS the \
+         responsible human on the ADR-0049 sign-off surface"
+    );
+}
