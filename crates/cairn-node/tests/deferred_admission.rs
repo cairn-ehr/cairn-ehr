@@ -493,7 +493,10 @@ async fn failed_readjudication_stays_powerless_and_flagged() {
         )
         .await
         .unwrap();
-    assert!(rows.is_empty(), "an un-attested suppress must NOT be promoted");
+    assert!(
+        rows.is_empty(),
+        "an un-attested suppress must NOT be promoted"
+    );
 
     let r = c
         .query_one(

@@ -184,7 +184,10 @@ async fn unknown_event_type_is_admitted_uninterpreted() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(deferred, 1, "admitted uninterpreted must be marked deferred");
+    assert_eq!(
+        deferred, 1,
+        "admitted uninterpreted must be marked deferred"
+    );
 }
 
 #[tokio::test]
