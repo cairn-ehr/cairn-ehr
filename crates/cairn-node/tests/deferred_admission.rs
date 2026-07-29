@@ -253,3 +253,127 @@ async fn strict_door_still_refuses_an_unclassifiable_type() {
         .get(0);
     assert_eq!(marked, 0, "a refused local author must leave no marker");
 }
+
+/// A deferred event is invisible to replay. This is the ADR-0057 seam doing the job it was
+/// built for: even a hand-run mid-upgrade `cairn_reproject` cannot grant power to an event
+/// whose classification-gated checks have never been run.
+#[tokio::test]
+async fn reproject_does_not_touch_a_deferred_event() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let b = peer_event(&kid, p, UNKNOWN_TYPE, WALL_2026);
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .unwrap();
+
+    let eligible: bool = c
+        .query_one(
+            "SELECT cairn_replay_eligible(el) FROM event_log el WHERE el.event_type = $1",
+            &[&UNKNOWN_TYPE],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!eligible, "a deferred event must never be replay-eligible");
+}
+
+/// THE SECURITY TEST of this slice (design doc §4.2).
+///
+/// A deferred event's attestation token is CARRIED, NOT VOUCHED — the door stored it without
+/// verifying it, because the gate that verifies it is deferred with the interpretation. It
+/// must therefore not widen the ADR-0043 owner-gate, whose own contract is "wrong direction
+/// is over-refusal, never over-permission".
+///
+/// Scenario: a hostile peer ships an unknown-type event carrying a token naming some other
+/// key. Before the fix, `cairn_suppression_author_ok` unioned that unverified key into the
+/// target's human-author set, so its holder could suppress the event on the strength of a
+/// token nothing had checked. The gate must compute exactly as if no token had travelled.
+#[tokio::test]
+async fn a_carried_token_does_not_widen_the_owner_gate() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_agent, kid_agent, sk_human, kid_human) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // Signed by the HUMAN, so the target's human-author set is non-empty via the signer arm
+    // and the gate is genuinely restrictive — not the vacuous "no human authors ⇒ anyone may
+    // suppress" branch, which would make this test pass for the wrong reason.
+    let b = peer_event(&kid_human, p, UNKNOWN_TYPE, WALL_2026);
+    let target_id = b.event_id.clone();
+    let signed = sign(&b, &sk_human).unwrap();
+    // A token from a DIFFERENT key rides along. Nothing verifies it on the deferred path —
+    // that is precisely the hazard.
+    let token = cairn_event::sign_attestation(
+        &cairn_event::event_address(&signed.signed_bytes),
+        &kid_agent,
+        "attested",
+        &sk_agent,
+    )
+    .unwrap();
+    let agent_key = hex::decode(&kid_agent).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &token, &agent_key],
+    )
+    .await
+    .expect("a deferred event carrying a token is still admitted");
+
+    // Precondition: the token really was stored (otherwise this test proves nothing).
+    let stored: Option<Vec<u8>> = c
+        .query_one(
+            "SELECT attester_key FROM event_log WHERE event_id = $1::text::uuid",
+            &[&target_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        stored.as_deref(),
+        Some(agent_key.as_slice()),
+        "precondition: the carried token must be stored, else the hazard is not reproduced"
+    );
+
+    // The carried token must NOT put its key inside the target's author set.
+    let widened: bool = c
+        .query_one(
+            "SELECT cairn_suppression_author_ok($1::text::uuid, $2)",
+            &[&target_id, &agent_key],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !widened,
+        "a CARRIED (unverified) token on a deferred target must not widen the ADR-0043 \
+         owner-gate — the gate must compute as if no token had travelled"
+    );
+
+    // Sanity: the target's genuine human signer is still an author of it, so the fix
+    // narrowed only the unverified arm and did not break the gate outright.
+    let genuine: bool = c
+        .query_one(
+            "SELECT cairn_suppression_author_ok($1::text::uuid, $2)",
+            &[&target_id, &hex::decode(&kid_human).unwrap()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        genuine,
+        "the target's real human signer must still count as its author"
+    );
+}

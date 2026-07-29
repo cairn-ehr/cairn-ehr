@@ -158,15 +158,29 @@ CREATE TRIGGER cairn_projection_apply_validate
 -- stop materialization. Locked down like cairn_event_twin_check.
 REVOKE INSERT, UPDATE, DELETE ON cairn_projection_apply FROM PUBLIC;
 
--- The #266 safety seam (ADR-0056 decision 4): cairn_reproject routes every
--- candidate event through this predicate. Constantly TRUE today — no deferred
--- events can exist while the remote door still fail-closes on unknown types.
--- #265's explicit deferred marker hooks in HERE and only here, so a manual
--- mid-upgrade reproject can never grant power to an unadjudicated deferred
--- event. The live-insert path needs no filter: an event being inserted through
--- a door was adjudicated by that door.
+-- The #266 safety seam (ADR-0056 decision 4): cairn_reproject (db/039) routes every
+-- candidate event through this predicate, so NO reprojection path — the loader's heal,
+-- the `cairn-node reproject` CLI, or a hand-run mid-upgrade replay — can grant power to
+-- an event whose classification-gated floor checks have never been run.
+--
+-- A deferred event is one the remote door admitted UNINTERPRETED (db/020, issue #265).
+-- Its marker is DELETED by cairn_readjudicate_deferred (db/043) only after the deferred
+-- gates pass, so "carries no marker" IS "adjudicated". An event that FAILS adjudication
+-- keeps its marker with the reason recorded and stays powerless — never silently promoted.
+--
+-- The live-insert path needs no filter: an event being inserted through a door was
+-- adjudicated by that door.
+--
+-- LANGUAGE sql (not plpgsql) deliberately: it inlines into cairn_reproject's per-type scan
+-- as an anti-join rather than costing a function call per replayed event — and the replay
+-- scan runs over the WHOLE log (2M events on the Pi5 bench). event_deferred is created in
+-- db/001, not in db/043 with the rest of this mechanism, precisely so this body resolves at
+-- CREATE time: SQL-language bodies are parsed and name-resolved when the function is
+-- created, unlike PL/pgSQL's late binding.
 CREATE OR REPLACE FUNCTION cairn_replay_eligible(e event_log)
-RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT TRUE $$;
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM event_deferred d WHERE d.event_id = e.event_id)
+$$;
 -- Locked down like every predicate in this file: cairn_reproject (db/039) calls it as
 -- the migration-defining owner, so no runtime role needs a grant, and PUBLIC's default
 -- EXECUTE would let any connected role probe/depend on a predicate that becomes a real
@@ -302,8 +316,29 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                         AND ae.op IN ('enroll','supersede')
                         AND ae.kind = 'human')
         UNION
+        -- ADR-0056 (issue #265): a DEFERRED target's attester_key is CARRIED, NOT VOUCHED.
+        --
+        -- The remote door stores the travelling token without verifying it — it cannot,
+        -- because the gate that verifies it is deferred with the interpretation. Unioning it
+        -- here would let a hostile peer put ANY key it likes inside the target's human-author
+        -- set simply by attaching a forged token to an unknown-type event, and its holder
+        -- could then suppress that event. That is over-permission on the ADR-0043 floor,
+        -- which this function's header forbids in exactly those words.
+        --
+        -- Note the fix is NEUTRAL, not merely stricter: for a deferred target signed by an
+        -- agent, dropping this arm empties human_authors and the gate OPENS (the
+        -- agent-advisory-is-dismissable rule below). That is correct — an unverified token
+        -- must not move the gate in EITHER direction. Promotion deletes the marker, after
+        -- which the now-verified token counts normally.
+        --
+        -- This is the one reader of event_log.attester_key that is REACHABLE for a deferred
+        -- row: the other two (patient_link_apply in db/018, medication_attestation_apply in
+        -- db/034) are projection apply fns, which a deferred row never reaches — the
+        -- classified-before-projected registration guard keeps the dispatcher from running
+        -- one at admission, and cairn_replay_eligible keeps replay from running one after.
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM event_deferred d WHERE d.event_id = p_target)
     )
     SELECT NOT EXISTS (SELECT 1 FROM human_authors)
         OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));
