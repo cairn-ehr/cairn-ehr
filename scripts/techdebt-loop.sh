@@ -231,6 +231,128 @@ setup_labels() {
     --description "techdebt-loop: parked after second failure; human triage"
 }
 
+# ---- argument parsing ----
+parse_args() {
+  SETUP_LABELS_ONLY=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --max-issues)    MAX_ISSUES="$2"; shift 2 ;;
+      --max-wait)      MAX_WAIT_HOURS="$2"; shift 2 ;;
+      --timeout)       TIMEOUT_HOURS="$2"; shift 2 ;;
+      --include-epics) INCLUDE_EPICS=1; shift ;;
+      --bypass)        BYPASS=1; shift ;;
+      --issue)         FORCE_ISSUE="$2"; shift 2 ;;
+      --smoke)         SMOKE=1; shift ;;
+      --setup-labels)  SETUP_LABELS_ONLY=1; shift ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+}
+
+# spawn_worker ITER — run one fresh worker session. The env vars are the
+# entire driver->worker contract; the transcript captures everything the
+# session printed (the forensic record when no outcome.json appears).
+spawn_worker() {
+  local iter="$1"
+  OUTCOME_FILE="$RUN_DIR/outcome-$iter.json"
+  TRANSCRIPT="$RUN_DIR/iter-$iter.log"
+  rm -f "$OUTCOME_FILE"
+  local perm_args="--permission-mode acceptEdits"
+  if [ "$BYPASS" = "1" ]; then
+    perm_args="--dangerously-skip-permissions"
+  fi
+  # shellcheck disable=SC2086  # perm_args is deliberately word-split
+  run_with_timeout "$((TIMEOUT_HOURS * 3600))" \
+    env TECHDEBT_OUTCOME_FILE="$OUTCOME_FILE" \
+        TECHDEBT_INCLUDE_EPICS="$INCLUDE_EPICS" \
+        TECHDEBT_FORCE_ISSUE="$FORCE_ISSUE" \
+        TECHDEBT_SMOKE="$SMOKE" \
+    claude -p "/techdebt-next" $perm_args \
+    > "$TRANSCRIPT" 2>&1
+}
+
+# summarize — one place that prints the run's ledger; called on every exit.
+summarize() {
+  log "run summary — merged: $N_MERGED, skipped: $N_SKIPPED, failed: $N_FAILED, iterations: $ITER"
+  notify "techdebt-loop done: $N_MERGED merged, $N_FAILED failed"
+}
+
+main() {
+  parse_args "$@"
+  require_cmds claude gh jq git
+  # Always operate from the repo root, wherever the script was called from.
+  cd "$(cd "$(dirname "$0")/.." && pwd)" || die "cannot cd to repo root"
+  mkdir -p "$LOOP_HOME"
+  if [ "$SETUP_LABELS_ONLY" = "1" ]; then
+    setup_labels
+    exit 0
+  fi
+  acquire_lock || die "another techdebt-loop is already running"
+  trap release_lock EXIT INT TERM
+  RUN_DIR="$LOOP_HOME/run-$(date '+%Y%m%d-%H%M%S')"
+  mkdir -p "$RUN_DIR"
+  log "run dir: $RUN_DIR"
+
+  ITER=0; N_MERGED=0; N_FAILED=0; N_SKIPPED=0
+  CONSEC_FAIL=0
+  WAITED_TOTAL=0
+  local max_wait_secs=$((MAX_WAIT_HOURS * 3600))
+
+  while :; do
+    # --max-issues counts completed issue attempts (merged+failed+skipped).
+    if [ "$MAX_ISSUES" -gt 0 ] && \
+       [ $((N_MERGED + N_FAILED + N_SKIPPED)) -ge "$MAX_ISSUES" ]; then
+      log "--max-issues $MAX_ISSUES reached"
+      summarize; exit 0
+    fi
+    ITER=$((ITER + 1))
+    log "iteration $ITER: spawning worker"
+    spawn_worker "$ITER" || true   # exit code is informational; outcome rules
+    OUTCOME="$(classify_result "$OUTCOME_FILE" "$TRANSCRIPT")"
+    log "iteration $ITER: outcome=$OUTCOME"
+    case "$OUTCOME" in
+      merged)
+        N_MERGED=$((N_MERGED + 1)); CONSEC_FAIL=0 ;;
+      skipped)
+        N_SKIPPED=$((N_SKIPPED + 1)); CONSEC_FAIL=0 ;;
+      smoke-ok)
+        log "smoke test passed: skill invocation + outcome plumbing verified"
+        summarize; exit 0 ;;
+      dry)
+        log "backlog dry: no loop:ready issues remain"
+        summarize; exit 0 ;;
+      failed-permission)
+        log "PERMISSION DENIED — extend the allowlist and re-run:"
+        jq -r '.detail // "unknown command"' "$OUTCOME_FILE" 2>/dev/null | \
+          while IFS= read -r line; do log "  $line"; done
+        summarize; exit 2 ;;
+      rate-limited)
+        local epoch wait_secs
+        epoch="$(parse_reset_epoch "$TRANSCRIPT")"
+        wait_secs="$(compute_wait_secs "$epoch" "$(date +%s)")"
+        WAITED_TOTAL=$((WAITED_TOTAL + wait_secs))
+        if [ "$max_wait_secs" -gt 0 ] && [ "$WAITED_TOTAL" -gt "$max_wait_secs" ]; then
+          log "cumulative wait would exceed --max-wait ${MAX_WAIT_HOURS}h; stopping"
+          summarize; exit 4
+        fi
+        log "usage limit hit; sleeping ${wait_secs}s (issue unpenalized)"
+        sleep "$wait_secs"
+        continue ;;   # not an issue attempt: counters untouched
+      failed|*)
+        N_FAILED=$((N_FAILED + 1)); CONSEC_FAIL=$((CONSEC_FAIL + 1))
+        log "cycle failed (consecutive: $CONSEC_FAIL) — see $TRANSCRIPT"
+        if [ "$CONSEC_FAIL" -ge 2 ]; then
+          log "two consecutive failures: something systemic is wrong; stopping"
+          summarize; exit 1
+        fi ;;
+    esac
+    if [ -n "$FORCE_ISSUE" ] || [ "$SMOKE" = "1" ]; then
+      # Single-shot modes: one real attempt, then stop.
+      summarize; exit 0
+    fi
+  done
+}
+
 # ---- test guard: when sourced by the test harness, stop here ----
 if [ "${TECHDEBT_TEST:-0}" = "1" ]; then
   # shellcheck disable=SC2317 # reached when script is sourced in test mode

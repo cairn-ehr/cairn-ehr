@@ -189,4 +189,131 @@ t_assert_ok "loop:ready label present" grep -q "label create loop:ready" "$GH_CA
 t_assert_ok "loop:failed label present" grep -q "label create loop:failed" "$GH_CALLS"
 t_teardown
 
+# ---- main loop scenarios (stubbed claude / gh / sleep / osascript) ----
+# Scenario tests bypass the real timeout machinery: its watcher calls
+# `sleep`, which the stub turns into an instant no-op, so the watcher would
+# TERM the fake claude in a race. run_with_timeout has its own tests
+# (Task 2); here we run the worker command directly.
+run_with_timeout() { shift; "$@"; }
+
+# make_stub_env SCENARIO_LINES... — builds a PATH shim dir with a fake
+# `claude` that consumes one scenario line per invocation:
+#   merged | skipped | dry | failed | failed-permission | smoke-ok
+#     -> writes that outcome to $TECHDEBT_OUTCOME_FILE
+#   rate-limit:EPOCH -> prints the CLI limit error, writes nothing
+#   crash            -> writes nothing, exits 1
+# Also stubs: `sleep` (records requested seconds instead of sleeping),
+# `osascript` (no-op), `gh` (records argv, exits 0).
+make_stub_env() {
+  STUB="$T_TMP/bin"
+  mkdir -p "$STUB"
+  SCENARIO="$T_TMP/scenario"
+  COUNTER="$T_TMP/count"
+  : > "$SCENARIO"
+  local line
+  for line in "$@"; do echo "$line" >> "$SCENARIO"; done
+  echo 0 > "$COUNTER"
+  cat > "$STUB/claude" <<'EOF'
+#!/bin/bash
+n=$(cat "${STUB_COUNTER:?}"); n=$((n + 1)); echo "$n" > "$STUB_COUNTER"
+line=$(sed -n "${n}p" "${STUB_SCENARIO:?}")
+case "$line" in
+  rate-limit:*)
+    echo "Claude AI usage limit reached|${line#rate-limit:}"
+    exit 1 ;;
+  crash)
+    echo "unexpected death"
+    exit 1 ;;
+  *)
+    printf '{"outcome":"%s","issue":11,"pr":null,"step":"test","detail":"denied: cargo test"}' \
+      "$line" > "${TECHDEBT_OUTCOME_FILE:?}"
+    exit 0 ;;
+esac
+EOF
+  cat > "$STUB/sleep" <<'EOF'
+#!/bin/bash
+echo "$1" >> "${SLEEP_CALLS:?}"
+EOF
+  cat > "$STUB/osascript" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+  cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+  chmod +x "$STUB/claude" "$STUB/sleep" "$STUB/osascript" "$STUB/gh"
+  SLEEP_CALLS="$T_TMP/sleep-calls"
+  : > "$SLEEP_CALLS"
+  export STUB_COUNTER="$COUNTER" STUB_SCENARIO="$SCENARIO" SLEEP_CALLS
+}
+
+# run_main FLAGS... — run main with the stub PATH in a subshell so each
+# scenario is isolated; captures exit code in MAIN_RC.
+run_main() {
+  ( PATH="$STUB:$PATH" LOOP_HOME="$T_TMP/loophome" main "$@" ) \
+    > "$T_TMP/main-out" 2>&1
+  MAIN_RC=$?
+}
+
+t_setup; make_stub_env merged merged dry
+run_main
+t_assert_eq "merged,merged,dry exits 0" "0" "$MAIN_RC"
+t_assert_ok "summary reports 2 merged" grep -q "merged: 2" "$T_TMP/main-out"
+t_teardown
+
+t_setup; make_stub_env failed failed
+run_main
+t_assert_eq "two consecutive failures exit 1" "1" "$MAIN_RC"
+t_teardown
+
+t_setup; make_stub_env failed merged failed failed
+run_main
+t_assert_eq "failure counter resets on success" "1" "$MAIN_RC"
+t_assert_ok "ran all four scenario calls" grep -q "^4$" "$COUNTER"
+t_teardown
+
+t_setup; make_stub_env failed-permission
+run_main
+t_assert_eq "permission denial exits 2 immediately" "2" "$MAIN_RC"
+t_assert_ok "denied command surfaced" grep -q "denied: cargo test" "$T_TMP/main-out"
+t_teardown
+
+t_setup; make_stub_env "rate-limit:$(( $(date +%s) + 1000 ))" merged dry
+run_main
+t_assert_eq "rate limit then recovery exits 0" "0" "$MAIN_RC"
+WAITED=$(head -1 "$SLEEP_CALLS")
+t_assert_ok "slept roughly delta+300 (1250..1350)" \
+  sh -c "[ \"$WAITED\" -ge 1250 ] && [ \"$WAITED\" -le 1350 ]"
+t_teardown
+
+t_setup; make_stub_env "rate-limit:$(( $(date +%s) + 90000 ))"
+run_main --max-wait 1
+t_assert_eq "wait beyond --max-wait exits 4" "4" "$MAIN_RC"
+t_teardown
+
+t_setup; make_stub_env crash dry
+run_main
+t_assert_eq "crash without limit pattern counts as failed, loop continues" "0" "$MAIN_RC"
+t_assert_ok "summary reports 1 failed" grep -q "failed: 1" "$T_TMP/main-out"
+t_teardown
+
+t_setup; make_stub_env merged merged merged
+run_main --max-issues 2
+t_assert_eq "--max-issues 2 stops after 2" "0" "$MAIN_RC"
+t_assert_ok "only two claude calls made" grep -q "^2$" "$COUNTER"
+t_teardown
+
+t_setup; make_stub_env smoke-ok
+run_main --smoke
+t_assert_eq "--smoke exits 0 on smoke-ok" "0" "$MAIN_RC"
+t_assert_ok "only one claude call in smoke" grep -q "^1$" "$COUNTER"
+t_teardown
+
+t_setup; make_stub_env skipped dry
+run_main
+t_assert_eq "skipped continues without failure" "0" "$MAIN_RC"
+t_assert_ok "summary reports 1 skipped" grep -q "skipped: 1" "$T_TMP/main-out"
+t_teardown
+
 t_summary
