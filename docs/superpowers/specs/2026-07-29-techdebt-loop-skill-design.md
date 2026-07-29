@@ -82,11 +82,21 @@ Deliberately dumb — all intelligence is in the worker.
     problem: CI infra, DB substrate, allowlist rot).
   - `failed-permission` — **abort immediately without penalizing the issue** (its labels
     are untouched); print the denied command so HH extends the allowlist and re-runs.
+- **Missing `outcome.json`** (worker died before writing it): the driver classifies from
+  the exit code and transcript:
+  - transcript matches a usage-limit pattern (`Claude AI usage limit reached|<epoch>` or
+    "You've hit your session limit") → **`rate-limited`**: parse the reset epoch when
+    present and sleep until reset + 5 min; if no epoch is parseable, sleep 30 min and
+    retry. Does **not** touch the consecutive-failure counter and does not penalize the
+    issue — a mid-cycle kill is just a crash, absorbed by §7 step 0 adoption. Total
+    waiting is capped by `--max-wait` (default 6 h; `0` = wait indefinitely, for
+    weekly-cap survival) — beyond the cap, summarize and exit with a clear message.
+  - timeout kill or anything else → `failed`.
 - Flags: `--max-issues N`, `--include-epics`, `--dry-run`, `--issue N` (force one
-  specific issue), `--bypass`.
+  specific issue), `--bypass`, `--max-wait H`.
 - On any exit: run summary (merged / retried / failed / remaining) + notification.
 
-Timeout expiry counts as `failed` for that cycle; the orphaned `loop:in-progress` label is
+The orphaned `loop:in-progress` label left by any kill (timeout, rate limit, crash) is
 the next worker's crash-recovery signal (§7 step 0).
 
 ## 7. Worker cycle (`/techdebt-next`)
@@ -158,6 +168,7 @@ remains the merge gate in both modes.
 | Allowlist gap mid-run | `failed-permission` outcome: stop, no issue penalized, exact command reported |
 | Crashed session leaves an issue claimed | `loop:in-progress` + GitHub-state reconstruction in the next session's preflight |
 | Two loops collide | Driver lockfile |
+| Usage-window exhaustion mid-run | `rate-limited` classification: sleep until the parsed reset epoch (+5 min) and resume; issue unpenalized, cycle resumed via §7 step 0 adoption; `--max-wait` caps the zombie-driver risk |
 | Shared-file churn (HANDOVER/ROADMAP) across serial PRs | Each cycle branches from freshly-merged main; docs touched only when material |
 | Triage misclassifies an epic as ready | Worker re-checks scope at plan time; if the plan exceeds single-PR size, it relabels `loop:epic`, comments, and moves on (counts as no attempt, not a failure) |
 
@@ -170,3 +181,7 @@ remains the merge gate in both modes.
 - `outcome.json` schema (issue, outcome, step reached, PR/commit refs, denied command).
 - Whether the second review reuses `code-review:code-review` or a purpose-built
   multi-agent review prompt.
+- Exact usage-limit transcript patterns to match (verify against the installed CLI
+  version at implementation time; both known phrasings above are matched defensively).
+  Optional later hardening: a statusLine hook that writes the reset epoch to a flag file
+  the driver reads, instead of transcript parsing (community "Smart Resume" pattern).
