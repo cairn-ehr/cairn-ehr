@@ -46,10 +46,22 @@ end your turn. Touch nothing else — no labels, no issues, no branches.
    — a non-empty result means a previous worker died mid-cycle. ADOPT the
    lowest-numbered one instead of picking fresh: reconstruct its position
    from GitHub state and resume from there:
+
+   Reconstruct its position with these commands (the crashed session chose
+   the slug, so discover rather than guess):
+   - Branch: `git ls-remote --heads origin "loop/<n>-*"`; local worktree at
+     `~/.cairn-loop/wt/issue-<n>` may also exist.
+   - PR: `gh pr list --state all --limit 50 --json number,state,headRefName,mergedAt`
+     and filter for `headRefName` beginning `loop/<n>-` (e.g. with jq).
+   - Second-review state: `gh pr view <pr> --comments` — the full PR review
+     posted in Step 7 is visible as review comments on the PR.
+
    - PR exists and is MERGED → resume at Step 9 (cleanup).
    - PR exists, checks failing → resume at Step 8's red-CI arm.
    - PR exists, checks green/pending, second review not yet posted (no PR
      review from this loop visible) → resume at Step 7.
+   - PR exists, checks green/pending, second review ALREADY posted → resume
+     at Step 8 (docs check + merge). Do not re-run the second review.
    - Branch `loop/<n>-*` exists but no PR → delete the remote branch if
      pushed, remove any local worktree at `~/.cairn-loop/wt/issue-<n>`,
      and restart the cycle at Step 2 (the plan comment already posted
@@ -59,7 +71,11 @@ end your turn. Touch nothing else — no labels, no issues, no branches.
 ## Step 1 — pick
 
 - If `TECHDEBT_FORCE_ISSUE` is set and non-empty, that is your issue
-  (verify it is open; if not, write outcome `dry` and stop).
+  (verify it is open; if not, write outcome `dry` and stop). A forced issue
+  is operator-chosen: it need not carry an eligibility label. When claiming
+  it, remove its `loop:ready`/`loop:retry`/`loop:epic` label if present and
+  proceed even if it has none — this is the one sanctioned exception to the
+  "never touch issues without a `loop:*` label" hard rule.
 - Else: lowest-numbered open issue labeled `loop:ready`. If none and
   `TECHDEBT_INCLUDE_EPICS=1`, lowest open `loop:epic`. If none at all —
   check `loop:retry`: lowest open `loop:retry` is eligible ONCE more.
@@ -130,7 +146,8 @@ local gate after fixes.
    nothing material changed — most tech debt.
 2. `gh pr merge <pr> --auto --merge` (merge commit; --auto waits for the
    5 required checks).
-3. Poll every 2 minutes (max 40 min):
+3. Poll every 2 minutes (max 40 min per CI run — the budget restarts when
+   you push a fix and re-enable auto-merge):
    `gh pr view <pr> --json state,statusCheckRollup`.
    - MERGED → Step 9.
    - Any required check failed → diagnose and fix ONCE (push the fix,
@@ -153,11 +170,14 @@ outcome `merged` (step "cleanup", pr number filled in). End your turn.
 
 ## Cycle failure (any step irrecoverable)
 
-1. Comment on the issue: which step, what failed (include the actual error
-   text), what you tried.
-2. Labels: remove `loop:in-progress`; add `loop:retry` if this was the
-   issue's FIRST failed cycle (no prior failure comment from the loop),
-   else `loop:failed`.
+1. Post the failure comment FIRST, with this exact machine-checkable prefix:
+   `techdebt-loop: cycle failed (step <step>): <error detail, what you tried>`
+   — adopted sessions rely on that prefix to count prior failures.
+2. Labels: remove `loop:in-progress`. Then decide retry vs park:
+   - This was the issue's SECOND failed cycle if EITHER you claimed it by
+     removing `loop:retry` in Step 1, OR its comments already contain an
+     earlier `techdebt-loop: cycle failed` comment → add `loop:failed`.
+   - Otherwise (first failure) → add `loop:retry`.
 3. If a PR is open: `gh pr ready <pr> --undo` (convert to draft).
 4. Remove the worktree (as in Step 9).
 5. Write outcome `failed` (step = where it died, detail = one-line error).
@@ -168,5 +188,6 @@ outcome `merged` (step "cleanup", pr number filled in). End your turn.
 - ONE issue per session. Ending early with an honest `failed` outcome beats
   a heroic multi-issue session.
 - Never `git push --force`, never rewrite main, never merge a red PR.
-- Never touch issues without a `loop:*` label.
+- Never touch issues without a `loop:*` label (sole exception: a
+  `TECHDEBT_FORCE_ISSUE` issue — operator-chosen).
 - The outcome file write is always your last file action.
