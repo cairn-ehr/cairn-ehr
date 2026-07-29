@@ -211,6 +211,26 @@ release_lock() {
   fi
 }
 
+# ---- label taxonomy (spec §4) ----
+# Idempotent: --force updates color/description on an existing label instead
+# of failing, so every run may call this safely.
+setup_labels() {
+  gh label create "loop:ready"       --force --color "0E8A16" \
+    --description "techdebt-loop: bounded, autonomously fixable, deps met"
+  gh label create "loop:blocked"     --force --color "D93F0B" \
+    --description "techdebt-loop: blocked; comment records what unblocks it"
+  gh label create "loop:needs-human" --force --color "5319E7" \
+    --description "techdebt-loop: needs human judgment"
+  gh label create "loop:epic"        --force --color "1D76DB" \
+    --description "techdebt-loop: multi-PR slice (only with --include-epics)"
+  gh label create "loop:in-progress" --force --color "FBCA04" \
+    --description "techdebt-loop: a worker session owns this issue"
+  gh label create "loop:retry"       --force --color "F9D0C4" \
+    --description "techdebt-loop: first cycle failed; one retry allowed"
+  gh label create "loop:failed"      --force --color "B60205" \
+    --description "techdebt-loop: parked after second failure; human triage"
+}
+
 # ---- test guard: when sourced by the test harness, stop here ----
 if [ "${TECHDEBT_TEST:-0}" = "1" ]; then
   # shellcheck disable=SC2317 # reached when script is sourced in test mode

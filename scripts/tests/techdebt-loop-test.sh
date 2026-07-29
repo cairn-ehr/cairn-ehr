@@ -170,4 +170,23 @@ kill "$UNRELATED_PID" 2>/dev/null || true
 wait "$UNRELATED_PID" 2>/dev/null || true
 t_teardown
 
+# ---- setup_labels (stubbed gh) ----
+t_setup
+STUB="$T_TMP/bin"
+mkdir -p "$STUB"
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+EOF
+chmod +x "$STUB/gh"
+GH_CALLS="$T_TMP/gh-calls"
+export GH_CALLS
+PATH="$STUB:$PATH" setup_labels
+t_assert_eq "seven labels created" "7" "$(wc -l < "$GH_CALLS" | tr -d ' ')"
+t_assert_eq "all creates are idempotent (--force)" "7" \
+  "$(grep -c -- '--force' "$GH_CALLS")"
+t_assert_ok "loop:ready label present" grep -q "label create loop:ready" "$GH_CALLS"
+t_assert_ok "loop:failed label present" grep -q "label create loop:failed" "$GH_CALLS"
+t_teardown
+
 t_summary
