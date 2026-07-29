@@ -371,7 +371,15 @@ BEGIN
     -- refusal would fork honest nodes) and the merge is caught by the flag lifecycle
     -- AFTER the overlay below. The Rust auto-apply pre-check stays as the polite early
     -- skip; this is the floor behind it.
-    IF v_state = 'link' AND e.attester_key IS NULL AND cairn_has_hard_veto(lo, hi)
+    -- "e.attester_key set" means a human decided — but only if something VERIFIED it. A
+    -- deferred event's token is carried, not vouched (ADR-0056 / PR #302 finding F2), so an
+    -- unvouched row is treated exactly as an un-attested one: the veto still forces a human
+    -- decision. Unreachable on this branch today (the remote_apply guard below skips it for
+    -- every replicated event, and a deferred event only ever arrives replicated), but a
+    -- reader must not have to prove that to trust the line.
+    IF v_state = 'link'
+       AND (e.attester_key IS NULL OR NOT cairn_attestation_vouched(e.event_id))
+       AND cairn_has_hard_veto(lo, hi)
        AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         RAISE EXCEPTION
             'identity link %/%: hard veto — the §5.2 floor forces a human decision; an un-attested (agent) link may not merge these charts (issue #190)',
@@ -413,7 +421,13 @@ BEGIN
     -- clear. The winner's attestation is looked up via its content_address (UNIQUE in
     -- event_log); patient_link always has a row here (the upsert inserted or kept one).
     -- Node-local advisory state, so INSERT/DELETE is honest — the events all remain logged.
-    SELECT pl.state, pl.content_address, el.attester_key IS NOT NULL
+    -- THE REACHABLE ONE (PR #302 finding F2). Unlike the door refusal above, nothing skips
+    -- this on the sync path — so an unvouched token satisfying `v_win_attested` would
+    -- SUPPRESS the flag on a hard-vetoed merge: two charts merged, no worklist entry, both
+    -- charts reading `confirmed`. Strictly worse than the un-attested case, which is at
+    -- least flagged. An unvouched vouch is not a vouch.
+    SELECT pl.state, pl.content_address,
+           el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id)
       INTO v_win_state, v_win_ca, v_win_attested
       FROM patient_link pl
       JOIN event_log el ON el.content_address = pl.content_address

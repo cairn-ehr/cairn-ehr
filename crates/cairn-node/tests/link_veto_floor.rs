@@ -480,3 +480,80 @@ async fn human_attested_relink_clears_the_veto_flag() {
         "chart reads confirmed again"
     );
 }
+
+/// PR #302 review finding F2, second reader. A deferred event's attester_key is CARRIED, NOT
+/// VOUCHED — and once promotion projects it (db/043 gate 4), this apply fn sees it.
+///
+/// `v_win_attested` drives the whole #190 flag lifecycle: an attested link is the human
+/// decision the veto forces, so it raises no flag. Let an unverified token satisfy that and a
+/// hostile peer suppresses the flag on a hard-vetoed merge with a blob nothing ever checked —
+/// two charts silently merged, no worklist entry, both reading `confirmed`. That is strictly
+/// worse than the un-attested case, which at least gets flagged.
+#[tokio::test]
+async fn an_unvouched_token_is_not_a_link_attestation() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+
+    // Simulate "this node has no code for identity.link.asserted yet" the same way
+    // deferred_admission.rs does for patient.created: remove BOTH things the migration
+    // provides. Removing only the class row produces a registered-but-unclassified state no
+    // real node can reach, and the AFTER-INSERT dispatcher would still fire. All three rows
+    // are restored by the next connect's migration replay, so this is self-healing.
+    for sql in [
+        "DELETE FROM cairn_projection_apply WHERE event_type = 'identity.link.asserted'",
+        "DELETE FROM cairn_event_twin_check WHERE event_type = 'identity.link.asserted'",
+        "DELETE FROM event_type_class WHERE event_type = 'identity.link.asserted'",
+    ] {
+        c.execute(sql, &[]).await.unwrap();
+    }
+
+    // An AGENT link — no human decision anywhere — carrying a garbage token. Derived at
+    // runtime, never a literal (house rule 6).
+    let body = link_body(&kid_a, a, b, true, 10, false);
+    let signed = sign(&body, &sk_a).unwrap();
+    let bogus: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(11)).collect();
+    let akey = hex::decode(&kid_a).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes, &bogus, &akey],
+    )
+    .await
+    .expect("an unclassifiable type is admitted uninterpreted");
+
+    // A fresh connect replays the migrations (restoring all three rows), re-adjudicates, and
+    // projects what it promoted.
+    drop(c);
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+
+    let deferred: i64 = c2
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deferred, 0, "precondition: the link was promoted");
+    let merged: i64 = c2
+        .query_one("SELECT count(*) FROM person_member", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(merged > 0, "precondition: the promoted link projected");
+
+    let flags: i64 = c2
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 1,
+        "an UNVOUCHED token is not the human decision the §5.2 veto forces — the vetoed \
+         merge must still be flagged, never silently accepted"
+    );
+    assert_eq!(trust_state(&c2, a).await.as_deref(), Some("under-review"));
+    assert_eq!(trust_state(&c2, b).await.as_deref(), Some("under-review"));
+}
