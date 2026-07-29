@@ -1119,16 +1119,44 @@ The task that closes the node-bricking failure.
 
 Append to `crates/cairn-node/tests/deferred_admission.rs`:
 
+> **AMENDED after Task 5 (controller).** The fixture originally specified here cannot work, and
+> the reason is worth recording: **once gate 0 exists, no currently-reachable event passes gates
+> 0–3 and then fails a heal-safe apply fn.** `cairn_check_medication_assertion` validates exactly
+> the payload-derived NOT NULL columns of `medication_statement` (`medication_id`,
+> `substance.term`, `info_source`); `medication_cessation_apply` needs only `medication_id`; and
+> the only three types with a projection but **no** `check_fn` (`note.added`, `patient.amended`,
+> `patient.created`) have no payload-derived NOT NULL columns either — `note.added` is
+> additionally `heal_safe = false`, so gate 4 skips it by design.
+>
+> That is a good result: it means gate 0 covers today's whole reachable surface. It also makes
+> gate 4 **pure defence-in-depth**, exactly like Task 4's db/034 guard — it exists for the
+> stricter apply fn someone writes in 2027, not for a bug reachable today. So its test must be
+> **white-box**, forcing the state rather than contriving an event that cannot exist.
+
+Append to `crates/cairn-node/tests/deferred_admission.rs`:
+
 ```rust
 /// PR #302 review finding F1, the part that BRICKS THE NODE.
 ///
-/// Measured before this fix: promotion deleted the marker for an event whose apply fn then
-/// raised, and because event_log is append-only nothing could undo it. Three consecutive
-/// connect_and_load_schema calls failed with `post-upgrade heal replay: db error` and
-/// node_schema.version never advanced past 42. `cairn-node deferred` could not diagnose it —
-/// it calls connect_and_load_schema itself.
+/// Measured before this work began: promotion deleted the marker for an event whose apply fn
+/// then raised, and because `event_log` is append-only nothing could undo it. Three consecutive
+/// `connect_and_load_schema` calls failed with `post-upgrade heal replay: db error` and
+/// `node_schema.version` never advanced past 42. `cairn-node deferred` could not diagnose it —
+/// it calls `connect_and_load_schema` itself.
 ///
-/// The invariant this pins: a promoted event is one that has ALREADY projected cleanly.
+/// WHITE-BOX BY NECESSITY, and the necessity is itself the finding: with gate 0 in place there
+/// is no longer any reachable event that passes gates 0-3 and then fails a heal-safe apply fn
+/// (every registered `check_fn` covers its projection's payload-derived NOT NULL columns, and
+/// the three types without a `check_fn` have no such columns). Gate 4 therefore guards the
+/// stricter apply fn written years from now. To pin it at all, the failure must be constructed:
+/// a test-only event type with a deliberately-raising apply fn.
+///
+/// The construction is safe to leak. `cairn_test_wedge_apply` can only ever be invoked for
+/// events of type `readjudicate.wedge.probe`, and only this test creates one — so even if the
+/// cleanup below never runs (a panic), `cairn_reproject` finds zero eligible rows of that type
+/// and the function never executes.
+///
+/// The invariant this pins: A PROMOTED EVENT IS ONE THAT HAS ALREADY PROJECTED CLEANLY.
 #[tokio::test]
 async fn a_promotion_that_cannot_project_never_promotes() {
     let Some(base) = cs() else {
@@ -1139,30 +1167,60 @@ async fn a_promotion_that_cannot_project_never_promotes() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _, _) = setup(&c).await;
     let p = Uuid::now_v7();
-    for sql in [
-        "DELETE FROM cairn_projection_apply WHERE event_type = 'clinical.medication.asserted'",
-        "DELETE FROM cairn_event_twin_check WHERE event_type = 'clinical.medication.asserted'",
-        "DELETE FROM event_type_class WHERE event_type = 'clinical.medication.asserted'",
-    ] {
-        c.execute(sql, &[]).await.unwrap();
-    }
-    let mut b = peer_event(&kid, p, "clinical.medication.asserted", WALL_2026);
-    b.schema_version = "clinical.medication.asserted/1".into();
-    b.payload = serde_json::json!({"nonsense": true});
+    const PROBE: &str = "readjudicate.wedge.probe";
+
+    // Idempotent pre-clean, not post-clean: cleanup at the END does not survive a panic, and a
+    // predecessor that died mid-test would otherwise poison this one (the issue #296 lesson,
+    // applied forward). Registration first — the FK-less registry rows must go before the fn.
+    let pre_clean = format!(
+        "DELETE FROM cairn_projection_apply WHERE event_type = '{PROBE}'; \
+         DELETE FROM event_type_class      WHERE event_type = '{PROBE}'; \
+         DROP FUNCTION IF EXISTS cairn_test_wedge_apply(event_log);"
+    );
+    c.batch_execute(&pre_clean).await.unwrap();
+
+    // An apply fn that always refuses. This is the "stricter apply fn written in 2027" that
+    // gate 4 exists for, stood up deliberately because no real one exists yet.
+    c.batch_execute(
+        "CREATE FUNCTION cairn_test_wedge_apply(e event_log) RETURNS void \
+         LANGUAGE plpgsql AS $fn$ BEGIN \
+           RAISE EXCEPTION 'deliberate test failure: this apply fn always refuses'; \
+         END $fn$;",
+    )
+    .await
+    .unwrap();
+
+    // Admit the event while the type is UNCLASSIFIED — the only way to become deferred.
+    let mut b = peer_event(&kid, p, PROBE, WALL_2026);
+    b.schema_version = "readjudicate.wedge.probe/1".into();
+    let probe_id = b.event_id.clone();
     let signed = sign(&b, &sk).unwrap();
     c.execute(
         "SELECT apply_remote_event($1)",
         &[&signed.signed_bytes.to_vec()],
     )
     .await
+    .expect("an unclassifiable type is admitted uninterpreted");
+
+    // The code plane lands: classification FIRST (db/005's registry trigger refuses a
+    // projection for an unclassified type), then the projection registration.
+    c.batch_execute(&format!(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+           VALUES ('{PROBE}', 'additive', FALSE) ON CONFLICT DO NOTHING; \
+         INSERT INTO cairn_projection_apply (event_type, apply_fn, projection_tables) \
+           VALUES ('{PROBE}', 'cairn_test_wedge_apply', ARRAY['patient_chart']);"
+    ))
+    .await
     .unwrap();
-    // The code plane update also bumps the generation, so the loader takes the FULL-heal
-    // branch — the realistic path, and the one that wedged permanently.
+
+    // A code-plane update bumps the generation too, so the loader takes the FULL-heal branch —
+    // the realistic path, and the one that wedged permanently.
     c.execute("UPDATE node_schema SET version = version - 1", &[])
         .await
         .unwrap();
     drop(c);
 
+    // THE ASSERTION THAT MATTERS: the loader survives, repeatedly.
     for attempt in 1..=3 {
         db::connect_and_load_schema(&base)
             .await
@@ -1171,14 +1229,30 @@ async fn a_promotion_that_cannot_project_never_promotes() {
 
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
     let kept: i64 = c2
-        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .query_one(
+            "SELECT count(*) FROM event_deferred WHERE event_id = $1::text::uuid",
+            &[&probe_id],
+        )
         .await
         .unwrap()
         .get(0);
     assert_eq!(
         kept, 1,
-        "an event that cannot project must KEEP its marker — powerless, retryable, and \
-         above all unable to take the loader down with it"
+        "an event that cannot project must KEEP its marker — powerless, retryable, and above \
+         all unable to take the loader down with it"
+    );
+    let err: Option<String> = c2
+        .query_one(
+            "SELECT adjudication_error FROM event_deferred WHERE event_id = $1::text::uuid",
+            &[&probe_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let err = err.expect("the refusal must be recorded, not silent");
+    assert!(
+        err.contains("deliberate test failure"),
+        "the apply fn's own refusal must be what gets flagged; got: {err}"
     );
     let embedded = db::embedded_schema_version();
     let recorded: i32 = c2
@@ -1188,11 +1262,11 @@ async fn a_promotion_that_cannot_project_never_promotes() {
         .get(0);
     assert_eq!(
         recorded, embedded,
-        "the generation must ADVANCE — a stuck stamp means every future connect retries \
-         the same doomed heal forever"
+        "the generation must ADVANCE — a stuck stamp means every future connect retries the \
+         same doomed heal forever, which is precisely how the node bricked"
     );
 
-    // Leave the shared test database clean for the next test.
+    c2.batch_execute(&pre_clean).await.unwrap();
     c2.batch_execute("TRUNCATE event_log CASCADE").await.unwrap();
 }
 ```
@@ -1200,21 +1274,24 @@ async fn a_promotion_that_cannot_project_never_promotes() {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$(whoami) dbname=cairn_test" \
-  cargo test -p cairn-node --test deferred_admission cannot_project -- --nocapture
+export CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$(whoami) dbname=cairn_test"
+cargo test -p cairn-node --test deferred_admission cannot_project -- --nocapture
 ```
 
-Expected: FAIL at `connect attempt 1 must succeed, got: post-upgrade heal replay: db error`.
+Expected: FAIL at `connect attempt 1 must succeed, got: post-upgrade heal replay: db error`. Without gate 4 the pass promotes the probe (marker deleted, so the event becomes replay-eligible), the full heal then invokes `cairn_test_wedge_apply` on it, and the raise propagates out of `connect_and_load_schema`.
 
-**If it passes, stop.** Task 5's gate 0 already refuses this payload, so the test does not reach gate 4 and does not discriminate. Change the payload to one gate 0 accepts but the apply fn rejects — add a valid authored twin (`b.plaintext_twin = Some("metformin 500mg".into())`) while leaving the payload without the fields `medication_statement` requires — and re-verify the failure before continuing.
+If it fails at a *different* point — e.g. the projection registration is refused, or the event is not deferred — the fixture is wrong, not the production code. Fix the fixture and re-verify the RED before implementing.
 
 - [ ] **Step 3: Recover the wedged test database**
 
-The failing run leaves a poisoned event behind. Before implementing:
+The failing run leaves a promoted-but-unprojectable event and the test-only registry rows behind, and the next connect will keep failing on them. Before implementing:
 
 ```bash
-psql "host=127.0.0.1 port=5532 user=$(whoami) dbname=cairn_test" \
-  -c "TRUNCATE event_log CASCADE"
+psql "host=127.0.0.1 port=5532 user=$(whoami) dbname=cairn_test" -c \
+  "DELETE FROM cairn_projection_apply WHERE event_type = 'readjudicate.wedge.probe';
+   DELETE FROM event_type_class WHERE event_type = 'readjudicate.wedge.probe';
+   DROP FUNCTION IF EXISTS cairn_test_wedge_apply(event_log);
+   TRUNCATE event_log CASCADE;"
 ```
 
 - [ ] **Step 4: Add gate 4**
