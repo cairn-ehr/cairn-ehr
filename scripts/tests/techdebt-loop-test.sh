@@ -193,8 +193,19 @@ t_teardown
 # Scenario tests bypass the real timeout machinery: its watcher calls
 # `sleep`, which the stub turns into an instant no-op, so the watcher would
 # TERM the fake claude in a race. run_with_timeout has its own tests
-# (Task 2); here we run the worker command directly.
-run_with_timeout() { shift; "$@"; }
+# (Task 2); here we run the worker command directly — but backgrounded and
+# explicitly `wait`ed (like the real function), not called synchronously in
+# the foreground. Verified empirically: bash only notices a pending TERM/INT
+# trap promptly while blocked in the `wait` builtin; a plain foreground
+# command defers trap handling until that command itself exits. The
+# TERM/INT-terminates-the-loop regression test below depends on the prompt
+# behavior to observe a signal reaction within seconds instead of minutes.
+run_with_timeout() {
+  shift
+  "$@" &
+  local child_pid=$!
+  wait "$child_pid"
+}
 
 # make_stub_env SCENARIO_LINES... — builds a PATH shim dir with a fake
 # `claude` that consumes one scenario line per invocation:
@@ -229,6 +240,12 @@ case "$line" in
   crash)
     echo "unexpected death"
     exit 1 ;;
+  hang-real)
+    # Uses the REAL sleep (absolute path), not the shimmed no-op that's
+    # ahead of it on PATH: this token exists so a worker can genuinely
+    # still be running when the TERM/INT signal-handling test below
+    # signals the driver, instead of the instant-return other scenarios.
+    /bin/sleep 30 ;;
   *)
     printf '{"outcome":"%s","issue":11,"pr":null,"step":"test","detail":"denied: cargo test"}' \
       "$line" > "${TECHDEBT_OUTCOME_FILE:?}"
@@ -410,6 +427,31 @@ t_assert_eq "main --setup-labels creates exactly 7 labels" "7" \
   "$(grep -c "label create" "$GH_CALLS")"
 t_assert_fail "main --setup-labels never takes the run lock" \
   [ -d "$SETUP_LOOP_HOME/lock" ]
+t_teardown
+
+# ---- TERM/INT must actually terminate the loop (review finding, task 7) ----
+# Old bug: `trap release_lock EXIT INT TERM` ran release_lock on TERM/INT
+# but never exited — bash resumes the interrupted loop afterward, so a
+# `kill <pid>` released the lock while the driver kept running and spawned
+# another worker; a subsequent /techdebt-loop launch then sees no lock and
+# double-launches. This scenario's fake claude genuinely hangs (real sleep,
+# not the shimmed no-op) so the worker is still "running" when we signal it.
+t_setup; make_stub_env hang-real
+(
+  PATH="$STUB:$PATH" LOOP_HOME="$T_TMP/loophome" main
+) > "$T_TMP/main-out" 2>&1 &
+MAIN_BG_PID=$!
+sleep 1
+kill -TERM "$MAIN_BG_PID" 2>/dev/null
+wait "$MAIN_BG_PID" 2>/dev/null
+sleep 1   # settle: let the EXIT trap's release_lock finish before we check
+t_assert_fail "TERM terminates the loop: lock is released" \
+  [ -d "$T_TMP/loophome/lock" ]
+t_assert_eq "TERM terminates the loop: no post-kill respawn" "1" \
+  "$(cat "$COUNTER")"
+# Best-effort cleanup: the fake claude's real `/bin/sleep 30` is orphaned
+# once main exits (never signaled itself) and finishes on its own shortly.
+pkill -f '/bin/sleep 30' >/dev/null 2>&1 || true
 t_teardown
 
 t_summary

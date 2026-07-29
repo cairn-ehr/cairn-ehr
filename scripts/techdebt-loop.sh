@@ -288,7 +288,13 @@ main() {
     exit 0
   fi
   acquire_lock || die "another techdebt-loop is already running"
-  trap release_lock EXIT INT TERM
+  trap release_lock EXIT
+  # TERM/INT must actually terminate the loop; `exit` here fires the EXIT
+  # trap, which releases the lock exactly once. Without these, bash runs the
+  # handler and RESUMES the loop — `kill` would release the lock while the
+  # driver keeps spawning workers (double-launch hazard).
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   RUN_DIR="$LOOP_HOME/run-$(date '+%Y%m%d-%H%M%S')"
   mkdir -p "$RUN_DIR"
   log "run dir: $RUN_DIR"
