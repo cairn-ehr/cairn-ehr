@@ -39,6 +39,17 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
         .await
         .unwrap();
+    // Several tests below CLASSIFY `UNKNOWN_TYPE` to simulate a code-plane update landing.
+    // That row would otherwise persist in this shared database and silently break every
+    // test that needs the type to be unknown. Cleaning up at the END of those tests would
+    // not survive a panic, so de-classify HERE: idempotent, and it repairs the database
+    // after a predecessor that died mid-test (the issue #296 test-pollution lesson).
+    c.execute(
+        "DELETE FROM event_type_class WHERE event_type = $1",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
     // Keys are DERIVED at runtime, never byte literals (house rule 6 / issue #146).
     let (sk_a, kid_a) = generate_key().unwrap();
     let (sk_h, kid_h) = generate_key().unwrap();
@@ -375,5 +386,210 @@ async fn a_carried_token_does_not_widen_the_owner_gate() {
     assert!(
         genuine,
         "the target's real human signer must still count as its author"
+    );
+}
+
+/// Classification arrival PROMOTES a deferred event that passes the deferred gates: the
+/// marker is deleted and the event becomes replay-eligible. An additive type that targets
+/// nobody satisfies all three gates trivially, which is the common upgrade case.
+#[tokio::test]
+async fn classification_promotes_a_passing_deferred_event() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let b = peer_event(&kid, p, UNKNOWN_TYPE, WALL_2026);
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .unwrap();
+
+    // The code-plane update lands: a migration would classify the type exactly like this.
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+
+    let rows = c
+        .query(
+            "SELECT promoted_type, promoted_count FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "exactly one type should have been promoted");
+    let ty: String = rows[0].get(0);
+    let n: i64 = rows[0].get(1);
+    assert_eq!(ty, UNKNOWN_TYPE);
+    assert_eq!(n, 1);
+
+    let still: i64 = c
+        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(still, 0, "a promoted event's marker must be DELETED");
+
+    let eligible: bool = c
+        .query_one(
+            "SELECT cairn_replay_eligible(el) FROM event_log el WHERE el.event_type = $1",
+            &[&UNKNOWN_TYPE],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(eligible, "a promoted event must become replay-eligible");
+}
+
+/// ADR-0056 decision 4: an event that FAILS re-adjudication stays powerless and is flagged
+/// legibly — never silently promoted. Here the type turns out to be SUPPRESSING and the
+/// event carries no attestation, so the deferred attestation gate refuses it. This is the
+/// case that makes "no unattested suppression holds at every instant" true rather than
+/// violated-then-repaired.
+#[tokio::test]
+async fn failed_readjudication_stays_powerless_and_flagged() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+    let b = peer_event(&kid, p, UNKNOWN_TYPE, WALL_2026);
+    let signed = sign(&b, &sk).unwrap();
+    // Admitted with NO attestation token — legal for a deferred event, since the gate that
+    // would demand one is deferred with the interpretation.
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .unwrap();
+
+    // The code plane classifies it SUPPRESSING, so the attestation gate now applies.
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'suppressing', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+
+    let rows = c
+        .query(
+            "SELECT promoted_type, promoted_count FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(rows.is_empty(), "an un-attested suppress must NOT be promoted");
+
+    let r = c
+        .query_one(
+            "SELECT count(*)::bigint, max(adjudication_error) FROM event_deferred",
+            &[],
+        )
+        .await
+        .unwrap();
+    let kept: i64 = r.get(0);
+    let err: Option<String> = r.get(1);
+    assert_eq!(kept, 1, "a failing event keeps its marker — powerless");
+    let err = err.expect("the failure reason must be recorded");
+    assert!(
+        err.contains("attestation"),
+        "the flag must be legible; got: {err}"
+    );
+
+    let eligible: bool = c
+        .query_one(
+            "SELECT cairn_replay_eligible(el) FROM event_log el WHERE el.event_type = $1",
+            &[&UNKNOWN_TYPE],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(!eligible, "a failed event must stay replay-ineligible");
+}
+
+/// The travelling-token trap, pinned end to end: a token that rode in with a deferred event
+/// is stored, and is what lets re-adjudication promote it later. If the door ever dropped it
+/// again, this test fails — and admit-and-defer would have quietly become a slower
+/// fail-closed, with the event admitted but permanently powerless.
+#[tokio::test]
+async fn a_travelling_token_survives_defer_then_promote() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_a, _kid_a, sk_h, kid_h) = setup(&c).await;
+    let p = Uuid::now_v7();
+    // Signed by the HUMAN attester, so cairn_responsibility_bound is satisfied by the same
+    // key that signs the token — the ordinary attested-write shape.
+    let mut b = peer_event(&kid_h, p, UNKNOWN_TYPE, WALL_2026);
+    b.contributors = serde_json::json!([{
+        "actor_id": kid_h, "role": "authored",
+        "responsibility": {"held_by": kid_h}
+    }]);
+    let signed = sign(&b, &sk_h).unwrap();
+    let token = cairn_event::sign_attestation(
+        &cairn_event::event_address(&signed.signed_bytes),
+        &kid_h,
+        "attested",
+        &sk_h,
+    )
+    .unwrap();
+    let hkey = hex::decode(&kid_h).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3)",
+        &[&signed.signed_bytes.to_vec(), &token, &hkey],
+    )
+    .await
+    .unwrap();
+
+    let stored: Option<Vec<u8>> = c
+        .query_one(
+            "SELECT attestation FROM event_log WHERE event_type = $1",
+            &[&UNKNOWN_TYPE],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        stored.is_some(),
+        "the travelling token must be STORED on the deferred path, or re-adjudication has \
+         nothing to verify and the event can never gain power"
+    );
+
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ($1, 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[&UNKNOWN_TYPE],
+    )
+    .await
+    .unwrap();
+    let rows = c
+        .query(
+            "SELECT promoted_type FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the carried token must now VERIFY and promote the event"
     );
 }

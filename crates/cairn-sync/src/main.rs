@@ -130,6 +130,15 @@ const SCHEMA: &[(&str, &str)] = &[
         "040_clock_confidence_grade",
         include_str!("../../../db/040_clock_confidence_grade.sql"),
     ),
+    // db/043 (ADR-0056 decision 4 / #266): cairn_readjudicate_deferred. Unlike the
+    // medication files, which this subset legitimately lags on (#284), this one is NOT
+    // optional here: db/020 above is the door that WRITES the event_deferred marker, so a
+    // cairn-sync database without this file would accumulate deferred rows nothing could
+    // ever promote — admitted events, permanently powerless, with no mechanism to notice.
+    (
+        "043_deferred_readjudication",
+        include_str!("../../../db/043_deferred_readjudication.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)

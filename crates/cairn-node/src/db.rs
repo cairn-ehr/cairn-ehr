@@ -234,6 +234,16 @@ const SCHEMA: &[(&str, &str)] = &[
         "042_medication_coding_overlay",
         include_str!("../../../db/042_medication_coding_overlay.sql"),
     ),
+    // db/043 (ADR-0056 decision 4 / #266): cairn_readjudicate_deferred — the pass that
+    // re-runs the classification-gated floor checks before power is granted. Must land in
+    // BOTH lists (this one and cairn-sync's), unlike the medication files that legitimately
+    // lag: cairn-sync loads db/020, whose door WRITES the event_deferred marker, so a
+    // cairn-sync database missing this file would accumulate deferred rows that nothing
+    // could ever promote (#284's drift hazard, made concrete).
+    (
+        "043_deferred_readjudication",
+        include_str!("../../../db/043_deferred_readjudication.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
