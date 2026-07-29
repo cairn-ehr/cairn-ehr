@@ -1061,3 +1061,89 @@ async fn an_unvouched_token_never_becomes_an_attester_kid() {
          responsible human on the ADR-0049 sign-off surface"
     );
 }
+
+/// PR #302 review finding F1, first half. db/020 step 8 — `cairn_event_twin`'s dispatch to the
+/// type's `check_fn` and `twin_required_msg` — is skipped for a deferred event for exactly the
+/// same reason the other three gates are: the type has no registry row. db/043 re-ran three
+/// gates and not this one, so it was WAIVED rather than deferred.
+///
+/// Pinned with `clinical.medication.asserted`, which hard-requires an authored twin and has a
+/// real `check_fn`. The event below would be refused by BOTH doors if the type were known.
+#[tokio::test]
+async fn promotion_refuses_an_event_its_type_floor_rejects() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+
+    // Simulate "no code for this type yet" — all three rows the migration provides. Restored
+    // by the next connect's replay, so this is self-healing even if the test dies partway.
+    for sql in [
+        "DELETE FROM cairn_projection_apply WHERE event_type = 'clinical.medication.asserted'",
+        "DELETE FROM cairn_event_twin_check WHERE event_type = 'clinical.medication.asserted'",
+        "DELETE FROM event_type_class WHERE event_type = 'clinical.medication.asserted'",
+    ] {
+        c.execute(sql, &[]).await.unwrap();
+    }
+
+    let mut b = peer_event(&kid, p, "clinical.medication.asserted", WALL_2026);
+    b.schema_version = "clinical.medication.asserted/1".into();
+    // STRUCTURALLY VALID (a real medication_id/substance.term/info_source), so the ONE
+    // thing gate 0 catches below is the missing twin — not an incidental field-shape
+    // refusal from cairn_check_medication_assertion's own checks, which run first inside
+    // the same cairn_event_twin dispatch and would otherwise fire before ever reaching the
+    // twin requirement, proving the wrong thing.
+    b.payload = serde_json::json!({
+        "medication_id": Uuid::now_v7().to_string(),
+        "substance": {"term": "amoxicillin"},
+        "info_source": "patient report"
+    });
+    b.plaintext_twin = None; // the type hard-REQUIRES an authored twin
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .expect("an unclassifiable type is admitted uninterpreted");
+
+    // The code plane lands — restore only the classification, so promotion is attempted while
+    // the projection registration is still absent. That isolates gate 0 from gate 4.
+    c.execute(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+         VALUES ('clinical.medication.asserted', 'additive', FALSE) ON CONFLICT DO NOTHING",
+        &[],
+    )
+    .await
+    .unwrap();
+    c.batch_execute(include_str!("../../../db/031_medication.sql"))
+        .await
+        .unwrap(); // restores cairn_event_twin_check for the type
+
+    let rows = c
+        .query(
+            "SELECT promoted_type FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "an event its own type's structural floor rejects must NOT be promoted"
+    );
+
+    let err: Option<String> = c
+        .query_one("SELECT max(adjudication_error) FROM event_deferred", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let err = err.expect("the refusal must be recorded");
+    assert!(
+        err.contains("twin") || err.contains("§3.13"),
+        "the flag must name a CLINICAL reason, not a constraint violation; got: {err}"
+    );
+}

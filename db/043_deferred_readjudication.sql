@@ -59,13 +59,22 @@ DECLARE
     v_bears    boolean;
     v_target   uuid;
     v_err      text;
+    v_clear    jsonb;
     -- type → count of events promoted this run. A jsonb accumulator rather than a temp
     -- table: the deferred set is tiny by construction (empty on a healthy node), and this
     -- keeps the function free of any object a concurrent caller could collide on.
     v_promoted jsonb := '{}'::jsonb;
 BEGIN
+    -- These are PEER-ARRIVED events, so every check below must run on the LENIENT tier the
+    -- door would have used. db/041's cairn_check_medication_coding reads this marker; without
+    -- it, gate 0 would refuse a verifiable peer event outright — the sync-watermark freeze
+    -- db/020's own step-8 comment warns about, and precisely what ADR-0056 forbids.
+    -- SET LOCAL (is_local = true): scoped to this transaction, exactly as cairn_reproject
+    -- (db/039) does for its whole run.
+    PERFORM set_config('cairn.remote_apply', 'on', true);
+
     FOR r IN
-        SELECT d.event_id, d.event_type, el.signed_bytes, el.content_address,
+        SELECT d.event_id, d.event_type, el AS el_row, el.signed_bytes, el.content_address,
                el.attestation, el.attester_key, c.mode, c.targets_other_author
           FROM event_deferred d
           JOIN event_log el       ON el.event_id  = d.event_id
@@ -92,6 +101,22 @@ BEGIN
             b := cairn_body(r.signed_bytes);
             IF b IS NULL THEN
                 RAISE EXCEPTION 'stored signed bytes no longer parse';
+            END IF;
+
+            -- Deferred gate 0 — the per-type STRUCTURAL floor (db/020 step 8). It was skipped
+            -- at admission for the same reason gates 1-3 were: the type had no registry row,
+            -- so cairn_event_twin found neither a check_fn nor a twin_required_msg and fell
+            -- through to the skeleton. Now the row exists, so the check must run — otherwise
+            -- this check is WAIVED rather than deferred, and this file's header is false.
+            --
+            -- cairn_clear_payload is reused rather than reimplementing db/020's
+            -- sealed/unsealed branching, so the two paths cannot drift on what a readable
+            -- body is. NULL = sealed with no custody here: skip, exactly as the door does —
+            -- a structural check cannot run on ciphertext. Gate 4 still proves such an event
+            -- can project.
+            v_clear := cairn_clear_payload(r.el_row);
+            IF v_clear IS NOT NULL THEN
+                PERFORM cairn_event_twin(r.event_type, jsonb_set(b, '{payload}', v_clear));
             END IF;
 
             -- Deferred gate 1 — the suppressing⇒attestation gate (db/020 step 4). The token
