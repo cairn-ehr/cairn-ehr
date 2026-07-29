@@ -213,4 +213,48 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_pull_at TIMESTAMPTZ
 );
 
+-- ---------------------------------------------------------------------------
+-- The admitted-uninterpreted marker (ADR-0056 decision 1, issue #265).
+--
+-- A 1:1 node-local sidecar of event_log. One row means: "this event was admitted
+-- by the remote door WITHOUT its type being classified, so it holds NO power."
+-- Node-local derived state — never signed, never on the wire (principle 12),
+-- like reproject_log (db/039) and node_schema (db/038).
+--
+-- WHY EXPLICIT, rather than inferred from a missing event_type_class row:
+-- ADR-0056's corollary forbids inferring the deferred state from a null
+-- classification lookup falling through the gates by three-valued logic. An
+-- inferred marker also has nowhere to record WHY a re-adjudication attempt
+-- failed, which decision 4 requires to be flagged legibly.
+--
+-- WHY IT LIVES HERE rather than in this slice's own db/043: db/005's
+-- cairn_replay_eligible and cairn_suppression_author_ok both read it, and both
+-- are LANGUAGE sql — SQL-language function bodies resolve table names at CREATE
+-- time (unlike PL/pgSQL's late binding), so the table must exist before db/005
+-- loads. Its consumers are documented in db/043_deferred_readjudication.sql.
+--
+-- The row is DELETED on promotion, never marked resolved: its presence IS the
+-- invariant ("powerless; the classification-gated checks have not been passed"),
+-- and a resolved-row history would be a second, drift-prone source of truth for
+-- the same fact.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_deferred (
+    event_id           UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE,
+    -- Denormalized from event_log so the reclassification scan selects its
+    -- candidates by joining this against event_type_class alone, and the
+    -- `cairn-node deferred` listing reads it without touching event_log.
+    event_type         TEXT        NOT NULL,
+    -- Node-local operational stamp (clock_timestamp, like reproject_log.ran_at).
+    -- NEVER a clinical time: t_recorded/t_effective live on event_log and are the
+    -- only times that mean anything about the record itself.
+    admitted_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    -- NULL until a re-adjudication attempt has run and FAILED; then the verbatim
+    -- refusal. This column IS decision 4's "flagged legibly".
+    adjudication_error TEXT,
+    last_attempt_at    TIMESTAMPTZ
+);
+
+-- The reclassification scan joins event_deferred → event_type_class on this column.
+CREATE INDEX IF NOT EXISTS event_deferred_type_idx ON event_deferred (event_type);
+
 COMMIT;

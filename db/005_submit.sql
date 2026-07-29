@@ -120,6 +120,31 @@ BEGIN
                 v_tbl;
         END IF;
     END LOOP;
+    -- ADR-0056 decision 4 (issue #266): a projection-registered type MUST be classified.
+    --
+    -- The remote door admits an UNCLASSIFIED type uninterpreted (db/020, #265) and records
+    -- its event_deferred marker AFTER the event_log INSERT — but the AFTER-INSERT
+    -- dispatcher fires DURING that INSERT. So a type registered here without an
+    -- event_type_class row would be projected at admission, granting exactly the power the
+    -- marker exists to withhold. Making that unreachable at migration time is cheaper and
+    -- safer than defending against it at runtime.
+    --
+    -- It is also one of the two legs — the other is cairn_replay_eligible below — of the
+    -- guarantee that NO projection apply fn ever sees a deferred row. That guarantee is
+    -- what lets db/018 (patient_link_apply) and db/034 (medication_attestation_apply) keep
+    -- reading event_log.attester_key as a VERIFIED vouch, even though the door now stores
+    -- unverified carried tokens on deferred rows.
+    --
+    -- Runs LAST of the three independent fail-closed validations. The order carries no
+    -- safety meaning (any one of them refusing is enough), but it is not arbitrary either:
+    -- the apply_fn and projection_table checks predate this one and their refusals are
+    -- pinned by name in projection_registry.rs, so a registration that is wrong in more
+    -- than one way keeps reporting the SAME reason it always did.
+    IF NOT EXISTS (SELECT 1 FROM event_type_class WHERE event_type = NEW.event_type) THEN
+        RAISE EXCEPTION
+            'cairn_projection_apply: event_type "%" is not classified in event_type_class (fail closed) — classify it before registering a projection, or the dispatcher would project an event admitted uninterpreted',
+            NEW.event_type;
+    END IF;
     RETURN NEW;
 END;
 $$;
