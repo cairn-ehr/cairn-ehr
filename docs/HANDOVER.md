@@ -119,7 +119,10 @@ narrative in **ROADMAP Slice 58**; not restated here. The six things worth carry
    that followed **bricked the node**: three consecutive connects failed and the generation
    stamp never advanced. **Two rules:** a marker is only a valid proxy for a fact if it has the
    fact's lifetime; and a promotion must PROVE the event takes effect, never assume it. See
-   ROADMAP Slice 58's review round.
+   ROADMAP Slice 58's review round. **Verifying the cross-node half needs all three test
+   databases** — export `CAIRN_TEST_PG2`/`PG3` alongside `CAIRN_TEST_PG` (see the "Test env" note
+   above), or `clinical_pull`/`sync_watermark`/`federation`'s multi-node cases self-skip and cargo
+   counts the skip as a pass.
 
 **Deliberately NOT done, stated honestly:** the **node/actor plane still fail-closes** on an unmappable
 type (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301), so §6.5's invariant

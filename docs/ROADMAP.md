@@ -422,6 +422,12 @@ replay safety (a second green run is what shows no test poisons a shared databas
 Both runs: **935/0**, up from 927/0 (2 new tests naming the unvouched state in Task 1, one apiece for
 each of Tasks 2–7). `./scripts/run-db-sql-tests.sh` and `mkdocs build` both clean.
 
+The count alone is not the whole proof: without `CAIRN_TEST_PG2`/`PG3` the multi-node convergence
+suites self-skip and cargo still counts them as passed — 10 of 11 in `clinical_pull`, 2 of 6 in
+`sync_watermark`, both in `federation`. Those were re-run separately with all three databases set
+and confirmed to execute (twice, green), which is what makes the cross-node half of "promotion
+must be proven" actually verified rather than merely counted.
+
 **Deliberately NOT done, stated honestly.** The **node/actor plane still fail-closes** on an unmappable type
 (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301) rather than left silent: the
 carrier-forwarding argument transfers, but `node_event` is type-shaped (four hardcoded ops, bespoke INSERTs,
