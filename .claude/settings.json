@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(cargo:*)",
+      "Bash(uv:*)",
+      "Bash(jq:*)",
+      "Bash(shellcheck:*)",
+      "Bash(psql:*)",
+      "Bash(scripts/run-db-sql-tests.sh:*)",
+      "Bash(scripts/techdebt-loop.sh:*)",
+      "Bash(bash scripts/tests/techdebt-loop-test.sh:*)",
+      "Bash(sleep:*)",
+      "Bash(echo:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push -f:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh repo edit:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh api:*)"
+    ],
+    "additionalDirectories": [
+      "~/.cairn-loop"
+    ]
+  }
+}
