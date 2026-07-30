@@ -5056,18 +5056,23 @@ mod schema_generation_tests {
             )
             .unwrap()
             .get(0);
+
+        // Clean up BEFORE asserting, so a failure cannot strand the shared database — the
+        // same discipline load_schema_stamps_the_generation_and_refuses_a_newer_db uses
+        // above. `event_type_class` is load-bearing here: no migration knows this probe
+        // type, so migration replay would never remove the row.
+        c.batch_execute(
+            "TRUNCATE event_log CASCADE; \
+             DELETE FROM event_type_class WHERE event_type = 'sync.defer.probe'",
+        )
+        .unwrap();
+
         assert!(
             err.is_some(),
             "this loader must re-adjudicate: a sync-only node whose loader never calls the \
              pass accumulates admitted-but-permanently-powerless events with no mechanism to \
              notice (PR #302 finding F3)"
         );
-
-        c.batch_execute(
-            "TRUNCATE event_log CASCADE; \
-             DELETE FROM event_type_class WHERE event_type = 'sync.defer.probe'",
-        )
-        .unwrap();
     }
 
     /// The guard must read the recorded generation UNDER the loaders' advisory
