@@ -369,6 +369,59 @@ and the gate OPENS (the agent-advisory-is-dismissable rule), because an unverifi
 gate in *either* direction. Pinned by the slice's security test, which asserts the hazard's precondition
 before asserting the fix.
 
+**The review round — PR #302 found three findings; seven tasks fixed them; promotion must now be
+proven (2026-07-30; same branch; no ADR change; `SCHEMA_GENERATION` stays 43 — no new `db/*.sql`
+file).** Full design in
+[promotion must be proven](superpowers/specs/2026-07-29-adr-0056-promotion-must-be-proven-design.md).
+**F1** (the serious one): `cairn_readjudicate_deferred` promoted a deferred event without checking it
+could actually *project*. The marker delete committed, the loader's heal then raised on the event, and
+because `event_log` is append-only nothing could undo it — three consecutive `connect_and_load_schema`
+calls failed and `node_schema.version` never advanced. Fixed by **gate 0** (re-run the per-type
+structural floor db/020 step 8 skipped) and **gate 4** (run the type's heal-safe apply fns inside the
+promotion subtransaction): a promoted event is now, by construction, one that has already projected
+cleanly, so the loader's targeted reproject became redundant and `db.rs` got smaller. **F2**: the
+carried attestation token was never verified when the type is additive and bears no responsibility,
+yet promotion deleted the `event_deferred` marker that `cairn_suppression_author_ok` keyed its
+exclusion on — a garbage 64-byte blob naming an unrelated enrolled human put that human inside another
+clinician's author set. Fixed by naming the carried-not-vouched state, `event_attestation_unvouched`
+(db/001) + `cairn_attestation_vouched(uuid)`, with three readers switched onto it: db/005's owner-gate
+(replacing the `event_deferred` proxy), db/018's link-veto flag lifecycle, db/034's attester_kid. **F3**:
+cairn-sync embedded db/043 but never called it — fixed last, deliberately, since landing it before gate
+4 would have spread the wedge to the sync daemon.
+
+**Five of the seven tasks' review findings were plan-mandated** — every one a defect in the plan's own
+text, not implementer error, and every implementer surfaced rather than silently absorbed it: a db/005
+comment claiming in the present tense that two other readers already carried an exclusion they did not
+yet carry; a global `count(*)` on a table `setup()` never truncates, order-dependent under parallel test
+binaries; a `{"nonsense": true}` fixture that refused on a missing `medication_id` *before* reaching the
+twin check the test existed to pin; a cairn-sync probe that could never be promoted, because the pass
+re-derives every envelope via `cairn_body` and refuses unparseable bytes; and cleanup placed *after* an
+assertion, so a future regression would strand rows in a shared database. The generalisable rule:
+mandated test code is not exempt from review, and declining to silently deviate from a flawed mandate is
+the right call.
+
+**A discovery worth recording.** Once gate 0 exists, there is no longer any *reachable* event that
+passes gates 0–3 and then fails a heal-safe apply fn: `cairn_check_medication_assertion` validates
+exactly the payload-derived NOT NULL columns of `medication_statement`, `medication_cessation_apply`
+needs only `medication_id`, and the only three types with a projection but no `check_fn`
+(`note.added`, `patient.amended`, `patient.created`) have no payload-derived NOT NULL columns either
+(`note.added` is additionally `heal_safe = false`, so gate 4 skips it by design). That makes gate 4
+pure defence-in-depth against a future type that violates the pattern — which is why its test is
+white-box rather than waiting for a fixture that exercises it black-box.
+
+The predecessor design doc's two false claims — *"the twin needs no work"* (true at admission, never
+re-asked for promotion) and *"promotion deletes the marker, at which point the now-verified token
+counts normally"* (assumed a verification that only happens when the mode demands a token) — are
+corrected in place, with the reasoning failure recorded rather than quietly overwritten. Measured
+evidence: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and the
+batched workspace suite — `cargo test -p cairn-event`; `-p cairn-sync -- --test-threads=1`; `-p
+cairn-node --lib --bins` and `--doc` separately (cargo refuses to mix `--doc` with target-selecting
+flags); and the 77 `crates/cairn-node/tests/*.rs` integration targets split into eight `--test` groups
+so no single command risks the ten-minute cap — run **twice** against the same databases to prove
+replay safety (a second green run is what shows no test poisons a shared database for its successors).
+Both runs: **935/0**, up from 927/0 (2 new tests naming the unvouched state in Task 1, one apiece for
+each of Tasks 2–7). `./scripts/run-db-sql-tests.sh` and `mkdocs build` both clean.
+
 **Deliberately NOT done, stated honestly.** The **node/actor plane still fail-closes** on an unmappable type
 (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301) rather than left silent: the
 carrier-forwarding argument transfers, but `node_event` is type-shaped (four hardcoded ops, bespoke INSERTs,

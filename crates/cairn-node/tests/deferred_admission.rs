@@ -593,7 +593,9 @@ async fn a_travelling_token_survives_defer_then_promote() {
     assert_eq!(
         rows.len(),
         1,
-        "the carried token must now VERIFY and promote the event"
+        "the carried token must SURVIVE defer→promote. Note this type is additive and bears \
+         no responsibility, so no gate demands the token and nothing verifies it here — the \
+         unvouched marker is what keeps it from counting as a vouch (PR #302 finding F2)",
     );
 }
 

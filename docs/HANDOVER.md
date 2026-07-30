@@ -109,13 +109,25 @@ narrative in **ROADMAP Slice 58**; not restated here. The six things worth carry
    poison a shared database; cleanup at test *end* does not survive a panic. De-classify in `setup()`
    instead — idempotent, and it repairs the DB after a predecessor that died (the #296 lesson applied
    forward rather than re-learned).
+7. **A review found the slice's own lesson applied one layer too shallow.** Item 3 above says
+   *"when you store a value you have not verified, name the state and audit every reader"* — and
+   the slice then used `event_deferred` as the name, which has the wrong lifetime: promotion
+   deletes it, and gate 1 verifies a token only when the type's mode demands one. An additive
+   event bearing no responsibility promoted with its token unchecked, and the gate re-opened.
+   Separately, the same "re-adjudicate everything that was deferred" claim enumerated three
+   gates when there were four — the per-type structural floor was waived, and the reprojection
+   that followed **bricked the node**: three consecutive connects failed and the generation
+   stamp never advanced. **Two rules:** a marker is only a valid proxy for a fact if it has the
+   fact's lifetime; and a promotion must PROVE the event takes effect, never assume it. See
+   ROADMAP Slice 58's review round.
 
 **Deliberately NOT done, stated honestly:** the **node/actor plane still fail-closes** on an unmappable
 type (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301), so §6.5's invariant
 is true for clinical events only and that asymmetry is a known gap, not a design. ADR-0056 **decision 5**
 (the residual refusal contract) is untouched: #267/#268/#269/#270 remain open, including the live silent
 failure that **a frozen clinical watermark exits success**. No paper-parity time budget — the slice takes
-the §1.2 forced-rationale escape (no human act changes at any layer). Workspace 927/0.
+the §1.2 forced-rationale escape (no human act changes at any layer). Workspace 927/0 at first landing;
+935/0 after the review round in item 7 (F1/F2/F3 — see ROADMAP Slice 58).
 
 **Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, 57 and 58
 each condensed there, with every still-open issue enumerated in full). The arc: demographics slices

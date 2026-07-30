@@ -77,9 +77,17 @@ deliberate design (db/005's own comment gives the reason — *"a refusal there w
 watermark on a verifiable event"* — which is this ADR's argument, already applied), so it is not a
 concern here.
 
-The twin needs no work: `cairn_event_twin` (db/005:213) finds no `cairn_event_twin_check` row for an
-unregistered type, so `v_fn` and `v_msg` are both NULL and it returns `cairn_twin_skeleton`. It never
-raises. Verified before this design was written, because the whole mechanism dead-ends otherwise.
+The twin needs work at PROMOTION, though not at admission — a claim this document originally got
+wrong, and PR #302's review caught. At **admission** `cairn_event_twin` (db/005) finds no
+`cairn_event_twin_check` row for an unregistered type, so `v_fn` and `v_msg` are both NULL and it
+returns `cairn_twin_skeleton`; it never raises. But that reasoning was applied once and never
+re-applied to **promotion**, when the registry row exists and the check *should* run. Left
+unfixed, the type's `check_fn` and `twin_required_msg` were WAIVED rather than deferred, and the
+resulting reprojection wedged `connect_and_load_schema` permanently. Now db/043's **gate 0**
+re-runs it — see
+[promotion must be proven](2026-07-29-adr-0056-promotion-must-be-proven-design.md). The
+generalisable rule: every claim of the form *"X needs no work because the registry is empty"* has
+a second lifetime in which the registry is no longer empty.
 
 ### 4.1 The travelling-attestation trap
 
@@ -121,8 +129,13 @@ over-refusal, never over-permission."*
 as it would have had no token travelled. Note this is deliberately *neutral*, not merely stricter:
 for a deferred event whose signer is an agent, dropping the arm empties the human-author set and the
 gate opens (the ADR-0043 agent-advisory-is-dismissable rule). That is correct — an unverified token
-must not move the gate in **either** direction. Promotion deletes the marker, at which point the
-now-verified token counts normally.
+must not move the gate in **either** direction. Promotion deletes the marker — but that does **not**
+imply the token was verified, which this document originally assumed. db/043's gate 1 verifies a
+token only when the type's mode demands one, so an additive event bearing no responsibility is
+promoted with its token unchecked, and the `event_deferred` proxy said "vouched" the instant the
+marker vanished. The exclusion is therefore keyed on `event_attestation_unvouched`, a marker with
+the correct lifetime — see
+[promotion must be proven](2026-07-29-adr-0056-promotion-must-be-proven-design.md) §3.
 
 ## 5. #266 — reclassification re-adjudicates, then reprojects
 
