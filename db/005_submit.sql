@@ -120,6 +120,51 @@ BEGIN
                 v_tbl;
         END IF;
     END LOOP;
+    -- ADR-0056 decision 4 (issue #266): a projection-registered type MUST be classified.
+    --
+    -- The remote door admits an UNCLASSIFIED type uninterpreted (db/020, #265) and records
+    -- its event_deferred marker AFTER the event_log INSERT — but the AFTER-INSERT
+    -- dispatcher fires DURING that INSERT. So a type registered here without an
+    -- event_type_class row would be projected at admission, granting exactly the power the
+    -- marker exists to withhold. Making that unreachable at migration time is cheaper and
+    -- safer than defending against it at runtime.
+    --
+    -- It is one of THREE things bounding which apply fns run against a deferred row. The
+    -- other two are cairn_replay_eligible below (no reprojection path can reach one) and
+    -- db/043's gate 4, which DELIBERATELY runs a promoted event's heal-safe apply fns while
+    -- its event_deferred marker is still present — that is how promotion proves the event
+    -- can project before the marker is deleted (PR #302 finding F1).
+    --
+    -- So "no apply fn ever sees a deferred row" is NOT true, and must not be assumed. What
+    -- IS true is that no apply fn currently READS that state: db/018 (patient_link_apply)
+    -- and db/034 (medication_attestation_apply) can keep treating event_log.attester_key as
+    -- a vouch because they exclude event_attestation_unvouched (db/001), which is keyed on
+    -- the token's verification, not on the deferral. A future apply fn that defensively
+    -- skips or asserts on a deferred row would misbehave under gate 4 — raising flags the
+    -- event unpromotable forever, and a silent no-op promotes it unprojected, because the
+    -- loader no longer runs a targeted reproject after the pass.
+    --
+    -- Runs LAST of the three independent fail-closed validations. The order carries no
+    -- safety meaning (any one of them refusing is enough), but it is not arbitrary either:
+    -- the apply_fn and projection_table checks predate this one and their refusals are
+    -- pinned by name in projection_registry.rs, so a registration that is wrong in more
+    -- than one way keeps reporting the SAME reason it always did.
+    --
+    -- HONEST RESIDUAL, worth knowing before relying on this: the check runs at REGISTRATION
+    -- time, so it cannot see a class row deleted AFTERWARDS. A registered-but-unclassified
+    -- type would leave the AFTER-INSERT dispatcher firing for a deferred event, because the
+    -- dispatcher reads cairn_projection_apply and never consults event_type_class. The state
+    -- is unreachable in practice for two reasons — a type's classification and its
+    -- projection registration arrive in the SAME migration, and no migration ever DELETEs
+    -- from event_type_class (every write is INSERT ... ON CONFLICT DO NOTHING) — and
+    -- event_type_class is REVOKEd from PUBLIC, so only an owner could create it by hand.
+    -- Same privilege tier as cairn_reproject. A future migration that wants to retire a type
+    -- must drop its projection registration FIRST, or restore this invariant some other way.
+    IF NOT EXISTS (SELECT 1 FROM event_type_class WHERE event_type = NEW.event_type) THEN
+        RAISE EXCEPTION
+            'cairn_projection_apply: event_type "%" is not classified in event_type_class (fail closed) — classify it before registering a projection, or the dispatcher would project an event admitted uninterpreted',
+            NEW.event_type;
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -133,15 +178,29 @@ CREATE TRIGGER cairn_projection_apply_validate
 -- stop materialization. Locked down like cairn_event_twin_check.
 REVOKE INSERT, UPDATE, DELETE ON cairn_projection_apply FROM PUBLIC;
 
--- The #266 safety seam (ADR-0056 decision 4): cairn_reproject routes every
--- candidate event through this predicate. Constantly TRUE today — no deferred
--- events can exist while the remote door still fail-closes on unknown types.
--- #265's explicit deferred marker hooks in HERE and only here, so a manual
--- mid-upgrade reproject can never grant power to an unadjudicated deferred
--- event. The live-insert path needs no filter: an event being inserted through
--- a door was adjudicated by that door.
+-- The #266 safety seam (ADR-0056 decision 4): cairn_reproject (db/039) routes every
+-- candidate event through this predicate, so NO reprojection path — the loader's heal,
+-- the `cairn-node reproject` CLI, or a hand-run mid-upgrade replay — can grant power to
+-- an event whose classification-gated floor checks have never been run.
+--
+-- A deferred event is one the remote door admitted UNINTERPRETED (db/020, issue #265).
+-- Its marker is DELETED by cairn_readjudicate_deferred (db/043) only after the deferred
+-- gates pass, so "carries no marker" IS "adjudicated". An event that FAILS adjudication
+-- keeps its marker with the reason recorded and stays powerless — never silently promoted.
+--
+-- The live-insert path needs no filter: an event being inserted through a door was
+-- adjudicated by that door.
+--
+-- LANGUAGE sql (not plpgsql) deliberately: it inlines into cairn_reproject's per-type scan
+-- as an anti-join rather than costing a function call per replayed event — and the replay
+-- scan runs over the WHOLE log (2M events on the Pi5 bench). event_deferred is created in
+-- db/001, not in db/043 with the rest of this mechanism, precisely so this body resolves at
+-- CREATE time: SQL-language bodies are parsed and name-resolved when the function is
+-- created, unlike PL/pgSQL's late binding.
 CREATE OR REPLACE FUNCTION cairn_replay_eligible(e event_log)
-RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT TRUE $$;
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM event_deferred d WHERE d.event_id = e.event_id)
+$$;
 -- Locked down like every predicate in this file: cairn_reproject (db/039) calls it as
 -- the migration-defining owner, so no runtime role needs a grant, and PUBLIC's default
 -- EXECUTE would let any connected role probe/depend on a predicate that becomes a real
@@ -277,8 +336,37 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
                         AND ae.op IN ('enroll','supersede')
                         AND ae.kind = 'human')
         UNION
+        -- ADR-0056 (issue #265, PR #302 review finding F2): count this arm only when the
+        -- stored token has actually been VOUCHED.
+        --
+        -- The remote door stores a deferred event's travelling token without verifying it
+        -- — it cannot, because the gate that verifies it is deferred with the
+        -- interpretation. Unioning an unverified key here would let a hostile peer put ANY
+        -- key it likes inside the target's human-author set simply by attaching a forged
+        -- token to an unknown-type event, and its holder could then suppress that event.
+        -- That is over-permission on the ADR-0043 floor, which this function's header
+        -- forbids in exactly those words.
+        --
+        -- WHY NOT "is the target deferred?", which is what this originally asked: that is a
+        -- PROXY with the wrong lifetime. cairn_readjudicate_deferred (db/043) verifies a
+        -- token only when the type's mode DEMANDS one, so an additive event bearing no
+        -- responsibility is promoted — event_deferred row deleted — with its token never
+        -- checked. The proxy said "vouched" the instant the marker vanished. The marker
+        -- below survives promotion and is cleared only by gate 1 actually verifying, so it
+        -- answers the question this arm means to ask.
+        --
+        -- The fix is NEUTRAL, not merely stricter: for a target signed by an AGENT, dropping
+        -- this arm empties human_authors and the gate OPENS (the agent-advisory-is-
+        -- dismissable rule below). That is correct — an unverified token must not move the
+        -- gate in EITHER direction.
+        --
+        -- Two other readers of event_log.attester_key owe the same exclusion:
+        -- patient_link_apply (db/018) and medication_attestation_apply (db/034), both
+        -- fixed in the commits that follow this one. A new reader of these columns owes
+        -- the same choice.
         SELECT encode(t.attester_key, 'hex') FROM tgt t
         WHERE t.attester_key IS NOT NULL
+          AND cairn_attestation_vouched(p_target)
     )
     SELECT NOT EXISTS (SELECT 1 FROM human_authors)
         OR EXISTS (SELECT 1 FROM human_authors h WHERE h.kid = encode(p_attester_key, 'hex'));

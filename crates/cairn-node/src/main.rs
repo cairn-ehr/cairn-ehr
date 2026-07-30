@@ -927,6 +927,14 @@ enum Cmd {
         #[arg(long)]
         rebuild: bool,
     },
+
+    /// List events this node admitted UNINTERPRETED (ADR-0056 decision 1 / #265):
+    /// stored verbatim and re-propagated, but holding NO power because this node
+    /// has no code classifying their type. A row carrying a reason has since been
+    /// re-adjudicated and REFUSED — it stays powerless until that reason resolves
+    /// (a missing overlay target arriving, for instance). A healthy node whose code
+    /// covers everything it has received lists nothing.
+    Deferred,
 }
 
 #[tokio::main]
@@ -2279,6 +2287,33 @@ async fn main() -> anyhow::Result<()> {
             println!("replayed {total} events in {ms} ms");
             if !skipped.is_empty() {
                 println!("skipped (heal_safe = false — rebuild to heal these): {skipped:?}");
+            }
+        }
+        Cmd::Deferred => {
+            // connect_and_load_schema itself re-adjudicates before returning, so this
+            // listing already reflects the freshest verdict the node can reach — an
+            // operator running it right after a code-plane update sees the post-upgrade
+            // state, not the stale one.
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            // admitted_at is cast in SQL rather than formatted in Rust: TIMESTAMPTZ::text
+            // renders ISO-8601 with the session offset and costs no new dependency.
+            let rows = db
+                .query(
+                    "SELECT event_id::text, event_type, admitted_at::text, \
+                            COALESCE(adjudication_error, '(not yet re-adjudicated)') \
+                       FROM event_deferred ORDER BY admitted_at",
+                    &[],
+                )
+                .await?;
+            if rows.is_empty() {
+                println!("no deferred events — every event this node holds has a classified type");
+            }
+            for r in &rows {
+                let id: String = r.get(0);
+                let ty: String = r.get(1);
+                let at: String = r.get(2);
+                let reason: String = r.get(3);
+                println!("{id}  {ty:<40}  {at}  {reason}");
             }
         }
     }

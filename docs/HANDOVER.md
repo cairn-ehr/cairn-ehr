@@ -2,19 +2,24 @@
 
 ## ⇒ NEXT
 
-**ADR-0059 is now fully implemented.** Medication slice **6b** shipped 2026-07-28 (branch
-`feat/medication-coding-overlay-slice-6b-0059`, ROADMAP Slice 57): the two coding-overlay event types
-(`clinical.medication-coding.asserted` + `-correction.asserted`, `db/042`, `SCHEMA_GENERATION` 41→42),
-the **strike** back to honest not-yet-coded, and `patient_medication_uncoded` — the coder worklist. The
-same branch closed the two 6a hygiene issues **#295** and **#296**. Detail: the session block below and
-ROADMAP Slice 57.
+**ADR-0056's floor is now built.** Slice **58** shipped 2026-07-29 (branch
+`feat/adr-0056-admit-uninterpreted-floor-265-266`, ROADMAP Slice 58): the clinical remote door **admits an
+unclassifiable event type** instead of raising (#265), an explicit `event_deferred` marker records the
+admitted-uninterpreted state, and `cairn_readjudicate_deferred` (db/043, `SCHEMA_GENERATION` 42→43) re-runs
+the classification-gated floor checks **before** anything reprojects (#266). `sync.md` §6.5's
+lossless-forwarding invariant is now true as written *for clinical events*. The branch also carried a
+security fix the reader-audit surfaced — see the session block below, item 3.
 
 **The genuinely next candidates** (nothing blocks a choice between them):
 
-1. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
-   **coded↔uncoded** duplicate case ADR-0059 decision 5 deliberately leaves open. Needs a design
-   decision first: the cross-service connection model. The slice-6a/6b source guard keeps the trusted
-   surface drugref-free and must stay passing.
+1. **The ADR-0056 residual refusal contract** — decision 5, the other half of the same ADR, now the
+   cheapest coherent slice: [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267) (a door refusal on
+   *verifiable* bytes pens nothing), [#270](https://github.com/cairn-ehr/cairn-ehr/issues/270) (**a frozen
+   clinical watermark exits SUCCESS** — a live silent failure),
+   [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) (node plane skips-and-advances where the
+   clinical plane freezes), [#269](https://github.com/cairn-ehr/cairn-ehr/issues/269) (no test of a skipped
+   event healing via full sweep). Slice 58 shrank the blast radius: those paths now fire only on genuine
+   refusals. Rust-only, both pull loops.
 2. **The §5.9 safety-projection slice** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) —
    the largest unbuilt piece of settled architecture (sequester + the sensitivity stream + the
    de-identified safety projection). Carries [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294):
@@ -22,8 +27,14 @@ ROADMAP Slice 57.
 3. **The med-list UI slice** (Tauri 2 shell) — the first surface that would make a paper-parity *time*
    budget measurable, and it owes [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288): whole-list
    sign-off must collapse to ONE human gesture.
-4. **The ADR-0056 code catch-up** (#265→#270) — five filed issues against a settled decision; the door
-   still fails closed on an event type it cannot classify.
+4. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
+   **coded↔uncoded** duplicate case ADR-0059 decision 5 deliberately leaves open. Needs a design
+   decision first: the cross-service connection model. The slice-6a/6b source guard keeps the trusted
+   surface drugref-free and must stay passing.
+5. **The node/actor plane's unknown-type door** ([#301](https://github.com/cairn-ehr/cairn-ehr/issues/301),
+   filed by slice 58) — `db/007` still fail-closes, so a carrier node remains a propagation barrier for
+   future *trust-plane* types. Not a symmetric fix: `node_event` is type-shaped, so it needs a
+   carried-not-interpreted row shape plus an audit of every trust projection.
 
 **Standing gate:** whole-project review cycles repeat periodically, and there will be **no release for
 clinical use before repeated review cycles pass cleanly.** The last full pass ran 2026-07-15 (five
@@ -33,9 +44,9 @@ passes: in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting sea
 
 ---
 
-**Session date:** 2026-07-28 (Slice 57) · **Spec/ADRs:** v0.61 (through ADR-0059) · **Phase:**
-architecture complete (every original §11 question closed); **first production clinical surface under
-construction** on `cairn-node`.
+**Session date:** 2026-07-29 (Slice 58) · **Spec/ADRs:** v0.61 (through ADR-0059; no ADR change this
+slice — it *implements* ADR-0056) · **Phase:** architecture complete (every original §11 question closed);
+**first production clinical surface under construction** on `cairn-node`.
 
 **Built so far** (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/
@@ -57,68 +68,77 @@ the **contributor-role vocabulary floor** (ADR-0051) ·
 **per-write human authorship** (ADR-0053 — grading half-live until #245) ·
 the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar, pivot to
 **Tauri 2**, an L3 choice below the compatibility boundary; PR #174) ·
-**generic reprojection** (ADR-0057 — one registered apply fn per projection + one dispatcher).
+**generic reprojection** (ADR-0057 — one registered apply fn per projection + one dispatcher) ·
+the **ADR-0056 admit-uninterpreted floor** (the clinical door admits an unclassifiable type; power granted
+only by re-adjudication — decisions 1+4; decision 5 still owed, #267/#268/#269/#270).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
 
 ---
 
-**Session (2026-07-28) — `clinical.medication` slice 6b: the coding-overlay event types.** Full
-narrative in **ROADMAP Slice 57**; not restated here. The seven things worth carrying forward:
+**Session (2026-07-29) — the ADR-0056 floor: admit uninterpreted, re-adjudicate before power.** Full
+narrative in **ROADMAP Slice 58**; not restated here. The six things worth carrying forward:
 
-1. **The slice stayed additive**, exactly as 6a's table-not-columns decision promised: both apply fns
-   write the existing `medication_coding` table under the existing winner rule, the dup-key degrades
-   with **no change at all** (`'code:' || NULL` is NULL), and only two downstream predicates needed an
-   edit.
-2. **A strike leaves a row, never deletes one** — deleting would break arrival-order independence,
-   because a lower-HLC coding arriving after the strike would have nothing to lose the race against.
-   `struck` is **generated** (`coding_code IS NULL`), not written — see 7.
-3. **`cairn_medication_thread_patient` gained a `medication_coding` arm.** An overlay may legitimately
-   arrive before the assert it codes; its row falls back to the coding event's own patient claim, and
-   that claim must be visible to the shared #192 guard or a later assert naming a different patient
-   would leave two projections permanently disagreeing about the thread's chart. **Consequence to
-   remember:** a coder who codes against the wrong chart now blocks the real assert with a legible
-   local-door error (remote apply flags rather than refuses).
-4. **`medication_coding` is now written by THREE event types**, so `cairn_reproject` refuses a narrow
-   single-type prefix rebuild over it (db/039). Expected, and commented at the registration site.
-5. **A test that passes can still be worthless.** The group-display test first asserted only
-   `coding_display` and went green against the live defect — the struck member was still winning the
-   whole row, dragging its term and dose with it. Asserting the *term* alongside made it discriminate.
-   Same lesson in #295: the behavioural collation test cannot catch a future unpinning on a
-   deterministic-default cluster, so the actual gate had to be a no-DB source guard.
-6. **Only `cargo test --workspace` catches guard-scope gaps.** Slice 6a's drugref guard skips `tests/`
-   directories but had never met a `#[cfg(test)]` module inside a `src/` file — 6b's unit tests are the
-   first. Per-test-binary runs missed it entirely; the full run did not. **Run the whole
-   workspace before claiming a slice is done**, and note that `cargo test | tail` masks cargo's exit
-   code (an old lesson, still true).
-7. **A redundant column is a convergence hazard, not just clutter** — the PR review's sharpest finding
-   (detail in ROADMAP Slice 57's review-round paragraph; workspace now 916/0). `medication_coding.struck`
-   duplicated `coding_code IS NULL`, and the table has THREE writers: db/031's INLINE coding upsert wrote
-   the anchor columns and not `struck`, so an inline coding that WON the HLC race over an earlier-arriving
-   strike left a live anchor beside a stale `struck = TRUE` — two honest nodes reading the same events in
-   different arrival orders then disagreed. The fix deletes the writer rather than correcting it
-   (`GENERATED ALWAYS AS (coding_code IS NULL) STORED`), so a fourth writer inherits the invariant.
-   **Two generalisable rules:** when a projection column is derivable from another, generate it; and a
-   CHECK constraint is the *wrong* tool on a projection table — a violation aborts the apply and wedges
-   that event forever (the ADR-0058 hazard). The same widening also broke the anchor-conflict view's
-   `array_agg`, which — unlike `count(DISTINCT …)` — **keeps NULLs**. Nullable-widening an existing
-   column means re-reading every aggregate over it.
+1. **Refusal hides; admission cannot.** The door stored NOTHING for a type it could not classify, so a
+   carrier node acquired nothing past the first unknown-type event — *absent*, not merely unrendered.
+   That is the §6.1 sneakernet case Cairn exists for. The generalisable form: when a floor must choose
+   between refusing and admitting-without-power, admitting is the recoverable direction.
+2. **Re-adjudicate BEFORE reprojecting, and the order is the whole guarantee.** Admitting uninterpreted
+   *skips* every gate downstream of the classification lookup (attestation, overlay-target-exists,
+   ADR-0043). Reprojection alone would grant power that never passed a gate. `cairn_replay_eligible` —
+   the constantly-TRUE stub ADR-0057 built *for* this — is now the structural enforcement.
+3. **THE FINDING: an unverified value stored "for later" leaks into a live gate.** The deferred arm must
+   store the travelling attestation token (drop it and re-adjudication has nothing to verify — admit-and-
+   defer silently becomes a slower fail-closed). But `cairn_suppression_author_ok` reads the **target's**
+   `attester_key` into the ADR-0043 owner-gate's author set, and unlike the projection apply fns that read
+   the same column it **is** reachable for a deferred row. A forged token on an unknown-type event would
+   have put any key inside that event's permitted-suppressor set. **Two rules:** when you store a value
+   you have not verified, name the state (*carried, not vouched*) and audit **every** reader; and the fix
+   for an unverified input is **neutrality, not strictness** — the gate now computes as if no token
+   travelled, which for an agent-signed target *opens* it.
+4. **A failing test falsified a design claim, mid-implementation.** The design said the
+   classified-before-projected guard makes projection-at-admission "unreachable". It does not, alone: the
+   dispatcher reads `cairn_projection_apply` and never consults `event_type_class`, so unreachability
+   rests on a **second** premise — that classification and projection registration arrive in the same
+   migration and no migration deletes a class row. Recorded at the guard site and in the design doc.
+5. **The ADR's trigger was too narrow, and the code says so.** Decision 4 describes reclassification as
+   the trigger, but re-adjudication can FAIL on something that resolves without any code-plane update
+   (`overlay targets unknown event`, target still in flight). So the pass runs on **every connect**; only
+   the reprojection stays generation-gated. Cheap because `event_deferred` is empty on a healthy node.
+6. **Test pollution is designed against, not cleaned up after.** Tests that classify a type mid-run would
+   poison a shared database; cleanup at test *end* does not survive a panic. De-classify in `setup()`
+   instead — idempotent, and it repairs the DB after a predecessor that died (the #296 lesson applied
+   forward rather than re-learned).
+7. **A review found the slice's own lesson applied one layer too shallow.** Item 3 above says
+   *"when you store a value you have not verified, name the state and audit every reader"* — and
+   the slice then used `event_deferred` as the name, which has the wrong lifetime: promotion
+   deletes it, and gate 1 verifies a token only when the type's mode demands one. An additive
+   event bearing no responsibility promoted with its token unchecked, and the gate re-opened.
+   Separately, the same "re-adjudicate everything that was deferred" claim enumerated three
+   gates when there were four — the per-type structural floor was waived, and the reprojection
+   that followed **bricked the node**: three consecutive connects failed and the generation
+   stamp never advanced. **Two rules:** a marker is only a valid proxy for a fact if it has the
+   fact's lifetime; and a promotion must PROVE the event takes effect, never assume it. See
+   ROADMAP Slice 58's review round. **Verifying the cross-node half needs all three test
+   databases** — export `CAIRN_TEST_PG2`/`PG3` alongside `CAIRN_TEST_PG` (see the "Test env" note
+   above), or `clinical_pull`/`sync_watermark`/`federation`'s multi-node cases self-skip and cargo
+   counts the skip as a pass.
 
-**Deliberately NOT done, stated honestly:** no drugref code anywhere in the tree; the coded↔uncoded
-duplicate case is still open (needs term→anchor resolution); the §5.9 safety class is still owed
-(#294, blocked on #232); no coding UI, so no paper-parity *time* budget was measured — 6b exposes a CLI
-ops surface, and the budget is owed by the med-list UI slice (#288 neighbourhood). Left open from the
-review round: **[#300](https://github.com/cairn-ehr/cairn-ehr/issues/300)** — the coder worklist lists
-every uncoded member of an already-coded reconciled group. Duplicated coder work, but filtering them out
-could suppress the mis-reconciliation signal 6a built (an anchor never contradicted), so it wants a
-clinical opinion rather than a patch.
+**Deliberately NOT done, stated honestly:** the **node/actor plane still fail-closes** on an unmappable
+type (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301), so §6.5's invariant
+is true for clinical events only and that asymmetry is a known gap, not a design. ADR-0056 **decision 5**
+(the residual refusal contract) is untouched: #267/#268/#269/#270 remain open, including the live silent
+failure that **a frozen clinical watermark exits success**. No paper-parity time budget — the slice takes
+the §1.2 forced-rationale escape (no human act changes at any layer). Workspace 927/0 at first landing;
+935/0 after the review round in item 7 (F1/F2/F3 — see ROADMAP Slice 58).
 
-**Earlier sessions — condensed.** ROADMAP now carries the per-slice detail (Slices 13–35, 36–56 and 57
-are each condensed there, with every still-open issue enumerated in full). The arc: demographics slices
+**Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, 57 and 58
+each condensed there, with every still-open issue enumerated in full). The arc: demographics slices
 1–5 + gaps A/B/C and the §5.2 matcher pieces (2026-06-25 → 07-08) · the identity/John-Doe/medication
 build-out and CI catch-up (07-02 → 07-15) · the five-priority review course P1–P5 and the Priority-6
 design queue → ADR-0051 through ADR-0058 (07-16 → 07-24) · the matcher follow-on batches #209/#210,
-#211, #290 (07-23 → 07-25) · ADR-0059 and medication slices 6a/6b (07-25 → 07-28).
+#211, #290 (07-23 → 07-25) · ADR-0059 and medication slices 6a/6b (07-25 → 07-28) · the ADR-0056
+admit-uninterpreted floor (07-29).
 
 **GUI/L3 design threads (2026-07-16 + 07-18, design-only; full detail in
 [`scratch/ui-sketches/easygp-consult-screen-inventory.md`](../scratch/ui-sketches/easygp-consult-screen-inventory.md)

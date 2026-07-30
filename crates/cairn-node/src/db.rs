@@ -234,6 +234,20 @@ const SCHEMA: &[(&str, &str)] = &[
         "042_medication_coding_overlay",
         include_str!("../../../db/042_medication_coding_overlay.sql"),
     ),
+    // db/043 (ADR-0056 decision 4 / #266): cairn_readjudicate_deferred — the pass that
+    // re-runs the classification-gated floor checks before power is granted. Must land in
+    // BOTH lists (this one and cairn-sync's), unlike the medication files that legitimately
+    // lag: cairn-sync loads db/020, whose door WRITES the event_deferred marker, so a
+    // cairn-sync database missing this file would accumulate deferred rows that nothing
+    // could ever promote (#284's drift hazard, made concrete).
+    //
+    // Shipping the file is necessary but not sufficient: the loader in this crate must also
+    // CALL cairn_readjudicate_deferred, or the function sits unused and the markers pile up
+    // anyway (PR #302 review finding F3).
+    (
+        "043_deferred_readjudication",
+        include_str!("../../../db/043_deferred_readjudication.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
@@ -402,6 +416,41 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             .await
             .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
     }
+    // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
+    //
+    // A deferred event — one db/020 admitted uninterpreted (#265) — skipped the floor checks
+    // that classification gates: the suppressing⇒attestation gate, the overlay-target-exists
+    // refusal, and the ADR-0043 cross-author-suppression refusal. Those are deferred WITH the
+    // interpretation, not waived by it, so they are re-run here BEFORE anything reprojects. A
+    // reprojection that merely rebuilt rows would grant power that never passed a gate.
+    //
+    // WHY EVERY CONNECT, and not only on a generation change like the heal below:
+    // classification itself only arrives with a code-plane update, so a generation change is
+    // the right trigger for RECLASSIFICATION. But re-adjudication can FAIL for a reason that
+    // later resolves with no code change at all — `overlay targets unknown event`, where the
+    // target is still in flight from another peer. Gated on the generation, such an event
+    // would stay powerless until the next code-plane update, potentially months. The pass is
+    // driven off `event_deferred`, which is empty on a healthy node, so this costs one
+    // indexed probe per connect.
+    //
+    // Ordered before the stamp for the same reason the heal is (see the long note below): a
+    // failure here must leave the recorded generation at its OLD value so the next connect
+    // retries the whole replay-then-adjudicate-then-heal sequence.
+    let promoted = client
+        .query(
+            "SELECT promoted_type, promoted_count FROM cairn_readjudicate_deferred()",
+            &[],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("re-adjudicating deferred events: {e}"))?;
+    // Granting power is never a silent event: an operator who upgrades a node wants to see
+    // which types just became live. Empty on a healthy node, so this prints nothing.
+    for row in &promoted {
+        let ty: String = row.get(0);
+        let n: i64 = row.get(1);
+        eprintln!("re-adjudicated: promoted {n} deferred event(s) of type {ty}");
+    }
+
     // #208/ADR-0057: heal replay on generation CHANGE only, and BEFORE the stamp
     // below. New projection capability (and any projection-logic fix) arrives only
     // via a code-plane update — i.e. a generation change — so an unchanged
@@ -411,6 +460,13 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // free no-op; hand-built rig: converges once) errs toward healing. Runs inside
     // SCHEMA_LOAD_LOCK: concurrent loaders serialize, and the second sees the
     // stamped generation.
+    //
+    // NO targeted reproject for what the pass just promoted: db/043's gate 4 already
+    // ran each promoted event's heal-safe apply fns inside its promotion
+    // subtransaction — that is what "promoted" now MEANS. It also makes this full
+    // heal safe by construction, which it was not before: a promoted event that
+    // cannot project used to abort the load here, permanently, because the marker
+    // was already gone and event_log is append-only (PR #302 review finding F1).
     //
     // Ordered BEFORE the stamp deliberately: if the heal query below errors, the
     // stamp never runs, so the recorded generation stays at its OLD (pre-upgrade)

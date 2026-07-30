@@ -130,6 +130,19 @@ const SCHEMA: &[(&str, &str)] = &[
         "040_clock_confidence_grade",
         include_str!("../../../db/040_clock_confidence_grade.sql"),
     ),
+    // db/043 (ADR-0056 decision 4 / #266): cairn_readjudicate_deferred. Unlike the
+    // medication files, which this subset legitimately lags on (#284), this one is NOT
+    // optional here: db/020 above is the door that WRITES the event_deferred marker, so a
+    // cairn-sync database without this file would accumulate deferred rows nothing could
+    // ever promote — admitted events, permanently powerless, with no mechanism to notice.
+    //
+    // Shipping the file is necessary but not sufficient: the loader in this crate must also
+    // CALL cairn_readjudicate_deferred, or the function sits unused and the markers pile up
+    // anyway (PR #302 review finding F3).
+    (
+        "043_deferred_readjudication",
+        include_str!("../../../db/043_deferred_readjudication.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
@@ -729,6 +742,26 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
     }
+    // ADR-0056 decision 4 (#266) / PR #302 finding F3: RE-ADJUDICATE FIRST, REPROJECT
+    // SECOND — the same pass, in the same position, as cairn-node's loader. This crate
+    // carries db/020, the door that WRITES the event_deferred marker, so without this call
+    // a sync-only database (the phone-tier carrier node the ADR exists for) accumulates
+    // admitted-but-powerless events that nothing can ever promote.
+    //
+    // Safe to run unconditionally — NOT because "a promoted event has already projected
+    // cleanly" (unqualified, that is false: a type whose apply fns are ALL heal_safe = false,
+    // e.g. note.added today, promotes on ZERO apply-fn runs by design, since a counter fn
+    // cannot prove itself by replaying). The real reason: db/043's gate 4 selects its apply
+    // fns with `WHERE event_type = ... AND heal_safe` (the `FOR v_apply_fn` loop inside
+    // cairn_readjudicate_deferred), which is IDENTICAL to the heal filter cairn_reproject
+    // (db/039) uses for its own per-type apply-fn aggregation (`FILTER (WHERE p_rebuild OR
+    // r.heal_safe)`, with `p_rebuild = false` on this connect path). So the heal below can
+    // never invoke an apply fn that gate 4 did not already run to completion on that exact
+    // row — THAT identity, not "already projected", is what makes the F1 brick unreachable: a
+    // bad event simply keeps its marker instead of taking the schema load down with it. On
+    // THIS subset database gate 4 runs only the projections db/002 registers here, which is
+    // correct — the node projects what it knows how to project.
+    client.execute("SELECT count(*) FROM cairn_readjudicate_deferred()", &[])?;
     // #208/ADR-0057: same gated heal as cairn-node's loader, and BEFORE the stamp
     // below for the same reason. On this SUBSET database only the
     // subset-registered projections exist (db/002's rows); the registry makes
@@ -4973,6 +5006,88 @@ mod schema_generation_tests {
 
         // 3. The restored database replays again — only genuine downgrades refuse.
         load_schema(&mut c).expect("replay after restore must succeed");
+    }
+
+    /// PR #302 review finding F3. This crate embeds db/043 — and the comment beside that
+    /// entry argues it MUST, because db/020 (also here) is the door that WRITES the
+    /// event_deferred marker. The reasoning was right and only the function shipped: nothing
+    /// in this binary called it, so a sync-only database — the phone-tier carrier node
+    /// ADR-0056 exists for — accumulated markers that nothing could ever promote.
+    #[test]
+    fn load_schema_promotes_a_deferred_event() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+        let mut c = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        load_schema(&mut c).expect("baseline replay must succeed");
+        c.batch_execute("TRUNCATE event_log CASCADE").unwrap();
+
+        // Hand-write a deferred row AND classify its type. The pass's query INNER JOINs
+        // event_deferred to event_type_class (db/043) — a type with NO class row is SKIPPED
+        // entirely, so the probe below would never even be reached and adjudication_error
+        // would stay NULL forever, whether or not the loader calls the pass at all. The
+        // INSERT INTO event_type_class below is therefore load-bearing, not incidental: it is
+        // what makes the pass attempt this row, so its refusal (this crate cannot sign, so
+        // signed_bytes never parses) lands in adjudication_error — the one column this test
+        // can read without a real signature.
+        c.batch_execute(
+            "DO $$ DECLARE v_id uuid := uuidv7(); v_sb bytea; BEGIN \
+               v_sb := ('sync-defer-' || v_id::text)::bytea; \
+               INSERT INTO event_log (event_id, patient_id, event_type, schema_version, \
+                 hlc_wall, hlc_counter, node_origin, signed_bytes, content_address, \
+                 body, contributors, signer_key_id, plaintext_twin) \
+               VALUES (v_id, v_id, 'sync.defer.probe', 'test-1', \
+                 (extract(epoch from now()) * 1000)::bigint, 0, 'test-node', v_sb, \
+                 '\\x1220'::bytea || digest(v_sb, 'sha256'), \
+                 '{}'::jsonb, '[]'::jsonb, 'test-key', 'probe'); \
+               INSERT INTO event_deferred (event_id, event_type) \
+                 VALUES (v_id, 'sync.defer.probe'); \
+               INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+                 VALUES ('sync.defer.probe', 'additive', FALSE) ON CONFLICT DO NOTHING; \
+             END $$;",
+        )
+        .unwrap();
+
+        load_schema(&mut c).expect("replay must succeed");
+
+        // WHAT THIS ASSERTS, and why it is not "the event was promoted": this crate cannot
+        // sign, so the row above carries unparseable `signed_bytes` — and the pass re-derives
+        // every event's envelope from those bytes (`cairn_body`), refusing anything that no
+        // longer parses. So the probe can never be PROMOTED here, by construction.
+        //
+        // It can, however, be ADJUDICATED, and that is exactly what F3 is about: whether this
+        // loader invokes the pass at all. A pass that ran records its refusal in
+        // `adjudication_error`; a loader that never calls it leaves the column NULL forever.
+        // That is the discriminator, and it needs no signing. Promotion itself is already
+        // pinned by cairn-node's suite, which can sign.
+        let err: Option<String> = c
+            .query_one(
+                "SELECT adjudication_error FROM event_deferred WHERE event_type = $1",
+                &[&"sync.defer.probe"],
+            )
+            .unwrap()
+            .get(0);
+
+        // Clean up BEFORE asserting, so a failure cannot strand the shared database — the
+        // same discipline load_schema_stamps_the_generation_and_refuses_a_newer_db uses
+        // above. `event_type_class` is load-bearing here: no migration knows this probe
+        // type, so migration replay would never remove the row.
+        c.batch_execute(
+            "TRUNCATE event_log CASCADE; \
+             DELETE FROM event_type_class WHERE event_type = 'sync.defer.probe'",
+        )
+        .unwrap();
+
+        assert!(
+            err.is_some(),
+            "this loader must re-adjudicate: a sync-only node whose loader never calls the \
+             pass accumulates admitted-but-permanently-powerless events with no mechanism to \
+             notice (PR #302 finding F3)"
+        );
     }
 
     /// The guard must read the recorded generation UNDER the loaders' advisory

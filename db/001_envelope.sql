@@ -213,4 +213,104 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_pull_at TIMESTAMPTZ
 );
 
+-- ---------------------------------------------------------------------------
+-- The admitted-uninterpreted marker (ADR-0056 decision 1, issue #265).
+--
+-- A 1:1 node-local sidecar of event_log. One row means: "this event was admitted
+-- by the remote door WITHOUT its type being classified, so it holds NO power."
+-- Node-local derived state — never signed, never on the wire (principle 12),
+-- like reproject_log (db/039) and node_schema (db/038).
+--
+-- WHY EXPLICIT, rather than inferred from a missing event_type_class row:
+-- ADR-0056's corollary forbids inferring the deferred state from a null
+-- classification lookup falling through the gates by three-valued logic. An
+-- inferred marker also has nowhere to record WHY a re-adjudication attempt
+-- failed, which decision 4 requires to be flagged legibly.
+--
+-- WHY IT LIVES HERE rather than in this slice's own db/043: db/005's
+-- cairn_replay_eligible and cairn_suppression_author_ok both read it, and both
+-- are LANGUAGE sql — SQL-language function bodies resolve table names at CREATE
+-- time (unlike PL/pgSQL's late binding), so the table must exist before db/005
+-- loads. Its consumers are documented in db/043_deferred_readjudication.sql.
+--
+-- The row is DELETED on promotion, never marked resolved: its presence IS the
+-- invariant ("powerless; the classification-gated checks have not been passed"),
+-- and a resolved-row history would be a second, drift-prone source of truth for
+-- the same fact.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_deferred (
+    event_id           UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE,
+    -- Denormalized from event_log so the reclassification scan selects its
+    -- candidates by joining this against event_type_class alone, and the
+    -- `cairn-node deferred` listing reads it without touching event_log.
+    event_type         TEXT        NOT NULL,
+    -- Node-local operational stamp (clock_timestamp, like reproject_log.ran_at).
+    -- NEVER a clinical time: t_recorded/t_effective live on event_log and are the
+    -- only times that mean anything about the record itself.
+    admitted_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    -- NULL until a re-adjudication attempt has run and FAILED; then the verbatim
+    -- refusal. This column IS decision 4's "flagged legibly".
+    adjudication_error TEXT,
+    last_attempt_at    TIMESTAMPTZ
+);
+
+-- The reclassification scan joins event_deferred → event_type_class on this column.
+CREATE INDEX IF NOT EXISTS event_deferred_type_idx ON event_deferred (event_type);
+
+-- ---------------------------------------------------------------------------
+-- The carried-not-vouched marker (ADR-0056, PR #302 review finding F2).
+--
+-- One row means: "this event_log row's attestation/attester_key were STORED
+-- WITHOUT BEING VERIFIED." The remote door cannot verify a deferred event's
+-- travelling token — the gate that would is deferred with the interpretation —
+-- but it must store it, or cairn_readjudicate_deferred has nothing to verify
+-- later and admit-and-defer degrades into a slower fail-closed.
+--
+-- WHY A SECOND TABLE, rather than reusing event_deferred: the two answer
+-- DIFFERENT questions with DIFFERENT lifetimes.
+--   event_deferred                 -> "has this event been adjudicated?"
+--   event_attestation_unvouched    -> "is this event's stored token vouched?"
+-- Promotion deletes the first. The second must SURVIVE it, because db/043's
+-- gate 1 only verifies a token when the type's mode DEMANDS one — an additive
+-- event bearing no responsibility promotes with its token never checked. Using
+-- event_deferred as the proxy is precisely the F2 defect: it let a forged token
+-- on an unknown-type event put any key inside the target's human-author set
+-- once the type was classified.
+--
+-- Node-local derived state — never signed, never on the wire (principle 12),
+-- like event_deferred, reproject_log (db/039) and node_schema (db/038).
+--
+-- Deleted, never marked resolved, for the same reason event_deferred is: its
+-- presence IS the invariant, and a resolved-row history would be a second,
+-- drift-prone source of truth for one fact. Its readers are documented at the
+-- three call sites (db/005 cairn_suppression_author_ok, db/018
+-- patient_link_apply, db/034 medication_attestation_apply); a new reader of
+-- event_log.attestation / .attester_key owes the same exclusion.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
+    event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE
+);
+
+-- The ONE way to ask "is this row's stored attestation a real vouch?" (house rule 4).
+--
+-- Four readers need it — db/005's cairn_suppression_author_ok, db/018's patient_link_apply
+-- (twice) and db/034's medication_attestation_apply — and a fifth will arrive with the next
+-- type that reads event_log.attester_key. Four hand-written copies of one predicate is four
+-- places to change in step; a named function makes each call site read as the QUESTION being
+-- asked rather than the mechanism, which is the point of the marker.
+--
+-- Lives HERE, in db/001, because db/005's cairn_suppression_author_ok is LANGUAGE sql, whose
+-- body resolves table AND function names at CREATE time — the same reason the table is here.
+-- LANGUAGE sql STABLE so it INLINES: db/005's predicate still folds into cairn_reproject's
+-- per-type anti-join instead of costing a call per replayed event.
+CREATE OR REPLACE FUNCTION cairn_attestation_vouched(p_event_id uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT NOT EXISTS (SELECT 1 FROM event_attestation_unvouched u
+                        WHERE u.event_id = p_event_id)
+$$;
+-- Locked down like cairn_replay_eligible (db/005): every caller is a SECURITY DEFINER door or
+-- a migration-owned trigger, so no runtime role needs a grant, and PUBLIC's default EXECUTE
+-- would let any connected role probe a safety predicate.
+REVOKE EXECUTE ON FUNCTION cairn_attestation_vouched(uuid) FROM PUBLIC;
+
 COMMIT;
