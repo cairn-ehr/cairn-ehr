@@ -50,13 +50,13 @@ end your turn. Touch nothing else — no labels, no issues, no branches.
 1. `git fetch origin main`.
 2. `gh issue list --label "loop:in-progress" --state open --json number`
    — a non-empty result means a previous worker died mid-cycle. ADOPT the
-   lowest-numbered one instead of picking fresh — unless `TECHDEBT_FORCE_ISSUE`
-   is set and names a DIFFERENT issue, in which case skip adoption entirely
-   and proceed to Step 1 with the forced issue (the in-progress one stays
-   claimed for the next non-forced run): reconstruct its position
-   from GitHub state and resume from there:
+   lowest-numbered one instead of picking fresh. Exception: if
+   `TECHDEBT_FORCE_ISSUE` is set and names a DIFFERENT issue, skip
+   adoption entirely and proceed to Step 1 with the forced issue (the
+   in-progress one stays claimed for the next non-forced run).
 
-   Reconstruct its position with these commands (the crashed session chose
+   When adopting, reconstruct the ADOPTED issue's position from GitHub
+   state and resume from there, using these commands (the crashed session chose
    the slug, so discover rather than guess):
    - Branch: `git ls-remote --heads origin "loop/<n>-*"`; local worktree at
      `~/.cairn-loop/wt/issue-<n>` may also exist.
