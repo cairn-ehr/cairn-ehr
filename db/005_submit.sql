@@ -129,11 +129,20 @@ BEGIN
     -- marker exists to withhold. Making that unreachable at migration time is cheaper and
     -- safer than defending against it at runtime.
     --
-    -- It is also one of the two legs — the other is cairn_replay_eligible below — of the
-    -- guarantee that NO projection apply fn ever sees a deferred row. That guarantee is
-    -- what lets db/018 (patient_link_apply) and db/034 (medication_attestation_apply) keep
-    -- reading event_log.attester_key as a VERIFIED vouch, even though the door now stores
-    -- unverified carried tokens on deferred rows.
+    -- It is one of THREE things bounding which apply fns run against a deferred row. The
+    -- other two are cairn_replay_eligible below (no reprojection path can reach one) and
+    -- db/043's gate 4, which DELIBERATELY runs a promoted event's heal-safe apply fns while
+    -- its event_deferred marker is still present — that is how promotion proves the event
+    -- can project before the marker is deleted (PR #302 finding F1).
+    --
+    -- So "no apply fn ever sees a deferred row" is NOT true, and must not be assumed. What
+    -- IS true is that no apply fn currently READS that state: db/018 (patient_link_apply)
+    -- and db/034 (medication_attestation_apply) can keep treating event_log.attester_key as
+    -- a vouch because they exclude event_attestation_unvouched (db/001), which is keyed on
+    -- the token's verification, not on the deferral. A future apply fn that defensively
+    -- skips or asserts on a deferred row would misbehave under gate 4 — raising flags the
+    -- event unpromotable forever, and a silent no-op promotes it unprojected, because the
+    -- loader no longer runs a targeted reproject after the pass.
     --
     -- Runs LAST of the three independent fail-closed validations. The order carries no
     -- safety meaning (any one of them refusing is enough), but it is not arbitrary either:
