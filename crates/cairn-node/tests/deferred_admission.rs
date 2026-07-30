@@ -104,9 +104,14 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 /// `event_log` INSERT, but the AFTER-INSERT projection dispatcher fires DURING it. So a type
 /// registered for projection without an `event_type_class` row would be projected at
 /// admission — granting exactly the power the marker exists to withhold. Making that state
-/// unreachable at migration time is also one of the two legs (the other is
-/// `cairn_replay_eligible`) holding up the guarantee that no projection apply fn ever sees a
-/// deferred row, which is what lets db/018 and db/034 keep trusting `event_log.attester_key`.
+/// unreachable at migration time is one of two things bounding which apply fns run against a
+/// deferred row: the other is `cairn_replay_eligible` (no reprojection path can reach one
+/// later). It is NOT "no projection apply fn ever sees a deferred row" — db/043's gate 4
+/// deliberately runs a promoted event's heal-safe apply fns while its marker is still
+/// present, before deleting it (PR #302 finding F1). db/018 and db/034 stay safe under that
+/// not by trusting `event_log.attester_key`, but by explicitly excluding
+/// `event_attestation_unvouched` (db/001) — keyed on the token's verification, not on
+/// deferral.
 #[tokio::test]
 async fn projection_registration_requires_a_classified_type() {
     let Some(base) = cs() else {
@@ -602,9 +607,13 @@ async fn a_travelling_token_survives_defer_then_promote() {
 /// The loader runs the pass on EVERY connect and reprojects what it promotes.
 ///
 /// Pinned with a type that HAS a registered projection, so "promoted" is observable as a
-/// projection row rather than only as a deleted marker — the marker alone would pass even if
-/// the reprojection half were missing, which is the half that makes the event actually
-/// visible in a chart.
+/// projection row rather than only as a deleted marker — and this is a STRONGER proof than
+/// that alone sounds: `SCHEMA_GENERATION` never changes across this test, so the second
+/// connect below stamps `recorded == embedded` and the loader's generation-gated heal
+/// (`cairn_reproject`, guarded by `if recorded != Some(embedded)` in db.rs) never runs. The
+/// only thing left that could have written the `patient_chart` row asserted below is gate 4's
+/// own apply-fn run inside `cairn_readjudicate_deferred` — making this the one black-box test
+/// that proves gate 4 itself projects, not merely that some later heal cleans up after it.
 #[tokio::test]
 async fn connect_promotes_and_reprojects_a_deferred_event() {
     let Some(base) = cs() else {

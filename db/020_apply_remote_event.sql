@@ -225,11 +225,17 @@ BEGIN
     --
     -- INVARIANT, and the reason db/005's cairn_suppression_author_ok had to change: an
     -- attestation on a row that carries an event_deferred marker is CARRIED, NOT VOUCHED —
-    -- nothing has verified it. Every reader must therefore either be unreachable for
-    -- deferred rows (the projection apply fns in db/018 and db/034, kept unreachable by the
-    -- registration guard + cairn_replay_eligible) or exclude them explicitly
-    -- (cairn_suppression_author_ok, which reads the TARGET's attester_key and IS reachable).
-    -- A new reader of these columns owes that same choice.
+    -- nothing has verified it. It is NOT true that every reader is either unreachable for
+    -- deferred rows or must exclude them explicitly to stay safe: db/043's gate 4
+    -- DELIBERATELY runs the projection apply fns in db/018 and db/034 against a deferred row
+    -- (its event_deferred marker still present) as its proof the event can project before
+    -- promotion (PR #302 finding F1), so "unreachable" does not hold for them either.
+    -- What IS true: db/018 (patient_link_apply) and db/034 (medication_attestation_apply)
+    -- keep treating event_log.attester_key as a vouch because they exclude
+    -- event_attestation_unvouched (db/001) explicitly — keyed on the token's verification,
+    -- not on deferral — exactly as cairn_suppression_author_ok (which reads the TARGET's
+    -- attester_key) already does. A new reader of these columns owes that same explicit
+    -- exclusion.
     IF v_deferred THEN
         v_att     := p_attestation;
         v_att_key := p_attester_key;

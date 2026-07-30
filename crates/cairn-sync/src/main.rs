@@ -748,10 +748,19 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
     // a sync-only database (the phone-tier carrier node the ADR exists for) accumulates
     // admitted-but-powerless events that nothing can ever promote.
     //
-    // Safe to run unconditionally because db/043's gate 4 promotes only events that have
-    // already projected cleanly: a bad event keeps its marker instead of taking the schema
-    // load down with it. On THIS subset database gate 4 runs only the projections db/002
-    // registers here, which is correct — the node projects what it knows how to project.
+    // Safe to run unconditionally — NOT because "a promoted event has already projected
+    // cleanly" (unqualified, that is false: a type whose apply fns are ALL heal_safe = false,
+    // e.g. note.added today, promotes on ZERO apply-fn runs by design, since a counter fn
+    // cannot prove itself by replaying). The real reason: db/043's gate 4 selects its apply
+    // fns with `WHERE event_type = ... AND heal_safe` (the `FOR v_apply_fn` loop inside
+    // cairn_readjudicate_deferred), which is IDENTICAL to the heal filter cairn_reproject
+    // (db/039) uses for its own per-type apply-fn aggregation (`FILTER (WHERE p_rebuild OR
+    // r.heal_safe)`, with `p_rebuild = false` on this connect path). So the heal below can
+    // never invoke an apply fn that gate 4 did not already run to completion on that exact
+    // row — THAT identity, not "already projected", is what makes the F1 brick unreachable: a
+    // bad event simply keeps its marker instead of taking the schema load down with it. On
+    // THIS subset database gate 4 runs only the projections db/002 registers here, which is
+    // correct — the node projects what it knows how to project.
     client.execute("SELECT count(*) FROM cairn_readjudicate_deferred()", &[])?;
     // #208/ADR-0057: same gated heal as cairn-node's loader, and BEFORE the stamp
     // below for the same reason. On this SUBSET database only the
@@ -5017,8 +5026,14 @@ mod schema_generation_tests {
         load_schema(&mut c).expect("baseline replay must succeed");
         c.batch_execute("TRUNCATE event_log CASCADE").unwrap();
 
-        // Hand-write a deferred row: this crate cannot sign, and the pass only needs a row
-        // whose type has no event_type_class entry to leave it untouched-and-unflagged.
+        // Hand-write a deferred row AND classify its type. The pass's query INNER JOINs
+        // event_deferred to event_type_class (db/043) — a type with NO class row is SKIPPED
+        // entirely, so the probe below would never even be reached and adjudication_error
+        // would stay NULL forever, whether or not the loader calls the pass at all. The
+        // INSERT INTO event_type_class below is therefore load-bearing, not incidental: it is
+        // what makes the pass attempt this row, so its refusal (this crate cannot sign, so
+        // signed_bytes never parses) lands in adjudication_error — the one column this test
+        // can read without a real signature.
         c.batch_execute(
             "DO $$ DECLARE v_id uuid := uuidv7(); v_sb bytea; BEGIN \
                v_sb := ('sync-defer-' || v_id::text)::bytea; \

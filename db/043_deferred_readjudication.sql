@@ -19,15 +19,34 @@
 -- gate that exists to bound it. Re-running them HERE, before cairn_reproject, is what makes
 -- "no unattested suppression" hold at EVERY INSTANT rather than being violated-then-repaired.
 --
--- WHERE THE PIECES LIVE. The marker table itself is in db/001, next to event_log, not in
--- this file: db/005's cairn_replay_eligible and cairn_suppression_author_ok both read it and
--- both are LANGUAGE sql, whose bodies resolve table names at CREATE time. The three
--- consumers of the marker are therefore:
+-- WHERE THE PIECES LIVE. Two markers, in db/001 next to event_log, not in this file — and
+-- they do NOT share a lifetime (PR #302 finding F2's lesson: a marker is a valid proxy for a
+-- fact only if it has that fact's lifetime):
 --
---   * db/020        — writes it (admission),
---   * db/005        — reads it (the replay gate + the ADR-0043 owner-gate's carried-token
---                     exclusion),
---   * this file     — consumes it (promotion) or annotates it (a recorded refusal).
+--   * event_deferred              — REPLAY eligibility. This file's DELETE (promotion,
+--                                    below) ends its life.
+--   * event_attestation_unvouched — ATTESTATION trust for a token the door CARRIED without
+--                                    verifying. Deliberately SURVIVES promotion; only gate 1
+--                                    below (actual verification) clears it. Promotion used to
+--                                    double as the clearing event, via
+--                                    cairn_suppression_author_ok reading event_deferred as
+--                                    its proxy for "vouched" — the wrong marker, which was F2.
+--
+-- Both predicates (cairn_replay_eligible, cairn_attestation_vouched) are LANGUAGE sql, so
+-- their bodies resolve table names at CREATE time. Consumers:
+--
+--   * db/020         — writes BOTH markers at admission: event_deferred always; event_
+--                       attestation_unvouched only when a token actually travelled with the
+--                       event.
+--   * db/005         — reads event_deferred for cairn_replay_eligible (the replay gate);
+--                       reads cairn_attestation_vouched (over event_attestation_unvouched)
+--                       for the ADR-0043 owner-gate's target-attester check.
+--   * db/018, db/034 — read cairn_attestation_vouched (over event_attestation_unvouched),
+--                       NOT event_deferred, before trusting event_log.attester_key as a vouch
+--                       (db/018 twice, db/034 once).
+--   * this file      — consumes event_deferred (promotion, gate 4); clears event_
+--                       attestation_unvouched once gate 1 verifies the carried token; or
+--                       annotates event_deferred with a recorded refusal.
 --
 -- connect_and_load_schema re-runs every migration each connect: everything below is
 -- idempotent.
@@ -113,8 +132,36 @@ BEGIN
             -- cairn_clear_payload is reused rather than reimplementing db/020's
             -- sealed/unsealed branching, so the two paths cannot drift on what a readable
             -- body is. NULL = sealed with no custody here: skip, exactly as the door does —
-            -- a structural check cannot run on ciphertext. Gate 4 still proves such an event
-            -- can project.
+            -- a structural check cannot run on ciphertext.
+            --
+            -- HONEST GAP on the sealed-WITH-custody path (this node holds the DEK — the ONLY
+            -- path any clinical type takes, ADR-0052 born-sealed): `b` is re-derived from
+            -- signed_bytes, so its plaintext_twin is the WIRE-level field, which for a sealed
+            -- event is always the mechanical STUB (non-empty by construction) — never the
+            -- real inner twin the author sealed next to the payload. Substituting only
+            -- `{payload}` below (never `{plaintext_twin}`) leaves that stub in place, so
+            -- cairn_event_twin's `v_authored` test (db/005_submit.sql, in cairn_event_twin)
+            -- reads TRUE unconditionally on this path. The check_fn half of the floor still
+            -- runs correctly (it sees the real clear payload); only the twin_required_msg
+            -- half is defeated — it can never RAISE here, authored or not.
+            --
+            -- NOT fixable with a second jsonb_set: the real inner twin is not recoverable
+            -- from any stored state. event_clear.twin (populated at admission, db/020 step 8)
+            -- was itself produced by cairn_event_twin while the type was still unclassified
+            -- (v_fn/v_msg both NULL) — so for an event whose author supplied no real twin, it
+            -- already holds cairn_twin_skeleton's generic, always-non-empty output, not an
+            -- empty string, and that output is indistinguishable AS STORED TEXT from a
+            -- genuinely authored one. Feeding it back in here would make v_authored read TRUE
+            -- just as unconditionally as the wire stub does — same defect, different source
+            -- string. The one bit that actually matters (was a real twin present) is lost at
+            -- admission and cannot be re-derived later.
+            --
+            -- RESIDUAL: a future twin-requiring clinical type (twin_required_msg set) that
+            -- arrives unclassified, born-sealed, with NO real authored twin, would be refused
+            -- at the strict door (cairn_event_twin runs there on the true clear view) but
+            -- PROMOTED here, because this gate cannot see that absence. Gate 4 still proves
+            -- the event projects; it says nothing about the twin.
+            -- FOLLOW-UP: file an issue for the sealed-path twin_required_msg gap (house rule 5).
             v_clear := cairn_clear_payload(r.el_row);
             IF v_clear IS NOT NULL THEN
                 PERFORM cairn_event_twin(r.event_type, jsonb_set(b, '{payload}', v_clear));
@@ -180,9 +227,16 @@ BEGIN
             -- Running the apply fns HERE, inside the per-row subtransaction, makes the
             -- marker delete conditional on them succeeding: a raise sets v_err, the
             -- subtransaction rolls back every projection write it made, and the marker stays.
-            -- The invariant that buys: a PROMOTED EVENT IS ONE THAT HAS ALREADY PROJECTED
-            -- CLEANLY. That holds for a stricter apply fn written years from now, which gate
-            -- 0 alone would not cover.
+            -- The invariant that buys: a PROMOTED EVENT IS ONE WHOSE HEAL-SAFE APPLY FNS HAVE
+            -- ALREADY PROJECTED CLEANLY — qualified deliberately, not "projected cleanly"
+            -- unqualified. A type whose apply fns are ALL heal_safe = false (note.added
+            -- today, registered that way in db/005 because note_count is a counter, and
+            -- replaying it can only increment again, never prove itself) makes the FOR loop
+            -- below iterate zero times, so it promotes on ZERO proof. That is correct, not a
+            -- gap: heal_safe = false exists precisely so cairn_reproject's heal (db/039) never
+            -- re-runs that fn over a live row either, and gate 4 applies the identical rule.
+            -- For a heal-safe fn, the invariant holds even for a stricter one written years
+            -- from now, which gate 0 alone would not cover.
             --
             -- WHY PER-EVENT DISPATCH IS AFFORDABLE HERE and not in cairn_reproject: db/039
             -- is deliberately set-based (one full-table pass per (type, fn)) because the
@@ -223,7 +277,7 @@ BEGIN
 
     -- One row per type that gained at least one promoted event. Gate 4 above already ran
     -- each promoted event's heal-safe apply fns inside its own promotion subtransaction, so
-    -- the loader no longer needs this to scope a targeted heal (Task 6, PR #302 finding F1) —
+    -- the loader no longer needs this to scope a targeted heal (PR #302 finding F1) —
     -- it now exists so the loader can tell the operator which types just gained power.
     RETURN QUERY
         SELECT k, v::bigint FROM jsonb_each_text(v_promoted) AS t(k, v);
