@@ -240,6 +240,10 @@ const SCHEMA: &[(&str, &str)] = &[
     // lag: cairn-sync loads db/020, whose door WRITES the event_deferred marker, so a
     // cairn-sync database missing this file would accumulate deferred rows that nothing
     // could ever promote (#284's drift hazard, made concrete).
+    //
+    // Shipping the file is necessary but not sufficient: the loader in this crate must also
+    // CALL cairn_readjudicate_deferred, or the function sits unused and the markers pile up
+    // anyway (PR #302 review finding F3).
     (
         "043_deferred_readjudication",
         include_str!("../../../db/043_deferred_readjudication.sql"),

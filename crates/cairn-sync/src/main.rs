@@ -135,6 +135,10 @@ const SCHEMA: &[(&str, &str)] = &[
     // optional here: db/020 above is the door that WRITES the event_deferred marker, so a
     // cairn-sync database without this file would accumulate deferred rows nothing could
     // ever promote — admitted events, permanently powerless, with no mechanism to notice.
+    //
+    // Shipping the file is necessary but not sufficient: the loader in this crate must also
+    // CALL cairn_readjudicate_deferred, or the function sits unused and the markers pile up
+    // anyway (PR #302 review finding F3).
     (
         "043_deferred_readjudication",
         include_str!("../../../db/043_deferred_readjudication.sql"),
@@ -738,6 +742,17 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
         client.batch_execute(sql)?;
         eprintln!("applied {name}");
     }
+    // ADR-0056 decision 4 (#266) / PR #302 finding F3: RE-ADJUDICATE FIRST, REPROJECT
+    // SECOND — the same pass, in the same position, as cairn-node's loader. This crate
+    // carries db/020, the door that WRITES the event_deferred marker, so without this call
+    // a sync-only database (the phone-tier carrier node the ADR exists for) accumulates
+    // admitted-but-powerless events that nothing can ever promote.
+    //
+    // Safe to run unconditionally because db/043's gate 4 promotes only events that have
+    // already projected cleanly: a bad event keeps its marker instead of taking the schema
+    // load down with it. On THIS subset database gate 4 runs only the projections db/002
+    // registers here, which is correct — the node projects what it knows how to project.
+    client.execute("SELECT count(*) FROM cairn_readjudicate_deferred()", &[])?;
     // #208/ADR-0057: same gated heal as cairn-node's loader, and BEFORE the stamp
     // below for the same reason. On this SUBSET database only the
     // subset-registered projections exist (db/002's rows); the registry makes
@@ -4982,6 +4997,77 @@ mod schema_generation_tests {
 
         // 3. The restored database replays again — only genuine downgrades refuse.
         load_schema(&mut c).expect("replay after restore must succeed");
+    }
+
+    /// PR #302 review finding F3. This crate embeds db/043 — and the comment beside that
+    /// entry argues it MUST, because db/020 (also here) is the door that WRITES the
+    /// event_deferred marker. The reasoning was right and only the function shipped: nothing
+    /// in this binary called it, so a sync-only database — the phone-tier carrier node
+    /// ADR-0056 exists for — accumulated markers that nothing could ever promote.
+    #[test]
+    fn load_schema_promotes_a_deferred_event() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
+            .unwrap();
+        let mut c = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        load_schema(&mut c).expect("baseline replay must succeed");
+        c.batch_execute("TRUNCATE event_log CASCADE").unwrap();
+
+        // Hand-write a deferred row: this crate cannot sign, and the pass only needs a row
+        // whose type has no event_type_class entry to leave it untouched-and-unflagged.
+        c.batch_execute(
+            "DO $$ DECLARE v_id uuid := uuidv7(); v_sb bytea; BEGIN \
+               v_sb := ('sync-defer-' || v_id::text)::bytea; \
+               INSERT INTO event_log (event_id, patient_id, event_type, schema_version, \
+                 hlc_wall, hlc_counter, node_origin, signed_bytes, content_address, \
+                 body, contributors, signer_key_id, plaintext_twin) \
+               VALUES (v_id, v_id, 'sync.defer.probe', 'test-1', \
+                 (extract(epoch from now()) * 1000)::bigint, 0, 'test-node', v_sb, \
+                 '\\x1220'::bytea || digest(v_sb, 'sha256'), \
+                 '{}'::jsonb, '[]'::jsonb, 'test-key', 'probe'); \
+               INSERT INTO event_deferred (event_id, event_type) \
+                 VALUES (v_id, 'sync.defer.probe'); \
+               INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+                 VALUES ('sync.defer.probe', 'additive', FALSE) ON CONFLICT DO NOTHING; \
+             END $$;",
+        )
+        .unwrap();
+
+        load_schema(&mut c).expect("replay must succeed");
+
+        // WHAT THIS ASSERTS, and why it is not "the event was promoted": this crate cannot
+        // sign, so the row above carries unparseable `signed_bytes` — and the pass re-derives
+        // every event's envelope from those bytes (`cairn_body`), refusing anything that no
+        // longer parses. So the probe can never be PROMOTED here, by construction.
+        //
+        // It can, however, be ADJUDICATED, and that is exactly what F3 is about: whether this
+        // loader invokes the pass at all. A pass that ran records its refusal in
+        // `adjudication_error`; a loader that never calls it leaves the column NULL forever.
+        // That is the discriminator, and it needs no signing. Promotion itself is already
+        // pinned by cairn-node's suite, which can sign.
+        let err: Option<String> = c
+            .query_one(
+                "SELECT adjudication_error FROM event_deferred WHERE event_type = $1",
+                &[&"sync.defer.probe"],
+            )
+            .unwrap()
+            .get(0);
+        assert!(
+            err.is_some(),
+            "this loader must re-adjudicate: a sync-only node whose loader never calls the \
+             pass accumulates admitted-but-permanently-powerless events with no mechanism to \
+             notice (PR #302 finding F3)"
+        );
+
+        c.batch_execute(
+            "TRUNCATE event_log CASCADE; \
+             DELETE FROM event_type_class WHERE event_type = 'sync.defer.probe'",
+        )
+        .unwrap();
     }
 
     /// The guard must read the recorded generation UNDER the loaders' advisory
