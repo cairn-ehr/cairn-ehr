@@ -16,6 +16,7 @@
     ],
     "deny": [
       "Bash(git push --force:*)",
+      "Bash(git push --force-with-lease:*)",
       "Bash(git push -f:*)",
       "Bash(gh repo delete:*)",
       "Bash(gh repo edit:*)",

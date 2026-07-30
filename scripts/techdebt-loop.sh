@@ -25,9 +25,6 @@ INCLUDE_EPICS=0     # 1 = worker may also pick loop:epic issues
 BYPASS=0            # 1 = --dangerously-skip-permissions instead of allowlist
 FORCE_ISSUE=""      # non-empty = work exactly this issue number, then stop
 SMOKE=0             # 1 = plumbing test: worker writes smoke-ok and exits
-# All config vars above are used by parse_args (Task 2) and main loop (Tasks 3+);
-# mark as used for shellcheck since this task defines them but doesn't use them.
-: "${LOOP_HOME} ${MAX_ISSUES} ${MAX_WAIT_HOURS} ${TIMEOUT_HOURS} ${INCLUDE_EPICS} ${BYPASS} ${FORCE_ISSUE} ${SMOKE}"
 
 # ---- small utilities ----
 
@@ -119,30 +116,73 @@ run_with_timeout() {
   local secs="$1"; shift
   local start
   start=$(date +%s)
-  # Enable job control so the spawned command gets its own process group
-  # (pgid == pid). This lets us kill the entire tree with a negative PID.
+  # Enable job control so BOTH background jobs get their own process group
+  # (pgid == pid): the command, so the watcher can kill its whole tree with
+  # a negative PID; the watcher, so WE can later kill the watcher subshell
+  # AND its sleep child in one group signal (a bare kill of the subshell
+  # would orphan the sleep for up to SECS — stray multi-hour sleeps).
   set -m
   "$@" &
   local cmd_pid=$!
-  set +m
   (
-    sleep "$secs"
-    # Kill the process group (-$cmd_pid), not just the direct child.
-    # This ensures all descendants are reaped. Also kill the bare PID as a
-    # fallback: if job control (set -m) somehow didn't give the child its
-    # own process group, the group kill above would miss it entirely.
-    kill -TERM -- -"$cmd_pid" 2>/dev/null
-    kill -TERM "$cmd_pid" 2>/dev/null
-    sleep 15
-    kill -KILL -- -"$cmd_pid" 2>/dev/null
-    kill -KILL "$cmd_pid" 2>/dev/null
+    # Watcher. Two design points, both orphan-proofing:
+    # 1) NO long arming sleep — poll the deadline in <=5s chunks. The
+    #    parent's reap cannot reliably take a watcher's sleep child with
+    #    it (a bare kill misses it entirely; a group kill can race a
+    #    mid-fork sleep); with chunking, the worst any miss can leak is
+    #    one 5s sleep instead of a multi-hour one.
+    # 2) Self-exit as soon as the command is gone (`kill -0` fails once
+    #    the parent has reaped it) — covers even a completely missed TERM.
+    # The trap is a best-effort third net: kill our own process group
+    # (this subshell became a group leader at spawn under set -m, so
+    # `kill 0` cannot touch the driver), and chase with CONT because a
+    # stopped process holds SIGTERM pending until continued.
+    set +m
+    trap 'trap "" TERM; kill -TERM 0 2>/dev/null; kill -CONT 0 2>/dev/null; exit 0' TERM
+    # Every sleep in here is BACKGROUNDED and `wait`ed, never foreground:
+    # bash defers trap processing while a foreground command runs, so a
+    # foreground sleep would make the parent's reaping TERM pend for the
+    # sleep's duration (the same deferral bug as the driver's rate-limit
+    # wait, and the fork of a foreground sleep can even race the group
+    # kill). Blocked in the wait builtin, the trap fires immediately.
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+      # If the DRIVER itself is gone (killed, crashed), stop watching:
+      # once the parent can no longer reap, cmd_pid may be reaped by init
+      # and RECYCLED, and firing the deadline kills at a recycled pid
+      # would TERM an innocent process group. ($$ inside this subshell
+      # still names the driver shell, not the subshell.) Consequence,
+      # documented in the entry skill: killing the driver also ends the
+      # in-flight worker's timeout guard.
+      kill -0 "$$" 2>/dev/null || exit 0
+      if [ $(( $(date +%s) - start )) -ge "$secs" ]; then
+        # Deadline passed. Kill the process group (-$cmd_pid), not just
+        # the direct child, so all descendants are reaped; also the bare
+        # PID as a fallback in case the child never got its own group.
+        kill -TERM -- -"$cmd_pid" 2>/dev/null
+        kill -TERM "$cmd_pid" 2>/dev/null
+        sleep 15 & wait $!
+        kill -KILL -- -"$cmd_pid" 2>/dev/null
+        kill -KILL "$cmd_pid" 2>/dev/null
+        exit 0
+      fi
+      sleep 5 & wait $!
+    done
   ) &
   local watch_pid=$!
+  set +m
   local rc=0
   wait "$cmd_pid" 2>/dev/null || rc=$?
   if kill -0 "$watch_pid" 2>/dev/null; then
-    # Watcher still sleeping => the command finished on its own. Reap it.
-    kill "$watch_pid" 2>/dev/null
+    # Watcher alive: EITHER the command finished on its own (watcher is in
+    # a <=5s poll chunk) OR we are at the timeout boundary and the watcher
+    # already TERMed the command and sits in its 15s TERM->KILL window.
+    # Reap it group-first, then directly (same belt-and-braces as the cmd
+    # kill above); its TERM trap takes its sleep child with it. A boundary
+    # timeout is still classified correctly by the 143/137 normalization
+    # and the elapsed-time check below.
+    kill -TERM -- -"$watch_pid" 2>/dev/null
+    kill -TERM "$watch_pid" 2>/dev/null
+    kill -CONT -- -"$watch_pid" 2>/dev/null   # wake any stopped member so the TERM lands
     wait "$watch_pid" 2>/dev/null
   else
     rc=124
@@ -161,6 +201,17 @@ run_with_timeout() {
   # Unconditionally reap the watcher to prevent zombies.
   wait "$watch_pid" 2>/dev/null || true
   return "$rc"
+}
+
+# interruptible_sleep SECS — a sleep that TERM/INT can actually interrupt.
+# Bash runs a pending trap only AFTER a foreground command exits, so a plain
+# foreground `sleep` would turn `kill <driver-pid>` into a no-op for up to
+# the whole rate-limit wait (hours). Backgrounding the sleep and blocking in
+# the `wait` builtin makes the trap fire immediately; the orphaned sleep
+# child then just runs out its clock and exits harmlessly.
+interruptible_sleep() {
+  sleep "$1" &
+  wait $!
 }
 
 # ---- single-instance lock ----
@@ -194,9 +245,17 @@ acquire_lock() {
       return 1  # a live loop holds the lock
     fi
   fi
-  # Stale lock from a dead process or unrelated PID: reclaim it.
-  rm -rf "$lockdir"
-  mkdir "$lockdir" 2>/dev/null && echo $$ > "$lockdir/pid"
+  # Stale lock from a dead process or unrelated PID: reclaim it — atomically.
+  # Two contenders can BOTH reach this line; with a plain rm+mkdir the loser
+  # could delete the winner's freshly-made lock and both would run. rename(2)
+  # (`mv`) succeeds for exactly one contender: the loser's mv fails and it
+  # backs off, reporting the lock as held (the operator just re-runs).
+  local stale
+  stale="$lockdir.stale.$$"
+  mv "$lockdir" "$stale" 2>/dev/null || return 1
+  rm -rf "$stale"
+  mkdir "$lockdir" 2>/dev/null || return 1
+  echo $$ > "$lockdir/pid"
 }
 
 release_lock() {
@@ -332,8 +391,10 @@ main() {
         log "backlog dry: no loop:ready issues remain"
         summarize; exit 0 ;;
       failed-permission)
-        log "PERMISSION DENIED — extend the allowlist and re-run:"
-        jq -r '.detail // "unknown command"' "$OUTCOME_FILE" 2>/dev/null | \
+        # Operator-actionable stop: a denied tool call OR a missing repo
+        # setting (e.g. auto-merge disabled). The detail says which.
+        log "OPERATOR ACTION REQUIRED — fix the item below, then re-run:"
+        jq -r '.detail // "(no detail provided — see the iteration transcript)"' "$OUTCOME_FILE" 2>/dev/null | \
           while IFS= read -r line; do log "  $line"; done
         summarize; exit 2 ;;
       rate-limited)
@@ -346,7 +407,7 @@ main() {
           summarize; exit 4
         fi
         log "usage limit hit; sleeping ${wait_secs}s (issue unpenalized)"
-        sleep "$wait_secs"
+        interruptible_sleep "$wait_secs"
         continue ;;   # not an issue attempt: counters untouched
       failed|*)
         N_FAILED=$((N_FAILED + 1)); CONSEC_FAIL=$((CONSEC_FAIL + 1))

@@ -65,6 +65,15 @@ also the input for the next run's re-check of `loop:blocked`).
 `--dry-run` stops after triage and prints the classification table — recommended for the
 first run so HH can sanity-check labels before any code is touched.
 
+**Author gate.** The repo is public and an issue body is untrusted input to an unattended,
+merge-capable worker (branch protection requires green checks, not human approval). Triage
+therefore never gives a non-operator-authored issue an eligibility label (`loop:ready` OR
+`loop:epic`) — it parks as `loop:needs-human` with a comment — and the worker re-verifies
+authorship before claiming. The gate covers authorship only: comments on operator-authored
+issues remain untrusted, so both triage subagents and the worker treat issue text as data
+(never instructions), and the worker counts machine-checkable failure markers only from
+operator-authored comments.
+
 ## 6. Driver (`scripts/techdebt-loop.sh`)
 
 Deliberately dumb — all intelligence is in the worker.
@@ -91,6 +100,10 @@ Deliberately dumb — all intelligence is in the worker.
     issue — a mid-cycle kill is just a crash, absorbed by §7 step 0 adoption. Total
     waiting is capped by `--max-wait` (default 6 h; `0` = wait indefinitely, for
     weekly-cap survival) — beyond the cap, summarize and exit with a clear message.
+    (Known bound: a session that dies without `outcome.json` while its final output
+    happens to quote a limit phrase is misclassified as rate-limited; the damage is
+    capped waiting under `--max-wait`, and the §11 statusLine-hook hardening would
+    remove transcript matching entirely.)
   - timeout kill or anything else → `failed`.
 - Flags: `--max-issues N`, `--include-epics`, `--issue N` (force one
   specific issue), `--bypass`, `--max-wait H`, `--timeout H`, `--smoke`, `--setup-labels`.
@@ -129,9 +142,13 @@ One fresh session, one issue, full cycle. All steps leave GitHub evidence.
 9. **Docs**: HANDOVER/ROADMAP updated only if state materially changed; bundled in the
    same PR.
 10. **Merge**: `gh pr merge --auto --merge` (merge-commit convention; `--auto` waits for
-    the required checks). CI red → one diagnosis-and-fix attempt, then treat as cycle
-    failure.
-11. **Cleanup**: remove worktree + branch, verify the issue auto-closed, remove
+    the required checks; requires the repo's "Allow auto-merge" setting — if it is off,
+    the worker stops the whole run via `failed-permission` with the fix in the detail,
+    keeping `loop:in-progress` so the next run resumes at this step; the entry skill
+    also checks the setting in preflight). CI red → one diagnosis-and-fix attempt, then
+    treat as cycle failure.
+11. **Cleanup**: remove worktree + branch (local and remote — the repo does not
+    auto-delete merged heads), verify the issue auto-closed, remove
     `loop:in-progress`, write `outcome.json`, exit.
 
 **Failure handling**: on irrecoverable failure at any step — label `loop:retry` (first
@@ -149,6 +166,12 @@ gaps cheap: the run stops, HH adds the pattern, re-runs; no issue is penalized. 
 allowlist has matured through a few supervised runs, graduate to `--bypass`
 (`--dangerously-skip-permissions`) for maximum unattended robustness. Branch protection
 remains the merge gate in both modes.
+
+Be honest about what the deny list is: prefix patterns are convenience brakes, not a
+security boundary — variant spellings (`git push origin -f`, a `+refspec` force push)
+evade prefix matching. The enforced boundary is server-side branch protection
+(required checks + `enforce_admins`). Note also that project-settings denies apply to
+EVERY Claude session in this repo, interactive ones included (e.g. `gh api` reads).
 
 ## 9. Non-goals
 
@@ -171,6 +194,7 @@ remains the merge gate in both modes.
 | Usage-window exhaustion mid-run | `rate-limited` classification: sleep until the parsed reset epoch (+5 min) and resume; issue unpenalized, cycle resumed via §7 step 0 adoption; `--max-wait` caps the zombie-driver risk |
 | Shared-file churn (HANDOVER/ROADMAP) across serial PRs | Each cycle branches from freshly-merged main; docs touched only when material |
 | Triage misclassifies an epic as ready | Worker re-checks scope at plan time; if the plan exceeds single-PR size, it relabels `loop:epic`, comments, and moves on (counts as no attempt, not a failure) |
+| Hostile issue or comment from an untrusted author steers an unattended worker (public repo; no human merge gate) | Author gate (§5): only operator-authored issues get eligibility labels, everything else parks `loop:needs-human`; the worker re-verifies authorship before claiming; issue text is treated as data, never instructions; failure markers counted only from operator-authored comments; branch protection + the two reviews remain downstream nets |
 
 ## 11. Deferred to the implementation plan
 

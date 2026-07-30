@@ -195,7 +195,10 @@ current build state, open threads, and time-sensitive items.
   `loop:*` labels and drives `/techdebt-next` one fresh headless session per
   issue until the ready backlog is dry (spec:
   `docs/superpowers/specs/2026-07-29-techdebt-loop-skill-design.md`).
-  First run: `--dry-run`, then `--max-issues 1`, then unbounded.
+  Launch precondition: enable the repo setting "Allow auto-merge" (verified
+  OFF 2026-07-30; gh cannot read it — preflight asks for confirmation, the
+  worker's merge step enforces it). First run: `--dry-run`, then
+  `--max-issues 1`, then unbounded.
 
 ---
 

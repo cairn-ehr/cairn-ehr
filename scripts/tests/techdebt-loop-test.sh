@@ -112,10 +112,16 @@ run_with_timeout 1 sleep 30
 RC=$?
 ELAPSED=$(( $(date +%s) - START ))
 t_assert_eq "hanging command killed with 124" "124" "$RC"
-t_assert_ok "hanging command killed promptly" [ "$ELAPSED" -lt 10 ]
+# The watcher polls the deadline in 5s chunks, so a 1s timeout fires at
+# ~5s; 15 leaves load headroom while still discriminating from the 30s hang.
+t_assert_ok "hanging command killed promptly" [ "$ELAPSED" -lt 15 ]
 t_teardown
 
 # ---- lock ----
+# NOTE: "holder alive" passes because acquire_lock greps the holder's ps
+# command line for "techdebt-loop" — and THIS test script's own path
+# contains that string. Renaming this test file would break the assertion
+# below (a false "stale lock" reclaim), not the lock itself.
 t_setup
 LOOP_HOME="$T_TMP/loophome"
 mkdir -p "$LOOP_HOME"
@@ -128,6 +134,10 @@ release_lock
 mkdir -p "$LOOP_HOME/lock"
 echo 999999 > "$LOOP_HOME/lock/pid"
 t_assert_ok "stale lock (dead pid) is reclaimed" acquire_lock
+# Pins ownership semantics only — the two-contender reclaim race that the
+# atomic `mv` closes is not deterministically testable from one process.
+t_assert_eq "reclaimed lock records the reclaimer's pid" "$$" \
+  "$(cat "$LOOP_HOME/lock/pid")"
 release_lock
 t_teardown
 
@@ -142,6 +152,30 @@ t_teardown
 t_setup
 run_with_timeout 1 bash -c 'trap "exit 0" TERM; while :; do sleep 1; done'
 t_assert_eq "SIGTERM trap to exit 0 still times out" "124" "$?"
+t_teardown
+
+# ---- run_with_timeout: no full-duration watcher sleep may exist ----
+# Old bug: the watcher armed itself with one `sleep SECS`; reaping the
+# watcher raced bash 3.2 signal delivery and could orphan that sleep for
+# up to the full per-iteration timeout (hours) — and a survivor holds the
+# caller's stdout pipe open besides. The fix polls the deadline in <=5s
+# chunks, so a process whose command line is the FULL duration ("sleep
+# 971") must never exist at all — if one appears, someone reverted to a
+# long arming sleep. 971 is a distinctive duration for pgrep. The command
+# must OUTLIVE the watcher's setup (hence /bin/sleep 1, not `true`): with
+# an instant command the old watcher never reached its arming sleep either,
+# and this test would pass vacuously against the old code.
+t_setup
+run_with_timeout 971 /bin/sleep 1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -f "sleep 971" >/dev/null || break
+  /bin/sleep 0.2
+done
+t_assert_fail "no full-duration watcher sleep after fast completion" \
+  pgrep -fl "sleep 971"
+# Insurance against a regression: a survivor would hold this suite's
+# stdout PIPE open for 971s whenever the suite runs piped (grep/tee).
+pkill -f "sleep 971" >/dev/null 2>&1 || true
 t_teardown
 
 # ---- acquire_lock: empty pid file grace period ----
@@ -200,6 +234,10 @@ t_teardown
 # command defers trap handling until that command itself exits. The
 # TERM/INT-terminates-the-loop regression test below depends on the prompt
 # behavior to observe a signal reaction within seconds instead of minutes.
+#
+# ORDERING IS LOAD-BEARING: everything below this override sees the STUB.
+# Any new test of the REAL run_with_timeout must go ABOVE this line, or it
+# will silently pass against the stub instead of the function under test.
 run_with_timeout() {
   shift
   "$@" &
@@ -441,7 +479,14 @@ t_setup; make_stub_env hang-real
   PATH="$STUB:$PATH" LOOP_HOME="$T_TMP/loophome" main
 ) > "$T_TMP/main-out" 2>&1 &
 MAIN_BG_PID=$!
-sleep 1
+# Synchronize on the worker having actually STARTED (its first action is
+# the CLAUDE_CALLS append): freshly-written stubs can take seconds to
+# first-exec on macOS, and TERMing before the spawn would race the test.
+TRIES=0
+while [ "$TRIES" -lt 40 ]; do
+  [ -s "$CLAUDE_CALLS" ] && break
+  /bin/sleep 0.5; TRIES=$((TRIES + 1))
+done
 kill -TERM "$MAIN_BG_PID" 2>/dev/null
 wait "$MAIN_BG_PID" 2>/dev/null
 sleep 1   # settle: let the EXIT trap's release_lock finish before we check
@@ -451,6 +496,52 @@ t_assert_eq "TERM terminates the loop: no post-kill respawn" "1" \
   "$(cat "$COUNTER")"
 # Best-effort cleanup: the fake claude's real `/bin/sleep 30` is orphaned
 # once main exits (never signaled itself) and finishes on its own shortly.
+pkill -f '/bin/sleep 30' >/dev/null 2>&1 || true
+t_teardown
+
+# ---- TERM during a RATE-LIMIT WAIT must terminate promptly (review) ----
+# Old bug: the rate-limited arm slept in the FOREGROUND. Bash defers trap
+# handling until a foreground command exits, so `kill <pid>` during a
+# usage-limit wait (30 min to hours) did nothing until the sleep ran out —
+# and the lock stayed held, so a re-launch reported "already running".
+# The fix (interruptible_sleep) backgrounds the sleep and blocks in the
+# `wait` builtin, where traps fire immediately. To discriminate, this
+# scenario's sleep stub sleeps for REAL (30s): the buggy driver outlives
+# TERM by that whole sleep, the fixed one dies within the 2s poll below.
+# Synchronization matters: freshly-written stub scripts can take seconds
+# to FIRST-exec on macOS (new-binary scan), so we wait for the driver's
+# own "usage limit hit" log line — proof it is entering the wait — rather
+# than signaling after a fixed delay and racing the spawn.
+t_setup; make_stub_env "rate-limit:$(( $(date +%s) + 1000 ))"
+cat > "$STUB/sleep" <<'EOF'
+#!/bin/bash
+echo "$1" >> "${SLEEP_CALLS:?}"
+exec /bin/sleep 30
+EOF
+chmod +x "$STUB/sleep"
+(
+  PATH="$STUB:$PATH" LOOP_HOME="$T_TMP/loophome" main
+) > "$T_TMP/main-out" 2>&1 &
+MAIN_BG_PID=$!
+TRIES=0   # allow up to 20s for the slow first-exec path
+while [ "$TRIES" -lt 40 ]; do
+  grep -q "usage limit hit" "$T_TMP/main-out" 2>/dev/null && break
+  /bin/sleep 0.5; TRIES=$((TRIES + 1))
+done
+t_assert_ok "driver reached the rate-limit wait" \
+  grep -q "usage limit hit" "$T_TMP/main-out"
+/bin/sleep 0.3   # let it enter interruptible_sleep's wait builtin
+kill -TERM "$MAIN_BG_PID" 2>/dev/null
+TRIES=0   # fixed driver dies well within 2s; buggy one lives ~30s more
+while [ "$TRIES" -lt 10 ] && kill -0 "$MAIN_BG_PID" 2>/dev/null; do
+  /bin/sleep 0.2; TRIES=$((TRIES + 1))
+done
+t_assert_fail "TERM during rate-limit wait kills the driver promptly" \
+  sh -c "kill -0 $MAIN_BG_PID 2>/dev/null"
+wait "$MAIN_BG_PID" 2>/dev/null
+t_assert_fail "rate-limit wait TERM releases the lock" \
+  [ -d "$T_TMP/loophome/lock" ]
+# The orphaned real sleep exits on its own; reap best-effort anyway.
 pkill -f '/bin/sleep 30' >/dev/null 2>&1 || true
 t_teardown
 
