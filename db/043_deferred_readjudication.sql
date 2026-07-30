@@ -161,7 +161,8 @@ BEGIN
             -- at the strict door (cairn_event_twin runs there on the true clear view) but
             -- PROMOTED here, because this gate cannot see that absence. Gate 4 still proves
             -- the event projects; it says nothing about the twin.
-            -- FOLLOW-UP: file an issue for the sealed-path twin_required_msg gap (house rule 5).
+            -- Tracked as issue #308 (house rule 5) — no type today registers a
+            -- twin_required_msg AND is born-sealed, so the gap is latent, not live.
             v_clear := cairn_clear_payload(r.el_row);
             IF v_clear IS NOT NULL THEN
                 PERFORM cairn_event_twin(r.event_type, jsonb_set(b, '{payload}', v_clear));
