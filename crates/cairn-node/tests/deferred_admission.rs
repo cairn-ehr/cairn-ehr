@@ -1147,3 +1147,139 @@ async fn promotion_refuses_an_event_its_type_floor_rejects() {
         "the flag must name a CLINICAL reason, not a constraint violation; got: {err}"
     );
 }
+
+/// PR #302 review finding F1, the part that BRICKS THE NODE.
+///
+/// Measured before this work began: promotion deleted the marker for an event whose apply fn
+/// then raised, and because `event_log` is append-only nothing could undo it. Three consecutive
+/// `connect_and_load_schema` calls failed with `post-upgrade heal replay: db error` and
+/// `node_schema.version` never advanced past 42. `cairn-node deferred` could not diagnose it —
+/// it calls `connect_and_load_schema` itself.
+///
+/// WHITE-BOX BY NECESSITY, and the necessity is itself the finding: with gate 0 in place there
+/// is no longer any reachable event that passes gates 0-3 and then fails a heal-safe apply fn
+/// (every registered `check_fn` covers its projection's payload-derived NOT NULL columns, and
+/// the three types without a `check_fn` have no such columns). Gate 4 therefore guards the
+/// stricter apply fn written years from now. To pin it at all, the failure must be constructed:
+/// a test-only event type with a deliberately-raising apply fn.
+///
+/// The construction is safe to leak. `cairn_test_wedge_apply` can only ever be invoked for
+/// events of type `readjudicate.wedge.probe`, and only this test creates one — so even if the
+/// cleanup below never runs (a panic), `cairn_reproject` finds zero eligible rows of that type
+/// and the function never executes.
+///
+/// The invariant this pins: A PROMOTED EVENT IS ONE THAT HAS ALREADY PROJECTED CLEANLY.
+#[tokio::test]
+async fn a_promotion_that_cannot_project_never_promotes() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = Uuid::now_v7();
+    const PROBE: &str = "readjudicate.wedge.probe";
+
+    // Idempotent pre-clean, not post-clean: cleanup at the END does not survive a panic, and a
+    // predecessor that died mid-test would otherwise poison this one (the issue #296 lesson,
+    // applied forward). Registration first — the FK-less registry rows must go before the fn.
+    let pre_clean = format!(
+        "DELETE FROM cairn_projection_apply WHERE event_type = '{PROBE}'; \
+         DELETE FROM event_type_class      WHERE event_type = '{PROBE}'; \
+         DROP FUNCTION IF EXISTS cairn_test_wedge_apply(event_log);"
+    );
+    c.batch_execute(&pre_clean).await.unwrap();
+
+    // An apply fn that always refuses. This is the "stricter apply fn written in 2027" that
+    // gate 4 exists for, stood up deliberately because no real one exists yet.
+    c.batch_execute(
+        "CREATE FUNCTION cairn_test_wedge_apply(e event_log) RETURNS void \
+         LANGUAGE plpgsql AS $fn$ BEGIN \
+           RAISE EXCEPTION 'deliberate test failure: this apply fn always refuses'; \
+         END $fn$;",
+    )
+    .await
+    .unwrap();
+
+    // Admit the event while the type is UNCLASSIFIED — the only way to become deferred.
+    let mut b = peer_event(&kid, p, PROBE, WALL_2026);
+    b.schema_version = "readjudicate.wedge.probe/1".into();
+    let probe_id = b.event_id.clone();
+    let signed = sign(&b, &sk).unwrap();
+    c.execute(
+        "SELECT apply_remote_event($1)",
+        &[&signed.signed_bytes.to_vec()],
+    )
+    .await
+    .expect("an unclassifiable type is admitted uninterpreted");
+
+    // The code plane lands: classification FIRST (db/005's registry trigger refuses a
+    // projection for an unclassified type), then the projection registration.
+    c.batch_execute(&format!(
+        "INSERT INTO event_type_class (event_type, mode, targets_other_author) \
+           VALUES ('{PROBE}', 'additive', FALSE) ON CONFLICT DO NOTHING; \
+         INSERT INTO cairn_projection_apply (event_type, apply_fn, projection_tables) \
+           VALUES ('{PROBE}', 'cairn_test_wedge_apply', ARRAY['patient_chart']);"
+    ))
+    .await
+    .unwrap();
+
+    // A code-plane update bumps the generation too, so the loader takes the FULL-heal branch —
+    // the realistic path, and the one that wedged permanently.
+    c.execute("UPDATE node_schema SET version = version - 1", &[])
+        .await
+        .unwrap();
+    drop(c);
+
+    // THE ASSERTION THAT MATTERS: the loader survives, repeatedly.
+    for attempt in 1..=3 {
+        db::connect_and_load_schema(&base)
+            .await
+            .unwrap_or_else(|e| panic!("connect attempt {attempt} must succeed, got: {e}"));
+    }
+
+    let c2 = db::connect_and_load_schema(&base).await.unwrap();
+    let kept: i64 = c2
+        .query_one(
+            "SELECT count(*) FROM event_deferred WHERE event_id = $1::text::uuid",
+            &[&probe_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        kept, 1,
+        "an event that cannot project must KEEP its marker — powerless, retryable, and above \
+         all unable to take the loader down with it"
+    );
+    let err: Option<String> = c2
+        .query_one(
+            "SELECT adjudication_error FROM event_deferred WHERE event_id = $1::text::uuid",
+            &[&probe_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let err = err.expect("the refusal must be recorded, not silent");
+    assert!(
+        err.contains("deliberate test failure"),
+        "the apply fn's own refusal must be what gets flagged; got: {err}"
+    );
+    let embedded = db::embedded_schema_version();
+    let recorded: i32 = c2
+        .query_one("SELECT version FROM node_schema", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        recorded, embedded,
+        "the generation must ADVANCE — a stuck stamp means every future connect retries the \
+         same doomed heal forever, which is precisely how the node bricked"
+    );
+
+    c2.batch_execute(&pre_clean).await.unwrap();
+    c2.batch_execute("TRUNCATE event_log CASCADE")
+        .await
+        .unwrap();
+}

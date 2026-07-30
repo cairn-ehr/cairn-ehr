@@ -60,6 +60,7 @@ DECLARE
     v_target   uuid;
     v_err      text;
     v_clear    jsonb;
+    v_apply_fn text;
     -- type → count of events promoted this run. A jsonb accumulator rather than a temp
     -- table: the deferred set is tiny by construction (empty on a healthy node), and this
     -- keeps the function free of any object a concurrent caller could collide on.
@@ -166,6 +167,38 @@ BEGIN
                         'cross-author suppression refused — a suppress of another human''s event may not be admitted; disagreement is additive. (ADR-0043)';
                 END IF;
             END IF;
+
+            -- Deferred gate 4 — PROVE IT TAKES EFFECT (PR #302 review finding F1).
+            --
+            -- Gates 0-3 answer "should this event have power?". This one answers "CAN it
+            -- take power?", and skipping it bricked the node: the marker delete below
+            -- commits, the event becomes replay-eligible, the loader's heal then raises on
+            -- it, and because event_log is append-only nothing can undo that. Every
+            -- subsequent connect repeated the same failure and the generation stamp never
+            -- advanced. Measured: three consecutive connects failed, node_schema frozen.
+            --
+            -- Running the apply fns HERE, inside the per-row subtransaction, makes the
+            -- marker delete conditional on them succeeding: a raise sets v_err, the
+            -- subtransaction rolls back every projection write it made, and the marker stays.
+            -- The invariant that buys: a PROMOTED EVENT IS ONE THAT HAS ALREADY PROJECTED
+            -- CLEANLY. That holds for a stricter apply fn written years from now, which gate
+            -- 0 alone would not cover.
+            --
+            -- WHY PER-EVENT DISPATCH IS AFFORDABLE HERE and not in cairn_reproject: db/039
+            -- is deliberately set-based (one full-table pass per (type, fn)) because the
+            -- per-event loop it replaced was ~25% of a 2M-event rebuild at the Pi target.
+            -- That argument does not transfer — event_deferred is empty on a healthy node
+            -- and tiny by construction otherwise.
+            --
+            -- heal_safe mirrors heal mode (db/039): a fn that only converges under a
+            -- TRUNCATE cannot prove anything by running over live rows.
+            FOR v_apply_fn IN
+                SELECT apply_fn FROM cairn_projection_apply
+                 WHERE event_type = r.event_type AND heal_safe
+                 ORDER BY run_order, apply_fn
+            LOOP
+                EXECUTE format('SELECT %I($1)', v_apply_fn) USING r.el_row;
+            END LOOP;
         EXCEPTION WHEN OTHERS THEN
             v_err := SQLERRM;
         END;
@@ -188,8 +221,10 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- One row per type that gained at least one promoted event. The loader uses these to
-    -- scope a targeted heal when there was no generation change to trigger a full one.
+    -- One row per type that gained at least one promoted event. Gate 4 above already ran
+    -- each promoted event's heal-safe apply fns inside its own promotion subtransaction, so
+    -- the loader no longer needs this to scope a targeted heal (Task 6, PR #302 finding F1) —
+    -- it now exists so the loader can tell the operator which types just gained power.
     RETURN QUERY
         SELECT k, v::bigint FROM jsonb_each_text(v_promoted) AS t(k, v);
 END;
