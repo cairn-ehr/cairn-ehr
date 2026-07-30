@@ -1497,14 +1497,28 @@ Add to the existing `#[cfg(test)] mod tests` in `crates/cairn-sync/src/main.rs`,
 
         load_schema(&mut c).expect("replay must succeed");
 
-        let kept: i64 = c
-            .query_one("SELECT count(*) FROM event_deferred", &[])
+        // WHAT THIS ASSERTS, and why it is not "the event was promoted": this crate cannot
+        // sign, so the row above carries unparseable `signed_bytes` — and the pass re-derives
+        // every event's envelope from those bytes (`cairn_body`), refusing anything that no
+        // longer parses. So the probe can never be PROMOTED here, by construction.
+        //
+        // It can, however, be ADJUDICATED, and that is exactly what F3 is about: whether this
+        // loader invokes the pass at all. A pass that ran records its refusal in
+        // `adjudication_error`; a loader that never calls it leaves the column NULL forever.
+        // That is the discriminator, and it needs no signing. Promotion itself is already
+        // pinned by cairn-node's suite, which can sign.
+        let err: Option<String> = c
+            .query_one(
+                "SELECT adjudication_error FROM event_deferred WHERE event_type = $1",
+                &[&"sync.defer.probe"],
+            )
             .unwrap()
             .get(0);
-        assert_eq!(
-            kept, 0,
-            "this loader must re-adjudicate: a sync-only node that never promotes accumulates \
-             admitted-but-permanently-powerless events with no mechanism to notice"
+        assert!(
+            err.is_some(),
+            "this loader must re-adjudicate: a sync-only node whose loader never calls the \
+             pass accumulates admitted-but-permanently-powerless events with no mechanism to \
+             notice (PR #302 finding F3)"
         );
 
         c.batch_execute(
