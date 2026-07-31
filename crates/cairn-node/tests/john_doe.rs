@@ -11,6 +11,9 @@ use cairn_node::{db, john_doe};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+mod common;
+use common::trust_of;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -18,6 +21,9 @@ fn cs() -> Option<String> {
 /// Truncate the clinical + identity tables and enroll one agent signer. Returns (sk, kid).
 /// `chart_identity_state` is created by db/024, so it is truncated behind a `to_regclass`
 /// guard — keeping `setup()` correct even on a DB migrated only to an earlier stage.
+///
+/// Kept local rather than delegating to `common::setup`: this suite additionally truncates
+/// `patient_name`, which is not in the shared helper's core list.
 async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
@@ -36,18 +42,6 @@ async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
         &[&kid],
     ).await.unwrap();
     (sk, kid)
-}
-
-/// The effective trust state chart_trust reports for a subject, or None (== confirmed).
-async fn trust_of(c: &Client, subject: Uuid) -> Option<String> {
-    let s_s = subject.to_string();
-    c.query_opt(
-        "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid",
-        &[&s_s],
-    )
-    .await
-    .unwrap()
-    .map(|r| r.get::<_, String>(0))
 }
 
 /// The standing identity state of a chart (db/024 overlay), or None if no row exists.

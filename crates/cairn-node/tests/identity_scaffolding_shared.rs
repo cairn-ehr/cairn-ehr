@@ -1,59 +1,59 @@
 //! #120 — the identity integration tests must share ONE copy of their scaffolding.
 //!
-//! `identity_identify.rs` landed the *third* near-verbatim copy of `db_msg` / `setup` /
-//! `submit_patient_created` / `trust_of` / `person_chart_trust`, copied from
-//! `identity_dispute.rs`, itself copied from `identity_linkage.rs` — and the copies had
-//! already drifted (the third file's `submit_dispute` had silently dropped the
-//! reason/resolution parameter its original carries). Copying is the path of least
-//! resistance, so removing the copies without a guard just resets the clock until copy #4.
+//! `identity_identify.rs` landed the *third* near-verbatim copy of the identity test
+//! scaffolding, copied from `identity_dispute.rs`, itself copied from
+//! `identity_linkage.rs` — and the copies had already drifted (the third file's
+//! `submit_dispute` had silently dropped the reason/resolution parameter its original
+//! carries). Copying is the path of least resistance, so removing the copies without a
+//! guard just resets the clock until copy #4.
 //!
 //! This is a SOURCE-LEVEL guard (no DB needed), the same idiom as
 //! `twin_dispatch_single_source.rs` (#173) and `paper_parity_plan_section.rs` (#217): it
-//! scans `tests/identity_*.rs` and fails if a bound file declares a helper that
-//! `tests/common/mod.rs` already provides. It runs in every `cargo test` / CI pass.
+//! fails if a bound test file declares a helper that `tests/common/mod.rs` already
+//! provides. It runs in every `cargo test` / CI pass.
 //!
-//! FORWARD-ONLY, and deliberately opt-OUT rather than opt-in: every `identity_*.rs` is
-//! bound unless it is named in `EXEMPT`, so a NEW identity test file is caught the moment
-//! it copies scaffolding instead of importing it. The exemptions are the two files whose
-//! `setup()` genuinely differs in shape (see `EXEMPT`), not a general escape hatch.
+//! ## What it guards, and what it deliberately does NOT
+//!
+//! The helper list is DERIVED from `common/mod.rs` rather than restated here, so a helper
+//! added there is guarded automatically — a hand-maintained mirror would reintroduce
+//! exactly the drift this file exists to prevent.
+//!
+//! Subtracted from that derived list is [`REPO_WIDE`]: `cs` / `db_msg` / `setup` are
+//! project-wide test idioms, declared in 62 / 23 / 27 of this directory's files at the
+//! time of writing. They are duplicated far beyond the identity cluster, and binding only
+//! `identity_*.rs` against them would be arbitrary — it would flag an identity suite for
+//! writing the same four lines that fifty other suites write legitimately. Unifying those
+//! is real work with a much wider blast radius, tracked separately. What remains is the
+//! set that genuinely belongs to this cluster: the submit path and the projection readers.
+//!
+//! ## What it binds
+//!
+//! Every `identity_*.rs`, plus the identity-surface files named in [`ALSO_BOUND`]. Binding
+//! by filename prefix ALONE would let copy #4 escape by being called something else —
+//! `john_doe.rs` is precisely such a file (§5.4 is the identity surface; it is simply not
+//! named `identity_*`), so it is bound explicitly.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Helper declarations that now live in `tests/common/mod.rs`. A bound file re-declaring
-/// any of these is starting copy N+1. Matched against the START of each trimmed source
-/// line (a leading `pub ` is stripped first), so a doc comment or a *call* mentioning the
-/// name is not a false positive — only a top-level declaration is.
-const SHARED_HELPERS: [&str; 7] = [
-    "fn cs()",
-    "fn db_msg(",
-    "async fn setup(",
-    "async fn submit_signed(",
-    "async fn submit_patient_created(",
-    "async fn trust_of(",
-    "async fn person_chart_trust(",
-];
+/// Helpers that `common/mod.rs` provides but this guard does NOT bind, because they are
+/// project-wide test idioms rather than identity-cluster copies. See the module header for
+/// the counts. Removing an entry here means committing to unify that helper everywhere.
+const REPO_WIDE: [&str; 3] = ["fn cs(", "fn db_msg(", "async fn setup("];
 
-/// Identity test files NOT bound by this guard, each for a stated structural reason.
-/// Being on this list is not permission to copy — it records that the shared `setup()`
-/// does not fit the file's needs today:
-///
-/// - `identity_repudiate.rs` — its `setup()` returns TWO enrolled signers (a repudiation
-///   needs a second actor), so it cannot call the single-signer shared `setup()`.
-/// - `identity_evidence_text.rs` — its `setup()` neither truncates the identity overlay
-///   tables nor returns the same tuple shape.
-///
-/// Converting either one means deleting its entry here, not widening the list.
-const EXEMPT: [&str; 2] = ["identity_repudiate.rs", "identity_evidence_text.rs"];
-
-/// Files the conversion covered. Pinned by name so a rename or an accidental deletion
-/// makes the guard fail LOUDLY rather than silently scanning an empty set and passing —
-/// the anti-vacuity check `paper_parity_plan_section.rs` calls out.
-const BOUND: [&str; 3] = [
+/// Files the conversion covered: each must import the shared module. Pinned by name so a
+/// rename or accidental deletion fails LOUDLY rather than silently shrinking the scanned
+/// set — the anti-vacuity lesson from `paper_parity_plan_section.rs`.
+const BOUND: [&str; 4] = [
     "identity_dispute.rs",
     "identity_identify.rs",
     "identity_linkage.rs",
+    "john_doe.rs",
 ];
+
+/// Identity-surface test files NOT named `identity_*`, bound explicitly so the guard's
+/// coverage is a deliberate list rather than an accident of naming.
+const ALSO_BOUND: [&str; 1] = ["john_doe.rs"];
 
 /// This crate's `tests/` directory. Same `CARGO_MANIFEST_DIR` idiom as
 /// `twin_dispatch_single_source.rs`'s `db_dir()`.
@@ -64,33 +64,61 @@ fn tests_dir() -> PathBuf {
         .expect("crates/cairn-node/tests/ dir")
 }
 
-/// Every `identity_*.rs` directly in `tests/`, sorted. Directories (`tests/common/`) and
-/// non-Rust files are skipped by the extension check.
-fn identity_test_files(dir: &Path) -> Vec<String> {
+/// The helper signatures `common/mod.rs` publishes, minus [`REPO_WIDE`].
+///
+/// Derived by reading the module: every `pub fn` / `pub async fn` line, with `pub `
+/// stripped and everything from the argument list onward dropped, leaving a needle like
+/// `async fn trust_of(`. `pub struct EventSpec` is not a function and is correctly
+/// ignored. Deriving rather than restating is the point — see the module header.
+fn guarded_helpers(dir: &Path) -> Vec<String> {
+    let src = fs::read_to_string(dir.join("common/mod.rs")).expect("read tests/common/mod.rs");
+    src.lines()
+        .filter_map(|line| {
+            let line = line.trim_start().strip_prefix("pub ")?;
+            if !(line.starts_with("fn ") || line.starts_with("async fn ")) {
+                return None;
+            }
+            // Keep the name and the opening paren: `async fn trust_of(c: &Client…` becomes
+            // `async fn trust_of(`, which is a precise declaration needle.
+            let end = line.find('(')?;
+            Some(line[..=end].to_string())
+        })
+        .filter(|needle| !REPO_WIDE.contains(&needle.as_str()))
+        .collect()
+}
+
+/// Test files this guard binds: every `identity_*.rs` plus [`ALSO_BOUND`], sorted.
+/// Directories (`tests/common/`) and non-Rust files are skipped by the extension check.
+fn bound_files(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .expect("read tests/")
         .map(|e| e.expect("dir entry").path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"))
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .filter(|n| n.starts_with("identity_"))
+        .filter(|n| n.starts_with("identity_") || ALSO_BOUND.contains(&n.as_str()))
         .collect();
     names.sort();
     names
 }
 
-/// The shared helpers a source file declares itself.
+/// Which of `needles` the source declares itself.
 ///
-/// Line-start matching (after trimming indentation and any `pub `) is what keeps this
-/// honest: these helpers are all top-level items at column 0, while doc comments start
-/// `///` and call sites are indented inside a function body, so neither can trip it.
-fn locally_declared(src: &str) -> Vec<&'static str> {
-    SHARED_HELPERS
+/// Line-start matching (after trimming indentation and any visibility prefix) is what
+/// keeps this honest: these helpers are top-level items, while doc comments start `///`
+/// and call sites sit inside a function body after a `let`/`assert!`/etc. Neither can
+/// trip it, and a declaration pasted into an indented `mod` block still does.
+fn locally_declared<'a>(src: &str, needles: &'a [String]) -> Vec<&'a str> {
+    needles
         .iter()
-        .copied()
+        .map(String::as_str)
         .filter(|needle| {
             src.lines().any(|line| {
                 let line = line.trim_start();
-                let line = line.strip_prefix("pub ").unwrap_or(line);
+                // `pub `, `pub(crate) `, `pub(super) ` — any visibility a paste may carry.
+                let line = match line.strip_prefix("pub") {
+                    Some(rest) => rest.trim_start_matches(|c| c != ' ').trim_start(),
+                    None => line,
+                };
                 line.starts_with(needle)
             })
         })
@@ -98,23 +126,30 @@ fn locally_declared(src: &str) -> Vec<&'static str> {
 }
 
 #[test]
-fn identity_tests_do_not_redeclare_shared_scaffolding() {
+fn bound_tests_do_not_redeclare_shared_scaffolding() {
     let dir = tests_dir();
-    let files = identity_test_files(&dir);
+    let needles = guarded_helpers(&dir);
+    let files = bound_files(&dir);
 
-    // Anti-vacuity: the scan must actually see the files the conversion covered.
+    // Anti-vacuity: a guard with no needles, or one that scans none of the files it was
+    // written for, passes while checking nothing.
+    assert!(
+        !needles.is_empty(),
+        "derived no helper needles from tests/common/mod.rs — the derivation or the \
+         module's shape changed (#120)"
+    );
     for expected in BOUND {
         assert!(
             files.iter().any(|f| f == expected),
-            "expected {expected} in tests/ — if it was renamed, update BOUND (a guard that \
-             scans nothing passes vacuously)"
+            "expected {expected} among the bound files — if it was renamed, update BOUND \
+             (a guard that scans nothing passes vacuously)"
         );
     }
 
     let mut offenders: Vec<String> = Vec::new();
-    for name in files.iter().filter(|f| !EXEMPT.contains(&f.as_str())) {
+    for name in &files {
         let src = fs::read_to_string(dir.join(name)).expect("read test source");
-        let dupes = locally_declared(&src);
+        let dupes = locally_declared(&src, &needles);
         if !dupes.is_empty() {
             offenders.push(format!("{name}: {dupes:?}"));
         }
@@ -122,14 +157,14 @@ fn identity_tests_do_not_redeclare_shared_scaffolding() {
 
     assert!(
         offenders.is_empty(),
-        "these identity tests re-declare scaffolding that tests/common/mod.rs already \
-         provides (#120) — import it with `mod common;` instead of copying:\n  {}",
+        "these tests re-declare scaffolding that tests/common/mod.rs already provides \
+         (#120) — import it with `mod common;` instead of copying:\n  {}",
         offenders.join("\n  ")
     );
 }
 
 #[test]
-fn bound_identity_tests_import_the_shared_module() {
+fn bound_tests_import_the_shared_module() {
     let dir = tests_dir();
     for name in BOUND {
         let src = fs::read_to_string(dir.join(name)).expect("read test source");
@@ -141,16 +176,22 @@ fn bound_identity_tests_import_the_shared_module() {
     }
 }
 
+/// The derivation is pinned so a change to `common/mod.rs`'s shape cannot silently empty
+/// it — the failure mode would be a guard that passes because it checks nothing.
 #[test]
-fn exemptions_name_real_files() {
-    let dir = tests_dir();
-    for name in EXEMPT {
-        assert!(
-            dir.join(name).is_file(),
-            "EXEMPT names {name}, which does not exist — a stale exemption is a silent hole \
-             in the guard; delete the entry (#120)"
-        );
-    }
+fn derivation_finds_the_expected_helpers() {
+    let mut got = guarded_helpers(&tests_dir());
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            "async fn person_chart_trust(",
+            "async fn submit_patient_created(",
+            "async fn submit_signed(",
+            "async fn trust_of(",
+        ],
+        "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"
+    );
 }
 
 /// The matcher itself, pinned against synthetic sources so its verdict cannot regress
@@ -158,20 +199,34 @@ fn exemptions_name_real_files() {
 /// `paper_parity_plan_section.rs`).
 #[test]
 fn matcher_distinguishes_declarations_from_mentions() {
-    // A declaration — with and without `pub`, at column 0 and indented.
-    assert_eq!(locally_declared("fn cs() -> Option<String> {"), ["fn cs()"]);
+    let needles = vec!["async fn trust_of(".to_string(), "fn db_msg(".to_string()];
+    let found = |src: &str| locally_declared(src, &needles);
+
+    // Declarations — bare, `pub`, `pub(crate)`, and indented (a paste inside a `mod`).
     assert_eq!(
-        locally_declared("pub async fn trust_of(c: &Client) {"),
+        found("async fn trust_of(c: &Client) {"),
         ["async fn trust_of("]
+    );
+    assert_eq!(
+        found("pub async fn trust_of(c: &Client) {"),
+        ["async fn trust_of("]
+    );
+    assert_eq!(
+        found("pub(crate) async fn trust_of(c: &Client) {"),
+        ["async fn trust_of("]
+    );
+    assert_eq!(
+        found("    fn db_msg(e: &Error) -> String {"),
+        ["fn db_msg("]
     );
 
     // A doc comment naming a helper is NOT a declaration.
-    assert!(locally_declared("/// Mirrors `fn cs()` in common.").is_empty());
+    assert!(found("/// Mirrors `async fn trust_of(` in common.").is_empty());
     // Neither is a call site inside a function body.
-    assert!(locally_declared("    let t = trust_of(&c, p).await;").is_empty());
+    assert!(found("    let t = trust_of(&c, p).await;").is_empty());
     // Nor a similarly-named helper that is not the shared one.
-    assert!(locally_declared("async fn setup_node(c: &Client) {").is_empty());
+    assert!(found("async fn trust_of_person(c: &Client) {").is_empty());
 
     // A file importing the module rather than copying it is clean.
-    assert!(locally_declared("mod common;\nuse common::{cs, setup, trust_of};").is_empty());
+    assert!(found("mod common;\nuse common::{db_msg, trust_of};").is_empty());
 }
