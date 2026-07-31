@@ -10,7 +10,7 @@ duplicate-sweep is the declared backstop for any signal missed at the noise floo
 from collections.abc import Mapping
 from uuid import UUID
 
-from cairn_matcher.orchestrator import field_comparisons
+from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, field_comparisons
 from cairn_matcher.pipeline.alias import known_alias_evidence
 from cairn_matcher.pipeline.banding import (
     DEFAULT_THRESHOLDS,
@@ -35,6 +35,7 @@ def propose(
     *,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
+    config: ComparatorConfig = DEFAULT_CONFIG,
     aliases: Mapping[str, "frozenset[str]"] | None = None,
     trust: Mapping[str, str] | None = None,
 ) -> Band | None:
@@ -43,6 +44,12 @@ def propose(
     Returns the Band (AUTO_CANDIDATE | REVIEW) when a proposal is written, or None when
     the pair is below the review threshold (nothing persisted). The pair is stored in
     canonical (low, high) order so the row is symmetric in a and b.
+
+    `config` is the per-field comparator wiring handed to field_comparisons (the ADR-0014
+    locale-pack seam). thresholds/weights/config together are the pair's effective matcher
+    configuration, and ALL of it flows into build_payload so the persisted matcher_version
+    pins what actually scored and banded this pair (issue #100) — the ADR-0011/0029
+    contamination-recall handle.
 
     `aliases` is an optional preloaded {patient_id_text: known-aliases} lookup a BATCH
     caller (sweep) supplies so this function issues no per-pair alias SELECT — it reads
@@ -60,7 +67,7 @@ def propose(
 
     rec_a = db.load_candidate(conn, a)
     rec_b = db.load_candidate(conn, b)
-    comparisons = field_comparisons(rec_a, rec_b)
+    comparisons = field_comparisons(rec_a, rec_b, config)
     match_score = score(comparisons, weights)
     vetoes = db.match_veto(conn, a, b)
 
@@ -130,7 +137,8 @@ def propose(
         if unconfirmed_ids else ()
     )
     payload = build_payload(
-        match_score, vetoes, band_value, weights, alias_evidence, trust_evidence
+        match_score, vetoes, band_value, weights, alias_evidence, trust_evidence,
+        thresholds=thresholds, config=config,
     )
     db.upsert_proposal(conn, low, high, payload)
     # Commit boundary owned here: a batch caller wrapping propose() is not silently

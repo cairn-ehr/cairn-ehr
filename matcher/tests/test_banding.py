@@ -7,9 +7,13 @@ threshold nothing is proposed (the noise floor; the B3 hub sweep is the declared
 backstop for missed signal).
 """
 
+from dataclasses import replace
+
 import pytest
 
-from cairn_matcher.agreement import AgreementLevel
+from cairn_matcher.agreement import AgreementLevel, Context
+from cairn_matcher.comparators import compare_exact
+from cairn_matcher.orchestrator import DEFAULT_CONFIG
 from cairn_matcher.pipeline.banding import (
     Band,
     ProposalPayload,
@@ -19,7 +23,13 @@ from cairn_matcher.pipeline.banding import (
     build_payload,
     matcher_version,
 )
-from cairn_matcher.scoring import FieldEvidence, MatchScore
+from cairn_matcher.scoring import (
+    DEFAULT_WEIGHTS,
+    FieldEvidence,
+    FieldWeights,
+    MatchScore,
+    Weights,
+)
 
 
 def _score(total: float) -> MatchScore:
@@ -127,6 +137,115 @@ def test_matcher_version_is_deterministic_and_carries_package_version():
     assert v1.startswith(f"{__version__}+")
 
 
+# --- matcher_version pins the FULL effective config (issue #100) -------------------------
+# ADR-0011/0029 make the config-pinned actor identity the contamination-recall handle:
+# "which links did matcher-config vN propose?". A pin that moves only with the weights
+# makes a bad threshold or comparator rollout invisible in the proposal table — the recall
+# has no key to cascade on. So EVERY knob that can change a band decision must move the
+# digest: thresholds, per-field comparator wiring, context params, and weights.
+
+
+def test_matcher_version_changes_when_thresholds_change():
+    custom = Thresholds(review=2.0, auto=8.0)
+    assert matcher_version(thresholds=custom) != matcher_version()
+
+
+def test_matcher_version_changes_when_a_context_param_changes():
+    # Loosening edit_distance_threshold changes agreement levels (EDIT_DISTANCE vs
+    # DISAGREE on near-miss strings) and therefore band decisions — it must move the pin.
+    loosened = tuple(
+        replace(spec, context=Context(edit_distance_threshold=0.80))
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=loosened) != matcher_version()
+
+
+def test_matcher_version_changes_when_a_comparator_is_swapped():
+    # The ADR-0014 locale-pack seam: same field, different comparator FUNCTION. The
+    # wiring is config (the function bodies are pinned by the package version), so a
+    # swap must be visible in the pin.
+    swapped = tuple(
+        replace(spec, comparator=compare_exact) if spec.field == "name" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=swapped) != matcher_version()
+
+
+def test_matcher_version_changes_when_weights_change():
+    # The one axis the pre-#100 digest already covered — kept as an explicit regression.
+    heavier = Weights(per_field={
+        **{f: fw for f, fw in DEFAULT_WEIGHTS.per_field.items() if f != "sex"},
+        "sex": FieldWeights({AgreementLevel.EXACT: 1.5, AgreementLevel.DISAGREE: -2.0}),
+    })
+    assert matcher_version(weights=heavier) != matcher_version()
+
+
+def test_matcher_version_is_insensitive_to_weights_table_insertion_order():
+    # Canonicalization guard: the digest input is sorted, so two EQUAL configs pin
+    # identically however their dicts happened to be assembled.
+    reordered = Weights(per_field=dict(reversed(list(DEFAULT_WEIGHTS.per_field.items()))))
+    assert matcher_version(weights=reordered) == matcher_version()
+
+
+def _absent_names(rec):
+    """A named stand-in extractor: reduces every name comparison to INSUFFICIENT_DATA."""
+    return (None, 0)
+
+
+def test_matcher_version_changes_when_an_extractor_is_swapped():
+    # FieldSpec.get decides WHICH record data reaches the comparator — swapping it changes
+    # band decisions exactly like swapping the comparator (a locale pack feeding, say,
+    # historical names through the same compare_name_set), so it must move the pin too
+    # (#100 review finding 1).
+    swapped = tuple(
+        replace(spec, get=_absent_names) if spec.field == "name" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=swapped) != matcher_version()
+
+
+def test_matcher_version_pins_int_and_float_thresholds_identically():
+    # Numerically equal configs must not split the recall key on Python numeric TYPE:
+    # Thresholds(3, 8) and Thresholds(3.0, 8.0) band every pair identically, so they are
+    # the SAME config and must carry the same pin.
+    assert matcher_version(thresholds=Thresholds(review=3, auto=8)) == matcher_version()
+
+
+def test_config_fingerprint_covers_every_declared_config_field():
+    # The completeness guard that would have caught #100 itself: every declared field of
+    # every config dataclass must appear in the fingerprint. A future field added to
+    # FieldSpec/Context/Thresholds that can move a band decision then fails HERE instead
+    # of silently vanishing from the recall key.
+    import json
+    from dataclasses import fields
+
+    from cairn_matcher.orchestrator import FieldSpec
+    from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, _config_fingerprint
+
+    fp = json.loads(_config_fingerprint(DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, DEFAULT_CONFIG))
+    assert set(fp["thresholds"]) == {f.name for f in fields(Thresholds)}
+    assert len(fp["comparators"]) == len(DEFAULT_CONFIG)
+    for entry in fp["comparators"]:
+        assert set(entry) == {f.name for f in fields(FieldSpec)}
+        assert set(entry["context"]) == {f.name for f in fields(Context)}
+
+
+def test_config_fingerprint_weights_field_sets_are_pinned():
+    # Weights/FieldWeights CANNOT ride the generic dataclasses.fields rendering above:
+    # their Mapping-with-enum-keys shape defeats asdict, so _config_fingerprint's weights
+    # branch hand-walks per_field/weights. A hand-walk silently drops any FUTURE field
+    # added to either dataclass (the #100 failure mode, relocated), so pin both field
+    # sets here — the #211/#79 anti-drift pattern. If this assertion fails, you added a
+    # field to Weights or FieldWeights: extend _config_fingerprint's weights branch to
+    # carry it, THEN update this pin.
+    from dataclasses import fields
+
+    from cairn_matcher.scoring import FieldWeights
+
+    assert {f.name for f in fields(Weights)} == {"per_field"}
+    assert {f.name for f in fields(FieldWeights)} == {"weights"}
+
+
 def test_build_payload_serializes_evidence_and_vetoes():
     score = _score(9.0)
     vetoes = [VetoFinding("dob", "hard_veto", "dob", "verified dob clash")]
@@ -138,6 +257,15 @@ def test_build_payload_serializes_evidence_and_vetoes():
     assert payload.evidence[0]["level"] == "EXACT"
     assert payload.veto_findings[0]["severity"] == "hard_veto"
     assert payload.matcher_version == matcher_version()
+
+
+def test_build_payload_pins_the_callers_thresholds():
+    # The pin must record the config that ACTUALLY banded the pair (issue #100): a caller
+    # running custom thresholds produces a different matcher_version than the defaults.
+    custom = Thresholds(review=1.0, auto=4.0)
+    payload = build_payload(_score(5.0), [], Band.AUTO_CANDIDATE, thresholds=custom)
+    assert payload.matcher_version == matcher_version(thresholds=custom)
+    assert payload.matcher_version != matcher_version()
 
 
 # --- known-alias signal (§5.5(a) returning fabricated persona) --------------------------

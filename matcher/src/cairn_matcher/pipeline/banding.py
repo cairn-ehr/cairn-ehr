@@ -14,12 +14,14 @@ halves every field at unknown provenance, so defaults are chosen with that in mi
 """
 
 import hashlib
+import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
 
 from cairn_matcher import __version__
 from cairn_matcher.agreement import AgreementLevel
+from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, callable_identity
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
 
@@ -178,19 +180,77 @@ def band(
     return Band.REVIEW
 
 
-def matcher_version(weights: Weights = DEFAULT_WEIGHTS) -> str:
-    """A version-pin string for a proposal: package version + a digest of the weights.
+def _fingerprint_value(value):
+    """Render one config value into its canonical fingerprint form.
 
-    ADR-0014 makes the matcher a config-version-pinned actor. This is the lightweight
-    slice of that: a proposal records WHICH matcher config produced it, so a re-run with
-    different weights is distinguishable. Full §7.5 actor registration/signing is B3.
+    Callables become their stable module-qualified name (config wiring, the ADR-0014
+    locale-pack seam — validated nameable at FieldSpec construction); nested config
+    dataclasses (Context, Thresholds) become plain dicts via asdict, so a field added to
+    them later is picked up automatically instead of silently vanishing from the recall
+    key (how #100 happened); ints are normalised to float so numerically equal configs —
+    Thresholds(3, 8) vs Thresholds(3.0, 8.0) — never split the recall key on Python
+    numeric type (bool is excluded: it is an int subclass but not a number here).
     """
-    items = sorted(
-        (field, level.name, w)
-        for field, fw in weights.per_field.items()
-        for level, w in fw.weights.items()
-    )
-    digest = hashlib.sha256(repr(items).encode()).hexdigest()[:12]
+    if callable(value):
+        return callable_identity(value)
+    if is_dataclass(value):
+        return {k: _fingerprint_value(v) for k, v in asdict(value).items()}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _config_fingerprint(
+    weights: Weights, thresholds: Thresholds, config: ComparatorConfig
+) -> str:
+    """Serialize every config knob that can move a band decision, canonically.
+
+    Each FieldSpec is rendered field-by-field via dataclasses.fields — never a hand-kept
+    list, so a future FieldSpec field cannot be silently omitted (the completeness guard
+    in test_banding fails if one is). The ONE exception is the weights branch below:
+    Weights/FieldWeights carry Mappings with enum keys, which asdict cannot traverse, so
+    they are hand-walked — and their field sets are therefore PINNED by a guard test
+    (test_config_fingerprint_weights_field_sets_are_pinned), which fails loudly the day
+    either dataclass grows a field this walk would drop. Comparator entries are sorted by
+    field so two equal configs digest identically however they were assembled
+    (field_comparisons sums per-field evidence, so spec order never changes a score).
+
+    "Canonical" here means JSON with sorted keys and compact separators. Float formatting
+    follows Python's shortest-round-trip repr — deterministic in CPython, but NOT the full
+    RFC 8785 (JCS) number canonicalization; that upgrade is owed when this digest
+    graduates to the ADR-0014 `namespace@content-hash` comparator-profile tag (#100).
+    """
+    fingerprint = {
+        "weights": {
+            field: {level.name: _fingerprint_value(w) for level, w in fw.weights.items()}
+            for field, fw in weights.per_field.items()
+        },
+        "thresholds": _fingerprint_value(thresholds),
+        "comparators": [
+            {f.name: _fingerprint_value(getattr(spec, f.name)) for f in fields(spec)}
+            for spec in sorted(config, key=lambda spec: spec.field)
+        ],
+    }
+    return json.dumps(fingerprint, sort_keys=True, separators=(",", ":"))
+
+
+def matcher_version(
+    weights: Weights = DEFAULT_WEIGHTS,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    config: ComparatorConfig = DEFAULT_CONFIG,
+) -> str:
+    """A version-pin string for a proposal: package version + a digest of the FULL config.
+
+    ADR-0014 makes the matcher a config-version-pinned actor, and ADR-0011/0029 make that
+    pin the contamination-recall handle ("which links did matcher-config vN propose?").
+    The digest therefore covers every knob that can change a band decision — weights,
+    thresholds, comparator wiring, context params. Weights alone (the pre-#100 digest)
+    left a bad threshold rollout indistinguishable in the proposal table, so a recall had
+    no key to cascade on. Full §7.5 actor registration/signing is B3.
+    """
+    digest = hashlib.sha256(
+        _config_fingerprint(weights, thresholds, config).encode()
+    ).hexdigest()[:12]
     return f"{__version__}+{digest}"
 
 
@@ -212,9 +272,15 @@ def build_payload(
     weights: Weights = DEFAULT_WEIGHTS,
     alias_evidence: Sequence[dict] = (),
     trust_evidence: Sequence[dict] = (),
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    config: ComparatorConfig = DEFAULT_CONFIG,
 ) -> ProposalPayload:
     """Shape a self-explaining proposal payload: the band, the score, and WHY (evidence
     breakdown + veto findings), plus the matcher version that produced it.
+
+    `thresholds` and `config` exist ONLY to feed the version pin (issue #100): the pin
+    must record the configuration that actually scored and banded this pair, so a caller
+    running non-default cut-offs or comparator wiring passes them here too.
 
     `alias_evidence` (the §5.5(a) `known_alias` entries, if any) is appended after the
     field breakdown so a reviewer sees that the match involves a repudiated known alias —
@@ -242,5 +308,5 @@ def build_payload(
         band=band_value,
         veto_findings=findings,
         evidence=evidence,
-        matcher_version=matcher_version(weights),
+        matcher_version=matcher_version(weights, thresholds, config),
     )
