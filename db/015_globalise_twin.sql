@@ -30,7 +30,7 @@ $$;
 -- not), so no stored flag is needed. cairn_body is the pgrx COSE/CBOR parser (db/005 dependency).
 CREATE OR REPLACE FUNCTION cairn_twin_is_authored(p_signed bytea)
 RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT t IS NOT NULL AND length(regexp_replace(t, '\s+', '', 'g')) > 0
+    SELECT cairn_twin_is_present(t)
     FROM (SELECT cairn_body(p_signed) ->> 'plaintext_twin' AS t) s;
 $$;
 
@@ -50,7 +50,7 @@ DECLARE
     v_body jsonb := cairn_body(p_signed);
     v_twin text  := v_body ->> 'plaintext_twin';
 BEGIN
-    twin_authored := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
+    twin_authored := cairn_twin_is_present(v_twin);
     verifiable    := v_body IS NOT NULL;
     RETURN NEXT;
 END;

@@ -2,13 +2,18 @@
 
 ## ⇒ NEXT
 
-**ADR-0056's floor is now built.** Slice **58** shipped 2026-07-29 (branch
-`feat/adr-0056-admit-uninterpreted-floor-265-266`, ROADMAP Slice 58): the clinical remote door **admits an
-unclassifiable event type** instead of raising (#265), an explicit `event_deferred` marker records the
+**In flight right now:** PR [#311](https://github.com/cairn-ehr/cairn-ehr/pull/311) (closes
+[#75](https://github.com/cairn-ehr/cairn-ehr/issues/75) — the twin blank-test was collation-dependent, i.e.
+a set-union convergence break, not the cosmetic asymmetry the issue described; gate green 938/0) and the
+**tech-debt loop**, whose launch preconditions were corrected this session (ROADMAP Slice 59). If the loop
+is running, `tail -f ~/.cairn-loop/run.log`; re-running `/techdebt-loop` after any interruption is always
+safe.
+
+**ADR-0056's floor is built.** Slice **58** (2026-07-29 + review round 07-30, PR #302): the clinical remote
+door **admits an unclassifiable event type** instead of raising (#265), `event_deferred` records the
 admitted-uninterpreted state, and `cairn_readjudicate_deferred` (db/043, `SCHEMA_GENERATION` 42→43) re-runs
-the classification-gated floor checks **before** anything reprojects (#266). `sync.md` §6.5's
-lossless-forwarding invariant is now true as written *for clinical events*. The branch also carried a
-security fix the reader-audit surfaced — see the session block below, item 3.
+the classification-gated checks **before** anything reprojects (#266). §6.5's lossless-forwarding invariant
+is now true as written *for clinical events*. Lessons + the security finding: ROADMAP Slice 58.
 
 **The genuinely next candidates** (nothing blocks a choice between them):
 
@@ -44,9 +49,10 @@ passes: in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting sea
 
 ---
 
-**Session date:** 2026-07-29 (Slice 58) · **Spec/ADRs:** v0.61 (through ADR-0059; no ADR change this
-slice — it *implements* ADR-0056) · **Phase:** architecture complete (every original §11 question closed);
-**first production clinical surface under construction** on `cairn-node`.
+**Session date:** 2026-07-31 (Slice 59) · **Spec/ADRs:** v0.61 (through ADR-0059; no ADR change in slices
+58 or 59 — 58 *implements* ADR-0056, 59 is a floor determinism fix + tooling) · **Phase:** architecture
+complete (every original §11 question closed); **first production clinical surface under construction** on
+`cairn-node`.
 
 **Built so far** (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/
@@ -76,69 +82,42 @@ Postgres-on-Android).
 
 ---
 
-**Session (2026-07-29) — the ADR-0056 floor: admit uninterpreted, re-adjudicate before power.** Full
-narrative in **ROADMAP Slice 58**; not restated here. The six things worth carrying forward:
+**Session (2026-07-31) — Slice 59: floor determinism + tech-debt-loop launch readiness.** Full narrative in
+**ROADMAP Slice 59**; not restated here. Four things worth carrying forward:
 
-1. **Refusal hides; admission cannot.** The door stored NOTHING for a type it could not classify, so a
-   carrier node acquired nothing past the first unknown-type event — *absent*, not merely unrendered.
-   That is the §6.1 sneakernet case Cairn exists for. The generalisable form: when a floor must choose
-   between refusing and admitting-without-power, admitting is the recoverable direction.
-2. **Re-adjudicate BEFORE reprojecting, and the order is the whole guarantee.** Admitting uninterpreted
-   *skips* every gate downstream of the classification lookup (attestation, overlay-target-exists,
-   ADR-0043). Reprojection alone would grant power that never passed a gate. `cairn_replay_eligible` —
-   the constantly-TRUE stub ADR-0057 built *for* this — is now the structural enforcement.
-3. **THE FINDING: an unverified value stored "for later" leaks into a live gate.** The deferred arm must
-   store the travelling attestation token (drop it and re-adjudication has nothing to verify — admit-and-
-   defer silently becomes a slower fail-closed). But `cairn_suppression_author_ok` reads the **target's**
-   `attester_key` into the ADR-0043 owner-gate's author set, and unlike the projection apply fns that read
-   the same column it **is** reachable for a deferred row. A forged token on an unknown-type event would
-   have put any key inside that event's permitted-suppressor set. **Two rules:** when you store a value
-   you have not verified, name the state (*carried, not vouched*) and audit **every** reader; and the fix
-   for an unverified input is **neutrality, not strictness** — the gate now computes as if no token
-   travelled, which for an agent-signed target *opens* it.
-4. **A failing test falsified a design claim, mid-implementation.** The design said the
-   classified-before-projected guard makes projection-at-admission "unreachable". It does not, alone: the
-   dispatcher reads `cairn_projection_apply` and never consults `event_type_class`, so unreachability
-   rests on a **second** premise — that classification and projection registration arrive in the same
-   migration and no migration deletes a class row. Recorded at the guard site and in the design doc.
-5. **The ADR's trigger was too narrow, and the code says so.** Decision 4 describes reclassification as
-   the trigger, but re-adjudication can FAIL on something that resolves without any code-plane update
-   (`overlay targets unknown event`, target still in flight). So the pass runs on **every connect**; only
-   the reprojection stays generation-gated. Cheap because `event_deferred` is empty on a healthy node.
-6. **Test pollution is designed against, not cleaned up after.** Tests that classify a type mid-run would
-   poison a shared database; cleanup at test *end* does not survive a panic. De-classify in `setup()`
-   instead — idempotent, and it repairs the DB after a predecessor that died (the #296 lesson applied
-   forward rather than re-learned).
-7. **A review found the slice's own lesson applied one layer too shallow.** Item 3 above says
-   *"when you store a value you have not verified, name the state and audit every reader"* — and
-   the slice then used `event_deferred` as the name, which has the wrong lifetime: promotion
-   deletes it, and gate 1 verifies a token only when the type's mode demands one. An additive
-   event bearing no responsibility promoted with its token unchecked, and the gate re-opened.
-   Separately, the same "re-adjudicate everything that was deferred" claim enumerated three
-   gates when there were four — the per-type structural floor was waived, and the reprojection
-   that followed **bricked the node**: three consecutive connects failed and the generation
-   stamp never advanced. **Two rules:** a marker is only a valid proxy for a fact if it has the
-   fact's lifetime; and a promotion must PROVE the event takes effect, never assume it. See
-   ROADMAP Slice 58's review round. **Verifying the cross-node half needs all three test
-   databases** — export `CAIRN_TEST_PG2`/`PG3` alongside `CAIRN_TEST_PG` (see the "Test env" note
-   above), or `clinical_pull`/`sync_watermark`/`federation`'s multi-node cases self-skip and cargo
-   counts the skip as a pass.
+1. **A "benign asymmetry" was a convergence break.** #75 filed the twin blank-test's Rust/SQL Unicode gap as
+   cosmetic. Measuring it found Postgres's `\s` is `[[:space:]]`, whose membership depends on the
+   **collation's ctype** — so the floor's verdict depended on how the database happened to be created, and
+   since `cairn_event_twin` is also the remote-apply gate that RAISEs for a hard-require type, **the same
+   signed event could apply on one node and raise on another**. Generalisable: an issue's own severity
+   assessment is a hypothesis, not a finding — measure before believing "benign".
+2. **A cross-boundary predicate needs one definition per language, and a test that compares them.** The fix
+   collapses four call sites onto `cairn_twin_is_present`, and `twin_blank_parity.rs` classifies every BMP
+   code point on both sides and asserts the blank sets are equal — drift is now a test failure, not a
+   silent divergence.
+3. **The loop's queue had two bad items at its head, and triage could not have caught either.** The worker
+   takes the lowest-numbered `loop:ready` issue, but §2 triage only re-checks unlabeled + `loop:blocked` —
+   never `loop:ready`. #11's upstream blocker was still live (a major-version crypto bump on the §9 signing
+   surface would have been the first unattended act) and #75 already had a PR. Both relabelled; the skill now
+   mandates a head-of-queue inspection; the mechanism gap is [#312](https://github.com/cairn-ehr/cairn-ehr/issues/312).
+4. **"Nothing can probe this" deserves one attempt at disproof.** The skill asserted repo auto-merge was
+   unprobeable and stale-recorded it as OFF. It is probeable indirectly — enabling auto-merge on a PR fails
+   when the repo setting is off, so a recent `autoMergeRequest` in `gh pr list --json` proves it was on.
 
-**Deliberately NOT done, stated honestly:** the **node/actor plane still fail-closes** on an unmappable
-type (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301), so §6.5's invariant
-is true for clinical events only and that asymmetry is a known gap, not a design. ADR-0056 **decision 5**
-(the residual refusal contract) is untouched: #267/#268/#269/#270 remain open, including the live silent
-failure that **a frozen clinical watermark exits success**. No paper-parity time budget — the slice takes
-the §1.2 forced-rationale escape (no human act changes at any layer). Workspace 927/0 at first landing;
-935/0 after the review round in item 7 (F1/F2/F3 — see ROADMAP Slice 58).
+**Deliberately NOT done, stated honestly:** #75's fix tightens a remote-apply gate, so a pathological
+all-Unicode-whitespace twin that a peer accepted under the old code would now refuse here — acceptable
+pre-clinically (no real data, no legacy fleet), and it is the #267 refusal path, not a new one. The loop's
+`loop:ready` re-check gap is filed (#312), not fixed. No paper-parity time budget — §1.2 forced-rationale
+escape (in-DB floor determinism + tooling; no human act changes at any layer).
 
-**Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, 57 and 58
+**Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, and 57/58/59
 each condensed there, with every still-open issue enumerated in full). The arc: demographics slices
 1–5 + gaps A/B/C and the §5.2 matcher pieces (2026-06-25 → 07-08) · the identity/John-Doe/medication
 build-out and CI catch-up (07-02 → 07-15) · the five-priority review course P1–P5 and the Priority-6
 design queue → ADR-0051 through ADR-0058 (07-16 → 07-24) · the matcher follow-on batches #209/#210,
 #211, #290 (07-23 → 07-25) · ADR-0059 and medication slices 6a/6b (07-25 → 07-28) · the ADR-0056
-admit-uninterpreted floor (07-29).
+admit-uninterpreted floor + its review round (07-29 → 07-30) · floor determinism (#75) and tech-debt-loop
+launch readiness (07-31).
 
 **GUI/L3 design threads (2026-07-16 + 07-18, design-only; full detail in
 [`scratch/ui-sketches/easygp-consult-screen-inventory.md`](../scratch/ui-sketches/easygp-consult-screen-inventory.md)
@@ -215,10 +194,15 @@ current build state, open threads, and time-sensitive items.
   `loop:*` labels and drives `/techdebt-next` one fresh headless session per
   issue until the ready backlog is dry (spec:
   `docs/superpowers/specs/2026-07-29-techdebt-loop-skill-design.md`).
-  Launch precondition: enable the repo setting "Allow auto-merge" (verified
-  OFF 2026-07-30; gh cannot read it — preflight asks for confirmation, the
-  worker's merge step enforces it). First run: `--dry-run`, then
-  `--max-issues 1`, then unbounded.
+  **Auto-merge is ENABLED** (2026-07-31) and is now *probeable* — a recent
+  `autoMergeRequest` in `gh pr list --state merged --json` proves the repo
+  setting was on, since enabling it on a PR fails when it is off. **First
+  real run** (07-31, issue #75) halted at `failed-permission`; PR #310 fixed
+  that durably and PR #311 lands its work. Preflight now inspects the
+  **head of the queue** — the worker takes the lowest-numbered `loop:ready`
+  issue and triage never re-checks `loop:ready` (gap filed as #312), which
+  is how #11 and #75 were both wrongly parked at the front. Ladder:
+  `--dry-run`, then `--max-issues 1` watched, then unbounded.
 
 ---
 
@@ -276,8 +260,10 @@ current build state, open threads, and time-sensitive items.
   projection, and must be surfaced by salience not a modal (paper-parity); **③ impossible-vs-uncertain** constraint
   rule for the in-DB floor (reject only the physically/type-impossible, advisorily flag the merely improbable).
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
-  hygiene. **Re-verified 2026-06-25: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
+  hygiene. **Re-verified 2026-07-31: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
   while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
+  Labeled `loop:blocked` — it is the lowest-numbered issue, so a wrong `loop:ready` there puts a
+  major-version crypto bump on the §9 signing surface at the head of the tech-debt queue.
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 

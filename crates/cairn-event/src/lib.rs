@@ -456,23 +456,36 @@ pub fn plaintext_twin(body: &EventBody) -> String {
     )
 }
 
-/// True iff an Option twin is present and not just whitespace. The single blank-test
-/// shared by `resolve_twin` and `materialise_generic_twin` (DRY).
-fn twin_is_present(twin: &Option<String>) -> bool {
-    matches!(twin.as_deref(), Some(t) if !t.trim().is_empty())
+/// True iff a twin is present and not just whitespace. The single blank-test shared by
+/// `resolve_twin` and `materialise_generic_twin` (DRY).
+///
+/// This is the RUST HALF OF A CROSS-BOUNDARY CONTRACT, which is why it is public: the in-DB
+/// floor answers the same question in SQL (`cairn_twin_is_present`, db/005_submit.sql), and
+/// the two must agree exactly or the same signed event can be judged differently on two
+/// nodes — `cairn_event_twin` is also the remote-apply gate (db/020) and RAISEs for a
+/// hard-require type, so a disagreement is a set-union convergence break (issue #75).
+/// `crates/cairn-node/tests/twin_blank_parity.rs` holds the two sides to that equality
+/// exhaustively; keep any change here in step with the SQL class.
+///
+/// "Whitespace" means Unicode `White_Space=Yes` — `str::trim` uses `char::is_whitespace`,
+/// so U+00A0 NO-BREAK SPACE and friends count as blank, while the zero-width look-alikes
+/// U+200B and U+FEFF do NOT (they are `White_Space=No`, hence present).
+pub fn twin_is_present(twin: Option<&str>) -> bool {
+    matches!(twin, Some(t) if !t.trim().is_empty())
 }
 
 /// Resolve the twin to STORE for an event, following the globalised-twin rule (ADR-0039):
 /// prefer the author-materialised twin (principle 11 — the author renders it faithfully and
 /// signs it in, so a reader generations behind never re-derives from a schema it may not
 /// understand); fall back to the mechanically-derived twin only when the author left it absent
-/// or blank (an older / non-conformant peer). The in-DB floor (db/015 `cairn_event_twin`)
-/// mirrors this exact rule for the validated write door — keep the two in sync.
+/// or blank (an older / non-conformant peer). The in-DB floor (db/005 `cairn_event_twin`)
+/// mirrors this exact rule for the validated write door — keep the two in sync; the blank-test
+/// itself is shared as [`twin_is_present`] / SQL `cairn_twin_is_present`.
 /// Note: the derived (fallback) twin is a non-authoritative LOCAL projection — two nodes may
 /// render a twin-less event's derived twin differently, but the signed body is the convergent
 /// artifact, so this never breaks set-union.
 pub fn resolve_twin(body: &EventBody) -> String {
-    if twin_is_present(&body.plaintext_twin) {
+    if twin_is_present(body.plaintext_twin.as_deref()) {
         // Safe: twin_is_present guarantees Some(non-blank).
         body.plaintext_twin.clone().unwrap()
     } else {
@@ -485,7 +498,7 @@ pub fn resolve_twin(body: &EventBody) -> String {
 /// (e.g. a demographic builder's tailored twin) is left untouched, so this is safe to call on
 /// any body. Must run before `sign`, as the twin becomes part of the signed/content-addressed body.
 pub fn materialise_generic_twin(mut body: EventBody) -> EventBody {
-    if !twin_is_present(&body.plaintext_twin) {
+    if !twin_is_present(body.plaintext_twin.as_deref()) {
         body.plaintext_twin = Some(plaintext_twin(&body));
     }
     body
@@ -1321,6 +1334,72 @@ mod tests {
         // Non-empty authored twin → carried verbatim.
         body.plaintext_twin = Some("Progress note: BP 120/80".into());
         assert_eq!(resolve_twin(&body), "Progress note: BP 120/80");
+    }
+
+    /// The code points with Unicode `White_Space=Yes` — exactly what `char::is_whitespace()`
+    /// (hence `str::trim()`, hence [`twin_is_present`]) matches, and therefore exactly the set
+    /// the in-DB mirror `cairn_twin_is_present` (db/005_submit.sql) must strip. Held as an
+    /// explicit list so that drift in either direction shows up in a diff (issue #75).
+    const UNICODE_WHITESPACE: [char; 25] = [
+        '\u{0009}', '\u{000A}', '\u{000B}', '\u{000C}', '\u{000D}', // ASCII controls
+        '\u{0020}', // SPACE
+        '\u{0085}', // NEXT LINE
+        '\u{00A0}', // NO-BREAK SPACE
+        '\u{1680}', // OGHAM SPACE MARK
+        '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}',
+        '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', // EN QUAD .. HAIR SPACE
+        '\u{2028}', // LINE SEPARATOR
+        '\u{2029}', // PARAGRAPH SEPARATOR
+        '\u{202F}', // NARROW NO-BREAK SPACE
+        '\u{205F}', // MEDIUM MATHEMATICAL SPACE
+        '\u{3000}', // IDEOGRAPHIC SPACE
+    ];
+
+    /// Zero-width look-alikes that are `White_Space=No`. A twin made only of these is
+    /// *present* on BOTH sides of the boundary — pinned explicitly because issue #75's own
+    /// text mis-listed U+FEFF as Rust whitespace (it is not).
+    const NOT_WHITESPACE: [char; 3] = ['\u{200B}', '\u{FEFF}', 'a'];
+
+    /// The Rust half of the cross-boundary blank-test contract (issue #75).
+    ///
+    /// Two properties, both load-bearing for the in-DB mirror:
+    ///   1. `twin_is_present` classifies a twin by Unicode `White_Space`, not by ASCII; and
+    ///   2. [`UNICODE_WHITESPACE`] is the COMPLETE such set, so the code-point class the SQL
+    ///      floor spells out is complete too. Property 2 is checked exhaustively over every
+    ///      Unicode scalar value — a hand-picked list could otherwise silently go stale.
+    #[test]
+    fn twin_blankness_follows_unicode_white_space() {
+        for c in UNICODE_WHITESPACE {
+            let cp = c as u32;
+            assert!(c.is_whitespace(), "U+{cp:04X} must be Unicode whitespace");
+            assert!(
+                !twin_is_present(Some(&c.to_string())),
+                "a twin of only U+{cp:04X} is blank"
+            );
+        }
+        for c in NOT_WHITESPACE {
+            let cp = c as u32;
+            assert!(!c.is_whitespace(), "U+{cp:04X} is not Unicode whitespace");
+            assert!(
+                twin_is_present(Some(&c.to_string())),
+                "a twin of only U+{cp:04X} is present"
+            );
+        }
+
+        // Exhaustive completeness: no scalar value ANYWHERE is whitespace outside the list.
+        for cp in 0..=0x10FFFF {
+            if let Some(c) = char::from_u32(cp) {
+                assert_eq!(
+                    c.is_whitespace(),
+                    UNICODE_WHITESPACE.contains(&c),
+                    "U+{cp:04X}: UNICODE_WHITESPACE is out of step with char::is_whitespace()"
+                );
+            }
+        }
+
+        // Mixed content is present even when padded with exotic whitespace.
+        assert!(twin_is_present(Some("\u{00A0}BP 120/80\u{3000}")));
+        assert!(!twin_is_present(None));
     }
 
     #[test]

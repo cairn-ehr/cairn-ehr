@@ -14,16 +14,46 @@ yourself (triage only, no launch).
 - `git fetch origin main` and confirm `gh auth status` succeeds. If either
   fails, stop and report it — triage and the driver both depend on them.
 - Auto-merge must be allowed repo-side or every worker cycle dies at its
-  merge step. There is NO scripted probe for this setting here: `gh repo
-  view --json` does not expose it (no `autoMergeAllowed` field in any gh
-  release to date) and `gh api` is deny-listed — do not pretend to check
-  it with a command. Instead: if this is the first run, or the user has
-  not previously confirmed it this session, ask the user to confirm
-  "Allow auto-merge" is enabled in the repository settings (it was
-  verified OFF on 2026-07-30) and stop until they do. The enforcing
-  backstop is the worker's merge step, which stops the whole run with the
-  fix in its outcome detail if the setting is off.
+  merge step. `gh repo view --json` does not expose the setting (no
+  `autoMergeAllowed` field in any gh release to date) and `gh api` is
+  deny-listed — but there IS a sound indirect probe, because enabling
+  auto-merge **on a PR** fails outright when the repo setting is off:
+
+  ```bash
+  gh pr list --state merged --limit 10 --json number,autoMergeRequest \
+    --jq '.[] | select(.autoMergeRequest != null)
+              | "PR #\(.number): auto-merge enabled at \(.autoMergeRequest.enabledAt)"'
+  ```
+
+  A recent hit **proves the setting was on at that timestamp** (verified
+  on 2026-07-31: PRs #302/#307/#310, the most recent 2026-07-31T02:08Z).
+  It cannot prove the setting is on *now* — someone may have flipped it
+  since — so treat a recent hit as "satisfied, say so and proceed", and
+  NO hit (or only stale ones) as "ask the user to confirm 'Allow
+  auto-merge' is enabled in the repository settings, and stop until they
+  do". Report which of the two you got rather than asking blind. The
+  enforcing backstop either way is the worker's merge step, which stops
+  the whole run with the fix in its outcome detail if the setting is off.
 - `scripts/techdebt-loop.sh --setup-labels` (idempotent).
+- **Inspect the head of the queue before launching unpinned.** The worker
+  takes the LOWEST-numbered open `loop:ready` issue, and §2 triage never
+  re-checks issues already labeled `loop:ready` — so a stale or mistaken
+  ready label sits at the front of the queue indefinitely:
+
+  ```bash
+  gh issue list --state open --label "loop:ready" --limit 60 \
+    --json number,title --jq 'sort_by(.number) | .[] | "#\(.number)  \(.title[0:78])"'
+  ```
+
+  Read the first few and sanity-check them yourself: is the blocker really
+  cleared, is it really bounded, does it already have an open PR? Relabel
+  anything that fails (`loop:blocked` + a justification comment) before
+  launching. This is not hypothetical — on 2026-07-31 the head of the
+  queue was #11 (dedupe transitive RustCrypto versions), whose upstream
+  blocker was still live, so the first unattended cycle would have
+  attempted a major-version crypto bump on the §9 signing surface; #75 was
+  second and already had PR #311 open. Both were caught here, not by
+  triage.
 - If `~/.cairn-loop/lock/pid` names a live process whose command line
   contains `techdebt-loop` (`ps -p <pid> -o command=`), a loop is already
   running — tell the user and stop. A dead or unrelated PID is a stale

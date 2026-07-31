@@ -269,13 +269,53 @@ $$;
 -- Twin policy (ADR-0039): an authored twin is carried verbatim for EVERY type; if absent,
 -- a type with twin_required_msg RAISES (demographics + identity + medication hard-require
 -- it), and every other type degrades honestly to a mechanical skeleton.
+-- The ONE blank-test for a §3.13 plaintext legibility twin: did the author supply text, or
+-- must the floor derive a twin? Declared here (the twin door) and called by the write gate
+-- below AND by the db/015 read predicates, so the question is spelled exactly once in SQL.
+--
+-- WHY AN EXPLICIT CODE-POINT SET AND NOT `\s` (issue #75). Postgres's `\s` is `[[:space:]]`,
+-- and membership of that class is decided by the COLLATION's ctype: under a libc UTF-8
+-- collation `iswspace(U+00A0)` is true, under `C` / `ucs_basic` it is false. That made the
+-- floor's verdict depend on how the database happened to be created — and since
+-- cairn_event_twin is also the remote-apply gate (db/020) and RAISEs for a hard-require
+-- type, the SAME signed event could apply on one node and raise on another. That is a
+-- set-union convergence break, so the test has to be a property of the bytes alone.
+--
+-- The set below is exactly the 25 code points with Unicode `White_Space=Yes`, which is
+-- precisely what Rust's `char::is_whitespace()` — hence `str::trim()`, hence
+-- `cairn_event::twin_is_present` — matches. Two nodes therefore agree, and so do the Rust
+-- and SQL halves of the floor. Deliberately EXCLUDED, because Unicode and Rust exclude them:
+-- U+200B ZERO WIDTH SPACE and U+FEFF BOM are `White_Space=No`, so a twin of those is
+-- *present* on both sides.
+--
+-- `btrim(t, set)` is the literal mirror of Rust's `t.trim().is_empty()`: strip any leading or
+-- trailing character in the set and ask whether anything survived. It compares characters
+-- directly — no locale, no regex class — which is what makes the answer identical on every
+-- node. The code points are written as `U&'\XXXX'` escapes rather than pasted literally so a
+-- reviewer can SEE them: a pasted NO-BREAK SPACE is indistinguishable from a normal space in
+-- source. (`U&''` requires standard_conforming_strings=on, the default; with it off this
+-- migration fails loudly at load rather than silently mis-parsing.) Verified against every
+-- BMP code point by crates/cairn-node/tests/twin_blank_parity.rs and
+-- db/tests/044_twin_blank_unicode_test.sql.
+CREATE OR REPLACE FUNCTION cairn_twin_is_present(p_twin text)
+RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT p_twin IS NOT NULL
+       AND btrim(p_twin,
+                    -- TAB, LF, VT, FF, CR, SPACE, NEL, NO-BREAK SPACE, OGHAM SPACE MARK
+                    U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680'
+                    -- EN QUAD .. HAIR SPACE
+                 || U&'\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A'
+                    -- LINE SEP, PARAGRAPH SEP, NARROW NBSP, MEDIUM MATH SPACE, IDEOGRAPHIC SPACE
+                 || U&'\2028\2029\202F\205F\3000') <> '';
+$$;
+
 CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
 RETURNS text LANGUAGE plpgsql
 SET search_path = public
 AS $$
 DECLARE
     v_twin     text    := b ->> 'plaintext_twin';
-    v_authored boolean := v_twin IS NOT NULL AND length(regexp_replace(v_twin, '\s+', '', 'g')) > 0;
+    v_authored boolean := cairn_twin_is_present(v_twin);
     v_fn       text;
     v_msg      text;
 BEGIN
