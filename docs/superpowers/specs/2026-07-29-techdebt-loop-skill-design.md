@@ -91,6 +91,16 @@ Deliberately dumb — all intelligence is in the worker.
     problem: CI infra, DB substrate, allowlist rot).
   - `failed-permission` — **abort immediately without penalizing the issue** (its labels
     are untouched); print the denied command so HH extends the allowlist and re-runs.
+  - `merge-pending` — the worker's honest "work done, every check green, auto-merge
+    armed, merge not yet fired when its bounded foreground wait ran out": routed
+    through the same adoption machinery as a crash (LANDED scan, then adopt the CI
+    watch), but **scoped to the issue the outcome file names** — the one arm where the
+    driver knows exactly which issue the cycle owned. Under `--issue N` the operator's
+    scope beats the worker's declaration; an issue-less `merge-pending` **fails
+    closed** (no scope → no scan — a wide scan could adopt foreign wreckage and run
+    destructive cleanup on an issue the worker never owned). Adopted → `merged`; watch
+    expires or the PR closes unmerged → `failed`. Smoke-mode guard applies as for
+    `crashed`.
 - **Missing `outcome.json`** (worker died before writing it): the driver classifies from
   the exit code and transcript:
   - transcript matches a usage-limit pattern (`Claude AI usage limit reached|<epoch>` or
@@ -111,8 +121,9 @@ Deliberately dumb — all intelligence is in the worker.
     (issue #320, observed 2026-08-01: both cycles of a run died this way while the
     work itself merged, and the false `failed`s tripped the systemic halt). The
     driver runs a GitHub post-mortem before deciding: a `loop:in-progress` issue
-    CLOSED by a `loop/<n>-*` PR merged after the iteration started → count
-    `merged` and finish the dead worker's cleanup (stale label, worktree,
+    (closed — or still open, when the merged PR lacked a closing keyword) whose
+    `loop/<n>-*` PR merged after the iteration started → count `merged` and
+    finish the dead worker's cleanup (close-if-unclosed, stale label, worktree,
     branches); an open claimed issue with auto-merge armed on its open PR → adopt
     the dead worker's CI watch (poll up to 30 min) and count by what the PR does;
     anything else → `failed`. Guards: the post-mortem is skipped entirely in smoke
