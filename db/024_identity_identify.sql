@@ -229,12 +229,17 @@ CREATE OR REPLACE VIEW chart_trust AS
         --   under-review (2) <- pending reattribution                 (§5.5 — future)
         --   under-review (2) <- coherence-check demoted link          (§5.2 feedback — future)
     )
-    -- Highest severity wins the single displayed state. Two guards on the way out:
+    -- Highest severity wins the single displayed state. Three guards on the way out,
+    -- each closing a distinct NULL/locale hole a future branch could open:
     --   * COALESCE — a future branch selecting a NULLABLE label column must not let a
     --     NULL win the pick: person_chart_trust COALESCEs a missing state to
     --     'confirmed', so a NULL here would render a genuinely trust-flagged chart as
     --     confirmed — a silent fail-OPEN on a safety signal. Degrade to the most
-    --     cautious label instead (the same job the old CASE's ELSE arm did).
+    --     cautious label instead (the label half of the old ELSE arm's job).
+    --   * NULLS LAST — DESC alone sorts NULLs FIRST, so a future branch selecting a
+    --     NULLABLE severity column would OUT-RANK a genuine severity-2 row and show
+    --     its own label instead (the old MAX(severity) simply ignored NULLs; this
+    --     keeps that behaviour — a NULL severity never beats a real one).
     --   * COLLATE "C" (ADR-0045) — a TEXT tie-break must byte-compare, or two nodes
     --     with different locale collations could display DIFFERENT labels for an
     --     identical event set: a set-union convergence violation.
@@ -250,7 +255,7 @@ CREATE OR REPLACE VIEW chart_trust AS
            patient_id,
            COALESCE(trust_state, 'under-review')::text AS trust_state
     FROM trust_source
-    ORDER BY patient_id, severity DESC, trust_state COLLATE "C";
+    ORDER BY patient_id, severity DESC NULLS LAST, trust_state COLLATE "C";
 
 GRANT SELECT ON chart_trust TO cairn_agent;
 

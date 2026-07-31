@@ -96,8 +96,9 @@ const SCHEMA: &[(&str, &str)] = &[
     // §5.4/§5.7 identity-pending + `identify` + the *unconfirmed* trust state (C4): two
     // additive event types through the reused submit_event door, a chart_identity_state
     // standing overlay keyed by subject, and the reworked chart_trust projection that
-    // composes under-review (dispute) ⊔ unconfirmed (pending) by highest severity —
-    // completing the §5.7 confirmed/unconfirmed/under-review contract C3 opened. Leaves
+    // composes its sources — under-review (dispute, and since #190 the link-veto flag)
+    // ⊔ unconfirmed (pending) — by highest severity, completing the §5.7
+    // confirmed/unconfirmed/under-review contract C3 opened. Leaves
     // db/023 untouched (CREATE-OR-REPLACEs the shared twin hook + chart_trust view).
     (
         "024_identity_identify",
