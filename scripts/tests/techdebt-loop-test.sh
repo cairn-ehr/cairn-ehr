@@ -105,24 +105,19 @@ t_teardown
 # The timing filter is load-bearing: a loop/<n>-* PR merged BEFORE this
 # iteration began (e.g. a stale in-progress label left by an ancient crash)
 # must never be adopted as THIS cycle's success. Start epoch 1000000000 is
-# 2001; the two stub mergedAt values straddle it. The stub is a shell
-# FUNCTION shadowing the gh binary (no PATH games, no subshell needed);
-# unset -f restores the real gh for everything below.
+# 2001; the two mergedAt values straddle it. The function is pure — the
+# caller pre-fetches the merged-PR payload — so no gh stub is needed.
 t_setup
-# shellcheck disable=SC2329 # invoked indirectly, via merged_loop_pr_after
-gh() {
-  printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"%s"}]' "${GH_MERGED_AT:?}"
-}
-GH_MERGED_AT="2999-01-01T00:00:00Z"
-merged_loop_pr_after 424242 1000000000; RC=$?
+LATE_PR='[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]'
+EARLY_PR='[{"headRefName":"loop/424242-fix-slug","mergedAt":"2000-01-01T00:00:00Z"}]'
+merged_loop_pr_after 424242 1000000000 "$LATE_PR"; RC=$?
 t_assert_eq "loop/<n> PR merged after iteration start is found" "0" "$RC"
-merged_loop_pr_after 4242 1000000000; RC=$?
+merged_loop_pr_after 4242 1000000000 "$LATE_PR"; RC=$?
 t_assert_eq "issue number must match exactly (4242 != 424242)" "1" "$RC"
-GH_MERGED_AT="2000-01-01T00:00:00Z"
-merged_loop_pr_after 424242 1000000000; RC=$?
+merged_loop_pr_after 424242 1000000000 "$EARLY_PR"; RC=$?
 t_assert_eq "merge older than iteration start is ignored" "1" "$RC"
-unset GH_MERGED_AT
-unset -f gh
+merged_loop_pr_after 424242 1000000000 ""; RC=$?
+t_assert_eq "empty payload (gh failed) is no evidence, not an error" "1" "$RC"
 t_teardown
 
 # ---- compute_wait_secs ----
@@ -281,8 +276,9 @@ run_with_timeout() {
 
 # make_stub_env SCENARIO_LINES... — builds a PATH shim dir with a fake
 # `claude` that consumes one scenario line per invocation:
-#   merged | skipped | dry | failed | failed-permission | smoke-ok
-#     -> writes that outcome to $TECHDEBT_OUTCOME_FILE
+#   merged | skipped | dry | failed | merge-pending | failed-permission | smoke-ok
+#     -> writes that outcome to $TECHDEBT_OUTCOME_FILE (issue always 11)
+#   merge-pending-noissue -> same, but with "issue": null (protocol violation)
 #   rate-limit:EPOCH -> prints the CLI limit error, writes nothing
 #   crash            -> writes nothing, exits 1
 # Also stubs: `sleep` (records requested seconds instead of sleeping),
@@ -312,6 +308,13 @@ case "$line" in
   crash)
     echo "unexpected death"
     exit 1 ;;
+  merge-pending-noissue)
+    # Schema-compliant but protocol-violating: outcome JSON permits
+    # "issue": null, and the driver must fail CLOSED on it (an unscoped
+    # adoption scan could count another cycle's wreckage as this one's).
+    printf '{"outcome":"merge-pending","issue":null,"pr":9999,"step":"automerge-wait","detail":""}' \
+      > "${TECHDEBT_OUTCOME_FILE:?}"
+    exit 0 ;;
   hang-real)
     # Uses the REAL sleep (absolute path), not the shimmed no-op that's
     # ahead of it on PATH: this token exists so a worker can genuinely
@@ -634,6 +637,39 @@ t_assert_ok "adopted remote branch deleted" \
   grep -q -- "push origin --delete loop/424242-fix-slug" "$GIT_CALLS"
 t_teardown
 
+# (A2) LANDED, but the issue is still OPEN: the merged PR lacked a closing
+# keyword, so the merge landed without closing its issue — and the worker
+# died before its own Step-9 verify-and-close. The PENDING arm cannot catch
+# this (the PR is no longer open), so the LANDED scan must also read the
+# OPEN claimed-issue list; finish_adopted_cycle then closes the issue, as
+# it already does when a watched merge lands. (PR #321 review finding 1.)
+t_setup; make_stub_env crash dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) : ;;
+  *"issue list"*"--state open"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *"issue view 424242"*) echo "OPEN" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "merged-PR-but-open-issue crash exits 0" "0" "$MAIN_RC"
+t_assert_ok "open-issue landed crash counted as merged" \
+  grep -q "merged: 1" "$T_TMP/main-out"
+t_assert_ok "open-issue landed crash adds no failure" \
+  grep -q "failed: 0" "$T_TMP/main-out"
+t_assert_ok "the keyword-less issue is closed by the post-mortem" \
+  grep -q "issue close 424242" "$GH_CALLS"
+t_assert_ok "claim label removed from the adopted issue" \
+  grep -q "issue edit 424242 --remove-label loop:in-progress" "$GH_CALLS"
+t_teardown
+
 # (B) PENDING: the dead worker armed auto-merge and died waiting for CI.
 # The driver adopts the CI watch: polls the PR until it merges, then counts
 # the cycle merged. (pr view answers OPEN twice, then MERGED.)
@@ -796,6 +832,185 @@ run_main
 t_assert_eq "two pending crashes halt the run" "1" "$MAIN_RC"
 t_assert_eq "the second crash never re-armed the watch (still 30 polls)" "30" \
   "$(grep -c '^60$' "$SLEEP_CALLS")"
+t_teardown
+
+# (J) merge-pending: a worker that finished its work, saw all checks green
+# but auto-merge not yet fired, and wrote the honest outcome instead of
+# spinning out its turn (or backgrounding — #320). The driver owns the
+# wait from there: same adoption machinery as a crash, and here the merge
+# has landed by the time the driver looks (LANDED path, issue closed by
+# the PR's closing keyword).
+t_setup; make_stub_env merge-pending dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) echo "11" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/11-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *"issue view 11"*) echo "CLOSED" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "merge-pending cycle exits 0" "0" "$MAIN_RC"
+t_assert_ok "merge-pending worker's landed merge counted" \
+  grep -q "merged: 1" "$T_TMP/main-out"
+t_assert_ok "merge-pending is not a failure" \
+  grep -q "failed: 0" "$T_TMP/main-out"
+t_teardown
+
+# (K) The merge-pending adoption is scoped to the issue the worker DECLARED
+# in its outcome file (the stub claude writes issue 11): another cycle's
+# wreckage — a different closed claimed issue with a fresh merged PR — must
+# never be counted as THIS cycle's merge. (Crashes have no declaration and
+# scan wide; merge-pending is the one arm that knows exactly which issue
+# the worker owned.)
+t_setup; make_stub_env merge-pending dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_ok "declared-issue scope refuses foreign wreckage" \
+  grep -q "merged: 0" "$T_TMP/main-out"
+t_assert_ok "unadoptable merge-pending counts failed" \
+  grep -q "failed: 1" "$T_TMP/main-out"
+t_teardown
+
+# (L) SMOKE guard, merge-pending flavor: a smoke worker opens no PRs by
+# contract, so a smoke-mode merge-pending is a broken environment — the
+# driver must not scan GitHub, where stale wreckage could green a broken
+# plumbing check (same rationale as the smoke-crash guard in (E)).
+t_setup; make_stub_env merge-pending
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "11" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/11-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main --smoke
+t_assert_eq "smoke merge-pending never adopts — exits 1" "1" "$MAIN_RC"
+t_assert_fail "smoke merge-pending runs no adoption" \
+  grep -q "adopted" "$T_TMP/main-out"
+t_teardown
+
+# (F2) Forced-issue precedence, merge-pending flavor: under --issue N the
+# OPERATOR's scope is authoritative — a worker whose outcome declares a
+# DIFFERENT issue (a bug, or it claimed the wrong one) must not widen the
+# adoption to its own declaration: destructive cleanup would land on an
+# issue the operator never asked about, and the single-shot exit code
+# would report the wrong issue's fate.
+t_setup; make_stub_env merge-pending
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "11" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/11-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *"issue view 11"*) echo "CLOSED" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main --issue 320
+t_assert_eq "forced scope beats the worker's declaration — exits 1" "1" "$MAIN_RC"
+t_assert_fail "no adoption of the self-declared issue in forced mode" \
+  grep -q "adopted" "$T_TMP/main-out"
+t_teardown
+
+# (N) A merge-pending outcome whose issue is null fails CLOSED: with no
+# declared issue and no forced issue there is NO legitimate scope, and
+# falling back to a wide crash-style scan would reintroduce exactly the
+# foreign-wreckage adoption (K) forbids — silently. The worker violated
+# the protocol (issue is mandatory for merge-pending); the cycle fails
+# and the claimed issue stays recoverable by the next worker's Step 0.
+t_setup; make_stub_env merge-pending-noissue dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_ok "null-issue merge-pending adopts nothing" \
+  grep -q "merged: 0" "$T_TMP/main-out"
+t_assert_ok "null-issue merge-pending counts failed" \
+  grep -q "failed: 1" "$T_TMP/main-out"
+t_assert_ok "the missing declaration is logged" \
+  grep -q "without an issue number" "$T_TMP/main-out"
+t_teardown
+
+# (M) merge-pending, PENDING flavor — the shape the outcome was invented
+# for: the PR is still open with auto-merge armed when the driver looks,
+# so the driver adopts the CI watch under the worker-declared scope
+# (issue 11) and counts the landing. This is the one path that exercises
+# pending_automerge_pr with a NON-empty scope: (F)/(F2) reject before the
+# PR scan runs, and (B)/(C)/(H) adopt unscoped.
+t_setup; make_stub_env merge-pending dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+GH_PRVIEW_COUNT="$T_TMP/prview-count"; echo 0 > "$GH_PRVIEW_COUNT"; export GH_PRVIEW_COUNT
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) : ;;
+  *"issue list"*"--state open"*) echo "11" ;;
+  *"pr list"*"--state open"*)
+    printf '[{"number":9999,"headRefName":"loop/11-fix-slug","autoMergeRequest":{"enabledAt":"2026-01-01T00:00:00Z"}}]' ;;
+  *"pr view 9999"*)
+    v="$(cat "${GH_PRVIEW_COUNT:?}")"; v=$((v + 1)); echo "$v" > "$GH_PRVIEW_COUNT"
+    if [ "$v" -ge 2 ]; then echo "MERGED"; else echo "OPEN"; fi ;;
+  *"issue view 11"*) echo "CLOSED" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "scoped pending adoption exits 0" "0" "$MAIN_RC"
+t_assert_ok "the adopted watch counted the landing as merged" \
+  grep -q "merged: 1" "$T_TMP/main-out"
+t_assert_ok "the driver polled the declared issue's armed PR" \
+  grep -q "pr view 9999" "$GH_CALLS"
+t_teardown
+
+# (I) One merged-PR fetch per post-mortem, not one per candidate issue:
+# wreckage-heavy runs (exactly what #320 leaves behind) can carry several
+# stale claimed issues across both states, and every extra `gh pr list`
+# call is another chance for a throttled/failed response — silently eaten
+# by 2>/dev/null — to hide a landed merge and feed the failure breaker.
+t_setup; make_stub_env crash dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) printf '424242\n555555\n' ;;
+  *"issue list"*"--state open"*) : ;;
+  *"pr list"*"--state merged"*) printf '[]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "two stale candidates, one merged-PR fetch" "1" \
+  "$(grep -c -- "pr list --state merged" "$GH_CALLS")"
 t_teardown
 
 # ---- label taxonomy: agent-filed provenance + skill/driver drift ----

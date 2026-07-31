@@ -20,8 +20,17 @@ JSON object:
 {"outcome": "<token>", "issue": <n|null>, "pr": <n|null>, "step": "<step>", "detail": "<text>"}
 ```
 
+(`issue` may be null for most tokens; it is MANDATORY for `merge-pending` —
+see that token below.)
+
 Outcome tokens: `merged` (cycle completed), `skipped` (relabeled without
 attempting), `dry` (no eligible issue), `failed` (cycle failed),
+`merge-pending` (Step 8 only: every check green and auto-merge armed, but
+the merge had not fired when the bounded wait ran out — the work is done,
+so NEVER write `failed` for this state; the driver adopts the CI watch
+and counts the cycle by what the PR actually does; `issue` is MANDATORY
+for this token — the driver scopes its adoption to it and fails an
+issue-less merge-pending closed),
 `failed-permission` (an operator-actionable environment gap: a tool call
 denied by permissions OR a missing repo setting such as auto-merge —
 `detail` carries the exact denied command or the setting to fix; the
@@ -37,8 +46,8 @@ yielding "until it concludes" kills you before the outcome write above;
 the driver must then reconstruct your fate from GitHub, and a cycle whose
 merge was minutes from landing gets logged as a crash. So nothing runs in
 the background, ever: every wait is a FOREGROUND blocking call inside the
-turn (re-run a long gate command if it hits the Bash timeout cap; poll CI
-with repeated foreground `gh pr view` calls per Step 8). The only turn you
+turn (re-run a long gate command if it hits the Bash timeout cap; wait on
+CI with the foreground `gh pr checks --watch` call per Step 8). The only turn you
 end is the one that has already written the outcome file. (Standalone
 interactive use is exempt — there the harness does re-invoke you.)
 
@@ -232,16 +241,47 @@ silently.
    resumes exactly here), write outcome `failed-permission` with detail
    `enable "Allow auto-merge" in the repo settings, then re-run`, and end
    your turn. The driver stops the whole run and surfaces the detail.
-4. Poll IN THE FOREGROUND every ~2 minutes (max 40 min per CI run — the
-   budget restarts when you push a fix and re-enable auto-merge): repeated
-   foreground `gh pr view <pr> --json state,statusCheckRollup` calls.
-   Never a background watcher plus end-of-turn "I'll be re-invoked" — a
-   headless session dies at turn end, before Step 9's outcome write (#320).
+4. Wait for the merge IN THE FOREGROUND. The wait mechanism:
+   `gh pr checks <pr> --watch --interval 30` as a single FOREGROUND call
+   with the Bash timeout at its 600000ms cap — one allowlisted `gh`
+   command that blocks while checks are PENDING; when it hits the cap,
+   simply re-run it (same pattern as the long gate command). The CI
+   budget of ~40 min per run ≈ 4 such timed-out re-runs (the budget
+   restarts when you push a fix and re-enable auto-merge). `--watch`
+   returns when checks CONCLUDE — one event BEFORE the merge — so after
+   each return read `gh pr view <pr> --json state,statusCheckRollup`
+   and branch:
    - MERGED → Step 9.
+   - The watch printed `no checks reported` → checks not registered
+     yet, NOT a failure: re-run the watch. But bound it — these returns
+     are instant, so they never consume the timeout budget: ~5 in a row
+     (path-filtered workflows, a renamed required check, an Actions
+     outage) → treat as cycle failure; `merge-pending` would be
+     dishonest here because no check ever went green.
    - Any required check failed → diagnose and fix ONCE (push the fix,
-     `gh pr merge --auto --merge` again, resume polling). A second red
-     round → treat as cycle failure (below).
-   - 40 min without resolution → cycle failure.
+     `gh pr merge --auto --merge` again, restart the watch and its
+     budget). A second red round → treat as cycle failure (below).
+   - All checks green but the PR still OPEN: auto-merge fires moments
+     after the last check — re-read `pr view` a few times; if STILL
+     open after ~5 of those instant returns, do NOT spin and do NOT
+     write `failed` (the work is done and the merge armed): write
+     outcome `merge-pending` (step "automerge-wait", `issue` AND `pr`
+     both filled in — the driver refuses an issue-less merge-pending as
+     failed, because it scopes its adoption to that number) and end
+     your turn — the driver adopts the watch and counts the cycle by
+     what the PR actually does.
+   - ~4 timed-out watch re-runs with checks still pending → cycle
+     failure.
+   Never a background watcher plus end-of-turn "I'll be re-invoked" — a
+   headless session dies at turn end, before Step 9's outcome write
+   (#320). Do NOT improvise waits: standalone `sleep`s of ~30s or more
+   are BLOCKED by the harness ahead of the allowlist (chaining shorter
+   ones is forbidden by the same guard), and `bash -c 'while …'`
+   wrappers and `VAR=… cmd` prefixes are not allowlisted — a denied
+   call stops the whole run. If a blocked call's error text suggests
+   Monitor or `run_in_background`, refuse: in this headless session
+   both are the #320 death — the foreground watch call above is the
+   only wait.
 
 ## Step 9 — cleanup and report
 

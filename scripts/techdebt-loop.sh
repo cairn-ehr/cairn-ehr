@@ -250,15 +250,19 @@ adoption_candidate() {
   return 0
 }
 
-# merged_loop_pr_after N START — did a PR whose head branch is loop/N-*
-# merge at/after epoch START? The trailing dash keeps issue 42 from matching
-# loop/424-…; the time filter keeps an ancient stale claim from being
-# adopted as THIS cycle's success. jq does the ISO-8601 comparison (gh's
-# --jq flag cannot take arguments).
+# merged_loop_pr_after N START PRS_JSON — does PRS_JSON (a pre-fetched
+# `gh pr list --state merged` payload) hold a PR whose head branch is
+# loop/N-* merged at/after epoch START? Pure — the caller fetches the
+# payload ONCE for all its candidates: a per-candidate fetch would give
+# every throttled/failed gh response (silently eaten by 2>/dev/null) its
+# own chance to hide a landed merge. An empty payload is no evidence, not
+# an error. The trailing dash keeps issue 42 from matching loop/424-…; the
+# time filter keeps an ancient stale claim from being adopted as THIS
+# cycle's success. jq does the ISO-8601 comparison (gh's --jq flag cannot
+# take arguments).
 merged_loop_pr_after() {
-  local n="$1" start="$2" count
-  count="$(gh pr list --state merged --limit 50 --json headRefName,mergedAt \
-             2>/dev/null \
+  local n="$1" start="$2" prs="$3" count
+  count="$(printf '%s' "$prs" \
            | jq --arg n "$n" --argjson start "$start" \
                '[.[] | select(.headRefName | startswith("loop/\($n)-"))
                      | select((.mergedAt | fromdateiso8601) >= $start)]
@@ -270,13 +274,20 @@ merged_loop_pr_after() {
 # any: an OPEN loop:in-progress issue with an OPEN loop/<n>-* PR whose
 # auto-merge is enabled, restricted by adoption_candidate (scope +
 # once-only). Prints "<issue> <pr>"; prints nothing when there is none.
+# The open-PR list is fetched ONCE and re-queried per issue with jq — one
+# gh call instead of one per candidate. (A transient gh failure blanks the
+# list for this whole pass; the issue stays claimed and the next crash's
+# post-mortem — or the next worker's Step-0 recovery — retries.)
 pending_automerge_pr() {
-  local scope="${1:-}" n pr
-  for n in $(gh issue list --state open --label "loop:in-progress" \
-               --json number --jq '.[].number' 2>/dev/null); do
+  local scope="${1:-}" issues n pr prs
+  issues="$(gh issue list --state open --label "loop:in-progress" \
+              --json number --jq '.[].number' 2>/dev/null)"
+  [ -n "$issues" ] || return 1
+  prs="$(gh pr list --state open --limit 50 \
+           --json number,headRefName,autoMergeRequest 2>/dev/null)"
+  for n in $issues; do
     adoption_candidate "$n" "$scope" || continue
-    pr="$(gh pr list --state open --limit 50 \
-            --json number,headRefName,autoMergeRequest 2>/dev/null \
+    pr="$(printf '%s' "$prs" \
           | jq -r --arg n "$n" \
               '[.[] | select(.headRefName | startswith("loop/\($n)-"))
                     | select(.autoMergeRequest != null)][0].number // empty' \
@@ -321,9 +332,13 @@ finish_adopted_cycle() {
 # adopt_crashed_merge ITER_START_EPOCH SCOPE — the post-mortem itself.
 # SCOPE is empty on a normal run, the forced issue number under --issue N.
 # Evidence of success, checked in order:
-#   LANDED:  a loop:in-progress issue is CLOSED and its loop/<n>-* PR merged
-#            at/after this iteration began — the worker died after the merge
-#            but before its outcome write.
+#   LANDED:  a loop:in-progress issue's loop/<n>-* PR merged at/after this
+#            iteration began — the worker died after the merge but before
+#            its outcome write. The issue is usually CLOSED (the PR's
+#            closing keyword fired) but can still be OPEN when the keyword
+#            was missing, so BOTH issue states are scanned — the PENDING
+#            arm below cannot catch that case (its PR is no longer open),
+#            and finish_adopted_cycle already closes an open adopted issue.
 #   PENDING: an open loop:in-progress issue has an open loop/<n>-* PR with
 #            auto-merge armed — the worker died waiting for CI. Adopt its
 #            watch: poll until the PR merges, closes, or the budget expires.
@@ -336,17 +351,22 @@ finish_adopted_cycle() {
 # driver's TERM/INT traps for the whole adopted watch (the same deferral
 # interruptible_sleep exists to avoid) and swallow these log lines besides.
 adopt_crashed_merge() {
-  local start="$1" scope="${2:-}" n pending pr waited=0 state
+  local start="$1" scope="${2:-}" issue_state n pending pr waited=0 state merged_prs
   ADOPTED_ISSUE=""
-  for n in $(gh issue list --state closed --label "loop:in-progress" \
-               --json number --jq '.[].number' 2>/dev/null); do
-    adoption_candidate "$n" "$scope" || continue
-    if merged_loop_pr_after "$n" "$start"; then
-      ADOPTED_ISSUE="$n"
-      ADOPT_SEEN="${ADOPT_SEEN:-} $n"
-      finish_adopted_cycle "$n"
-      return 0
-    fi
+  # One merged-PR fetch serves every candidate below — see merged_loop_pr_after.
+  merged_prs="$(gh pr list --state merged --limit 50 \
+                  --json headRefName,mergedAt 2>/dev/null)"
+  for issue_state in closed open; do
+    for n in $(gh issue list --state "$issue_state" --label "loop:in-progress" \
+                 --json number --jq '.[].number' 2>/dev/null); do
+      adoption_candidate "$n" "$scope" || continue
+      if merged_loop_pr_after "$n" "$start" "$merged_prs"; then
+        ADOPTED_ISSUE="$n"
+        ADOPT_SEEN="${ADOPT_SEEN:-} $n"
+        finish_adopted_cycle "$n"
+        return 0
+      fi
+    done
   done
   pending="$(pending_automerge_pr "$scope")" || return 1
   n="${pending%% *}"
@@ -603,6 +623,46 @@ main() {
           fail_cycle
         elif adopt_crashed_merge "$ITER_START" "$FORCE_ISSUE"; then
           log "iteration $ITER: post-mortem adopted issue #$ADOPTED_ISSUE as merged (worker died before its outcome write)"
+          OUTCOME="merged"
+          N_MERGED=$((N_MERGED + 1)); CONSEC_FAIL=0
+        else
+          OUTCOME="failed"   # single-shot exit code below keys off this
+          fail_cycle
+        fi ;;
+      merge-pending)
+        # An HONEST "work done, auto-merge armed, merge not yet fired":
+        # checks were green but the PR still open when the worker's bounded
+        # foreground wait ran out (SKILL.md Step 8.4). The worker must NOT
+        # spin its turn away or write `failed` for work that lands a minute
+        # later — the driver owns the wait, with the same machinery as a
+        # crash: LANDED scan first (the merge may have fired since the
+        # worker's last poll), else adopt the armed watch. Unlike a crash,
+        # the outcome file NAMES the issue the worker owned — scope the
+        # adoption to it, so another cycle's wreckage can never be counted
+        # as this cycle's merge. Smoke workers open no PRs by contract, so
+        # a smoke-mode merge-pending is a broken environment (see crashed).
+        local declared scope
+        # Unconditional assignments, deliberately: bash 3.2 `local` does NOT
+        # reset a variable when the arm re-runs on a later iteration, so a
+        # conditional write here would inherit the previous cycle's scope.
+        declared="$(jq -r '.issue // empty' "$OUTCOME_FILE" 2>/dev/null)"
+        # Operator scope (--issue N) is authoritative over the worker's
+        # self-declaration — a worker that claims the wrong issue must not
+        # widen a forced run's adoption beyond the issue the operator named.
+        scope="${FORCE_ISSUE:-$declared}"
+        if [ "$SMOKE" = "1" ]; then
+          OUTCOME="failed"
+          fail_cycle
+        elif [ -z "$scope" ]; then
+          # merge-pending MUST name its issue (SKILL.md): with no scope at
+          # all, a wide crash-style scan could adopt another cycle's
+          # wreckage — and run destructive cleanup on an issue this worker
+          # never owned. Fail closed; Step-0 recovery still gets the issue.
+          log "merge-pending outcome without an issue number — counting the cycle failed (worker must fill .issue)"
+          OUTCOME="failed"
+          fail_cycle
+        elif adopt_crashed_merge "$ITER_START" "$scope"; then
+          log "iteration $ITER: adopted issue #$ADOPTED_ISSUE's armed merge (worker reported merge-pending)"
           OUTCOME="merged"
           N_MERGED=$((N_MERGED + 1)); CONSEC_FAIL=0
         else
