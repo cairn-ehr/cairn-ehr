@@ -11,7 +11,7 @@ exclude = ["extensions/cairn_pgx", "cairn-gui"]
 edition = "2021"
 # The Rust floor for the workspace. Kept in step with rust-toolchain.toml's pinned
 # channel: the project is developed and CI-validated against 1.96, and the modern
-# dependency graph (ed25519-dalek 2, bao 0.13, the postgres stack) does not build on
+# dependency graph (ed25519-dalek 3, bao 0.13, the postgres stack) does not build on
 # the old, unverified "1.74" this previously claimed — an honest floor, not aspirational
 # (issue #144). Bump alongside rust-toolchain.toml.
 rust-version = "1.96"

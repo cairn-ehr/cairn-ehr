@@ -43,6 +43,20 @@ fn aad_for(event_id: &str) -> Vec<u8> {
     aad
 }
 
+/// Borrow exactly-32 key bytes as the AEAD `Key` type. Zero-copy and infallible
+/// (the fixed-size input makes the length right by construction) — replaces the
+/// `Key::from_slice` idiom that chacha20poly1305 0.11 deprecated in favour of
+/// fallible `TryFrom` on unsized slices.
+fn aead_key(bytes: &[u8; 32]) -> &Key {
+    bytes.into()
+}
+
+/// Borrow exactly-24 nonce bytes as the AEAD `XNonce` type. Zero-copy and
+/// infallible — same rationale as `aead_key`.
+fn aead_nonce(bytes: &[u8; 24]) -> &XNonce {
+    bytes.into()
+}
+
 /// Seal a clear payload + its clear twin under a FRESH per-event DEK.
 /// Returns (container, dek). The caller places the container into
 /// EventBody.payload and seal_stub_twin(..) into EventBody.plaintext_twin,
@@ -70,10 +84,10 @@ pub fn seal_event_payload(
             .map_err(|e| EventError::Seal(format!("inner serialize: {e}")))?,
     );
 
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(dek.as_ref()));
+    let cipher = XChaCha20Poly1305::new(aead_key(&dek));
     let ct = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            aead_nonce(&nonce),
             Payload {
                 msg: inner_bytes.as_slice(),
                 aad: &aad_for(event_id),
@@ -114,17 +128,19 @@ pub fn unseal_event_payload(
     .map_err(|_| EventError::Seal("malformed nonce hex".into()))?;
     let ct = hex::decode(container.get("ct").and_then(|v| v.as_str()).unwrap_or(""))
         .map_err(|_| EventError::Seal("malformed ct hex".into()))?;
-    if nonce.len() != 24 {
-        return Err(EventError::Seal("nonce must be 24 bytes".into()));
-    }
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(dek));
+    // The same refusal the explicit length check used to make, now folded into
+    // the fixed-size conversion the AEAD call needs anyway.
+    let nonce: [u8; 24] = nonce
+        .try_into()
+        .map_err(|_| EventError::Seal("nonce must be 24 bytes".into()))?;
+    let cipher = XChaCha20Poly1305::new(aead_key(dek));
     // Hardening minor 1: the decrypted plaintext is transient secret material
     // (it holds the clinical payload AND the twin) — Zeroizing wipes it on drop
     // instead of leaving it in freed heap memory for a later read to find.
     let inner_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
         cipher
             .decrypt(
-                XNonce::from_slice(&nonce),
+                aead_nonce(&nonce),
                 Payload {
                     msg: ct.as_slice(),
                     aad: &aad_for(event_id),
@@ -233,10 +249,10 @@ pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>,
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, recipient_pub);
     let mut nonce = [0u8; 24];
     getrandom::fill(&mut nonce).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(kek.as_ref()));
+    let cipher = XChaCha20Poly1305::new(aead_key(&kek));
     let ct = cipher
         .encrypt(
-            XNonce::from_slice(&nonce),
+            aead_nonce(&nonce),
             Payload {
                 msg: dek.as_slice(),
                 aad: WRAP_AAD_CONTEXT,
@@ -262,7 +278,7 @@ pub fn unwrap_dek(
         return Err(EventError::Seal("malformed wrapped DEK length".into()));
     }
     let eph_pub: [u8; 32] = wrapped[..32].try_into().expect("sliced 32 bytes");
-    let nonce = &wrapped[32..56];
+    let nonce: [u8; 24] = wrapped[32..56].try_into().expect("sliced 24 bytes");
     let ct = &wrapped[56..];
 
     let me = StaticSecret::from(*unwrap_secret);
@@ -279,7 +295,7 @@ pub fn unwrap_dek(
     }
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, &my_pub);
 
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(kek.as_ref()));
+    let cipher = XChaCha20Poly1305::new(aead_key(&kek));
     // Hardening (mirrors `unseal_event_payload`'s convention): the decrypted
     // DEK bytes are transient secret material before they're copied into the
     // fixed-size Zeroizing output below — wrap the AEAD output itself so it is
@@ -287,7 +303,7 @@ pub fn unwrap_dek(
     let pt: Zeroizing<Vec<u8>> = Zeroizing::new(
         cipher
             .decrypt(
-                XNonce::from_slice(nonce),
+                aead_nonce(&nonce),
                 Payload {
                     msg: ct,
                     aad: WRAP_AAD_CONTEXT,
@@ -456,10 +472,10 @@ mod tests {
         let nonce = nonce_fixture();
         let inner_missing_twin = json!({"payload": {}});
         let inner_bytes = serde_json::to_vec(&inner_missing_twin).unwrap();
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&dek));
+        let cipher = XChaCha20Poly1305::new(aead_key(&dek));
         let ct = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                aead_nonce(&nonce),
                 Payload {
                     msg: inner_bytes.as_slice(),
                     aad: &aad_for("evt-crafted"),

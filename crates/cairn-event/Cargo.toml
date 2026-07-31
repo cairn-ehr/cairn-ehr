@@ -16,21 +16,21 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ciborium = "0.2"           # CBOR encode/decode of the canonical body
 coset = "0.3"              # COSE_Sign1 (RFC 9052) signature envelope
-ed25519-dalek = "2"        # Ed25519 (RFC 8032)
-sha2 = "0.10"              # event content address (sha2-256, multihash 0x12)
+ed25519-dalek = "3"        # Ed25519 (RFC 8032)
+sha2 = "0.11"              # event content address (sha2-256, multihash 0x12)
 blake3 = "1"               # blob content address (multihash 0x1e)
 bao = "0.13"               # BLAKE3 verified streaming: per-slice content verification (§4.4)
 uuid = { version = "1", features = ["v7"] }
-getrandom = "0.4"          # key generation entropy (0.4 matches uuid/rand; dedupes once #11's RustCrypto stack lands)
+getrandom = "0.4"          # key generation entropy (0.4 matches uuid/rand)
 hex = "0.4"
 serde_bytes = "0.11"       # CBOR byte-string encoding for reserved inline blob bytes
 thiserror = "1"
 # ADR-0052 born-sealed bodies: AEAD seal + DEK wrap plane. Licenses checked
 # (house rule 1): chacha20poly1305 MIT/Apache-2.0, x25519-dalek BSD-3-Clause,
 # hkdf MIT/Apache-2.0, zeroize MIT/Apache-2.0 — all AGPL-3.0-compatible.
-chacha20poly1305 = "0.10"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-hkdf = "0.12"
+chacha20poly1305 = "0.11"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+hkdf = "0.13"
 zeroize = "1"
 
 [dev-dependencies]

@@ -10,7 +10,7 @@
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::Aead;
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
 // `Zeroizing<T>` wipes its wrapped bytes on drop (issue #54). We use it for every
 // transient secret in this module — the KEKs, the DEK, and the recovered seed — so
@@ -213,15 +213,17 @@ pub(crate) fn aead_encrypt(
     nonce: &[u8; 24],
     pt: &[u8],
 ) -> Result<Vec<u8>, SealError> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    // `.into()` borrows the fixed-size arrays as the AEAD `Key`/`XNonce` types
+    // (zero-copy; chacha20poly1305 0.11 deprecated the `from_slice` idiom).
+    let cipher = XChaCha20Poly1305::new(key.into());
     cipher
-        .encrypt(XNonce::from_slice(nonce), pt)
+        .encrypt(nonce.into(), pt)
         .map_err(|_| SealError::Aead)
 }
 
 pub(crate) fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    cipher.decrypt(XNonce::from_slice(nonce), ct).ok()
+    let cipher = XChaCha20Poly1305::new(key.into());
+    cipher.decrypt(nonce.into(), ct).ok()
 }
 
 /// Copy a 32-byte key out of a slice into a `Zeroizing` buffer **without** ever
