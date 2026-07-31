@@ -195,11 +195,14 @@ REVOKE EXECUTE ON FUNCTION chart_identity_state_apply(event_log) FROM PUBLIC;
 --    challenged" (the data PRESENT may not belong here at all). The sharper, more actively-
 --    dangerous caution wins the display.
 --
---    Built so LATER slices ADD a branch, never rewrite: a future *under-review* source
---    (pending reattribution §5.5, a coherence-check demoted link §5.2) emits severity 2 and
---    needs NO CASE change; a source introducing a NEW label adds both its `SELECT ... n`
---    branch AND its `WHEN n` arm (the one invariant a future editor must hold — every
---    emitted severity must have a matching WHEN, or trust_state would be NULL).
+--    Built so LATER slices ADD a branch, never rewrite: a future source appends ONE
+--    self-contained `SELECT <subject>, <severity>, '<label>'` branch. The severity→label
+--    mapping lives ONLY at that point of emission — there is no separate CASE arm to
+--    keep in sync, so the #119 trap (a new label silently absorbed into a fail-safe
+--    ELSE because its WHEN arm was forgotten) is structurally gone. The one invariant
+--    left for a future editor is far weaker: branches SHARING a severity must carry
+--    the same label (today severity 2 is always 'under-review'); see the tie-break
+--    note on the ORDER BY below for why breaking even that cannot under-warn.
 --
 --    The column contract is UNCHANGED (patient_id uuid, trust_state text), so this
 --    CREATE OR REPLACE is reload-idempotent across connect_and_load_schema and db/023's
@@ -207,37 +210,33 @@ REVOKE EXECUTE ON FUNCTION chart_identity_state_apply(event_log) FROM PUBLIC;
 --    (confirmed) state appears in NEITHER source ⇒ has no row here ⇒ the read coalesces to
 --    'confirmed', keeping the VIEW tiny.
 CREATE OR REPLACE VIEW chart_trust AS
-    WITH trust_source(patient_id, severity) AS (
+    WITH trust_source(patient_id, severity, trust_state) AS (
         -- under-review (2): any standing OPEN dispute                 (C3, §5.5(b))
-        SELECT subject, 2 FROM chart_dispute        WHERE state = 'open'
+        SELECT subject, 2, 'under-review' FROM chart_dispute        WHERE state = 'open'
         UNION ALL
-        -- unconfirmed  (1): a standing identity-pending chart         (C4, §5.4)  <-- THIS slice
-        SELECT subject, 1 FROM chart_identity_state WHERE state = 'pending'
+        -- unconfirmed  (1): a standing identity-pending chart         (C4, §5.4)
+        SELECT subject, 1, 'unconfirmed'  FROM chart_identity_state WHERE state = 'pending'
         UNION ALL
         -- under-review (2): an un-attested link admitted on sync that trips the local
         -- db/016 hard veto (#190) — the merge converges, but BOTH charts read
         -- under-review until a human resolves the pair (unlink / attested re-link)
-        SELECT low,  2 FROM link_veto_flag
+        SELECT low,  2, 'under-review' FROM link_veto_flag
         UNION ALL
-        SELECT high, 2 FROM link_veto_flag
-        -- future sources ADD a branch here (both a SELECT and, for a new label, a WHEN):
+        SELECT high, 2, 'under-review' FROM link_veto_flag
+        -- future sources ADD one self-contained branch here (severity + label together):
         --   under-review (2) <- pending reattribution                 (§5.5 — future)
         --   under-review (2) <- coherence-check demoted link          (§5.2 feedback — future)
     )
-    SELECT patient_id,
-           (CASE max(severity) WHEN 2 THEN 'under-review'
-                               WHEN 1 THEN 'unconfirmed'
-                               -- FAIL-SAFE, not dead code: today severity is only ever 1 or 2,
-                               -- so this ELSE is unreachable. But if a future editor adds a
-                               -- `SELECT ... n` source branch and forgets its matching `WHEN n`,
-                               -- an un-elsed CASE would yield NULL — and person_chart_trust's
-                               -- COALESCE(trust_state,'confirmed') would then render a genuinely
-                               -- trust-flagged chart as *confirmed*: a silent fail-OPEN on a
-                               -- safety signal. Degrade to the most cautious state instead, so a
-                               -- missing WHEN can only ever OVER-warn, never under-warn.
-                               ELSE 'under-review' END)::text AS trust_state
+    -- Highest severity wins the single displayed state. The trust_state tie-break is
+    -- for determinism only: branches sharing a severity share its label by design, so
+    -- it never chooses between MEANINGS — and if a future editor breaks that design
+    -- invariant, the pick stays deterministic and severity-correct (it can only ever
+    -- pick among labels of the SAME rank, never under-warn on a safety signal).
+    SELECT DISTINCT ON (patient_id)
+           patient_id,
+           trust_state::text AS trust_state
     FROM trust_source
-    GROUP BY patient_id;
+    ORDER BY patient_id, severity DESC, trust_state;
 
 GRANT SELECT ON chart_trust TO cairn_agent;
 
