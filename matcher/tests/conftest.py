@@ -17,7 +17,28 @@ from pathlib import Path
 
 import pytest
 
-CAIRN_TEST_PG = os.environ.get("CAIRN_TEST_PG")
+
+def cairn_test_dsn() -> str | None:
+    """The DB-gated suite's connection string, read from the environment ON EVERY CALL.
+
+    Deliberately a function, not a module-level constant (issue #79). A constant is
+    evaluated once, when pytest first imports this conftest, so it can only ever see an
+    IN-PROCESS change to the environment — a `monkeypatch.setenv`, a plugin mutating
+    os.environ in a hook — as the value it captured at import.
+
+    Note what this is NOT: the way CAIRN_TEST_PG actually reaches this suite is the `env:`
+    block on CI's "pytest (matcher DB-gated integration suite)" step (.github/workflows/
+    rust.yml), which populates os.environ *before* the interpreter starts — a module-level
+    read sees that perfectly well. The original issue text described a "CI matrix that sets
+    the env var after Python start" missing the value; that cannot happen, since no external
+    process can inject env into a running one. So this change fixes testability, not a latent
+    CI bug — worth stating plainly rather than leaving a comment that teaches a wrong model
+    of how env vars reach a process.
+
+    Returns None (not "") when unset, because callers gate on truthiness to decide whether
+    to skip.
+    """
+    return os.environ.get("CAIRN_TEST_PG")
 
 
 def _seed_content_address(*parts: str) -> bytes:
@@ -121,9 +142,10 @@ def managed_pg_conn(dsn):
 @pytest.fixture
 def pg_conn():
     """A connection with schema applied and projection tables truncated; skip if no DB."""
-    if not CAIRN_TEST_PG:
+    dsn = cairn_test_dsn()
+    if not dsn:
         pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
-    with managed_pg_conn(CAIRN_TEST_PG) as conn:
+    with managed_pg_conn(dsn) as conn:
         yield conn
 
 

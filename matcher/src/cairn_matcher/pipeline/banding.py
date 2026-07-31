@@ -24,7 +24,20 @@ from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
 
 class Band(Enum):
-    """The advisory disposition of a scored pair. Persisted as the string value."""
+    """The advisory disposition of a scored pair. Persisted as the string value.
+
+    MIRRORED IN THE DATABASE: `db/017_match_proposal.sql` carries
+    `match_proposal_band_check CHECK (band IN ('auto_candidate','review'))` as defence in
+    depth against a writer that is not this pipeline (#79).
+
+    ADDING A MEMBER HERE REQUIRES THREE EDITS IN db/017, all in step: the inline CHECK on
+    the CREATE TABLE, the expression in the guarded ALTER below it, AND the `want` literal
+    that guard compares against. Miss the `want` literal and the guard either never fires
+    (the new band stays unstorable on every existing database) or fires on every connect.
+    `matcher/tests/test_match_proposal_band_check.py` drives the database with every member
+    of this enum, so a missed migration is a loud test failure rather than a production
+    INSERT error; `db/tests/017_match_proposal_test.sql` covers the two guard failure modes.
+    """
 
     AUTO_CANDIDATE = "auto_candidate"
     REVIEW = "review"

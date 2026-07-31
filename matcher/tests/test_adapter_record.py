@@ -36,6 +36,24 @@ def test_build_names_empty_is_none():
     assert build_names([]) is None
 
 
+def test_build_names_raises_loudly_on_a_none_name_value():
+    """#79 — a NULL name value is a structural bug and must FAIL, never degrade to absence.
+
+    `patient_name.value` is NOT NULL, so `None` cannot arrive from a healthy projection: if
+    it ever does, the row shape has broken (a changed query, a bad join, a hand-seeded test
+    row) and the honest response is to stop. Quietly treating it as "no name" would instead
+    feed INSUFFICIENT_DATA into the score — a matcher silently comparing on fewer fields
+    than it thinks, which is the acknowledged-uncertainty principle inverted: a precise
+    untruth ("these charts don't agree on name") standing in for a broken input.
+
+    Distinct from `build_names([])`, immediately above: an empty ROW LIST is genuine
+    absence and correctly yields None. This pins the difference so a future refactor
+    cannot collapse the two.
+    """
+    with pytest.raises(MatcherTypeError, match="NoneType"):
+        build_names([{"value": None, "provenance_rank": 10}])
+
+
 def test_build_identifiers_groups_by_system_and_skips_unknown():
     rows = [
         {"system": "mrn:hospital-a", "match_key": "12345"},
