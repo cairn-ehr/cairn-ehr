@@ -292,6 +292,15 @@ setup_labels() {
     --description "techdebt-loop: first cycle failed; one retry allowed"
   gh label create "loop:failed"      --force --color "B60205" \
     --description "techdebt-loop: parked after second failure; human triage"
+  # Provenance, not classification — it coexists with any of the labels above.
+  # The author gate in both skills admits issues authored by the operator, but
+  # a worker session runs under the operator's OWN gh credentials, so issues a
+  # worker files pass that gate too. Without this label an agent could file an
+  # issue, a later agent could work it as authoritative and merge it, with
+  # green CI as the only gate. Cleared by a deliberate operator act (removing
+  # the label), which GitHub records in the issue's timeline.
+  gh label create "loop:agent-filed" --force --color "C5DEF5" \
+    --description "techdebt-loop: filed by a worker, not the operator; needs sign-off"
 }
 
 # ---- argument parsing ----
