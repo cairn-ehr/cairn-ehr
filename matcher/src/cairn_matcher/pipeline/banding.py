@@ -16,12 +16,12 @@ halves every field at unknown provenance, so defaults are chosen with that in mi
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
 
 from cairn_matcher import __version__
 from cairn_matcher.agreement import AgreementLevel
-from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
+from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, callable_identity
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
 
@@ -180,17 +180,36 @@ def band(
     return Band.REVIEW
 
 
+def _fingerprint_value(value):
+    """Render one config value into its canonical fingerprint form.
+
+    Callables become their stable module-qualified name (config wiring, the ADR-0014
+    locale-pack seam — validated nameable at FieldSpec construction); nested config
+    dataclasses (Context, Thresholds) become plain dicts via asdict, so a field added to
+    them later is picked up automatically instead of silently vanishing from the recall
+    key (how #100 happened); ints are normalised to float so numerically equal configs —
+    Thresholds(3, 8) vs Thresholds(3.0, 8.0) — never split the recall key on Python
+    numeric type (bool is excluded: it is an int subclass but not a number here).
+    """
+    if callable(value):
+        return callable_identity(value)
+    if is_dataclass(value):
+        return {k: _fingerprint_value(v) for k, v in asdict(value).items()}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
 def _config_fingerprint(
     weights: Weights, thresholds: Thresholds, config: ComparatorConfig
 ) -> str:
     """Serialize every config knob that can move a band decision, canonically.
 
-    Comparator identity is the function's module-qualified NAME: the ADR-0014 locale-pack
-    seam swaps comparator functions at config time, so the wiring is configuration, while
-    the function bodies themselves are code, pinned by the package-version component of
-    matcher_version. Comparator entries are sorted by field so two equal configs digest
-    identically however they were assembled (field_comparisons sums per-field evidence,
-    so spec order never changes a score).
+    Each FieldSpec is rendered field-by-field via dataclasses.fields — never a hand-kept
+    list, so a future FieldSpec field cannot be silently omitted (the completeness guard
+    in test_banding fails if one is). Comparator entries are sorted by field so two equal
+    configs digest identically however they were assembled (field_comparisons sums
+    per-field evidence, so spec order never changes a score).
 
     "Canonical" here means JSON with sorted keys and compact separators. Float formatting
     follows Python's shortest-round-trip repr — deterministic in CPython, but NOT the full
@@ -199,16 +218,12 @@ def _config_fingerprint(
     """
     fingerprint = {
         "weights": {
-            field: {level.name: w for level, w in fw.weights.items()}
+            field: {level.name: _fingerprint_value(w) for level, w in fw.weights.items()}
             for field, fw in weights.per_field.items()
         },
-        "thresholds": asdict(thresholds),
+        "thresholds": _fingerprint_value(thresholds),
         "comparators": [
-            {
-                "field": spec.field,
-                "comparator": f"{spec.comparator.__module__}.{spec.comparator.__qualname__}",
-                "context": asdict(spec.context),
-            }
+            {f.name: _fingerprint_value(getattr(spec, f.name)) for f in fields(spec)}
             for spec in sorted(config, key=lambda spec: spec.field)
         ],
     }

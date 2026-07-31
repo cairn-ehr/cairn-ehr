@@ -187,6 +187,49 @@ def test_matcher_version_is_insensitive_to_weights_table_insertion_order():
     assert matcher_version(weights=reordered) == matcher_version()
 
 
+def _absent_names(rec):
+    """A named stand-in extractor: reduces every name comparison to INSUFFICIENT_DATA."""
+    return (None, 0)
+
+
+def test_matcher_version_changes_when_an_extractor_is_swapped():
+    # FieldSpec.get decides WHICH record data reaches the comparator — swapping it changes
+    # band decisions exactly like swapping the comparator (a locale pack feeding, say,
+    # historical names through the same compare_name_set), so it must move the pin too
+    # (#100 review finding 1).
+    swapped = tuple(
+        replace(spec, get=_absent_names) if spec.field == "name" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=swapped) != matcher_version()
+
+
+def test_matcher_version_pins_int_and_float_thresholds_identically():
+    # Numerically equal configs must not split the recall key on Python numeric TYPE:
+    # Thresholds(3, 8) and Thresholds(3.0, 8.0) band every pair identically, so they are
+    # the SAME config and must carry the same pin.
+    assert matcher_version(thresholds=Thresholds(review=3, auto=8)) == matcher_version()
+
+
+def test_config_fingerprint_covers_every_declared_config_field():
+    # The completeness guard that would have caught #100 itself: every declared field of
+    # every config dataclass must appear in the fingerprint. A future field added to
+    # FieldSpec/Context/Thresholds that can move a band decision then fails HERE instead
+    # of silently vanishing from the recall key.
+    import json
+    from dataclasses import fields
+
+    from cairn_matcher.orchestrator import FieldSpec
+    from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, _config_fingerprint
+
+    fp = json.loads(_config_fingerprint(DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, DEFAULT_CONFIG))
+    assert set(fp["thresholds"]) == {f.name for f in fields(Thresholds)}
+    assert len(fp["comparators"]) == len(DEFAULT_CONFIG)
+    for entry in fp["comparators"]:
+        assert set(entry) == {f.name for f in fields(FieldSpec)}
+        assert set(entry["context"]) == {f.name for f in fields(Context)}
+
+
 def test_build_payload_serializes_evidence_and_vetoes():
     score = _score(9.0)
     vetoes = [VetoFinding("dob", "hard_veto", "dob", "verified dob clash")]

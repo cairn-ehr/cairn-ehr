@@ -20,10 +20,40 @@ from cairn_matcher.comparators import (
 from cairn_matcher.records import CandidateRecord, FieldComparison, SexValue
 
 
+def callable_identity(fn: Callable) -> str:
+    """The module-qualified name of a CONFIGURED callable — its version-pin identity.
+
+    matcher_version (pipeline/banding.py) fingerprints a FieldSpec's comparator and
+    extractor by this name: the wiring is configuration (the ADR-0014 locale-pack seam),
+    while the function bodies are code, pinned by the package-version component. That only
+    works for callables whose name IS stable — a lambda ("<lambda>", shared by every
+    module-level lambda), a closure ("...<locals>...", shared by every closure from the
+    same factory), or a functools.partial (no __qualname__ at all) would either crash the
+    pin or let two DIFFERENT configs pin identically, silently merging the
+    ADR-0011/0029 contamination-recall key. Refuse those here, loudly; a parameterised
+    comparator belongs behind a named wrapper function (or, later, the ADR-0014
+    `namespace@content-hash` comparator-profile tag) so its parameters are visible config.
+    """
+    module = getattr(fn, "__module__", None)
+    qualname = getattr(fn, "__qualname__", None)
+    if not module or not qualname or "<lambda>" in qualname or "<locals>" in qualname:
+        raise ValueError(
+            f"FieldSpec callables need a stable module-qualified name for the "
+            f"matcher_version fingerprint; got {fn!r}. Use a module-level named "
+            f"function instead of a lambda/closure/partial."
+        )
+    return f"{module}.{qualname}"
+
+
 def _field_value(rec: CandidateRecord, attr: str) -> tuple[Any, int]:
     """Pull (value, provenance_rank) for a single-valued field; (None, 0) if absent."""
     fv = getattr(rec, attr)
     return (None, 0) if fv is None else (fv.value, fv.provenance_rank)
+
+
+def _dob(rec: CandidateRecord) -> tuple[Any, int]:
+    """Named (fingerprint-stable) extractor for the dob field — see callable_identity."""
+    return _field_value(rec, "dob")
 
 
 def _names(rec: CandidateRecord) -> tuple[Any, int]:
@@ -59,12 +89,29 @@ def _sex_composite(rec: CandidateRecord) -> tuple[Any, int]:
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """One field's comparison recipe: which comparator, and how to extract its inputs."""
+    """One field's comparison recipe: which comparator, and how to extract its inputs.
+
+    Every field here is part of the matcher_version fingerprint (issue #100): the spec IS
+    configuration, and configuration is the ADR-0011/0029 recall key. Adding a field?
+    banding._config_fingerprint picks it up automatically (it iterates dataclasses.fields),
+    and test_banding's completeness guard fails if it somehow doesn't.
+    """
 
     field: str
     comparator: Comparator
     get: Callable[[CandidateRecord], tuple[Any, int]]
     context: Context = dataclass_field(default_factory=Context)
+
+    def __post_init__(self) -> None:
+        """Refuse callables the version fingerprint cannot stably name (issue #100).
+
+        Validated at CONSTRUCTION — where the config author is looking — rather than
+        failing per-pair inside a sweep's build_payload (where sweep()'s per-pair
+        exception handling would reduce it to N errors and zero proposals). Same
+        construct-time-invariant pattern as Thresholds' review<=auto check (#211).
+        """
+        callable_identity(self.comparator)
+        callable_identity(self.get)
 
 
 ComparatorConfig = tuple[FieldSpec, ...]
@@ -72,7 +119,7 @@ ComparatorConfig = tuple[FieldSpec, ...]
 
 # The shipped culture-neutral configuration. A locale pack (B3) ships its own.
 DEFAULT_CONFIG: ComparatorConfig = (
-    FieldSpec("dob", compare_dob, lambda r: _field_value(r, "dob")),
+    FieldSpec("dob", compare_dob, _dob),
     FieldSpec("sex", compare_sex, _sex_composite),
     FieldSpec("name", compare_name_set, _names),
     FieldSpec("identifier", compare_identifier_sets, _identifiers),

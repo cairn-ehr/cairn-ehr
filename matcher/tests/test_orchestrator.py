@@ -1,5 +1,10 @@
+import functools
+
+import pytest
+
 from cairn_matcher.agreement import AgreementLevel
-from cairn_matcher.orchestrator import field_comparisons
+from cairn_matcher.comparators import compare_dob
+from cairn_matcher.orchestrator import FieldSpec, field_comparisons
 from cairn_matcher.records import CandidateRecord, DateValue, FieldValue, Name
 
 
@@ -67,3 +72,43 @@ def test_sex_absent_both_facets_is_insufficient_data():
         if c.field == "sex"
     )
     assert comp.level == AgreementLevel.INSUFFICIENT_DATA
+
+
+# --- FieldSpec refuses unnameable callables (issue #100 review) ---------------------------
+# matcher_version fingerprints a FieldSpec's comparator AND extractor by module-qualified
+# name — the ADR-0011/0029 recall key. A lambda, closure, or functools.partial has no
+# stable name (every module-level lambda is "<lambda>"; closures from one factory share a
+# qualname; partial has none at all), so two DIFFERENT configs could pin identically — a
+# silent false merge of the recall key — or crash at payload-build time deep inside a
+# sweep. The spec therefore refuses them at CONSTRUCTION, where the config author sees it
+# (the Thresholds #211 pattern).
+
+
+def _named_extractor(rec):
+    return (None, 0)
+
+
+def test_field_spec_refuses_a_lambda_extractor():
+    with pytest.raises(ValueError, match="stable"):
+        FieldSpec("dob", compare_dob, lambda r: (None, 0))
+
+
+def test_field_spec_refuses_a_partial_comparator():
+    with pytest.raises(ValueError, match="stable"):
+        FieldSpec("dob", functools.partial(compare_dob), _named_extractor)
+
+
+def test_field_spec_refuses_a_closure_comparator():
+    def _make():
+        def _cmp(a, b, ctx):
+            return AgreementLevel.EXACT
+        return _cmp
+
+    with pytest.raises(ValueError, match="stable"):
+        FieldSpec("dob", _make(), _named_extractor)
+
+
+def test_field_spec_accepts_module_level_named_functions():
+    # The shipped configuration style: plain module-level functions carry stable names.
+    spec = FieldSpec("dob", compare_dob, _named_extractor)
+    assert spec.field == "dob"
