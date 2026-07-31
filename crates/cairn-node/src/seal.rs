@@ -208,13 +208,14 @@ fn derive_kek(
     Ok(kek)
 }
 
+// In both helpers below, `.into()` borrows the fixed-size key/nonce arrays as the
+// AEAD `Key`/`XNonce` types (zero-copy; chacha20poly1305 0.11 deprecated the
+// `from_slice` idiom they previously used).
 pub(crate) fn aead_encrypt(
     key: &[u8; 32],
     nonce: &[u8; 24],
     pt: &[u8],
 ) -> Result<Vec<u8>, SealError> {
-    // `.into()` borrows the fixed-size arrays as the AEAD `Key`/`XNonce` types
-    // (zero-copy; chacha20poly1305 0.11 deprecated the `from_slice` idiom).
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher
         .encrypt(nonce.into(), pt)

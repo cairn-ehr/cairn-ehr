@@ -28,7 +28,10 @@ thiserror = "1"
 # ADR-0052 born-sealed bodies: AEAD seal + DEK wrap plane. Licenses checked
 # (house rule 1): chacha20poly1305 MIT/Apache-2.0, x25519-dalek BSD-3-Clause,
 # hkdf MIT/Apache-2.0, zeroize MIT/Apache-2.0 — all AGPL-3.0-compatible.
-chacha20poly1305 = "0.11"
+# zeroize is NOT a default feature in 0.11 (it was mandatory in 0.10): without it
+# the cipher's Drop no longer wipes its internal key copy — re-enable it explicitly
+# so DEK/KEK copies inside XChaCha20Poly1305 are still zeroed on drop (PR #319 review).
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 hkdf = "0.13"
 zeroize = "1"

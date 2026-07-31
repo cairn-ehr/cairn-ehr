@@ -261,10 +261,12 @@ current build state, open threads, and time-sensitive items.
   rule for the in-DB floor (reject only the physically/type-impossible, advisorily flag the merely improbable).
 - **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) —
   **RESOLVED 2026-08-01**: the unifying releases went stable, so the recipe applied as recorded
-  (ed25519-dalek 3 + x25519-dalek 3 together, chacha20poly1305 0.11, sha2 0.11, hkdf 0.13; zero-copy
-  `from_slice` → reference-conversion fixes). sha2/chacha20/hmac dedupe fully; the residue
-  (`digest 0.10` + `cpufeatures 0.2` under `argon2 0.5`, upstream-blocked; `getrandom 0.2` under
-  `ring`) is tracked in [#317](https://github.com/cairn-ehr/cairn-ehr/issues/317).
+  (ed25519-dalek 3 + x25519-dalek 3 together, chacha20poly1305 0.11 with the no-longer-default
+  `zeroize` feature re-enabled, sha2 0.11, hkdf 0.13; zero-copy `from_slice` → reference-conversion
+  fixes). sha2/chacha20/hmac dedupe fully; the residue `cargo deny check bans` still reports
+  (block-buffer, cpufeatures, crypto-common, digest, rand_core — all held by the `argon2 0.5`
+  stack, upstream-blocked on a stable argon2 0.6) is tracked in
+  [#317](https://github.com/cairn-ehr/cairn-ehr/issues/317).
   (The 2026-07-31 "still blocked" re-verification read our own `Cargo.lock` pins, which can never
   reflect new upstream majors — caret dry-run against the registry is the honest probe.)
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced

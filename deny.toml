@@ -55,11 +55,14 @@ unmaintained = "workspace"
 
 [bans]
 # Duplicate transitive versions are HYGIENE, not a safety failure — and the ones that remain
-# after #11's convergence are upstream-blocked (#317: argon2 0.5 holds digest 0.10 +
-# cpufeatures 0.2 until a stable argon2 0.6; ring holds getrandom 0.2; the rand 0.9/0.10 skew
-# is dev-only proptest). Warn (visible in CI logs) rather than fail, so the gate is honest about
-# what is and isn't in our control. Flip to "deny" only when `cargo deny check bans` reports no
-# duplicates at all — not on any single issue closing.
+# after #11's convergence are upstream-blocked. This gate currently reports five duplicates
+# (block-buffer, cpufeatures, crypto-common, digest, rand_core), every one held by the
+# argon2 0.5 stack (blake2 0.10 → digest 0.10; password-hash 0.5 → rand_core 0.6 — a
+# PRODUCTION chain, cairn-node's key-sealing KDF) until a stable argon2 0.6 lands (#317);
+# the rand_core split alone also has a dev-only leg (proptest's 0.9 vs rand's 0.10) that
+# outlives the argon2 bump. Warn (visible in CI logs) rather than fail, so the gate is honest
+# about what is and isn't in our control. Flip to "deny" only when `cargo deny check bans`
+# reports no duplicates at all — not on any single issue closing.
 multiple-versions = "warn"
 wildcards = "deny"               # a `version = "*"` dependency is never acceptable
 allow-wildcard-paths = true      # …but path deps within the workspace may omit a version

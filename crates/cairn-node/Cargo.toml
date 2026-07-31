@@ -27,7 +27,10 @@ base64 = "0.22"
 # getrandom are dual MIT/Apache-2.0; ciborium and rpassword are Apache-2.0-only.
 # All AGPL-3.0-compatible. Pure-Rust, reviewer-legible (§9).
 argon2 = "0.5"             # Argon2id KDF: passphrase/recovery-code -> key-encryption-key
-chacha20poly1305 = "0.11"  # XChaCha20-Poly1305 AEAD (192-bit nonce: random nonce, no reuse worry)
+# XChaCha20-Poly1305 AEAD (192-bit nonce: random nonce, no reuse worry). zeroize is
+# NOT a default feature in 0.11 (was mandatory in 0.10) — re-enabled so the cipher's
+# internal key copy is still wiped on drop (PR #319 review).
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 ciborium = "0.2"           # CBOR (de)serialization of the sealed-key bundle (same as cairn-event)
 getrandom = "0.4"          # salts/nonces/DEK entropy (matches cairn-event; no OsRng)
 rpassword = "7"            # no-echo operational-passphrase prompt
