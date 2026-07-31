@@ -75,6 +75,6 @@ def test_db_check_rejects_a_band_outside_the_enum(pg_conn):
     low, high = _pair(0)
     with pytest.raises(psycopg.errors.CheckViolation):
         _insert(pg_conn, low, high, "not_a_real_band")
-    # The failed statement aborted the transaction; roll back so the fixture's exit
-    # truncation runs on a usable connection.
-    pg_conn.rollback()
+    # No rollback needed: the failed statement leaves the transaction aborted, and
+    # `_truncate_projections` rolls back before it truncates precisely so teardown survives
+    # a test that ended that way (see its docstring in conftest).

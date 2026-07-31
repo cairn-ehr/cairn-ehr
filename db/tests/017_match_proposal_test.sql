@@ -34,6 +34,9 @@ END $$;
 -- constraint, the CREATE TABLE IF NOT EXISTS is a no-op, and the ALTER is the only thing
 -- that can install it. Simulate exactly that: drop the constraint so the table looks like an
 -- old database's, replay the schema file, and assert the constraint returns.
+--
+-- Both suites always build fresh databases, so WITHOUT this simulation nothing anywhere
+-- exercises the ALTER, and the file could ship constraining new databases only.
 DO $$
 BEGIN
     ALTER TABLE match_proposal DROP CONSTRAINT match_proposal_band_check;
@@ -48,6 +51,64 @@ BEGIN
                         'the paired ALTER is missing or mis-guarded (#207)';
     END IF;
     RAISE NOTICE 'PASS: guarded ALTER re-installs the CHECK on a pre-existing table';
+END $$;
+
+-- A STALE constraint must converge too, not just an absent one. This is the failure mode a
+-- name-keyed guard (`IF NOT EXISTS … conname = …`) cannot see: the constraint exists, so the
+-- guard skips, and a widened value set never reaches any database that already had the old
+-- one. Simulate an older node whose constraint predates a band: install a deliberately
+-- NARROW constraint under the same name, replay, and assert the full current set is storable
+-- again. Uses the enum's own second value, so it keeps working if the set later widens.
+DO $$
+BEGIN
+    ALTER TABLE match_proposal DROP CONSTRAINT match_proposal_band_check;
+    ALTER TABLE match_proposal
+        ADD CONSTRAINT match_proposal_band_check CHECK (band IN ('review')) NOT VALID;
+END $$;
+\i db/017_match_proposal.sql
+DO $$
+DECLARE
+    low  uuid := '00000000-0000-4000-8000-00000000000a';
+    high uuid := '00000000-0000-4000-8000-00000000000b';
+BEGIN
+    -- 'auto_candidate' is exactly what the stale narrow constraint forbade.
+    INSERT INTO match_proposal
+        (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version)
+    VALUES (low, high, 9.0, 'auto_candidate', '[]'::jsonb, '[]'::jsonb, 'sqltest');
+    RAISE NOTICE 'PASS: a STALE (narrower) constraint converges on replay';
+EXCEPTION WHEN check_violation THEN
+    RAISE EXCEPTION 'FAIL: replay left a stale narrow CHECK in place — the guard is keyed '
+                    'on the constraint NAME rather than its definition, so a widened band '
+                    'set can never reach an existing database (#79)';
+END $$;
+
+-- ...and the guard must be WRITE-FREE in the steady state. It runs on every connect, and a
+-- DROP+ADD takes an ACCESS EXCLUSIVE lock, so a guard that misfires every time would stall
+-- concurrent readers on a live node. A re-add creates a NEW pg_constraint row, so a stable
+-- oid across a replay proves the guard correctly recognised an up-to-date constraint. This
+-- is also what catches a future Postgres whose deparsed CHECK text stops matching the
+-- `want` literal in db/017.
+DO $$
+DECLARE before_oid oid;
+BEGIN
+    SELECT oid INTO before_oid FROM pg_constraint
+      WHERE conname = 'match_proposal_band_check'
+        AND conrelid = 'match_proposal'::regclass;
+    PERFORM set_config('cairn.test_band_check_oid', before_oid::text, false);
+END $$;
+\i db/017_match_proposal.sql
+DO $$
+DECLARE after_oid oid;
+BEGIN
+    SELECT oid INTO after_oid FROM pg_constraint
+      WHERE conname = 'match_proposal_band_check'
+        AND conrelid = 'match_proposal'::regclass;
+    IF after_oid::text IS DISTINCT FROM current_setting('cairn.test_band_check_oid') THEN
+        RAISE EXCEPTION 'FAIL: replay re-created the CHECK although it was already current '
+                        '— the guard is not write-free in the steady state, so every '
+                        'connect would take an ACCESS EXCLUSIVE lock (#79)';
+    END IF;
+    RAISE NOTICE 'PASS: guard is write-free when the constraint is already current';
 END $$;
 
 -- Both enum values must be accepted. If a future slice narrows the CHECK (or misspells a

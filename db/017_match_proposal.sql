@@ -10,8 +10,14 @@
 -- corruption. The safety-critical floor is db/016 (cairn_match_veto), which the matcher
 -- CALLS before writing; this table only records the advisory verdict.
 --
--- Additive: no event-format change, no submit_event change. Reads nothing; only the
--- Python pipeline writes here (as a role granted cairn_agent).
+-- Additive: no event-format change, no submit_event change. Reads nothing.
+--
+-- WRITERS (all as a role granted cairn_agent). The Python matcher INSERTs the proposal and
+-- retracts it (pipeline/db.py upsert_proposal / retract_pending_proposal); the Rust apply
+-- seams then move `status` — apply_proposal.rs (C2, human-driven) and auto_apply.rs (C2b,
+-- ×2). Five sites, two languages. This list used to read "only the Python pipeline writes
+-- here", which was already false when the C2/C2b seams landed and is corrected here (#79);
+-- keep it current, because two comments below reason about who writes.
 
 CREATE TABLE IF NOT EXISTS match_proposal (
     -- The pair is stored in canonical (least, greatest) order so it is a natural unique
@@ -42,15 +48,16 @@ CREATE TABLE IF NOT EXISTS match_proposal (
     -- 'pending'). No CHECK — deliberately open (advisory table).
     status             TEXT    NOT NULL DEFAULT 'pending',  -- disposition (see band note above)
     created_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    -- NO UPDATE TRIGGER, DELIBERATELY (#79). `runner.upsert_proposal` sets updated_at =
-    -- clock_timestamp() explicitly in its ON CONFLICT DO UPDATE arm, and it is the only
-    -- writer. A BEFORE UPDATE trigger would be more robust against a future writer that
-    -- forgets — but this is the advisory tier, where a stale updated_at costs a worklist
-    -- a wrong sort order, never record integrity, and the project keeps in-DB machinery
-    -- for the safety-critical floor (ADR-0001's "fat Postgres" is about the floor, not
-    -- about advisory bookkeeping). Recorded here so a future reader does not add one as a
-    -- "bug fix": if a SECOND writer to this table ever appears, revisit the trade — that
-    -- is the condition that flips it, not the mere absence of the trigger.
+    -- NO UPDATE TRIGGER, DELIBERATELY (#79). EVERY writer listed in the header sets
+    -- updated_at = clock_timestamp() explicitly today: db.py's upsert_proposal (in its
+    -- ON CONFLICT DO UPDATE arm) and retract_pending_proposal, plus apply_proposal.rs and
+    -- auto_apply.rs (×2). A BEFORE UPDATE trigger would be more robust against a future
+    -- writer that forgets — but this is the advisory tier, where a stale updated_at costs a
+    -- worklist a wrong sort order, never record integrity, and the project keeps in-DB
+    -- machinery for the safety-critical floor (ADR-0001's "fat Postgres" is about the
+    -- floor, not about advisory bookkeeping). Recorded here so a future reader does not add
+    -- one as a "bug fix". The condition that flips the trade is a writer that FORGETS the
+    -- column — not merely an additional writer, of which there are already five.
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (patient_low, patient_high),
     CHECK (patient_low < patient_high)
@@ -59,21 +66,47 @@ CREATE TABLE IF NOT EXISTS match_proposal (
 -- #207 paired-ALTER discipline. The CREATE TABLE above is IF NOT EXISTS, so on a database
 -- that already has match_proposal it is a no-op and the inline CONSTRAINT never lands —
 -- the table would stay unconstrained forever while the file *looks* like it constrains it.
--- Every schema file is replayed on each connect, so the ALTER must be idempotent: guard on
--- pg_constraint rather than catching the duplicate_object error, matching db/041.
+-- Every schema file is replayed on each connect, so this block must be idempotent.
 --
--- Safe to add to a populated table: the only writer is the matcher pipeline, which sources
--- the value from the Band enum, so no pre-existing row can violate it. If one somehow does,
--- the ALTER fails LOUDLY on the next connect — the correct outcome for a row nothing can
--- interpret, and far better than discovering it in a worklist.
+-- GUARDED ON THE DEFINITION, NOT THE NAME. The obvious `IF NOT EXISTS (… conname = …)`
+-- form (as db/041 uses) is subtly wrong for a set that can WIDEN: once the constraint
+-- exists, a later edit to the value list is silently skipped on every database that already
+-- has it, so a new band would be storable only on freshly-created databases. Both test
+-- suites build their databases fresh, so neither could ever catch that — it would surface
+-- only on long-lived rigs and real nodes. Comparing the deparsed definition instead makes a
+-- STALE constraint converge like an absent one. Steady state stays free: one catalog read,
+-- no lock, no table scan. db/tests/017 pins both halves (convergence AND the write-free
+-- steady state, via constraint oid stability).
+--
+-- ADDED `NOT VALID`, DELIBERATELY. A plain ADD validates every existing row, so ONE
+-- uninterpretable band on this ADVISORY table would abort the schema load — and
+-- connect_and_load_schema treats that as fatal, so the node would not start. Bricking a
+-- node over an advisory worklist row inverts availability-over-consistency. NOT VALID
+-- enforces the CHECK on every future INSERT/UPDATE (which is the entire point — it guards
+-- against a writer that is not the matcher) while leaving any pre-existing junk row alone
+-- to be found by a query rather than by an outage. It also skips the validation scan.
 DO $$
+DECLARE
+    -- What Postgres deparses `CHECK (band IN ('auto_candidate','review'))` back to. If a
+    -- future PG version changes that rendering, the oid-stability test in db/tests/017
+    -- fails loudly rather than letting this block re-add the constraint on every connect.
+    want CONSTANT text :=
+        'CHECK ((band = ANY (ARRAY[''auto_candidate''::text, ''review''::text])))';
+    have text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                    WHERE conname = 'match_proposal_band_check'
-                      AND conrelid = 'match_proposal'::regclass) THEN
+    -- Strip the NOT VALID suffix before comparing: the constraint this block adds carries
+    -- it while the one the CREATE TABLE above adds does not, and both are up to date.
+    SELECT regexp_replace(pg_get_constraintdef(oid), '\s+NOT VALID$', '') INTO have
+      FROM pg_constraint
+     WHERE conname = 'match_proposal_band_check'
+       AND conrelid = 'match_proposal'::regclass;
+
+    -- NULL (absent) or a different expression (stale) both converge to the current set.
+    IF have IS DISTINCT FROM want THEN
+        ALTER TABLE match_proposal DROP CONSTRAINT IF EXISTS match_proposal_band_check;
         ALTER TABLE match_proposal
             ADD CONSTRAINT match_proposal_band_check
-            CHECK (band IN ('auto_candidate','review'));
+            CHECK (band IN ('auto_candidate','review')) NOT VALID;
     END IF;
 END $$;
 

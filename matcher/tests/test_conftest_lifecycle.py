@@ -103,14 +103,13 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
 def test_dsn_is_read_per_call_not_at_import(monkeypatch):
     """#79 — the DSN must be read from the environment on every call, not once at import.
 
-    The old shape was a module-level `CAIRN_TEST_PG = os.environ.get(...)`, evaluated when
-    pytest first imported conftest. Anything that sets the variable AFTER Python starts —
-    a CI matrix step, a wrapper script that exports it between collection and run, a test
-    that sets it deliberately — was invisible, and every DB-gated test silently SKIPPED.
-    A skipped test looks green, so the failure mode was a whole suite quietly not running.
+    The old shape was a module-level `CAIRN_TEST_PG = os.environ.get(...)`, evaluated once
+    when pytest first imported conftest. That is invisible to any IN-PROCESS change to the
+    environment, which is what monkeypatch does here — and what a test or a pytest hook that
+    wants to steer the gating would do. Externally-set env (a CI step, a wrapper script's
+    export) was never affected either way; see `cairn_test_dsn`'s docstring for why.
 
-    monkeypatch here mutates the environment strictly after import, which is exactly the
-    condition the old shape could not see. DB-independent: it never opens a connection.
+    DB-independent: it never opens a connection.
     """
     monkeypatch.setenv("CAIRN_TEST_PG", "host=example-set-after-import")
     assert conftest.cairn_test_dsn() == "host=example-set-after-import"
