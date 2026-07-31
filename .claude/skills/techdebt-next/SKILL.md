@@ -100,6 +100,19 @@ end your turn. Touch nothing else — no labels, no issues, no branches.
   review required.`, write outcome `skipped`, stop. A
   `TECHDEBT_FORCE_ISSUE` issue is exempt (operator-chosen =
   operator-vouched).
+- **Provenance gate (before claiming):** `gh issue view <n> --json labels
+  --jq '[.labels[].name]'` must NOT contain `loop:agent-filed`. The author
+  gate above CANNOT catch this case: a worker session runs under the
+  operator's own gh credentials, so an issue a previous worker filed is
+  authored by `hherb` and passes it. Working one would close the loop —
+  agent files, agent works, agent merges, green CI the only gate — so a
+  single misdiagnosis could promote itself into `main` unreviewed. If the
+  label is present: remove whichever eligibility label it carries, add
+  `loop:needs-human`, comment `techdebt-loop: agent-filed — operator
+  sign-off required before automation may work this issue (remove the
+  loop:agent-filed label to sign off).`, write outcome `skipped`, stop.
+  `TECHDEBT_FORCE_ISSUE` is exempt here too: naming the issue explicitly IS
+  the sign-off.
 - Claim it: `gh issue edit <n> --add-label "loop:in-progress" --remove-label "loop:ready"`
   (or `--remove-label "loop:retry"` / `"loop:epic"` as appropriate), then
   comment: `techdebt-loop: cycle started (session <today's date>).`
@@ -157,6 +170,8 @@ local gate after fixes. A finding genuinely out of scope for this issue
 gets a follow-up GitHub issue instead (house rule 5) — never drop it
 silently.
 
+**Every issue YOU file carries `loop:agent-filed`** (see Step 7's rule).
+
 ## Step 7 — PR + second full review
 
 1. Push and open the PR: title `fix(#<n>): <summary>`; body explains the
@@ -168,6 +183,22 @@ silently.
 3. Every finding: fix it and push, or — only if genuinely out of scope —
    file a follow-up GitHub issue capturing it (house rule 5). Never drop a
    finding silently. Re-run the local gate if code changed.
+4. **Label every issue you file `loop:agent-filed`** — here and at Step 6,
+   without exception:
+
+   ```bash
+   gh issue create --label "loop:agent-filed" --title "…" --body "…"
+   ```
+
+   You are running under the operator's gh credentials, so the issue you
+   file is authored by `hherb` and would otherwise pass the author gate
+   that exists to keep unvetted work away from an unattended,
+   merge-capable session. Left unlabeled, your own follow-up could be
+   picked up, worked and merged by a later worker with no human ever
+   reading it — a misdiagnosis that promotes itself. The label says only
+   *"a machine wrote this, not the operator"*; the operator signs off by
+   removing it. Do NOT add an eligibility label (`loop:ready` /
+   `loop:epic`) to an issue you file — that is the operator's call.
 
 ## Step 8 — docs, then merge
 

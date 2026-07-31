@@ -216,11 +216,16 @@ chmod +x "$STUB/gh"
 GH_CALLS="$T_TMP/gh-calls"
 export GH_CALLS
 PATH="$STUB:$PATH" setup_labels
-t_assert_eq "seven labels created" "7" "$(wc -l < "$GH_CALLS" | tr -d ' ')"
-t_assert_eq "all creates are idempotent (--force)" "7" \
+# Eight: the seven classification/lifecycle labels plus loop:agent-filed, which
+# is PROVENANCE and coexists with any of them. The count is pinned so adding a
+# label is a deliberate act that updates this line and its sibling below.
+t_assert_eq "eight labels created" "8" "$(wc -l < "$GH_CALLS" | tr -d ' ')"
+t_assert_eq "all creates are idempotent (--force)" "8" \
   "$(grep -c -- '--force' "$GH_CALLS")"
 t_assert_ok "loop:ready label present" grep -q "label create loop:ready" "$GH_CALLS"
 t_assert_ok "loop:failed label present" grep -q "label create loop:failed" "$GH_CALLS"
+t_assert_ok "loop:agent-filed label present" \
+  grep -q "label create loop:agent-filed" "$GH_CALLS"
 t_teardown
 
 # ---- main loop scenarios (stubbed claude / gh / sleep / osascript) ----
@@ -461,7 +466,7 @@ SETUP_LOOP_HOME="$T_TMP/loophome-setup"
   > "$T_TMP/setup-labels-out" 2>&1
 SETUP_RC=$?
 t_assert_eq "main --setup-labels exits 0" "0" "$SETUP_RC"
-t_assert_eq "main --setup-labels creates exactly 7 labels" "7" \
+t_assert_eq "main --setup-labels creates exactly 8 labels" "8" \
   "$(grep -c "label create" "$GH_CALLS")"
 t_assert_fail "main --setup-labels never takes the run lock" \
   [ -d "$SETUP_LOOP_HOME/lock" ]
@@ -543,6 +548,49 @@ t_assert_fail "rate-limit wait TERM releases the lock" \
   [ -d "$T_TMP/loophome/lock" ]
 # The orphaned real sleep exits on its own; reap best-effort anyway.
 pkill -f '/bin/sleep 30' >/dev/null 2>&1 || true
+t_teardown
+
+# ---- label taxonomy: agent-filed provenance + skill/driver drift ----
+#
+# Two independent silent failures are guarded here.
+#
+# (1) PROVENANCE. Both skills' author gate admits an issue whose author is
+#     `hherb`, the operator. But a worker session runs under the operator's
+#     OWN gh credentials, so every issue a worker files is authored by
+#     `hherb` too and sails through that gate. That closes a loop with no
+#     human in it: an agent files an issue, a later agent picks it up as
+#     authoritative, works it, and merges it — green CI the only gate. So a
+#     worker that misdiagnoses something can promote its own misdiagnosis
+#     into main. `loop:agent-filed` is what breaks the loop, and a label the
+#     driver never creates cannot break anything.
+#
+# (2) DRIFT. `gh issue edit --add-label X` FAILS when label X does not
+#     exist, so a skill naming a label the driver never creates kills a
+#     worker mid-cycle — after it has already claimed the issue. Assert the
+#     labels the skills name are a subset of the labels the driver creates.
+#     (A `loop:*` glob in prose yields no match: the pattern requires at
+#     least one trailing character.)
+t_setup
+DRIVER_LABELS="$(declare -f setup_labels | grep -oE 'loop:[a-z-]+' | sort -u)"
+t_assert_eq "setup_labels creates loop:agent-filed" "loop:agent-filed" \
+  "$(printf '%s\n' "$DRIVER_LABELS" | grep -x 'loop:agent-filed' || true)"
+
+SKILLS_DIR="$SCRIPT_DIR/../../.claude/skills"
+SKILL_LABELS="$(cat "$SKILLS_DIR/techdebt-loop/SKILL.md" \
+                    "$SKILLS_DIR/techdebt-next/SKILL.md" \
+                | grep -oE 'loop:[a-z-]+' | sort -u)"
+UNCREATED="$(comm -23 <(printf '%s\n' "$SKILL_LABELS") \
+                      <(printf '%s\n' "$DRIVER_LABELS") | tr '\n' ' ')"
+t_assert_eq "every loop:* label the skills name is created by the driver" "" \
+  "$(printf '%s' "$UNCREATED" | sed 's/ *$//')"
+
+# The gate is only real if the WORKER refuses to claim such an issue — triage
+# is an LLM judgment call, the claim step is mechanical. Pin both skills'
+# prose so the rule cannot be dropped by a later edit without a red test.
+t_assert_ok "worker skill refuses to claim a loop:agent-filed issue" \
+  grep -q "loop:agent-filed" "$SKILLS_DIR/techdebt-next/SKILL.md"
+t_assert_ok "triage skill withholds eligibility from loop:agent-filed" \
+  grep -q "loop:agent-filed" "$SKILLS_DIR/techdebt-loop/SKILL.md"
 t_teardown
 
 t_summary
