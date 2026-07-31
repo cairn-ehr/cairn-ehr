@@ -207,9 +207,13 @@ def _config_fingerprint(
 
     Each FieldSpec is rendered field-by-field via dataclasses.fields — never a hand-kept
     list, so a future FieldSpec field cannot be silently omitted (the completeness guard
-    in test_banding fails if one is). Comparator entries are sorted by field so two equal
-    configs digest identically however they were assembled (field_comparisons sums
-    per-field evidence, so spec order never changes a score).
+    in test_banding fails if one is). The ONE exception is the weights branch below:
+    Weights/FieldWeights carry Mappings with enum keys, which asdict cannot traverse, so
+    they are hand-walked — and their field sets are therefore PINNED by a guard test
+    (test_config_fingerprint_weights_field_sets_are_pinned), which fails loudly the day
+    either dataclass grows a field this walk would drop. Comparator entries are sorted by
+    field so two equal configs digest identically however they were assembled
+    (field_comparisons sums per-field evidence, so spec order never changes a score).
 
     "Canonical" here means JSON with sorted keys and compact separators. Float formatting
     follows Python's shortest-round-trip repr — deterministic in CPython, but NOT the full

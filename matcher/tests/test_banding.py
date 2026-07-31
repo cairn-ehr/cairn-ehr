@@ -230,6 +230,22 @@ def test_config_fingerprint_covers_every_declared_config_field():
         assert set(entry["context"]) == {f.name for f in fields(Context)}
 
 
+def test_config_fingerprint_weights_field_sets_are_pinned():
+    # Weights/FieldWeights CANNOT ride the generic dataclasses.fields rendering above:
+    # their Mapping-with-enum-keys shape defeats asdict, so _config_fingerprint's weights
+    # branch hand-walks per_field/weights. A hand-walk silently drops any FUTURE field
+    # added to either dataclass (the #100 failure mode, relocated), so pin both field
+    # sets here — the #211/#79 anti-drift pattern. If this assertion fails, you added a
+    # field to Weights or FieldWeights: extend _config_fingerprint's weights branch to
+    # carry it, THEN update this pin.
+    from dataclasses import fields
+
+    from cairn_matcher.scoring import FieldWeights
+
+    assert {f.name for f in fields(Weights)} == {"per_field"}
+    assert {f.name for f in fields(FieldWeights)} == {"weights"}
+
+
 def test_build_payload_serializes_evidence_and_vetoes():
     score = _score(9.0)
     vetoes = [VetoFinding("dob", "hard_veto", "dob", "verified dob clash")]
