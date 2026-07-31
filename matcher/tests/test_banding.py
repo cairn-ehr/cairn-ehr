@@ -7,9 +7,13 @@ threshold nothing is proposed (the noise floor; the B3 hub sweep is the declared
 backstop for missed signal).
 """
 
+from dataclasses import replace
+
 import pytest
 
-from cairn_matcher.agreement import AgreementLevel
+from cairn_matcher.agreement import AgreementLevel, Context
+from cairn_matcher.comparators import compare_exact
+from cairn_matcher.orchestrator import DEFAULT_CONFIG
 from cairn_matcher.pipeline.banding import (
     Band,
     ProposalPayload,
@@ -19,7 +23,13 @@ from cairn_matcher.pipeline.banding import (
     build_payload,
     matcher_version,
 )
-from cairn_matcher.scoring import FieldEvidence, MatchScore
+from cairn_matcher.scoring import (
+    DEFAULT_WEIGHTS,
+    FieldEvidence,
+    FieldWeights,
+    MatchScore,
+    Weights,
+)
 
 
 def _score(total: float) -> MatchScore:
@@ -127,6 +137,56 @@ def test_matcher_version_is_deterministic_and_carries_package_version():
     assert v1.startswith(f"{__version__}+")
 
 
+# --- matcher_version pins the FULL effective config (issue #100) -------------------------
+# ADR-0011/0029 make the config-pinned actor identity the contamination-recall handle:
+# "which links did matcher-config vN propose?". A pin that moves only with the weights
+# makes a bad threshold or comparator rollout invisible in the proposal table — the recall
+# has no key to cascade on. So EVERY knob that can change a band decision must move the
+# digest: thresholds, per-field comparator wiring, context params, and weights.
+
+
+def test_matcher_version_changes_when_thresholds_change():
+    custom = Thresholds(review=2.0, auto=8.0)
+    assert matcher_version(thresholds=custom) != matcher_version()
+
+
+def test_matcher_version_changes_when_a_context_param_changes():
+    # Loosening edit_distance_threshold changes agreement levels (EDIT_DISTANCE vs
+    # DISAGREE on near-miss strings) and therefore band decisions — it must move the pin.
+    loosened = tuple(
+        replace(spec, context=Context(edit_distance_threshold=0.80))
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=loosened) != matcher_version()
+
+
+def test_matcher_version_changes_when_a_comparator_is_swapped():
+    # The ADR-0014 locale-pack seam: same field, different comparator FUNCTION. The
+    # wiring is config (the function bodies are pinned by the package version), so a
+    # swap must be visible in the pin.
+    swapped = tuple(
+        replace(spec, comparator=compare_exact) if spec.field == "name" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=swapped) != matcher_version()
+
+
+def test_matcher_version_changes_when_weights_change():
+    # The one axis the pre-#100 digest already covered — kept as an explicit regression.
+    heavier = Weights(per_field={
+        **{f: fw for f, fw in DEFAULT_WEIGHTS.per_field.items() if f != "sex"},
+        "sex": FieldWeights({AgreementLevel.EXACT: 1.5, AgreementLevel.DISAGREE: -2.0}),
+    })
+    assert matcher_version(weights=heavier) != matcher_version()
+
+
+def test_matcher_version_is_insensitive_to_weights_table_insertion_order():
+    # Canonicalization guard: the digest input is sorted, so two EQUAL configs pin
+    # identically however their dicts happened to be assembled.
+    reordered = Weights(per_field=dict(reversed(list(DEFAULT_WEIGHTS.per_field.items()))))
+    assert matcher_version(weights=reordered) == matcher_version()
+
+
 def test_build_payload_serializes_evidence_and_vetoes():
     score = _score(9.0)
     vetoes = [VetoFinding("dob", "hard_veto", "dob", "verified dob clash")]
@@ -138,6 +198,15 @@ def test_build_payload_serializes_evidence_and_vetoes():
     assert payload.evidence[0]["level"] == "EXACT"
     assert payload.veto_findings[0]["severity"] == "hard_veto"
     assert payload.matcher_version == matcher_version()
+
+
+def test_build_payload_pins_the_callers_thresholds():
+    # The pin must record the config that ACTUALLY banded the pair (issue #100): a caller
+    # running custom thresholds produces a different matcher_version than the defaults.
+    custom = Thresholds(review=1.0, auto=4.0)
+    payload = build_payload(_score(5.0), [], Band.AUTO_CANDIDATE, thresholds=custom)
+    assert payload.matcher_version == matcher_version(thresholds=custom)
+    assert payload.matcher_version != matcher_version()
 
 
 # --- known-alias signal (§5.5(a) returning fabricated persona) --------------------------

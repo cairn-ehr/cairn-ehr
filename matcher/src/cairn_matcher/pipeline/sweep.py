@@ -17,6 +17,7 @@ Requires the optional `pipeline` extra (psycopg) at CALL time, because it drives
 
 from dataclasses import dataclass, field
 
+from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
 from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, Band, Thresholds
 from cairn_matcher.pipeline.runner import propose
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
@@ -64,12 +65,17 @@ def sweep(
     max_block_size: int = 100,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
+    config: ComparatorConfig = DEFAULT_CONFIG,
 ) -> SweepResult:
     """Score every blocking candidate pair and return a SweepResult summary.
 
     Generates candidates (closing the read snapshot before writing), then proposes on each
     surviving pair. A pair whose propose() raises is recorded in `errors` and skipped; the
     connection is rolled back so it stays usable for the next pair.
+
+    `config` (the per-field comparator wiring) is threaded into EVERY propose() call —
+    main loop and reconciliation alike — so each persisted proposal's matcher_version pins
+    the configuration this sweep actually ran (issue #100).
     """
     # Imported lazily so this module is importable without the optional `pipeline` extra;
     # only an actual sweep() call needs psycopg (mirrors runner.propose's lazy db import).
@@ -100,7 +106,7 @@ def sweep(
     for low, high in pairs:
         try:
             result = propose(
-                conn, low, high, thresholds=thresholds, weights=weights,
+                conn, low, high, thresholds=thresholds, weights=weights, config=config,
                 aliases=aliases, trust=trust,
             )
         except Exception as exc:  # noqa: BLE001 — batch must survive one bad pair (house rule #5)
@@ -136,7 +142,9 @@ def sweep(
             # the loop never saw, so a generated pair is never double-processed here.
             continue
         try:
-            outcome = propose(conn, low, high, thresholds=thresholds, weights=weights)
+            outcome = propose(
+                conn, low, high, thresholds=thresholds, weights=weights, config=config,
+            )
         except Exception as exc:  # noqa: BLE001 — one bad pair must not abort reconciliation
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
