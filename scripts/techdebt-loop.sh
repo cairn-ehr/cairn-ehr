@@ -71,10 +71,15 @@ is_rate_limited() {
 }
 
 # classify_result OUTCOME_FILE TRANSCRIPT — the driver's one judgment call.
-# Precedence: a worker that finished writes outcome.json (authoritative).
-# A worker that died mid-cycle wrote nothing: a usage-limit pattern in the
-# transcript means rate-limited (wait + resume); anything else is a failure
-# (crash, timeout kill, tooling break).
+# Precedence: a worker that finished writes outcome.json (authoritative —
+# including an honest worker-written "failed"). A worker that died mid-cycle
+# wrote nothing valid: a usage-limit pattern in the transcript means
+# rate-limited (wait + resume); anything else is "crashed" — which is NOT
+# yet a failure: a headless session terminates the instant its turn ends,
+# so a worker that yielded with a background wait pending may have died
+# AFTER its merge landed (or with auto-merge armed and CI still running)
+# but before the outcome write; main() runs a GitHub post-mortem on every
+# crash before deciding merged vs failed (issue #320).
 classify_result() {
   local outcome_file="$1" transcript="$2" outcome=""
   if [ -s "$outcome_file" ]; then
@@ -83,14 +88,14 @@ classify_result() {
       echo "$outcome"
       return 0
     fi
-    # File exists but is not valid outcome JSON: treat as a crash.
-    echo "failed"
+    # File exists but is not valid outcome JSON: died mid-write.
+    echo "crashed"
     return 0
   fi
   if is_rate_limited "$transcript"; then
     echo "rate-limited"
   else
-    echo "failed"
+    echo "crashed"
   fi
 }
 
@@ -212,6 +217,160 @@ run_with_timeout() {
 interruptible_sleep() {
   sleep "$1" &
   wait $!
+}
+
+# ---- crash post-mortem (issue #320) ----
+# A headless worker session terminates the instant its turn ends; a pending
+# background task never re-invokes it (that only works interactively). A
+# worker that yields "to wait" for a test run or CI therefore dies before
+# writing outcome.json — possibly AFTER its merge landed, or with auto-merge
+# armed and CI minutes from green. These functions let main() consult GitHub
+# (the run's true ledger) before counting such a crash as a failure: two
+# false failures in a row would trip the systemic-halt breaker and strand
+# the rest of the run.
+
+ADOPT_WAIT_SECS=1800  # how long the driver adopts a dead worker's CI watch
+ADOPT_POLL_SECS=60    # PR-state poll cadence during that adopted watch
+
+# adoption_candidate N SCOPE — may issue N be adopted by this post-mortem?
+# No when a --issue run scopes the post-mortem to a different issue (the
+# forced worker owned exactly one issue; anything else is another cycle's
+# wreckage and the single-shot exit code must reflect the forced issue's
+# fate alone). And no when this run already adopted OR abandoned N
+# (ADOPT_SEEN): re-matching the same wreckage would double-count its merge,
+# mask a later crash's real fate, and defeat the two-failure breaker.
+adoption_candidate() {
+  local n="$1" scope="$2"
+  if [ -n "$scope" ] && [ "$n" != "$scope" ]; then
+    return 1
+  fi
+  case " ${ADOPT_SEEN:-} " in
+    *" $n "*) return 1 ;;
+  esac
+  return 0
+}
+
+# merged_loop_pr_after N START — did a PR whose head branch is loop/N-*
+# merge at/after epoch START? The trailing dash keeps issue 42 from matching
+# loop/424-…; the time filter keeps an ancient stale claim from being
+# adopted as THIS cycle's success. jq does the ISO-8601 comparison (gh's
+# --jq flag cannot take arguments).
+merged_loop_pr_after() {
+  local n="$1" start="$2" count
+  count="$(gh pr list --state merged --limit 50 --json headRefName,mergedAt \
+             2>/dev/null \
+           | jq --arg n "$n" --argjson start "$start" \
+               '[.[] | select(.headRefName | startswith("loop/\($n)-"))
+                     | select((.mergedAt | fromdateiso8601) >= $start)]
+                | length' 2>/dev/null)"
+  [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null
+}
+
+# pending_automerge_pr SCOPE — a dead worker's armed-but-unlanded merge, if
+# any: an OPEN loop:in-progress issue with an OPEN loop/<n>-* PR whose
+# auto-merge is enabled, restricted by adoption_candidate (scope +
+# once-only). Prints "<issue> <pr>"; prints nothing when there is none.
+pending_automerge_pr() {
+  local scope="${1:-}" n pr
+  for n in $(gh issue list --state open --label "loop:in-progress" \
+               --json number --jq '.[].number' 2>/dev/null); do
+    adoption_candidate "$n" "$scope" || continue
+    pr="$(gh pr list --state open --limit 50 \
+            --json number,headRefName,autoMergeRequest 2>/dev/null \
+          | jq -r --arg n "$n" \
+              '[.[] | select(.headRefName | startswith("loop/\($n)-"))
+                    | select(.autoMergeRequest != null)][0].number // empty' \
+              2>/dev/null)"
+    if [ -n "$pr" ]; then
+      echo "$n $pr"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# finish_adopted_cycle N — the Step-9 bookkeeping the dead worker never ran:
+# drop the stale claim label, remove its worktree and branches. All
+# best-effort — the merge has already landed; nothing here can un-land it.
+# (The worker skill's worktree path is ~/.cairn-loop/wt; LOOP_HOME defaults
+# to the same place and the tests point it at scratch.)
+finish_adopted_cycle() {
+  local n="$1" b state
+  # A PR without a closing keyword merges without closing its issue; the
+  # worker's own Step 9 verifies-and-closes, so the post-mortem must too.
+  # Stripping the claim label from a still-open issue would leave it with
+  # NO loop:* label at all — invisible to triage, untouchable by every
+  # future worker — with its fix already sitting in main.
+  state="$(gh issue view "$n" --json state --jq .state 2>/dev/null)"
+  if [ "$state" = "OPEN" ]; then
+    gh issue close "$n" \
+      --comment "techdebt-loop: closing — the fix merged (cycle adopted from a crashed worker by the driver post-mortem, #320)." \
+      >/dev/null 2>&1 \
+      || log "warning: could not close adopted issue #$n — close it manually"
+  fi
+  gh issue edit "$n" --remove-label "loop:in-progress" >/dev/null 2>&1 \
+    || log "warning: could not remove loop:in-progress from #$n — remove it manually"
+  git worktree remove "$LOOP_HOME/wt/issue-$n" --force >/dev/null 2>&1 || true
+  # The dead session chose the branch slug — discover it, never guess.
+  for b in $(git branch --list "loop/$n-*" --format='%(refname:short)' 2>/dev/null); do
+    git branch -D "$b" >/dev/null 2>&1 || true
+    git push origin --delete "$b" >/dev/null 2>&1 || true
+  done
+}
+
+# adopt_crashed_merge ITER_START_EPOCH SCOPE — the post-mortem itself.
+# SCOPE is empty on a normal run, the forced issue number under --issue N.
+# Evidence of success, checked in order:
+#   LANDED:  a loop:in-progress issue is CLOSED and its loop/<n>-* PR merged
+#            at/after this iteration began — the worker died after the merge
+#            but before its outcome write.
+#   PENDING: an open loop:in-progress issue has an open loop/<n>-* PR with
+#            auto-merge armed — the worker died waiting for CI. Adopt its
+#            watch: poll until the PR merges, closes, or the budget expires.
+# Both paths admit only adoption_candidate issues, and every issue adopted
+# OR abandoned here goes on ADOPT_SEEN so no later iteration re-matches it.
+# On success sets ADOPTED_ISSUE, finishes the dead worker's cleanup, and
+# returns 0. Returns 1 when the crash really was a failure (the issue stays
+# claimed; the next worker's crash recovery adopts it). Deliberately called
+# PLAIN, never in a $(…) capture: a capture subshell would defer the
+# driver's TERM/INT traps for the whole adopted watch (the same deferral
+# interruptible_sleep exists to avoid) and swallow these log lines besides.
+adopt_crashed_merge() {
+  local start="$1" scope="${2:-}" n pending pr waited=0 state
+  ADOPTED_ISSUE=""
+  for n in $(gh issue list --state closed --label "loop:in-progress" \
+               --json number --jq '.[].number' 2>/dev/null); do
+    adoption_candidate "$n" "$scope" || continue
+    if merged_loop_pr_after "$n" "$start"; then
+      ADOPTED_ISSUE="$n"
+      ADOPT_SEEN="${ADOPT_SEEN:-} $n"
+      finish_adopted_cycle "$n"
+      return 0
+    fi
+  done
+  pending="$(pending_automerge_pr "$scope")" || return 1
+  n="${pending%% *}"
+  pr="${pending##* }"
+  log "post-mortem: dead worker left auto-merge armed on PR #$pr (issue #$n); adopting its CI watch for up to ${ADOPT_WAIT_SECS}s"
+  while [ "$waited" -lt "$ADOPT_WAIT_SECS" ]; do
+    interruptible_sleep "$ADOPT_POLL_SECS"
+    waited=$((waited + ADOPT_POLL_SECS))
+    state="$(gh pr view "$pr" --json state --jq .state 2>/dev/null)"
+    case "$state" in
+      MERGED)
+        ADOPTED_ISSUE="$n"
+        ADOPT_SEEN="${ADOPT_SEEN:-} $n"
+        finish_adopted_cycle "$n"
+        return 0 ;;
+      CLOSED)
+        log "post-mortem: PR #$pr closed without merging — the cycle really failed"
+        ADOPT_SEEN="${ADOPT_SEEN:-} $n"
+        return 1 ;;
+    esac
+  done
+  log "post-mortem: PR #$pr still unmerged after ${ADOPT_WAIT_SECS}s — counting the cycle failed"
+  ADOPT_SEEN="${ADOPT_SEEN:-} $n"
+  return 1
 }
 
 # ---- single-instance lock ----
@@ -349,6 +508,17 @@ summarize() {
   notify "techdebt-loop done: $N_MERGED merged, $N_FAILED failed"
 }
 
+# fail_cycle — bookkeeping shared by the failed and crashed arms: count the
+# failure, and stop the whole run on the second consecutive one (systemic).
+fail_cycle() {
+  N_FAILED=$((N_FAILED + 1)); CONSEC_FAIL=$((CONSEC_FAIL + 1))
+  log "cycle failed (consecutive: $CONSEC_FAIL) — see $TRANSCRIPT"
+  if [ "$CONSEC_FAIL" -ge 2 ]; then
+    log "two consecutive failures: something systemic is wrong; stopping"
+    summarize; exit 1
+  fi
+}
+
 main() {
   parse_args "$@"
   require_cmds claude gh jq git
@@ -374,6 +544,7 @@ main() {
   ITER=0; N_MERGED=0; N_FAILED=0; N_SKIPPED=0
   CONSEC_FAIL=0
   WAITED_TOTAL=0
+  ADOPT_SEEN=""   # issues the crash post-mortem already adopted/abandoned
   local max_wait_secs=$((MAX_WAIT_HOURS * 3600))
 
   while :; do
@@ -384,6 +555,7 @@ main() {
       summarize; exit 0
     fi
     ITER=$((ITER + 1))
+    ITER_START="$(date +%s)"   # the crash post-mortem's freshness floor
     log "iteration $ITER: spawning worker"
     spawn_worker "$ITER" || true   # exit code is informational; outcome rules
     OUTCOME="$(classify_result "$OUTCOME_FILE" "$TRANSCRIPT")"
@@ -418,13 +590,27 @@ main() {
         log "usage limit hit; sleeping ${wait_secs}s (issue unpenalized)"
         interruptible_sleep "$wait_secs"
         continue ;;   # not an issue attempt: counters untouched
-      failed|*)
-        N_FAILED=$((N_FAILED + 1)); CONSEC_FAIL=$((CONSEC_FAIL + 1))
-        log "cycle failed (consecutive: $CONSEC_FAIL) — see $TRANSCRIPT"
-        if [ "$CONSEC_FAIL" -ge 2 ]; then
-          log "two consecutive failures: something systemic is wrong; stopping"
-          summarize; exit 1
+      crashed)
+        # No valid outcome.json: the worker died mid-cycle — but its work
+        # may have landed anyway (issue #320: a headless session dies at
+        # turn end, possibly after its merge and before its outcome write).
+        # Ask GitHub before counting a failure. Exception: a smoke worker
+        # touches nothing adoptable by contract, so a smoke crash is a
+        # broken environment — scanning GitHub could latch onto unrelated
+        # stale wreckage and report a false green for a plumbing check.
+        if [ "$SMOKE" = "1" ]; then
+          OUTCOME="failed"
+          fail_cycle
+        elif adopt_crashed_merge "$ITER_START" "$FORCE_ISSUE"; then
+          log "iteration $ITER: post-mortem adopted issue #$ADOPTED_ISSUE as merged (worker died before its outcome write)"
+          OUTCOME="merged"
+          N_MERGED=$((N_MERGED + 1)); CONSEC_FAIL=0
+        else
+          OUTCOME="failed"   # single-shot exit code below keys off this
+          fail_cycle
         fi ;;
+      failed|*)
+        fail_cycle ;;
     esac
     if [ -n "$FORCE_ISSUE" ] || [ "$SMOKE" = "1" ]; then
       # Single-shot modes: one real attempt, then stop. A scripting caller
