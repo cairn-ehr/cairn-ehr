@@ -7,49 +7,20 @@ use cairn_event::identity::{
     dispute_assertion_body, dispute_resolution_body, render_dispute_resolved_twin,
     render_dispute_twin, DisputeAssertion, DisputeResolution,
 };
-use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
+use cairn_event::SigningKey;
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-fn cs() -> Option<String> {
-    std::env::var("CAIRN_TEST_PG").ok()
-}
+mod common;
+use common::{
+    cs, db_msg, person_chart_trust, submit_patient_created, submit_signed, trust_of, EventSpec,
+};
 
-/// The Postgres error message text for a failed statement. `tokio_postgres::Error`'s
-/// Display renders only as the literal "db error"; the real `RAISE EXCEPTION` message
-/// lives in the DbError payload (project convention: see `identity_linkage.rs`).
-fn db_msg(e: &tokio_postgres::Error) -> String {
-    e.as_db_error()
-        .map(|d| d.message().to_string())
-        .unwrap_or_else(|| e.to_string())
-}
-
-/// Truncate the clinical + dispute tables and enroll one agent signer. Returns (sk, kid).
-/// `chart_dispute` is created by db/023, so it is truncated behind a `to_regclass` guard
-/// — keeping the single `setup()` helper correct even on a DB migrated only to an earlier
-/// stage (the identity_linkage.rs pattern).
-async fn setup(c: &Client) -> (SigningKey, String) {
-    c.batch_execute(
-        "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic CASCADE",
-    )
-    .await
-    .unwrap();
-    c.batch_execute(
-        "DO $$ BEGIN \
-           IF to_regclass('public.chart_dispute') IS NOT NULL THEN TRUNCATE chart_dispute; END IF; \
-         END $$;",
-    )
-    .await
-    .unwrap();
-    let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('agent', '{\"model\":\"reg-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
-        &[&kid],
-    ).await.unwrap();
-    (sk, kid)
-}
+/// The identity-overlay table this suite writes to, truncated per test by `common::setup`.
+/// Created by db/023, later than the core clinical tables — hence the `to_regclass` guard
+/// `setup` applies.
+const OVERLAY_TABLES: [&str; 1] = ["chart_dispute"];
 
 /// Sign + submit one dispute-open OR dispute-resolve event through the real submit_event
 /// door. `wall` is the HLC wall clock (higher = newer). Returns the submit result so a
@@ -92,27 +63,20 @@ async fn submit_dispute(
             render_dispute_resolved_twin(&d),
         )
     };
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: s_s.clone(), // an identity dispute is "about" its subject's chart
-        event_type: etype.into(),
-        schema_version: sver.into(),
-        hlc: Hlc {
+    submit_signed(
+        c,
+        sk,
+        kid,
+        EventSpec {
+            patient: subject, // an identity dispute is "about" its subject's chart
+            event_type: etype,
+            schema_version: sver,
+            payload,
+            plaintext_twin: Some(twin),
             wall,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload,
-        attachments: vec![],
-        plaintext_twin: Some(twin),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
+    )
+    .await
 }
 
 /// Convenience: open a dispute with a canned reason.
@@ -171,59 +135,6 @@ async fn dispute_state(c: &Client, dispute_id: Uuid) -> Option<String> {
     .map(|r| r.get::<_, String>(0))
 }
 
-/// The effective trust state chart_trust reports for a subject, or None (== confirmed).
-async fn trust_of(c: &Client, subject: Uuid) -> Option<String> {
-    let s_s = subject.to_string();
-    c.query_opt(
-        "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid",
-        &[&s_s],
-    )
-    .await
-    .unwrap()
-    .map(|r| r.get::<_, String>(0))
-}
-
-/// Submit a minimal patient.created so the subject has a patient_chart row (so
-/// person_chart lists it and its trust_state can be read).
-async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid, wall: i64) {
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: p.to_string(),
-        event_type: "patient.created".into(),
-        schema_version: "patient/1".into(),
-        hlc: Hlc {
-            wall,
-            counter: 0,
-            node_origin: "n".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
-        attachments: vec![],
-        plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .expect("patient.created accepted");
-}
-
-/// person_chart_trust.trust_state for a given patient_id row (the unified read composed
-/// on top of C1's person_chart — a chart read, so it lists a subject only once its chart
-/// has synced; chart_trust is the authoritative pre-sync safety signal).
-async fn person_chart_trust(c: &Client, subject: Uuid) -> Option<String> {
-    let s_s = subject.to_string();
-    c.query_opt(
-        "SELECT trust_state FROM person_chart_trust WHERE patient_id = $1::text::uuid",
-        &[&s_s],
-    )
-    .await
-    .unwrap()
-    .map(|r| r.get::<_, String>(0))
-}
-
 // --- acceptance + overlay behaviour ---
 
 #[tokio::test]
@@ -231,7 +142,7 @@ async fn valid_dispute_is_accepted() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     open_dispute(&c, &sk, &kid, d, subj, 100)
         .await
@@ -244,7 +155,7 @@ async fn newer_resolve_overlays_open() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // open @100
     resolve_dispute(&c, &sk, &kid, d, subj, 200).await.unwrap(); // resolve @200 (newer)
@@ -258,7 +169,7 @@ async fn older_open_does_not_reopen_resolved() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     resolve_dispute(&c, &sk, &kid, d, subj, 200).await.unwrap(); // resolve @200 lands first
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // open @100 lands later (older)
@@ -274,7 +185,7 @@ async fn reassert_same_dispute_is_one_row() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap();
     open_dispute(&c, &sk, &kid, d, subj, 105).await.unwrap(); // a second, later open of the same dispute
@@ -302,7 +213,7 @@ async fn local_subject_change_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj_a, subj_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     open_dispute(&c, &sk, &kid, d, subj_a, 100).await.unwrap();
     let err = open_dispute(&c, &sk, &kid, d, subj_b, 110)
@@ -330,7 +241,7 @@ async fn open_marks_chart_under_review() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     submit_patient_created(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d, subj, 110).await.unwrap();
@@ -347,7 +258,7 @@ async fn resolve_returns_to_confirmed() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     submit_patient_created(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d, subj, 110).await.unwrap();
@@ -369,7 +280,7 @@ async fn no_dispute_reads_confirmed() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
     submit_patient_created(&c, &sk, &kid, subj, 100).await;
     assert_eq!(trust_of(&c, subj).await, None);
@@ -388,7 +299,7 @@ async fn resolve_one_of_two_stays_under_review() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d1, d2, subj) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     submit_patient_created(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d1, subj, 110).await.unwrap();
@@ -416,7 +327,7 @@ async fn dispute_before_chart_still_under_review() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // no patient.created for subj
     assert_eq!(
@@ -438,7 +349,7 @@ async fn empty_reason_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     let err = submit_dispute(&c, &sk, &kid, d, subj, 100, true, "   ")
         .await
@@ -455,7 +366,7 @@ async fn empty_resolution_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     let err = submit_dispute(&c, &sk, &kid, d, subj, 100, false, "")
         .await
@@ -472,7 +383,7 @@ async fn missing_twin_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
     // Build a dispute event with NO authored twin — the identity floor HARD-requires one.
     let (d_s, s_s) = (d.to_string(), subj.to_string());
@@ -481,29 +392,21 @@ async fn missing_twin_is_rejected() {
         subject: &s_s,
         reason: "r",
     };
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: s_s.clone(),
-        event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute.asserted/1".into(),
-        hlc: Hlc {
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: subj,
+            event_type: "identity.dispute.asserted",
+            schema_version: "identity.dispute.asserted/1",
+            payload: dispute_assertion_body(&da),
+            plaintext_twin: None, // the omission under test
             wall: 100,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.clone(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: dispute_assertion_body(&da),
-        attachments: vec![],
-        plaintext_twin: None,
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, &sk).unwrap();
-    let err = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .unwrap_err();
+    )
+    .await
+    .unwrap_err();
     assert!(
         db_msg(&err).contains("authored twin"),
         "twin-less dispute event must be refused: {}",
@@ -518,31 +421,23 @@ async fn bad_dispute_id_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: subj.to_string(),
-        event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute.asserted/1".into(),
-        hlc: Hlc {
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: subj,
+            event_type: "identity.dispute.asserted",
+            schema_version: "identity.dispute.asserted/1",
+            payload: serde_json::json!({"dispute_id": "not-a-uuid", "subject": subj.to_string(), "reason": "r"}),
+            plaintext_twin: Some("dispute opened: x — r (dispute x)".into()),
             wall: 100,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.clone(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: serde_json::json!({"dispute_id": "not-a-uuid", "subject": subj.to_string(), "reason": "r"}),
-        attachments: vec![],
-        plaintext_twin: Some("dispute opened: x — r (dispute x)".into()),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, &sk).unwrap();
-    let err = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .unwrap_err();
+    )
+    .await
+    .unwrap_err();
     assert!(
         db_msg(&err).contains("dispute_id"),
         "a non-uuid dispute_id must be refused legibly: {}",
@@ -555,31 +450,23 @@ async fn missing_subject_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let d = Uuid::now_v7();
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: Uuid::now_v7().to_string(),
-        event_type: "identity.dispute.asserted".into(),
-        schema_version: "identity.dispute.asserted/1".into(),
-        hlc: Hlc {
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: Uuid::now_v7(),
+            event_type: "identity.dispute.asserted",
+            schema_version: "identity.dispute.asserted/1",
+            payload: serde_json::json!({"dispute_id": d.to_string(), "reason": "r"}), // no subject
+            plaintext_twin: Some("dispute opened: ? — r (dispute d)".into()),
             wall: 100,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.clone(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: serde_json::json!({"dispute_id": d.to_string(), "reason": "r"}), // no subject
-        attachments: vec![],
-        plaintext_twin: Some("dispute opened: ? — r (dispute d)".into()),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, &sk).unwrap();
-    let err = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .unwrap_err();
+    )
+    .await
+    .unwrap_err();
     assert!(
         db_msg(&err).contains("subject"),
         "a dispute with no subject must be refused legibly: {}",

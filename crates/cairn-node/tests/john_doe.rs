@@ -6,49 +6,21 @@
 //! Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide via `db::test_serial_guard`.
 //! Mirrors `identity_identify.rs` (the C4 slice this composes onto).
 
-use cairn_event::generate_key;
 use cairn_node::{db, john_doe};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-fn cs() -> Option<String> {
-    std::env::var("CAIRN_TEST_PG").ok()
-}
+mod common;
+use common::{cs, trust_of};
 
-/// Truncate the clinical + identity tables and enroll one agent signer. Returns (sk, kid).
-/// `chart_identity_state` is created by db/024, so it is truncated behind a `to_regclass`
-/// guard — keeping `setup()` correct even on a DB migrated only to an earlier stage.
-async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
-    c.batch_execute(
-        "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic, patient_name CASCADE",
-    )
-    .await
-    .unwrap();
-    c.batch_execute(
-        "DO $$ BEGIN \
-           IF to_regclass('public.chart_identity_state') IS NOT NULL THEN TRUNCATE chart_identity_state; END IF; \
-         END $$;")
-        .await.unwrap();
-    let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('agent', '{\"model\":\"reg-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
-        &[&kid],
-    ).await.unwrap();
-    (sk, kid)
-}
-
-/// The effective trust state chart_trust reports for a subject, or None (== confirmed).
-async fn trust_of(c: &Client, subject: Uuid) -> Option<String> {
-    let s_s = subject.to_string();
-    c.query_opt(
-        "SELECT trust_state FROM chart_trust WHERE patient_id = $1::text::uuid",
-        &[&s_s],
-    )
-    .await
-    .unwrap()
-    .map(|r| r.get::<_, String>(0))
-}
+/// The tables this suite truncates on top of `common::setup`'s clinical core.
+///
+/// `patient_name` holds the callsign this slice asserts, and `chart_identity_state` (db/024)
+/// the pending marker it composes. Both go through `setup`'s `to_regclass` guard, which is a
+/// no-op for a table that already exists and keeps the helper correct on a DB migrated only
+/// to an earlier stage. Nothing carries a foreign key to `patient_name`, so truncating it
+/// alongside the core list rather than inside its `CASCADE` is equivalent.
+const OVERLAY_TABLES: [&str; 2] = ["chart_identity_state", "patient_name"];
 
 /// The standing identity state of a chart (db/024 overlay), or None if no row exists.
 async fn identity_state(c: &Client, subject: Uuid) -> Option<String> {
@@ -95,7 +67,7 @@ async fn register_john_doe_creates_an_unconfirmed_chart() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
 
     let (pid, _call, _ord) = john_doe::register_john_doe(
         &mut c,
@@ -120,7 +92,7 @@ async fn callsign_is_stored_as_a_placeholder_use_name_and_is_the_display_winner(
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
 
     let (pid, call, _ord) = john_doe::register_john_doe(
         &mut c,
@@ -153,7 +125,7 @@ async fn two_john_does_coexist_as_distinct_pending_charts_with_distinct_callsign
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
 
     // Same site, same day — the partition-safe suffix must still keep them apart.
     let (p1, c1, _ord) = john_doe::register_john_doe(
@@ -201,7 +173,7 @@ async fn ordinal_numbers_registrations_per_node_origin() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
 
     // Two John Does first-recorded on node "n" → ordinals 1 then 2, in registration order.
     let (_p1, _c1, o1) =

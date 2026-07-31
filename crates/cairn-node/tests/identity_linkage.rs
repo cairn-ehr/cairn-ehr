@@ -7,51 +7,18 @@
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
 };
-use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
+use cairn_event::SigningKey;
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-fn cs() -> Option<String> {
-    std::env::var("CAIRN_TEST_PG").ok()
-}
+mod common;
+use common::{cs, db_msg, submit_patient_created, submit_signed, EventSpec};
 
-/// The Postgres error message text for a failed statement. `tokio_postgres::Error`'s
-/// Display renders only as the literal "db error" — the actual `RAISE EXCEPTION`
-/// message lives in the DbError payload — so every floor-rejection assertion must go
-/// through here (project convention: see `twin_globalise.rs`, `admission.rs`).
-fn db_msg(e: &tokio_postgres::Error) -> String {
-    e.as_db_error()
-        .map(|d| d.message().to_string())
-        .unwrap_or_else(|| e.to_string())
-}
-
-/// Truncate the clinical + linkage tables and enroll one agent signer. Returns (sk, kid).
-/// `patient_link` / `person_member` are created by LATER sections of db/018 (Tasks 3–4),
-/// so they are truncated behind a `to_regclass` guard — this keeps the single `setup()`
-/// helper correct at every stage as the migration grows, with no cross-task edits.
-async fn setup(c: &Client) -> (SigningKey, String) {
-    c.batch_execute(
-        "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
-         patient_demographic CASCADE",
-    )
-    .await
-    .unwrap();
-    c.batch_execute(
-        "DO $$ BEGIN \
-           IF to_regclass('public.patient_link')  IS NOT NULL THEN TRUNCATE patient_link;  END IF; \
-           IF to_regclass('public.person_member') IS NOT NULL THEN TRUNCATE person_member; END IF; \
-         END $$;",
-    )
-    .await
-    .unwrap();
-    let (sk, kid) = generate_key().unwrap();
-    c.execute(
-        "SELECT enroll_actor('agent', '{\"model\":\"reg-stub\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
-        &[&kid],
-    ).await.unwrap();
-    (sk, kid)
-}
+/// The identity-overlay tables this suite writes to, truncated per test by
+/// `common::setup`. Created by LATER sections of db/018 (Tasks 3–4) than the core
+/// clinical tables, hence the `to_regclass` guard `setup` applies.
+const OVERLAY_TABLES: [&str; 2] = ["patient_link", "person_member"];
 
 /// Sign + submit one link OR unlink event through the real submit_event door.
 /// `wall` is the HLC wall clock (higher = newer); patient_id is set to subject_a
@@ -105,27 +72,20 @@ async fn submit_link_prov(
             render_unlink_twin(&la),
         )
     };
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: a_s.clone(),
-        event_type: etype.into(),
-        schema_version: sver.into(),
-        hlc: Hlc {
+    submit_signed(
+        c,
+        sk,
+        kid,
+        EventSpec {
+            patient: a, // an identity event is "about" subject_a's linkage
+            event_type: etype,
+            schema_version: sver,
+            payload,
+            plaintext_twin: Some(twin),
             wall,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload,
-        attachments: vec![],
-        plaintext_twin: Some(twin),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
+    )
+    .await
 }
 
 #[tokio::test]
@@ -133,7 +93,7 @@ async fn valid_link_is_accepted() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true)
         .await
@@ -145,7 +105,7 @@ async fn self_link_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let a = Uuid::now_v7();
     let err = submit_link(&c, &sk, &kid, a, a, 100, true)
         .await
@@ -162,7 +122,7 @@ async fn empty_provenance_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     let err = submit_link_prov(&c, &sk, &kid, a, b, 100, true, "   ")
         .await
@@ -195,7 +155,7 @@ async fn link_creates_a_standing_edge() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     assert_eq!(edge_state(&c, a, b).await.as_deref(), Some("link"));
@@ -206,7 +166,7 @@ async fn newer_unlink_overlays_older_link() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // link @100
     submit_link(&c, &sk, &kid, a, b, 200, false).await.unwrap(); // unlink @200 (newer)
@@ -220,7 +180,7 @@ async fn older_link_does_not_overlay_newer_unlink() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 200, false).await.unwrap(); // unlink @200 lands first
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // link @100 lands later (older)
@@ -236,7 +196,7 @@ async fn missing_twin_is_rejected() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     // Build a link event with NO authored twin — the identity floor HARD-requires one.
     let (a_s, b_s) = (a.to_string(), b.to_string());
@@ -246,29 +206,21 @@ async fn missing_twin_is_rejected() {
         provenance: "p",
         confidence: None,
     };
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: a_s.clone(),
-        event_type: "identity.link.asserted".into(),
-        schema_version: "identity.link/1".into(),
-        hlc: Hlc {
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: a,
+            event_type: "identity.link.asserted",
+            schema_version: "identity.link/1",
+            payload: link_assertion_body(&la),
+            plaintext_twin: None, // the omission under test
             wall: 100,
-            counter: 0,
-            node_origin: "n".into(),
         },
-        t_effective: None,
-        signer_key_id: kid.clone(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: link_assertion_body(&la),
-        attachments: vec![],
-        plaintext_twin: None,
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, &sk).unwrap();
-    let err = c
-        .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .unwrap_err();
+    )
+    .await
+    .unwrap_err();
     assert!(
         db_msg(&err).contains("authored twin"),
         "twin-less identity event must be refused: {}",
@@ -296,7 +248,7 @@ async fn linked_pair_shares_min_uuid_person() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     let expected = a.min(b);
@@ -309,7 +261,7 @@ async fn transitive_links_form_one_person() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, d, 110, true).await.unwrap();
@@ -325,7 +277,7 @@ async fn diamond_unlink_stays_merged() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
@@ -343,7 +295,7 @@ async fn chain_unlink_splits_component() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
@@ -363,7 +315,7 @@ async fn re_link_is_idempotent() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, a, b, 105, true).await.unwrap(); // a second, later link of the same pair
@@ -381,38 +333,12 @@ async fn re_link_is_idempotent() {
     );
 }
 
-/// Submit a minimal patient.created so the patient has a patient_chart row to union.
-async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid, wall: i64) {
-    let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
-        patient_id: p.to_string(),
-        event_type: "patient.created".into(),
-        schema_version: "patient/1".into(),
-        hlc: Hlc {
-            wall,
-            counter: 0,
-            node_origin: "n".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
-        attachments: vec![],
-        plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-    };
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-        .expect("patient.created accepted");
-}
-
 #[tokio::test]
 async fn person_chart_unions_member_streams() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     submit_patient_created(&c, &sk, &kid, a, 100).await;
     submit_patient_created(&c, &sk, &kid, b, 101).await;
@@ -438,7 +364,7 @@ async fn person_chart_defaults_unlinked_to_self() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let a = Uuid::now_v7();
     submit_patient_created(&c, &sk, &kid, a, 100).await; // never linked → no person_member row
     let a_s = a.to_string();
@@ -463,7 +389,7 @@ async fn oversize_component_guard_rejects() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     c.batch_execute("SET cairn.max_component_size = 3")
         .await
         .unwrap();
@@ -493,7 +419,7 @@ async fn component_at_exactly_cap_is_accepted() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c).await;
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     c.batch_execute("SET cairn.max_component_size = 3")
         .await
         .unwrap();
