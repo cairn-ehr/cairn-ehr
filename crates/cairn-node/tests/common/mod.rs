@@ -17,8 +17,12 @@
 //! where their canned clinical strings are readable next to the assertions that depend on
 //! them. The line is: if two suites would write it identically, it goes here.
 //!
-//! Enforced by `tests/identity_scaffolding_shared.rs`, which fails if a suite re-declares
-//! any of these locally.
+//! `tests/identity_scaffolding_shared.rs` enforces adoption — but only of the helpers that
+//! are specific to this cluster: `submit_signed`, `submit_patient_created`, `trust_of`,
+//! `person_chart_trust`. It deliberately does NOT bind `cs` / `db_msg` / `setup`, which are
+//! project-wide test idioms declared in dozens of this directory's files; see that file's
+//! `REPO_WIDE` const for why, and #327 for unifying them. So a suite re-declaring its own
+//! `setup` is caught by review, not by the guard.
 
 // Each test binary uses only the subset of helpers it needs, so from the perspective of
 // any single binary the rest are dead. Without this, every suite would warn about the
@@ -34,7 +38,9 @@ use uuid::Uuid;
 ///
 /// Every DB-gated test opens with `let Some(base) = cs() else { return };` — absent
 /// `$CAIRN_TEST_PG` the suite quietly passes, so a plain `cargo test` on a machine with no
-/// database still works. `scripts/run-db-gated-tests.sh` exports it so CI really runs them.
+/// database still works. Two things set it so the tests actually run: CI declares it as a
+/// workflow-step `env:` entry (`.github/workflows/rust.yml`), and locally
+/// `scripts/run-db-gated-tests.sh` bakes it in.
 pub fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -125,7 +131,7 @@ pub struct EventSpec<'a> {
 
 /// Sign `spec` and submit it through the real `submit_event` door.
 ///
-/// Returns the raw submit result — NOT unwrapped — because roughly half of these tests
+/// Returns the raw submit result — NOT unwrapped — because about a third of these tests
 /// assert a *rejection* and match on [`db_msg`] of the error. A helper that unwrapped here
 /// would make the floor's rejections untestable.
 pub async fn submit_signed(
