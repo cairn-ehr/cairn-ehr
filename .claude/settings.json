@@ -9,7 +9,10 @@
       "Bash(shellcheck:*)",
       "Bash(psql:*)",
       "Bash(scripts/run-db-sql-tests.sh:*)",
+      "Bash(scripts/run-db-gated-tests.sh:*)",
       "Bash(scripts/techdebt-loop.sh:*)",
+      "Bash(bash scripts/run-db-sql-tests.sh:*)",
+      "Bash(bash scripts/run-db-gated-tests.sh:*)",
       "Bash(bash scripts/tests/techdebt-loop-test.sh:*)",
       "Bash(sleep:*)",
       "Bash(echo:*)"

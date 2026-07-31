@@ -134,9 +134,17 @@ cleverness, no hard-coded crypto material in tests.
 ## Step 5 — local gate (all must pass before a PR)
 
 - `cargo test` — FULL workspace from the worktree root. Never `-p`, never
-  piped through `tail` (masks the exit code).
+  piped through `tail` (masks the exit code). If the change touches `db/`
+  or anything DB-gated (event/floor/projection surfaces, twins, identity),
+  run `scripts/run-db-gated-tests.sh` INSTEAD: it runs the SQL mirrors plus
+  the full workspace `cargo test` with `CAIRN_TEST_PG`/`PG2`/`PG3` exported,
+  so the DB-gated suites (which self-skip without that env) actually run.
+- NEVER prefix any command with env-var assignments (`PGHOST=… bash
+  scripts/…`, `CAIRN_TEST_PG=… cargo test …`): permission rules are prefix
+  matches on the command string, a leading `VAR=value` can never be
+  allowlisted, and the denial stops the whole run. Every env the gate needs
+  is baked into `scripts/run-db-gated-tests.sh`.
 - `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets`.
-- If anything under `db/` changed: `scripts/run-db-sql-tests.sh`.
 - If `db/` added columns to `event_log`: recreate cairn_test/2/3 on :5532
   first (stale positional ROW literals otherwise fail born_sealed tests).
 - Python touched: `uv run pytest` in the affected directory.
