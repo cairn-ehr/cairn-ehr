@@ -11,14 +11,10 @@ projection tables on EXIT as well, guaranteeing a clean database no matter what 
 committed. This test drives that context manager directly and asserts the guarantee.
 """
 
-import os
-
 import pytest
 
 from tests import conftest
-from tests.conftest import _PROJECTION_TABLES, managed_pg_conn, seed_patient
-
-CAIRN_TEST_PG = os.environ.get("CAIRN_TEST_PG")
+from tests.conftest import _PROJECTION_TABLES, cairn_test_dsn, managed_pg_conn, seed_patient
 
 
 def _row_counts(dsn):
@@ -35,17 +31,18 @@ def _row_counts(dsn):
 
 def test_managed_pg_conn_truncates_committed_rows_on_exit():
     """A committed row (what a leaking test leaves behind) must not survive teardown."""
-    if not CAIRN_TEST_PG:
+    dsn = cairn_test_dsn()
+    if not dsn:
         pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
 
     # Commit a projection row inside the managed connection, exactly as a real
     # integration test does via seed_patient's trailing conn.commit().
-    with managed_pg_conn(CAIRN_TEST_PG) as conn:
+    with managed_pg_conn(dsn) as conn:
         seed_patient(conn, "11111111-1111-1111-1111-111111111111", names=[("Leaky", 0)])
 
     # A fresh connection (not the managed one) must see zero rows in every projection
     # table: the managed connection truncated them on exit.
-    assert _row_counts(CAIRN_TEST_PG) == dict.fromkeys(_PROJECTION_TABLES, 0)
+    assert _row_counts(dsn) == dict.fromkeys(_PROJECTION_TABLES, 0)
 
 
 class _FakeConn:
@@ -101,6 +98,27 @@ def test_exit_truncation_error_does_not_mask_the_test_failure(monkeypatch):
                 raise _Sentinel
     finally:
         assert fake.closed, "the connection must still be closed even when exit truncation fails"
+
+
+def test_dsn_is_read_per_call_not_at_import(monkeypatch):
+    """#79 — the DSN must be read from the environment on every call, not once at import.
+
+    The old shape was a module-level `CAIRN_TEST_PG = os.environ.get(...)`, evaluated when
+    pytest first imported conftest. Anything that sets the variable AFTER Python starts —
+    a CI matrix step, a wrapper script that exports it between collection and run, a test
+    that sets it deliberately — was invisible, and every DB-gated test silently SKIPPED.
+    A skipped test looks green, so the failure mode was a whole suite quietly not running.
+
+    monkeypatch here mutates the environment strictly after import, which is exactly the
+    condition the old shape could not see. DB-independent: it never opens a connection.
+    """
+    monkeypatch.setenv("CAIRN_TEST_PG", "host=example-set-after-import")
+    assert conftest.cairn_test_dsn() == "host=example-set-after-import"
+
+    # And the unset case still reads as "no database" rather than an empty string, since
+    # the fixture's skip decision is a truthiness test on this value.
+    monkeypatch.delenv("CAIRN_TEST_PG", raising=False)
+    assert conftest.cairn_test_dsn() is None
 
 
 def test_schema_file_list_tracks_the_db_directory():

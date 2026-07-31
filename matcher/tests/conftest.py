@@ -17,7 +17,21 @@ from pathlib import Path
 
 import pytest
 
-CAIRN_TEST_PG = os.environ.get("CAIRN_TEST_PG")
+
+def cairn_test_dsn() -> str | None:
+    """The DB-gated suite's connection string, read from the environment ON EVERY CALL.
+
+    Deliberately a function, not a module-level constant (issue #79). A constant is
+    evaluated once, when pytest first imports this conftest, so anything that sets
+    CAIRN_TEST_PG *after* Python starts — a CI matrix step, a wrapper script exporting it
+    between collection and run, a test setting it itself — was invisible and every
+    DB-gated test skipped. A skipped test reports green, so the failure mode was an entire
+    integration suite quietly not running while the summary still said OK.
+
+    Returns None (not "") when unset, because callers gate on truthiness to decide whether
+    to skip.
+    """
+    return os.environ.get("CAIRN_TEST_PG")
 
 
 def _seed_content_address(*parts: str) -> bytes:
@@ -121,9 +135,10 @@ def managed_pg_conn(dsn):
 @pytest.fixture
 def pg_conn():
     """A connection with schema applied and projection tables truncated; skip if no DB."""
-    if not CAIRN_TEST_PG:
+    dsn = cairn_test_dsn()
+    if not dsn:
         pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
-    with managed_pg_conn(CAIRN_TEST_PG) as conn:
+    with managed_pg_conn(dsn) as conn:
         yield conn
 
 
