@@ -104,7 +104,24 @@ Deliberately dumb — all intelligence is in the worker.
     happens to quote a limit phrase is misclassified as rate-limited; the damage is
     capped waiting under `--max-wait`, and the §11 statusLine-hook hardening would
     remove transcript matching entirely.)
-  - timeout kill or anything else → `failed`.
+  - timeout kill or anything else → **`crashed`**, which is not yet a failure: a
+    headless session terminates the instant its turn ends, so a worker that yielded
+    with a background wait pending may have died AFTER its merge landed (or with
+    auto-merge armed and CI minutes from green) but before its outcome write
+    (issue #320, observed 2026-08-01: both cycles of a run died this way while the
+    work itself merged, and the false `failed`s tripped the systemic halt). The
+    driver runs a GitHub post-mortem before deciding: a `loop:in-progress` issue
+    CLOSED by a `loop/<n>-*` PR merged after the iteration started → count
+    `merged` and finish the dead worker's cleanup (stale label, worktree,
+    branches); an open claimed issue with auto-merge armed on its open PR → adopt
+    the dead worker's CI watch (poll up to 30 min) and count by what the PR does;
+    anything else → `failed`. Guards: the post-mortem is skipped entirely in smoke
+    mode (a smoke worker creates nothing adoptable, and stale wreckage must not
+    green a broken plumbing check), scoped to the forced issue under `--issue N`,
+    adopts any given issue at most once per run, and closes an adopted issue whose
+    merged PR lacked a closing keyword before stripping its claim label. The skill
+    side of the same fix forbids workers from backgrounding anything in the first
+    place.
 - Flags: `--max-issues N`, `--include-epics`, `--issue N` (force one
   specific issue), `--bypass`, `--max-wait H`, `--timeout H`, `--smoke`, `--setup-labels`.
 - On any exit: run summary (merged / skipped / failed / iterations) + notification.

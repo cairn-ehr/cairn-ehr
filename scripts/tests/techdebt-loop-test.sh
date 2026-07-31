@@ -89,11 +89,40 @@ t_assert_eq "outcome.json wins over transcript" "merged" \
   "$(classify_result "$T_TMP/out.json" "$T_TMP/rl")"
 t_assert_eq "no outcome + limit pattern = rate-limited" "rate-limited" \
   "$(classify_result "$T_TMP/absent.json" "$T_TMP/rl")"
-t_assert_eq "no outcome + no pattern = failed" "failed" \
+t_assert_eq "no outcome + no pattern = crashed (post-mortem decides)" "crashed" \
   "$(classify_result "$T_TMP/absent.json" "$T_TMP/plain")"
 printf 'not json at all' > "$T_TMP/garbage.json"
-t_assert_eq "garbage outcome.json = failed" "failed" \
+t_assert_eq "garbage outcome.json = crashed (post-mortem decides)" "crashed" \
   "$(classify_result "$T_TMP/garbage.json" "$T_TMP/plain")"
+# A worker that finished and HONESTLY reported failure is a failure, never a
+# crash — the post-mortem must not second-guess a deliberate outcome write.
+printf '{"outcome":"failed","issue":11,"pr":null,"step":"gate","detail":"x"}' > "$T_TMP/honest.json"
+t_assert_eq "worker-written failed stays failed" "failed" \
+  "$(classify_result "$T_TMP/honest.json" "$T_TMP/plain")"
+t_teardown
+
+# ---- merged_loop_pr_after (crash post-mortem, issue #320) ----
+# The timing filter is load-bearing: a loop/<n>-* PR merged BEFORE this
+# iteration began (e.g. a stale in-progress label left by an ancient crash)
+# must never be adopted as THIS cycle's success. Start epoch 1000000000 is
+# 2001; the two stub mergedAt values straddle it. The stub is a shell
+# FUNCTION shadowing the gh binary (no PATH games, no subshell needed);
+# unset -f restores the real gh for everything below.
+t_setup
+# shellcheck disable=SC2329 # invoked indirectly, via merged_loop_pr_after
+gh() {
+  printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"%s"}]' "${GH_MERGED_AT:?}"
+}
+GH_MERGED_AT="2999-01-01T00:00:00Z"
+merged_loop_pr_after 424242 1000000000; RC=$?
+t_assert_eq "loop/<n> PR merged after iteration start is found" "0" "$RC"
+merged_loop_pr_after 4242 1000000000; RC=$?
+t_assert_eq "issue number must match exactly (4242 != 424242)" "1" "$RC"
+GH_MERGED_AT="2000-01-01T00:00:00Z"
+merged_loop_pr_after 424242 1000000000; RC=$?
+t_assert_eq "merge older than iteration start is ignored" "1" "$RC"
+unset GH_MERGED_AT
+unset -f gh
 t_teardown
 
 # ---- compute_wait_secs ----
@@ -307,12 +336,22 @@ EOF
 #!/bin/bash
 exit 0
 EOF
-  chmod +x "$STUB/claude" "$STUB/sleep" "$STUB/osascript" "$STUB/gh"
+  # git is stubbed too: the crash post-mortem's finish_adopted_cycle runs
+  # `git worktree remove` / `git branch -D` / `git push origin --delete`,
+  # which must never touch the developer's real repo from a test. Records
+  # argv; prints nothing (individual tests overwrite it to answer queries).
+  cat > "$STUB/git" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GIT_CALLS:?}"
+EOF
+  chmod +x "$STUB/claude" "$STUB/sleep" "$STUB/osascript" "$STUB/gh" "$STUB/git"
   SLEEP_CALLS="$T_TMP/sleep-calls"
   : > "$SLEEP_CALLS"
   CLAUDE_CALLS="$T_TMP/claude-calls"
   : > "$CLAUDE_CALLS"
-  export STUB_COUNTER="$COUNTER" STUB_SCENARIO="$SCENARIO" SLEEP_CALLS CLAUDE_CALLS
+  GIT_CALLS="$T_TMP/git-calls"
+  : > "$GIT_CALLS"
+  export STUB_COUNTER="$COUNTER" STUB_SCENARIO="$SCENARIO" SLEEP_CALLS CLAUDE_CALLS GIT_CALLS
 }
 
 # run_main FLAGS... — run main with the stub PATH in a subshell so each
@@ -548,6 +587,215 @@ t_assert_fail "rate-limit wait TERM releases the lock" \
   [ -d "$T_TMP/loophome/lock" ]
 # The orphaned real sleep exits on its own; reap best-effort anyway.
 pkill -f '/bin/sleep 30' >/dev/null 2>&1 || true
+t_teardown
+
+# ---- crash post-mortem scenarios (issue #320) ----
+# A worker that ends its turn with a background wait pending dies instantly
+# (headless sessions terminate at turn end) and never writes outcome.json —
+# even when its actual work SUCCEEDED. The driver must consult GitHub before
+# counting such a crash as a failure: two false failures in a row would trip
+# the systemic-halt breaker and strand the rest of the run.
+
+# (A) LANDED: the dead worker's PR already auto-merged and the issue closed.
+# The cycle is a merge; the driver also finishes the dead worker's label
+# cleanup (the stale loop:in-progress would otherwise linger forever).
+t_setup; make_stub_env crash dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+# git stub answers the branch discovery so the cleanup path is exercised.
+cat > "$STUB/git" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GIT_CALLS:?}"
+case "$*" in
+  *"branch --list"*) echo "loop/424242-fix-slug" ;;
+esac
+EOF
+chmod +x "$STUB/git"
+run_main
+t_assert_eq "crashed-but-landed cycle exits 0" "0" "$MAIN_RC"
+t_assert_ok "landed crash counted as merged" grep -q "merged: 1" "$T_TMP/main-out"
+t_assert_ok "landed crash adds no failure" grep -q "failed: 0" "$T_TMP/main-out"
+t_assert_ok "stale loop:in-progress removed from the adopted issue" \
+  grep -q "issue edit 424242 --remove-label loop:in-progress" "$GH_CALLS"
+t_assert_ok "adopted worktree removed" grep -q "worktree remove" "$GIT_CALLS"
+t_assert_ok "adopted local branch deleted" \
+  grep -q -- "branch -D loop/424242-fix-slug" "$GIT_CALLS"
+t_assert_ok "adopted remote branch deleted" \
+  grep -q -- "push origin --delete loop/424242-fix-slug" "$GIT_CALLS"
+t_teardown
+
+# (B) PENDING: the dead worker armed auto-merge and died waiting for CI.
+# The driver adopts the CI watch: polls the PR until it merges, then counts
+# the cycle merged. (pr view answers OPEN twice, then MERGED.)
+t_setup; make_stub_env crash dry
+GH_CALLS="$T_TMP/gh-calls"; : > "$GH_CALLS"; export GH_CALLS
+GH_PRVIEW_COUNT="$T_TMP/prview-count"; echo 0 > "$GH_PRVIEW_COUNT"; export GH_PRVIEW_COUNT
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+echo "$@" >> "${GH_CALLS:?}"
+case "$*" in
+  *"issue list"*"--state closed"*) : ;;
+  *"issue list"*"--state open"*) echo "424242" ;;
+  *"pr list"*"--state open"*)
+    printf '[{"number":9999,"headRefName":"loop/424242-fix-slug","autoMergeRequest":{"enabledAt":"2026-01-01T00:00:00Z"}}]' ;;
+  *"pr view 9999"*)
+    v="$(cat "${GH_PRVIEW_COUNT:?}")"; v=$((v + 1)); echo "$v" > "$GH_PRVIEW_COUNT"
+    if [ "$v" -ge 3 ]; then echo "MERGED"; else echo "OPEN"; fi ;;
+  *"issue view 424242"*) echo "OPEN" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "crashed-with-armed-automerge cycle exits 0" "0" "$MAIN_RC"
+t_assert_ok "adopted CI watch counts the landing as merged" \
+  grep -q "merged: 1" "$T_TMP/main-out"
+t_assert_ok "the driver actually polled the PR" grep -q "pr view 9999" "$GH_CALLS"
+t_assert_ok "the watch used the poll cadence" grep -q "^60$" "$SLEEP_CALLS"
+# A PR without a closing keyword merges without closing its issue. Stripping
+# the claim label from a still-open issue would leave it with NO loop:*
+# label at all — invisible to triage, untouchable by every future worker —
+# so the post-mortem must close it, as the worker's own Step 9 would have.
+t_assert_ok "adopted-but-unclosed issue is closed by the post-mortem" \
+  grep -q "issue close 424242" "$GH_CALLS"
+t_teardown
+
+# (C) PENDING, never lands: the adopted watch must give up at the budget —
+# the cycle counts failed (accurately: nothing merged) and the next worker's
+# crash recovery can still adopt the issue.
+t_setup; make_stub_env crash dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) : ;;
+  *"issue list"*"--state open"*) echo "424242" ;;
+  *"pr list"*"--state open"*)
+    printf '[{"number":9999,"headRefName":"loop/424242-fix-slug","autoMergeRequest":{"enabledAt":"2026-01-01T00:00:00Z"}}]' ;;
+  *"pr view 9999"*) echo "OPEN" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "unlanded adopted watch still exits 0 (single failure, then dry)" "0" "$MAIN_RC"
+t_assert_ok "unlanded crash counted failed" grep -q "failed: 1" "$T_TMP/main-out"
+# Pins the watch budget: exactly ADOPT_WAIT_SECS / ADOPT_POLL_SECS polls.
+t_assert_eq "watch gave up after exactly the adopt budget (30 polls)" "30" \
+  "$(grep -c '^60$' "$SLEEP_CALLS")"
+t_teardown
+
+# (D) An adopted crash RESETS the consecutive-failure breaker: an honest
+# failure followed by a crashed-but-landed cycle is one failure + one merge,
+# not the two-in-a-row that halts the run.
+t_setup; make_stub_env failed crash dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "adopted crash resets the consecutive-failure breaker" "0" "$MAIN_RC"
+t_assert_ok "ledger shows the merge and the single failure" \
+  grep -q "merged: 1, skipped: 0, failed: 1" "$T_TMP/main-out"
+t_teardown
+
+# (E) SMOKE guard: a smoke worker touches nothing adoptable by contract
+# (SKILL.md smoke mode: "no labels, no issues, no branches"), so a smoke
+# crash is a broken environment, full stop. The post-mortem must not scan
+# GitHub — stale wreckage from a previous real run (exactly what #320
+# leaves behind) could otherwise make a broken plumbing check exit 0.
+t_setup; make_stub_env crash
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main --smoke
+t_assert_eq "smoke crash never adopts — exits 1" "1" "$MAIN_RC"
+t_assert_fail "smoke crash runs no post-mortem" \
+  grep -q "post-mortem" "$T_TMP/main-out"
+t_teardown
+
+# (F) FORCED-ISSUE scope: with --issue N the driver knows exactly which
+# issue the worker owned; wreckage of any OTHER issue must not be adopted —
+# the single-shot exit code must reflect the forced issue's fate alone.
+t_setup; make_stub_env crash
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main --issue 320
+t_assert_eq "forced-issue crash ignores other issues' wreckage — exits 1" "1" "$MAIN_RC"
+t_assert_fail "no cross-issue adoption in forced mode" \
+  grep -q "adopted issue #424242" "$T_TMP/main-out"
+t_teardown
+
+# (G) Once only: an issue adopted by one iteration's post-mortem must never
+# be adopted again by a later one — the same wreckage re-matched would
+# double-count the merge and mask the later crash's real fate.
+t_setup; make_stub_env crash crash dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) echo "424242" ;;
+  *"pr list"*"--state merged"*)
+    printf '[{"headRefName":"loop/424242-fix-slug","mergedAt":"2999-01-01T00:00:00Z"}]' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "re-offered wreckage run still exits 0 (dry after two crashes)" "0" "$MAIN_RC"
+t_assert_ok "second crash counted failed, not merged again" \
+  grep -q "merged: 1, skipped: 0, failed: 1" "$T_TMP/main-out"
+t_teardown
+
+# (H) A watch that gave up is not re-armed: the abandoned issue goes on the
+# same once-only list, so a second crash fails FAST (no second 30-minute
+# watch) and the two-failure breaker still fires.
+t_setup; make_stub_env crash crash dry
+cat > "$STUB/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"issue list"*"--state closed"*) : ;;
+  *"issue list"*"--state open"*) echo "424242" ;;
+  *"pr list"*"--state open"*)
+    printf '[{"number":9999,"headRefName":"loop/424242-fix-slug","autoMergeRequest":{"enabledAt":"2026-01-01T00:00:00Z"}}]' ;;
+  *"pr view 9999"*) echo "OPEN" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+run_main
+t_assert_eq "two pending crashes halt the run" "1" "$MAIN_RC"
+t_assert_eq "the second crash never re-armed the watch (still 30 polls)" "30" \
+  "$(grep -c '^60$' "$SLEEP_CALLS")"
 t_teardown
 
 # ---- label taxonomy: agent-filed provenance + skill/driver drift ----
