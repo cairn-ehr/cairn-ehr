@@ -12,12 +12,21 @@
 --
 -- Additive: no event-format change, no submit_event change. Reads nothing.
 --
--- WRITERS (all as a role granted cairn_agent). The Python matcher INSERTs the proposal and
--- retracts it (pipeline/db.py upsert_proposal / retract_pending_proposal); the Rust apply
--- seams then move `status` — apply_proposal.rs (C2, human-driven) and auto_apply.rs (C2b,
--- ×2). Five sites, two languages. This list used to read "only the Python pipeline writes
--- here", which was already false when the C2/C2b seams landed and is corrected here (#79);
--- keep it current, because two comments below reason about who writes.
+-- WRITERS — five sites, two languages. The Python matcher INSERTs the proposal and retracts
+-- it (pipeline/db.py upsert_proposal / retract_pending_proposal), as a role granted
+-- cairn_agent by the GRANT at the foot of this file. The Rust apply seams then move
+-- `status` — apply_proposal.rs (C2, human-driven) and auto_apply.rs (C2b, ×2); auto_apply
+-- runs on an OWNER connection, not cairn_agent, because its caller must also enroll the
+-- per-epoch matcher actor and the db/004 trust-anchor floor deliberately bars cairn_agent
+-- from enroll_actor (see matcher_actor.rs). Ownership bypasses the GRANT, so that path does
+-- not depend on it at all.
+--
+-- Note `band` specifically: only the Python pipeline ever writes that COLUMN — the Rust
+-- seams touch status/applied_event_id/updated_at and never band. That is what makes the
+-- CHECK below a guard against a writer nobody has written yet, rather than against an
+-- existing one. This list used to read "only the Python pipeline writes here", flatly, which
+-- was already false when the C2/C2b seams landed and is corrected here (#79); keep it
+-- current, because two comments below reason about who writes.
 
 CREATE TABLE IF NOT EXISTS match_proposal (
     -- The pair is stored in canonical (least, greatest) order so it is a natural unique
@@ -69,7 +78,8 @@ CREATE TABLE IF NOT EXISTS match_proposal (
 -- Every schema file is replayed on each connect, so this block must be idempotent.
 --
 -- GUARDED ON THE DEFINITION, NOT THE NAME. The obvious `IF NOT EXISTS (… conname = …)`
--- form (as db/041 uses) is subtly wrong for a set that can WIDEN: once the constraint
+-- form (which db/041 still uses — filed as issue #315) is subtly wrong for a set that can
+-- WIDEN: once the constraint
 -- exists, a later edit to the value list is silently skipped on every database that already
 -- has it, so a new band would be storable only on freshly-created databases. Both test
 -- suites build their databases fresh, so neither could ever catch that — it would surface
@@ -79,9 +89,12 @@ CREATE TABLE IF NOT EXISTS match_proposal (
 -- steady state, via constraint oid stability).
 --
 -- ADDED `NOT VALID`, DELIBERATELY. A plain ADD validates every existing row, so ONE
--- uninterpretable band on this ADVISORY table would abort the schema load — and
--- connect_and_load_schema treats that as fatal, so the node would not start. Bricking a
--- node over an advisory worklist row inverts availability-over-consistency. NOT VALID
+-- uninterpretable band on this ADVISORY table would abort the schema load, which
+-- connect_and_load_schema treats as fatal. That takes out `init`, `restore`, `reproject`
+-- and `deferred` — provisioning and recovery, i.e. exactly the commands an operator reaches
+-- for when something is already wrong. (`serve`/`run` use plain db::connect and never replay
+-- the schema, so a RUNNING node would not notice.) Losing the recovery paths over an
+-- advisory worklist row still inverts availability-over-consistency. NOT VALID
 -- enforces the CHECK on every future INSERT/UPDATE (which is the entire point — it guards
 -- against a writer that is not the matcher) while leaving any pre-existing junk row alone
 -- to be found by a query rather than by an outage. It also skips the validation scan.

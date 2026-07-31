@@ -2,11 +2,12 @@
 -- Issue #79 — the advisory match_proposal band CHECK (matcher B2 follow-up minor).
 --
 -- WHAT THIS GUARDS: `band` carries the matcher's immutable propose-time assessment and its
--- values are owned by the Python `cairn_matcher.pipeline.banding.Band` enum. Only the
--- Python pipeline writes this table today, so the CHECK is defence in depth: it stops a
--- writer that is NOT that pipeline (a psql session, a migration script, a future service)
--- storing a band string no reader can interpret. Advisory table, so this is the cheap kind
--- of safety — a bad row is a bad PROPOSAL a human reviews, never record corruption.
+-- values are owned by the Python `cairn_matcher.pipeline.banding.Band` enum. Several
+-- writers touch this TABLE (see db/017's header), but only the Python pipeline writes the
+-- `band` COLUMN, so the CHECK is defence in depth: it stops a writer that is NOT that
+-- pipeline (a psql session, a migration script, a future service) storing a band string no
+-- reader can interpret. Advisory table, so this is the cheap kind of safety — a bad row is
+-- a bad PROPOSAL a human reviews, never record corruption.
 --
 -- The Python-side twin of this file is matcher/tests/test_match_proposal_band_check.py,
 -- which drives the DB with every `Band` member so the enum and this constraint cannot

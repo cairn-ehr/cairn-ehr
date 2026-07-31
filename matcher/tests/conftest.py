@@ -26,13 +26,14 @@ def cairn_test_dsn() -> str | None:
     IN-PROCESS change to the environment — a `monkeypatch.setenv`, a plugin mutating
     os.environ in a hook — as the value it captured at import.
 
-    Note what this is NOT: the usual ways CAIRN_TEST_PG arrives (a CI step's `env:`,
-    `scripts/run-db-gated-tests.sh`'s `export`) populate os.environ *before* the interpreter
-    starts, and a module-level read sees those perfectly well. The original issue text
-    described a "CI matrix that sets the env var after Python start" missing the value; that
-    cannot actually happen, since no external process can inject env into a running one. So
-    this change fixes testability, not a latent CI bug — worth stating plainly rather than
-    leaving a comment that teaches a wrong model of how env vars reach a process.
+    Note what this is NOT: the way CAIRN_TEST_PG actually reaches this suite is the `env:`
+    block on CI's "pytest (matcher DB-gated integration suite)" step (.github/workflows/
+    rust.yml), which populates os.environ *before* the interpreter starts — a module-level
+    read sees that perfectly well. The original issue text described a "CI matrix that sets
+    the env var after Python start" missing the value; that cannot happen, since no external
+    process can inject env into a running one. So this change fixes testability, not a latent
+    CI bug — worth stating plainly rather than leaving a comment that teaches a wrong model
+    of how env vars reach a process.
 
     Returns None (not "") when unset, because callers gate on truthiness to decide whether
     to skip.

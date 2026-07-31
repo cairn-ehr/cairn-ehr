@@ -2,9 +2,10 @@
 """DB-gated: `match_proposal.band` is constrained to the `banding.Band` enum (issue #79).
 
 The B2 review deferred a DB-level `CHECK (band IN (…))` as "defence in depth" — the values
-are owned by the Python `Band` enum and only the Python pipeline writes the table, so the
-CHECK guards against a writer that ISN'T that pipeline (a psql session, a future service,
-a migration script) storing a band no reader can interpret.
+are owned by the Python `Band` enum, and while several writers touch the table (see db/017's
+header), only that pipeline writes the `band` COLUMN. So the CHECK guards against a writer
+that ISN'T that pipeline (a psql session, a future service, a migration script) storing a
+band no reader can interpret.
 
 Defence in depth has a cost, though: the accepted set now lives in TWO places — this
 `db/017` CHECK and `banding.Band`. That is precisely the two-place-mapping failure mode of
