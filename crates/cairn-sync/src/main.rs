@@ -1230,7 +1230,7 @@ fn cmd_chart(conn: &str, patient: &str) -> R<()> {
 /// from which the harness extrapolates per-event vs per-episode key granularity.
 fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     use chacha20poly1305::aead::{Aead, KeyInit};
-    use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
+    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 
     let (sign_per_s, verify_per_s) = cairn_event::bench_sign_verify(sig_iters);
     let (sha_mbps, blake_mbps) = cairn_event::bench_hash_mbps(hash_mb);
@@ -1247,10 +1247,12 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     // House rule 6 (#146): bench key/nonce material is DERIVED at runtime, never a
     // byte literal, so CodeQL's hard-coded-crypto-value query stays literal-free and
     // live for production code. Deterministic on purpose — same bench input every run.
+    // The `(&array).into()` conversions below borrow the fixed-size arrays as the
+    // AEAD `Key`/`XNonce` types — chacha20poly1305 0.11 deprecated `from_slice`.
     let kek_bytes: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3).wrapping_add(9));
-    let kek = XChaCha20Poly1305::new(Key::from_slice(&kek_bytes));
+    let kek = XChaCha20Poly1305::new((&kek_bytes).into());
     let nonce_bytes: [u8; 24] = std::array::from_fn(|i| i as u8);
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce: &XNonce = (&nonce_bytes).into();
     let dek: [u8; 32] = std::array::from_fn(|i| (i as u8) ^ 3);
     let t = Instant::now();
     for _ in 0..dek_iters {
@@ -1259,7 +1261,7 @@ fn cmd_bench(hash_mb: usize, sig_iters: u32, dek_iters: u32) -> R<()> {
     let dek_wrap_per_s = dek_iters as f64 / t.elapsed().as_secs_f64();
 
     let body = vec![0x7Eu8; 1024]; // a representative ~1 KiB clinical body
-    let body_kek = XChaCha20Poly1305::new(Key::from_slice(&dek));
+    let body_kek = XChaCha20Poly1305::new((&dek).into());
     let t = Instant::now();
     for _ in 0..dek_iters {
         std::hint::black_box(body_kek.encrypt(nonce, body.as_ref()).unwrap());

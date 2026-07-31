@@ -401,8 +401,10 @@ auto-merge on a PR fails when the setting is off, so `gh pr list --state merged 
 showing a recent hit proves it was on (#302/#307/#310 do); the skill's "verified OFF, always ask" text was
 stale. **(b)** The worker takes the **lowest-numbered** `loop:ready` issue and §2 triage never re-checks
 `loop:ready`, so a mistaken label parks at the front of the queue forever — the head was
-[#11](https://github.com/cairn-ehr/cairn-ehr/issues/11) (RustCrypto dedupe), whose upstream blocker is still
-live (re-verified against `Cargo.lock`: `chacha20poly1305 0.10.1` still pins `chacha20 0.9.1`), so the first
+[#11](https://github.com/cairn-ehr/cairn-ehr/issues/11) (RustCrypto dedupe), whose upstream blocker was then
+believed still live (re-verified against `Cargo.lock`: `chacha20poly1305 0.10.1` still pins `chacha20 0.9.1`
+— a flawed probe: our own lockfile can never reflect new upstream majors; since resolved 2026-08-01 by #11's
+merge once the stable releases were confirmed, residue in #317), so the first
 unattended cycle would have attempted a **major-version crypto bump on the §9 signing surface**; #75 was
 second and already had a PR. Both relabelled `loop:blocked`; the skill now mandates a head-of-queue
 inspection before an unpinned launch. **(c)** The underlying mechanism gap is filed as

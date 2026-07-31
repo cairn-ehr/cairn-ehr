@@ -259,11 +259,16 @@ current build state, open threads, and time-sensitive items.
   `clock_timestamp()` stamps; **② open-loop/obligation** (order/recall/referral with no closing ack) may warrant a named
   projection, and must be surfaced by salience not a modal (paper-parity); **③ impossible-vs-uncertain** constraint
   rule for the in-DB floor (reject only the physically/type-impossible, advisorily flag the merely improbable).
-- **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) — supply-chain
-  hygiene. **Re-verified 2026-07-31: still blocked on upstream** — the `postgres` stack pulls `digest 0.11`/`sha2 0.11`/`chacha20 0.10`
-  while `chacha20poly1305 0.10.1` still depends on `chacha20 0.9` and `ed25519-dalek` on `digest 0.10`. Not fixable from our `Cargo.toml`; revisit when the ecosystem converges.
-  Labeled `loop:blocked` — it is the lowest-numbered issue, so a wrong `loop:ready` there puts a
-  major-version crypto bump on the §9 signing surface at the head of the tech-debt queue.
+- **Dedupe transitive RustCrypto dep versions** in `Cargo.lock` ([issue #11](https://github.com/cairn-ehr/cairn-ehr/issues/11)) —
+  **RESOLVED 2026-08-01**: the unifying releases went stable, so the recipe applied as recorded
+  (ed25519-dalek 3 + x25519-dalek 3 together, chacha20poly1305 0.11 with the no-longer-default
+  `zeroize` feature re-enabled, sha2 0.11, hkdf 0.13; zero-copy `from_slice` → reference-conversion
+  fixes). sha2/chacha20/hmac dedupe fully; the residue `cargo deny check bans` still reports
+  (block-buffer, cpufeatures, crypto-common, digest, rand_core — all held by the `argon2 0.5`
+  stack, upstream-blocked on a stable argon2 0.6) is tracked in
+  [#317](https://github.com/cairn-ehr/cairn-ehr/issues/317).
+  (The 2026-07-31 "still blocked" re-verification read our own `Cargo.lock` pins, which can never
+  reflect new upstream majors — caret dry-run against the registry is the honest probe.)
 - **Landing-page polish** — non-developer page for the generated site (frontend-design; `web/` already advanced
   across PRs #15–#17; draft plans under `docs/superpowers/`).
 
