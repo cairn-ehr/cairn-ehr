@@ -181,11 +181,12 @@ $$;
 -- default. Same discipline as every privileged fn in db/005 (Task-1 review finding).
 REVOKE EXECUTE ON FUNCTION chart_identity_state_apply(event_log) FROM PUBLIC;
 
--- 5. chart_trust: rework the §5.7 effective trust-state projection to COMPOSE two sources
+-- 5. chart_trust: rework the §5.7 effective trust-state projection to COMPOSE its sources
 --    by highest severity. C3 delivered under-review from one source (open dispute); C4
 --    adds unconfirmed (a standing identity-pending chart) and turns the VIEW into a
 --    highest-severity-wins overlay — the same "effective grade is the highest standing
---    assertion" discipline as the §5.9 sensitivity projection.
+--    assertion" discipline as the §5.9 sensitivity projection. (#190 later added the
+--    link-veto source: three sources, four branches below.)
 --
 --    Precedence: under-review (2) > unconfirmed (1) > confirmed (default). When a chart is
 --    BOTH identity-pending AND has an open dispute, the single displayed state is
@@ -201,8 +202,9 @@ REVOKE EXECUTE ON FUNCTION chart_identity_state_apply(event_log) FROM PUBLIC;
 --    keep in sync, so the #119 trap (a new label silently absorbed into a fail-safe
 --    ELSE because its WHEN arm was forgotten) is structurally gone. The one invariant
 --    left for a future editor is far weaker: branches SHARING a severity must carry
---    the same label (today severity 2 is always 'under-review'); see the tie-break
---    note on the ORDER BY below for why breaking even that cannot under-warn.
+--    the same label (today severity 2 is always 'under-review'). A second label at an
+--    existing severity is a DESIGN ERROR to resolve explicitly — give the new state
+--    its own severity — not something the ORDER BY below makes safe; see its comment.
 --
 --    The column contract is UNCHANGED (patient_id uuid, trust_state text), so this
 --    CREATE OR REPLACE is reload-idempotent across connect_and_load_schema and db/023's
@@ -227,16 +229,28 @@ CREATE OR REPLACE VIEW chart_trust AS
         --   under-review (2) <- pending reattribution                 (§5.5 — future)
         --   under-review (2) <- coherence-check demoted link          (§5.2 feedback — future)
     )
-    -- Highest severity wins the single displayed state. The trust_state tie-break is
-    -- for determinism only: branches sharing a severity share its label by design, so
-    -- it never chooses between MEANINGS — and if a future editor breaks that design
-    -- invariant, the pick stays deterministic and severity-correct (it can only ever
-    -- pick among labels of the SAME rank, never under-warn on a safety signal).
+    -- Highest severity wins the single displayed state. Two guards on the way out:
+    --   * COALESCE — a future branch selecting a NULLABLE label column must not let a
+    --     NULL win the pick: person_chart_trust COALESCEs a missing state to
+    --     'confirmed', so a NULL here would render a genuinely trust-flagged chart as
+    --     confirmed — a silent fail-OPEN on a safety signal. Degrade to the most
+    --     cautious label instead (the same job the old CASE's ELSE arm did).
+    --   * COLLATE "C" (ADR-0045) — a TEXT tie-break must byte-compare, or two nodes
+    --     with different locale collations could display DIFFERENT labels for an
+    --     identical event set: a set-union convergence violation.
+    -- The trust_state tie-break itself is a determinism backstop, NOT a safety
+    -- mechanism: branches sharing a severity share its label by design, so today it
+    -- never chooses between meanings. If that invariant is ever broken the pick is
+    -- still severity-correct (it cannot under-warn), but WHICH same-rank label shows
+    -- is byte-order-arbitrary — hence the header rule: a new label gets its own
+    -- severity. (Plan note: DISTINCT ON sorts where the old GROUP BY hash-aggregated;
+    -- the indexed point lookup `WHERE patient_id = …` still pushes down unaffected,
+    -- but a future unqualified worklist scan over this view now pays a sort.)
     SELECT DISTINCT ON (patient_id)
            patient_id,
-           trust_state::text AS trust_state
+           COALESCE(trust_state, 'under-review')::text AS trust_state
     FROM trust_source
-    ORDER BY patient_id, severity DESC, trust_state;
+    ORDER BY patient_id, severity DESC, trust_state COLLATE "C";
 
 GRANT SELECT ON chart_trust TO cairn_agent;
 

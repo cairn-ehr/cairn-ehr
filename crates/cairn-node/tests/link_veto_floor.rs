@@ -342,9 +342,12 @@ async fn remote_vetoed_link_admitted_flagged_and_under_review() {
 
 /// A chart can stand in TWO trust sources with DIFFERENT severities at once:
 /// identity-pending (unconfirmed, severity 1) and veto-flagged (under-review,
-/// severity 2). The single displayed state must be the higher severity — this is the
-/// cross-source pin for the #119 severity→label restructuring, proving the view
-/// still RANKS across sources rather than merely relabelling within one.
+/// severity 2). The single displayed state must be the higher severity, and when the
+/// higher-severity source clears, the chart must FALL BACK to the lower one — this is
+/// the cross-source pin for the #119 severity→label restructuring, proving the view
+/// RANKS across sources rather than merely relabelling within one (without the
+/// fallback leg, the final under-review assert would be satisfiable by the veto
+/// source alone).
 #[tokio::test]
 async fn veto_flag_outranks_pending_on_the_same_chart() {
     let Some(base) = cs() else {
@@ -375,6 +378,20 @@ async fn veto_flag_outranks_pending_on_the_same_chart() {
         trust_state(&c, a).await.as_deref(),
         Some("under-review"),
         "the veto flag (severity 2) must outrank the standing pending (severity 1)"
+    );
+
+    // The never-erase unlink repair (wall 11 overlays the link) clears the veto flag:
+    // chart `a` must fall back to unconfirmed, proving the pending marker stood
+    // UNDERNEATH the veto the whole time. Were the view driven by the veto source
+    // alone, this read would be None (confirmed), and the pin above would be hollow.
+    let unlink = sign(&link_body(&kid_a, a, b, false, 11, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&unlink.signed_bytes])
+        .await
+        .expect("the unlink repair must always pass");
+    assert_eq!(
+        trust_state(&c, a).await.as_deref(),
+        Some("unconfirmed"),
+        "veto cleared → the standing pending resurfaces as unconfirmed"
     );
 }
 
