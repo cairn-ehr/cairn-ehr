@@ -19,7 +19,8 @@
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::identity::{
-    link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
+    link_assertion_body, pending_assertion_body, render_link_twin, render_pending_twin,
+    render_unlink_twin, unlink_assertion_body, LinkAssertion, PendingAssertion,
 };
 use cairn_event::{
     event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
@@ -201,6 +202,39 @@ async fn trust_state(c: &Client, p: Uuid) -> Option<String> {
     .map(|r| r.get(0))
 }
 
+/// Register `subject` identity-pending through the real submit door (the pending arm of
+/// identity_identify.rs's helper — just enough here to put a chart in a SECOND trust
+/// source for the cross-source composition test).
+async fn mark_pending(c: &Client, sk: &SigningKey, kid: &str, subject: Uuid, wall: i64) {
+    let s_s = subject.to_string();
+    let a = PendingAssertion {
+        subject: &s_s,
+        basis: "unconscious ED arrival, no ID",
+    };
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: s_s.clone(),
+        event_type: "identity.pending.asserted".into(),
+        schema_version: "identity.pending.asserted/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: pending_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(render_pending_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("valid pending accepted");
+}
+
 #[tokio::test]
 async fn agent_link_with_hard_veto_refused_at_local_door() {
     let Some(base) = cs() else {
@@ -304,6 +338,61 @@ async fn remote_vetoed_link_admitted_flagged_and_under_review() {
     // ...and BOTH charts read under-review (never a silent merge).
     assert_eq!(trust_state(&c, a).await.as_deref(), Some("under-review"));
     assert_eq!(trust_state(&c, b).await.as_deref(), Some("under-review"));
+}
+
+/// A chart can stand in TWO trust sources with DIFFERENT severities at once:
+/// identity-pending (unconfirmed, severity 1) and veto-flagged (under-review,
+/// severity 2). The single displayed state must be the higher severity, and when the
+/// higher-severity source clears, the chart must FALL BACK to the lower one — this is
+/// the cross-source pin for the #119 severity→label restructuring, proving the view
+/// RANKS across sources rather than merely relabelling within one (without the
+/// fallback leg, the final under-review assert would be satisfiable by the veto
+/// source alone).
+#[tokio::test]
+async fn veto_flag_outranks_pending_on_the_same_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
+
+    // Chart `a` is ALSO an unnamed arrival: identity-pending on its own → unconfirmed.
+    mark_pending(&c, &sk_a, &kid_a, a, 5).await;
+    assert_eq!(
+        trust_state(&c, a).await.as_deref(),
+        Some("unconfirmed"),
+        "test precondition: pending alone reads unconfirmed"
+    );
+
+    // The replicated vetoed link lands: chart `a` now sits in BOTH trust sources.
+    let body = link_body(&kid_a, a, b, true, 10, false);
+    let signed = sign(&body, &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the apply door must admit the replicated link");
+
+    assert_eq!(
+        trust_state(&c, a).await.as_deref(),
+        Some("under-review"),
+        "the veto flag (severity 2) must outrank the standing pending (severity 1)"
+    );
+
+    // The never-erase unlink repair (wall 11 overlays the link) clears the veto flag:
+    // chart `a` must fall back to unconfirmed, proving the pending marker stood
+    // UNDERNEATH the veto the whole time. Were the view driven by the veto source
+    // alone, this read would be None (confirmed), and the pin above would be hollow.
+    let unlink = sign(&link_body(&kid_a, a, b, false, 11, false), &sk_a).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&unlink.signed_bytes])
+        .await
+        .expect("the unlink repair must always pass");
+    assert_eq!(
+        trust_state(&c, a).await.as_deref(),
+        Some("unconfirmed"),
+        "veto cleared → the standing pending resurfaces as unconfirmed"
+    );
 }
 
 #[tokio::test]

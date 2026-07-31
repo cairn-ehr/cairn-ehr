@@ -1,7 +1,8 @@
 //! Integration coverage for §5.4/§5.7 identity-pending + `identify` + the *unconfirmed*
 //! trust state (db/024): the pending/identify event types, the structural floor, the
 //! chart_identity_state standing overlay, and the reworked chart_trust projection that
-//! composes under-review (dispute) over unconfirmed (pending) by highest severity. Real
+//! composes under-review (dispute — and, tested in link_veto_floor.rs, the #190
+//! link-veto flag) over unconfirmed (pending) by highest severity. Real
 //! Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide via `db::test_serial_guard`.
 //! Mirrors `identity_dispute.rs` (C3).
 use cairn_event::identity::{
