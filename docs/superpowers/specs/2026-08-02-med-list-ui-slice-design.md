@@ -228,7 +228,10 @@ The recorded p95 is what a later revision of §6 commits to as the real budget.
 2. **A nil list cannot be signed off.** "No regular medications, reviewed" is a clinically meaningful
    act on paper with no record-layer home here: zero threads means zero attestations. This is
    ADR-0049's deferred "list reviewed at T" summary event. Filed as
-   [#331](https://github.com/cairn-ehr/cairn-ehr/issues/331), not built.
+   [#331](https://github.com/cairn-ehr/cairn-ehr/issues/331), not built. The leading candidate
+   recorded there is a **reserved "nil" medication code**, which absorbs the case with zero new event
+   types — conditional on first making staleness **list-scoped** for that sentinel, since per-thread
+   staleness would otherwise leave a fresh "patient takes nothing" vouch sitting above real drugs.
 3. **The pane/routing/freshness state machine is kept but unwired.** This slice renders a single-tab
    window. It is tested, documented code awaiting the next slice — not dead code.
 4. **No native API.** The DB-direct read is the ADR-0021 privilege gradient, recorded in §2.
