@@ -1596,7 +1596,12 @@ fn member(id: u128, vouch: VouchState) -> MemberVouch {
 /// A chart covering every shape the view model has to get right: unsigned, signed by
 /// SOMEONE ELSE, stale, ceased, and a reconciled group whose two members disagree.
 pub fn sample_rows() -> Vec<MedicationRow> {
-    let other = "b7c1e9a4f2d38650".to_string();
+    // A deliberately NON-hex label. A fixture attester id never needs to look like a real
+    // key id, and a hex-shaped literal in a key-id field trips CodeQL's
+    // `rust/hard-coded-cryptographic-value` as a recurring false positive that blocks the
+    // scan until a human dismisses it (house rule 6, issue #146) — and it would do so from
+    // a NON-test file, where the query is a real defense we want to keep live.
+    let other = "fixture-clinician-b".to_string();
 
     let mut unsigned = base(10, "atorvastatin", "40", "mg");
     unsigned.members = vec![member(10, VouchState::Absent)];
