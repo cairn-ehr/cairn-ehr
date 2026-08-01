@@ -454,6 +454,27 @@ carry the decisions and are unit-tested with no database.
 Also new: a penned event that later applies **auto-releases** (the node plane's #111 behaviour, mirrored),
 so the pen never keeps a duplicate of `event_log`; unverifiable bytes can never reach that path, so their
 forensic trace is preserved by construction rather than by a special case.
+
+**Review round (same day, PR #330).** Five findings, all fixed in place; two are worth carrying:
+
+- **A message assembled from unconditional clauses will eventually lie.** The loud text rendered its counts
+  and its "each is preserved verbatim in sync_quarantine … Inspect with `cairn-sync quarantine`" tail
+  *always* — so a freeze-only cycle announced "0 unverifiable and 0 floor-refused event(s)" and pointed the
+  operator at an empty pen, and a pen-**quota** freeze claimed "it clears by itself" two sentences after
+  correctly saying it needed a human ack. Both shapes were reachable from an existing green test, which
+  asserted only that the message contained `"quota"`. The fix makes every clause conditional on the state
+  that makes it true, in a pure `loud_pull_message` with three value-level tests. Generalisable: on the
+  operator path the *message is the product* — assert what a message must NOT say, not only what it must.
+- **`P0001` is a verdict-vs-fault test, not permanent-vs-transient.** One member of the deliberate class is
+  ordering-transient: an overlay whose target is still in flight from another link (`db/020` step 5). It is
+  now penned and keeps the cycle loud until the target lands, then applies and auto-releases — correct, but
+  noisier than the freeze it replaced, and `db/020`'s own comment still described the old contract. Comment
+  corrected, the cost named in §6.3. Accepted because the alternative wedges the link for every *other*
+  author. The same review also added the end-to-end freeze-arm test the first draft had declined (swap the
+  apply door for one raising `40001` — deterministic, and `locked_client` re-applies the schema, so it
+  cannot leak), scoped the auto-release comment's over-claim about `acked` rows, and stopped a failed
+  pen-row release from aborting the cycle as a `partition`.
+
 Paper-parity: not clinical-surface — this changes only what a node does with bytes its own floor refused;
 no human act changes at any layer and no runnable clinical surface is exposed.
 

@@ -101,10 +101,10 @@ Postgres-on-Android).
 **Deliberately NOT done, stated honestly:** #268 is analysed, not implemented (above). The pen can now be
 filled by a hostile-but-enrolled peer streaming *verifiable* events our floor refuses — bounded by the
 existing per-peer quota, and §6.3's honest-limit row is updated to say so rather than leaving it implied.
-The freeze arm survives only for transient faults, and its end-to-end coverage is the pen-failure test plus
-a value-level unit test of the loud condition — inducing a genuine transient DB fault deterministically was
-judged not worth contorting the schema for. No paper-parity time budget — §1.2 forced-rationale escape (this
-changes only what a node does with bytes its own floor refused; no human act changes at any layer).
+The freeze arm now survives for two cases, not one — a transient fault *and* a pen that refused the write —
+and the review round closed the coverage gap the first draft had accepted (see ROADMAP Slice 60's review
+paragraph). No paper-parity time budget — §1.2 forced-rationale escape (this changes only what a node does
+with bytes its own floor refused; no human act changes at any layer).
 
 **Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, and
 57/58/59/60 each condensed there, plus the unattended tech-debt-loop "Interlude", with every still-open
