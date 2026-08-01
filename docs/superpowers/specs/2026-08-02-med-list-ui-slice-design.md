@@ -227,14 +227,16 @@ The recorded p95 is what a later revision of §6 commits to as the real budget.
    exclusion in every run.
 2. **A nil list cannot be signed off.** "No regular medications, reviewed" is a clinically meaningful
    act on paper with no record-layer home here: zero threads means zero attestations. This is
-   ADR-0049's deferred "list reviewed at T" summary event. **Filed as an issue, not built.**
+   ADR-0049's deferred "list reviewed at T" summary event. Filed as
+   [#331](https://github.com/cairn-ehr/cairn-ehr/issues/331), not built.
 3. **The pane/routing/freshness state machine is kept but unwired.** This slice renders a single-tab
    window. It is tested, documented code awaiting the next slice — not dead code.
 4. **No native API.** The DB-direct read is the ADR-0021 privilege gradient, recorded in §2.
 5. **DOM accessibility is verified by an operator, not by CI.** The TS renderer is a pure function of
    `SemanticNode`, so Rust owns the contract; the live screen-reader pass is a recorded operator step
-   as in Spike 0004. Automating it needs a JavaScript toolchain in CI — **filed as an issue** rather
-   than smuggling npm into this slice.
+   as in Spike 0004. Automating it needs a JavaScript toolchain in CI — a supply-chain and
+   license-audit decision of its own, filed as
+   [#332](https://github.com/cairn-ehr/cairn-ehr/issues/332) rather than smuggled into this slice.
 6. **Dose editing, prescribing, and reconciliation from the UI are absent.** Read, sign off, cease.
 
 ## 9. Testing
