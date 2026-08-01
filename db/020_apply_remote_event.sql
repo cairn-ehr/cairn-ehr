@@ -263,13 +263,23 @@ BEGIN
 
     -- 5. Target gate for an overlay on another author's event — UNCONDITIONAL for every
     --    targets_other type (issue #191, mirroring db/005: absence must fail CLOSED, not
-    --    skip the existence check and the ADR-0043 owner-gate). A malformed/absent target
-    --    can never become valid, so the refused event sits in durable quarantine and its
-    --    re-offers keep failing — poisoning nothing. Target existence is safe to demand at
-    --    apply because HLC order is causal: a suppress is authored by someone who HELD the
-    --    target, so the target sorts earlier and (on this full-replication plane) arrives
-    --    first; a suppress whose target is still in flight from another link freezes the
-    --    watermark and retries until the target lands.
+    --    skip the existence check and the ADR-0043 owner-gate). Target existence is safe to
+    --    demand at apply because HLC order is causal: a suppress is authored by someone who
+    --    HELD the target, so the target sorts earlier and (on this full-replication plane)
+    --    arrives first.
+    --
+    --    WHAT A REFUSAL COSTS THE PULLER, since ADR-0056 decision 5 (slice 60, #267/#270):
+    --    this is a bare RAISE, so the clinical puller reads it as a DELIBERATE refusal —
+    --    the bytes are penned VERBATIM in sync_quarantine, the re-offer floor pins their
+    --    slot, the cursor still ADVANCES so other authors' events keep flowing, and the
+    --    cycle fails loudly. It no longer FREEZES the watermark (that arm is now transient
+    --    infrastructure faults only). Two members of this class, with different fates:
+    --      * a malformed/absent target that can never become valid sits in the pen and its
+    --        re-offers keep failing — poisoning nothing, until a human acks the exclusion;
+    --      * a target still IN FLIGHT from another link is the one ORDERING-transient member
+    --        here. The floor re-offers its slot every cycle, so the overlay applies and its
+    --        pen row auto-releases as soon as the target lands — delayed, never lost. The
+    --        accepted cost is that it holds one pen row and keeps the cycle loud until then.
     --
     -- A DEFERRED event skips this whole block. `v_targets_other` is NULL for an unclassified
     -- type, so the branch would short-circuit anyway — but relying on three-valued logic is

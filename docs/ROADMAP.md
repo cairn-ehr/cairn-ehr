@@ -277,29 +277,21 @@ fabrication principle 4 forbids. The correction event must be able to say *"not 
 
 The slice stayed **additive** — 6a's table-not-columns payoff: both apply fns write the existing
 `medication_coding` table under the existing overlay-winner rule. A strike NULLs the anchor rather than
-deleting the row (deleting breaks arrival-order independence — a lower-HLC coding arriving later would
-have nothing to lose the race against). `patient_medication_uncoded` is the coder worklist, with
-`previously_struck` separating "nobody has coded this" from "a reviewer established this is NOT what it
-was coded as". CLI: `medication-code` / `medication-code-correct`, both `--author-as` (ADR-0053) but
-deliberately **no** `--attest-as` — coding a drug identity is not a sign-off of the medication list.
-Also closed **#295** (anchor-conflict collation pin — the behavioural test *cannot* catch a future
-unpinning on a deterministic-default cluster, so the real gate is a no-DB source guard) and **#296** (a
-cairn-sync test dropped `event_log.seq`, letting the migration re-add it at the END and permanently
-reorder a SHARED test database — the root cause of the long-carried "recreate the test DBs" gotcha).
+deleting the row (deleting breaks arrival-order independence). `patient_medication_uncoded` is the coder
+worklist; CLI `medication-code` / `medication-code-correct`, both `--author-as` but deliberately **no**
+`--attest-as` — coding a drug identity is not a sign-off of the medication list. Also closed **#295**
+(anchor-conflict collation pin) and **#296** (a cairn-sync test dropped `event_log.seq` and permanently
+reordered a SHARED test database — the root cause of the long-carried "recreate the test DBs" gotcha).
 
 **Four lessons worth keeping** (full detail in git): **(1) a redundant projection column is a convergence
 hazard** — `struck` duplicated `coding_code IS NULL` and only two of three writers set it, so arrival
-order decided what a node read; it is now `GENERATED ALWAYS AS … STORED`, deleting the writer rather than
-correcting it. Deliberately **not** a CHECK: a violated CHECK aborts the apply and wedges that event
-forever. **(2) Nullable-widening a column means re-reading every aggregate over it** — unlike
-`count(DISTINCT …)`, `array_agg` KEEPS NULLs, so the anchor-conflict view emitted a blank entry.
-**(3) A passing test can be worthless** — the group-display test asserted only `coding_display` and went
-green against a live defect; asserting the *term* alongside made it discriminate. **(4) Only
-`cargo test --workspace` catches guard-scope gaps** — 6a's drugref guard had never met a `#[cfg(test)]`
-module inside a `src/` file. Workspace 916/0. Filed
-[#300](https://github.com/cairn-ehr/cairn-ehr/issues/300): the worklist lists every uncoded member of an
-already-coded reconciled group — a design question (hiding them could suppress the mis-reconciliation
-signal 6a built), not a defect.
+order decided what a node read; now `GENERATED ALWAYS AS … STORED`, deleting the writer rather than
+correcting it (deliberately **not** a CHECK: a violated CHECK aborts the apply and wedges that event
+forever). **(2) Nullable-widening a column means re-reading every aggregate over it** — `array_agg` KEEPS
+NULLs. **(3) A passing test can be worthless** — asserting only `coding_display` went green against a live
+defect. **(4) Only `cargo test --workspace` catches guard-scope gaps.** Workspace 916/0. Filed
+[#300](https://github.com/cairn-ehr/cairn-ehr/issues/300) (worklist lists every uncoded member of an
+already-coded reconciled group — a design question, not a defect).
 
 **Deliberately NOT done:** no drugref code anywhere in the tree; the **coded↔uncoded** duplicate case
 remains open (needs term→anchor resolution — ADR-0059 decision 5 is explicit the key does not close it);
@@ -348,10 +340,8 @@ text rather than implementer error, and every implementer surfaced rather than s
 Generalisable rule: mandated test code is not exempt from review.
 
 **Measurement caveat that outlives the slice:** without `CAIRN_TEST_PG2`/`PG3` the multi-node convergence
-suites self-skip and cargo counts them as **passed** (10 of 11 in `clinical_pull`, 2 of 6 in
-`sync_watermark`, both in `federation`). A workspace count alone cannot distinguish a skip from a pass —
-those were re-run separately with all three databases and confirmed to execute. Workspace 927/0 at first
-landing, **935/0** after the review round, run twice against the same databases to prove replay safety.
+suites self-skip and cargo counts them as **passed**, so a workspace count alone cannot distinguish a skip
+from a pass — always set all three DSNs. Workspace **935/0** after the review round.
 
 **Deliberately NOT done, stated honestly.** The **node/actor plane still fail-closes** on an unmappable type
 (`db/007`) — filed as [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301) rather than left silent
@@ -397,21 +387,96 @@ BMP code point on **both** sides and asserts the blank sets are equal. Gate gree
 permission rules are prefix matches and a leading `VAR=value` can never match an allowlist entry); its #75
 fix was complete but unpushed, and is what PR #311 lands. Three preflight corrections, all recorded in
 `.claude/skills/techdebt-loop/SKILL.md`: **(a)** repo "Allow auto-merge" IS probeable after all — enabling
-auto-merge on a PR fails when the setting is off, so `gh pr list --state merged --json autoMergeRequest`
-showing a recent hit proves it was on (#302/#307/#310 do); the skill's "verified OFF, always ask" text was
-stale. **(b)** The worker takes the **lowest-numbered** `loop:ready` issue and §2 triage never re-checks
-`loop:ready`, so a mistaken label parks at the front of the queue forever — the head was
-[#11](https://github.com/cairn-ehr/cairn-ehr/issues/11) (RustCrypto dedupe), whose upstream blocker was then
-believed still live (re-verified against `Cargo.lock`: `chacha20poly1305 0.10.1` still pins `chacha20 0.9.1`
-— a flawed probe: our own lockfile can never reflect new upstream majors; since resolved 2026-08-01 by #11's
-merge once the stable releases were confirmed, residue in #317), so the first
-unattended cycle would have attempted a **major-version crypto bump on the §9 signing surface**; #75 was
-second and already had a PR. Both relabelled `loop:blocked`; the skill now mandates a head-of-queue
-inspection before an unpinned launch. **(c)** The underlying mechanism gap is filed as
-[#312](https://github.com/cairn-ehr/cairn-ehr/issues/312) (re-check the N lowest ready issues, and/or refuse
-an issue with an open linked PR) — a policy choice, hence `loop:needs-human`.
+auto-merge on a PR fails when the setting is off, so a recent `autoMergeRequest` in `gh pr list --state
+merged --json` proves it was on; the skill's "verified OFF, always ask" text was stale. **(b)** The worker
+takes the **lowest-numbered** `loop:ready` issue and §2 triage never re-checks `loop:ready`, so a mistaken
+label parks at the front of the queue forever — the head was
+[#11](https://github.com/cairn-ehr/cairn-ehr/issues/11), whose upstream blocker was then believed still live
+(re-verified against our own `Cargo.lock` — a flawed probe, since a lockfile can never show a new upstream
+major; resolved 08-01, residue in #317), so the first unattended cycle would have attempted a
+**major-version crypto bump on the §9 signing surface**; #75 was second and already had a PR. The skill now
+mandates a head-of-queue inspection before an unpinned launch. **(c)** The mechanism gap is filed as
+[#312](https://github.com/cairn-ehr/cairn-ehr/issues/312) — a policy choice, hence `loop:needs-human`.
 Paper-parity: not clinical-surface — an in-DB floor determinism fix plus development tooling; no human act
 changes at any layer.
+
+**Interlude — the tech-debt loop ran unattended (2026-07-31 → 08-01).** Nine PRs merged with no slice of
+their own; recorded here so the build state is not a mystery. Issue work: **#79** (matcher B2 minors, PR
+#313), **#11** (the RustCrypto stacks converged on stable majors once the unifying releases landed — the
+earlier "still blocked" reading had probed our own `Cargo.lock`, which can never show a new upstream major;
+PR #319, residue [#317](https://github.com/cairn-ehr/cairn-ehr/issues/317)), **#100** (`matcher_version`
+pins the full effective config, not only weights, PR #323), **#119** (`chart_trust` severity→label mapping
+lives once, at emission, PR #324), **#120** (shared `cairn-node` integration-test scaffolding, PR #328).
+Loop-mechanism fixes: PR #316 (agent-filed provenance hole in the author gate), #321 (crash post-mortem in
+the driver + a no-backgrounding rule in the worker — a headless worker dies at turn end, so a successful
+cycle was being counted as a failure), #325 (#321 review follow-ups). Still open from that run:
+[#312](https://github.com/cairn-ehr/cairn-ehr/issues/312) (triage never re-checks `loop:ready`),
+[#314](https://github.com/cairn-ehr/cairn-ehr/issues/314), [#315](https://github.com/cairn-ehr/cairn-ehr/issues/315),
+[#322](https://github.com/cairn-ehr/cairn-ehr/issues/322),
+[#326](https://github.com/cairn-ehr/cairn-ehr/issues/326) (the worker's CI-wait idiom is dead — the harness
+blocks a foreground `sleep` and the allowlist blocks `until`-loops, so cycles complete by tight polling),
+[#327](https://github.com/cairn-ehr/cairn-ehr/issues/327).
+
+**Slice 60 — ADR-0056 decision 5: the residual refusal contract, clinical plane (2026-08-01; branch
+`fix/adr-0056-residual-refusal-contract`; closes [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267)
+and [#270](https://github.com/cairn-ehr/cairn-ehr/issues/270), tests
+[#269](https://github.com/cairn-ehr/cairn-ehr/issues/269); no spec/ADR change, no schema change, no
+`SCHEMA_GENERATION` bump).** Slice 58 removed the *unknown-type* refusal at the door; what remained in the
+puller's error arm was the genuine residual class — unenrolled/revoked signer, malformed envelope, oversize,
+`t_effective` past the ceiling, unlawful contributor shapes. For those, §6.3's promise ("quarantined
+*verbatim* by digest … the refusal is answered legibly") was false: the puller **persisted nothing**, froze
+its cursor, and **exited SUCCESS**, so a peer link wedged behind one bad author's event was indistinguishable
+from a healthy one — and the backlog grew silently every cycle.
+
+The enabling fact was one line of lost information: `apply_signed` flattened `postgres::Error` into a
+`String`, discarding the SQLSTATE, so the puller could not tell a deliberate `RAISE EXCEPTION` (`P0001`,
+every db/020 refusal) from a transient fault. `ApplyError` keeps both the legible message (RAISE text +
+DETAIL, the #109 diagnosis) and the code; two pure predicates (`refusal_is_deliberate`, `cycle_is_loud`)
+carry the decisions and are unit-tested with no database.
+
+**Three lessons worth carrying:**
+
+1. **A refusal that persists nothing is a refusal you cannot audit.** The evidence lived only in a stderr
+   line on a machine nobody was watching. The fix is not more logging — it is the *same* durable mechanism
+   the unverifiable class already had (pen verbatim by digest, pin the re-offer floor, dedupe on re-offer).
+2. **One contract per door, not one per refusal class.** A deliberate refusal now takes the unverifiable
+   path exactly: penned, pinned, and the cursor still advancing so *other* authors' events keep flowing
+   (principle 5 — one bad event must not withhold thousands of applicable ones). The freeze arm survives
+   only where retrying the same bytes is the correct response: a transient fault. Both are loud.
+3. **Symmetry between planes is a hypothesis, not a goal.** #268 asks the node plane to match, and the
+   naive alignment would be a defect: `stream_node_events` serves every row, so refusing events authored by
+   non-peers is that plane's routine *scoping*, not a refusal of history it should hold. Penning it would
+   hold the loud signal on permanently (alarm fatigue — what ADR-0009 forbids) and eventually exhaust the
+   quota. The prerequisite is a refusal-class partition in `db/007`; the analysis is recorded on the issue
+   and it stays `loop:blocked`. #269's new test pins **both** halves of today's node-plane behaviour — the
+   heal via full sweep is real, and it is *only* on the sweep — so whatever lands there moves it deliberately.
+
+Also new: a penned event that later applies **auto-releases** (the node plane's #111 behaviour, mirrored),
+so the pen never keeps a duplicate of `event_log`; unverifiable bytes can never reach that path, so their
+forensic trace is preserved by construction rather than by a special case.
+
+**Review round (same day, PR #330).** Five findings, all fixed in place; two are worth carrying:
+
+- **A message assembled from unconditional clauses will eventually lie.** The loud text rendered its counts
+  and its "each is preserved verbatim in sync_quarantine … Inspect with `cairn-sync quarantine`" tail
+  *always* — so a freeze-only cycle announced "0 unverifiable and 0 floor-refused event(s)" and pointed the
+  operator at an empty pen, and a pen-**quota** freeze claimed "it clears by itself" two sentences after
+  correctly saying it needed a human ack. Both shapes were reachable from an existing green test, which
+  asserted only that the message contained `"quota"`. The fix makes every clause conditional on the state
+  that makes it true, in a pure `loud_pull_message` with three value-level tests. Generalisable: on the
+  operator path the *message is the product* — assert what a message must NOT say, not only what it must.
+- **`P0001` is a verdict-vs-fault test, not permanent-vs-transient.** One member of the deliberate class is
+  ordering-transient: an overlay whose target is still in flight from another link (`db/020` step 5). It is
+  now penned and keeps the cycle loud until the target lands, then applies and auto-releases — correct, but
+  noisier than the freeze it replaced, and `db/020`'s own comment still described the old contract. Comment
+  corrected, the cost named in §6.3. Accepted because the alternative wedges the link for every *other*
+  author. The same review also added the end-to-end freeze-arm test the first draft had declined (swap the
+  apply door for one raising `40001` — deterministic, and `locked_client` re-applies the schema, so it
+  cannot leak), scoped the auto-release comment's over-claim about `acked` rows, and stopped a failed
+  pen-row release from aborting the cycle as a `partition`.
+
+Paper-parity: not clinical-surface — this changes only what a node does with bytes its own floor refused;
+no human act changes at any layer and no runnable clinical surface is exposed.
 
 ## Phase 5 — Security & compliance core
 

@@ -529,6 +529,181 @@ fn t_effective_has_explicit_offset(t: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// The residual refusal contract (ADR-0056 decision 5) — two pure decisions
+// ---------------------------------------------------------------------------
+
+/// The SQLSTATE Postgres assigns to a bare `RAISE EXCEPTION` in PL/pgSQL.
+/// Every refusal in `apply_remote_event` (db/020) is one of those, so this code
+/// is how the puller tells "the floor decided against these bytes" apart from
+/// "the database was briefly unhappy".
+const SQLSTATE_RAISE_EXCEPTION: &str = "P0001";
+
+/// Did the apply door DELIBERATELY refuse these bytes, or did something break?
+///
+/// The distinction is the whole of ADR-0056 decision 5's routing. A deliberate
+/// refusal is a verdict about the event: it will refuse identically on every
+/// retry until either the event or this node's floor changes, so the right move
+/// is to pen the bytes verbatim and keep re-offering the slot. A transient fault
+/// (dropped connection, serialization failure, statement timeout, disk full) is
+/// a verdict about nothing: the very same bytes may well apply next cycle, so
+/// the right move is to freeze the cursor and simply try again.
+///
+/// Getting this backwards is a real defect in both directions — penning on a
+/// transient fault fills the pen with events that were never refused, and
+/// freezing on a deliberate refusal wedges the peer link behind one bad event
+/// (the #270 failure).
+///
+/// `None` means the error carried no SQLSTATE at all (a dropped connection,
+/// a client-side decode failure) — never a door verdict, so never deliberate.
+fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
+    sqlstate == Some(SQLSTATE_RAISE_EXCEPTION)
+}
+
+/// Must this pull cycle fail LOUDLY (a `PullIntegrityError`) rather than exit 0?
+///
+/// Issue #270: a cycle whose watermark froze used to exit SUCCESS with nothing
+/// but a stderr line to show for it, so a wedged peer link accumulated a silent
+/// backlog. Every one of these four states means this node is knowingly NOT
+/// holding something a peer offered it, so every one of them is loud:
+///
+/// * `unverifiable` — bytes penned that cannot verify (existing behaviour);
+/// * `refused`      — verifiable bytes the floor deliberately refused (#267);
+/// * `frozen`       — the cursor halted, so events behind it are not being read (#270);
+/// * `pen_failed`   — a refusal we could not even record durably.
+///
+/// A human `ack` on a pen row is deliberately NOT counted by the caller: an
+/// acked exclusion is a recorded decision, not an unresolved refusal.
+fn cycle_is_loud(unverifiable: usize, refused: usize, frozen: bool, pen_failed: bool) -> bool {
+    unverifiable > 0 || refused > 0 || frozen || pen_failed
+}
+
+/// Compose the operator-facing text of a loud cycle (see [`cycle_is_loud`]).
+///
+/// Pure and unit-tested because this message IS the product on this path: it is
+/// what a human reads at 3am to decide whether a link is broken, wedged, or merely
+/// slow, and each of the four loud states calls for a DIFFERENT action. Assembling
+/// it from unconditional clauses is how it went wrong before: a transient-fault
+/// freeze announced "0 unverifiable and 0 floor-refused event(s) … each is
+/// preserved verbatim in sync_quarantine" and pointed at an empty pen, and a
+/// pen-QUOTA freeze said "it clears by itself" two sentences after correctly
+/// saying it needs an operator ack. Every clause here is therefore conditional on
+/// the state that makes it true.
+///
+/// * `frozen_at`   — `Some(seq)` when the cursor halted, naming the slot it halted at.
+/// * `pen_refused` — the pen's own refusal text (quota/insert failure), when that is
+///   what froze the cursor. Its presence changes the freeze from self-clearing to
+///   operator-action-required, so it is the one clause that rewrites another.
+/// * `diagnosis`   — the pre-composed "all shipped events are unverifiable" hint, or
+///   empty. Passed in rather than derived here so this stays free of wire types.
+fn loud_pull_message(
+    peer_name: &str,
+    unverifiable: usize,
+    refused: usize,
+    frozen_at: Option<i64>,
+    pen_refused: Option<&str>,
+    diagnosis: &str,
+) -> String {
+    let penned = unverifiable + refused;
+    // The lead. Only claim durable bytes when some were actually penned.
+    let lead = if penned > 0 {
+        format!(
+            "{unverifiable} unverifiable and {refused} floor-refused event(s) this cycle; \
+             each is preserved verbatim in sync_quarantine and its slot is held on the \
+             re-offer floor (nothing lost; valid events still applied)."
+        )
+    } else {
+        "this cycle ended holding LESS than the peer offered, and nothing was penned to \
+         show for it."
+            .to_string()
+    };
+    let pen = match pen_refused {
+        Some(qe) => format!(" Quarantine pen refused (cursor frozen): {qe}"),
+        None => String::new(),
+    };
+    // The freeze half (#270). A halted cursor means every event BEHIND the frozen
+    // slot is withheld too, so it is the loudest of the states. Whether it clears
+    // by itself depends entirely on WHY it froze — a transient fault does, a pen
+    // that refused the write does not.
+    let freeze = match (frozen_at, pen_refused.is_some()) {
+        (Some(at), false) => format!(
+            " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
+             from this peer and the backlog grows every cycle. This is a transient-fault \
+             hold (a deliberate floor refusal is penned instead), so it clears by itself \
+             once the underlying fault does — if it does not, the stderr line above names \
+             the failure."
+        ),
+        (Some(at), true) => format!(
+            " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
+             from this peer and the backlog grows every cycle. This hold does NOT clear by \
+             itself — the pen refusal above is its cause, and it lifts only once the \
+             operator action that message names has been taken."
+        ),
+        (None, _) => String::new(),
+    };
+    // The remedies, which are all about the pen — so they belong only where the pen
+    // is the thing to act on. A pure transient freeze has nothing to inspect.
+    let remedy = if penned > 0 || pen_refused.is_some() {
+        " Inspect with `cairn-sync quarantine`; a repaired peer — or a repaired floor here \
+         (enrol the author, take the code-plane update) — is picked up automatically; to \
+         accept a permanent exclusion, ack the row: UPDATE sync_quarantine SET acked = TRUE \
+         WHERE content_digest = …"
+    } else {
+        ""
+    };
+    format!("pull {peer_name}: {lead}{diagnosis}{pen}{freeze}{remedy}")
+}
+
+/// Why the in-DB apply door said no, with the SQLSTATE preserved.
+///
+/// `apply_signed` used to flatten `postgres::Error` into a `String`, which threw
+/// away the one fact [`refusal_is_deliberate`] needs. This keeps both: the
+/// legible message (the door's own RAISE text plus its DETAIL — the issue #109
+/// skew-vs-tampering diagnosis, which must keep reaching the pen reason and the
+/// freeze log lines) and the machine-readable code.
+#[derive(Debug)]
+struct ApplyError {
+    message: String,
+    sqlstate: Option<String>,
+}
+
+impl ApplyError {
+    /// True iff the floor decided against these bytes (see [`refusal_is_deliberate`]).
+    fn is_deliberate_refusal(&self) -> bool {
+        refusal_is_deliberate(self.sqlstate.as_deref())
+    }
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl Error for ApplyError {}
+
+impl From<postgres::Error> for ApplyError {
+    /// Surface the database's own message AND its DETAIL: `postgres::Error`'s
+    /// Display is just "db error", and `message()` alone drops the
+    /// `cairn_verify_error` DETAIL the doors attach (issue #109) — the reason
+    /// that would otherwise reach only a direct psql caller.
+    fn from(e: postgres::Error) -> Self {
+        match e.as_db_error() {
+            Some(db) => ApplyError {
+                message: match db.detail() {
+                    Some(detail) => format!("{} ({detail})", db.message()),
+                    None => db.message().to_string(),
+                },
+                sqlstate: Some(db.code().code().to_string()),
+            },
+            None => ApplyError {
+                message: e.to_string(),
+                sqlstate: None,
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Apply: hand a replicated event (and any attestation that travelled with it)
 // to the in-DB apply door. Shared by `pull`. Since issue #91 the daemon runs
 // ZERO checks and ZERO raw DML here: apply_remote_event (db/020) verifies the
@@ -550,7 +725,7 @@ fn apply_signed(
     // runs the full clear-view floor and records local custody; without it the
     // sealed row is admitted on structural checks only (set-union losslessness).
     dek: Option<&[u8]>,
-) -> R<bool> {
+) -> Result<bool, ApplyError> {
     // Newness probe for the metrics only: the door itself is idempotent (a re-apply
     // of identical bytes is a silent set-union no-op), so "did we already hold these
     // bytes" is read before knocking. Never a gate — the door decides admission.
@@ -571,20 +746,12 @@ fn apply_signed(
                 &dek.map(|d| d.to_vec()),
             ],
         )
-        // Surface the door's legible RAISE text AND its DETAIL: postgres::Error's Display is
-        // just "db error", and message() alone drops the cairn_verify_error DETAIL the doors
-        // now attach (issue #109) — the skew-vs-tampering reason that would otherwise reach
-        // only a direct psql caller. Appending it here carries it into the freeze/skip log
-        // lines, the quarantine reason, and last_requeue_error.
-        .map_err(|e| -> Box<dyn Error> {
-            match e.as_db_error() {
-                Some(db) => match db.detail() {
-                    Some(detail) => format!("{} ({detail})", db.message()).into(),
-                    None => db.message().to_string().into(),
-                },
-                None => e.into(),
-            }
-        })?;
+        // `ApplyError::from` surfaces the door's legible RAISE text AND its DETAIL
+        // (issue #109) while KEEPING the SQLSTATE — the one bit that tells a
+        // deliberate floor refusal apart from a transient fault (ADR-0056 decision 5;
+        // see `refusal_is_deliberate`). Flattening it to a String here was what left
+        // the puller unable to route the two differently (#267/#270).
+        .map_err(ApplyError::from)?;
     Ok(!existed)
 }
 
@@ -1458,6 +1625,23 @@ fn cmd_gen_blob(conn: &str, size_mb: usize, media: &str) -> R<()> {
     Ok(())
 }
 
+/// Which residual-refusal class a penned entry belongs to (ADR-0056 decision 5).
+///
+/// Both classes take the SAME mechanism — verbatim bytes penned by digest, the
+/// slot pinned on the re-offer floor, the cycle loud — because one contract at
+/// the door is cheaper to reason about than two. They are counted and reported
+/// separately only because they call for different operator action: unverifiable
+/// bytes need the PEER repaired (re-signed history, fixed build); a door refusal
+/// needs THIS node changed (enroll the author, take the code-plane update) or the
+/// exclusion acked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RefusalClass {
+    /// The bytes do not verify: they can never apply without repair at the source.
+    Unverifiable,
+    /// The bytes verify; this node's floor deliberately refused them.
+    DoorRefused,
+}
+
 /// Persist an unverifiable pulled event into `sync_quarantine` (db/021, issue
 /// #108): verbatim bytes + travelling attestation + the legible verify-failure
 /// reason. A re-offer of the same bytes dedupes onto its existing row (bumping
@@ -1720,23 +1904,33 @@ fn do_pull(
 
     // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
     // to the node-local seq for #196:
-    //   * a VERIFIABLE event that fails to APPLY (transient DB error, deterministic
-    //     refusal) FREEZES the cursor at the contiguous handled prefix — retried
-    //     next cycle, never skipped (A1). (During a FULL SWEEP a failing event may
-    //     sit BELOW the committed cursor; the freeze then leaves the cursor as-is
-    //     and the retry rides the NEXT sweep, not the next incremental — up to
-    //     FULL_SWEEP_EVERY cycles later. Delayed, never lost.);
     //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text) is
     //     quarantined durably (db/021) AND pins the re-offer floor at its seq. The
     //     cursor still advances for valid events, but the floor keeps the refused
     //     slot on the wire every cycle, so a later repaired/re-signed version is
     //     admitted automatically — a durable trace alone is NOT a license to move
     //     past an event. Only a human `acked` row or a clean cycle releases the slot;
+    //   * a VERIFIABLE event this node's floor DELIBERATELY refused (`P0001`:
+    //     unenrolled/revoked signer, oversize, t_effective past the ceiling, an
+    //     unlawful contributor shape) takes the SAME path — penned verbatim, slot
+    //     pinned (ADR-0056 decision 5, issue #267). It used to persist nothing and
+    //     freeze, which wedged the whole peer link behind one bad author's event;
+    //   * a VERIFIABLE event that fails to apply for any OTHER reason is transient
+    //     infrastructure trouble (dropped connection, deadlock, timeout, disk full),
+    //     where the very same bytes may apply next cycle. That FREEZES the cursor at
+    //     the contiguous handled prefix — retried next cycle, never skipped (A1).
+    //     (During a FULL SWEEP a failing event may sit BELOW the committed cursor;
+    //     the freeze then leaves the cursor as-is and the retry rides the NEXT sweep,
+    //     not the next incremental — up to FULL_SWEEP_EVERY cycles later. Delayed,
+    //     never lost.);
     //   * if the pen itself refuses (insert failure, per-peer quota), the cursor
-    //     freezes exactly as for a valid apply failure — delayed, never lost.
-    // Any unacked refusal makes the whole pull FAIL LOUDLY at the end.
+    //     freezes exactly as for a transient apply failure — delayed, never lost.
+    // Any unacked refusal — and any freeze (issue #270) — makes the whole pull FAIL
+    // LOUDLY at the end.
     let (mut applied, mut skipped_unverifiable, mut skipped_acked, mut event_bytes) =
         (0usize, 0usize, 0usize, 0usize);
+    // Verifiable events the floor refused and we penned this cycle (issue #267).
+    let mut refused_verifiable = 0usize;
     // Highest CONTIGUOUS handled seq. Starts at the cursor so re-offered low-seq
     // events (below it) never rewind the checkpoint; new events above it advance it.
     let mut max_seq = last_seq;
@@ -1776,10 +1970,14 @@ fn do_pull(
                 Ok((signed, att, akey))
             });
 
-        // (bytes to pen, attestation pair, reason) for a refused entry; None if
-        // the entry applied or verifies (freeze case).
-        let refused: Option<(WireEntry, String)> = match decoded {
-            Err(reason) => Some(((hexed.as_bytes().to_vec(), None, None), reason)),
+        // (bytes to pen, attestation pair, reason, class) for a refused entry;
+        // None if the entry applied or hit transient trouble (the freeze case).
+        let refused: Option<(WireEntry, String, RefusalClass)> = match decoded {
+            Err(reason) => Some((
+                (hexed.as_bytes().to_vec(), None, None),
+                reason,
+                RefusalClass::Unverifiable,
+            )),
             Ok((signed_bytes, att, akey)) => {
                 event_bytes += signed_bytes.len(); // A5: real clinical-plane payload
                                                    // Open the sidecar-wrapped DEK for THIS slot with our own unwrap
@@ -1818,24 +2016,81 @@ fn do_pull(
                         if new {
                             applied += 1;
                         }
+                        // Auto-release (mirrors the node plane's issue #111
+                        // behaviour): a re-offered event that NOW applies is no
+                        // longer an unresolved refusal, so its pen row must go —
+                        // otherwise the pen keeps a full duplicate of a row
+                        // event_log already holds, and `cairn-sync quarantine`
+                        // shows a resolved refusal forever. Gated on an ACTIVE
+                        // floor (this peer has at least one unresolved slot), so
+                        // the common forward path does no per-event DELETE.
+                        // UNVERIFIABLE bytes can never reach this arm — they never
+                        // apply — so the pen's forensic trace is preserved by
+                        // construction, not by a special case. An `acked` row IS
+                        // released when it reaches here, deliberately (same rule
+                        // `do_requeue` uses): an event the floor has now ADMITTED is
+                        // held in event_log, so a pen row claiming it is excluded
+                        // would be the misleading state. But note the reach — the
+                        // floor gate means an acked row only gets here while some
+                        // OTHER unresolved slot is still pinning this peer's floor;
+                        // an ack that cleared the last floor leaves its row in place
+                        // until a full sweep coincides with one. Harmless (the
+                        // content is in event_log either way), and the alternative —
+                        // a per-event DELETE on every clean forward pull — is a cost
+                        // the common path should not pay for a cosmetic tidy-up.
+                        //
+                        // A failure here is NOT worth aborting the cycle for: the
+                        // events already applied (each apply is its own transaction),
+                        // and the floor keeps re-offering, so the next cycle retries
+                        // the release. Aborting would instead discard the cursor
+                        // commit below and be logged as a `partition` — a transport
+                        // diagnosis for a tidy-up failure.
+                        if floor_seq.is_some() {
+                            let digest = cairn_event::event_address(&signed_bytes);
+                            if let Err(de) = client.execute(
+                                "DELETE FROM sync_quarantine WHERE content_digest = $1",
+                                &[&digest],
+                            ) {
+                                eprintln!(
+                                    "pull {peer_name}: seq {seq} applied but its resolved pen \
+                                     row could not be released: {de} — retried next cycle"
+                                );
+                            }
+                        }
                         None
                     }
                     Err(e) => {
-                        // Classify: a still-verifiable event that failed to
-                        // APPLY must NOT be lost — freeze so it is retried,
-                        // never skipped. An unverifiable one goes to the pen.
+                        // Three outcomes, decided by two independent questions:
+                        // do the bytes VERIFY, and did the door DELIBERATELY
+                        // refuse them (ADR-0056 decision 5)?
                         match verify_self_described(&signed_bytes) {
+                            // Verifiable + a deliberate floor refusal (P0001).
+                            // Deterministic: it will refuse identically until this
+                            // node changes. Pen it verbatim and pin the slot —
+                            // freezing here would wedge the whole link behind one
+                            // author's event (issue #267).
+                            Ok(_) if e.is_deliberate_refusal() => Some((
+                                (signed_bytes, att, akey),
+                                format!("refused by this node's floor: {e}"),
+                                RefusalClass::DoorRefused,
+                            )),
+                            // Verifiable, but the failure was NOT a door verdict:
+                            // transient infrastructure trouble, where the same
+                            // bytes may well apply next cycle. Freeze and retry —
+                            // penning would record a refusal that never happened.
                             Ok(_) => {
                                 frozen = true;
                                 eprintln!(
                                     "pull {peer_name}: HALTING seq cursor at {max_seq} — a valid \
-                                     event failed to apply and must not be skipped: {e}"
+                                     event failed to apply for a NON-refusal reason (transient?) \
+                                     and must not be skipped: {e}"
                                 );
                                 None
                             }
                             Err(verr) => Some((
                                 (signed_bytes, att, akey),
                                 format!("{verr}; apply door said: {e}"),
+                                RefusalClass::Unverifiable,
                             )),
                         }
                     }
@@ -1843,7 +2098,7 @@ fn do_pull(
             }
         };
 
-        if let Some(((bytes, att, akey), reason)) = refused {
+        if let Some(((bytes, att, akey), reason, class)) = refused {
             match quarantine_event(
                 client,
                 peer_name,
@@ -1859,19 +2114,30 @@ fn do_pull(
                     skipped_acked += 1;
                 }
                 Ok(false) => {
-                    skipped_unverifiable += 1;
+                    // Both classes pin the floor identically; only the tally and
+                    // the wording differ (see RefusalClass).
+                    let kind = match class {
+                        RefusalClass::Unverifiable => {
+                            skipped_unverifiable += 1;
+                            "unverifiable event"
+                        }
+                        RefusalClass::DoorRefused => {
+                            refused_verifiable += 1;
+                            "floor-refused (but verifiable) event"
+                        }
+                    };
                     if pin.is_none() {
                         pin = Some(seq);
                     }
                     eprintln!(
-                        "pull {peer_name}: unverifiable event quarantined durably \
+                        "pull {peer_name}: {kind} quarantined durably \
                          (sync_quarantine), slot held on the re-offer floor at seq {seq}: {reason}"
                     );
                 }
                 Err(qe) => {
                     frozen = true;
                     eprintln!(
-                        "pull {peer_name}: HALTING seq cursor at {max_seq} — an unverifiable \
+                        "pull {peer_name}: HALTING seq cursor at {max_seq} — a refused \
                          event could not be quarantined, so it must not be skipped: {qe}; \
                          reason: {reason}"
                     );
@@ -1902,17 +2168,18 @@ fn do_pull(
     //     overwriting would CLEAR a floor guarding a slot the cursor is already
     //     above — permanent exclusion. Keep the most conservative of
     //     (existing floor, new pin).
-    let new_floor: Option<i64> = if skipped_unverifiable == 0 && pen_refused.is_none() {
-        None
-    } else if pen_refused.is_none() {
-        pin
-    } else {
-        match (floor_seq, pin) {
-            (Some(f), Some(p)) => Some(f.min(p)),
-            (Some(f), None) => Some(f),
-            (None, p) => p,
-        }
-    };
+    let new_floor: Option<i64> =
+        if skipped_unverifiable == 0 && refused_verifiable == 0 && pen_refused.is_none() {
+            None
+        } else if pen_refused.is_none() {
+            pin
+        } else {
+            match (floor_seq, pin) {
+                (Some(f), Some(p)) => Some(f.min(p)),
+                (Some(f), None) => Some(f),
+                (None, p) => p,
+            }
+        };
     // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
     // whose max_seq did not exceed the committed cursor therefore never rewinds it.
     client.execute(
@@ -1928,6 +2195,7 @@ fn do_pull(
         "op": "pull", "peer": peer_name,
         "shipped": resp.events.len(), "applied_new": applied,
         "skipped_unverifiable": skipped_unverifiable,
+        "refused_verifiable": refused_verifiable,
         "skipped_acked": skipped_acked,
         "watermark_frozen": frozen,
         "floor_active": new_floor.is_some(),
@@ -1938,14 +2206,21 @@ fn do_pull(
         "cursor_seq": max_seq, "full_sweep": full_sweep
     });
 
-    // LOUD failure (issue #108, generalised by the #110 review): ANY unacked
-    // refusal — not just an all-unverifiable batch — fails the pull, every
-    // cycle, until the peer is fixed or a human acks the exclusion. The old
-    // `skipped == len` heuristic structurally missed the two common cases (a
-    // mixed legacy+new batch, and an already-synced link whose boundary event
-    // re-applies idempotently), which is exactly where the silent livelock
-    // lived. `run` logs this as an integrity condition, not a partition.
-    if skipped_unverifiable > 0 || pen_refused.is_some() {
+    // LOUD failure (issue #108, generalised by the #110 review, extended to the
+    // freeze by issue #270): ANY state in which this node knowingly does not hold
+    // something the peer offered it fails the pull, every cycle, until the cause is
+    // fixed or a human acks the exclusion. The old `skipped == len` heuristic
+    // structurally missed the two common cases (a mixed legacy+new batch, and an
+    // already-synced link whose boundary event re-applies idempotently), which is
+    // exactly where the silent livelock lived; the freeze arm then reintroduced one
+    // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
+    // integrity condition, not a partition.
+    if cycle_is_loud(
+        skipped_unverifiable,
+        refused_verifiable,
+        frozen,
+        pen_refused.is_some(),
+    ) {
         let all = !resp.events.is_empty() && skipped_unverifiable == resp.events.len();
         let diagnosis = if all {
             let declared = match &resp.signing_context {
@@ -1962,18 +2237,17 @@ fn do_pull(
         } else {
             String::new()
         };
-        let pen = match &pen_refused {
-            Some(qe) => format!(" Quarantine pen refused (cursor frozen): {qe}"),
-            None => String::new(),
-        };
+        // Every clause is conditional on the state that makes it true — see
+        // `loud_pull_message`, where the four loud states and their (different)
+        // operator actions are composed and unit-tested with no database.
         return Err(Box::new(PullIntegrityError {
-            message: format!(
-                "pull {peer_name}: {skipped_unverifiable} unverifiable event(s) this cycle; \
-                 each is preserved verbatim in sync_quarantine and its slot is held on the \
-                 re-offer floor (nothing lost; valid events still applied).{diagnosis}{pen} \
-                 Inspect with `cairn-sync quarantine`; a repaired/re-signed peer is picked \
-                 up automatically; to accept a permanent exclusion, ack the row: \
-                 UPDATE sync_quarantine SET acked = TRUE WHERE content_digest = …"
+            message: loud_pull_message(
+                peer_name,
+                skipped_unverifiable,
+                refused_verifiable,
+                frozen.then_some(max_seq),
+                pen_refused.as_deref(),
+                &diagnosis,
             ),
             metrics,
         }));
@@ -3039,6 +3313,139 @@ mod tests {
     use super::*;
     use cairn_event::{event_address, generate_key, verify_attestation};
 
+    /// ADR-0056 decision 5 routing: only the door's own `RAISE EXCEPTION` (P0001)
+    /// is a verdict about the event. Everything else is infrastructure trouble,
+    /// where the same bytes may apply on the very next attempt — pen those and
+    /// the pen fills with events that were never refused.
+    #[test]
+    fn only_a_bare_raise_is_a_deliberate_refusal() {
+        assert!(refusal_is_deliberate(Some("P0001")), "the door said no");
+        // Transient/infrastructure classes: a retry is the correct response.
+        assert!(
+            !refusal_is_deliberate(Some("40001")),
+            "serialization failure"
+        );
+        assert!(!refusal_is_deliberate(Some("40P01")), "deadlock detected");
+        assert!(!refusal_is_deliberate(Some("57014")), "statement timeout");
+        assert!(!refusal_is_deliberate(Some("53100")), "disk full");
+        assert!(!refusal_is_deliberate(Some("08006")), "connection failure");
+        // A raised-with-ERRCODE refusal is NOT P0001 and must stay conservative:
+        // freezing delays an event, penning one that was never refused loses the
+        // distinction the pen exists to record.
+        assert!(!refusal_is_deliberate(Some("23514")), "check violation");
+        // No SQLSTATE at all (dropped connection, client-side failure).
+        assert!(!refusal_is_deliberate(None));
+    }
+
+    /// A freeze with an EMPTY pen must not describe penned bytes. The message is
+    /// assembled from independent clauses, and the count clause used to render
+    /// unconditionally — so a transient-fault freeze announced "0 unverifiable and
+    /// 0 floor-refused event(s) this cycle; each is preserved verbatim in
+    /// sync_quarantine" and then sent the operator to inspect an empty pen.
+    #[test]
+    fn a_freeze_only_message_describes_no_penned_bytes() {
+        let m = loud_pull_message("peer-a", 0, 0, Some(7), None, "");
+        assert!(
+            !m.contains("0 unverifiable"),
+            "no counts when nothing was penned, got: {m}"
+        );
+        assert!(
+            !m.contains("preserved verbatim"),
+            "nothing was preserved, got: {m}"
+        );
+        assert!(
+            !m.contains("cairn-sync quarantine"),
+            "the pen is empty — do not send the operator to it, got: {m}"
+        );
+        assert!(
+            m.contains("FROZEN at 7"),
+            "it must name the halted slot: {m}"
+        );
+    }
+
+    /// The pen-quota freeze is NOT transient: it clears only when a human acks or
+    /// deletes held rows, which the pen clause itself says. The freeze clause must
+    /// not contradict it two sentences later with "clears by itself".
+    #[test]
+    fn a_pen_refusal_freeze_never_claims_it_clears_by_itself() {
+        let m = loud_pull_message("peer-a", 0, 0, Some(7), Some("pen is at its quota"), "");
+        assert!(m.contains("pen is at its quota"), "the cause survives: {m}");
+        assert!(
+            !m.contains("clears by itself"),
+            "a pen-refusal hold needs operator action, got: {m}"
+        );
+        assert!(
+            m.contains("does NOT clear by itself"),
+            "it must say so plainly, got: {m}"
+        );
+        assert!(
+            m.contains("cairn-sync quarantine"),
+            "here the pen IS the thing to inspect, got: {m}"
+        );
+    }
+
+    /// The penned path keeps everything it always said: both counts, the durability
+    /// claim, and the two remedies (repair the peer, or ack the row).
+    #[test]
+    fn a_penned_cycle_message_names_the_counts_and_both_remedies() {
+        let m = loud_pull_message("peer-a", 2, 1, None, None, " DIAGNOSIS.");
+        assert!(m.contains("2 unverifiable and 1 floor-refused"), "{m}");
+        assert!(m.contains("preserved verbatim"), "{m}");
+        assert!(m.contains(" DIAGNOSIS."), "the diagnosis is carried: {m}");
+        assert!(m.contains("acked = TRUE"), "the ack remedy survives: {m}");
+        assert!(!m.contains("FROZEN"), "nothing froze here: {m}");
+    }
+
+    /// Issue #270: a frozen watermark used to exit SUCCESS. Every state in which
+    /// this node knowingly does not hold something a peer offered it is loud.
+    #[test]
+    fn every_unresolved_refusal_state_makes_the_cycle_loud() {
+        // (unverifiable, refused, frozen, pen_failed)
+        assert!(!cycle_is_loud(0, 0, false, false), "a clean cycle is quiet");
+        assert!(
+            cycle_is_loud(1, 0, false, false),
+            "unverifiable bytes penned"
+        );
+        assert!(
+            cycle_is_loud(0, 1, false, false),
+            "a door refusal penned (#267)"
+        );
+        assert!(
+            cycle_is_loud(0, 0, true, false),
+            "a frozen watermark (#270)"
+        );
+        assert!(cycle_is_loud(0, 0, false, true), "the pen itself refused");
+        assert!(cycle_is_loud(2, 3, true, true), "several at once");
+    }
+
+    /// The door's legible text (RAISE message + DETAIL, issue #109) and its
+    /// SQLSTATE must BOTH survive the trip out of `apply_signed`: the message is
+    /// what a human reads in the pen row, the code is what the routing reads.
+    #[test]
+    fn apply_error_keeps_both_the_legible_message_and_the_sqlstate() {
+        let Some(base) = quarantine_tests::cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = quarantine_tests::locked_client(&base);
+        // A bare RAISE with a DETAIL, exactly the shape db/020's refusals take.
+        let err: ApplyError = c
+            .batch_execute(
+                "DO $$ BEGIN RAISE EXCEPTION 'apply_remote_event: signer is not enrolled'
+                            USING DETAIL = 'cairn_verify_error: unknown key'; END $$;",
+            )
+            .unwrap_err()
+            .into();
+        assert!(
+            err.message.contains("signer is not enrolled")
+                && err.message.contains("cairn_verify_error"),
+            "message must carry RAISE text AND DETAIL, got: {}",
+            err.message
+        );
+        assert_eq!(err.sqlstate.as_deref(), Some("P0001"));
+        assert!(err.is_deliberate_refusal());
+    }
+
     #[test]
     fn parse_pgx_version_accepts_plain_triples_and_rejects_the_rest() {
         assert_eq!(parse_pgx_version("0.2.0"), Some((0, 2, 0)));
@@ -3752,6 +4159,190 @@ mod quarantine_tests {
             1,
             "the trace survives as history"
         );
+    }
+
+    /// Issue #267 — ADR-0056 decision 5 for bytes that VERIFY but the floor
+    /// deliberately refuses (here: an author this node has not enrolled). Before
+    /// this, such a refusal persisted NOTHING: the puller froze its cursor, wrote
+    /// a stderr line, and exited SUCCESS, so the evidence lived only in a log.
+    /// Now it takes exactly the path an unverifiable refusal takes — verbatim
+    /// bytes penned by digest with the door's own reason, the slot pinned on the
+    /// re-offer floor, the cursor still advancing so other authors' events keep
+    /// flowing (principle 5, availability over consistency), and the cycle loud.
+    ///
+    /// The second half is the "delayed, never lost" proof AND the pen's
+    /// self-cleaning property: enroll the author, re-offer the same bytes, and
+    /// the event applies while its now-resolved pen row auto-releases.
+    #[test]
+    fn pull_pens_a_deliberate_door_refusal_and_releases_it_on_repair() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        // A perfectly valid signature from an actor this node does not know:
+        // db/020 refuses with a bare RAISE ("signer % is not an enrolled,
+        // non-revoked actor"), which is the residual-refusal class ADR-0056
+        // decision 5 governs — NOT a verification failure.
+        let (sk_x, kid_x) = cairn_event::generate_key().unwrap();
+
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let refused = peer_note(&sk_x, &kid_x, WALL_2026 + 1_500);
+        let e2 = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let raw = response_json(&[&e1, &refused, &e2], Some(CTX_EVENT.as_str()));
+
+        let addr = serve_canned(raw.clone(), 2);
+        let (msg, m) = pull_integrity_err(&mut c, &addr, "peer-a");
+        assert_eq!(
+            m["applied_new"], 2,
+            "one author's refusal must not withhold another author's events"
+        );
+        assert_eq!(m["refused_verifiable"], 1, "the door refusal is counted");
+        assert_eq!(
+            m["skipped_unverifiable"], 0,
+            "these bytes VERIFY — they are not the unverifiable class"
+        );
+        assert_eq!(
+            m["watermark_frozen"], false,
+            "penned and pinned, not frozen"
+        );
+        assert!(
+            msg.contains("floor-refused"),
+            "the loud message must name the refusal class, got: {msg}"
+        );
+
+        // The durable record: verbatim bytes, keyed by digest, with the door's
+        // own words as the reason a human will read in `cairn-sync quarantine`.
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(rows.len(), 1, "exactly the refused event is penned");
+        assert!(
+            rows[0].reason.contains("not an enrolled"),
+            "the door's reason must survive into the pen, got: {}",
+            rows[0].reason
+        );
+        let held: Vec<u8> = c
+            .query_one("SELECT signed_bytes FROM sync_quarantine", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(held, refused, "the pen holds the VERBATIM signed bytes");
+        assert_eq!(cursor(&mut c, "peer-a"), 3, "the cursor advanced past it");
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(2),
+            "…but the floor pins the refused slot, so it stays on the wire"
+        );
+
+        // Repair the cause (the ceremony a real second site performs): enroll the
+        // author. The floor re-offers the same bytes, they apply, and the pen row
+        // — now resolved — is released. Unverifiable rows can never reach this
+        // path (their bytes never apply), so the forensic trace is untouched.
+        c.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"late-enrolled\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+            &[&kid_x],
+        )
+        .unwrap();
+        let m = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect("the repaired cycle is clean and must not fail");
+        assert_eq!(m["applied_new"], 1, "delayed, never lost");
+        assert_eq!(m["refused_verifiable"], 0);
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            None,
+            "a clean cycle clears the floor"
+        );
+        assert_eq!(
+            quarantine_rows(&mut c).len(),
+            0,
+            "a penned event that now applies auto-releases (no stale duplicate of event_log)"
+        );
+    }
+
+    /// The OTHER half of the ADR-0056 decision 5 routing, end-to-end: a VERIFIABLE
+    /// event whose apply fails for a NON-refusal reason must FREEZE the cursor, pen
+    /// NOTHING, and still fail loudly (#270). Penning here would record a refusal
+    /// that never happened; skipping would lose the event. Only the pure predicate
+    /// covered this, so nothing pinned that `do_pull` actually wires it that way.
+    ///
+    /// The transient fault is induced by swapping the apply door for one that raises
+    /// with SQLSTATE `40001` (serialization failure) — the cheapest DETERMINISTIC way
+    /// to get a real non-`P0001` database error, and a class that genuinely occurs.
+    /// `locked_client` re-applies the whole SCHEMA at the start of every DB-gated
+    /// test, so the override cannot leak into another test even if this one panics;
+    /// the restore at the end is for the reader, not load-bearing cleanup.
+    #[test]
+    fn a_transient_apply_failure_freezes_and_pens_nothing() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        // A perfectly good event from an enrolled author: the ONLY reason it will
+        // not apply is the induced fault, so the freeze cannot be misattributed.
+        let good = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let raw = response_json(&[&good], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+
+        // Same signature (Postgres forbids renaming parameters on REPLACE), a
+        // non-P0001 SQLSTATE, and no message resembling a floor verdict.
+        c.batch_execute(
+            "CREATE OR REPLACE FUNCTION apply_remote_event(
+                 p_signed       BYTEA,
+                 p_attestation  BYTEA DEFAULT NULL,
+                 p_attester_key BYTEA DEFAULT NULL,
+                 p_dek          BYTEA DEFAULT NULL
+             ) RETURNS UUID LANGUAGE plpgsql AS $$
+             BEGIN
+                 RAISE EXCEPTION 'could not serialize access due to concurrent update'
+                       USING ERRCODE = '40001';
+             END $$;",
+        )
+        .unwrap();
+
+        let (msg, m) = pull_integrity_err(&mut c, &addr, "peer-t");
+        assert_eq!(
+            m["watermark_frozen"], true,
+            "a non-refusal failure freezes: the same bytes may apply next cycle"
+        );
+        assert_eq!(m["applied_new"], 0);
+        assert_eq!(
+            m["refused_verifiable"], 0,
+            "the door passed no verdict — this is not the refusal class"
+        );
+        assert_eq!(m["skipped_unverifiable"], 0, "the bytes verify");
+        assert_eq!(
+            quarantine_rows(&mut c).len(),
+            0,
+            "penning here would record a refusal that never happened"
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-t"),
+            0,
+            "the cursor holds at the contiguous applied prefix, so the event is re-offered"
+        );
+        assert_eq!(
+            floor(&mut c, "peer-t"),
+            None,
+            "nothing penned, nothing pinned"
+        );
+        // The message must not describe a pen it did not write (the clause-assembly
+        // defect the `loud_pull_message` unit tests guard at value level).
+        assert!(
+            !msg.contains("preserved verbatim") && !msg.contains("cairn-sync quarantine"),
+            "a freeze-only cycle must not send the operator to an empty pen, got: {msg}"
+        );
+        assert!(
+            msg.contains("FROZEN at 0"),
+            "it must name the halted slot, got: {msg}"
+        );
+
+        // Restore the real door so a reader of the next test is not misled.
+        for (name, sql) in SCHEMA {
+            if name.starts_with("020") {
+                c.batch_execute(sql).unwrap();
+            }
+        }
     }
 
     /// A human `acked` row is a recorded license to exclude: the same garbage
