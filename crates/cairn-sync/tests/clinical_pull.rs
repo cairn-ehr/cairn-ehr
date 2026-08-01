@@ -794,16 +794,18 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
 }
 
 #[tokio::test]
-async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
+async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
     // The RED check the PR #221 review asked to keep as a standing test: prove the
     // convergence test DISCRIMINATES (a pull whose events cannot apply must not fake
-    // convergence), pinned to the A1 watermark discipline. Events authored by an
-    // actor B has not enrolled VERIFY on the wire (the signature is self-described)
-    // but are REFUSED at B's apply door — that is a freeze, not an exclusion: the
-    // pull completes, nothing applies, nothing is penned (the quarantine is for
-    // UNVERIFIABLE bytes only), and the watermark holds at the contiguous applied
-    // prefix so the refused events stay on the wire. Fix the cause and the very
-    // next pull converges — delayed, never lost.
+    // convergence). Events authored by an actor B has not enrolled VERIFY on the wire
+    // (the signature is self-described) but are REFUSED at B's apply door.
+    //
+    // ADR-0056 decision 5 (issues #267/#270) changed what that costs. It used to be a
+    // silent freeze: nothing applied, nothing persisted, the watermark halted, and the
+    // pull exited SUCCESS — so a wedged link looked exactly like a healthy one. Now the
+    // refused bytes are penned verbatim by digest with the door's reason, the slot is
+    // pinned on the re-offer floor, and the cycle FAILS LOUDLY. Fix the cause and the
+    // very next pull converges and drains the pen — delayed, never lost.
     let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
         eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
         return;
@@ -893,21 +895,22 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
             .expect("run pull")
     };
 
-    // --- pull while B does not know the author: refuse-and-hold, loudly logged ---
+    // --- pull while B does not know the author: pen-and-hold, and say so ---
     let pull = pull_cmd();
     assert!(
-        pull.status.success(),
-        "a freeze is an availability decision, not an integrity failure — the pull \
-         itself completes\nstdout: {}\nstderr: {}",
+        !pull.status.success(),
+        "a refusal this node cannot resolve by itself is an INTEGRITY condition and \
+         must exit non-zero (#270) — a silent success is how a wedged link hid\
+         \nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&pull.stdout),
         String::from_utf8_lossy(&pull.stderr)
     );
-    let (applied, penned, cursor): (i64, i64, i64) = {
+    let (applied, penned, floor): (i64, i64, Option<i64>) = {
         let row = b
             .query_one(
                 "SELECT (SELECT count(*) FROM event_log), \
                         (SELECT count(*) FROM sync_quarantine), \
-                        last_seq \
+                        quarantine_floor_seq \
                  FROM sync_state WHERE peer = 'node-a'",
                 &[],
             )
@@ -919,14 +922,25 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         applied, 0,
         "nothing applied while the author is unknown at B"
     );
-    assert_eq!(
-        penned, 0,
-        "nothing penned — these bytes VERIFY; the pen is for unverifiable bytes"
+    assert!(
+        penned > 0,
+        "the refused bytes are preserved VERBATIM in the pen (#267) — a refusal that \
+         persists nothing leaves only a log line as evidence"
     );
-    assert_eq!(
-        cursor, 0,
-        "the seq cursor FROZE at the contiguous applied prefix, so the refused \
-         events stay on the wire (issue #196)"
+    assert!(
+        floor.is_some(),
+        "the re-offer floor pins the refused slot, so it stays on the wire every cycle"
+    );
+    // The pen's reason is what a human reads in `cairn-sync quarantine`; it must be
+    // the door's own words, not a generic "refused".
+    let reason: String = b
+        .query_one("SELECT reason FROM sync_quarantine LIMIT 1", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        reason.contains("not an enrolled"),
+        "the pen must carry the door's legible reason, got: {reason}"
     );
 
     // --- fix the cause (enroll the actors on B) and pull again: no loss ---
@@ -943,6 +957,23 @@ async fn refused_apply_freezes_the_watermark_and_recovers_without_loss() {
         snapshot(&b).await,
         "after the repair the next pull converges — the refusal was a delay, never a loss"
     );
+    let (still_penned, floor_after): (i64, Option<i64>) = {
+        let row = b
+            .query_one(
+                "SELECT (SELECT count(*) FROM sync_quarantine), quarantine_floor_seq \
+                 FROM sync_state WHERE peer = 'node-a'",
+                &[],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(
+        still_penned, 0,
+        "every penned event now applies, so the pen auto-releases — it must not keep a \
+         duplicate of event_log"
+    );
+    assert_eq!(floor_after, None, "a clean cycle clears the re-offer floor");
 }
 
 /// Issue #196 (the headline regression guard): an event that lands on A with an HLC

@@ -5,7 +5,8 @@
 //! Semantics mirrored from PR #110, adapted to the node plane's deny-all steady
 //! state: pull_into pens ONLY an UNVERIFIABLE node_event (never applies without
 //! repair), keeps skip-and-sweep for a verifiable-but-refused event (untrusted
-//! author / not-yet-have-code — self-heals on a later sweep), records the
+//! author / not-yet-have-code — self-heals on a later sweep, a claim now pinned
+//! by a test of BOTH its halves, issue #269), records the
 //! serving `seq` as a derived re-offer floor, auto-releases a penned row the
 //! moment its bytes apply, fails LOUDLY (stats.pending) while any unacked row
 //! exists, and lets a human license a permanent exclusion via `acked = TRUE`.
@@ -461,6 +462,139 @@ async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
         pen_count(&n.a).await,
         0,
         "the pen stays empty for a self-healing refusal"
+    );
+
+    n.serve.abort();
+}
+
+/// Issue #269 — the skip-and-advance arm above claims a refused event "self-heals
+/// on a later sweep", and nothing tested the healing half. This pins BOTH halves
+/// of that claim, because they are the argument for and against the current design:
+///
+/// * the heal is real — once the refusal's cause is fixed, a FULL SWEEP re-offers
+///   the event and the door admits it (the set-union guarantee holds: delayed,
+///   never lost);
+/// * the heal is ONLY on the sweep — an incremental pull cannot re-offer it,
+///   because the cursor already advanced past its seq. That is the latency
+///   [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) exists to remove,
+///   and it is up to `FULL_SWEEP_EVERY` cycles wide.
+///
+/// The event under test is a genuine `node.enrolled` genesis from a node this one
+/// does not peer with — the deny-all arm (`genesis from an un-trusted or mismatched
+/// node`), which is the node plane's real steady-state refusal rather than a
+/// synthetic one. Peering with that node is the repair.
+#[tokio::test]
+async fn a_skipped_node_event_heals_on_the_full_sweep_but_not_the_incremental() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let n = self_node(&base, "127.0.0.1:7936").await;
+    let local = identity::load_local(&n.a).await.unwrap();
+
+    // A well-formed genesis from a STRANGER node. Its node_id is, by definition,
+    // the content-address of these very bytes (genesis-stable identity, db/007),
+    // so the pairing bundle below can name it before we have ever admitted it.
+    let (sk_b, kid_b) = generate_key().unwrap();
+    let body = EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: "00000000-0000-0000-0000-000000000000".into(),
+        event_type: "node.enrolled".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "B".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid_b.clone(),
+        contributors: serde_json::json!([{"actor_id": kid_b, "role": "recorded"}]),
+        payload: serde_json::json!({"display_name": "B", "address": "127.0.0.1:7999"}),
+        attachments: vec![],
+        plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&body, &sk_b).unwrap().signed_bytes;
+    let stranger_node_id = hex::encode(cairn_event::event_address(&signed));
+    n.a.execute(
+        "INSERT INTO node_event
+             (node_event_id, op, author_node_id, subject_node_id, signer_key_id,
+              hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+         VALUES (gen_random_uuid(), 'enroll', '\\x00', '\\x00', 'k', 1, 0, 'n',
+                 $1::bytea, '\\x1220'::bytea || digest($1::bytea, 'sha256'))",
+        &[&signed],
+    )
+    .await
+    .unwrap();
+
+    // The trust store is re-read before every pull: peering below CHANGES it, and a
+    // stale store would silently test the wrong trust state.
+    let pull_cfg = || async {
+        sync::client_config(&base, &n.sk, sync::trust_store_from_db(&n.a).await.unwrap())
+            .await
+            .unwrap()
+    };
+
+    // Sweep 1 — refused (deny-all) and SKIPPED past: the cursor now sits above it.
+    let s1 = sync::pull_once(n.addr, pull_cfg().await, true)
+        .await
+        .unwrap();
+    assert!(
+        s1.rejected >= 1,
+        "the stranger genesis is refused (deny-all)"
+    );
+    assert_eq!(
+        s1.quarantined, 0,
+        "a verifiable refusal is not penned today"
+    );
+
+    // An INCREMENTAL pull cannot re-offer it — the whole point of #268. Nothing at
+    // all is served, because every row sits at or below the cursor.
+    let s2 = sync::pull_once(n.addr, pull_cfg().await, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        s2.received, 0,
+        "the skipped event is BELOW the cursor, so no incremental pull re-offers it"
+    );
+
+    // Repair the cause: peer with B (out-of-band confirmation, the real ceremony).
+    let bundle = cairn_event::PairingBundle {
+        node_id_hex: stranger_node_id,
+        pubkey_hex: kid_b.clone(),
+        address: "127.0.0.1:7999".into(),
+        fingerprint: cairn_event::short_fingerprint(&kid_b).unwrap(),
+        nonce: "n".into(),
+        hlc: Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: local.node_id_hex.clone(),
+        },
+    };
+    identity::author_peer(
+        &n.a,
+        &n.sk,
+        &local.pubkey_hex,
+        &local.node_id_hex,
+        &bundle,
+        Some("peer"),
+    )
+    .await
+    .unwrap();
+
+    // Sweep 2 — the FULL sweep is the only thing that re-offers the skipped slot,
+    // and the door now admits it. Nothing was lost; it was merely late.
+    let s3 = sync::pull_once(n.addr, pull_cfg().await, true)
+        .await
+        .unwrap();
+    assert!(
+        s3.received > s2.received,
+        "the full sweep re-offers everything, including the skipped slot"
+    );
+    assert_eq!(
+        s3.rejected, 0,
+        "with the cause repaired the once-refused genesis is admitted — the heal is real"
     );
 
     n.serve.abort();
