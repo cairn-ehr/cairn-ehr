@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
 [dependencies]
 uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }

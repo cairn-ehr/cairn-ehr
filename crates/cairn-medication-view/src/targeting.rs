@@ -145,8 +145,21 @@ mod tests {
                 MedicationStatus::Active,
                 vec![member(2, VouchState::Absent), member(2, VouchState::Absent)],
             ),
+            // The same thread (medication_id 5) shows up as a member of two DISTINCT
+            // groups. Dedup must hold across groups, not just within one row's member
+            // list — a thread's id, not its group, is the identity that matters here.
+            row(
+                3,
+                MedicationStatus::Active,
+                vec![member(5, VouchState::Absent)],
+            ),
+            row(
+                4,
+                MedicationStatus::Active,
+                vec![member(5, VouchState::Absent)],
+            ),
         ];
-        assert_eq!(sign_off_targets(&rows), vec![uid(2), uid(9)]);
+        assert_eq!(sign_off_targets(&rows), vec![uid(2), uid(5), uid(9)]);
     }
 
     #[test]
