@@ -2,16 +2,18 @@
 //!
 //! Everything before this slice authored events; nothing read clinical content back out
 //! in Rust. This module maps the existing medication projections into the shared
-//! `cairn_medication_view` model — and it is the ONLY such mapping: the med-list UI reads
-//! through it today, and the future native API (ADR-0023, Phase 8) is expected to wrap
-//! this same function rather than re-derive the joins.
+//! `cairn_medication_view` model — and it is the ONLY such mapping: the CLI verbs read
+//! through it today, and the med-list UI (deferred to a later session on this branch) and
+//! the future native API (ADR-0023, Phase 8) are expected to wrap this same function
+//! rather than re-derive the joins.
 //!
-//! WHY THREE SMALL QUERIES AND NOT ONE JOIN. The list, the per-thread vouches, and the two
-//! advisory flags answer three different questions over three different grains (group,
-//! thread, worklist). One join would need two levels of aggregation and would be far
-//! harder for a reviewer to check against the view definitions in db/031-034. Three plain
-//! queries plus an explicit assembly step in Rust is the reviewer-legible shape §9 asks
-//! for, and each query is independently checkable against its view.
+//! WHY FOUR SMALL QUERIES AND NOT ONE JOIN. The list, the per-thread vouches, and the
+//! three advisory flags answer four different questions over four different grains
+//! (group, thread, worklist, cross-patient hazard). One join would need two levels of
+//! aggregation and would be far harder for a reviewer to check against the view
+//! definitions in db/031-034. Four plain queries plus an explicit assembly step in Rust
+//! is the reviewer-legible shape §9 asks for, and each query is independently checkable
+//! against its view.
 //!
 //! Generic over `GenericClient` so a caller can read through an open transaction — the
 //! sign-off orchestrator (`signoff.rs`) relies on that to compute its targets in the same
@@ -27,6 +29,20 @@ use cairn_medication_view::{MedicationRow, MedicationStatus, MemberVouch, VouchS
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+/// A patient's chart, plus what the node knows is MISSING from it.
+///
+/// `rows` is what the clinician sees. `groups_missing_from_chart` is a safety signal that
+/// exists BECAUSE a reconciled group can span more than one patient (issue #334): the
+/// group then displays on only ONE patient's chart (see the module doc on
+/// `read_cross_patient_groups`), so a patient whose thread was pulled into such a group
+/// can have locally-known medication content the node simply cannot show here. Non-empty
+/// means this chart is INCOMPLETE, not merely sparse — `sign_off_medication_list` refuses
+/// to vouch for it for exactly that reason. Empty in normal operation.
+pub struct PatientMedicationList {
+    pub rows: Vec<MedicationRow>,
+    pub groups_missing_from_chart: Vec<Uuid>,
+}
+
 /// Read one patient's medication list: current drugs AND ceased ones.
 ///
 /// Ceased rows are retained deliberately. A struck line stays visible on a paper drug
@@ -36,10 +52,11 @@ use uuid::Uuid;
 pub async fn list_patient_medications(
     client: &(impl tokio_postgres::GenericClient + Sync),
     patient: Uuid,
-) -> anyhow::Result<Vec<MedicationRow>> {
+) -> anyhow::Result<PatientMedicationList> {
     let members = read_member_vouches(client, patient).await?;
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, patient).await?;
     let coding_conflict = read_coding_conflict_groups(client, patient).await?;
+    let cross_patient = read_cross_patient_groups(client, patient).await?;
 
     // `patient_medication_current` and `_past` each keep their OWN column set stable
     // across migrations (the db/033 replay-safety constraint on `CREATE OR REPLACE VIEW`
@@ -71,19 +88,49 @@ pub async fn list_patient_medications(
                 members: members.get(&group_id).cloned().unwrap_or_default(),
                 reconciliation_flagged: reconciliation_flagged.contains(&group_id),
                 coding_conflict: coding_conflict.contains(&group_id),
+                cross_patient: cross_patient.contains(&group_id),
             });
         }
     }
-    // Stable display order: coded/asserted term, then the group id as the tiebreak. Sorted
-    // in Rust rather than SQL so the order cannot depend on the database's collation
-    // (ADR-0045 — a locale-dependent ORDER BY is a node-local property).
+
+    // DEDUPLICATE by group_id, keeping the first occurrence (issue #334). A cross-patient
+    // group (member threads spanning two patients) makes `medication_group_status` emit
+    // TWO rows for the SAME group under the WINNING patient's id — see
+    // `medication_group_cross_patient`'s view comment in db/033 for the mechanism. Without
+    // this dedup, that group would print TWICE on the winner's chart: a duplicated drug
+    // line is a double-dose reading hazard on an inpatient chart, not a cosmetic glitch.
+    let mut seen_groups: HashSet<Uuid> = HashSet::new();
+    rows.retain(|row| seen_groups.insert(row.group_id));
+
+    // Stable display order: the name the clinician actually SEES (`display_name` — coded
+    // display when coded, else the asserted term), then the group id as the tiebreak.
+    // Sorting on the invisible `term` when a coded display exists would file a coded drug
+    // under a string the reader never sees (e.g. "Lipitor" sorted under "atorvastatin") —
+    // real cognitive-load cost against the §1.2 paper-parity benchmark. Sorted in Rust
+    // rather than SQL so the order cannot depend on the database's collation (ADR-0045 —
+    // a locale-dependent ORDER BY is a node-local property).
     rows.sort_by(|a, b| {
-        a.term
+        a.display_name()
             .as_bytes()
-            .cmp(b.term.as_bytes())
+            .cmp(b.display_name().as_bytes())
             .then_with(|| a.group_id.cmp(&b.group_id))
     });
-    Ok(rows)
+
+    // Groups this patient has locally-known member threads in (per `members`, which is
+    // scoped to this patient via `medication_thread_group.patient_id`) but that matched no
+    // assembled row above. Sorted for determinism — the same reason the rows themselves
+    // are sorted in Rust rather than left in database order.
+    let mut groups_missing_from_chart: Vec<Uuid> = members
+        .keys()
+        .filter(|group_id| !seen_groups.contains(*group_id))
+        .copied()
+        .collect();
+    groups_missing_from_chart.sort();
+
+    Ok(PatientMedicationList {
+        rows,
+        groups_missing_from_chart,
+    })
 }
 
 const CURRENT_SQL: &str = "SELECT medication_id::text AS medication_id, \
@@ -178,6 +225,34 @@ async fn read_coding_conflict_groups(
     let sql = "SELECT DISTINCT cc.group_id::text AS group_id \
                FROM medication_group_coding_conflict cc \
                JOIN medication_thread_group g ON g.group_id = cc.group_id \
+               WHERE g.patient_id = $1::text::uuid";
+    let patient_s = patient.to_string();
+    let ids: Result<HashSet<Uuid>, uuid::Error> = client
+        .query(sql, &[&patient_s])
+        .await?
+        .iter()
+        .map(|r| r.get::<_, String>("group_id").parse())
+        .collect();
+    Ok(ids?)
+}
+
+/// Groups whose member threads span more than one patient (issue #334, db/033
+/// `medication_group_cross_patient`) — a standing wrong-chart hazard. The reconcile door
+/// only refuses this at LOCAL author time when BOTH patients are already known locally
+/// (db/033 lines 260-279); it never refuses on the sync-apply path, so this state is
+/// EXPECTED to arrive from a peer. `medication_group_display`'s DISTINCT ON always picks
+/// ONE patient as the group's displayed owner, so the OTHER patient's chart shows no row
+/// for this group at all — that silent absence is exactly what
+/// `groups_missing_from_chart` (above) exists to catch. This query, like
+/// `read_coding_conflict_groups`, is joined through `medication_thread_group` because the
+/// underlying view carries no patient_id of its own.
+async fn read_cross_patient_groups(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    patient: Uuid,
+) -> anyhow::Result<HashSet<Uuid>> {
+    let sql = "SELECT DISTINCT cp.group_id::text AS group_id \
+               FROM medication_group_cross_patient cp \
+               JOIN medication_thread_group g ON g.group_id = cp.group_id \
                WHERE g.patient_id = $1::text::uuid";
     let patient_s = patient.to_string();
     let ids: Result<HashSet<Uuid>, uuid::Error> = client

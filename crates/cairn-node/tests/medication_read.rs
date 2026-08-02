@@ -36,6 +36,7 @@ use cairn_event::SigningKey;
 use cairn_medication_view::{MedicationStatus, VouchState};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
+use cairn_node::medication::signoff::sign_off_medication_list;
 use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
@@ -130,7 +131,7 @@ async fn a_single_unvouched_medication_reads_as_absent() {
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(rows.len(), 1, "one assert, one displayed row");
     assert_eq!(rows[0].term, "metformin");
     assert_eq!(rows[0].status, MedicationStatus::Active);
@@ -167,7 +168,7 @@ async fn an_attested_thread_reads_as_fresh_with_its_attester() {
         .await
         .unwrap();
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(
         rows[0].members[0].vouch,
         VouchState::Fresh { by: hkid.clone() }
@@ -213,7 +214,7 @@ async fn a_reconciled_pair_reads_as_one_row_with_two_members() {
     .await
     .unwrap();
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(
         rows.len(),
         1,
@@ -258,7 +259,7 @@ async fn a_ceased_medication_is_retained_and_marked_ceased() {
     .await
     .unwrap();
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(rows.len(), 1, "a ceased drug is still on the chart");
     assert_eq!(rows[0].status, MedicationStatus::Ceased);
 }
@@ -277,7 +278,11 @@ async fn another_patients_medications_are_not_returned() {
 
     assert_one(&mut c, &sk, &kid, "origin-a", theirs, "warfarin").await;
 
-    assert!(list_patient_medications(&c, mine).await.unwrap().is_empty());
+    assert!(list_patient_medications(&c, mine)
+        .await
+        .unwrap()
+        .rows
+        .is_empty());
 }
 
 #[tokio::test]
@@ -293,6 +298,7 @@ async fn a_patient_with_no_medications_reads_as_an_empty_list() {
     assert!(list_patient_medications(&c, Uuid::now_v7())
         .await
         .unwrap()
+        .rows
         .is_empty());
 }
 
@@ -344,7 +350,7 @@ async fn a_thread_grown_after_attestation_reads_as_stale() {
     .await
     .unwrap();
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(
         rows.len(),
         1,
@@ -377,7 +383,7 @@ async fn two_un_reconciled_threads_sharing_a_term_are_flagged_for_reconciliation
     assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(
         rows.len(),
         2,
@@ -446,10 +452,101 @@ async fn a_reconciled_group_with_conflicting_codings_is_flagged() {
     .await
     .expect("reconciliation is a human judgment — never auto-refused over a coding");
 
-    let rows = list_patient_medications(&c, patient).await.unwrap();
+    let rows = list_patient_medications(&c, patient).await.unwrap().rows;
     assert_eq!(rows.len(), 1, "the reconciled pair is one displayed row");
     assert!(
         rows[0].coding_conflict,
         "two different anchors in one reconciled group must be flagged"
+    );
+}
+
+/// Fix 1 (#288 final review, issue #334): a reconciled group whose member threads span
+/// TWO patients is a standing wrong-chart hazard. `medication_group_display`'s
+/// `DISTINCT ON (group_id)` always picks exactly ONE patient as the group's displayed
+/// owner (see db/033's comment on that view), so `patient_medication_current` shows the
+/// group under the WINNING patient's id — TWICE, once per `medication_group_status` row —
+/// while the LOSING patient's chart shows no row for it at all, even though the node holds
+/// real, locally-known content (a whole medication thread) for that patient.
+///
+/// THE DOOR CANNOT PRODUCE THIS VIA THE EVENT PATH. db/033's reconcile door
+/// (`medication_reconciliation_apply`) refuses a reconciliation at LOCAL author time
+/// whenever BOTH subject threads' patients are already known locally and differ (db/033
+/// lines 260-279) — exactly the state this test needs. It never refuses on the SYNC-APPLY
+/// path (`cairn.remote_apply = 'on'`), so a peer node's reconciliation event legitimately
+/// produces this state here; this test reproduces that arrival by inserting directly into
+/// `medication_group_member`, the same projection table the sync-apply path would write,
+/// rather than by asserting an event the local door would refuse.
+#[tokio::test]
+async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+
+    let thread_a = assert_one(&mut c, &sk, &kid, "origin-a", patient_a, "metformin").await;
+    let thread_b = assert_one(&mut c, &sk, &kid, "origin-a", patient_b, "amlodipine").await;
+
+    // Fold both threads into ONE group, with thread_a as the group id — the same shape
+    // `cairn_recompute_medication_group` writes for a real reconciled pair. Using thread_a
+    // as the group id (rather than relying on which of the two UUIDs happens to sort
+    // lower) makes patient A deterministically the "winner" below via
+    // `medication_group_display`'s `(s.medication_id = g.group_id) DESC` tiebreak.
+    c.execute(
+        "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
+         ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
+        &[&thread_a.to_string(), &thread_b.to_string()],
+    )
+    .await
+    .unwrap();
+
+    // Patient A wins the tiebreak (its member IS the group id), so patient A's chart shows
+    // the group — deduplicated to ONE row by the FIX 1(c) defence in `read.rs`, not the two
+    // `medication_group_status` would otherwise emit — and carries the cross-patient
+    // warning so the winning chart's reader can see the hazard too.
+    let a_list = list_patient_medications(&c, patient_a).await.unwrap();
+    assert_eq!(a_list.rows.len(), 1, "the group is deduplicated to one row");
+    assert!(
+        a_list.rows[0].cross_patient,
+        "the winning patient's row must carry the cross-patient warning"
+    );
+    assert!(
+        a_list.groups_missing_from_chart.is_empty(),
+        "patient A's own thread is fully accounted for on patient A's chart"
+    );
+
+    // Patient B loses the tiebreak: every row `patient_medication_current` emits for this
+    // group carries the WINNER's (patient A's) patient_id, so filtering
+    // `WHERE patient_id = patient_b` returns nothing — patient B's chart renders empty even
+    // though the node holds a real, locally-known drug (thread_b) for patient B. The
+    // `groups_missing_from_chart` signal is what catches this silent gap.
+    let b_list = list_patient_medications(&c, patient_b).await.unwrap();
+    assert!(
+        b_list.rows.is_empty(),
+        "the group displays under patient A only — patient B's chart shows nothing"
+    );
+    assert_eq!(
+        b_list.groups_missing_from_chart,
+        vec![thread_a],
+        "the node must surface that a locally-known group is missing from this chart"
+    );
+
+    // The read-path defence this fix exists for: sign-off must REFUSE for patient B rather
+    // than silently reporting "nothing to sign off" over a chart the node itself knows is
+    // incomplete — that would be a false statement about who is responsible for thread_b.
+    let params = AttestParams {
+        human_sk: &hsk,
+        human_kid: &hkid,
+        basis: None,
+        note: None,
+    };
+    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b).await;
+    assert!(
+        err.is_err(),
+        "sign-off must refuse a chart the node knows is missing content, not report it clean"
     );
 }

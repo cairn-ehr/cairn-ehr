@@ -2240,17 +2240,40 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::MedicationList { patient, json } => {
             let db = cairn_node::db::connect(&cli.conn).await?;
-            let rows = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
+            let list = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
-            } else if rows.is_empty() {
+                println!("{}", serde_json::to_string_pretty(&list.rows)?);
+                if !list.groups_missing_from_chart.is_empty() {
+                    // JSON mode only emits the row array on stdout (a caller parses that as
+                    // a single value), so the incompleteness warning goes to stderr rather
+                    // than corrupting the JSON payload.
+                    eprintln!(
+                        "warning: {} medication group(s) with locally-known content for this \
+                         patient are missing from this chart (issue #334)",
+                        list.groups_missing_from_chart.len()
+                    );
+                }
+            } else if list.rows.is_empty() {
                 // Deliberately explicit: an empty chart is a real clinical state, and
                 // silence would read as "the query failed" (issue #331 covers recording
                 // "nil medications, reviewed" as an act — not attempted here).
                 println!("no medications recorded for {patient}");
+                if !list.groups_missing_from_chart.is_empty() {
+                    // The #334 case this whole fix exists for: "no medications recorded"
+                    // would otherwise be a straightforward LIE when the node actually holds
+                    // content for this patient it just cannot display (a cross-patient
+                    // reconciliation). Never let the plain empty-chart message stand alone
+                    // when this is true.
+                    println!(
+                        "! but {} medication group(s) with locally-known content for this \
+                         patient are missing from this chart entirely (issue #334) — this is \
+                         NOT the same as \"no medications\"",
+                        list.groups_missing_from_chart.len()
+                    );
+                }
             } else {
-                for row in &rows {
-                    let name = row.coding_display.as_deref().unwrap_or(&row.term);
+                for row in &list.rows {
+                    let name = row.display_name();
                     let dose = match (&row.dose_amount, &row.dose_unit) {
                         (Some(a), Some(u)) => format!(" {a} {u}"),
                         (Some(a), None) => format!(" {a}"),
@@ -2283,6 +2306,23 @@ async fn main() -> anyhow::Result<()> {
                     if row.coding_conflict {
                         println!("    ! two different drug anchors in this group");
                     }
+                    if row.cross_patient {
+                        // This row displayed at all only because this patient happened to
+                        // win the DISTINCT ON tiebreak in medication_group_display — the
+                        // group's OTHER patient sees no row for it (issue #334).
+                        println!(
+                            "    ! this group's member threads span more than one patient \
+                             — see issue #334"
+                        );
+                    }
+                }
+                if !list.groups_missing_from_chart.is_empty() {
+                    println!(
+                        "! {} medication group(s) with locally-known content for this patient \
+                         are missing from this chart entirely (issue #334) — this list is \
+                         INCOMPLETE",
+                        list.groups_missing_from_chart.len()
+                    );
                 }
             }
         }
@@ -2316,9 +2356,20 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
             if out.attested.is_empty() {
-                println!(
-                    "nothing to sign off for {patient}: every drug already carries a current signature"
-                );
+                // FIX 4 (#288 review): these are two different clinical states that both
+                // produce an empty `attested`, and conflating them told the operator a
+                // false "everything is signed" for a chart that was never populated at all.
+                if out.total_rows == 0 {
+                    println!(
+                        "no medications are recorded for {patient}; nothing was signed. \
+                         Recording \"nil medications, reviewed\" as an act has no home yet \
+                         (issue #331)."
+                    );
+                } else {
+                    println!(
+                        "nothing to sign off for {patient}: every drug already carries a current signature"
+                    );
+                }
             } else {
                 println!(
                     "signed off {} medication thread(s) for {patient}",

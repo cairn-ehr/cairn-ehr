@@ -12,5 +12,9 @@ publish = false
 workspace = true
 
 [dependencies]
-uuid = { version = "1", features = ["v7", "serde"] }
+# `v7` deliberately omitted: this crate only ever constructs Uuids from values that arrive
+# from elsewhere (the database, or `Uuid::from_u128` in tests) — it never MINTS one. The `v7`
+# feature pulls `rand`/`getrandom` into a crate whose own module doc calls it "deliberately
+# pure" (house rule 4 — no dependency this crate does not need).
+uuid = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

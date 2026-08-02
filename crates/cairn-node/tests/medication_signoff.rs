@@ -22,8 +22,8 @@ use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::signoff::sign_off_medication_list;
 use cairn_node::medication::{
-    assert_medication, attest_medication_thread, cease_medication, AssertMedicationInput,
-    AttestParams, CeaseMedicationInput,
+    assert_medication, attest_medication_thread, cease_medication, change_dose,
+    AssertMedicationInput, AttestParams, CeaseMedicationInput, ChangeDoseInput,
 };
 use common::{cs, medication_setup as setup};
 use tokio_postgres::Client;
@@ -229,6 +229,14 @@ async fn a_ceased_thread_is_not_signed() {
 
     assert!(out.attested.is_empty(), "a struck line is not re-signed");
     assert_eq!(attestation_count(&c, thread).await, 0);
+    // FIX 4 (#288 review): the ceased row still counts toward `total_rows` — this chart is
+    // NOT empty, it just has nothing that currently needs a signature. Distinguishing this
+    // from a genuinely empty chart (see `an_empty_list_signs_nothing_without_erroring`
+    // below) is exactly what `total_rows` exists for.
+    assert_eq!(
+        out.total_rows, 1,
+        "a ceased row is still a row on the chart, not an empty chart"
+    );
 }
 
 /// An empty chart signs nothing and does NOT error. Recording "nil medications, reviewed"
@@ -255,6 +263,13 @@ async fn an_empty_list_signs_nothing_without_erroring() {
 
     assert!(out.attested.is_empty());
     assert!(out.event_ids.is_empty());
+    // FIX 4 (#288 review): a genuinely empty chart must report zero `total_rows`, so a
+    // caller (the CLI's `MedicationSignOff` handler) can tell "nothing recorded" apart from
+    // "everything already vouched" instead of printing the same reassurance for both.
+    assert_eq!(
+        out.total_rows, 0,
+        "a chart with no medications at all must report zero total_rows"
+    );
 }
 
 /// A refused attester leaves ZERO attestation rows. The db/005 responsibility gate checks
@@ -308,5 +323,88 @@ async fn a_refused_attestation_signs_nothing_at_all() {
         attestation_count(&c, b).await,
         0,
         "zero attestation rows after a refused attester"
+    );
+}
+
+/// FIX 5(c) (#288 final review): each half of "re-vouch a drug that changed" already has
+/// coverage on its own — `medication_read.rs`'s `a_thread_grown_after_attestation_reads_as_stale`
+/// pins that a content change flips the vouch to `Stale`, and
+/// `one_gesture_attests_every_unvouched_thread` above pins that whole-list sign-off signs
+/// unvouched/stale threads — but their COMPOSITION was never exercised: does a SECOND
+/// whole-list sign-off actually pick up a thread that changed after the FIRST one signed
+/// it? That is ADR-0049's entire point (a vouch is a claim about content, and it must go
+/// stale — and be re-signable — the moment the content it vouched for moves).
+///
+/// A CESSATION deliberately would not exercise this: a ceased thread is excluded from
+/// targeting entirely (see `a_ceased_thread_is_not_signed` above), so growing the thread
+/// with a dose change — which keeps it ACTIVE — is what actually forces the re-vouch path.
+#[tokio::test]
+async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let params = AttestParams {
+        human_sk: &hsk,
+        human_kid: &hkid,
+        basis: None,
+        note: None,
+    };
+
+    // First whole-list sign-off: the thread is unvouched, so it is signed.
+    let first = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .unwrap();
+    assert_eq!(
+        first.attested,
+        vec![thread],
+        "the first sign-off vouches for the thread"
+    );
+    assert_eq!(attestation_count(&c, thread).await, 1);
+
+    // Grow the thread's content with a REAL clinical change — a dose change, not a
+    // cessation — so the thread stays ACTIVE and therefore stays a sign-off target.
+    change_dose(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        patient,
+        thread,
+        &ChangeDoseInput {
+            dose_amount: Some("1000"),
+            dose_unit: Some("mg"),
+            effective: None,
+            effective_precision: None,
+            info_source: "clinician",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Second whole-list sign-off: the vouch from the first is now stale (the thread grew
+    // after it), so the whole-list gesture must pick the thread back up and re-attest it.
+    let second = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .unwrap();
+    assert_eq!(
+        second.attested,
+        vec![thread],
+        "the whole-list gesture must re-vouch the thread whose content changed since the last sign-off"
+    );
+    assert_eq!(
+        attestation_count(&c, thread).await,
+        2,
+        "the dose change earned the thread a SECOND attestation row: the stale one from the \
+         first sign-off, plus the fresh re-vouch from the second"
     );
 }

@@ -54,6 +54,7 @@ mod tests {
             members,
             reconciliation_flagged: false,
             coding_conflict: false,
+            cross_patient: false,
         }
     }
 

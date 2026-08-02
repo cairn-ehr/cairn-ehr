@@ -88,4 +88,18 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
+    /// This group's member threads span more than one patient
+    /// (`medication_group_cross_patient`) — a standing wrong-chart hazard (issue #334).
+    pub cross_patient: bool,
+}
+
+impl MedicationRow {
+    /// The name the clinician actually sees: the coded display name when the drug has been
+    /// coded, else the term exactly as asserted. Every renderer and the sort MUST use this, or
+    /// the chart is ordered by a string the reader cannot see (a coded chart would sort under
+    /// its invisible `term` while the clinician reads `coding_display` — e.g. "Lipitor" filed
+    /// under "atorvastatin").
+    pub fn display_name(&self) -> &str {
+        self.coding_display.as_deref().unwrap_or(&self.term)
+    }
 }

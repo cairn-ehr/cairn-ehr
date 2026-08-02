@@ -93,7 +93,7 @@ Postgres projections (all exist today; all GRANTed to cairn_agent)
     medication_group_coding_conflict        two anchors in one group
          |
     cairn_node::medication::read::list_patient_medications(db, patient)
-         |                                   -> Vec<MedicationRow>
+         |             -> PatientMedicationList { rows: Vec<MedicationRow>, groups_missing_from_chart }
     cairn-gui-tauri  (own tokio-postgres connection; Tauri command `med_list`)
          |
     cairn_gui_tab_medications::build_view(rows, now) -> MedListView    PURE, cargo-tested
@@ -149,7 +149,7 @@ pub fn sign_off_targets(rows: &[MedicationRow]) -> Vec<Uuid>
 
 Targets = every member thread of every **active** group whose attestation is **absent or stale**.
 
-Each row renders `VouchState::{None, Fresh { by }, Stale { by }}`. The clinician can therefore see
+Each row renders `VouchState::{Absent, Fresh { by }, Stale { by }}`. The clinician can therefore see
 which lines the gesture will sign **before** signing — the paper affordance of looking at the
 unsigned lines. This is explicitly *not* a confirmation dialog (principle 3): nothing is interposed
 between the intent and the act; the state is simply visible, ambient, and always was.
