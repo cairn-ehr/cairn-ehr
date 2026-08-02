@@ -892,6 +892,27 @@ enum Cmd {
         attest: AttestFlags,
     },
 
+    /// Read a patient's medication list — current drugs and ceased ones, each with the
+    /// clinician whose signature it carries. The read path the reference UI uses; a
+    /// future native API (ADR-0023) is expected to wrap the same function.
+    MedicationList {
+        /// The patient UUID whose chart to read.
+        patient: Uuid,
+        /// Emit JSON instead of the human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign off the whole medication list in ONE gesture (#288): attests every thread
+    /// whose vouch is absent or stale, in one transaction. Threads already carrying a
+    /// current signature keep it — a drug line carries the signature of the person
+    /// responsible for that drug.
+    MedicationSignOff {
+        /// The patient UUID whose chart is being signed off.
+        patient: Uuid,
+        #[command(flatten)]
+        attest: AttestFlags,
+    },
+
     /// Rung-3 audited crypto-shred (ADR-0005 / ADR-0052): irreversibly destroy an
     /// event's custody + derived plaintext, leaving behind a signed, LEGIBLE tombstone
     /// ("existed -> destroyed, basis Z") that outlives every key. Device-additive by
@@ -2216,6 +2237,97 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("attested medication thread {medication_id} (event {event_id})");
+        }
+        Cmd::MedicationList { patient, json } => {
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let rows = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                // Deliberately explicit: an empty chart is a real clinical state, and
+                // silence would read as "the query failed" (issue #331 covers recording
+                // "nil medications, reviewed" as an act — not attempted here).
+                println!("no medications recorded for {patient}");
+            } else {
+                for row in &rows {
+                    let name = row.coding_display.as_deref().unwrap_or(&row.term);
+                    let dose = match (&row.dose_amount, &row.dose_unit) {
+                        (Some(a), Some(u)) => format!(" {a} {u}"),
+                        (Some(a), None) => format!(" {a}"),
+                        _ => String::new(),
+                    };
+                    let status = match row.status {
+                        cairn_medication_view::MedicationStatus::Active => "current",
+                        cairn_medication_view::MedicationStatus::Ceased => "ceased",
+                    };
+                    // One line per MEMBER THREAD's signature state, not a row-level
+                    // summary: a reconciled group can hold several threads at different
+                    // signature states, and a summary is exactly what would hide that.
+                    let vouches: Vec<String> = row
+                        .members
+                        .iter()
+                        .map(|m| match &m.vouch {
+                            cairn_medication_view::VouchState::Absent => "unsigned".to_string(),
+                            cairn_medication_view::VouchState::Fresh { by } => {
+                                format!("signed by {}", &by[..8.min(by.len())])
+                            }
+                            cairn_medication_view::VouchState::Stale { by } => {
+                                format!("signed by {} (out of date)", &by[..8.min(by.len())])
+                            }
+                        })
+                        .collect();
+                    println!("{name}{dose} [{status}] — {}", vouches.join("; "));
+                    if row.reconciliation_flagged {
+                        println!("    ! possible un-reconciled duplicate");
+                    }
+                    if row.coding_conflict {
+                        println!("    ! two different drug anchors in this group");
+                    }
+                }
+            }
+        }
+        Cmd::MedicationSignOff { patient, attest } => {
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            // A sign-off IS the human vouch (it takes clinical responsibility for the
+            // whole list) — there is no device-additive form of it, unlike every other
+            // medication verb where --attest-as is an optional overlay. Refuse loudly
+            // rather than silently proceeding node-signed-only.
+            let (human_sk, human_kid) = resolve_attester(&db, &attest).await?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "medication-sign-off requires --attest-as: a sign-off IS the human vouch"
+                )
+            })?;
+            let params = cairn_node::medication::AttestParams {
+                human_sk: &human_sk,
+                human_kid: &human_kid,
+                basis: attest.basis.as_deref(),
+                note: attest.note.as_deref(),
+            };
+
+            let out = cairn_node::medication::signoff::sign_off_medication_list(
+                &mut db,
+                &node_sk,
+                &id.node_id_hex,
+                &params,
+                patient,
+            )
+            .await?;
+
+            if out.attested.is_empty() {
+                println!(
+                    "nothing to sign off for {patient}: every drug already carries a current signature"
+                );
+            } else {
+                println!(
+                    "signed off {} medication thread(s) for {patient}",
+                    out.attested.len()
+                );
+                for (thread, event) in out.attested.iter().zip(&out.event_ids) {
+                    println!("  {thread} -> attestation {event}");
+                }
+            }
         }
         Cmd::Shred {
             event,
