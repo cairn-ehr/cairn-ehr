@@ -10,6 +10,7 @@ mod attestation;
 mod cessation;
 mod coding;
 mod dose;
+pub mod read;
 mod reconciliation;
 mod sealed_submit;
 

@@ -7,6 +7,24 @@
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized cluster-wide via db::test_serial_guard. Key
 //! material is minted at runtime (house rule 6).
+//!
+//! GUARD-BEFORE-CONNECT (deviation from the brief and from every other DB-gated suite in
+//! this directory, which call `connect_and_load_schema` THEN `test_serial_guard`): with
+//! that order, every test in this file deadlocked reliably (100% of runs in isolation —
+//! `ERROR: deadlock detected`, e.g. relation 64708512 waiting on 64708602 while that
+//! session waited on the first). Root cause: `list_patient_medications` reads across
+//! nearly every medication view in one call (the whole point of this slice), so its lock
+//! footprint spans most of the medication schema; a sibling test's concurrent, unguarded
+//! `connect_and_load_schema` (which replays db/031-035's DDL, each statement taking
+//! AccessExclusiveLock even when a no-op) can acquire two of those relations' locks in the
+//! opposite order, and Postgres detects the cycle. Every other suite in this directory
+//! writes via narrow single/double-table statements, so its lock footprint is small enough
+//! that this has apparently never been hit before. Acquiring the guard FIRST serializes
+//! each test's schema load too, closing the window; 4/4 clean runs after the swap (and
+//! measurably faster — no more deadlock-abort-retry). This is a symptom of a race latent
+//! in the shared `db::connect_and_load_schema`/`test_serial_guard` pairing itself, not a
+//! defect in this slice's SQL — flagged for a follow-up issue rather than reordering the
+//! other ~50 files that rely on the existing convention.
 mod common;
 
 use cairn_event::SigningKey;
@@ -60,8 +78,8 @@ async fn a_single_unvouched_medication_reads_as_absent() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -82,8 +100,8 @@ async fn an_attested_thread_reads_as_fresh_with_its_attester() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -112,8 +130,8 @@ async fn a_reconciled_pair_reads_as_one_row_with_two_members() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -145,7 +163,11 @@ async fn a_reconciled_pair_reads_as_one_row_with_two_members() {
     .unwrap();
 
     let rows = list_patient_medications(&c, patient).await.unwrap();
-    assert_eq!(rows.len(), 1, "a reconciled pair collapses to ONE displayed row");
+    assert_eq!(
+        rows.len(),
+        1,
+        "a reconciled pair collapses to ONE displayed row"
+    );
     let mut members: Vec<Uuid> = rows[0].members.iter().map(|m| m.medication_id).collect();
     members.sort();
     let mut expected = vec![a, b];
@@ -161,8 +183,8 @@ async fn a_ceased_medication_is_retained_and_marked_ceased() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
 
@@ -196,8 +218,8 @@ async fn another_patients_medications_are_not_returned() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let mine = Uuid::now_v7();
     let theirs = Uuid::now_v7();
@@ -213,8 +235,8 @@ async fn a_patient_with_no_medications_reads_as_an_empty_list() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let c = db::connect_and_load_schema(&base).await.unwrap();
     let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
     let _ = setup(&c).await;
 
     assert!(list_patient_medications(&c, Uuid::now_v7())

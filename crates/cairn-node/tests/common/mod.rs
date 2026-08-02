@@ -1,4 +1,8 @@
-//! Shared scaffolding for the cairn-node identity integration tests (#120).
+//! Shared scaffolding for cairn-node's integration tests generally. It started as
+//! scaffolding for the identity integration tests (#120) and has since grown helpers for
+//! other clusters too (`medication_setup`, #288) — the #120 guard below
+//! (`identity_scaffolding_shared.rs`) still binds only the identity-cluster helpers, not
+//! everything this file publishes.
 //!
 //! Every identity suite needs the same four things before it can assert anything: a
 //! connection string from the environment, a clean database with one enrolled signer, a
