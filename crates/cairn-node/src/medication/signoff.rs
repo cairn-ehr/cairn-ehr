@@ -26,6 +26,13 @@ pub struct SignOffOutcome {
     /// signature" — both produce an empty `attested`, but they are very different clinical
     /// states (issue #331: the first has no "reviewed, nothing to record" act to log yet).
     pub total_rows: usize,
+    /// Displayed lines (GROUP ids) that still need a signature but were deliberately NOT
+    /// signed — today, only cross-patient groups (issue #334), whose displayed dose may
+    /// belong to the group's other patient. The caller MUST surface these: "signed off 11"
+    /// over a chart of 12 outstanding lines is a false completeness claim, which is the
+    /// same defect class as vouching for a list with a missing line. Empty in normal
+    /// operation. See `cairn_medication_view::withheld_rows`.
+    pub withheld: Vec<Uuid>,
 }
 
 /// Attest every thread on this patient's chart whose vouch is absent or stale, in one
@@ -41,10 +48,10 @@ pub struct SignOffOutcome {
 ///
 /// WHAT THIS DOES NOT GUARANTEE (issue #335). `client.transaction()` issues a plain BEGIN,
 /// which runs at Postgres's default READ COMMITTED — a fresh snapshot PER STATEMENT, not
-/// one snapshot for the whole transaction. `list_patient_medications` is now SIX statements
-/// (four small advisory-flag queries plus the current/past list queries), so even the
-/// in-transaction read alone spans six snapshots, and neither read is atomic with the
-/// other or with itself. The `actual != expected` compare below is therefore a
+/// one snapshot for the whole transaction. `list_patient_medications` issues SIX statements
+/// (the per-thread vouch read, three advisory-flag reads, and the current/past list reads),
+/// so even the in-transaction read alone spans six snapshots, and neither read is atomic
+/// with the other or with itself. The `actual != expected` compare below is therefore a
 /// best-effort check, not an isolation guarantee: it catches a race that
 /// happens to move the computed TARGET SET between the two reads, but a narrower race, or
 /// one that leaves the target set unchanged while still mutating what gets signed, could
@@ -84,11 +91,20 @@ pub async fn sign_off_medication_list(
             "{} medication group(s) with locally-known content for this patient do not \
              appear on this chart (issue #334) — most likely a cross-patient reconciliation \
              this chart cannot yet display correctly; signing off would falsely vouch for an \
-             incomplete list, so nothing was signed. Resolve the missing group(s) (see \
-             db/033 medication_group_cross_patient) before signing off.",
-            first_read.groups_missing_from_chart.len()
+             incomplete list, so nothing was signed. Separate the affected group with \
+             `medication-separate` (which is deliberately never blocked, db/033) and sign \
+             off again. Group id(s): {}.",
+            first_read.groups_missing_from_chart.len(),
+            format_thread_ids(first_read.groups_missing_from_chart.iter())
         );
     }
+
+    // Lines that need a signature but are not safe to sign (cross-patient dose bleed,
+    // issue #334). Withheld per LINE, never per chart: refusing the whole gesture over one
+    // suspect line would make this slower than the paper chart it is benchmarked against
+    // (§1.2), where a clinician signs the lines they can vouch for. Computed on the first
+    // read so the count reported matches the list the refusal check just validated.
+    let withheld = cairn_medication_view::withheld_rows(&first_read.rows);
 
     let expected = sign_off_targets(&first_read.rows);
     if expected.is_empty() {
@@ -98,6 +114,7 @@ pub async fn sign_off_medication_list(
             attested: vec![],
             event_ids: vec![],
             total_rows: first_read.rows.len(),
+            withheld,
         });
     }
 
@@ -116,7 +133,25 @@ pub async fn sign_off_medication_list(
     // case `medication_signoff.rs`'s `a_refused_attestation_signs_nothing_at_all` can't
     // reach for the same reason (see that test's doc comment).
     let tx = client.transaction().await?;
-    let actual = sign_off_targets(&list_patient_medications(&tx, patient).await?.rows);
+    let second_read = list_patient_medications(&tx, patient).await?;
+
+    // Re-check completeness inside the transaction, not just outside it. A reconciliation
+    // landing in the gap between the two reads can pull a group off this chart WITHOUT
+    // changing the target set — if every thread on the vanished group was already vouched,
+    // `actual == expected` still holds and the target compare below waves it through. The
+    // signal is already computed by the read; discarding it here would leave the #334
+    // defence with a hole exactly the width of that race.
+    if !second_read.groups_missing_from_chart.is_empty() {
+        anyhow::bail!(
+            "this chart became incomplete while it was being signed: {} medication group(s) \
+             with locally-known content for this patient no longer appear on it (issue \
+             #334); nothing was signed — refresh the list and sign again. Group id(s): {}.",
+            second_read.groups_missing_from_chart.len(),
+            format_thread_ids(second_read.groups_missing_from_chart.iter())
+        );
+    }
+
+    let actual = sign_off_targets(&second_read.rows);
     if actual != expected {
         // Report WHAT changed, not just how many — two counts that happen to match (a
         // thread swapped for another) would otherwise read as a true but useless "3 vs 3".
@@ -141,13 +176,14 @@ pub async fn sign_off_medication_list(
         attested: actual,
         event_ids,
         total_rows: first_read.rows.len(),
+        withheld,
     })
 }
 
-/// Render a set of thread ids for a clinician-facing error message: `"none"` when empty,
-/// otherwise a comma-separated list. Pure and reusable rather than inlined at the one call
-/// site above, so the mismatch diagnostic's two symmetric branches (added / removed) stay
-/// visibly identical instead of risking silent drift between two hand-written formats.
+/// Render a set of uuids for a clinician-facing message: `"none"` when empty, otherwise a
+/// comma-separated list. Pure and reusable rather than inlined at each call site, so the
+/// mismatch diagnostic's two symmetric branches (added / removed) stay visibly identical
+/// instead of risking silent drift between two hand-written formats.
 fn format_thread_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> String {
     let rendered: Vec<String> = ids.map(|id| id.to_string()).collect();
     if rendered.is_empty() {

@@ -103,3 +103,70 @@ impl MedicationRow {
         self.coding_display.as_deref().unwrap_or(&self.term)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A row carrying just the two fields `display_name` chooses between. The rest are the
+    /// neutral empty values — this is a unit test of one accessor, not of the read path.
+    fn row(term: &str, coding_display: Option<&str>) -> MedicationRow {
+        MedicationRow {
+            group_id: Uuid::from_u128(1),
+            patient_id: Uuid::from_u128(2),
+            term: term.into(),
+            coding_display: coding_display.map(Into::into),
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            started_value: None,
+            started_precision: None,
+            status: MedicationStatus::Active,
+            members: vec![],
+            reconciliation_flagged: false,
+            coding_conflict: false,
+            cross_patient: false,
+        }
+    }
+
+    #[test]
+    fn an_uncoded_row_displays_its_asserted_term() {
+        assert_eq!(
+            row("little white pill", None).display_name(),
+            "little white pill"
+        );
+    }
+
+    #[test]
+    fn a_coded_row_displays_its_coded_name() {
+        assert_eq!(
+            row("atorvastatin", Some("Lipitor 40 mg tablet")).display_name(),
+            "Lipitor 40 mg tablet"
+        );
+    }
+
+    /// The case the accessor exists to prevent: sorting a coded chart by the invisible
+    /// `term` files "Lipitor" under "atorvastatin", so the clinician's eye lands nowhere
+    /// near where the row actually is. These two rows sort in OPPOSITE orders by `term`
+    /// and by `display_name`, so this test fails if any caller reverts to sorting on
+    /// `term`.
+    ///
+    /// The fixture is chosen around a real property of the comparison the read path uses:
+    /// it is a BYTE-order compare (deliberately, so the order cannot depend on the
+    /// database's collation — ADR-0045), and in ASCII every capital letter sorts before
+    /// every lowercase one. So a capitalised brand name like "Lipitor" lands ahead of a
+    /// lowercase generic like "aspirin" regardless of letter. That is what makes these two
+    /// orders diverge here, and it is also a real cognitive-load wart for the eventual
+    /// chart UI (issue #337) — recorded rather than hidden behind a tidier fixture.
+    #[test]
+    fn sorting_by_display_name_differs_from_sorting_by_term() {
+        let coded = row("atorvastatin", Some("Lipitor 40 mg tablet"));
+        let plain = row("aspirin", None);
+        assert!(plain.term < coded.term, "by term, aspirin comes first");
+        assert!(
+            coded.display_name() < plain.display_name(),
+            "by displayed name, Lipitor comes first — the opposite order"
+        );
+    }
+}

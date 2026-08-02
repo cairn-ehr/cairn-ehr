@@ -2,11 +2,23 @@
 
 ## ⇒ NEXT
 
-**Nothing in flight.** The tech-debt loop is **stopped** (it ran unattended 07-31 → 08-01 and merged nine
-PRs — ROADMAP "Interlude"; the driver was signalled after its third iteration today so this session could
+**In flight: the med-list slice, node tier — Tasks 1–4 of 12 are built and in a PR
+([#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)); Tasks 5–12 are handed to a fresh session.**
+Everything needed to resume is in the plan file
+[`docs/superpowers/plans/2026-08-02-med-list-ui-slice.md`](superpowers/plans/2026-08-02-med-list-ui-slice.md)
+(each task carries its full text and code) beside the design spec
+[`…-med-list-ui-slice-design.md`](superpowers/specs/2026-08-02-med-list-ui-slice-design.md). **Start at
+Task 5.** See "the med-list slice" below for what shipped, what is deliberately still missing, and the
+three repo conventions that run cost this build.
+
+The tech-debt loop is **stopped** (it ran unattended 07-31 → 08-01 and merged nine
+PRs — ROADMAP "Interlude"; the driver was signalled after its third iteration so a human session could
 work the main repo). Re-running `/techdebt-loop` is always safe; `tail -f ~/.cairn-loop/run.log`. Note
 [#326](https://github.com/cairn-ehr/cairn-ehr/issues/326) — the worker's CI-wait idiom is dead in this
-harness and cycles complete by tight polling, which works but burns tokens.
+harness and cycles complete by tight polling, which works but burns tokens. **Do not start it while a
+human session holds the main repo**: on 08-02 a stray loop `cargo test --workspace` ran ~5 h against the
+same test cluster and build lock, stretching this session's suites from ~3 min to ~90 min. They contend on
+one cargo lock and one `test_serial_guard` advisory lock.
 
 **ADR-0056 is now fully built on the clinical plane.** Slice **58** (07-29/07-30, PR #302) made the door
 admit an unclassifiable type and re-adjudicate before reprojecting (#265/#266); Slice **60** (08-01) closed
@@ -20,9 +32,9 @@ The node/actor plane still diverges by design-gap, not design — see candidate 
    the largest unbuilt piece of settled architecture (sequester + the sensitivity stream + the
    de-identified safety projection). Carries [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294):
    the projection must *carry* the coding-derived drug class, never re-derive it.
-2. **The med-list UI slice** (Tauri 2 shell) — the first surface that would make a paper-parity *time*
-   budget measurable, and it owes [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288): whole-list
-   sign-off must collapse to ONE human gesture.
+2. **The med-list UI slice, Tasks 5–12** (retire iced · Tauri 2 shell · webview · timing) — **in flight,
+   see above.** Its node tier (Tasks 1–4) is built; what remains is the surface that makes the
+   paper-parity *time* budget measurable.
 3. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
    **coded↔uncoded** duplicate case ADR-0059 decision 5 deliberately leaves open. Needs a design
    decision first: the cross-service connection model. The slice-6a/6b source guard keeps the trusted
@@ -69,7 +81,13 @@ the **contributor-role vocabulary floor** (ADR-0051) ·
 **born-sealed clinical bodies** (ADR-0052 — an erasability substrate, NOT confidentiality until #231) ·
 **per-write human authorship** (ADR-0053 — grading half-live until #245) ·
 the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar, pivot to
-**Tauri 2**, an L3 choice below the compatibility boundary; PR #174) ·
+**Tauri 2**, an L3 choice below the compatibility boundary; PR #174). **Read this precisely: there is no
+Tauri shell yet.** What exists is `cairn-gui/` — a ~1.3 k-LOC *iced* standalone workspace (shell, manifest,
+tab trait, two demo tabs), deliberately detached from the root workspace via its `exclude` entry so
+iced/winit/cosmic-text can never enter `cairn-node`'s dependency tree. It is **superseded and slated for
+retirement by med-list Task 5**; nothing clinical reads through it ·
+the **med-list node tier** (2026-08-02 — Cairn's first clinical READ path + whole-list sign-off + two CLI
+verbs; see below) ·
 **generic reprojection** (ADR-0057 — one registered apply fn per projection + one dispatcher) ·
 the **ADR-0056 admit-uninterpreted floor** (the clinical door admits an unclassifiable type; power granted
 only by re-adjudication — decisions 1+4) + **the residual refusal contract on the clinical plane**
@@ -77,6 +95,58 @@ only by re-adjudication — decisions 1+4) + **the residual refusal contract on 
 watermark fails loud; #267/#270 closed, #269 tested, #268 analysed and still open on the node plane).
 Viability proven by spikes (walking skeleton, advisory-actor contract, a first federating node,
 Postgres-on-Android).
+
+---
+
+**Session (2026-08-02) — the med-list slice, Tasks 1–4 of 12 (the node tier).** Branch
+`feat/med-list-ui-slice-288`, owes [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288). No spec/ADR
+change, no schema change — this is the first code that READS clinical content back out in Rust.
+
+**Shipped.** `crates/cairn-medication-view` (a pure, DB-free, GUI-free crate holding the read model and the
+ONE definition of what a sign-off gesture attests) · `cairn-node/src/medication/read.rs` (six statements
+over the db/031–035 projections → `PatientMedicationList`) · `medication/signoff.rs` (N attestations, one
+unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI verbs.
+
+**The three things worth carrying forward:**
+
+1. **A displayed row is a GROUP; an attestation is a THREAD.** ADR-0047 collapses reconciled duplicates
+   into one line; ADR-0049 attests per thread. Every defect found in this build lived on that seam. The
+   shared crate exists so the node and the UI cannot answer *"what is about to be signed?"* differently —
+   a divergence there puts a green "signed" badge over a thread nobody signed.
+2. **Sign-off is per-line, like a paper drug chart** — only *absent or stale* threads are signed, so
+   another clinician's current signature is never silently overwritten with yours. This was a **user
+   correction** to the original design (which proposed attesting everything): the paper counterpart is the
+   **drug chart**, where each line carries the signature of whoever is responsible for *that* drug, not a
+   med-rec form signed once at the bottom.
+3. **`patient_medication_current` can hide a drug, and the read path now says so.** A reconciled group whose
+   member threads span two patients displays on ONE chart only (db/033 joins a `DISTINCT ON (group_id)`
+   display view against a per-`(group, patient)` status view). The losing patient's chart silently omitted a
+   real drug and sign-off reported "nothing to sign off"; the winner's chart showed it twice, and its dose
+   comes from a whole-group `DISTINCT ON` that ignores patient — so it can display the *other* patient's
+   dose. Now: rows dedupe by group, `groups_missing_from_chart` names what cannot be shown, sign-off
+   **refuses** an incomplete chart, and a cross-patient line is **withheld** from the gesture and reported
+   rather than signed. Refuse the chart when a line is *missing*; withhold just the line when it is
+   *present but untrustworthy* — refusing the whole chart there would be slower than paper (§1.2). The view
+   defect itself is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
+
+**Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
+stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →
+K=1 UI-bundled for review-and-sign). No "nil medications, reviewed" act ([#331](https://github.com/cairn-ehr/cairn-ehr/issues/331)).
+Two safety branches remain untested for want of a test-only injection seam
+([#333](https://github.com/cairn-ehr/cairn-ehr/issues/333)). The read is O(all medications) per chart open
+([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)), and the two-read compare is best-effort, not
+an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335)). Sort order clusters
+capitalised brand names above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337)).
+
+**Three repo conventions this run learned the hard way — they will bite Task 5+ too:**
+- **Guard before connect.** DB-gated tests take `db::test_serial_guard(&base)` *before*
+  `connect_and_load_schema`. Every existing suite does this in execution order.
+- **UUIDs bind as text.** `cairn-node` does not enable tokio-postgres's `with-uuid-1`, so a `Uuid`
+  parameter has no `ToSql`. Bind `&uuid.to_string()` and cast in SQL: `$1::text::uuid`.
+- **A second human actor needs a distinguishing determinant.** `actor_id` content-addresses the *pinned
+  determinant set*, so enrolling two clinicians as `{"role":"clinician"}` collides into one actor and is
+  refused (P0001, ADR-0044/[#152](https://github.com/cairn-ehr/cairn-ehr/issues/152)). Add e.g.
+  `"handle":"dr-b"`. The floor working as designed.
 
 ---
 

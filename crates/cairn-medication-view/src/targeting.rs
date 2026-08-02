@@ -2,6 +2,24 @@
 use crate::row::{MedicationRow, MedicationStatus};
 use uuid::Uuid;
 
+/// Whether a displayed line is one this gesture may sign at all.
+///
+/// Two exclusions, for two different reasons:
+///
+/// - **Ceased.** A struck line on a paper chart is not re-signed. Ceased rows stay visible
+///   for parity, but they are never targets.
+/// - **Cross-patient.** The row's group holds member threads belonging to more than one
+///   patient (issue #334). `patient_medication_current` takes the line's dose from
+///   `medication_group_current_dose`, which picks one member across the WHOLE group
+///   regardless of patient — so this line can display the other patient's dose over this
+///   patient's drug name. A signature is a claim of responsibility for what the line SAYS,
+///   and the node knows it may be saying something it cannot stand behind.
+///
+/// Both are line-level. The rest of the chart stays signable — see `withheld_rows`.
+fn is_signable_line(row: &MedicationRow) -> bool {
+    row.status == MedicationStatus::Active && !row.cross_patient
+}
+
 /// Which threads a single sign-off gesture attests.
 ///
 /// Paper drug-chart semantics: each drug line carries the signature of the person
@@ -15,9 +33,7 @@ use uuid::Uuid;
 pub fn sign_off_targets(rows: &[MedicationRow]) -> Vec<Uuid> {
     let mut targets: Vec<Uuid> = rows
         .iter()
-        // A struck line is not re-signed. Ceased rows stay visible for parity with a
-        // paper chart, but they are never targets.
-        .filter(|row| row.status == MedicationStatus::Active)
+        .filter(|row| is_signable_line(row))
         .flat_map(|row| row.members.iter())
         .filter(|member| member.vouch.needs_signature())
         .map(|member| member.medication_id)
@@ -25,6 +41,31 @@ pub fn sign_off_targets(rows: &[MedicationRow]) -> Vec<Uuid> {
     targets.sort();
     targets.dedup();
     targets
+}
+
+/// The lines this gesture deliberately leaves UNSIGNED although they still need a
+/// signature — returned as GROUP ids, because a group is the line the clinician sees.
+///
+/// WHY THIS IS A SEPARATE, PUBLIC FUNCTION. Withholding a line silently would be the worst
+/// of both worlds: the clinician sees "signed off 11 medications", assumes the chart is
+/// done, and the twelfth drug stays unvouched with nobody aware of it. So the caller is
+/// handed the list and is expected to say so out loud. It lives here, beside
+/// `sign_off_targets`, so the rule for *what is signed* and the rule for *what is reported
+/// as not signed* cannot drift apart — the same reason the whole crate exists.
+///
+/// Only lines that would OTHERWISE have been signed are reported. A cross-patient line
+/// everyone has already vouched is not an outstanding action, and warning about it would
+/// train the reader to ignore the warning.
+pub fn withheld_rows(rows: &[MedicationRow]) -> Vec<Uuid> {
+    let mut withheld: Vec<Uuid> = rows
+        .iter()
+        .filter(|row| !is_signable_line(row) && row.status == MedicationStatus::Active)
+        .filter(|row| row.members.iter().any(|m| m.vouch.needs_signature()))
+        .map(|row| row.group_id)
+        .collect();
+    withheld.sort();
+    withheld.dedup();
+    withheld
 }
 
 #[cfg(test)]
@@ -168,5 +209,78 @@ mod tests {
         assert!(VouchState::Absent.needs_signature());
         assert!(VouchState::Stale { by: "x".into() }.needs_signature());
         assert!(!VouchState::Fresh { by: "x".into() }.needs_signature());
+    }
+
+    /// A cross-patient row is a line whose displayed dose may belong to the OTHER patient
+    /// in the group (issue #334), so it is withheld from the gesture rather than signed.
+    #[test]
+    fn a_cross_patient_row_is_never_a_target() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].cross_patient = true;
+        assert!(sign_off_targets(&rows).is_empty());
+    }
+
+    /// The clean lines are still signable — withholding is per LINE, not per chart. A
+    /// clinician blocked from signing eleven sound drugs because a twelfth is suspect
+    /// would be slower than paper, which §1.2 forbids.
+    #[test]
+    fn a_cross_patient_row_does_not_block_the_rest_of_the_chart() {
+        let mut rows = vec![
+            row(
+                1,
+                MedicationStatus::Active,
+                vec![member(1, VouchState::Absent)],
+            ),
+            row(
+                2,
+                MedicationStatus::Active,
+                vec![member(2, VouchState::Absent)],
+            ),
+        ];
+        rows[0].cross_patient = true;
+        assert_eq!(sign_off_targets(&rows), vec![uid(2)]);
+        assert_eq!(withheld_rows(&rows), vec![uid(1)]);
+    }
+
+    /// Withholding is reported by GROUP id, because that is the line the clinician sees.
+    /// Only lines that would OTHERWISE have been signed are reported: a cross-patient row
+    /// everyone has already vouched is not an outstanding action, and reporting it would
+    /// train the reader to ignore the warning.
+    #[test]
+    fn a_fully_vouched_cross_patient_row_is_not_reported_as_withheld() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Fresh { by: "dr_b".into() })],
+        )];
+        rows[0].cross_patient = true;
+        assert!(withheld_rows(&rows).is_empty());
+    }
+
+    /// A ceased cross-patient row is not an outstanding action either — a struck line is
+    /// never signed, so there is nothing being withheld from the clinician.
+    #[test]
+    fn a_ceased_cross_patient_row_is_not_reported_as_withheld() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Ceased,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].cross_patient = true;
+        assert!(withheld_rows(&rows).is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_chart_withholds_nothing() {
+        let rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        assert!(withheld_rows(&rows).is_empty());
     }
 }

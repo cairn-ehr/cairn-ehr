@@ -4,4 +4,4 @@ pub mod row;
 pub mod targeting;
 
 pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
-pub use targeting::sign_off_targets;
+pub use targeting::{sign_off_targets, withheld_rows};

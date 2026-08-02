@@ -2242,11 +2242,20 @@ async fn main() -> anyhow::Result<()> {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let list = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&list.rows)?);
+                // The payload is an OBJECT, not a bare row array. A machine reader must be
+                // able to see the incompleteness signal in-band: a script that pipes stdout
+                // to `jq` and never reads stderr would otherwise consume a chart the node
+                // knows is missing a drug, with a zero exit code and no marker at all.
+                // Emitting both fields is the same "surface the uncertainty" rule the Rust
+                // return type follows (principle 4).
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "rows": &list.rows,
+                        "groups_missing_from_chart": &list.groups_missing_from_chart,
+                    }))?
+                );
                 if !list.groups_missing_from_chart.is_empty() {
-                    // JSON mode only emits the row array on stdout (a caller parses that as
-                    // a single value), so the incompleteness warning goes to stderr rather
-                    // than corrupting the JSON payload.
                     eprintln!(
                         "warning: {} medication group(s) with locally-known content for this \
                          patient are missing from this chart (issue #334)",
@@ -2309,10 +2318,13 @@ async fn main() -> anyhow::Result<()> {
                     if row.cross_patient {
                         // This row displayed at all only because this patient happened to
                         // win the DISTINCT ON tiebreak in medication_group_display — the
-                        // group's OTHER patient sees no row for it (issue #334).
+                        // group's OTHER patient sees no row for it (issue #334). The dose
+                        // shown may be that other patient's, so the line cannot be signed.
                         println!(
-                            "    ! this group's member threads span more than one patient \
-                             — see issue #334"
+                            "    ! this group's member threads span more than one patient — \
+                             the dose shown may belong to the other patient, so this line \
+                             CANNOT be signed off (issue #334); separate it with \
+                             `medication-separate`"
                         );
                     }
                 }
@@ -2365,10 +2377,16 @@ async fn main() -> anyhow::Result<()> {
                          Recording \"nil medications, reviewed\" as an act has no home yet \
                          (issue #331)."
                     );
-                } else {
+                } else if out.withheld.is_empty() {
                     println!(
                         "nothing to sign off for {patient}: every drug already carries a current signature"
                     );
+                } else {
+                    // Guard on `withheld`: without it this branch would claim every drug
+                    // is signed while the ONLY outstanding lines were ones the node
+                    // refused to sign — a precise untruth about the one thing the
+                    // clinician is asking about.
+                    println!("nothing was signed off for {patient}.");
                 }
             } else {
                 println!(
@@ -2377,6 +2395,22 @@ async fn main() -> anyhow::Result<()> {
                 );
                 for (thread, event) in out.attested.iter().zip(&out.event_ids) {
                     println!("  {thread} -> attestation {event}");
+                }
+            }
+            if !out.withheld.is_empty() {
+                // Printed in EVERY outcome, never folded into the success line. "Signed off
+                // 11 medication thread(s)" on a chart with a twelfth outstanding line reads
+                // as a finished chart; the whole point of withholding rather than refusing
+                // is that the clinician is told precisely which line they still own.
+                println!(
+                    "! {} medication line(s) still need a signature but were NOT signed: their \
+                     group's member threads span more than one patient, so the dose displayed \
+                     may belong to the other patient (issue #334). Separate each with \
+                     `medication-separate`, then sign off again.",
+                    out.withheld.len()
+                );
+                for group in &out.withheld {
+                    println!("    unsigned group {group}");
                 }
             }
         }

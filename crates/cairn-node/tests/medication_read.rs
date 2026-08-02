@@ -544,9 +544,36 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
         basis: None,
         note: None,
     };
-    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b).await;
+    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
+        .await
+        .expect_err("sign-off must refuse a chart the node knows is missing content");
+    // Assert on the BRANCH, not merely on failure: any unrelated error inside the
+    // orchestrator would satisfy `is_err()`, so the test would keep passing if the #334
+    // refusal were deleted and something else happened to break.
+    let message = format!("{err:#}");
     assert!(
-        err.is_err(),
-        "sign-off must refuse a chart the node knows is missing content, not report it clean"
+        message.contains("#334") && message.contains("do not appear on this chart"),
+        "the refusal must be the #334 incomplete-chart branch, got: {message}"
+    );
+
+    // The WINNING patient's side of the same hazard. Patient A's chart DOES show the line,
+    // so there is nothing missing to refuse over — but the dose on that line comes from
+    // `medication_group_current_dose`, which picks one member across the whole group
+    // regardless of patient, so it may be patient B's dose under patient A's drug name.
+    // The line is therefore withheld from the gesture instead of signed. Withholding is
+    // per LINE: if the fix ever escalated to refusing the whole chart, this call would
+    // return Err and the assertion below would fail.
+    let a_out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_a)
+        .await
+        .expect("the winning patient's chart is complete, so sign-off must not refuse it");
+    assert!(
+        a_out.attested.is_empty(),
+        "a cross-patient line must not be signed: its displayed dose may be another patient's"
+    );
+    assert_eq!(
+        a_out.withheld,
+        vec![thread_a],
+        "the withheld line must be REPORTED, or the clinician reads an empty result as \
+         'nothing needed doing' over a drug that still needs their signature"
     );
 }

@@ -7,17 +7,19 @@
 //! the future native API (ADR-0023, Phase 8) are expected to wrap this same function
 //! rather than re-derive the joins.
 //!
-//! WHY FOUR SMALL QUERIES AND NOT ONE JOIN. The list, the per-thread vouches, and the
-//! three advisory flags answer four different questions over four different grains
-//! (group, thread, worklist, cross-patient hazard). One join would need two levels of
-//! aggregation and would be far harder for a reviewer to check against the view
-//! definitions in db/031-034. Four plain queries plus an explicit assembly step in Rust
-//! is the reviewer-legible shape §9 asks for, and each query is independently checkable
-//! against its view.
+//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Five query helpers issuing six statements —
+//! the current list, the past list, the per-thread vouches, and three advisory flags —
+//! answer different questions over different grains (group, thread, worklist,
+//! mis-reconciliation, cross-patient hazard). One join would need two levels of aggregation
+//! and would be far harder for a reviewer to check against the view definitions in
+//! db/031-034. Plain queries plus an explicit assembly step in Rust is the reviewer-legible
+//! shape §9 asks for, and each query is independently checkable against its view.
 //!
 //! Generic over `GenericClient` so a caller can read through an open transaction — the
-//! sign-off orchestrator (`signoff.rs`) relies on that to compute its targets in the same
-//! snapshot it writes in.
+//! sign-off orchestrator (`signoff.rs`) reads through its own transaction to re-check the
+//! list before writing. That re-read is a best-effort compare, NOT an isolation guarantee:
+//! the connection runs at READ COMMITTED, so each of these six statements takes a fresh
+//! snapshot. See `signoff.rs` and issue #335 before relying on it for atomicity.
 //!
 //! UUID BINDING. `tokio-postgres` has no `ToSql`/`FromSql` impl for `uuid::Uuid` without the
 //! `with-uuid-1` feature, which this crate deliberately does not enable (mirrors the
@@ -38,6 +40,16 @@ use uuid::Uuid;
 /// can have locally-known medication content the node simply cannot show here. Non-empty
 /// means this chart is INCOMPLETE, not merely sparse — `sign_off_medication_list` refuses
 /// to vouch for it for exactly that reason. Empty in normal operation.
+///
+/// WHAT IT DOES NOT CATCH. The signal is derived from `medication_thread_group`, which
+/// db/033 drives from `medication_statement` alone. A thread known locally ONLY through an
+/// orphan cessation — a stop event that arrived before the statement it stops, the
+/// late-arrival case db/033 calls out — has no `medication_thread_group` row, so it
+/// contributes nothing here and a group holding only such threads still escapes detection.
+/// That thread is invisible to this read path with or without a group, so this is a
+/// pre-existing limit of the projection rather than a gap this signal introduced; it is
+/// recorded here so nobody reads `groups_missing_from_chart` as a total guarantee of
+/// completeness. It is a guarantee about *displayable* content only.
 pub struct PatientMedicationList {
     pub rows: Vec<MedicationRow>,
     pub groups_missing_from_chart: Vec<Uuid>,
