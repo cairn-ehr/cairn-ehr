@@ -120,9 +120,17 @@ async fn a_thread_with_a_fresh_vouch_is_left_untouched() {
     let (sk, kid, hsk, hkid) = setup(&c).await;
     // A SECOND human — "Dr B" — whose signature must survive the first human's sign-off.
     // `generate_key()` returns (SigningKey, hex kid); the kid is never a literal (rule 6).
+    //
+    // ADR-0044: `actor_id` content-addresses the PINNED DETERMINANT SET, not the key (a
+    // key is mutable across `rotate-key`). `medication_setup` already enrolled a human
+    // under `{"role":"clinician"}`; reusing that same bare pinned set here would
+    // content-address to the SAME actor_id as that first human, and `enroll_actor` refuses
+    // it as a silent identity merge (issue #152) rather than actually creating Dr B. A
+    // second, genuinely distinct human needs a person-distinguishing determinant added to
+    // the set — `handle` here — so the two humans address to two different actors.
     let (other_sk, other_kid) = generate_key().unwrap();
     c.execute(
-        "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\",\"handle\":\"dr-b\"}', $1)",
         &[&other_kid],
     )
     .await
