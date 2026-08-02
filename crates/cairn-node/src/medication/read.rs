@@ -41,8 +41,13 @@ pub async fn list_patient_medications(
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, patient).await?;
     let coding_conflict = read_coding_conflict_groups(client, patient).await?;
 
-    // `patient_medication_current` and `_past` carry the SAME column set by design (a
-    // db/033 replay-safety constraint), so one shared row mapper serves both.
+    // `patient_medication_current` and `_past` each keep their OWN column set stable
+    // across migrations (the db/033 replay-safety constraint on `CREATE OR REPLACE VIEW`
+    // — a widened view must stay append-only, or a live node's re-replay of an earlier
+    // migration fails). The two views are NOT identical to each other — `_past` also
+    // carries `stopped_value`/`stopped_precision`/`reason` — so this SELECT list is
+    // deliberately the subset the two views genuinely share, which is what lets one
+    // mapper serve both.
     let patient_s = patient.to_string();
     let mut rows = Vec::new();
     for (sql, status) in [
@@ -112,9 +117,21 @@ async fn read_member_vouches(
     for row in client.query(sql, &[&patient_s]).await? {
         let attester: Option<String> = row.get("attester_kid");
         let stale: Option<bool> = row.get("stale");
+        // Principle 4 (acknowledged uncertainty): an uncertain staleness read must never
+        // be silently upgraded to a confident "signed" one — that direction is unsafe,
+        // because a stale vouch rendering as fresh is a signed claim the drug was
+        // reviewed when it was not. So every arm is spelled explicitly rather than
+        // falling through a wildcard toward Fresh.
         let vouch = match (attester, stale) {
             (Some(by), Some(true)) => VouchState::Stale { by },
-            (Some(by), _) => VouchState::Fresh { by },
+            (Some(by), Some(false)) => VouchState::Fresh { by },
+            // `stale` is a boolean expression on `medication_thread_attestation`
+            // (db/034) that is never NULL for a row the LEFT JOIN actually matched — this
+            // arm is unreachable today. It exists so that if that invariant ever breaks
+            // (a future db/034 change, or a different join shape), an attested-but-
+            // unknown-staleness thread fails SAFE by reading Stale (forces re-signature)
+            // rather than silently reading Fresh.
+            (Some(by), None) => VouchState::Stale { by },
             (None, _) => VouchState::Absent,
         };
         let group_id: Uuid = row.get::<_, String>("group_id").parse()?;
