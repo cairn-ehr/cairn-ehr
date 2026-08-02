@@ -55,7 +55,10 @@ pub async fn sign_off_medication_list(
         // Nothing to vouch for. NOT an error: an empty chart is a legitimate state. That
         // "no regular medications, reviewed" cannot itself be recorded is a real gap,
         // tracked as issue #331 — the caller renders the gesture as unavailable.
-        return Ok(SignOffOutcome { attested: vec![], event_ids: vec![] });
+        return Ok(SignOffOutcome {
+            attested: vec![],
+            event_ids: vec![],
+        });
     }
 
     // One HLC per attestation, minted up front and consumed in target order (which
@@ -65,15 +68,24 @@ pub async fn sign_off_medication_list(
         hlcs.push(crate::db::next_hlc(client, node_origin).await?);
     }
 
+    // SAFETY NOTE (untested, issue #333): this refusal branch has no test coverage today.
+    // Forcing `actual != expected` needs a second connection to write a medication event
+    // (or a competing sign-off) for this patient in the narrow window between the two
+    // reads above — a race that needs a test-only injection seam this crate does not have
+    // yet. Issue #333 tracks building that seam; it also covers the mid-gesture-rollback
+    // case `medication_signoff.rs`'s `a_refused_attestation_signs_nothing_at_all` can't
+    // reach for the same reason (see that test's doc comment).
     let tx = client.transaction().await?;
     let actual = sign_off_targets(&list_patient_medications(&tx, patient).await?);
     if actual != expected {
+        // Report WHAT changed, not just how many — two counts that happen to match (a
+        // thread swapped for another) would otherwise read as a true but useless "3 vs 3".
+        let added = format_thread_ids(actual.iter().filter(|t| !expected.contains(t)));
+        let removed = format_thread_ids(expected.iter().filter(|t| !actual.contains(t)));
         anyhow::bail!(
-            "the medication list changed while it was being signed ({} thread(s) when read, \
-             {} in the signing transaction); nothing was signed — refresh the list and sign \
-             again so the vouch covers what was actually reviewed",
-            expected.len(),
-            actual.len()
+            "the medication list changed while it was being signed (thread(s) added: {added}; \
+             removed: {removed}); nothing was signed — refresh the list and sign again so the \
+             vouch covers what was actually reviewed"
         );
     }
 
@@ -85,5 +97,21 @@ pub async fn sign_off_medication_list(
     }
     tx.commit().await?;
 
-    Ok(SignOffOutcome { attested: actual, event_ids })
+    Ok(SignOffOutcome {
+        attested: actual,
+        event_ids,
+    })
+}
+
+/// Render a set of thread ids for a clinician-facing error message: `"none"` when empty,
+/// otherwise a comma-separated list. Pure and reusable rather than inlined at the one call
+/// site above, so the mismatch diagnostic's two symmetric branches (added / removed) stay
+/// visibly identical instead of risking silent drift between two hand-written formats.
+fn format_thread_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> String {
+    let rendered: Vec<String> = ids.map(|id| id.to_string()).collect();
+    if rendered.is_empty() {
+        "none".to_string()
+    } else {
+        rendered.join(", ")
+    }
 }

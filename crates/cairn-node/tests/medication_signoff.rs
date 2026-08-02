@@ -104,7 +104,11 @@ async fn one_gesture_attests_every_unvouched_thread() {
     assert_eq!(out.attested.len(), 3, "one gesture, three threads");
     assert_eq!(out.event_ids.len(), 3, "one attestation event per thread");
     for t in [a, b, d] {
-        assert_eq!(attestation_count(&c, t).await, 1, "thread {t} vouched exactly once");
+        assert_eq!(
+            attestation_count(&c, t).await,
+            1,
+            "thread {t} vouched exactly once"
+        );
     }
 }
 
@@ -160,7 +164,11 @@ async fn a_thread_with_a_fresh_vouch_is_left_untouched() {
         .await
         .unwrap();
 
-    assert_eq!(out.attested, vec![unsigned], "only the unsigned thread is signed");
+    assert_eq!(
+        out.attested,
+        vec![unsigned],
+        "only the unsigned thread is signed"
+    );
     assert_eq!(
         attestation_count(&c, signed_by_other).await,
         1,
@@ -249,10 +257,23 @@ async fn an_empty_list_signs_nothing_without_erroring() {
     assert!(out.event_ids.is_empty());
 }
 
-/// All-or-nothing: an unenrolled attester is refused by the db/005 responsibility gate,
-/// and NO thread ends up vouched — not even the ones processed before the failure.
+/// A refused attester leaves ZERO attestation rows. The db/005 responsibility gate checks
+/// only the attester's KEY (never enrolled here), never which medication thread is being
+/// attested, so it refuses on the very FIRST thread `sign_off_medication_list` attempts —
+/// thread `b` is never even reached — and the whole verb returns an error before any
+/// thread is signed.
+///
+/// WHAT THIS DOES NOT PROVE. It does not demonstrate the stronger, more interesting
+/// property one-transaction sign-off actually promises: a thread that already succeeded
+/// EARLIER in the same transaction being rolled back because a LATER thread's attestation
+/// fails. This failure mode is not per-thread-asymmetric (an unenrolled key is refused for
+/// every thread alike, not just some), so it can't exercise that path. Proving the
+/// asymmetric case needs a failure that succeeds on thread A and fails on thread B within
+/// one transaction, which needs a test-only injection seam this crate does not have yet —
+/// tracked as issue #333, which also covers the untested double-read-mismatch refusal
+/// branch in `signoff.rs`.
 #[tokio::test]
-async fn a_refused_attestation_rolls_the_whole_gesture_back() {
+async fn a_refused_attestation_signs_nothing_at_all() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -265,7 +286,9 @@ async fn a_refused_attestation_rolls_the_whole_gesture_back() {
     let a = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let b = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
 
-    // Never enrolled: the db/005 responsibility gate refuses this attester.
+    // Never enrolled: the db/005 responsibility gate refuses this attester on the first
+    // thread it tries — see the doc comment above for exactly what that does and does not
+    // demonstrate.
     let (stranger_sk, stranger_kid) = generate_key().unwrap();
     let params = AttestParams {
         human_sk: &stranger_sk,
@@ -276,6 +299,14 @@ async fn a_refused_attestation_rolls_the_whole_gesture_back() {
 
     let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient).await;
     assert!(err.is_err(), "an unenrolled attester must be refused");
-    assert_eq!(attestation_count(&c, a).await, 0, "no partial sign-off survives");
-    assert_eq!(attestation_count(&c, b).await, 0, "no partial sign-off survives");
+    assert_eq!(
+        attestation_count(&c, a).await,
+        0,
+        "zero attestation rows after a refused attester"
+    );
+    assert_eq!(
+        attestation_count(&c, b).await,
+        0,
+        "zero attestation rows after a refused attester"
+    );
 }
