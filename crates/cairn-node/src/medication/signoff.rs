@@ -9,8 +9,12 @@
 //!
 //! The bundling shape (mint the HLCs, open one transaction, attest each thread, commit) is
 //! the one `reconciliation.rs` already uses for exactly two threads, generalised to N.
-use crate::medication::{read::list_patient_medications, AttestParams};
-use cairn_medication_view::sign_off_targets;
+use crate::medication::{
+    read::{format_hazard_groups, list_patient_medications, SEPARATION_INSTRUCTION},
+    AttestParams,
+};
+use cairn_medication_view::{sign_off_targets, MedicationStatus};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// What one sign-off gesture did.
@@ -26,6 +30,16 @@ pub struct SignOffOutcome {
     /// signature" — both produce an empty `attested`, but they are very different clinical
     /// states (issue #331: the first has no "reviewed, nothing to record" act to log yet).
     pub total_rows: usize,
+    /// How many of `total_rows` were ACTIVE (not ceased) at the first read.
+    ///
+    /// `total_rows` alone is not enough to keep a caller honest (#338 review finding 2). A
+    /// chart holding nothing but a ceased, never-signed drug reports `total_rows == 1` and
+    /// an empty `attested` — and a caller that concludes "every drug already carries a
+    /// current signature" from that pair states a plain falsehood: that drug carries no
+    /// signature at all, it is simply a struck line that is never re-signed. This field is
+    /// what separates "nothing here CURRENTLY NEEDS a signature" from "every current drug
+    /// HAS one", so only the second is ever said out loud.
+    pub active_rows: usize,
     /// Displayed lines (GROUP ids) that still need a signature but were deliberately NOT
     /// signed — today, only cross-patient groups (issue #334), whose displayed dose may
     /// belong to the group's other patient. The caller MUST surface these: "signed off 11"
@@ -33,6 +47,14 @@ pub struct SignOffOutcome {
     /// same defect class as vouching for a list with a missing line. Empty in normal
     /// operation. See `cairn_medication_view::withheld_rows`.
     pub withheld: Vec<Uuid>,
+    /// Each hazardous group's FULL member-thread list — the arguments to the
+    /// `medication-separate` remedy the caller is told to run. Carried through verbatim
+    /// from `PatientMedicationList::separation_targets`, so it is a SUPERSET of `withheld`:
+    /// it also covers cross-patient groups that needed no signature and were therefore
+    /// never withheld. Look up the groups you are reporting; do not iterate it as if it
+    /// were the withheld set. See the `PatientMedicationList` field for why naming a group
+    /// without its threads is not enough to act on (#338 review finding 1).
+    pub separation_targets: BTreeMap<Uuid, Vec<Uuid>>,
 }
 
 /// Attest every thread on this patient's chart whose vouch is absent or stale, in one
@@ -48,16 +70,17 @@ pub struct SignOffOutcome {
 ///
 /// WHAT THIS DOES NOT GUARANTEE (issue #335). `client.transaction()` issues a plain BEGIN,
 /// which runs at Postgres's default READ COMMITTED — a fresh snapshot PER STATEMENT, not
-/// one snapshot for the whole transaction. `list_patient_medications` issues SIX statements
-/// (the per-thread vouch read, three advisory-flag reads, and the current/past list reads),
-/// so even the in-transaction read alone spans six snapshots, and neither read is atomic
-/// with the other or with itself. The `actual != expected` compare below is therefore a
-/// best-effort check, not an isolation guarantee: it catches a race that
-/// happens to move the computed TARGET SET between the two reads, but a narrower race, or
-/// one that leaves the target set unchanged while still mutating what gets signed, could
-/// slip through undetected. Issue #335 tracks the isolation-level decision (e.g. upgrading
-/// to REPEATABLE READ) and binding the compare to the human's actual on-screen review
-/// window rather than just the gap between these two reads.
+/// one snapshot for the whole transaction. `list_patient_medications` issues up to SEVEN
+/// statements (the per-thread vouch read, three advisory-flag reads, the current/past list
+/// reads, and the hazardous-group membership read), so even the in-transaction read alone
+/// spans seven snapshots, and neither read is atomic with the other or with itself. The
+/// `actual != expected` compare below is therefore a best-effort check, not an isolation
+/// guarantee: it catches a race that happens to move the computed TARGET SET between the
+/// two reads, but a narrower race, or one that leaves the target set unchanged while still
+/// mutating what gets signed, could slip through undetected. Issue #335 tracks the
+/// isolation-level decision (e.g. upgrading to REPEATABLE READ) and binding the compare to
+/// the human's actual on-screen review window rather than just the gap between these two
+/// reads.
 ///
 /// If the two target sets disagree — a medication arrived, or someone else signed a
 /// thread, in the milliseconds between — the gesture is REFUSED rather than silently
@@ -86,16 +109,29 @@ pub async fn sign_off_medication_list(
     // false "everything is accounted for" claim from the vouching human. Checked on this
     // FIRST, outside-transaction read — no HLC has been minted and no transaction opened
     // yet, so refusing here costs nothing to unwind.
+    //
+    // THIS IS AN OPEN DESIGN QUESTION, NOT A SETTLED ONE (issue #339). Refusing the whole
+    // chart argues from WHOLE-LIST semantics ("you cannot vouch for what you were never
+    // shown"), while `withheld` below argues from PER-LINE drug-chart semantics for the
+    // present-but-untrustworthy case — and per-line is the model #288 actually adopted, in
+    // which each signature is a claim about its own thread and is not falsified by a
+    // different line being invisible. The cost is real: one invisible group blocks sign-off
+    // for every other drug on the chart, which is slower than the paper chart §1.2
+    // benchmarks against. Pinned by `medication_read.rs`'s
+    // `an_incomplete_chart_refuses_sign_off_even_for_its_unrelated_drugs`, so resolving
+    // #339 the other way fails a test rather than changing behaviour unnoticed.
     if !first_read.groups_missing_from_chart.is_empty() {
         anyhow::bail!(
             "{} medication group(s) with locally-known content for this patient do not \
              appear on this chart (issue #334) — most likely a cross-patient reconciliation \
              this chart cannot yet display correctly; signing off would falsely vouch for an \
-             incomplete list, so nothing was signed. Separate the affected group with \
-             `medication-separate` (which is deliberately never blocked, db/033) and sign \
-             off again. Group id(s): {}.",
+             incomplete list, so nothing was signed. {SEPARATION_INSTRUCTION} Then sign off \
+             again. Affected: {}.",
             first_read.groups_missing_from_chart.len(),
-            format_thread_ids(first_read.groups_missing_from_chart.iter())
+            format_hazard_groups(
+                &first_read.groups_missing_from_chart,
+                &first_read.separation_targets
+            )
         );
     }
 
@@ -105,16 +141,24 @@ pub async fn sign_off_medication_list(
     // (§1.2), where a clinician signs the lines they can vouch for. Computed on the first
     // read so the count reported matches the list the refusal check just validated.
     let withheld = cairn_medication_view::withheld_rows(&first_read.rows);
+    let active_rows = first_read
+        .rows
+        .iter()
+        .filter(|row| row.status == MedicationStatus::Active)
+        .count();
 
     let expected = sign_off_targets(&first_read.rows);
     if expected.is_empty() {
-        // Nothing to vouch for. NOT an error: an empty or fully-vouched chart is a
-        // legitimate state — `total_rows` lets the caller tell the two apart (issue #331).
+        // Nothing to vouch for. NOT an error: an empty, ceased-only or fully-vouched chart
+        // is a legitimate state — `total_rows` and `active_rows` let the caller tell the
+        // three apart (issues #331 and #338 review finding 2).
         return Ok(SignOffOutcome {
             attested: vec![],
             event_ids: vec![],
             total_rows: first_read.rows.len(),
+            active_rows,
             withheld,
+            separation_targets: first_read.separation_targets,
         });
     }
 
@@ -145,9 +189,13 @@ pub async fn sign_off_medication_list(
         anyhow::bail!(
             "this chart became incomplete while it was being signed: {} medication group(s) \
              with locally-known content for this patient no longer appear on it (issue \
-             #334); nothing was signed — refresh the list and sign again. Group id(s): {}.",
+             #334); nothing was signed — refresh the list and sign again. \
+             {SEPARATION_INSTRUCTION} Affected: {}.",
             second_read.groups_missing_from_chart.len(),
-            format_thread_ids(second_read.groups_missing_from_chart.iter())
+            format_hazard_groups(
+                &second_read.groups_missing_from_chart,
+                &second_read.separation_targets
+            )
         );
     }
 
@@ -176,7 +224,9 @@ pub async fn sign_off_medication_list(
         attested: actual,
         event_ids,
         total_rows: first_read.rows.len(),
+        active_rows,
         withheld,
+        separation_targets: first_read.separation_targets,
     })
 }
 

@@ -25,7 +25,7 @@ use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, change_dose,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ChangeDoseInput,
 };
-use common::{cs, medication_setup as setup};
+use common::{attestation_count, cs, medication_setup as setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -59,21 +59,6 @@ async fn assert_one(
     )
     .await
     .unwrap()
-}
-
-/// How many attestation rows exist for a thread.
-///
-/// UUID BINDING: this crate does not enable tokio-postgres's `with-uuid-1` feature (see
-/// `medication/read.rs`'s "UUID BINDING" module comment), so `thread` is bound as text and
-/// cast in SQL rather than passed as a `Uuid` parameter directly.
-async fn attestation_count(c: &Client, thread: Uuid) -> i64 {
-    c.query_one(
-        "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
-        &[&thread.to_string()],
-    )
-    .await
-    .unwrap()
-    .get(0)
 }
 
 #[tokio::test]
@@ -237,6 +222,15 @@ async fn a_ceased_thread_is_not_signed() {
         out.total_rows, 1,
         "a ceased row is still a row on the chart, not an empty chart"
     );
+    // FIX 3 (#338 review finding 2): `total_rows` alone cannot keep the caller honest here.
+    // This chart holds ONE drug and it carries NO signature — so a caller that sees
+    // `total_rows > 0` and an empty `attested` and concludes "every drug already carries a
+    // current signature" states a falsehood. `active_rows` is what separates "nothing on
+    // this chart CURRENTLY NEEDS a signature" from "every current drug HAS one".
+    assert_eq!(
+        out.active_rows, 0,
+        "a ceased-only chart has no current drug at all — never say its drugs are signed"
+    );
 }
 
 /// An empty chart signs nothing and does NOT error. Recording "nil medications, reviewed"
@@ -269,6 +263,46 @@ async fn an_empty_list_signs_nothing_without_erroring() {
     assert_eq!(
         out.total_rows, 0,
         "a chart with no medications at all must report zero total_rows"
+    );
+    assert_eq!(out.active_rows, 0, "and no current drugs either");
+}
+
+/// FIX 3 (#338 review finding 2), the positive case: a chart whose current drugs really
+/// ARE all signed must be distinguishable from the ceased-only chart above. Both report an
+/// empty `attested`; only this one may be described as "every current drug already carries
+/// a signature", and `active_rows` is the field that licenses that sentence.
+#[tokio::test]
+async fn a_fully_vouched_chart_reports_its_current_rows() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let params = AttestParams {
+        human_sk: &hsk,
+        human_kid: &hkid,
+        basis: None,
+        note: None,
+    };
+
+    // First gesture signs it; the second finds nothing left to do.
+    sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .unwrap();
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .unwrap();
+
+    assert!(out.attested.is_empty(), "nothing left to sign");
+    assert_eq!(
+        out.active_rows, 1,
+        "there IS a current drug here, and it is signed — the one case where \
+         'every current drug already carries a signature' is a true statement"
     );
 }
 

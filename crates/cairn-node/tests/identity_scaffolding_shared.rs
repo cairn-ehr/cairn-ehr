@@ -186,10 +186,11 @@ fn derivation_finds_the_expected_helpers() {
         got,
         vec![
             // common/mod.rs now also carries non-identity scaffolding (#288's
-            // `medication_setup`, for the medication read-path + sign-off test suites).
-            // Its presence here does not mean it is identity-specific — only that an
-            // identity-bound file (BOUND above) must not declare its own copy of it. See
-            // the module header's widened first paragraph.
+            // `medication_setup` and `attestation_count`, for the medication read-path +
+            // sign-off test suites). Their presence here does not mean they are
+            // identity-specific — only that an identity-bound file (BOUND above) must not
+            // declare its own copy of them. See the module header's widened first paragraph.
+            "async fn attestation_count(",
             "async fn medication_setup(",
             "async fn person_chart_trust(",
             "async fn submit_patient_created(",

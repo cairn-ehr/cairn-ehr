@@ -122,6 +122,20 @@ struct AttestFlags {
     note: Option<String>,
 }
 
+/// The first 8 characters of a key id, for a display line that has no room for 64.
+///
+/// Takes CHARACTERS, not bytes. A kid is `hex::encode` output today, so `&kid[..8]` would
+/// be equivalent — but a byte slice panics the moment anything non-ASCII reaches it, and a
+/// display helper is exactly where an unvalidated string eventually arrives. Truncating on
+/// a char boundary cannot panic, whatever it is handed (#338 review finding 6).
+///
+/// This is an ABBREVIATION for reading, never an identifier to act on: two attesters
+/// sharing a prefix would render alike. Anything that must distinguish attesters uses the
+/// full kid.
+fn short_kid(kid: &str) -> String {
+    kid.chars().take(8).collect()
+}
+
 /// True when attest CONTEXT flags were given but there is no key to attest with —
 /// the "nothing to attest" case. Deliberately ignores the passphrase: it carries an
 /// `env` fallback and may be set without intent (see `resolve_attester`).
@@ -2242,23 +2256,21 @@ async fn main() -> anyhow::Result<()> {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let list = cairn_node::medication::read::list_patient_medications(&db, patient).await?;
             if json {
-                // The payload is an OBJECT, not a bare row array. A machine reader must be
-                // able to see the incompleteness signal in-band: a script that pipes stdout
-                // to `jq` and never reads stderr would otherwise consume a chart the node
-                // knows is missing a drug, with a zero exit code and no marker at all.
-                // Emitting both fields is the same "surface the uncertainty" rule the Rust
-                // return type follows (principle 4).
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "rows": &list.rows,
-                        "groups_missing_from_chart": &list.groups_missing_from_chart,
-                    }))?
-                );
+                // The payload is the WHOLE `PatientMedicationList`, not a bare row array. A
+                // machine reader must be able to see the incompleteness signal in-band: a
+                // script that pipes stdout to `jq` and never reads stderr would otherwise
+                // consume a chart the node knows is missing a drug, with a zero exit code
+                // and no marker at all. Serializing the struct itself (rather than
+                // hand-picking fields into a `json!`) means a field added to the read model
+                // reaches machine readers automatically instead of being silently dropped
+                // here — the same "surface the uncertainty" rule the Rust return type
+                // follows (principle 4).
+                println!("{}", serde_json::to_string_pretty(&list)?);
                 if !list.groups_missing_from_chart.is_empty() {
                     eprintln!(
                         "warning: {} medication group(s) with locally-known content for this \
-                         patient are missing from this chart (issue #334)",
+                         patient are missing from this chart (issue #334); see \
+                         .separation_targets for the threads to pass to `medication-separate`",
                         list.groups_missing_from_chart.len()
                     );
                 }
@@ -2276,8 +2288,13 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "! but {} medication group(s) with locally-known content for this \
                          patient are missing from this chart entirely (issue #334) — this is \
-                         NOT the same as \"no medications\"",
-                        list.groups_missing_from_chart.len()
+                         NOT the same as \"no medications\". {}\n    {}",
+                        list.groups_missing_from_chart.len(),
+                        cairn_node::medication::read::SEPARATION_INSTRUCTION,
+                        cairn_node::medication::read::format_hazard_groups(
+                            &list.groups_missing_from_chart,
+                            &list.separation_targets
+                        )
                     );
                 }
             } else {
@@ -2301,10 +2318,10 @@ async fn main() -> anyhow::Result<()> {
                         .map(|m| match &m.vouch {
                             cairn_medication_view::VouchState::Absent => "unsigned".to_string(),
                             cairn_medication_view::VouchState::Fresh { by } => {
-                                format!("signed by {}", &by[..8.min(by.len())])
+                                format!("signed by {}", short_kid(by))
                             }
                             cairn_medication_view::VouchState::Stale { by } => {
-                                format!("signed by {} (out of date)", &by[..8.min(by.len())])
+                                format!("signed by {} (out of date)", short_kid(by))
                             }
                         })
                         .collect();
@@ -2320,11 +2337,21 @@ async fn main() -> anyhow::Result<()> {
                         // win the DISTINCT ON tiebreak in medication_group_display — the
                         // group's OTHER patient sees no row for it (issue #334). The dose
                         // shown may be that other patient's, so the line cannot be signed.
+                        // The member-thread list is printed with it because the remedy named
+                        // here takes thread ids, and `row.members` holds only THIS patient's
+                        // half of the group.
                         println!(
                             "    ! this group's member threads span more than one patient — \
                              the dose shown may belong to the other patient, so this line \
-                             CANNOT be signed off (issue #334); separate it with \
-                             `medication-separate`"
+                             CANNOT be signed off (issue #334). {}",
+                            cairn_node::medication::read::SEPARATION_INSTRUCTION
+                        );
+                        println!(
+                            "      {}",
+                            cairn_node::medication::read::format_hazard_groups(
+                                &[row.group_id],
+                                &list.separation_targets
+                            )
                         );
                     }
                 }
@@ -2332,25 +2359,35 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "! {} medication group(s) with locally-known content for this patient \
                          are missing from this chart entirely (issue #334) — this list is \
-                         INCOMPLETE",
-                        list.groups_missing_from_chart.len()
+                         INCOMPLETE. {}\n    {}",
+                        list.groups_missing_from_chart.len(),
+                        cairn_node::medication::read::SEPARATION_INSTRUCTION,
+                        cairn_node::medication::read::format_hazard_groups(
+                            &list.groups_missing_from_chart,
+                            &list.separation_targets
+                        )
                     );
                 }
             }
         }
         Cmd::MedicationSignOff { patient, attest } => {
-            let node_sk = load_signing_key(&cli.key, true)?;
             let mut db = cairn_node::db::connect(&cli.conn).await?;
-            let id = cairn_node::identity::load_local(&db).await?;
             // A sign-off IS the human vouch (it takes clinical responsibility for the
             // whole list) — there is no device-additive form of it, unlike every other
             // medication verb where --attest-as is an optional overlay. Refuse loudly
             // rather than silently proceeding node-signed-only.
+            //
+            // Resolved BEFORE the node key is unsealed (#338 review finding 6): unsealing
+            // prompts for a passphrase, and an operator who simply forgot `--attest-as`
+            // should not be made to type one only to be refused straight afterwards. A
+            // wasted step is a paper-parity step (§1.2).
             let (human_sk, human_kid) = resolve_attester(&db, &attest).await?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "medication-sign-off requires --attest-as: a sign-off IS the human vouch"
                 )
             })?;
+            let node_sk = load_signing_key(&cli.key, true)?;
+            let id = cairn_node::identity::load_local(&db).await?;
             let params = cairn_node::medication::AttestParams {
                 human_sk: &human_sk,
                 human_kid: &human_kid,
@@ -2368,18 +2405,31 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
             if out.attested.is_empty() {
-                // FIX 4 (#288 review): these are two different clinical states that both
-                // produce an empty `attested`, and conflating them told the operator a
-                // false "everything is signed" for a chart that was never populated at all.
+                // FIX 4 (#288 review) + #338 review finding 2: FOUR clinical states all
+                // produce an empty `attested`, and each earns a different sentence. Saying
+                // "everything is signed" for any of the other three is a precise untruth —
+                // exactly what principle 4 forbids — about the one question the clinician
+                // is asking.
                 if out.total_rows == 0 {
                     println!(
                         "no medications are recorded for {patient}; nothing was signed. \
                          Recording \"nil medications, reviewed\" as an act has no home yet \
                          (issue #331)."
                     );
+                } else if out.active_rows == 0 {
+                    // A chart of nothing but struck lines. Those lines may well carry NO
+                    // signature at all — a ceased drug is never re-signed — so the
+                    // "everything already signed" sentence below would be flatly false here.
+                    println!(
+                        "no CURRENT medications for {patient} ({} ceased line(s) on the \
+                         chart); nothing needed a signature. A struck line is never \
+                         re-signed, signed or not.",
+                        out.total_rows
+                    );
                 } else if out.withheld.is_empty() {
                     println!(
-                        "nothing to sign off for {patient}: every drug already carries a current signature"
+                        "nothing to sign off for {patient}: every current drug already \
+                         carries a current signature"
                     );
                 } else {
                     // Guard on `withheld`: without it this branch would claim every drug
@@ -2405,13 +2455,20 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "! {} medication line(s) still need a signature but were NOT signed: their \
                      group's member threads span more than one patient, so the dose displayed \
-                     may belong to the other patient (issue #334). Separate each with \
-                     `medication-separate`, then sign off again.",
-                    out.withheld.len()
+                     may belong to the other patient (issue #334). {} Then sign off again.",
+                    out.withheld.len(),
+                    cairn_node::medication::read::SEPARATION_INSTRUCTION
                 );
-                for group in &out.withheld {
-                    println!("    unsigned group {group}");
-                }
+                // The member threads, not just the group id: they ARE the remedy's
+                // arguments, and this patient's own row lists only their half of the group
+                // (#338 review finding 1).
+                println!(
+                    "    {}",
+                    cairn_node::medication::read::format_hazard_groups(
+                        &out.withheld,
+                        &out.separation_targets
+                    )
+                );
             }
         }
         Cmd::Shred {

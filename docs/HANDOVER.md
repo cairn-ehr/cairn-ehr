@@ -103,11 +103,11 @@ Postgres-on-Android).
 change, no schema change — this is the first code that READS clinical content back out in Rust.
 
 **Shipped.** `crates/cairn-medication-view` (a pure, DB-free, GUI-free crate holding the read model and the
-ONE definition of what a sign-off gesture attests) · `cairn-node/src/medication/read.rs` (six statements
+ONE definition of what a sign-off gesture attests) · `cairn-node/src/medication/read.rs` (seven statements
 over the db/031–035 projections → `PatientMedicationList`) · `medication/signoff.rs` (N attestations, one
 unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI verbs.
 
-**The three things worth carrying forward:**
+**The four things worth carrying forward:**
 
 1. **A displayed row is a GROUP; an attestation is a THREAD.** ADR-0047 collapses reconciled duplicates
    into one line; ADR-0049 attests per thread. Every defect found in this build lived on that seam. The
@@ -127,7 +127,16 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    **refuses** an incomplete chart, and a cross-patient line is **withheld** from the gesture and reported
    rather than signed. Refuse the chart when a line is *missing*; withhold just the line when it is
    *present but untrustworthy* — refusing the whole chart there would be slower than paper (§1.2). The view
-   defect itself is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
+   defect itself is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334); whether the *refuse* half of
+   that asymmetry is right is now [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339).
+4. **A safety refusal is only as good as the escape hatch it names** (third review round). All three
+   cross-patient warnings said "run `medication-separate`" — a verb taking two THREAD ids — while printing
+   only a GROUP id, and the losing patient's own thread was on no surface at all (empty chart; the vouch read
+   is patient-scoped). The remedy was reachable only by raw SQL. Now `PatientMedicationList` carries
+   `separation_targets` (each hazardous group's full membership, including the other patient's bare thread
+   id), and one `SEPARATION_INSTRUCTION` const + one `format_hazard_groups` renderer serve all three call
+   sites, so the advice cannot drift between them. **Check every error message that names a fix: can the
+   reader actually run it from what you just printed?**
 
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
 stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →
@@ -137,6 +146,10 @@ Two safety branches remain untested for want of a test-only injection seam
 ([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)), and the two-read compare is best-effort, not
 an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335)). Sort order clusters
 capitalised brand names above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337)).
+The refuse-vs-withhold asymmetry needs a clinician call ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)),
+and the three medication test-TRUNCATE lists are still hand-synced
+([#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) — they are NOT interchangeable, read it before
+"tidying" them).
 
 **Three repo conventions this run learned the hard way — they will bite Task 5+ too:**
 - **Guard before connect.** DB-gated tests take `db::test_serial_guard(&base)` *before*

@@ -441,7 +441,7 @@ branch `feat/med-list-ui-slice-288`; Tasks 1–4 of a 12-task plan; owes
 `SCHEMA_GENERATION` bump).** Every slice before this one *authored* events; nothing read clinical content
 back out in Rust. Four pieces: `crates/cairn-medication-view` (pure — no DB driver, no GUI toolkit — holding
 the read model and the single definition of what a sign-off gesture attests), `cairn-node`'s
-`medication/read.rs` (six small statements over the db/031–035 projections, assembled in Rust rather than
+`medication/read.rs` (seven small statements over the db/031–035 projections, assembled in Rust rather than
 one two-level-aggregate join, so each is checkable against its view), `medication/signoff.rs` (N per-thread
 attestations behind ONE unseal and ONE transaction — the #288 gesture), and the `medication-list` /
 `medication-sign-off` CLI verbs.
@@ -453,7 +453,7 @@ only threads whose vouch is **absent or stale**, and another clinician's current
 silently reassigned to you. Ceased lines stay visible (a struck line stays on the paper chart) and are
 never re-signed.
 
-**Two lessons worth carrying:**
+**Three lessons worth carrying:**
 
 1. **Group/thread asymmetry is the defect-prone seam.** ADR-0047 collapses reconciled duplicates into one
    displayed row; ADR-0049 attests per thread. Nearly every defect this build surfaced lived there. The
@@ -469,6 +469,17 @@ never re-signed.
    cross-patient line rather than signing it. Refusing the whole chart in the second case was rejected
    deliberately: blocking eleven sound drugs over a twelfth suspect one is slower than paper, which §1.2
    forbids. The underlying view defect is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
+   Whether the *first* half of that asymmetry survives is now itself an open question —
+   [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339), below.
+3. **A named remedy must name its arguments** (PR-review round 3). All three cross-patient warnings told the
+   operator to run `medication-separate` — which takes two THREAD ids — while printing only a GROUP id, and
+   the losing patient's own thread appeared on no surface at all (their chart is empty, and the vouch read is
+   patient-scoped). The one exit from a hard refusal was therefore reachable only by raw SQL. The read model
+   now carries `separation_targets` (each hazardous group's FULL membership, deliberately including the other
+   patient's thread — a bare id with no clinical content, the minimum needed to repair a wrong-chart link the
+   node is itself complaining about), and one `SEPARATION_INSTRUCTION` const + one renderer serve all three
+   call sites so the repair advice cannot drift between them. **Generalised: a safety refusal is only as good
+   as the escape hatch it names.**
 
 **Deliberately NOT done.** No UI, so the §1.2 *time* budget stays unmeasured — the plan's benchmark (paper
 N=3 human acts → architecture-forced M=1 → UI-bundled K=1 for review-and-sign) is owed by Task 10. Open:
@@ -477,7 +488,11 @@ N=3 human acts → architecture-forced M=1 → UI-bundled K=1 for review-and-sig
 seam), [#335](https://github.com/cairn-ehr/cairn-ehr/issues/335) (the two-read compare is best-effort at
 READ COMMITTED, not an isolation guarantee), [#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)
 (O(all medications) per chart open), [#337](https://github.com/cairn-ehr/cairn-ehr/issues/337) (byte-order
-sort clusters capitalised brands above lowercase generics). **Tasks 5–12** (retire the superseded `cairn-gui`
+sort clusters capitalised brands above lowercase generics),
+[#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) (refusing the WHOLE chart over one invisible line
+argues from whole-list semantics the per-line design abandoned — needs a clinician call; the cost is pinned
+by a test), [#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) (three near-identical medication
+TRUNCATE lists in the test scaffolding, not interchangeable, no guard). **Tasks 5–12** (retire the superseded `cairn-gui`
 iced workspace · data port · view model · db/044 gesture timing · Tauri backend · webview · measurement ·
 docs) are handed to a fresh session with the plan file, not abandoned.
 

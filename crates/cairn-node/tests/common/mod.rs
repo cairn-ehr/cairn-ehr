@@ -230,6 +230,14 @@ pub async fn person_chart_trust(c: &Client, subject: Uuid) -> Option<String> {
 /// by a later migration than the core clinical tables: the guard keeps one shared helper
 /// correct on a database migrated only partway, instead of erroring on a table that does
 /// not exist yet. Same discipline as `setup` above.
+///
+/// NOT INTERCHANGEABLE with `medication_attestation.rs`'s own `setup`, which looks nearly
+/// identical but deliberately OMITS `medication_attestation` from its truncation list —
+/// that suite scopes its counts by patient and relies on attestation rows surviving across
+/// tests. Repointing it here would quietly change its semantics. Issue #340 tracks
+/// consolidating the three medication truncation lists properly (this one,
+/// `medication_attestation.rs`'s, and `medication_coding.rs`'s narrower one with its
+/// registry sweep); do not "tidy" them into one without reading it first.
 pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, \
@@ -279,4 +287,23 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     .await
     .unwrap();
     (sk_d, kid_d, sk_h, kid_h)
+}
+
+/// How many attestation rows a medication thread carries.
+///
+/// Shared by the two #288 medication suites (`medication_read.rs`, `medication_signoff.rs`),
+/// which both need to assert "this thread was / was not vouched" — the line this module's
+/// header draws ("if two suites would write it identically, it goes here").
+///
+/// UUID BINDING: `cairn-node` does not enable tokio-postgres's `with-uuid-1` feature (see
+/// `medication/read.rs`'s "UUID BINDING" module comment), so `thread` is bound as text and
+/// cast in SQL rather than passed as a `Uuid` parameter directly.
+pub async fn attestation_count(c: &Client, thread: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+        &[&thread.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
