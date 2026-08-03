@@ -57,8 +57,9 @@ passes: in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting sea
 
 ---
 
-**Session date:** 2026-08-01 (Slice 60) · **Spec/ADRs:** v0.61 (through ADR-0059; no ADR change in slices
-58–60 — 58 and 60 *implement* ADR-0056 decisions 1/4 and 5, 59 is a floor determinism fix + tooling) ·
+**Session date:** 2026-08-03 (Slice 61 + its review rounds) · **Spec/ADRs:** v0.62 (through **ADR-0060**,
+*partial validity* — a corollary of paper-parity that a clinician ruling forced out of the med-list slice;
+Slice 61 itself changed no spec/ADR, and slices 58–60 changed none either) ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical surface
 under construction** on `cairn-node`.
 
@@ -126,9 +127,12 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    dose. Now: rows dedupe by group, `groups_missing_from_chart` names what cannot be shown, sign-off
    **refuses** an incomplete chart, and a cross-patient line is **withheld** from the gesture and reported
    rather than signed. Refuse the chart when a line is *missing*; withhold just the line when it is
-   *present but untrustworthy* — refusing the whole chart there would be slower than paper (§1.2). The view
-   defect itself is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334); whether the *refuse* half of
-   that asymmetry is right is now [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339).
+   *present but untrustworthy*. **The clinician overruled the refuse half on 2026-08-03
+   ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339), closed) — see the new principle below.**
+   Sign-off now signs every line it can show and **reports** both the withheld lines and the invisible
+   groups; it refuses nothing but a target-set *mismatch* (a different question: not "is this chart
+   perfect?" but "is this the same chart the human reviewed?"). The view defect itself is
+   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
 4. **A safety refusal is only as good as the escape hatch it names** (third review round). All three
    cross-patient warnings said "run `medication-separate`" — a verb taking two THREAD ids — while printing
    only a GROUP id, and the losing patient's own thread was on no surface at all (empty chart; the vouch read
@@ -138,6 +142,50 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    sites, so the advice cannot drift between them. **Check every error message that names a fix: can the
    reader actually run it from what you just printed?**
 
+> [!IMPORTANT]
+> **[ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
+> (spec v0.62): *partial validity — a defect on one line never invalidates another.*** A **corollary of
+> paper-parity** (principle 3), not a new axiom — it earned its own ADR because it was violated *by a design
+> that had already accepted paper-parity*, and no test caught it. Canonical home: the new composability limb
+> of [§1.2](spec/vision.md). This came out of resolving
+> [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) and is broader than medications. In the
+> clinician's words: *"there is no reason to refuse the whole chart if one single line is not visible or not
+> trustworthy. What matters is that all visible lines in the chart must be signed … or presented as unsigned
+> in the UI."* The paper counterpart is a drug written up but missing a signature: that prompts the nurse to
+> chase the signature before acting on **that** drug; it does not void the chart.
+>
+> The worked case, which is why this is a **safety** property and not a convenience one: a doctor writes up
+> 1 L normal saline over 4 h and signs it, then writes up a 100 mL minibag with 10 mmol potassium and does
+> not sign it. **The saline must still be giveable.** A system that voids the chart because the potassium
+> line is unsigned — or invalid, or invisible — withholds fluid from a patient over a defect in a different
+> line.
+>
+> Built into `signoff.rs` today, **including at the transaction layer**: each attestation commits in its own
+> transaction, so a failing line rolls back alone (decision 7). The first draft of the ADR deferred that as a
+> bounded residual and was overruled — *"transaction scope must match the atomicity we discussed … db
+> transactions must ensure no collateral damage on rollbacks."* The deferral had smuggled the anti-pattern
+> back in one layer down. Testing it needed no injection seam after all: a **partial-custody thread** (sealed
+> body synced without its DEK — delete its `event_clear` row) makes exactly one line uncommittable.
+>
+> **The framing that generates the whole ADR** (and the one to lead with when explaining it): *the clinician
+> gives an order and expects it to be carried out; it may be cancelled only by somebody **taking ownership**
+> of the cancellation and **giving a rationale** — something only another clinician may do.* Hence **the
+> system may fail to record an order, but it may never cancel one**: no rollback, validation failure or
+> projection defect may have a cancellation's effect. The sharpest test to apply to any code path that stops
+> an order being carried out — *who owns this cancellation, and what is their reason?*
+>
+> That test immediately found a live gap: `medication-cease` accepts both an absent rationale and a
+> device-additive author, so a drug can be stopped with **no owner and no reason**
+> ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342), decision 6, not fixed — it changes a shipped
+> verb's contract). Note the trap recorded there: the fix is **local-authoring only**, never a door/NOT NULL
+> check, or a peer's rationale-less cessation forks the event set and wedges replication.
+>
+> **It will bind the orders/administration surface far harder than it binds sign-off** — order sets, infusion
+> regimens, care plans, discharge scripts, result panels, referral bundles. Two things to hold onto when
+> building those: decision 2 (never refusing the whole is only half of it — the half that is easy to forget
+> is that **partial completion must be reported, never implied**), and decision 7 (**check the transaction
+> boundaries**, because that is where the rule gets quietly violated by code that looks correct).
+
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
 stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →
 K=1 UI-bundled for review-and-sign). No "nil medications, reviewed" act ([#331](https://github.com/cairn-ehr/cairn-ehr/issues/331)).
@@ -146,10 +194,10 @@ Two safety branches remain untested for want of a test-only injection seam
 ([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)), and the two-read compare is best-effort, not
 an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335)). Sort order clusters
 capitalised brand names above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337)).
-The refuse-vs-withhold asymmetry needs a clinician call ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)),
-and the three medication test-TRUNCATE lists are still hand-synced
+The three medication test-TRUNCATE lists are still hand-synced
 ([#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) — they are NOT interchangeable, read it before
-"tidying" them).
+"tidying" them). ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) is **closed** — resolved by the
+clinician, see the callout above.)
 
 **Three repo conventions this run learned the hard way — they will bite Task 5+ too:**
 - **Guard before connect.** DB-gated tests take `db::test_serial_guard(&base)` *before*

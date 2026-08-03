@@ -554,43 +554,44 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
          to the other patient — they are the arguments to `medication-separate`"
     );
 
-    // The read-path defence this fix exists for: sign-off must REFUSE for patient B rather
-    // than silently reporting "nothing to sign off" over a chart the node itself knows is
-    // incomplete — that would be a false statement about who is responsible for thread_b.
+    // Sign-off must NOT refuse over the invisible group (#339, resolved by the clinician).
+    // An incomplete chart is REPORTED, never refused: nothing here is signable, but that is
+    // because B's chart is empty, not because the node blocked it. The missing group comes
+    // back in the outcome so the caller can say so out loud.
     let params = AttestParams {
         human_sk: &hsk,
         human_kid: &hkid,
         basis: None,
         note: None,
     };
-    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
+    let b_out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
         .await
-        .expect_err("sign-off must refuse a chart the node knows is missing content");
-    // Assert on the BRANCH, not merely on failure: any unrelated error inside the
-    // orchestrator would satisfy `is_err()`, so the test would keep passing if the #334
-    // refusal were deleted and something else happened to break.
-    let message = format!("{err:#}");
+        .expect("an incomplete chart is reported, never refused (#339)");
     assert!(
-        message.contains("#334") && message.contains("do not appear on this chart"),
-        "the refusal must be the #334 incomplete-chart branch, got: {message}"
+        b_out.attested.is_empty(),
+        "patient B's chart displays nothing, so there is nothing to sign"
     );
-    // FIX 1 (#338 review finding 1): a refusal that names a remedy must name the remedy's
-    // ARGUMENTS. The message points the operator at `medication-separate`, which takes two
-    // thread ids — so both must appear in the message, or the one exit from this hard
-    // refusal is a dead end that can only be cleared with raw SQL.
-    assert!(
-        message.contains(&thread_a.to_string()) && message.contains(&thread_b.to_string()),
-        "the refusal must name BOTH member threads to pass to `medication-separate`, \
-         got: {message}"
+    assert_eq!(
+        b_out.groups_missing_from_chart,
+        vec![thread_a],
+        "the outcome must carry what the chart could not show — an empty `attested` over a \
+         silently incomplete chart is the false 'all accounted for' claim #334 is about"
+    );
+    // The remedy's ARGUMENTS travel with it: `medication-separate` takes two thread ids and
+    // patient B's own thread_b is on no other surface (their chart is empty and the vouch
+    // read is patient-scoped), so without this the report is unactionable.
+    assert_eq!(
+        b_out.separation_targets.get(&thread_a),
+        Some(&sorted(vec![thread_a, thread_b])),
+        "the missing group must carry BOTH member threads, including the one belonging to \
+         the other patient"
     );
 
     // The WINNING patient's side of the same hazard. Patient A's chart DOES show the line,
-    // so there is nothing missing to refuse over — but the dose on that line comes from
-    // `medication_group_current_dose`, which picks one member across the whole group
-    // regardless of patient, so it may be patient B's dose under patient A's drug name.
-    // The line is therefore withheld from the gesture instead of signed. Withholding is
-    // per LINE: if the fix ever escalated to refusing the whole chart, this call would
-    // return Err and the assertion below would fail.
+    // but the dose on it comes from `medication_group_current_dose`, which picks one member
+    // across the whole group regardless of patient, so it may be patient B's dose under
+    // patient A's drug name. The line is therefore withheld from the gesture instead of
+    // signed — withholding is per LINE.
     let a_out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_a)
         .await
         .expect("the winning patient's chart is complete, so sign-off must not refuse it");
@@ -615,20 +616,26 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
     );
 }
 
-/// FIX 2 (#338 review finding 4): the refusal above is only interesting when the losing
-/// patient's chart is OTHERWISE SIGNABLE. `a_cross_patient_group_is_missing_from_the_
-/// losing_patients_chart` leaves patient B with an empty chart, so refusing costs B
-/// nothing there and the test cannot see the price of the decision.
+/// THE #339 CONTRACT, and the most important test in this file: **a defect on one line
+/// never invalidates another.**
 ///
-/// Here patient B also has an ordinary, unsigned drug of their own. The refusal therefore
-/// blocks a drug that is in no way implicated in the cross-patient group — the whole chart
-/// is held hostage by one invisible line. That is the CURRENT deliberate design (refuse
-/// when a line is *missing*, withhold when a line is *present but untrustworthy*), and
-/// this test pins it so the cost is visible in the suite rather than argued in prose.
-/// Issue #339 tracks whether the asymmetry is right; if it is ever resolved the other way
-/// this test fails loudly instead of the behaviour changing unnoticed.
+/// The clinician's ruling (2026-08-03), in their words: *"there is no reason to refuse the
+/// whole chart if one single line is not visible or not trustworthy. What matters is that
+/// all visible lines in the chart must be signed … or presented as unsigned in the UI."*
+/// The paper counterpart is a drug written up but missing a signature — that prompts the
+/// nurse to chase the signature before acting on THAT drug; it does not void the chart.
+///
+/// The worked case they gave, which is why this is a safety property and not a convenience
+/// one: a doctor writes up 1 L normal saline over 4 h and signs it, then writes up a
+/// 100 mL minibag with 10 mmol potassium and does NOT sign it. The saline must still be
+/// giveable. A system that voids the whole chart because the potassium line is unsigned (or
+/// invalid, or invisible) withholds fluid from a patient over a defect in a different line.
+///
+/// Here patient B has an ordinary, unsigned drug of their own PLUS an invisible
+/// cross-patient group. The visible drug must be signed; the invisible group must be
+/// reported, not used as grounds to refuse.
 #[tokio::test]
-async fn an_incomplete_chart_refuses_sign_off_even_for_its_unrelated_drugs() {
+async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -679,23 +686,40 @@ async fn an_incomplete_chart_refuses_sign_off_even_for_its_unrelated_drugs() {
         basis: None,
         note: None,
     };
-    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
         .await
-        .expect_err("an incomplete chart is refused whole, unrelated drugs included");
-    let message = format!("{err:#}");
-    assert!(
-        message.contains("#334"),
-        "the refusal must be the #334 incomplete-chart branch, got: {message}"
+        .expect("an incomplete chart must never be refused (#339)");
+
+    // THE PROPERTY: the sound line is signed, despite an invisible group on the same chart.
+    assert_eq!(
+        out.attested,
+        vec![unrelated],
+        "the visible, sound drug must be signed — a defect on one line never invalidates \
+         another (#339: the saline goes up even when the potassium is unsigned)"
     );
-    assert!(
-        message.contains(&thread_a.to_string()) && message.contains(&thread_b.to_string()),
-        "the refusal must name both threads to separate, got: {message}"
-    );
-    // THE COST, made explicit: warfarin — a drug with nothing wrong with it — is left
-    // unsigned by a refusal caused by an entirely different group.
     assert_eq!(
         attestation_count(&c, unrelated).await,
+        1,
+        "and the attestation is really committed, not merely reported"
+    );
+
+    // AND the incompleteness is still surfaced — signing what it can must never become
+    // silence about what it cannot. This is the half that keeps #334 honest.
+    assert_eq!(
+        out.groups_missing_from_chart,
+        vec![thread_a],
+        "the invisible group must be reported alongside the successful sign-off"
+    );
+    assert_eq!(
+        out.separation_targets.get(&thread_a),
+        Some(&sorted(vec![thread_a, thread_b])),
+        "with the thread ids that make `medication-separate` runnable"
+    );
+
+    // The other patient's thread is untouched: signing B's chart says nothing about A's.
+    assert_eq!(
+        attestation_count(&c, thread_a).await,
         0,
-        "the unrelated drug is left unsigned by the whole-chart refusal (issue #339)"
+        "patient A's thread is not vouched by patient B's sign-off"
     );
 }

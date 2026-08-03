@@ -459,18 +459,41 @@ never re-signed.
    displayed row; ADR-0049 attests per thread. Nearly every defect this build surfaced lived there. The
    shared crate exists so the node and the future UI cannot answer *"what is about to be signed?"*
    differently — a divergence puts a green "signed" badge over a thread nobody signed.
-2. **Refuse the chart when a line is missing; withhold the line when it is present but untrustworthy.** A
-   reconciled group whose members span two patients displays on one chart only (db/033 joins a
+2. **A defect on one line never invalidates another** — the slice's most important lesson, and it arrived as
+   a **clinician override** of the first design ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339),
+   2026-08-03). A reconciled group whose members span two patients displays on one chart only (db/033 joins a
    `DISTINCT ON (group_id)` display view against a per-`(group, patient)` status view). The losing patient's
    chart silently dropped a real drug and sign-off answered "nothing to sign off"; the winner's chart showed
    it twice, and its dose comes from a whole-group `DISTINCT ON` that ignores patient, so it can display the
-   *other* patient's dose. The read path now dedupes by group, names what it cannot show
-   (`groups_missing_from_chart`), **refuses** to sign an incomplete chart, and **withholds and reports** a
-   cross-patient line rather than signing it. Refusing the whole chart in the second case was rejected
-   deliberately: blocking eleven sound drugs over a twelfth suspect one is slower than paper, which §1.2
-   forbids. The underlying view defect is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
-   Whether the *first* half of that asymmetry survives is now itself an open question —
-   [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339), below.
+   *other* patient's dose. The first fix **refused** to sign an incomplete chart while merely **withholding**
+   an untrustworthy line — an asymmetry that argued from whole-list semantics the per-line drug-chart model
+   had already abandoned. The ruling: *"there is no reason to refuse the whole chart if one single line is
+   not visible or not trustworthy. What matters is that all visible lines in the chart must be signed … or
+   presented as unsigned in the UI."* The paper counterpart is a drug written up but missing a signature —
+   the nurse chases **that** signature; the chart is not voided. The worked case that makes it a safety
+   property: 1 L saline signed, a 10 mmol potassium minibag unsigned — **the saline must still be giveable.**
+   So the read path dedupes by group, names what it cannot show (`groups_missing_from_chart`), signs every
+   line it can stand behind, and **reports** both the withheld lines and the invisible groups. The only
+   remaining refusal is a target-set *mismatch*, which asks a different question: not "is this chart
+   perfect?" but "is this the same chart the human reviewed?". The underlying view defect is
+   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334). **Generalises well past medications**, so it is
+   now [ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
+   (*partial validity*, spec **v0.62**) with a new composability limb in §1.2 — a **corollary of
+   paper-parity**, given its own ADR precisely because it was violated by a design that had already accepted
+   paper-parity. The ADR reaches the **transaction layer** too (decision 7): the N attestations no longer
+   share one transaction, because a failure on any line would otherwise un-write every other line's
+   signature — the ADR's own anti-pattern, one layer down, which its first draft had deferred as a "bounded
+   residual" until the maintainer rejected the deferral. Testing that needed no injection seam in the end: a
+   **partial-custody thread** (sealed body synced without its DEK) makes exactly one line uncommittable while
+   its siblings commit, which also retires half of #333. It will bind order sets, infusion regimens, care
+   plans and result panels harder than it binds sign-off; the two things to carry are decision 2 (**partial
+   completion must be reported, never implied**) and decision 7 (**check the transaction boundaries** — that
+   is where the rule gets violated by code that looks correct). The framing that generates all of it, and the
+   one to lead with: *the clinician gives an order and expects it to be carried out; it may be cancelled only
+   by somebody taking ownership and giving a rationale, which only another clinician may do* — so **the
+   system may fail to record an order, but it may never cancel one.** Applying that test immediately found a
+   live gap: `medication-cease` accepts both an absent rationale and a device-additive author
+   ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342)).
 3. **A named remedy must name its arguments** (PR-review round 3). All three cross-patient warnings told the
    operator to run `medication-separate` — which takes two THREAD ids — while printing only a GROUP id, and
    the losing patient's own thread appeared on no surface at all (their chart is empty, and the vouch read is
@@ -489,10 +512,10 @@ seam), [#335](https://github.com/cairn-ehr/cairn-ehr/issues/335) (the two-read c
 READ COMMITTED, not an isolation guarantee), [#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)
 (O(all medications) per chart open), [#337](https://github.com/cairn-ehr/cairn-ehr/issues/337) (byte-order
 sort clusters capitalised brands above lowercase generics),
-[#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) (refusing the WHOLE chart over one invisible line
-argues from whole-list semantics the per-line design abandoned — needs a clinician call; the cost is pinned
-by a test), [#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) (three near-identical medication
-TRUNCATE lists in the test scaffolding, not interchangeable, no guard). **Tasks 5–12** (retire the superseded `cairn-gui`
+[#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) (three near-identical medication
+TRUNCATE lists in the test scaffolding, not interchangeable, no guard).
+[#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) is **closed** — resolved by the clinician, lesson 2
+above. **Tasks 5–12** (retire the superseded `cairn-gui`
 iced workspace · data port · view model · db/044 gesture timing · Tauri backend · webview · measurement ·
 docs) are handed to a fresh session with the plan file, not abandoned.
 

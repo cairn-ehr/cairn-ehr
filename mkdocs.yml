@@ -164,6 +164,7 @@ nav:
       - ADR-0057 · Generic reprojection — registration is the wiring: spec/decisions/0057-generic-reprojection-registered-apply-dispatch.md
       - ADR-0058 · Grade-gated t_effective ceiling: spec/decisions/0058-grade-gated-teffective-ceiling.md
       - ADR-0059 · Medication drug-identity coding — the drugref moiety anchor: spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md
+      - ADR-0060 · Partial validity — a defect on one line never invalidates another: spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
