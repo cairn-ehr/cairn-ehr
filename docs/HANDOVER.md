@@ -160,10 +160,18 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
 > line is unsigned — or invalid, or invisible — withholds fluid from a patient over a defect in a different
 > line.
 >
-> Built into `signoff.rs` today. **It will bind the orders/administration surface far harder than it binds
-> sign-off** — order sets, infusion regimens, care plans, discharge scripts, result panels, referral bundles.
-> The ADR's decision 2 is the one to hold onto when building those: never refusing the whole is only half of
-> it, and the half that is easy to forget is that **partial completion must be reported, never implied.**
+> Built into `signoff.rs` today, **including at the transaction layer**: each attestation commits in its own
+> transaction, so a failing line rolls back alone (decision 6). The first draft of the ADR deferred that as a
+> bounded residual and was overruled — *"transaction scope must match the atomicity we discussed … db
+> transactions must ensure no collateral damage on rollbacks."* The deferral had smuggled the anti-pattern
+> back in one layer down. Testing it needed no injection seam after all: a **partial-custody thread** (sealed
+> body synced without its DEK — delete its `event_clear` row) makes exactly one line uncommittable.
+>
+> **It will bind the orders/administration surface far harder than it binds sign-off** — order sets, infusion
+> regimens, care plans, discharge scripts, result panels, referral bundles. Two things to hold onto when
+> building those: decision 2 (never refusing the whole is only half of it — the half that is easy to forget
+> is that **partial completion must be reported, never implied**), and decision 6 (**check the transaction
+> boundaries**, because that is where the rule gets quietly violated by code that looks correct).
 
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
 stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →

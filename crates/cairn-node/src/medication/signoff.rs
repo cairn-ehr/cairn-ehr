@@ -2,17 +2,31 @@
 //!
 //! ADR-0049 attestation is per THREAD, so vouching for a chart means authoring one
 //! attestation per thread that needs one. That is N cryptographic acts, but it must be
-//! ONE human act: `attest_thread_in_tx` takes an already-unsealed key by reference, so one
-//! unseal and one transaction cover all N. This module is what turns that permission into
-//! a callable verb — and it lives in the node, not the UI, so the CLI has the same gesture
-//! and the reference UI uses no privileged path (ADR-0021).
+//! ONE human act: `attest_thread_in_tx` takes an already-unsealed key by reference, so a
+//! single unseal and a single review cover all N. This module is what turns that permission
+//! into a callable verb — and it lives in the node, not the UI, so the CLI has the same
+//! gesture and the reference UI uses no privileged path (ADR-0021).
 //!
-//! The bundling shape (mint the HLCs, open one transaction, attest each thread, commit) is
-//! the one `reconciliation.rs` already uses for exactly two threads, generalised to N.
+//! WHAT MAKES THE GESTURE ONE THING is the unseal and the review, NOT a shared database
+//! transaction. Each attestation commits in its OWN transaction (ADR-0060): these are N
+//! independent clinical acts, and a failure on one must not un-write the others. An earlier
+//! version bundled all N into one transaction and had exactly that defect.
 use crate::medication::{read::list_patient_medications, AttestParams};
 use cairn_medication_view::{sign_off_targets, MedicationStatus};
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+/// One line the gesture attempted but could not complete.
+///
+/// A failed line is NOT a failed gesture (ADR-0060): it is excluded and reported, and every
+/// other line commits regardless. `error` carries the real reason, rendered from the full
+/// `anyhow` chain, because "one line failed" without saying which or why is a report the
+/// operator cannot act on (ADR-0060 decision 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedLine {
+    pub medication_id: Uuid,
+    pub error: String,
+}
 
 /// What one sign-off gesture did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,18 +76,30 @@ pub struct SignOffOutcome {
     /// #334 defence exists to prevent. Union of both reads, so a group that vanished
     /// mid-gesture is reported too. Empty in normal operation.
     pub groups_missing_from_chart: Vec<Uuid>,
+    /// Lines this gesture tried to sign and could not — each with the reason.
+    ///
+    /// A failed line never blocks another (ADR-0060): each attestation commits in its OWN
+    /// transaction, so a failure here rolls back that line alone. Callers MUST surface this;
+    /// the CLI additionally exits non-zero, because unlike `withheld` and
+    /// `groups_missing_from_chart` — which are reported, actionable, normal-operation states
+    /// — a failed line is an attempted write that errored. Empty in normal operation.
+    pub failed: Vec<FailedLine>,
 }
 
 /// Attest every thread on this patient's chart whose vouch is absent or stale, in one
 /// transaction.
 ///
-/// # A defect on one line never invalidates another (#339)
+/// # A defect on one line never invalidates another (ADR-0060, #339)
 ///
 /// This function does NOT refuse over an incomplete or partly-untrustworthy chart. It signs
 /// every line it can show and stand behind, and REPORTS the rest — `withheld` for lines
 /// present but untrustworthy (cross-patient dose bleed), `groups_missing_from_chart` for
-/// content the chart could not display at all. Both must be surfaced by the caller; signing
-/// what it can must never become silence about what it cannot.
+/// content the chart could not display at all, `failed` for lines whose write errored. All
+/// three must be surfaced by the caller; signing what it can must never become silence
+/// about what it cannot.
+///
+/// The rule reaches the **transaction layer**, not just the targeting logic: each line
+/// commits separately, so a rollback damages only the line that caused it.
 ///
 /// The clinician's ruling that settled this: *"there is no reason to refuse the whole chart
 /// if one single line is not visible or not trustworthy. What matters is that all visible
@@ -156,33 +182,33 @@ pub async fn sign_off_medication_list(
             withheld,
             separation_targets: first_read.separation_targets,
             groups_missing_from_chart: first_read.groups_missing_from_chart,
+            failed: vec![],
         });
     }
 
     // One HLC per attestation, minted up front and consumed in target order (which
-    // `sign_off_targets` sorts, so the assignment is deterministic).
+    // `sign_off_targets` sorts, so the assignment is deterministic). A line that later
+    // fails simply burns its HLC — the counter is monotonic and nothing requires reuse.
     let mut hlcs = Vec::with_capacity(expected.len());
     for _ in 0..expected.len() {
         hlcs.push(crate::db::next_hlc(client, node_origin).await?);
     }
 
-    // SAFETY NOTE (untested, issue #333): this refusal branch has no test coverage today.
-    // Forcing `actual != expected` needs a second connection to write a medication event
-    // (or a competing sign-off) for this patient in the narrow window between the two
-    // reads above — a race that needs a test-only injection seam this crate does not have
-    // yet. Issue #333 tracks building that seam; it also covers the mid-gesture-rollback
-    // case `medication_signoff.rs`'s `a_refused_attestation_signs_nothing_at_all` can't
-    // reach for the same reason (see that test's doc comment).
-    let tx = client.transaction().await?;
-    let second_read = list_patient_medications(&tx, patient).await?;
+    // The second read, on the client directly rather than inside a transaction. Wrapping it
+    // in one bought no isolation — READ COMMITTED takes a fresh snapshot per statement
+    // either way (issue #335) — and it can no longer share a transaction with the writes,
+    // because the writes are now per line (see below).
+    //
+    // SAFETY NOTE (untested, issue #333): the mismatch refusal below still has no coverage.
+    // Forcing `actual != expected` needs a second connection writing a medication event for
+    // this patient in the narrow window between the two reads.
+    let second_read = list_patient_medications(&*client, patient).await?;
 
-    // Re-read completeness inside the transaction, not just outside it, and report the
-    // UNION of the two. A reconciliation landing in the gap between the reads can pull a
-    // group off this chart WITHOUT changing the target set — if every thread on the
-    // vanished group was already vouched, `actual == expected` still holds and the compare
-    // below waves it through. Unioning (rather than taking either read alone) means a group
-    // missing at EITHER moment is reported: the safe direction is to over-report
-    // incompleteness, never to under-report it.
+    // Report the UNION of what either read found missing. A reconciliation landing in the
+    // gap can pull a group off this chart WITHOUT changing the target set — if every thread
+    // on the vanished group was already vouched, `actual == expected` still holds and the
+    // compare below waves it through. Unioning means a group missing at EITHER moment is
+    // reported: over-report incompleteness, never under-report it (ADR-0060 decision 3).
     let groups_missing_from_chart = union_sorted(
         &first_read.groups_missing_from_chart,
         &second_read.groups_missing_from_chart,
@@ -190,6 +216,11 @@ pub async fn sign_off_medication_list(
 
     let actual = sign_off_targets(&second_read.rows);
     if actual != expected {
+        // The ONE admissible whole-gesture refusal (ADR-0060 decision 5). It does not ask
+        // "is this chart perfect?" — that question is now always answered by reporting — but
+        // "is this the same list the human reviewed?". Raised BEFORE any line commits, so
+        // refusing here writes nothing and needs no rollback.
+        //
         // Report WHAT changed, not just how many — two counts that happen to match (a
         // thread swapped for another) would otherwise read as a true but useless "3 vs 3".
         let added = format_thread_ids(actual.iter().filter(|t| !expected.contains(t)));
@@ -201,13 +232,42 @@ pub async fn sign_off_medication_list(
         );
     }
 
+    // ONE TRANSACTION PER LINE (ADR-0060, transaction scope must match clinical atomicity).
+    //
+    // These N attestations are N INDEPENDENT clinical acts that happen to share one human
+    // gesture — the gesture is one because one unseal and one review cover them all, NOT
+    // because they share a database transaction. Bundling them into a single transaction
+    // meant a failure on any one line un-wrote every other line's signature: the saline
+    // rolled back because the potassium minibag could not be vouched. That is precisely the
+    // collateral damage ADR-0060 forbids, so each line now commits on its own and a failure
+    // is confined to the line that caused it.
+    //
+    // What is NOT split: a single clinical act that spans two threads (a reconciliation and
+    // its two attestations, `reconciliation.rs`) stays atomic — you cannot half-link two
+    // drugs. The unit is the clinical line, not the statement count.
+    let mut attested = Vec::with_capacity(actual.len());
     let mut event_ids = Vec::with_capacity(actual.len());
+    let mut failed = Vec::new();
     for (thread, hlc) in actual.iter().zip(hlcs) {
-        event_ids.push(
-            crate::medication::attest_thread_in_tx(&tx, params, patient, *thread, hlc).await?,
-        );
+        let tx = client.transaction().await?;
+        match crate::medication::attest_thread_in_tx(&tx, params, patient, *thread, hlc).await {
+            Ok(event_id) => {
+                tx.commit().await?;
+                attested.push(*thread);
+                event_ids.push(event_id);
+            }
+            Err(e) => {
+                // Roll back THIS line only. The error is kept as text rather than
+                // propagated: propagating it would abort the remaining lines, which is the
+                // behaviour this loop exists to remove.
+                tx.rollback().await?;
+                failed.push(FailedLine {
+                    medication_id: *thread,
+                    error: format!("{e:#}"),
+                });
+            }
+        }
     }
-    tx.commit().await?;
 
     // The second read's hazard membership wins: it is the state at write time, and a group
     // that only became hazardous during the gesture must still carry its repair arguments.
@@ -217,13 +277,14 @@ pub async fn sign_off_medication_list(
     separation_targets.extend(second_read.separation_targets);
 
     Ok(SignOffOutcome {
-        attested: actual,
+        attested,
         event_ids,
         total_rows: first_read.rows.len(),
         active_rows,
         withheld,
         separation_targets,
         groups_missing_from_chart,
+        failed,
     })
 }
 

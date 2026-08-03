@@ -480,9 +480,15 @@ never re-signed.
    now [ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
    (*partial validity*, spec **v0.62**) with a new composability limb in §1.2 — a **corollary of
    paper-parity**, given its own ADR precisely because it was violated by a design that had already accepted
-   paper-parity. It will bind order sets, infusion regimens, care plans and result panels harder than it
-   binds sign-off, and the half that is easy to forget is decision 2: **partial completion must be reported,
-   never implied.**
+   paper-parity. The ADR reaches the **transaction layer** too (decision 6): the N attestations no longer
+   share one transaction, because a failure on any line would otherwise un-write every other line's
+   signature — the ADR's own anti-pattern, one layer down, which its first draft had deferred as a "bounded
+   residual" until the maintainer rejected the deferral. Testing that needed no injection seam in the end: a
+   **partial-custody thread** (sealed body synced without its DEK) makes exactly one line uncommittable while
+   its siblings commit, which also retires half of #333. It will bind order sets, infusion regimens, care
+   plans and result panels harder than it binds sign-off; the two things to carry are decision 2 (**partial
+   completion must be reported, never implied**) and decision 6 (**check the transaction boundaries** — that
+   is where the rule gets violated by code that looks correct).
 3. **A named remedy must name its arguments** (PR-review round 3). All three cross-patient warnings told the
    operator to run `medication-separate` — which takes two THREAD ids — while printing only a GROUP id, and
    the losing patient's own thread appeared on no surface at all (their chart is empty, and the vouch read is

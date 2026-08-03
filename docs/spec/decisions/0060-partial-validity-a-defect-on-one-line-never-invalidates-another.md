@@ -96,22 +96,38 @@ signature currency, and actionability are properties of the **individual line**,
    [§1.2](../vision.md#12-the-paper-parity-test-normative) forced-rationale-class friction, not a
    completeness gate.
 
-**Scope.** This binds any workflow over a composite clinical object at any layer — the in-DB floor, the
-event core, the API, and the UI. It does **not** license partial application of a single atomic *event*:
-event bodies remain all-or-nothing at the door ([§3](../data-model.md)). The unit of independence is the
-**clinical line**, not the storage write.
+6. **Transaction scope must match clinical atomicity — no collateral damage on rollback.** The rule binds
+   the **storage layer**, not merely the targeting logic. A workflow acting on N independent lines must not
+   bundle them into one database transaction: a failure on any one would then roll back every other line's
+   committed act, which is this ADR's own anti-pattern reintroduced one layer down. Each independently-
+   actionable line commits in its **own** transaction, and a failed line is rolled back **alone** and
+   reported (decision 2). What makes a multi-line gesture *one human act* is the single unseal and the
+   single review — never a shared transaction.
 
-**A named residual, not a resolved one.** A gesture that bundles N per-line acts into one transaction still
-commits or aborts as one, so a line that fails *unexpectedly at the door* does roll back its siblings — a
-smaller instance of the very pattern this ADR forbids. Two things bound it, and neither dissolves it:
-elements with *known* defects are excluded **before** the transaction opens (so the rollback case is a
-surprise, not a foreseen exclusion), and an all-or-nothing write is the honest failure mode when the
-alternative is a partially-applied gesture whose extent nobody recorded. The principled fix — per-line
-commit with a per-line outcome record — is deferred, not decided against; it needs a failure that is
-asymmetric across lines to even be testable
-([#333](https://github.com/cairn-ehr/cairn-ehr/issues/333)). Anyone extending this to orders or
-administration, where the cost of a spurious rollback is a withheld treatment rather than a re-click, should
-revisit it there rather than inherit this bound.
+**Scope, and what stays atomic.** This binds any workflow over a composite clinical object at any layer —
+the in-DB floor, the event core, the API, and the UI. The unit of independence is the **clinical line**, not
+the statement count. Three things are therefore *not* split:
+
+- a single **event body**, which remains all-or-nothing at the door ([§3](../data-model.md));
+- a single clinical act that inherently spans several threads — a medication *reconciliation* and the
+  attestations for both of its subjects ([ADR-0047](0047-medication-reconciliation-resolution.md)) commit
+  together, because you cannot half-link two drugs;
+- a content event and the vouch authored with it in the same gesture, which is one act plus its signature.
+
+The test is whether the parts are **independently actionable in the clinic**, not whether they were written
+in one keystroke. Two drugs on a chart are independently giveable; the two halves of a reconciliation are
+not.
+
+> This decision replaced a deliberate deferral. The first draft of this ADR recorded the shared-transaction
+> rollback as a *bounded residual* — known-defective lines are excluded before the transaction opens, so a
+> rollback is a surprise rather than a foreseen exclusion — and deferred the fix for want of a way to test an
+> asymmetric failure ([#333](https://github.com/cairn-ehr/cairn-ehr/issues/333)). The maintainer rejected the
+> deferral: *"transaction scope must match the atomicity we discussed — an order must not be refused because
+> another order is invalid or incomplete. Hence db transactions must ensure no collateral damage on
+> rollbacks."* That is correct, and the deferral had smuggled the anti-pattern back in under a bound. The
+> test turned out not to need an injection seam either: a **partial-custody node** — one thread's sealed body
+> synced without its DEK, a state the schema already anticipates — makes exactly one line uncommittable while
+> its siblings commit normally.
 
 ## Consequences
 
@@ -128,6 +144,9 @@ revisit it there rather than inherit this bound.
 **Harder.**
 - **Every** such workflow now owes a reporting surface, and the reports must be good enough to act on
   (decision 4). That is more design work per workflow than a refusal, which needs none.
+- Per-line transactions cost per-line round trips, and they surrender the convenience of "it either all
+  happened or none of it did." A caller can now observe a genuinely partial world, which is the point, but it
+  means every consumer of a multi-line result must handle three outcomes rather than two.
 - Reports accumulate into an alert-fatigue risk, which §1.2's *mostly-pull, selectively-push* limb governs:
   a partial-completion account belongs where the clinician is already looking (the line itself, rendered
   unsigned), not as an additional push.
@@ -148,7 +167,11 @@ answer is a better-placed affordance (paper's blank box is *in the line*, not in
 bottom), not a return to all-or-nothing refusal.
 
 **First instance.** `cairn-node`'s `medication/signoff.rs`: whole-list sign-off signs every line it can show
-and stand behind, and reports both `withheld` lines (present but untrustworthy) and
-`groups_missing_from_chart` (not displayable at all) with the thread ids that make the repair command
-runnable. Pinned by `an_incomplete_chart_still_signs_every_line_it_can_show`
-([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)).
+and stand behind, each in its own transaction, and reports `withheld` lines (present but untrustworthy),
+`groups_missing_from_chart` (not displayable at all) — both with the thread ids that make the repair command
+runnable — and `failed` lines (write errored, rolled back alone). Pinned by two tests:
+`an_incomplete_chart_still_signs_every_line_it_can_show`
+([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)) for decisions 1–4, and
+`a_line_that_cannot_be_attested_never_rolls_back_the_others` for decision 6 — the latter breaks the
+**middle** line of three, so a successful commit sits both before and after the failure and the earlier one
+must survive it.

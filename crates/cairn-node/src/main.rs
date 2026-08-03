@@ -2498,6 +2498,23 @@ async fn main() -> anyhow::Result<()> {
                     )
                 );
             }
+            if !out.failed.is_empty() {
+                // Distinct from `withheld` and `groups_missing_from_chart`, which are
+                // reported, actionable, normal-operation states. A failed line is an
+                // ATTEMPTED WRITE THAT ERRORED, so it is the one outstanding-work category
+                // that also earns a non-zero exit: a script must not read "sign-off
+                // succeeded" from a run where a signature the clinician asked for did not
+                // land. Each line rolled back alone (ADR-0060), so the rest are committed.
+                eprintln!(
+                    "! {} medication line(s) could NOT be signed. Each rolled back on its own \
+                     — every other line above is committed and unaffected.",
+                    out.failed.len()
+                );
+                for line in &out.failed {
+                    eprintln!("    {} — {}", line.medication_id, line.error);
+                }
+                std::process::exit(1);
+            }
         }
         Cmd::Shred {
             event,

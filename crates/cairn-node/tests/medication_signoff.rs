@@ -306,23 +306,21 @@ async fn a_fully_vouched_chart_reports_its_current_rows() {
     );
 }
 
-/// A refused attester leaves ZERO attestation rows. The db/005 responsibility gate checks
-/// only the attester's KEY (never enrolled here), never which medication thread is being
-/// attested, so it refuses on the very FIRST thread `sign_off_medication_list` attempts —
-/// thread `b` is never even reached — and the whole verb returns an error before any
-/// thread is signed.
+/// An unenrolled attester fails EVERY line, and commits nothing.
 ///
-/// WHAT THIS DOES NOT PROVE. It does not demonstrate the stronger, more interesting
-/// property one-transaction sign-off actually promises: a thread that already succeeded
-/// EARLIER in the same transaction being rolled back because a LATER thread's attestation
-/// fails. This failure mode is not per-thread-asymmetric (an unenrolled key is refused for
-/// every thread alike, not just some), so it can't exercise that path. Proving the
-/// asymmetric case needs a failure that succeeds on thread A and fails on thread B within
-/// one transaction, which needs a test-only injection seam this crate does not have yet —
-/// tracked as issue #333, which also covers the untested double-read-mismatch refusal
-/// branch in `signoff.rs`.
+/// The db/005 responsibility gate checks only the attester's KEY, never which medication
+/// thread is being attested, so every line fails alike. That is a UNIFORM failure, not
+/// collateral damage — no line was refused *because of another line* — so ADR-0060 is not
+/// engaged, and the correct outcome is simply "nothing committed, every line reported as
+/// failed".
+///
+/// The verb returns `Ok` with per-line failures rather than `Err`: whole-gesture validation
+/// ("is this key an enrolled human?") belongs in the caller's pre-flight, which the CLI does
+/// via `resolve_attester`. Reaching this code with a bad key means that pre-flight was
+/// skipped, and the honest report is still per line. The CLI exits non-zero when any line
+/// failed.
 #[tokio::test]
-async fn a_refused_attestation_signs_nothing_at_all() {
+async fn an_unenrolled_attester_fails_every_line_and_commits_nothing() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -335,9 +333,6 @@ async fn a_refused_attestation_signs_nothing_at_all() {
     let a = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let b = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
 
-    // Never enrolled: the db/005 responsibility gate refuses this attester on the first
-    // thread it tries — see the doc comment above for exactly what that does and does not
-    // demonstrate.
     let (stranger_sk, stranger_kid) = generate_key().unwrap();
     let params = AttestParams {
         human_sk: &stranger_sk,
@@ -346,17 +341,110 @@ async fn a_refused_attestation_signs_nothing_at_all() {
         note: None,
     };
 
-    let err = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient).await;
-    assert!(err.is_err(), "an unenrolled attester must be refused");
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .expect("per-line failures are reported, not raised as a whole-gesture error");
+    assert!(out.attested.is_empty(), "nothing may be signed");
+    assert_eq!(out.failed.len(), 2, "both lines are reported as failed");
+    assert_eq!(attestation_count(&c, a).await, 0);
+    assert_eq!(attestation_count(&c, b).await, 0);
+}
+
+/// **ADR-0060, at the transaction layer: no collateral damage on rollback.**
+///
+/// The maintainer's ruling (2026-08-03): *"transaction scope must match the atomicity we
+/// discussed — an order must not be refused because another order is invalid or incomplete.
+/// Hence db transactions must ensure no collateral damage on rollbacks."*
+///
+/// Until this test, sign-off bundled all N attestations into ONE transaction, so a failure
+/// on any one line rolled back every other line's committed act. That is the ADR-0060
+/// anti-pattern living inside the very verb the ADR was written for — a failure on the
+/// potassium minibag un-writing the saline.
+///
+/// THE FIXTURE, and why it needs no test-only seam. `cairn_medication_thread_commitment`
+/// (db/034) resolves a thread's content events through `cairn_clear_payload`, which reads
+/// the `event_clear` shadow for a sealed body (ADR-0052). Deleting one thread's `event_clear`
+/// row reproduces a **partial-custody node** — an event synced without its DEK, a real state
+/// this schema anticipates — and makes that thread, and only that thread, uncommittable:
+/// `attest_thread_in_tx` refuses with "no local content ... nothing to vouch for". The
+/// projection row survives, so the line still displays and is still a sign-off target. This
+/// is the asymmetric failure issue #333 said needed an injection seam; it does not.
+///
+/// THE MIDDLE LINE IS THE BROKEN ONE, deliberately. Commit order is `sign_off_targets`'
+/// uuid sort, which for `Uuid::now_v7` is creation order, so breaking the middle drug puts a
+/// successful commit BOTH BEFORE and AFTER the failure. That is what makes this a real test
+/// of rollback scope: the earlier success must survive a later failure (the case a single
+/// transaction got wrong), and the later success must not be pre-empted by an earlier one.
+#[tokio::test]
+async fn a_line_that_cannot_be_attested_never_rolls_back_the_others() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let first = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
+    let broken = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
+    let last = assert_one(&mut c, &sk, &kid, "origin-a", patient, "warfarin").await;
+    // The commit order this test depends on, asserted rather than assumed.
+    assert!(
+        first < broken && broken < last,
+        "v7 uuids sort by creation time, so the broken line must be the MIDDLE commit"
+    );
+
+    // Strip the middle thread's clear payload: its statement becomes unreadable, so its
+    // commitment resolves to NULL and only that line can no longer be vouched.
+    let stripped = c
+        .execute(
+            "DELETE FROM event_clear WHERE event_id IN ( \
+               SELECT el.event_id FROM event_log el \
+               WHERE el.event_type = 'clinical.medication.asserted' \
+                 AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = $1::text::uuid)",
+            &[&broken.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(stripped, 1, "exactly one statement's clear payload removed");
+
+    let params = AttestParams {
+        human_sk: &hsk,
+        human_kid: &hkid,
+        basis: None,
+        note: None,
+    };
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        .await
+        .expect("one unattestable line must not fail the gesture");
+
+    // THE PROPERTY: both sound lines are signed and COMMITTED, either side of the failure.
     assert_eq!(
-        attestation_count(&c, a).await,
-        0,
-        "zero attestation rows after a refused attester"
+        out.attested,
+        vec![first, last],
+        "the lines before AND after the failure must both be signed"
     );
     assert_eq!(
-        attestation_count(&c, b).await,
+        attestation_count(&c, first).await,
+        1,
+        "the line committed BEFORE the failure must survive it — this is the exact \
+         collateral damage a single shared transaction caused"
+    );
+    assert_eq!(attestation_count(&c, last).await, 1);
+
+    // And the failure is reported per line, naming which line and why.
+    assert_eq!(out.failed.len(), 1, "exactly one line failed");
+    assert_eq!(out.failed[0].medication_id, broken);
+    assert!(
+        out.failed[0].error.contains("no local content"),
+        "the reported reason must be the real one, got: {}",
+        out.failed[0].error
+    );
+    assert_eq!(
+        attestation_count(&c, broken).await,
         0,
-        "zero attestation rows after a refused attester"
+        "and the failed line really is unsigned"
     );
 }
 
