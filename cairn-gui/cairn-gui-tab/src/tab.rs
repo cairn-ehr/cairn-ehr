@@ -1,9 +1,9 @@
-//! The iced-free part of the Tab contract: a stable addressable id and the
-//! accessibility-contract accessor every tab implements. The full Tab trait with
-//! iced view()/update() lives in the shell crate behind the `gui` feature (Task
-//! 7/8), keeping this crate iced-free. Cross-pane routing in slice 1 goes through
-//! the shell's own message + Workspace::open_in_opposite (Task 6); the spec §4
-//! Intent/Outcome vocabulary arrives when tabs become independent TEA sub-apps.
+//! The rendering-framework-free part of the Tab contract: a stable addressable id and
+//! the accessibility-contract accessor every tab implements. There is deliberately no
+//! `view()` here — under Tauri 2 the rendering is semantic HTML in the webview, and what
+//! a tab owes the shell is its *contract*, not its widgets. Cross-pane routing goes
+//! through the shell's `Workspace::open_in_opposite`; the spec §4 Intent/Outcome
+//! vocabulary arrives when tabs become independent sub-apps.
 use crate::context::Context;
 use crate::semantics::SemanticNode;
 

@@ -1,0 +1,180 @@
+/*
+ * Nothing here carries meaning by colour alone.
+ *
+ * A colour-blind clinician and a screen-reader user must both get every clinical fact this
+ * window shows, so every visual signal below is a SECOND channel for something already
+ * stated in text: the row that will be signed says "— will be signed" in its signature
+ * cell, a ceased drug says "ceased" in its status cell, and a flagged line spells the flag
+ * out in a row beneath it. Remove all the colour and the chart still reads correctly.
+ */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #16181d;
+  --muted: #5b6169;
+  --line: #d3d7dd;
+  --accent: #1f5d8b;
+  --warn-bg: #fdf3e3;
+  --warn-fg: #6b3f05;
+  --warn-line: #b8791a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e8eaed;
+    --muted: #a3a9b3;
+    --line: #333941;
+    --accent: #7fb6dd;
+    --warn-bg: #2c2317;
+    --warn-fg: #f0d5a8;
+    --warn-line: #c08b34;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 1rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.4rem;
+}
+
+/* Visible to a screen reader, not to the eye — used for headings that give the
+   accessibility tree structure the sighted layout already conveys. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+#session {
+  margin-bottom: 1rem;
+  color: var(--muted);
+}
+
+#unlock-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+input[type="password"],
+input[type="text"] {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+button {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* A visible focus ring is not decoration: it is how a keyboard-only clinician knows where
+   they are. Never removed. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#chart-warnings {
+  border: 2px solid var(--warn-line);
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+caption {
+  text-align: left;
+  color: var(--muted);
+  padding-bottom: 0.5rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+thead th {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* The line the gesture will sign: a left bar as well as the "— will be signed" text
+   already in the signature cell. */
+tr[data-will-sign="true"] th[scope="row"] {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+/* A struck line, as on paper. The word "ceased" is in the status cell regardless. */
+tr[data-ceased="true"] th[scope="row"],
+tr[data-ceased="true"] td {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+/* A per-line flag rides directly under its drug. The "!" prefix is in the text, so the
+   marker survives a stylesheet that never loads. */
+tr[data-flag="true"] td {
+  border-bottom: 1px solid var(--line);
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  font-size: 0.92rem;
+}
+
+#sign-off {
+  margin-top: 1rem;
+  font-size: 1.05rem;
+  padding: 0.5rem 1.1rem;
+}
+
+#outcome,
+#empty-message {
+  margin-top: 0.75rem;
+  color: var(--muted);
+}

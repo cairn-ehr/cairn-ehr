@@ -21,3 +21,4 @@ pub mod seal;
 pub mod shred;
 pub mod sync;
 pub mod transport;
+pub mod ui_timing;

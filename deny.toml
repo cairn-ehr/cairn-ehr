@@ -28,6 +28,13 @@ all-features = true
 # an AGPL-3.0 distribution. A dependency introducing anything else (GPL, MPL, proprietary, or an
 # unlicensed crate) FAILS the gate — that is the whole point. Adding a license here is a
 # deliberate, reviewed act, not a convenience. Confidence threshold left at the strict default.
+#
+# THE GUI TREE IS GATED SEPARATELY, AND THIS LIST STAYS PERMISSIVE-ONLY. `cairn-gui/` is its own
+# cargo workspace with its own lockfile, and Tauri's webview stack brings five MPL-2.0 crates
+# into it. MPL is conditionally compatible, not permissively so, so it is allowed in
+# `cairn-gui/deny.toml` — where those crates actually resolve — and NOT here, where none of them
+# appear. Widening this list for a tree that cannot reach it would relax the gate that guards the
+# node, the sync daemon and the event core in exchange for nothing.
 allow = [
     "AGPL-3.0-only",              # our own crates (inbound = outbound)
     "Apache-2.0",

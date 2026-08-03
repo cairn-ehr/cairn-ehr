@@ -50,10 +50,14 @@ jobs:
         run: cargo fmt --all --check
       - name: rustfmt (cairn_pgx extension)
         run: cargo fmt --check --manifest-path extensions/cairn_pgx/Cargo.toml
+      - name: rustfmt (cairn-gui workspace)
+        run: cargo fmt --all --check --manifest-path cairn-gui/Cargo.toml
 
   # Supply-chain gate — fast, no Postgres. Enforces the AGPL-compatible license allow-list,
-  # RUSTSEC advisories, wildcard/source bans (deny.toml). Runs on BOTH trees; the extension
-  # tree shares the root deny.toml. cargo-deny is cached like cargo-pgrx below.
+  # RUSTSEC advisories, wildcard/source bans (deny.toml). Runs on ALL THREE trees; the
+  # extension tree shares the root deny.toml, while cairn-gui has its own (Tauri's webview
+  # stack brings MPL-2.0 crates that the node tree must not acquire silently — see the header
+  # of cairn-gui/deny.toml). cargo-deny is cached like cargo-pgrx below.
   deny:
     name: cargo-deny
     runs-on: ubuntu-24.04
@@ -76,6 +80,69 @@ jobs:
         run: cargo deny check
       - name: cargo-deny (cairn_pgx extension)
         run: cargo deny --manifest-path extensions/cairn_pgx/Cargo.toml check --config deny.toml
+      - name: cargo-deny (cairn-gui workspace)
+        run: cargo deny --manifest-path cairn-gui/Cargo.toml check
+
+  # The reference UI's own gate. cairn-gui is a SEPARATE cargo workspace (the root one
+  # `exclude`s it, so wry/tao never enter cairn-node's tree — ADR-0021 / §9.5), which meant
+  # `cargo test --workspace` below has never covered a line of it. That was tolerable while
+  # the crate was an unwired state machine; it stopped being tolerable when the med-list
+  # window became Cairn's first runnable clinical surface (#288).
+  #
+  # What this job exists to keep honest, specifically: the webview is plain JavaScript with no
+  # type checking (the deliberate no-bundler decision), and the ONE compensating control is a
+  # Rust test that scans `main.js` for every field access and asserts the backend sends it. A
+  # guard that only runs when a human remembers to `cd cairn-gui` is not a gate. It matters
+  # most for `missing_message`: `undefined` is falsy, so a renamed field silently hides the
+  # warning that a chart is INCOMPLETE — the exact ADR-0060 failure the slice exists to
+  # prevent, arriving through a typo.
+  #
+  # No Postgres: every test in this tree is pure (the view model, the session-key lock, the
+  # drift guard). The window's DB path is exercised through cairn-node, in the job below.
+  gui:
+    name: clippy + cargo test (cairn-gui)
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the pinned toolchain (+ rustfmt/clippy)
+        run: rustup show
+
+      # Tauri links against the SYSTEM webview; on Linux that is WebKitGTK, so without these
+      # the crate does not build at all — a prerequisite of the gate, not a convenience.
+      # This is Tauri 2's documented Linux prerequisite set installed WHOLE rather than pared
+      # to what today's feature flags happen to need (the window enables no tray or dialog
+      # plugin right now, so appindicator/rsvg are probably surplus). Deliberate: the cost is
+      # seconds of apt, and the alternative is a CI break the first time someone adds a
+      # feature, in a job whose whole point is catching things a human would not.
+      - name: Install the WebKitGTK build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Cache the cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cairn-gui/target
+          key: cairn-gui-${{ runner.os }}-${{ hashFiles('cairn-gui/Cargo.lock') }}
+          restore-keys: cairn-gui-${{ runner.os }}-
+
+      - name: clippy (cairn-gui, tests)
+        run: cargo clippy --manifest-path cairn-gui/Cargo.toml --workspace --tests -- -D warnings
+
+      - name: cargo test (cairn-gui — view model, session lock, JS/Rust drift guard)
+        run: cargo test --manifest-path cairn-gui/Cargo.toml --workspace
 
   test:
     # This job's name is a REQUIRED status check in main's branch protection, and GitHub
@@ -233,6 +300,15 @@ jobs:
           CAIRN_TEST_PG2: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test2
           CAIRN_TEST_PG3: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test3
         run: cargo test --workspace
+
+      # ---- the one off-by-default feature in this tree --------------------------------
+      # `cairn-medication-view/fixtures` is off by default so a production node binary does
+      # not link demo clinical content. Off-by-default means the module and its own tests are
+      # not compiled by the run above — so they are run here explicitly rather than left to
+      # the GUI tree, where only the fixture's CONSUMERS are exercised. A gate that silently
+      # stops covering the code it gated is worse than no gate.
+      - name: cargo test (cairn-medication-view, fixtures feature)
+        run: cargo test -p cairn-medication-view --features fixtures
 
       # ---- SQL mirrors: db/tests/*.sql (#212) ----------------------------------------
       # These previously ran NOWHERE (the mechanism that manufactured the #182 twin-

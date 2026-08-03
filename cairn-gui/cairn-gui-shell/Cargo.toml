@@ -6,21 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+# No rendering framework here any more. The iced dependency — and the `gui` feature that
+# gated it, and the binary behind it — was retired on 2026-08-03: released iced 0.14 ships
+# no accessibility tree (spike 0004), so the reference UI moved to Tauri 2 and now lives in
+# `cairn-gui-tauri`. What is left in this crate is framework-agnostic state.
 [dependencies]
 cairn-gui-tab = { path = "../cairn-gui-tab" }
 cairn-gui-data = { path = "../cairn-gui-data" }
 cairn-gui-manifest = { path = "../cairn-gui-manifest" }
 cairn-gui-tab-demographics = { path = "../cairn-gui-tabs/cairn-gui-tab-demographics" }
 cairn-gui-tab-note = { path = "../cairn-gui-tabs/cairn-gui-tab-note" }
-# iced enters the dependency tree ONLY behind the `gui` feature (ADR-0021 / §9.5):
-# `cargo test -p cairn-gui-shell` (default, no gui) must never pull it in.
-iced = { version = "0.14", optional = true, features = ["tiny-skia", "wgpu"] }
-
-[features]
-default = []
-gui = ["dep:iced"]
-
-[[bin]]
-name = "cairn-gui"
-path = "src/bin/gui.rs"
-required-features = ["gui"]

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The minimum this window needs: its own commands and nothing else. Every clinical action reaches the database through a command in src/commands.rs, so the webview needs no filesystem, no shell, no network and no dialog permission — and is not granted any. A permission added here should have to argue for itself in review.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

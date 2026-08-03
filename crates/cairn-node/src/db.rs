@@ -249,6 +249,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "043_deferred_readjudication",
         include_str!("../../../db/043_deferred_readjudication.sql"),
     ),
+    // db/044 (#288): node-local, aggregate-only UI gesture timing behind the §1.2
+    // paper-parity budget. cairn-sync does not carry it and never should — it is a
+    // node-local UI metric with nothing to replicate (#284 documents that the sync
+    // subset legitimately lags).
+    (
+        "044_ui_gesture_timing",
+        include_str!("../../../db/044_ui_gesture_timing.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

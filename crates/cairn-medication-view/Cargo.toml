@@ -11,6 +11,13 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# OFF by default. `fixtures` is a realistic sample chart for the `--mock` window and the GUI
+# tests; the node and the sync daemon depend on this crate for the read model alone and must
+# not link demo clinical content into a production binary. The GUI crates opt in.
+default = []
+fixtures = []
+
 [dependencies]
 # `v7` deliberately omitted: this crate only ever constructs Uuids from values that arrive
 # from elsewhere (the database, or `Uuid::from_u128` in tests) — it never MINTS one. The `v7`
@@ -18,3 +25,10 @@ workspace = true
 # pure" (house rule 4 — no dependency this crate does not need).
 uuid = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+
+# Dev-only, and deliberately not a runtime dependency: the crate DEFINES the shapes that
+# get serialized but never serializes anything itself. `PatientMedicationList` carries a
+# `BTreeMap<Uuid, _>`, and serde_json accepts only map keys that serialize as strings — a
+# runtime failure, not a compile error. The guard test belongs beside the struct it guards.
+[dev-dependencies]
+serde_json = "1"

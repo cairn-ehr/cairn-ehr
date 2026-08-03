@@ -1,8 +1,12 @@
 //! The pure accessibility contract shared by every tab and every piece of shell
-//! chrome. It is *data*: declared here, unit-tested for completeness in CI, and
-//! rendered by the iced layer. A divergence between "what we declared" and "what
-//! a screen reader announces" is then visible (the shell's `--dump-a11y` prints
-//! this tree; the operator confirms it against Orca/NVDA). Zero GUI dependency.
+//! chrome. It is *data*: declared here and unit-tested for completeness in CI.
+//!
+//! Under the retired iced shell this was a contract the renderer *hoped* to match,
+//! diffed by hand against what Orca/NVDA announced. Under Tauri 2 the window is
+//! semantic HTML, so the browser builds the accessibility tree from the markup and
+//! this declaration is what the markup is written to satisfy — same data, but the
+//! renderer can now actually be held to it. A live screen-reader pass remains an
+//! operator act; automating the DOM assertions in CI is issue #332. Zero GUI dependency.
 
 /// Accessibility role, mapped to what AccessKit / a screen reader announces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
