@@ -161,16 +161,29 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
 > line.
 >
 > Built into `signoff.rs` today, **including at the transaction layer**: each attestation commits in its own
-> transaction, so a failing line rolls back alone (decision 6). The first draft of the ADR deferred that as a
+> transaction, so a failing line rolls back alone (decision 7). The first draft of the ADR deferred that as a
 > bounded residual and was overruled — *"transaction scope must match the atomicity we discussed … db
 > transactions must ensure no collateral damage on rollbacks."* The deferral had smuggled the anti-pattern
 > back in one layer down. Testing it needed no injection seam after all: a **partial-custody thread** (sealed
 > body synced without its DEK — delete its `event_clear` row) makes exactly one line uncommittable.
 >
+> **The framing that generates the whole ADR** (and the one to lead with when explaining it): *the clinician
+> gives an order and expects it to be carried out; it may be cancelled only by somebody **taking ownership**
+> of the cancellation and **giving a rationale** — something only another clinician may do.* Hence **the
+> system may fail to record an order, but it may never cancel one**: no rollback, validation failure or
+> projection defect may have a cancellation's effect. The sharpest test to apply to any code path that stops
+> an order being carried out — *who owns this cancellation, and what is their reason?*
+>
+> That test immediately found a live gap: `medication-cease` accepts both an absent rationale and a
+> device-additive author, so a drug can be stopped with **no owner and no reason**
+> ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342), decision 6, not fixed — it changes a shipped
+> verb's contract). Note the trap recorded there: the fix is **local-authoring only**, never a door/NOT NULL
+> check, or a peer's rationale-less cessation forks the event set and wedges replication.
+>
 > **It will bind the orders/administration surface far harder than it binds sign-off** — order sets, infusion
 > regimens, care plans, discharge scripts, result panels, referral bundles. Two things to hold onto when
 > building those: decision 2 (never refusing the whole is only half of it — the half that is easy to forget
-> is that **partial completion must be reported, never implied**), and decision 6 (**check the transaction
+> is that **partial completion must be reported, never implied**), and decision 7 (**check the transaction
 > boundaries**, because that is where the rule gets quietly violated by code that looks correct).
 
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget

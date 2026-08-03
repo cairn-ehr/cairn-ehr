@@ -67,6 +67,34 @@ all-or-nothing is far more expensive than starting with it.
 **A defect on one element of a composite clinical object never invalidates the other elements.** Validity,
 signature currency, and actionability are properties of the **individual line**, never of the container.
 
+### The clinician's framing, which is the load-bearing one
+
+Everything below follows from one sentence, and it is worth reading before the numbered rules because it is
+what makes them obvious rather than arbitrary:
+
+> The clinician gives an order, and expects it to be carried out. The order (or part of it) may be cancelled
+> by somebody taking ownership of the cancellation and providing a rationale for it — something only another
+> clinician should be able to do.
+
+Three things fall straight out of it:
+
+1. **An order stands until cancelled.** The default is execution, not suspension. Absence of a signature,
+   absence of a record, absence of certainty — none of these cancel anything; they are reasons to *chase*,
+   which is what the blank signature box does.
+2. **Cancellation is a positive clinical act**, and it carries the two marks of one: an **accountable owner**
+   ([ADR-0007](0007-authorship-and-accountability.md) — attestation, not mere recording) and a **recorded
+   rationale**. It is the [§1.2](../vision.md#12-the-paper-parity-test-normative) forced-rationale gate's
+   natural home.
+3. **Therefore no technical event may have the *effect* of a cancellation.** Not a validation failure, not a
+   transaction rollback, not a projection defect, not an unreadable body, not a sync gap. **The system may
+   fail to record an order; it may never cancel one.**
+
+Point 3 is the sharpest test this ADR offers, and it is what makes the original defect unambiguous rather
+than debatable: a shared-transaction rollback *cancelled the saline* — with no owner and no rationale, by a
+system with no authority to cancel anything. It was not merely inconvenient; it was the machine performing a
+clinical act reserved for a clinician. Ask of any code path that stops an order being carried out: **who
+owns this cancellation, and what is their reason?** If there is no answer, it is a defect.
+
 1. **Never refuse the whole for a defect in a part.** A workflow over a composite object (chart, order set,
    regimen, panel) processes every element it can show and stand behind. An element that is missing,
    invalid, unsigned, untrustworthy, or unreadable is **excluded from the operation — not a veto over it.**
@@ -96,7 +124,18 @@ signature currency, and actionability are properties of the **individual line**,
    [§1.2](../vision.md#12-the-paper-parity-test-normative) forced-rationale-class friction, not a
    completeness gate.
 
-6. **Transaction scope must match clinical atomicity — no collateral damage on rollback.** The rule binds
+6. **Cancellation needs an owner and a rationale, and only a clinical actor may author one.** A workflow
+   that stops an order being carried out must record *who* decided and *why*; a cancellation authored
+   device-additively (no human attester) or with an empty reason is an unowned clinical act and must be
+   refused **at local authoring time**. This is a *local-authoring* rule, never a wire rule: the remote
+   door must still admit whatever a peer sends, because rejecting a validly-signed event would fork the
+   event set and wedge replication (the asymmetry db/033's cross-patient guard and
+   [ADR-0058](0058-grade-gated-teffective-ceiling.md) already use). A peer's under-specified cancellation
+   is surfaced as an advisory gap, not refused. **Not yet built:** `medication-cease` currently accepts both
+   an absent rationale and a device-additive author, i.e. a cancellation with no owner and no reason —
+   [#342](https://github.com/cairn-ehr/cairn-ehr/issues/342).
+
+7. **Transaction scope must match clinical atomicity — no collateral damage on rollback.** The rule binds
    the **storage layer**, not merely the targeting logic. A workflow acting on N independent lines must not
    bundle them into one database transaction: a failure on any one would then roll back every other line's
    committed act, which is this ADR's own anti-pattern reintroduced one layer down. Each independently-
@@ -172,6 +211,6 @@ and stand behind, each in its own transaction, and reports `withheld` lines (pre
 runnable — and `failed` lines (write errored, rolled back alone). Pinned by two tests:
 `an_incomplete_chart_still_signs_every_line_it_can_show`
 ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)) for decisions 1–4, and
-`a_line_that_cannot_be_attested_never_rolls_back_the_others` for decision 6 — the latter breaks the
+`a_line_that_cannot_be_attested_never_rolls_back_the_others` for decision 7 — the latter breaks the
 **middle** line of three, so a successful commit sits both before and after the failure and the earlier one
 must survive it.

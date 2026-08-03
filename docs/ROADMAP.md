@@ -480,15 +480,20 @@ never re-signed.
    now [ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
    (*partial validity*, spec **v0.62**) with a new composability limb in §1.2 — a **corollary of
    paper-parity**, given its own ADR precisely because it was violated by a design that had already accepted
-   paper-parity. The ADR reaches the **transaction layer** too (decision 6): the N attestations no longer
+   paper-parity. The ADR reaches the **transaction layer** too (decision 7): the N attestations no longer
    share one transaction, because a failure on any line would otherwise un-write every other line's
    signature — the ADR's own anti-pattern, one layer down, which its first draft had deferred as a "bounded
    residual" until the maintainer rejected the deferral. Testing that needed no injection seam in the end: a
    **partial-custody thread** (sealed body synced without its DEK) makes exactly one line uncommittable while
    its siblings commit, which also retires half of #333. It will bind order sets, infusion regimens, care
    plans and result panels harder than it binds sign-off; the two things to carry are decision 2 (**partial
-   completion must be reported, never implied**) and decision 6 (**check the transaction boundaries** — that
-   is where the rule gets violated by code that looks correct).
+   completion must be reported, never implied**) and decision 7 (**check the transaction boundaries** — that
+   is where the rule gets violated by code that looks correct). The framing that generates all of it, and the
+   one to lead with: *the clinician gives an order and expects it to be carried out; it may be cancelled only
+   by somebody taking ownership and giving a rationale, which only another clinician may do* — so **the
+   system may fail to record an order, but it may never cancel one.** Applying that test immediately found a
+   live gap: `medication-cease` accepts both an absent rationale and a device-additive author
+   ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342)).
 3. **A named remedy must name its arguments** (PR-review round 3). All three cross-patient warnings told the
    operator to run `medication-separate` — which takes two THREAD ids — while printing only a GROUP id, and
    the losing patient's own thread appeared on no surface at all (their chart is empty, and the vouch read is
