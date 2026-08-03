@@ -57,8 +57,9 @@ passes: in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting sea
 
 ---
 
-**Session date:** 2026-08-01 (Slice 60) · **Spec/ADRs:** v0.61 (through ADR-0059; no ADR change in slices
-58–60 — 58 and 60 *implement* ADR-0056 decisions 1/4 and 5, 59 is a floor determinism fix + tooling) ·
+**Session date:** 2026-08-03 (Slice 61 + its review rounds) · **Spec/ADRs:** v0.62 (through **ADR-0060**,
+*partial validity* — a corollary of paper-parity that a clinician ruling forced out of the med-list slice;
+Slice 61 itself changed no spec/ADR, and slices 58–60 changed none either) ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical surface
 under construction** on `cairn-node`.
 
@@ -142,8 +143,11 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    reader actually run it from what you just printed?**
 
 > [!IMPORTANT]
-> **Candidate principle, decided 2026-08-03, NOT yet written into the spec: *partial orders carry weight —
-> a defect on one line never invalidates another.*** This came out of resolving
+> **[ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
+> (spec v0.62): *partial validity — a defect on one line never invalidates another.*** A **corollary of
+> paper-parity** (principle 3), not a new axiom — it earned its own ADR because it was violated *by a design
+> that had already accepted paper-parity*, and no test caught it. Canonical home: the new composability limb
+> of [§1.2](spec/vision.md). This came out of resolving
 > [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) and is broader than medications. In the
 > clinician's words: *"there is no reason to refuse the whole chart if one single line is not visible or not
 > trustworthy. What matters is that all visible lines in the chart must be signed … or presented as unsigned
@@ -157,8 +161,9 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
 > line.
 >
 > Built into `signoff.rs` today. **It will bind the orders/administration surface far harder than it binds
-> sign-off**, and it plausibly belongs in the spec (a §1.2 paper-parity corollary) or in its own ADR — that
-> call is the maintainer's and has not been made. Do not let it stay only in a commit message.
+> sign-off** — order sets, infusion regimens, care plans, discharge scripts, result panels, referral bundles.
+> The ADR's decision 2 is the one to hold onto when building those: never refusing the whole is only half of
+> it, and the half that is easy to forget is that **partial completion must be reported, never implied.**
 
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
 stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →

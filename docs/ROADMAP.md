@@ -476,9 +476,13 @@ never re-signed.
    line it can stand behind, and **reports** both the withheld lines and the invisible groups. The only
    remaining refusal is a target-set *mismatch*, which asks a different question: not "is this chart
    perfect?" but "is this the same chart the human reviewed?". The underlying view defect is
-   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334). **Generalises well past medications** — it will
-   bind orders and administration harder than it binds sign-off; whether it becomes a spec §1.2 corollary or
-   its own ADR is an open maintainer call, flagged in HANDOVER.
+   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334). **Generalises well past medications**, so it is
+   now [ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
+   (*partial validity*, spec **v0.62**) with a new composability limb in §1.2 — a **corollary of
+   paper-parity**, given its own ADR precisely because it was violated by a design that had already accepted
+   paper-parity. It will bind order sets, infusion regimens, care plans and result panels harder than it
+   binds sign-off, and the half that is easy to forget is decision 2: **partial completion must be reported,
+   never implied.**
 3. **A named remedy must name its arguments** (PR-review round 3). All three cross-patient warnings told the
    operator to run `medication-separate` — which takes two THREAD ids — while printing only a GROUP id, and
    the losing patient's own thread appeared on no surface at all (their chart is empty, and the vouch read is
