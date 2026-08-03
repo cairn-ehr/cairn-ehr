@@ -10,8 +10,6 @@ publish = false
 cairn-gui-tab = { path = "../../cairn-gui-tab" }
 cairn-medication-view = { path = "../../../crates/cairn-medication-view" }
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
-# Test-only: the view model itself speaks in Strings, so a Uuid never crosses its public
-# surface. The tests need one to build the MedicationRow fixtures they feed it.
+# The rendered view speaks in Strings, but the two report renderers take GROUP ids: the
+# after-the-gesture caller passes `SignOffOutcome::withheld`, which is a `Vec<Uuid>`.
 uuid = "1"

@@ -20,7 +20,8 @@ use cairn_medication_view::{
     PatientMedicationList, VouchState, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use uuid::Uuid;
 
 /// One rendered drug line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -119,8 +120,8 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
 
     MedListView {
         empty_message: empty_message(list.rows.len(), active_rows, sign_off_count),
-        withheld_message: withheld_message(list),
-        missing_message: missing_message(list),
+        withheld_message: withheld_report(&withheld_rows(&list.rows), &list.separation_targets),
+        missing_message: missing_report(&list.groups_missing_from_chart, &list.separation_targets),
         rows: view_rows,
         sign_off_count,
         sign_off_enabled: sign_off_count > 0,
@@ -200,17 +201,23 @@ fn flags(row: &MedicationRow) -> Vec<String> {
 
 /// The withheld-lines report: displayed lines that need a signature and will not get one.
 ///
-/// Built from `withheld_rows`, the same function the orchestrator uses to decide what it
-/// leaves unsigned, so the warning and the behaviour cannot drift.
-fn withheld_message(list: &PatientMedicationList) -> Option<String> {
-    let withheld = withheld_rows(&list.rows);
+/// PUBLIC because two surfaces render it — the chart *before* the gesture ("these lines
+/// will not be signed") and the outcome *after* it ("these lines were not signed"). Those
+/// are the same fact at two moments, and two hand-written renderings of it are how the
+/// promise and the report start to disagree. It takes the group ids rather than the chart
+/// so the after-the-fact caller can pass `SignOffOutcome::withheld`, which is what the
+/// orchestrator actually did rather than what a re-read says it would do now.
+pub fn withheld_report(
+    withheld: &[Uuid],
+    separation_targets: &BTreeMap<Uuid, Vec<Uuid>>,
+) -> Option<String> {
     if withheld.is_empty() {
         return None;
     }
     Some(format!(
         "{} line(s) on this chart still need a signature but will NOT be signed: {}. {}",
         withheld.len(),
-        format_hazard_groups(&withheld, &list.separation_targets),
+        format_hazard_groups(withheld, separation_targets),
         SEPARATION_INSTRUCTION
     ))
 }
@@ -219,17 +226,20 @@ fn withheld_message(list: &PatientMedicationList) -> Option<String> {
 ///
 /// This is the harder half to surface, and the one a renderer is most likely to drop:
 /// there is nothing on screen to hang it off, because the whole point is that the drug
-/// could not be displayed.
-fn missing_message(list: &PatientMedicationList) -> Option<String> {
-    if list.groups_missing_from_chart.is_empty() {
+/// could not be displayed. Public for the same reason as `withheld_report`.
+pub fn missing_report(
+    missing: &[Uuid],
+    separation_targets: &BTreeMap<Uuid, Vec<Uuid>>,
+) -> Option<String> {
+    if missing.is_empty() {
         return None;
     }
     Some(format!(
         "This chart is INCOMPLETE. {} medication group(s) known to this patient cannot be \
          displayed here, because their threads are shared with another patient's record: \
          {}. {}",
-        list.groups_missing_from_chart.len(),
-        format_hazard_groups(&list.groups_missing_from_chart, &list.separation_targets),
+        missing.len(),
+        format_hazard_groups(missing, separation_targets),
         SEPARATION_INSTRUCTION
     ))
 }
@@ -257,11 +267,7 @@ fn empty_message(total_rows: usize, active_rows: usize, sign_off_count: usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_medication_view::{
-        MedicationRow, MedicationStatus, MemberVouch, PatientMedicationList, VouchState,
-    };
-    use std::collections::BTreeMap;
-    use uuid::Uuid;
+    use cairn_medication_view::{MedicationRow, MedicationStatus, MemberVouch};
 
     fn uid(n: u128) -> Uuid {
         Uuid::from_u128(n)

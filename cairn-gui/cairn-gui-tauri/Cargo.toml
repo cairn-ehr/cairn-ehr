@@ -1,0 +1,31 @@
+[package]
+name = "cairn-gui-tauri"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The one-way dependency (ADR-0021 / §9.5): cairn-gui/* may depend on crates/*, never the
+# reverse. This is why the window is a separate workspace — wry/tao and a webview stack
+# must not enter cairn-node's dependency tree any more than iced was allowed to.
+cairn-node = { path = "../../crates/cairn-node" }
+cairn-event = { path = "../../crates/cairn-event" }
+cairn-medication-view = { path = "../../crates/cairn-medication-view" }
+cairn-gui-data = { path = "../cairn-gui-data" }
+cairn-gui-tab = { path = "../cairn-gui-tab" }
+cairn-gui-tab-medications = { path = "../cairn-gui-tabs/cairn-gui-tab-medications" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio-postgres = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v7"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
