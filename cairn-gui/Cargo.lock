@@ -47,6 +47,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-gui-tab-medications"
+version = "0.1.0"
+dependencies = [
+ "cairn-gui-tab",
+ "cairn-medication-view",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "cairn-gui-tab-note"
 version = "0.1.0"
 dependencies = [
