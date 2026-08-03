@@ -57,8 +57,14 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // One multi-thread runtime shared by every command, built here rather than by
-    // `#[tokio::main]` because Tauri owns the main thread for the event loop.
+    // A tokio runtime built by hand rather than by `#[tokio::main]`, because Tauri owns the
+    // main thread for the event loop.
+    //
+    // THIS BINDING IS LOAD-BEARING — do not inline it into the `block_on` below. Commands do
+    // NOT run on it (Tauri drives those on its own `tauri::async_runtime`); what it hosts is
+    // the `tokio::spawn`ed tokio_postgres connection task that `connect_and_load_schema`
+    // starts. Drop this runtime and that task stops being polled, so every query for the rest
+    // of the session hangs or fails. Keeping it alive until `main` returns is the point.
     let runtime = tokio::runtime::Runtime::new()?;
 
     let app_state = if cli.mock {

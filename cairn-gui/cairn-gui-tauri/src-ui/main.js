@@ -222,4 +222,9 @@ void refresh();
 void pollLock();
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).
+//
+// This poll deliberately does NOT extend the session: `lock_state` reads the lock without
+// counting as activity, because nobody is at the keyboard when a timer fires. It used to go
+// through the touching accessor, which meant the window reset its own idle clock every 10
+// seconds and the key never re-locked at all. Only a clinical act (sign-off, cease) counts.
 setInterval(pollLock, LOCK_POLL_MS);

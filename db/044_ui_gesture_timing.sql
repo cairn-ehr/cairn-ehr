@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS ui_gesture_timing (
     CONSTRAINT ui_gesture_timing_p95_ck    CHECK (p95_ms IS NULL OR p95_ms >= 0)
 );
 
-GRANT SELECT, INSERT, UPDATE ON ui_gesture_timing TO cairn_agent;
+-- NO GRANT TO cairn_agent, deliberately. The window writes here as the node role; no
+-- advisory agent has any reason to touch a UI metric, and an agent that could UPDATE this
+-- table could silently poison the §1.2 paper-parity evidence the table exists to produce —
+-- in a file whose whole argument is that this data must never become a lever. Least
+-- privilege: a caller that needs access has to add the grant and say why.
+--
+-- The REVOKE is for convergence, not for safety: an earlier draft of this migration DID
+-- carry the grant, and the loader re-runs every db/*.sql on every connect, so a database
+-- provisioned from that draft would otherwise keep it forever (the #214 replay lesson). It
+-- is a no-op on a database that never had it.
+REVOKE ALL ON ui_gesture_timing FROM cairn_agent;
 
 COMMIT;

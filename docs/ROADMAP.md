@@ -417,7 +417,7 @@ under `cargo test`), **`db/044` aggregate-only gesture timing**, the **`cairn-gu
 backend** (session-key custody, 15-minute idle re-lock, five commands), and a **semantic-HTML
 webview** in plain JavaScript.
 
-**Four things worth carrying:**
+**Six things worth carrying:**
 
 1. **A plan written before an ADR does not know about it.** Tasks 7 and 9 predated ADR-0060
    landing (2026-08-03, same day). Their `build_view(&[MedicationRow])` and
@@ -442,11 +442,30 @@ webview** in plain JavaScript.
    were wrong as drafted (`init` needs `--name`/`--address`; `--key` is a *global* flag). The
    node-tier write cost is now measured — median **222 ms** for a 3-target sign-off over a
    5-drug chart, an upper bound including a schema replay the window pays once at launch.
+5. **A unit-tested safety control can still be defeated by the surface that calls it** (review
+   round, PR #343). The 15-minute idle re-lock never fired. The window polls `lock_state` every
+   10 s so the lock is *ambient rather than modal* — a good rule — but that poll went through the
+   same accessor a sign-off used, and the accessor counted every call as activity. So the window
+   reset its own idle clock forever and a held signing key outlived any absence, on a gesture
+   whose blast radius is a whole medication chart. **Every `SessionKey` unit test passed**,
+   because all of them exercised the type in isolation and none the polled path. The fix splits
+   *reading* the lock (`key_status`) from *using* the key (`live_key`); the regression test
+   drives the real 10-second poll right across the timeout, and was verified to fail against the
+   old behaviour. Same round: expiry now consults the **wall clock as well as `Instant`**, which
+   does not advance while a laptop sleeps — the commonest unattended workstation there is.
+6. **A compensating control outside CI is not a control.** `cairn-gui` is a separate cargo
+   workspace, so `cargo test --workspace` had never covered a line of it — including the drift
+   guard in point 3, the single thing paying for the no-bundler decision. A **`gui` CI job** now
+   runs fmt/clippy/test/deny over that tree (it needs the WebKitGTK dev packages). The general
+   lesson: when a tree is excluded from the workspace for dependency-isolation reasons, its gates
+   have to be re-added deliberately or the isolation quietly becomes an exemption.
 
-**Also settled here:** MPL-2.0 joins the cargo-deny allow-list, checked rather than assumed —
+**Also settled here:** MPL-2.0 is allowed **for the GUI tree only**, checked rather than assumed —
 Tauri's webview stack brings five MPL crates, §3.3 permits combination into an AGPL-3.0 Larger
-Work, and none carries the Exhibit B notice that would void that (`deny.toml` records the check
-so the next MPL crate must pass it too). Retiring iced also cleared
+Work, and none carries the Exhibit B notice that would void that. The allowance lives in a new
+`cairn-gui/deny.toml`, **not** the root one: none of those crates can reach the node tree, so
+widening the root allow-list would have relaxed the gate guarding the event core, the node and the
+sync daemon in exchange for nothing. The root list stays permissive-only. Retiring iced also cleared
 [#252](https://github.com/cairn-ehr/cairn-ehr/issues/252): `cairn-gui`'s advisory check went
 FAILED → ok and `quick-xml` left the tree entirely with 3,934 lines of `Cargo.lock`.
 

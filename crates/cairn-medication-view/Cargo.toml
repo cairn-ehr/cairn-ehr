@@ -11,6 +11,13 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# OFF by default. `fixtures` is a realistic sample chart for the `--mock` window and the GUI
+# tests; the node and the sync daemon depend on this crate for the read model alone and must
+# not link demo clinical content into a production binary. The GUI crates opt in.
+default = []
+fixtures = []
+
 [dependencies]
 # `v7` deliberately omitted: this crate only ever constructs Uuids from values that arrive
 # from elsewhere (the database, or `Uuid::from_u128` in tests) — it never MINTS one. The `v7`

@@ -16,8 +16,8 @@
 //!    message naming the remedy *and its arguments*. Silence would let "signed off 11
 //!    medications" stand over a chart with a twelfth nobody knows about.
 use cairn_medication_view::{
-    format_hazard_groups, sign_off_targets, withheld_rows, MedicationRow, MedicationStatus,
-    PatientMedicationList, VouchState, SEPARATION_INSTRUCTION,
+    format_hazard_groups, short_kid, sign_off_targets, withheld_rows, MedicationRow,
+    MedicationStatus, PatientMedicationList, VouchState, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -161,19 +161,6 @@ fn vouch_label(row: &MedicationRow) -> String {
         // No members at all. Not expected from the read path, but "not signed" is the
         // honest reading of "nothing here vouches for this line".
         None => "not signed".to_string(),
-    }
-}
-
-/// The first 8 characters of an actor key id — enough to distinguish colleagues on
-/// screen, short enough to read. The full id is always available in the event log.
-///
-/// Sliced on a char boundary rather than a byte index: an attester id is hex in practice,
-/// but this is display code and a panic on a non-ASCII id would take the whole chart down
-/// over a label.
-fn short_kid(kid: &str) -> &str {
-    match kid.char_indices().nth(8) {
-        Some((byte_index, _)) => &kid[..byte_index],
-        None => kid,
     }
 }
 

@@ -29,3 +29,11 @@ uuid = { version = "1", features = ["v7"] }
 zeroize = { version = "1", features = ["zeroize_derive"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
+
+# The drift guard builds its reference payload from the sample chart, which is test-only in
+# THIS crate (the window gets its fixtures through `cairn-gui-data`). Enabling the feature on
+# the dev edge alone keeps demo content out of the shipped binary.
+[dev-dependencies]
+cairn-medication-view = { path = "../../crates/cairn-medication-view", features = [
+    "fixtures",
+] }

@@ -4,7 +4,7 @@
 
 **The med-list slice is COMPLETE — all 12 tasks. Cairn has a runnable clinical surface**
 (`cairn-gui/cairn-gui-tauri`: a Tauri 2 window on one patient's drug chart, whole-list sign-off as
-one gesture, per-row cease). **Two things it owes are HUMAN acts and cannot be done by an agent:**
+one gesture, per-row cease). **Three things it owes are HUMAN acts and cannot be done by an agent:**
 
 1. **The §1.2 time budget is still a seeded figure, not a measured one.** Follow
    [`cairn-gui/cairn-gui-tauri/results/RUNBOOK.md`](../cairn-gui/cairn-gui-tauri/results/RUNBOOK.md)
@@ -17,6 +17,12 @@ one gesture, per-row cease). **Two things it owes are HUMAN acts and cannot be d
    line and an invisible group so the ADR-0060 warnings are actually exercised. Automating the DOM
    assertions is [#332](https://github.com/cairn-ehr/cairn-ehr/issues/332) and needs a JS-toolchain
    decision this slice deliberately did not take (the webview is plain JS, no npm, no bundler).
+3. **Make the new `gui` CI job a REQUIRED status check.** PR #343's review round added a job —
+   "clippy + cargo test (cairn-gui)" — that gates the reference-UI workspace for the first time,
+   including the JS/Rust drift guard. Only a repo admin can add it to main's branch-protection
+   required checks; until that happens it can go red without blocking a merge, which is most of the
+   value gone. (The required check today is "clippy + cargo test (cairn_pgx floor)" — match the job
+   name exactly, per the warning in `rust.yml`.)
 
 **If either measurement falls outside the provisional 15 s / 5 s budget, that is the finding —
 file an issue; do not adjust the budget to match.**
@@ -130,6 +136,20 @@ things worth carrying:
    sends it; **verified to fail on a renamed field**, not merely to pass.
 4. **Running the runbook is what found its bugs** — three of its commands were wrong as drafted
    (`init` needs `--name`/`--address`; `--key` is a *global* flag, before the subcommand).
+5. **A unit-tested safety control can still be defeated by the surface that calls it** (review round
+   on PR #343). The 15-minute idle re-lock never fired: the window polls `lock_state` every 10 s so the
+   lock is ambient rather than modal, that poll went through the same accessor a sign-off used, and the
+   accessor counted every call as activity — so the window reset its own idle clock forever and a held
+   signing key outlived any absence. **Every `SessionKey` unit test passed**; all of them exercised the
+   type in isolation and none the polled path. Fixed by splitting `key_status` (reads) from `live_key`
+   (uses); the regression test drives the real poll across the timeout and was verified to fail against
+   the old code. Expiry now also consults the **wall clock**, since `Instant` does not advance while a
+   laptop sleeps. **When reviewing a timer-backed control, test the path the product actually calls.**
+6. **A compensating control outside CI is not a control.** `cairn-gui` is a separate cargo workspace, so
+   `cargo test --workspace` had never covered a line of it — the JS/Rust drift guard in point 3 included.
+   A **`gui` CI job** now runs fmt/clippy/test/deny on that tree. ⚠️ **It is not yet a REQUIRED status
+   check** in main's branch protection — a human has to add "clippy + cargo test (cairn-gui)" there, or
+   it can fail without blocking a merge.
 
 **Deliberately NOT done, stated honestly:** the two human measurements in ⇒ NEXT above. Also: no patient
 picker, no dose editing/prescribing/reconciliation from the UI, the pane state machine kept but unwired,

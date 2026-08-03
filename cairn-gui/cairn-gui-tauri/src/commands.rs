@@ -9,11 +9,12 @@
 //!    clinician needs to act on.
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
-use crate::state::{AppState, SessionKey};
+use crate::state::{AppState, Now, SessionKey};
 use cairn_gui_tab_medications::view::{build_view, missing_report, withheld_report, MedListView};
-use cairn_medication_view::PatientMedicationList;
+use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// Read the chart and build the view model.
 ///
@@ -46,6 +47,12 @@ pub async fn unlock(
     state: tauri::State<'_, AppState>,
     passphrase: String,
 ) -> Result<LockState, String> {
+    // Wiped when this function returns, on the success path and on every error path alike.
+    // The webview clears its own field either way (see `main.js`); this is the other half —
+    // a passphrase left in the heap outlives the failure that put it there, and this process
+    // stays alive for a whole clinical session.
+    let passphrase = Zeroizing::new(passphrase);
+
     let path = state
         .attester_key_path
         .as_ref()
@@ -79,7 +86,7 @@ pub async fn unlock(
     drop(db);
 
     let short = short_kid(&kid).to_string();
-    *state.session.lock().await = Some(SessionKey::new(sk, Instant::now()));
+    *state.session.lock().await = Some(SessionKey::new(sk, Now::read()));
     Ok(LockState {
         unlocked: true,
         kid: Some(short),
@@ -92,12 +99,17 @@ pub async fn unlock(
 /// The frontend polls this, so the window SHOWS the lock rather than the clinician
 /// discovering it when a sign-off is refused — the same "state is ambient, never modal"
 /// rule the shell design follows.
+///
+/// It goes through `key_status`, NOT `live_key`, and that distinction is the whole reason
+/// the two exist. This runs on a 10-second timer with nobody at the keyboard; treating it as
+/// activity meant the window kept resetting its own idle clock and the key never re-locked
+/// at all. See the `state` module doc.
 #[tauri::command]
 pub async fn lock_state(state: tauri::State<'_, AppState>) -> Result<LockState, String> {
-    let held = state.live_key().await;
+    let held = state.key_status(Now::read()).await;
     Ok(LockState {
         unlocked: held.is_some(),
-        kid: held.map(|(_, kid)| short_kid(&kid).to_string()),
+        kid: held.as_deref().map(|kid| short_kid(kid).to_string()),
         mock: state.is_mock(),
     })
 }
@@ -124,7 +136,7 @@ pub async fn sign_off(state: tauri::State<'_, AppState>) -> Result<SignOffReport
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
     let (human_sk, human_kid) = state
-        .live_key()
+        .live_key(Now::read())
         .await
         // Not a failure to hide: the clinician needs to know the key re-locked, not to see
         // a gesture silently do nothing.
@@ -220,7 +232,7 @@ pub async fn cease(
     }
     let group: Uuid = group_id.parse().map_err(|_| "not a medication id")?;
     let (human_sk, human_kid) = state
-        .live_key()
+        .live_key(Now::read())
         .await
         .ok_or("your signing key is locked — unlock it to stop a drug")?;
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
@@ -317,31 +329,15 @@ async fn record_timing(
     }
 }
 
-/// The first 8 characters of a key id — enough to tell colleagues apart on screen.
-///
-/// Sliced on a char boundary: this is display code, and a panic over a label would take the
-/// window down.
-fn short_kid(kid: &str) -> &str {
-    match kid.char_indices().nth(8) {
-        Some((byte_index, _)) => &kid[..byte_index],
-        None => kid,
-    }
-}
+// `short_kid` is `cairn_medication_view::display::short_kid` — ONE truncation rule, because
+// this window shows a key id from the view model (the signature column) and one from its own
+// lock state (the "signing as …" line) on the same screen. Two copies of the rule is one edit
+// away from rendering the same clinician as two different-looking ids.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-
-    /// The kid shown on screen must be short enough to read and must never panic, whatever
-    /// the id turns out to be — including a short one or a non-ASCII one.
-    #[test]
-    fn the_displayed_kid_is_truncated_without_panicking() {
-        assert_eq!(short_kid("abcdef0123456789"), "abcdef01");
-        assert_eq!(short_kid("abc"), "abc");
-        assert_eq!(short_kid(""), "");
-        assert_eq!(short_kid("ααααααααββ"), "αααααααα");
-    }
 
     /// Every field name `main.js` reads off a payload, in source order of appearance.
     ///

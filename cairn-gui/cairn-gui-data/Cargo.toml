@@ -12,4 +12,9 @@ cairn-gui-tab = { path = "../cairn-gui-tab" }
 # GUI -> crates, which is the permitted one (nothing in /crates may ever depend on
 # cairn-gui). The crate is pure — no database driver, no GUI toolkit — so this pulls no
 # Postgres into the data port.
-cairn-medication-view = { path = "../../crates/cairn-medication-view" }
+#
+# `fixtures` is a NORMAL (not dev) feature here, and deliberately: `MockData::with_fixtures`
+# is the `--mock` window's real data source, not a test helper. It is off by default in the
+# shared crate so the node binary does not carry demo clinical content; this is the crate
+# whose whole job is serving it.
+cairn-medication-view = { path = "../../crates/cairn-medication-view", features = ["fixtures"] }

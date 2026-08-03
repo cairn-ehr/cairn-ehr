@@ -13,3 +13,11 @@ serde = { version = "1", features = ["derive"] }
 # The rendered view speaks in Strings, but the two report renderers take GROUP ids: the
 # after-the-gesture caller passes `SignOffOutcome::withheld`, which is a `Vec<Uuid>`.
 uuid = "1"
+
+# The sample chart is TEST-ONLY here (the view model itself never mentions it), so the
+# `fixtures` feature is enabled through the dev-dependency edge alone: under resolver 2 that
+# keeps it out of the library this crate actually ships.
+[dev-dependencies]
+cairn-medication-view = { path = "../../../crates/cairn-medication-view", features = [
+    "fixtures",
+] }
