@@ -2,29 +2,35 @@
 
 ## ⇒ NEXT
 
-**In flight: the med-list slice, node tier — Tasks 1–4 of 12 are built and in a PR
-([#288](https://github.com/cairn-ehr/cairn-ehr/issues/288)); Tasks 5–12 are handed to a fresh session.**
-Everything needed to resume is in the plan file
-[`docs/superpowers/plans/2026-08-02-med-list-ui-slice.md`](superpowers/plans/2026-08-02-med-list-ui-slice.md)
-(each task carries its full text and code) beside the design spec
-[`…-med-list-ui-slice-design.md`](superpowers/specs/2026-08-02-med-list-ui-slice-design.md). **Start at
-Task 5.** See "the med-list slice" below for what shipped, what is deliberately still missing, and the
-three repo conventions that run cost this build.
+**The med-list slice is COMPLETE — all 12 tasks. Cairn has a runnable clinical surface**
+(`cairn-gui/cairn-gui-tauri`: a Tauri 2 window on one patient's drug chart, whole-list sign-off as
+one gesture, per-row cease). **Two things it owes are HUMAN acts and cannot be done by an agent:**
 
-The tech-debt loop is **stopped** (it ran unattended 07-31 → 08-01 and merged nine
-PRs — ROADMAP "Interlude"; the driver was signalled after its third iteration so a human session could
-work the main repo). Re-running `/techdebt-loop` is always safe; `tail -f ~/.cairn-loop/run.log`. Note
-[#326](https://github.com/cairn-ehr/cairn-ehr/issues/326) — the worker's CI-wait idiom is dead in this
-harness and cycles complete by tight polling, which works but burns tokens. **Do not start it while a
+1. **The §1.2 time budget is still a seeded figure, not a measured one.** Follow
+   [`cairn-gui/cairn-gui-tauri/results/RUNBOOK.md`](../cairn-gui/cairn-gui-tauri/results/RUNBOOK.md)
+   (its commands are verified working) and record into a dated copy of `TEMPLATE.md`. Only the
+   *write* half is measured so far — median 222 ms, in
+   `results/2026-08-03-node-tier-write-cost.md`, which says **PARTIAL** in its title for this reason.
+2. **The accessibility pass** — a live screen-reader run (VoiceOver) through the runbook's eight
+   checks, keyboard-only. Run `cargo run -p cairn-gui-tauri -- --mock --patient
+   00000000-0000-0000-0000-000000000001`; the fixture chart deliberately carries a cross-patient
+   line and an invisible group so the ADR-0060 warnings are actually exercised. Automating the DOM
+   assertions is [#332](https://github.com/cairn-ehr/cairn-ehr/issues/332) and needs a JS-toolchain
+   decision this slice deliberately did not take (the webview is plain JS, no npm, no bundler).
+
+**If either measurement falls outside the provisional 15 s / 5 s budget, that is the finding —
+file an issue; do not adjust the budget to match.**
+
+The tech-debt loop is **stopped** (it merged nine PRs unattended 07-31 → 08-01 — ROADMAP "Interlude").
+Re-running `/techdebt-loop` is always safe; `tail -f ~/.cairn-loop/run.log`. **Do not start it while a
 human session holds the main repo**: on 08-02 a stray loop `cargo test --workspace` ran ~5 h against the
-same test cluster and build lock, stretching this session's suites from ~3 min to ~90 min. They contend on
-one cargo lock and one `test_serial_guard` advisory lock.
+same cluster, stretching this session's suites from ~3 min to ~90 min (they contend on one cargo lock and
+one `test_serial_guard` advisory lock). Also [#326](https://github.com/cairn-ehr/cairn-ehr/issues/326) —
+the worker's CI-wait idiom is dead in this harness; cycles complete by tight polling, which burns tokens.
 
-**ADR-0056 is now fully built on the clinical plane.** Slice **58** (07-29/07-30, PR #302) made the door
-admit an unclassifiable type and re-adjudicate before reprojecting (#265/#266); Slice **60** (08-01) closed
-the residual half (#267/#270): a deliberate floor refusal on verifiable bytes is penned verbatim, pins the
-re-offer floor, auto-releases when it later applies, and **a frozen watermark can no longer exit success**.
-The node/actor plane still diverges by design-gap, not design — see candidate 5.
+**ADR-0056 is now fully built on the clinical plane** (Slice 58 admits an unclassifiable type and
+re-adjudicates before reprojecting, #265/#266; Slice 60 closed the residual refusal half, #267/#270). The
+node/actor plane still diverges by design-gap, not design — see candidate 4.
 
 **The genuinely next candidates** (nothing blocks a choice between them):
 
@@ -32,9 +38,10 @@ The node/actor plane still diverges by design-gap, not design — see candidate 
    the largest unbuilt piece of settled architecture (sequester + the sensitivity stream + the
    de-identified safety projection). Carries [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294):
    the projection must *carry* the coding-derived drug class, never re-derive it.
-2. **The med-list UI slice, Tasks 5–12** (retire iced · Tauri 2 shell · webview · timing) — **in flight,
-   see above.** Its node tier (Tasks 1–4) is built; what remains is the surface that makes the
-   paper-parity *time* budget measurable.
+2. **Second UI slice** — now that a window exists, the cheapest high-value additions are the
+   §5.3/§5.8 **search-before-create funnel** (which retires the `--patient` launch constraint and is
+   the wrong-chart affordance paper has and this window does not) and wiring the kept-but-unwired
+   pane/routing/freshness state machine.
 3. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
    **coded↔uncoded** duplicate case ADR-0059 decision 5 deliberately leaves open. Needs a design
    decision first: the cross-service connection model. The slice-6a/6b source guard keeps the trusted
@@ -50,18 +57,18 @@ The node/actor plane still diverges by design-gap, not design — see candidate 
    Full analysis on #268; both stay `loop:blocked`.
 
 **Standing gate:** whole-project review cycles repeat periodically, and there will be **no release for
-clinical use before repeated review cycles pass cleanly.** The last full pass ran 2026-07-15 (five
-passes: in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting seams —
-[report](code_reviews/2026-07-15-whole-project-architecture-review.md), findings #187–#217) and is
-**fully closed**.
+clinical use before repeated review cycles pass cleanly.** The last full pass ran 2026-07-15 (five passes:
+in-DB floor, Rust workspace, spec/ADR corpus, matcher, cross-cutting seams —
+[report](code_reviews/2026-07-15-whole-project-architecture-review.md), findings #187–#217), **fully
+closed**. A runnable clinical surface now exists, so the next pass should include it.
 
 ---
 
-**Session date:** 2026-08-03 (Slice 61 + its review rounds) · **Spec/ADRs:** v0.62 (through **ADR-0060**,
-*partial validity* — a corollary of paper-parity that a clinician ruling forced out of the med-list slice;
-Slice 61 itself changed no spec/ADR, and slices 58–60 changed none either) ·
+**Session date:** 2026-08-03 (Slice 61 + its review rounds, then Slice 62 — the med-list window) ·
+**Spec/ADRs:** v0.62 (through **ADR-0060**, *partial validity* — a corollary of paper-parity that a
+clinician ruling forced out of the med-list slice; slices 58–62 changed no spec/ADR themselves) ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical surface
-under construction** on `cairn-node`.
+RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** (full detail in ROADMAP + the ADR log + git):
 **demographics slices 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/
@@ -81,12 +88,13 @@ drug-identity shape and the two coding-overlay verbs, ADR-0059) + the **twin-che
 the **contributor-role vocabulary floor** (ADR-0051) ·
 **born-sealed clinical bodies** (ADR-0052 — an erasability substrate, NOT confidentiality until #231) ·
 **per-write human authorship** (ADR-0053 — grading half-live until #245) ·
-the **L3 reference-UI shell, slice 1** (framework SETTLED — iced FAILS the accessibility bar, pivot to
-**Tauri 2**, an L3 choice below the compatibility boundary; PR #174). **Read this precisely: there is no
-Tauri shell yet.** What exists is `cairn-gui/` — a ~1.3 k-LOC *iced* standalone workspace (shell, manifest,
-tab trait, two demo tabs), deliberately detached from the root workspace via its `exclude` entry so
-iced/winit/cosmic-text can never enter `cairn-node`'s dependency tree. It is **superseded and slated for
-retirement by med-list Task 5**; nothing clinical reads through it ·
+the **L3 reference UI** — `cairn-gui/`, a standalone workspace deliberately detached from the root one
+via its `exclude` entry so no GUI stack (once iced, now wry/tao) can enter `cairn-node`'s dependency
+tree; the dependency direction is one-way, GUI → crates, forever. PR #174 shipped an **iced** shell
+which then FAILED the accessibility bar (spike 0004) and was **retired 2026-08-03**; what runs today is
+**`cairn-gui-tauri`** — a Tauri 2 window on one patient's medication chart (whole-list sign-off, per-row
+cease, plain-JS semantic-HTML webview, no npm). The pane/routing/freshness state machine survived the
+retirement and is tested but not yet wired ·
 the **med-list node tier** (2026-08-02 — Cairn's first clinical READ path + whole-list sign-off + two CLI
 verbs; see below) ·
 **generic reprojection** (ADR-0057 — one registered apply fn per projection + one dispatcher) ·
@@ -99,107 +107,94 @@ Postgres-on-Android).
 
 ---
 
-**Session (2026-08-02) — the med-list slice, Tasks 1–4 of 12 (the node tier).** Branch
-`feat/med-list-ui-slice-288`, owes [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288). No spec/ADR
-change, no schema change — this is the first code that READS clinical content back out in Rust.
+**Session (2026-08-03, second half) — Slice 62: the med-list WINDOW.** Branch
+`feat/med-list-ui-tauri-288`, Tasks 5–12 of the same plan, owes
+[#288](https://github.com/cairn-ehr/cairn-ehr/issues/288). Full narrative in **ROADMAP Slice 62**; four
+things worth carrying:
 
-**Shipped.** `crates/cairn-medication-view` (a pure, DB-free, GUI-free crate holding the read model and the
-ONE definition of what a sign-off gesture attests) · `cairn-node/src/medication/read.rs` (seven statements
-over the db/031–035 projections → `PatientMedicationList`) · `medication/signoff.rs` (N attestations, one
-unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI verbs.
+1. **A plan written before an ADR does not know about it.** Tasks 7/9 predated ADR-0060 landing the same
+   morning. Their `build_view(&[MedicationRow])` and `SignOffReport { signed }` would have *dropped*
+   `groups_missing_from_chart` and `withheld` — making decision 2 (*partial completion reported, never
+   implied*) unobeyable at the UI layer, since a renderer cannot warn about a drug it was never handed.
+   Both now take the whole `PatientMedicationList` / `SignOffOutcome`. **Check whether the plan predates
+   the decision it has to satisfy.**
+2. **A type moves to where its second consumer can reach it.** `PatientMedicationList`,
+   `SEPARATION_INSTRUCTION` and `format_hazard_groups` moved from `cairn-node`'s read path into the pure
+   `cairn-medication-view` (the window cannot depend on a crate carrying a Postgres driver);
+   `cairn-node` re-exports all three and their pure tests moved *with* them.
+3. **No type checking, so the drift guard is in Rust.** The webview is plain JS, no bundler, no npm — a
+   maintainer decision (nothing between what a reviewer reads and what the window runs; no JS supply
+   chain to audit). A Rust field rename therefore yields `undefined`, and for `missing_message`
+   `undefined` is falsy — the warning silently disappears and the chart claims a completeness it does not
+   have. A test scans `main.js` for every `view.`/`row.`/`report.`/`lock.` access and asserts the backend
+   sends it; **verified to fail on a renamed field**, not merely to pass.
+4. **Running the runbook is what found its bugs** — three of its commands were wrong as drafted
+   (`init` needs `--name`/`--address`; `--key` is a *global* flag, before the subcommand).
 
-**The four things worth carrying forward:**
+**Deliberately NOT done, stated honestly:** the two human measurements in ⇒ NEXT above. Also: no patient
+picker, no dose editing/prescribing/reconciliation from the UI, the pane state machine kept but unwired,
+and `cease` charges **K=2** (reason + Stop) rather than the plan's projected K=1 — ADR-0060 requires a
+cancellation to carry an owner *and* a rationale, and K=2 still equals the paper counterpart's N=2.
+`medication-cease` itself still accepts neither ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342),
+unfixed — the window simply never walks that path).
+
+---
+
+**Session (2026-08-02) — Slice 61: the med-list node tier (Tasks 1–4).** Branch
+`feat/med-list-ui-slice-288` (merged, PR #338 + #341). Cairn's first clinical READ path:
+`crates/cairn-medication-view` (the pure shared read model + the ONE definition of what a sign-off
+attests) · `medication/read.rs` · `medication/signoff.rs` · the `medication-list` /
+`medication-sign-off` CLI verbs. Full narrative in **ROADMAP Slice 61**; three things worth carrying:
 
 1. **A displayed row is a GROUP; an attestation is a THREAD.** ADR-0047 collapses reconciled duplicates
-   into one line; ADR-0049 attests per thread. Every defect found in this build lived on that seam. The
-   shared crate exists so the node and the UI cannot answer *"what is about to be signed?"* differently —
-   a divergence there puts a green "signed" badge over a thread nobody signed.
+   into one line; ADR-0049 attests per thread. Nearly every defect this build surfaced lived on that
+   seam. The shared crate exists so the node and the UI cannot answer *"what is about to be signed?"*
+   differently — a divergence puts a green "signed" badge over a thread nobody signed.
 2. **Sign-off is per-line, like a paper drug chart** — only *absent or stale* threads are signed, so
-   another clinician's current signature is never silently overwritten with yours. This was a **user
-   correction** to the original design (which proposed attesting everything): the paper counterpart is the
-   **drug chart**, where each line carries the signature of whoever is responsible for *that* drug, not a
-   med-rec form signed once at the bottom.
-3. **`patient_medication_current` can hide a drug, and the read path now says so.** A reconciled group whose
-   member threads span two patients displays on ONE chart only (db/033 joins a `DISTINCT ON (group_id)`
-   display view against a per-`(group, patient)` status view). The losing patient's chart silently omitted a
-   real drug and sign-off reported "nothing to sign off"; the winner's chart showed it twice, and its dose
-   comes from a whole-group `DISTINCT ON` that ignores patient — so it can display the *other* patient's
-   dose. Now: rows dedupe by group, `groups_missing_from_chart` names what cannot be shown, sign-off
-   **refuses** an incomplete chart, and a cross-patient line is **withheld** from the gesture and reported
-   rather than signed. Refuse the chart when a line is *missing*; withhold just the line when it is
-   *present but untrustworthy*. **The clinician overruled the refuse half on 2026-08-03
-   ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339), closed) — see the new principle below.**
-   Sign-off now signs every line it can show and **reports** both the withheld lines and the invisible
-   groups; it refuses nothing but a target-set *mismatch* (a different question: not "is this chart
-   perfect?" but "is this the same chart the human reviewed?"). The view defect itself is
-   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
-4. **A safety refusal is only as good as the escape hatch it names** (third review round). All three
-   cross-patient warnings said "run `medication-separate`" — a verb taking two THREAD ids — while printing
-   only a GROUP id, and the losing patient's own thread was on no surface at all (empty chart; the vouch read
-   is patient-scoped). The remedy was reachable only by raw SQL. Now `PatientMedicationList` carries
-   `separation_targets` (each hazardous group's full membership, including the other patient's bare thread
-   id), and one `SEPARATION_INSTRUCTION` const + one `format_hazard_groups` renderer serve all three call
-   sites, so the advice cannot drift between them. **Check every error message that names a fix: can the
-   reader actually run it from what you just printed?**
+   another clinician's current signature is never silently overwritten. A **user correction** to the
+   original design: the paper counterpart is the drug chart, where each line carries the signature of
+   whoever is responsible for *that* drug, not a med-rec form signed once at the bottom.
+3. **A safety refusal is only as good as the escape hatch it names.** All three cross-patient warnings
+   told the operator to run `medication-separate` — a verb taking two THREAD ids — while printing only a
+   GROUP id, so the remedy was reachable only by raw SQL. `separation_targets` now carries each hazardous
+   group's full membership, and one const + one renderer serve every call site. **Check every error
+   message that names a fix: can the reader actually run it from what you just printed?**
 
 > [!IMPORTANT]
 > **[ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
 > (spec v0.62): *partial validity — a defect on one line never invalidates another.*** A **corollary of
-> paper-parity** (principle 3), not a new axiom — it earned its own ADR because it was violated *by a design
-> that had already accepted paper-parity*, and no test caught it. Canonical home: the new composability limb
-> of [§1.2](spec/vision.md). This came out of resolving
-> [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) and is broader than medications. In the
-> clinician's words: *"there is no reason to refuse the whole chart if one single line is not visible or not
-> trustworthy. What matters is that all visible lines in the chart must be signed … or presented as unsigned
-> in the UI."* The paper counterpart is a drug written up but missing a signature: that prompts the nurse to
-> chase the signature before acting on **that** drug; it does not void the chart.
+> paper-parity**, not a new axiom — it earned its own ADR because it was violated *by a design that had
+> already accepted paper-parity*, and no test caught it. Canonical home: the composability limb of
+> [§1.2](spec/vision.md). Read the ADR; only the operative parts are repeated here.
 >
-> The worked case, which is why this is a **safety** property and not a convenience one: a doctor writes up
-> 1 L normal saline over 4 h and signs it, then writes up a 100 mL minibag with 10 mmol potassium and does
-> not sign it. **The saline must still be giveable.** A system that voids the chart because the potassium
-> line is unsigned — or invalid, or invisible — withholds fluid from a patient over a defect in a different
-> line.
+> **The framing that generates it, and the one to lead with:** *the clinician gives an order and expects
+> it to be carried out; it may be cancelled only by somebody **taking ownership** of the cancellation and
+> **giving a rationale** — something only another clinician may do.* Hence **the system may fail to record
+> an order, but it may never cancel one.** The sharpest test for any code path that stops an order being
+> carried out — *who owns this cancellation, and what is their reason?* Applying it immediately found
+> [#342](https://github.com/cairn-ehr/cairn-ehr/issues/342) (`medication-cease` accepts an absent
+> rationale AND a device-additive author). Note the trap recorded there: the fix is **local-authoring
+> only**, never a door/NOT NULL check, or a peer's rationale-less cessation forks the event set and wedges
+> replication.
 >
-> Built into `signoff.rs` today, **including at the transaction layer**: each attestation commits in its own
-> transaction, so a failing line rolls back alone (decision 7). The first draft of the ADR deferred that as a
-> bounded residual and was overruled — *"transaction scope must match the atomicity we discussed … db
-> transactions must ensure no collateral damage on rollbacks."* The deferral had smuggled the anti-pattern
-> back in one layer down. Testing it needed no injection seam after all: a **partial-custody thread** (sealed
-> body synced without its DEK — delete its `event_clear` row) makes exactly one line uncommittable.
->
-> **The framing that generates the whole ADR** (and the one to lead with when explaining it): *the clinician
-> gives an order and expects it to be carried out; it may be cancelled only by somebody **taking ownership**
-> of the cancellation and **giving a rationale** — something only another clinician may do.* Hence **the
-> system may fail to record an order, but it may never cancel one**: no rollback, validation failure or
-> projection defect may have a cancellation's effect. The sharpest test to apply to any code path that stops
-> an order being carried out — *who owns this cancellation, and what is their reason?*
->
-> That test immediately found a live gap: `medication-cease` accepts both an absent rationale and a
-> device-additive author, so a drug can be stopped with **no owner and no reason**
-> ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342), decision 6, not fixed — it changes a shipped
-> verb's contract). Note the trap recorded there: the fix is **local-authoring only**, never a door/NOT NULL
-> check, or a peer's rationale-less cessation forks the event set and wedges replication.
->
-> **It will bind the orders/administration surface far harder than it binds sign-off** — order sets, infusion
-> regimens, care plans, discharge scripts, result panels, referral bundles. Two things to hold onto when
-> building those: decision 2 (never refusing the whole is only half of it — the half that is easy to forget
-> is that **partial completion must be reported, never implied**), and decision 7 (**check the transaction
-> boundaries**, because that is where the rule gets quietly violated by code that looks correct).
+> **It will bind the orders/administration surface far harder than it binds sign-off** — order sets,
+> infusion regimens, care plans, discharge scripts, result panels, referral bundles. Two things to hold
+> onto: decision 2 (**partial completion must be reported, never implied** — the half that is easy to
+> forget) and decision 7 (**check the transaction boundaries**, because that is where the rule gets
+> quietly violated by code that looks correct — each attestation now commits in its own transaction, so a
+> failing line rolls back alone).
 
-**Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
-stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →
-K=1 UI-bundled for review-and-sign). No "nil medications, reviewed" act ([#331](https://github.com/cairn-ehr/cairn-ehr/issues/331)).
-Two safety branches remain untested for want of a test-only injection seam
-([#333](https://github.com/cairn-ehr/cairn-ehr/issues/333)). The read is O(all medications) per chart open
-([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)), and the two-read compare is best-effort, not
-an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335)). Sort order clusters
-capitalised brand names above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337)).
-The three medication test-TRUNCATE lists are still hand-synced
-([#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) — they are NOT interchangeable, read it before
-"tidying" them). ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) is **closed** — resolved by the
-clinician, see the callout above.)
+**Deliberately NOT done (Slice 61).** No "nil medications, reviewed" act
+([#331](https://github.com/cairn-ehr/cairn-ehr/issues/331)); one safety branch still untested
+([#333](https://github.com/cairn-ehr/cairn-ehr/issues/333) — the partial-custody thread retired the other
+half); the read is O(all medications) per chart open ([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336));
+the two-read compare is best-effort, not an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335));
+sort order clusters capitalised brands above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337));
+the three medication test-TRUNCATE lists are hand-synced ([#340](https://github.com/cairn-ehr/cairn-ehr/issues/340)
+— NOT interchangeable, read it before "tidying" them); the underlying view defect is
+[#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
 
-**Three repo conventions this run learned the hard way — they will bite Task 5+ too:**
+**Three repo conventions these two runs learned the hard way:**
 - **Guard before connect.** DB-gated tests take `db::test_serial_guard(&base)` *before*
   `connect_and_load_schema`. Every existing suite does this in execution order.
 - **UUIDs bind as text.** `cairn-node` does not enable tokio-postgres's `with-uuid-1`, so a `Uuid`
@@ -212,30 +207,12 @@ clinician, see the callout above.)
 ---
 
 **Session (2026-08-01) — Slice 60: ADR-0056 decision 5, the residual refusal contract.** Full narrative in
-**ROADMAP Slice 60**; not restated here. Three things worth carrying forward:
-
-1. **A refusal that persists nothing is a refusal you cannot audit.** §6.3 promised refused bytes were
-   "quarantined *verbatim* by digest"; on the clinical plane a *verifiable* door refusal persisted nothing,
-   froze the cursor, and **exited SUCCESS** — a wedged peer link was indistinguishable from a healthy one.
-   The fix was not more logging: it was routing the refusal onto the same durable mechanism the unverifiable
-   class already had (pen by digest, pin the re-offer floor, dedupe on re-offer, fail loudly).
-2. **One lost bit of information was the whole blocker.** `apply_signed` flattened `postgres::Error` into a
-   `String`, discarding the SQLSTATE — so the puller could not tell a deliberate `RAISE EXCEPTION` (`P0001`,
-   every db/020 refusal) from a transient fault, and had to treat both as a freeze. `ApplyError` keeps the
-   legible message *and* the code. Generalisable: when a call site cannot make a distinction, check first
-   whether an intermediate layer threw the distinction away.
-3. **Symmetry between two planes is a hypothesis, not a goal.** #268 asks the node plane to match; the naive
-   alignment would be a defect (its deny-all is routine *scoping*, not a refusal of history), and the
-   codebase already said so in a test comment nobody had connected to the issue. Analysis on #268; it stays
-   blocked on a refusal-class partition in `db/007`.
-
-**Deliberately NOT done, stated honestly:** #268 is analysed, not implemented (above). The pen can now be
-filled by a hostile-but-enrolled peer streaming *verifiable* events our floor refuses — bounded by the
-existing per-peer quota, and §6.3's honest-limit row is updated to say so rather than leaving it implied.
-The freeze arm now survives for two cases, not one — a transient fault *and* a pen that refused the write —
-and the review round closed the coverage gap the first draft had accepted (see ROADMAP Slice 60's review
-paragraph). No paper-parity time budget — §1.2 forced-rationale escape (this changes only what a node does
-with bytes its own floor refused; no human act changes at any layer).
+**ROADMAP Slice 60**. Two things worth carrying: **a refusal that persists nothing is a refusal you cannot
+audit** (a verifiable door refusal froze the cursor and exited SUCCESS — the fix was reusing the durable
+pen, not more logging); and **when a call site cannot make a distinction, check whether an intermediate
+layer threw it away** (`apply_signed` flattened `postgres::Error` to a `String`, discarding the SQLSTATE
+that separates a deliberate `P0001` refusal from a transient fault). #268 is analysed, not implemented —
+symmetry between the two planes is a hypothesis, not a goal.
 
 **Earlier sessions — condensed.** ROADMAP carries the per-slice detail (Slices 13–35, 36–56, and
 57/58/59/60 each condensed there, plus the unattended tech-debt-loop "Interlude", with every still-open
@@ -248,21 +225,20 @@ admit-uninterpreted floor + its review round (07-29 → 07-30) · floor determin
 launch readiness (07-31) · the loop's nine unattended PRs and the ADR-0056 residual refusal contract
 (07-31 → 08-01).
 
-**GUI/L3 design threads (2026-07-16 + 07-18, design-only; full detail in
+**GUI/L3 design threads (2026-07-16/18, design-only).** Full detail in
 [`scratch/ui-sketches/easygp-consult-screen-inventory.md`](../scratch/ui-sketches/easygp-consult-screen-inventory.md)
-and [`easygp-editing-area-inventory.md`](../scratch/ui-sketches/easygp-editing-area-inventory.md)).**
-easyGP mining (screenshots + developer-guide chapters; source material git-ignored under
-`docs/untracked_for_brainstorming/` — real photos, **never commit or publish**). Headline: easyGP's six
-editing-area invariants ≅ Cairn's event envelope near line-for-line — external validation that the
-envelope is the right user-facing grammar. Live outputs awaiting graduation: **ten GUI principles**
-queued for the shell spec (one entry grammar; type-ahead primary; auto-fill to the fork; state ambient
+and [`easygp-editing-area-inventory.md`](../scratch/ui-sketches/easygp-editing-area-inventory.md) (source
+screenshots git-ignored under `docs/untracked_for_brainstorming/` — real photos, **never commit or
+publish**). Headline: easyGP's six editing-area invariants ≅ Cairn's event envelope near line-for-line —
+external validation that the envelope is the right user-facing grammar. Awaiting graduation into the shell
+spec: **ten GUI principles** (one entry grammar; type-ahead primary; auto-fill to the fork; state ambient
 never modal; vocabulary never blocks; session folds; documents = previewed projections; record-as-book
-incl. the audit overlay; the drawing hand; per-user geometry) + a **GP-manifest seed** + eleven
-principle-4 prior-art exhibits. **Open:** co-author questions in the editing-area note §7;
-results-inbox screenshots pending (the three-zone vs two-pane question rides on them — don't
-improvise it). **Team/scope:** the easyGP co-author may return to lead **GP-facing GUI design**; HH
-designs **ED & ward** once core infra is nailed down; the shell's role-manifest layer is the seam
-(uniform core, plural edges — ADR-0021 working as intended).
+incl. the audit overlay; the drawing hand; per-user geometry) + a **GP-manifest seed** + eleven principle-4
+prior-art exhibits. The med-list window already honours several (state ambient never modal; no
+confirmation dialogs). **Open:** co-author questions in the editing-area note §7; results-inbox screenshots
+pending — the three-zone vs two-pane question rides on them, **don't improvise it**. **Team/scope:** the
+easyGP co-author may return to lead **GP-facing GUI design**; HH designs **ED & ward** once core infra is
+nailed down; the shell's role-manifest layer is the seam (ADR-0021 working as intended).
 
 **Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
 of each session. If it ever disagrees with the canonical docs, **the canonical docs win.** The *why* lives
