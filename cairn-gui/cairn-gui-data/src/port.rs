@@ -28,4 +28,18 @@ pub enum DataError {
 pub trait ClinicalData {
     fn demographics(&self, patient_uuid: &str) -> Result<Demographics, DataError>;
     fn note_refs(&self, patient_uuid: &str) -> Result<Vec<NoteRef>, DataError>;
+
+    /// One patient's medication chart — current drugs, ceased ones, each carrying the
+    /// signature state of its member threads, AND what the node knows it cannot display.
+    ///
+    /// Returns the whole `PatientMedicationList` rather than just its rows on purpose.
+    /// ADR-0060 decision 2 requires partial completion to be *reported, never implied*, and
+    /// a port that hands over only rows makes obeying that impossible: the renderer cannot
+    /// warn about a drug it was never given. The real implementation is
+    /// `cairn_node::medication::read::list_patient_medications`; this port exists so the
+    /// window can also run against fixtures with no database.
+    fn medications(
+        &self,
+        patient_uuid: &str,
+    ) -> Result<cairn_medication_view::PatientMedicationList, DataError>;
 }
