@@ -1,0 +1,20 @@
+[package]
+name = "cairn-medication-view"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
+[dependencies]
+# `v7` deliberately omitted: this crate only ever constructs Uuids from values that arrive
+# from elsewhere (the database, or `Uuid::from_u128` in tests) — it never MINTS one. The `v7`
+# feature pulls `rand`/`getrandom` into a crate whose own module doc calls it "deliberately
+# pure" (house rule 4 — no dependency this crate does not need).
+uuid = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }

@@ -297,6 +297,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-medication-view"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "cairn-node"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +312,7 @@ dependencies = [
  "argon2",
  "base64",
  "cairn-event",
+ "cairn-medication-view",
  "chacha20poly1305",
  "ciborium",
  "clap",

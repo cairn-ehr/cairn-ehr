@@ -1,4 +1,8 @@
-//! Shared scaffolding for the cairn-node identity integration tests (#120).
+//! Shared scaffolding for cairn-node's integration tests generally. It started as
+//! scaffolding for the identity integration tests (#120) and has since grown helpers for
+//! other clusters too (`medication_setup`, #288) — the #120 guard below
+//! (`identity_scaffolding_shared.rs`) still binds only the identity-cluster helpers, not
+//! everything this file publishes.
 //!
 //! Every identity suite needs the same four things before it can assert anything: a
 //! connection string from the environment, a clean database with one enrolled signer, a
@@ -216,4 +220,90 @@ pub async fn person_chart_trust(c: &Client, subject: Uuid) -> Option<String> {
     .await
     .unwrap()
     .map(|r| r.get::<_, String>(0))
+}
+
+/// Truncate the event log, the custody plane and every medication projection, then enroll
+/// one DEVICE actor (mints medication threads) and one HUMAN actor (signs and attests).
+/// Returns `(device_sk, device_kid, human_sk, human_kid)`.
+///
+/// Each medication table is truncated behind a `to_regclass` guard because it is created
+/// by a later migration than the core clinical tables: the guard keeps one shared helper
+/// correct on a database migrated only partway, instead of erroring on a table that does
+/// not exist yet. Same discipline as `setup` above.
+///
+/// NOT INTERCHANGEABLE with `medication_attestation.rs`'s own `setup`, which looks nearly
+/// identical but deliberately OMITS `medication_attestation` from its truncation list —
+/// that suite scopes its counts by patient and relies on attestation rows surviving across
+/// tests. Repointing it here would quietly change its semantics. Issue #340 tracks
+/// consolidating the three medication truncation lists properly (this one,
+/// `medication_attestation.rs`'s, and `medication_coding.rs`'s narrower one with its
+/// registry sweep); do not "tidy" them into one without reading it first.
+pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
+    c.batch_execute(
+        "TRUNCATE event_log, actor_event, patient_chart, \
+         node_unwrap_key, event_dek, event_clear, erasure_shred_log CASCADE",
+    )
+    .await
+    .unwrap();
+    c.batch_execute(
+        "DO $$ BEGIN \
+           IF to_regclass('public.medication_statement') IS NOT NULL THEN TRUNCATE medication_statement; END IF; \
+           IF to_regclass('public.medication_cessation') IS NOT NULL THEN TRUNCATE medication_cessation; END IF; \
+           IF to_regclass('public.medication_dose_event') IS NOT NULL THEN TRUNCATE medication_dose_event; END IF; \
+           IF to_regclass('public.medication_dose_correction') IS NOT NULL THEN TRUNCATE medication_dose_correction; END IF; \
+           IF to_regclass('public.medication_reconciliation') IS NOT NULL THEN TRUNCATE medication_reconciliation; END IF; \
+           IF to_regclass('public.medication_group_member') IS NOT NULL THEN TRUNCATE medication_group_member; END IF; \
+           IF to_regclass('public.medication_projection_flag') IS NOT NULL THEN TRUNCATE medication_projection_flag; END IF; \
+           IF to_regclass('public.medication_coding') IS NOT NULL THEN TRUNCATE medication_coding; END IF; \
+           IF to_regclass('public.medication_attestation') IS NOT NULL THEN TRUNCATE medication_attestation; END IF; \
+         END $$;",
+    )
+    .await
+    .unwrap();
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (sk_h, kid_h) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('device', '{\"role\":\"registration-desk\"}', $1)",
+        &[&kid_d],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
+        &[&kid_h],
+    )
+    .await
+    .unwrap();
+    // ADR-0052: register THIS node's unwrap key (derived from the device key) so the strict
+    // door can wrap every sealed event's DEK into custody — attestation events are
+    // clinical.* and born-sealed too. A node has exactly ONE unwrap key regardless of who
+    // signs individual events; deriving it from the human key would collide on the
+    // node_unwrap_key singleton.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .unwrap();
+    (sk_d, kid_d, sk_h, kid_h)
+}
+
+/// How many attestation rows a medication thread carries.
+///
+/// Shared by the two #288 medication suites (`medication_read.rs`, `medication_signoff.rs`),
+/// which both need to assert "this thread was / was not vouched" — the line this module's
+/// header draws ("if two suites would write it identically, it goes here").
+///
+/// UUID BINDING: `cairn-node` does not enable tokio-postgres's `with-uuid-1` feature (see
+/// `medication/read.rs`'s "UUID BINDING" module comment), so `thread` is bound as text and
+/// cast in SQL rather than passed as a `Uuid` parameter directly.
+pub async fn attestation_count(c: &Client, thread: Uuid) -> i64 {
+    c.query_one(
+        "SELECT count(*) FROM medication_attestation WHERE medication_id = $1::text::uuid",
+        &[&thread.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
