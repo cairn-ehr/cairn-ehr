@@ -9,10 +9,7 @@
 //!
 //! The bundling shape (mint the HLCs, open one transaction, attest each thread, commit) is
 //! the one `reconciliation.rs` already uses for exactly two threads, generalised to N.
-use crate::medication::{
-    read::{format_hazard_groups, list_patient_medications, SEPARATION_INSTRUCTION},
-    AttestParams,
-};
+use crate::medication::{read::list_patient_medications, AttestParams};
 use cairn_medication_view::{sign_off_targets, MedicationStatus};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -55,10 +52,43 @@ pub struct SignOffOutcome {
     /// were the withheld set. See the `PatientMedicationList` field for why naming a group
     /// without its threads is not enough to act on (#338 review finding 1).
     pub separation_targets: BTreeMap<Uuid, Vec<Uuid>>,
+    /// Groups whose locally-known content this chart could not display at all (issue
+    /// #334), carried through from `PatientMedicationList::groups_missing_from_chart`.
+    ///
+    /// This does NOT block the gesture (#339) — see `sign_off_medication_list`. It is the
+    /// other half of the bargain: sign every line you can show, and say plainly which ones
+    /// you could not. The caller MUST surface this, because an empty or partial `attested`
+    /// over a silently incomplete chart is exactly the false "all accounted for" claim the
+    /// #334 defence exists to prevent. Union of both reads, so a group that vanished
+    /// mid-gesture is reported too. Empty in normal operation.
+    pub groups_missing_from_chart: Vec<Uuid>,
 }
 
 /// Attest every thread on this patient's chart whose vouch is absent or stale, in one
 /// transaction.
+///
+/// # A defect on one line never invalidates another (#339)
+///
+/// This function does NOT refuse over an incomplete or partly-untrustworthy chart. It signs
+/// every line it can show and stand behind, and REPORTS the rest — `withheld` for lines
+/// present but untrustworthy (cross-patient dose bleed), `groups_missing_from_chart` for
+/// content the chart could not display at all. Both must be surfaced by the caller; signing
+/// what it can must never become silence about what it cannot.
+///
+/// The clinician's ruling that settled this: *"there is no reason to refuse the whole chart
+/// if one single line is not visible or not trustworthy. What matters is that all visible
+/// lines in the chart must be signed … or presented as unsigned in the UI."* The paper
+/// counterpart is a drug written up but missing a signature — that prompts the nurse to
+/// chase the signature before acting on THAT drug; it does not void the chart.
+///
+/// The worked case, which is why this is a safety property rather than a convenience:
+/// 1 L normal saline over 4 h, signed, plus a 100 mL minibag with 10 mmol potassium, not
+/// signed. The saline must still be giveable. A system that voids the chart because the
+/// potassium line is unsigned — or invalid, or invisible — withholds fluid from a patient
+/// over a defect in a different line. Partial orders carry weight.
+///
+/// The one thing still refused is the target-set MISMATCH below, and it is a different
+/// question: not "is this chart perfect?" but "is this the same chart the human reviewed?".
 ///
 /// # Why the target set is read twice
 ///
@@ -101,45 +131,9 @@ pub async fn sign_off_medication_list(
 
     let first_read = list_patient_medications(&*client, patient).await?;
 
-    // Refuse BEFORE minting anything when the node itself knows of medication content for
-    // this patient that this chart cannot display (issue #334 — a reconciled group whose
-    // member threads span two patients displays on only one of them). A clinician must
-    // never vouch for a list the node knows is incomplete: `sign_off_medication_list`
-    // returning Ok(empty) over a chart that is silently missing a real drug would be a
-    // false "everything is accounted for" claim from the vouching human. Checked on this
-    // FIRST, outside-transaction read — no HLC has been minted and no transaction opened
-    // yet, so refusing here costs nothing to unwind.
-    //
-    // THIS IS AN OPEN DESIGN QUESTION, NOT A SETTLED ONE (issue #339). Refusing the whole
-    // chart argues from WHOLE-LIST semantics ("you cannot vouch for what you were never
-    // shown"), while `withheld` below argues from PER-LINE drug-chart semantics for the
-    // present-but-untrustworthy case — and per-line is the model #288 actually adopted, in
-    // which each signature is a claim about its own thread and is not falsified by a
-    // different line being invisible. The cost is real: one invisible group blocks sign-off
-    // for every other drug on the chart, which is slower than the paper chart §1.2
-    // benchmarks against. Pinned by `medication_read.rs`'s
-    // `an_incomplete_chart_refuses_sign_off_even_for_its_unrelated_drugs`, so resolving
-    // #339 the other way fails a test rather than changing behaviour unnoticed.
-    if !first_read.groups_missing_from_chart.is_empty() {
-        anyhow::bail!(
-            "{} medication group(s) with locally-known content for this patient do not \
-             appear on this chart (issue #334) — most likely a cross-patient reconciliation \
-             this chart cannot yet display correctly; signing off would falsely vouch for an \
-             incomplete list, so nothing was signed. {SEPARATION_INSTRUCTION} Then sign off \
-             again. Affected: {}.",
-            first_read.groups_missing_from_chart.len(),
-            format_hazard_groups(
-                &first_read.groups_missing_from_chart,
-                &first_read.separation_targets
-            )
-        );
-    }
-
     // Lines that need a signature but are not safe to sign (cross-patient dose bleed,
-    // issue #334). Withheld per LINE, never per chart: refusing the whole gesture over one
-    // suspect line would make this slower than the paper chart it is benchmarked against
-    // (§1.2), where a clinician signs the lines they can vouch for. Computed on the first
-    // read so the count reported matches the list the refusal check just validated.
+    // issue #334). Withheld per LINE, never per chart — see the #339 note on this
+    // function: nothing wrong with one line may block another.
     let withheld = cairn_medication_view::withheld_rows(&first_read.rows);
     let active_rows = first_read
         .rows
@@ -151,7 +145,9 @@ pub async fn sign_off_medication_list(
     if expected.is_empty() {
         // Nothing to vouch for. NOT an error: an empty, ceased-only or fully-vouched chart
         // is a legitimate state — `total_rows` and `active_rows` let the caller tell the
-        // three apart (issues #331 and #338 review finding 2).
+        // three apart (issues #331 and #338 review finding 2). An INCOMPLETE chart also
+        // lands here rather than erroring (#339); `groups_missing_from_chart` is what the
+        // caller must say out loud.
         return Ok(SignOffOutcome {
             attested: vec![],
             event_ids: vec![],
@@ -159,6 +155,7 @@ pub async fn sign_off_medication_list(
             active_rows,
             withheld,
             separation_targets: first_read.separation_targets,
+            groups_missing_from_chart: first_read.groups_missing_from_chart,
         });
     }
 
@@ -179,25 +176,17 @@ pub async fn sign_off_medication_list(
     let tx = client.transaction().await?;
     let second_read = list_patient_medications(&tx, patient).await?;
 
-    // Re-check completeness inside the transaction, not just outside it. A reconciliation
-    // landing in the gap between the two reads can pull a group off this chart WITHOUT
-    // changing the target set — if every thread on the vanished group was already vouched,
-    // `actual == expected` still holds and the target compare below waves it through. The
-    // signal is already computed by the read; discarding it here would leave the #334
-    // defence with a hole exactly the width of that race.
-    if !second_read.groups_missing_from_chart.is_empty() {
-        anyhow::bail!(
-            "this chart became incomplete while it was being signed: {} medication group(s) \
-             with locally-known content for this patient no longer appear on it (issue \
-             #334); nothing was signed — refresh the list and sign again. \
-             {SEPARATION_INSTRUCTION} Affected: {}.",
-            second_read.groups_missing_from_chart.len(),
-            format_hazard_groups(
-                &second_read.groups_missing_from_chart,
-                &second_read.separation_targets
-            )
-        );
-    }
+    // Re-read completeness inside the transaction, not just outside it, and report the
+    // UNION of the two. A reconciliation landing in the gap between the reads can pull a
+    // group off this chart WITHOUT changing the target set — if every thread on the
+    // vanished group was already vouched, `actual == expected` still holds and the compare
+    // below waves it through. Unioning (rather than taking either read alone) means a group
+    // missing at EITHER moment is reported: the safe direction is to over-report
+    // incompleteness, never to under-report it.
+    let groups_missing_from_chart = union_sorted(
+        &first_read.groups_missing_from_chart,
+        &second_read.groups_missing_from_chart,
+    );
 
     let actual = sign_off_targets(&second_read.rows);
     if actual != expected {
@@ -220,13 +209,21 @@ pub async fn sign_off_medication_list(
     }
     tx.commit().await?;
 
+    // The second read's hazard membership wins: it is the state at write time, and a group
+    // that only became hazardous during the gesture must still carry its repair arguments.
+    // Merged rather than replaced so a group seen only on the FIRST read (one that vanished
+    // mid-gesture, and is in the union above) keeps the membership we managed to read.
+    let mut separation_targets = first_read.separation_targets;
+    separation_targets.extend(second_read.separation_targets);
+
     Ok(SignOffOutcome {
         attested: actual,
         event_ids,
         total_rows: first_read.rows.len(),
         active_rows,
         withheld,
-        separation_targets: first_read.separation_targets,
+        separation_targets,
+        groups_missing_from_chart,
     })
 }
 
@@ -241,4 +238,17 @@ fn format_thread_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> String {
     } else {
         rendered.join(", ")
     }
+}
+
+/// The sorted, deduplicated union of two uuid lists.
+///
+/// Used for the incompleteness signal across the two reads, where the safe direction is to
+/// over-report: a group missing at EITHER moment is a group the clinician was not shown,
+/// and dropping it because the other read happened not to see it would put the silence back
+/// that #334 exists to break.
+fn union_sorted(a: &[Uuid], b: &[Uuid]) -> Vec<Uuid> {
+    let mut out: Vec<Uuid> = a.iter().chain(b.iter()).copied().collect();
+    out.sort();
+    out.dedup();
+    out
 }

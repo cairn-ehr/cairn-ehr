@@ -2410,11 +2410,19 @@ async fn main() -> anyhow::Result<()> {
                 // "everything is signed" for any of the other three is a precise untruth —
                 // exactly what principle 4 forbids — about the one question the clinician
                 // is asking.
-                if out.total_rows == 0 {
+                if out.total_rows == 0 && out.groups_missing_from_chart.is_empty() {
                     println!(
                         "no medications are recorded for {patient}; nothing was signed. \
                          Recording \"nil medications, reviewed\" as an act has no home yet \
                          (issue #331)."
+                    );
+                } else if out.total_rows == 0 {
+                    // Guarded on the missing set: "no medications are recorded" is a
+                    // straightforward LIE when the node holds content for this patient it
+                    // simply cannot display. The detail follows in the block below.
+                    println!(
+                        "nothing could be signed for {patient}: this chart displays no \
+                         medications, but that is NOT the same as having none — see below."
                     );
                 } else if out.active_rows == 0 {
                     // A chart of nothing but struck lines. Those lines may well carry NO
@@ -2466,6 +2474,26 @@ async fn main() -> anyhow::Result<()> {
                     "    {}",
                     cairn_node::medication::read::format_hazard_groups(
                         &out.withheld,
+                        &out.separation_targets
+                    )
+                );
+            }
+            if !out.groups_missing_from_chart.is_empty() {
+                // Also printed in EVERY outcome, success included (#339). Sign-off no
+                // longer refuses over an incomplete chart — a defect on one line must not
+                // block another — so this report is now the ONLY thing standing between the
+                // clinician and a chart that looks finished while the node knows it is not.
+                println!(
+                    "! {} medication group(s) with locally-known content for this patient \
+                     could NOT be displayed on this chart and were therefore NOT signed \
+                     (issue #334) — whatever was signed above, this list is INCOMPLETE. {}",
+                    out.groups_missing_from_chart.len(),
+                    cairn_node::medication::read::SEPARATION_INSTRUCTION
+                );
+                println!(
+                    "    {}",
+                    cairn_node::medication::read::format_hazard_groups(
+                        &out.groups_missing_from_chart,
                         &out.separation_targets
                     )
                 );

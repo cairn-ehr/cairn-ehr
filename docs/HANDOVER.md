@@ -126,9 +126,12 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    dose. Now: rows dedupe by group, `groups_missing_from_chart` names what cannot be shown, sign-off
    **refuses** an incomplete chart, and a cross-patient line is **withheld** from the gesture and reported
    rather than signed. Refuse the chart when a line is *missing*; withhold just the line when it is
-   *present but untrustworthy* — refusing the whole chart there would be slower than paper (§1.2). The view
-   defect itself is [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334); whether the *refuse* half of
-   that asymmetry is right is now [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339).
+   *present but untrustworthy*. **The clinician overruled the refuse half on 2026-08-03
+   ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339), closed) — see the new principle below.**
+   Sign-off now signs every line it can show and **reports** both the withheld lines and the invisible
+   groups; it refuses nothing but a target-set *mismatch* (a different question: not "is this chart
+   perfect?" but "is this the same chart the human reviewed?"). The view defect itself is
+   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334).
 4. **A safety refusal is only as good as the escape hatch it names** (third review round). All three
    cross-patient warnings said "run `medication-separate`" — a verb taking two THREAD ids — while printing
    only a GROUP id, and the losing patient's own thread was on no surface at all (empty chart; the vouch read
@@ -138,6 +141,25 @@ unseal, one transaction) · the `medication-list` / `medication-sign-off` CLI ve
    sites, so the advice cannot drift between them. **Check every error message that names a fix: can the
    reader actually run it from what you just printed?**
 
+> [!IMPORTANT]
+> **Candidate principle, decided 2026-08-03, NOT yet written into the spec: *partial orders carry weight —
+> a defect on one line never invalidates another.*** This came out of resolving
+> [#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) and is broader than medications. In the
+> clinician's words: *"there is no reason to refuse the whole chart if one single line is not visible or not
+> trustworthy. What matters is that all visible lines in the chart must be signed … or presented as unsigned
+> in the UI."* The paper counterpart is a drug written up but missing a signature: that prompts the nurse to
+> chase the signature before acting on **that** drug; it does not void the chart.
+>
+> The worked case, which is why this is a **safety** property and not a convenience one: a doctor writes up
+> 1 L normal saline over 4 h and signs it, then writes up a 100 mL minibag with 10 mmol potassium and does
+> not sign it. **The saline must still be giveable.** A system that voids the chart because the potassium
+> line is unsigned — or invalid, or invisible — withholds fluid from a patient over a defect in a different
+> line.
+>
+> Built into `signoff.rs` today. **It will bind the orders/administration surface far harder than it binds
+> sign-off**, and it plausibly belongs in the spec (a §1.2 paper-parity corollary) or in its own ADR — that
+> call is the maintainer's and has not been made. Do not let it stay only in a commit message.
+
 **Deliberately NOT done, stated honestly.** No UI — nothing renders this yet, and the §1.2 *time* budget
 stays unmeasured until Task 10 (the plan carries the benchmark: N=3 paper acts → M=1 architecture-forced →
 K=1 UI-bundled for review-and-sign). No "nil medications, reviewed" act ([#331](https://github.com/cairn-ehr/cairn-ehr/issues/331)).
@@ -146,10 +168,10 @@ Two safety branches remain untested for want of a test-only injection seam
 ([#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)), and the two-read compare is best-effort, not
 an isolation guarantee ([#335](https://github.com/cairn-ehr/cairn-ehr/issues/335)). Sort order clusters
 capitalised brand names above lowercase generics ([#337](https://github.com/cairn-ehr/cairn-ehr/issues/337)).
-The refuse-vs-withhold asymmetry needs a clinician call ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339)),
-and the three medication test-TRUNCATE lists are still hand-synced
+The three medication test-TRUNCATE lists are still hand-synced
 ([#340](https://github.com/cairn-ehr/cairn-ehr/issues/340) — they are NOT interchangeable, read it before
-"tidying" them).
+"tidying" them). ([#339](https://github.com/cairn-ehr/cairn-ehr/issues/339) is **closed** — resolved by the
+clinician, see the callout above.)
 
 **Three repo conventions this run learned the hard way — they will bite Task 5+ too:**
 - **Guard before connect.** DB-gated tests take `db::test_serial_guard(&base)` *before*
