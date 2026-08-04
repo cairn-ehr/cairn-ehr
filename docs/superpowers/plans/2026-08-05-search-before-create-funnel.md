@@ -1256,13 +1256,29 @@ AS $$
        AND pd.field = 'dob'
        AND pd.value = p_birth_date
     UNION
-    -- Pass 3: shared name token. Culture-neutral: token overlap in ANY position, so a name
-    -- typed in a different order still finds the chart. Callsigns ARE included — see the
-    -- test; a clerk must be able to find the John Doe in front of them.
+    -- Pass 3: shared name token. Culture-neutral: EXACT token equality in ANY position, so
+    -- a name typed in a different order still finds the chart, with no name-order model.
+    --
+    -- The tokenising expression is COPIED VERBATIM from matcher/src/cairn_matcher/pipeline/
+    -- db.py's _GROUPS_SQL: `regexp_split_to_table(lower(normalize(value, NFC)), '\s+')`.
+    -- Same key extraction, so a chart the sweep would pair is a chart this search finds.
+    -- NFC normalisation is load-bearing, not decoration: without it a composed and a
+    -- decomposed "José" are different tokens and the chart is silently unfindable.
+    --
+    -- Exact equality, NOT `LIKE '%token%'`: a leading-wildcard match cannot use an index at
+    -- all, and the §7 budget is 5 s to find an existing chart. Equality keeps the door open
+    -- to an expression index on the same expression when a node grows large enough to need
+    -- one.
+    --
+    -- Callsigns ARE included here, unlike in the matcher (which excludes them via
+    -- `use_key <> ALL(...)`). Both are right: a callsign is not evidence of identity, so it
+    -- must not feed the scorer — but a clerk must be able to find the John Doe in front of
+    -- them.
     SELECT DISTINCT pn.patient_id, 'name'::text
       FROM patient_name pn
+      CROSS JOIN LATERAL regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS tok
       JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
-        ON lower(pn.value) LIKE '%' || lower(t) || '%'
+        ON tok = lower(normalize(t, NFC))
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_search_candidates(text[], text, jsonb) FROM PUBLIC;
@@ -1271,11 +1287,12 @@ GRANT EXECUTE ON FUNCTION cairn_search_candidates(text[], text, jsonb) TO cairn_
 COMMIT;
 ```
 
-> **Note for the implementer:** pass 3's `LIKE '%token%'` is a substring match, which is
-> deliberately generous for a *blocking* pass (recall matters, precision does not — a human
-> decides). If the DB-gated test shows it returning the whole table for a one-character token,
-> add a minimum token length and **log/report the skip**, never silently cap — the existing
-> oversized-block discipline. Feed any such skip into the caller's `incomplete` flag (Task 5).
+> **Note for the implementer:** pass 3 is a full scan of `patient_name` today, because no index
+> exists on the tokenising expression. That is acceptable at current scale and is NOT to be
+> "fixed" by adding an index speculatively — [#336](https://github.com/cairn-ehr/cairn-ehr/issues/336)
+> already tracks the same shape for the med-list read, and the honest move is to measure first.
+> If the DB-gated test shows a pathological result set, **report the skip, never silently cap**
+> (the existing oversized-block discipline) and feed it into the caller's `incomplete` flag (Task 5).
 
 - [ ] **Step 4: Wire the schema guards**
 
