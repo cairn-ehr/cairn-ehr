@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cairn-event",
     "crates/cairn-medication-view",
+    "crates/cairn-patient-search",
     "crates/cairn-sync",
     "crates/cairn-node", # cairn-node added in Task 6
 ]

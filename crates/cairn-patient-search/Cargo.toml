@@ -1,0 +1,20 @@
+[package]
+name = "cairn-patient-search"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
+[dependencies]
+# Deliberately minimal, exactly as cairn-medication-view is: this crate must stay
+# linkable by a future picker WINDOW, which cannot depend on a crate carrying a
+# Postgres driver. `v7` is omitted — this crate never MINTS a Uuid, it only carries
+# ones that arrive from the database.
+uuid = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
