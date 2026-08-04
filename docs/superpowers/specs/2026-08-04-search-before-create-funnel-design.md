@@ -38,9 +38,12 @@ Two facts make this bigger than "add a search":
 2. **There is no patient search of any kind.** The §5.2 matcher does batch pairwise sweeps over the
    whole population; nothing answers *"a clerk typed a name — which charts might this be?"*.
 
-**In scope:** the registration event type and its floor check, the precedence rule, the candidate
-search, the pure read/attestation model, the `patient_registration` projection, two CLI verbs, and
-re-expressing John Doe onto the same act.
+**In scope:** the registration event type and its structural floor check, the candidate search, the
+pure read/attestation model, the `patient_registration` projection, two CLI verbs, and re-expressing
+John Doe onto the same act.
+
+**Split out to a follow-on PR** (§2.3, measured not assumed): the precedence rule's *enforcement*,
+retiring `patient.created`, and the ~83-call-site fixture sweep the two require.
 
 **Out of scope, deliberately** (§8 states every gap): all UI, candidate scoring/ranking, photo bytes,
 the §5.6 pseudonymous *workflow*, and matcher convergence on the blocking keys.
@@ -80,9 +83,32 @@ unknown types are admitted uninterpreted, so a peer on older code carries this e
 It also records a fact §5.3 asserts and no code holds today: **which class a chart was registered
 under.**
 
-### 2.3 Strict local submit, lenient remote apply
+### 2.3 Strict local submit, lenient remote apply — decided here, enforced in the follow-on
 
-The precedence rule is enforced at `submit_event` and **not** at `apply_remote_event`.
+The precedence rule (*the first event carrying a new `patient_id` must be a registration*) is
+enforced at `submit_event` and **not** at `apply_remote_event`.
+
+> [!IMPORTANT]
+> **The rule is settled; its enforcement ships in a separate PR, and this section records why.**
+> Measuring the change rather than assuming it turned up two facts this design originally missed:
+>
+> 1. **`patient.created` already exists** — a walking-skeleton event type classified `additive`
+>    (`db/005`), projecting to `patient_chart` through `patient_chart_apply` at run_order 10, with a
+>    `{name, dob, sex}` payload superseded by demographics slices 1–5, **no structural floor** and no
+>    twin-check row. It is an unfloored registration act. It must be **retired** by the same change
+>    that turns the rule on — grandfathering it as a permitted first event would put back exactly the
+>    "unless" §2.2 exists to remove.
+> 2. **The rule converts ~83 submit call sites across ~38 `cairn-node` test files**, plus 37
+>    `patient.created` references in `cairn-sync`/`cairn-event`. Only 4 files use the existing
+>    `submit_patient_created` helper; the rest build bodies inline. That is the whole DB-gated suite.
+>
+> A mechanical rewrite of 38 test fixtures deserves its own review, where each converted fixture's
+> intent can be checked. Bundled into this slice it would swamp ~8 files of actual design. So this
+> slice builds the funnel and the follow-on makes it unbypassable.
+>
+> **The funnel is therefore complete but not yet unbypassable when this slice lands.** A client can
+> still mint a chart by asserting a name. Stated plainly rather than implied — the same discipline
+> ADR-0060 decision 2 applies to clinical output.
 
 Set-union sync has no ordering guarantee, so a peer's clinical event legitimately arrives *before*
 the registration event that licenses it. A fail-closed remote door would then wedge replication on
@@ -242,7 +268,7 @@ already makes a named registrar unforgeable; requiring one is policy, not floor.
 The check is pure (`p_type`, `b`) → void, matching the ADR-0048 unified signature, so registration in
 the dispatcher is one row and the dispatcher itself is untouched.
 
-### 4.2 Precedence predicate
+### 4.2 Precedence predicate — FOLLOW-ON PR, not this slice
 
 ```sql
 cairn_patient_has_events(p_patient_id uuid) RETURNS boolean   -- pure, one indexed lookup
@@ -250,6 +276,10 @@ cairn_patient_has_events(p_patient_id uuid) RETURNS boolean   -- pure, one index
 
 `submit_event` (db/005) refuses a non-registration event whose `patient_id` has no prior event.
 `apply_remote_event` (db/020) does not call it at all (§2.3).
+
+**Neither the predicate nor its call site is built in this slice** (§2.3): it ships with the
+`patient.created` retirement and the fixture sweep, so the enforcement and the ~83 call sites it
+converts are reviewed together.
 
 ### 4.3 Projection
 
@@ -331,6 +361,8 @@ falls outside the budget, **that is the finding** — file it; do not move the b
 - **No photo bytes** — candidates carry the blob reference; the byte tier is ADR-0013 work.
 - **No §5.6 pseudonymous workflow.** The class exists in the enum so the floor is complete; the
   consent-gated linking §5.6 requires is its own slice.
+- **The precedence rule's enforcement, retiring `patient.created`, and the ~83-call-site fixture
+  sweep** — [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), the reason in §2.3.
 - **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced. Issue to file.
 - **No policy expression of "registrations must be attested"** (§2.6). The grade is shipped and the
   worklist query is trivial; turning that into a site requirement is ADR-0024 hard-policy work, and
@@ -362,10 +394,10 @@ carries no `search` key at all.
 - `class=standard` naming a registrar who is neither signer nor verified attester is refused by the
   *existing* unconditional binding — asserted here to prove §2.6's "unforgeable for free" claim
   rather than assume it
-- **precedence:** a bare name assertion on a fresh `patient_id` is refused; the same assertion after
-  a registration succeeds
-- **the load-bearing lenient case:** `apply_remote_event` admits an out-of-order clinical event whose
-  patient has no registration — no wedge, no pen
+*(The precedence tests — a bare assertion on a fresh `patient_id` refused, the same assertion after a
+registration accepted, and the load-bearing lenient case where `apply_remote_event` admits an
+out-of-order clinical event with no registration — belong to the follow-on PR that turns the rule on,
+§2.3/§4.2.)*
 
 **Search, DB-gated:** each blocking pass finds its candidate; an identity-pending (John Doe) chart is
 returned **with** trust state `unconfirmed`; a candidate whose demographics cannot be read is
@@ -389,7 +421,7 @@ registration remains atomic in one transaction.
 
 | Risk | Mitigation |
 |---|---|
-| The precedence rule breaks an existing test that mints a patient by asserting demographics directly | Expected and wanted — those call sites are the bypass the funnel exists to close. Each becomes an explicit registration in the fixture; if any resists, that is a finding, not a nuisance |
+| The precedence rule converts ~83 fixture call sites and requires retiring `patient.created` | Measured, not estimated (§2.3), and split into its own PR for that reason. Those call sites *are* the bypass the funnel exists to close; each becomes an explicit registration, and any that resists is a finding, not a nuisance |
 | Search latency on a large node makes the funnel slower than paper | The blocking passes are index-backed and the oversized-block guard reports rather than scans; the §7 budget is falsifiable and measured, not assumed |
 | The attestation's third-party UUIDs are a disclosure surface | Recorded in §2.5 and in ADR-0061 as a rung-2 erasure obligation; not silently accepted |
 | Re-expressing John Doe regresses a shipped, tested subsystem | Its suite runs unchanged as a regression gate; the new event joins the existing transaction rather than adding one |
