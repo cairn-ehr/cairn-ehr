@@ -13,6 +13,7 @@
 [ADR-0051](../../spec/decisions/0051-contributor-role-vocabulary-floor-and-responsibility-wire-shape.md) (strict-submit / lenient-apply) ·
 [ADR-0058](../../spec/decisions/0058-grade-gated-teffective-ceiling.md) (a remote door admits and flags, never rejects) ·
 [ADR-0053](../../spec/decisions/0053-per-write-human-authorship.md) (per-write human authorship) ·
+[§5.11](../../spec/identity.md#511-point-of-care-identity-possession-fast-authentication-and-salvage) (authorship confidence is a grade, not a gate) ·
 [ADR-0052](../../spec/decisions/0052-born-sealed-clinical-bodies.md) (sealed ⇒ clinical) ·
 [ADR-0060](../../spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md) (partial completion is reported, never implied) ·
 principle 2 (identity is a claim) · principle 3 (paper-parity) · principle 4 (acknowledged uncertainty) ·
@@ -37,9 +38,9 @@ Two facts make this bigger than "add a search":
 2. **There is no patient search of any kind.** The §5.2 matcher does batch pairwise sweeps over the
    whole population; nothing answers *"a clerk typed a name — which charts might this be?"*.
 
-**In scope:** the registration event type and its floor check, the precedence rule, the human-author
-binding on standard registration, the candidate search, the pure read/attestation model, the
-`patient_registration` projection, two CLI verbs, and re-expressing John Doe onto the same act.
+**In scope:** the registration event type and its floor check, the precedence rule, the candidate
+search, the pure read/attestation model, the `patient_registration` projection, two CLI verbs, and
+re-expressing John Doe onto the same act.
 
 **Out of scope, deliberately** (§8 states every gap): all UI, candidate scoring/ranking, photo bytes,
 the §5.6 pseudonymous *workflow*, and matcher convergence on the blocking keys.
@@ -126,28 +127,50 @@ name them, or the erased chart stays discoverable by anyone who can read the fun
 structurally the same footnote §5.5(a) already carries for the matcher's known-alias pool, and it is
 stated here so the rung-2 implementation cannot honestly miss it.
 
-### 2.6 A standard registration binds a human author
+### 2.6 The registrar is recorded and graded — never required
 
-An attestation whose purpose is the six-months-later investigation must answer **who was looking**,
-not only *what was on screen*. The demographic plane submits through the plain one-argument door
-(the node records; no human is bound —
-[ADR-0053](../../spec/decisions/0053-per-write-human-authorship.md)'s `cairn_authorship_bound` is
-scoped to sealed clinical bodies), so as first designed this event would have carried half a forensic
-record. `class=standard` therefore requires a bound human author, reusing the ADR-0053 machinery the
-med-list window already uses (`enroll-human`, a sealed personal key, the session unlock).
+An attestation whose purpose is the six-months-later investigation should answer **who was looking**,
+not only *what was on screen*. The tempting move is to make `class=standard` refuse without a bound
+human author. **That move is wrong, and this section exists to record why**, because it is the
+obvious thing for a future reader to "fix".
 
-**The other two classes do not.** Putting an authentication step in front of registering an
-unconscious patient is precisely where paper-parity forbids friction (§5.4: *care proceeds without
-delay*); those stay node-recorded, and the identification event that later resolves them is already
-human-attested (§5.7, `identify` — human, method recorded).
+**The mechanism already gives the honest half for free.** `cairn_authorship_bound` runs
+*unconditionally on every event* at the submit door (`db/005`, step 4b): any responsibility-bearing
+contributor's `actor_id` must be the event's signer or the verified attester. So a registration that
+*names* a human registrar is already unforgeable, with no new floor rule. What the door deliberately
+does not do is require such a contributor to exist —
+`cairn_event::contributor::classify_authorship_confidence` grades a bearing-less event `Device`
+rather than refusing it.
 
-**This costs zero human acts** and so does not disturb §7's `M = N`. §5.11 is explicit that
-gatekeeping is coarse and rare while attribution is per-write and paper-cheap: the registrar unlocks
-once at the start of a shift and every registration after that is free. If a future measurement shows
-otherwise, that is a §7 finding.
+**Requiring one would violate §5.11 outright:** *"Authorship-confidence is a grade, not a gate…
+where author identity cannot be cheaply established (badge forgotten, two in range, emergency), the
+system never blocks."* Three concrete failures follow from gating:
 
-The registrar enrolls as their own role-actor (`enroll-human --role registrar`), which is the
-(entity, role) model working as designed — one person may hold both a clinician and a registrar
+1. **It blocks care documentation, not just registration.** 03:00 in the ED, the clerk's personal key
+   is not unlocked (locum's first shift, dead reader, enrolment ceremony never run). The registration
+   is refused — and because the §2.3 precedence rule makes registration the *first* event for a new
+   `patient_id`, nothing can be recorded about that patient at all.
+2. **It trains staff to degrade the record.** `class=unidentified` needs neither search nor author,
+   so the gate's real-world effect is to push named, cooperative patients through the John Doe path
+   to get past the prompt. A control people route around by degrading the record is not a control.
+3. **It is self-defeating on its own terms.** A gate that refuses produces *no forensic record*. For
+   a mechanism that exists for the later investigation, refusing to write is strictly worse than
+   writing "registrar unattributed" — which is at least true, auditable, and honest.
+
+**So: no `db/005` change, and no new authorship rule anywhere.** `patient-register` takes an
+*optional* `--attester-key`. When the registrar signs, the existing binding makes the claim
+unforgeable and the existing classifier grades it `Attested`. When they cannot, the event records
+`Device` — *authored at this node, registrar unattributed* — never a guess (principle 4's explicit
+unknown), composing into the §5.7/§5.10 trust projection with **no new stream**.
+
+**Wanting attested registrations is policy, not mechanism** (principle 9). A deployment that requires
+it expresses it as [ADR-0024](../../spec/decisions/0024-hard-policy-expression-the-policy-assertion-stream.md)
+hard policy or a role gate; the CLI and the later UI nudge as soft policy (ADR-0021). Cairn ships the
+grade. The quality signal survives regardless: *"standard registrations graded `Device`"* is a
+one-line query and belongs on the same hub worklist as ADR-0014's duplicate sweep.
+
+Where a registrar *does* enrol, they do so as their own role-actor (`enroll-human --role registrar`)
+— the (entity, role) model working as designed; one person may hold both a clinician and a registrar
 actor, linked by a shared registration id (ADR-0044,
 [#168](https://github.com/cairn-ehr/cairn-ehr/issues/168)).
 
@@ -207,7 +230,14 @@ New migration `db/045_patient_registration.sql`.
 | `search.displayed` present, an array, every element a UUID | candidate list malformed |
 | `search.incomplete` present and boolean | completeness must be stated, not assumed |
 | `search.query` present, an object, at least one non-empty term | a search with no terms is not a search |
-| `class='standard'` ⇒ a bound human author (§2.6) | a standard registration names its registrar |
+
+**`search.displayed` MAY be empty**, and that is the *normal* case for a genuinely new patient — a
+search that correctly found nothing. `[]` and "no search ran" are distinguished by the presence of
+the `search` object itself, not by its length. Nobody should later "tighten" this into a non-empty
+requirement: doing so would make registering the first patient on a fresh node impossible.
+
+**No authorship rule is added here** (§2.6). The unconditional `cairn_authorship_bound` at step 4b
+already makes a named registrar unforgeable; requiring one is policy, not floor.
 
 The check is pure (`p_type`, `b`) → void, matching the ADR-0048 unified signature, so registration in
 the dispatcher is one row and the dispatcher itself is untouched.
@@ -263,7 +293,7 @@ time an unidentified patient is later named.
 | `crates/cairn-patient-search` (**new, pure**) | `SearchQuery`, `Candidate`, `CandidateList`, `SearchAttestation::from(&CandidateList)` | No Postgres driver, so the future picker window can depend on it — the `cairn-medication-view` precedent. `SearchAttestation` built *from* the displayed list is the one definition of what a registration attests, so the surface that displays and the act that attests cannot disagree (the Slice 61 lesson; here a divergence means swearing to candidates the clerk never saw) |
 | `crates/cairn-event/src/registration.rs` | pure body builders + the twin renderer | Sibling of `cairn-event::demographics` |
 | `crates/cairn-node/src/patient/search.rs` | `search_patients(&client, &SearchQuery) -> CandidateList` | The ONE mapping, as `medication/read.rs` is for the drug chart; the future native API wraps it |
-| `crates/cairn-node/src/patient/register.rs` | mint UUID → build body from the shown `CandidateList` → sign as the registrar (§2.6) → submit, one transaction | A chart is never half-registered (the John Doe precedent) |
+| `crates/cairn-node/src/patient/register.rs` | mint UUID → build body from the shown `CandidateList` → sign as the registrar when a key is available (§2.6, optional) → submit, one transaction | A chart is never half-registered (the John Doe precedent) |
 | `crates/cairn-node/src/john_doe.rs` | emit the registration act as its first event | §2.2 |
 | CLI | `patient-search`, `patient-register` | |
 
@@ -302,6 +332,9 @@ falls outside the budget, **that is the finding** — file it; do not move the b
 - **No §5.6 pseudonymous workflow.** The class exists in the enum so the floor is complete; the
   consent-gated linking §5.6 requires is its own slice.
 - **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced. Issue to file.
+- **No policy expression of "registrations must be attested"** (§2.6). The grade is shipped and the
+  worklist query is trivial; turning that into a site requirement is ADR-0024 hard-policy work, and
+  belongs to whoever has a deployment that wants it.
 - **No matcher convergence on the blocking keys.** `cairn_search_candidates` and
   `matcher/pipeline/db.py` will each extract identifier / DOB / name-token keys. They are not the
   same query (the sweep blocks all × all; the funnel maps query → set), so the shared part is the key
@@ -322,9 +355,13 @@ carries no `search` key at all.
 - a non-UUID in `displayed` is refused; a missing `incomplete` is refused
 - an empty query object is refused
 - the twin requirement fires
-- `class=standard` with no bound human author is refused; with one, it succeeds (§2.6)
-- `class=unidentified` with **no** human author still succeeds — the paper-parity carve-out is
-  tested, not assumed
+- an **empty** `search.displayed` succeeds — a search that found nothing is the normal first-patient
+  case, and the test exists so it cannot be tightened away
+- `class=standard` with **no** human author **succeeds**, graded `Device` (§2.6). This test is the
+  guard against a future reader turning the grade back into a gate; its failure message should say so
+- `class=standard` naming a registrar who is neither signer nor verified attester is refused by the
+  *existing* unconditional binding — asserted here to prove §2.6's "unforgeable for free" claim
+  rather than assume it
 - **precedence:** a bare name assertion on a fresh `patient_id` is refused; the same assertion after
   a registration succeeds
 - **the load-bearing lenient case:** `apply_remote_event` admits an out-of-order clinical event whose
@@ -356,4 +393,4 @@ registration remains atomic in one transaction.
 | Search latency on a large node makes the funnel slower than paper | The blocking passes are index-backed and the oversized-block guard reports rather than scans; the §7 budget is falsifiable and measured, not assumed |
 | The attestation's third-party UUIDs are a disclosure surface | Recorded in §2.5 and in ADR-0061 as a rung-2 erasure obligation; not silently accepted |
 | Re-expressing John Doe regresses a shipped, tested subsystem | Its suite runs unchanged as a regression gate; the new event joins the existing transaction rather than adding one |
-| Extending ADR-0053's authorship binding off the sealed clinical path (§2.6) touches `db/005`, a load-bearing door | The binding is *added* for one event type, not generalised: the existing clinical rule is untouched, and both the required (`standard`) and not-required (`unidentified`) branches are tested. If the door resists a clean additive change, that is a finding to raise before forcing it |
+| A future reader "fixes" the missing authorship requirement by gating it (§2.6) | §2.6 records the three failure scenarios and ADR-0061 carries it as a rejected alternative; a test asserts an unattested standard registration **succeeds**, so the gate cannot be added silently |
