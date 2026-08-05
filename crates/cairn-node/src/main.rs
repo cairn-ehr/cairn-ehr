@@ -1620,6 +1620,15 @@ async fn main() -> anyhow::Result<()> {
             confirm_new,
         } => {
             let identifiers = parse_identifier_pairs(&identifiers)?;
+            // Fail cheap, before any I/O (same discipline as `parse_identifier_pairs` above,
+            // review round 1 #350 Important 1): a malformed `--birth-date` must never reach
+            // the search/write path only to be discovered deep inside `register_patient`'s
+            // own transaction. Reuses the EXACT function `register_patient` calls internally
+            // — one function, so the CLI edge and the library call can never silently drift
+            // into two different opinions of "a valid shape".
+            if let Some(bd) = birth_date.as_deref() {
+                cairn_node::patient::register::dob_precision(bd)?;
+            }
             let query =
                 cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
 

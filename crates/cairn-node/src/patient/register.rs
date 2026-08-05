@@ -39,6 +39,14 @@
 //! changing shape for one caller's convenience — see `register_patient`'s doc for why it
 //! takes `name` as a separate parameter instead.
 //!
+//! **Review round 1 (#350) found two further gaps, both fixed here.** Important 1: this
+//! module used to hardcode dob precision as "day" regardless of what was typed — see
+//! `dob_precision`'s own doc for the fix (derive the precision from the value's SHAPE,
+//! refuse an unrecognised one, never guess). Important 2: the blank-name filter below was
+//! tested only against the LIBRARY shape (`None`) — the live CLI always sends `Some("")`
+//! for an empty `--name` (never `None`), and that shape had no test; see
+//! `tests/patient_register_demographics.rs` for the added coverage.
+//!
 //! Split, mirroring `john_doe.rs`: pure body assembly (`build_registration_body`/
 //! `build_name_body`/`build_dob_body`, unit-tested, no DB) plus the async `register_patient`
 //! orchestrator. And the one-home rule for the cross-crate conversion:
@@ -82,10 +90,34 @@ const DEMOGRAPHIC_FIELD_SCHEMA_VERSION: &str = "demographic.field/1";
 /// it explicitly is a separate decision for whoever next audits the whole ladder.
 pub const REGISTRATION_DEMOGRAPHIC_PROVENANCE: &str = "registrar-entered";
 
-/// The §4.2 dob precision this module always asserts: `SearchQuery.birth_date` (and the
-/// `--birth-date` CLI flag behind it) is documented as a full ISO `YYYY-MM-DD`, so "day" is
-/// the honest precision for every dob this module authors.
-const REGISTRATION_DOB_PRECISION: &str = "day";
+/// Derive the honest §4.2 dob precision from the SHAPE of a raw date string — YEAR
+/// (`YYYY`), MONTH (`YYYY-MM`), or DAY (`YYYY-MM-DD`) — and NEVER guesses: an unrecognised
+/// shape is refused, not silently coerced. (Review round 1, #350, Important 1: this module
+/// used to hardcode "day" regardless of input, so a clerk who typed only `--birth-date 1980`
+/// got a permanent, signed twin reading "Date of birth (registrar-entered): 1980 (day)" —
+/// asserting a precision nobody has, exactly the principle-4 failure this task otherwise
+/// honours, and immutable once signed.)
+///
+/// Shape-only, not calendar-valid — mirrors db/011's own "the floor does NOT parse the date
+/// value" stance (principle 12, culture-neutral): `"1980-13-40"` passes as day precision.
+/// Full calendar validation is a separate, later concern; this function's only job is to
+/// stop the *precision label* from being fabricated. Used both here (`register_patient`,
+/// before any HLC tick) and at the CLI edge (`main.rs`, before any I/O) — ONE function, so
+/// the two call sites can never silently drift into different opinions of "valid".
+pub fn dob_precision(value: &str) -> anyhow::Result<&'static str> {
+    fn all_digits(s: &str, len: usize) -> bool {
+        s.len() == len && s.bytes().all(|b| b.is_ascii_digit())
+    }
+    match value.split('-').collect::<Vec<_>>().as_slice() {
+        [y] if all_digits(y, 4) => Ok("year"),
+        [y, m] if all_digits(y, 4) && all_digits(m, 2) => Ok("month"),
+        [y, m, d] if all_digits(y, 4) && all_digits(m, 2) && all_digits(d, 2) => Ok("day"),
+        _ => anyhow::bail!(
+            "birth date {value:?} is not a recognised shape (expected YYYY, YYYY-MM, or \
+             YYYY-MM-DD) — refusing rather than asserting a precision nobody actually gave"
+        ),
+    }
+}
 
 /// Assemble the `identity.registration.asserted` `EventBody`. Pure: every input is supplied
 /// by the caller (including the freshly-minted `patient_id` and the HLC-derived `event_id`),
@@ -187,13 +219,18 @@ pub fn build_name_body(
 }
 
 /// Assemble a §4.2 DOB `demographic.field.asserted` `EventBody` for the registration path.
-/// Pure, mirroring `build_name_body` above. `value` is the raw ISO `YYYY-MM-DD` string —
+/// Pure, mirroring `build_name_body` above. `value` is the raw ISO date string —
 /// `SearchQuery.birth_date` already carries it untouched (tokenisation is a NAME-only
 /// concern), so no separate raw-value plumbing was needed for this field, unlike the name.
+/// `precision` is caller-supplied, not derived here: this stays a pure, unconditional
+/// assembler (like `build_name_body`) — `register_patient` is the one place that calls
+/// `dob_precision` and PERMITS `precision` to be anything (twelfth founding principle);
+/// the caller getting it wrong is a caller bug, not something this builder gatekeeps.
 pub fn build_dob_body(
     event_id: Uuid,
     patient_id: Uuid,
     value: &str,
+    precision: &str,
     kid: &str,
     hlc: Hlc,
 ) -> EventBody {
@@ -206,16 +243,11 @@ pub fn build_dob_body(
         t_effective: None,
         signer_key_id: kid.into(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: dob_assertion_body(
-            value,
-            REGISTRATION_DOB_PRECISION,
-            None,
-            REGISTRATION_DEMOGRAPHIC_PROVENANCE,
-        ),
+        payload: dob_assertion_body(value, precision, None, REGISTRATION_DEMOGRAPHIC_PROVENANCE),
         attachments: vec![],
         plaintext_twin: Some(render_dob_twin(
             value,
-            REGISTRATION_DOB_PRECISION,
+            precision,
             REGISTRATION_DEMOGRAPHIC_PROVENANCE,
         )),
         clock_grade: ClockGrade::SelfAsserted,
@@ -241,6 +273,15 @@ pub fn build_dob_body(
 /// dob needs no separate parameter — `query.birth_date` already carries the raw ISO string,
 /// and the identical "only if actually supplied" rule applies to it.
 ///
+/// **`name` MUST be the same typed string `query` was built FROM** (i.e. from the very same
+/// clerk keystroke that fed `SearchQuery::new`'s `raw_name` argument). Nothing in this
+/// function's TYPES enforces that — a caller could structurally attest a search for "Smith"
+/// while asserting the name "Jones", and this function would sign both without complaint
+/// (the twelfth founding principle again: the type system permits the illegal state; only a
+/// disciplined caller prevents it). The one real caller, `main.rs`'s `PatientRegister`
+/// handler, satisfies this by construction — `name` and `query` are built from the SAME
+/// `name: String` CLI argument, one line apart — but a future caller must preserve that.
+///
 /// Returns the minted `patient_id`; care can proceed against it immediately, as with
 /// `register_john_doe`.
 pub async fn register_patient(
@@ -264,6 +305,16 @@ pub async fn register_patient(
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty());
+
+    // Derive + validate the dob precision from its SHAPE up front — before ticking ANY HLC
+    // or authoring the registration act (review round 1, #350, Important 1). A malformed
+    // shape must refuse the WHOLE call with zero side effects, never partially proceed (tick
+    // a clock, author a registration) and only then discover dob's turn fails. Bundling the
+    // value with its derived precision here means every later use of `birth_date` already
+    // carries an honest, validated precision — never re-derived, never re-guessed.
+    let birth_date: Option<(&str, &str)> = birth_date
+        .map(|d| dob_precision(d).map(|p| (d, p)))
+        .transpose()?;
 
     // Tick the HLC once per event actually being authored, in submission order: the
     // registration act FIRST (the chart's birth act — #345 is expected to require the FIRST
@@ -299,7 +350,12 @@ pub async fn register_patient(
         .transpose()?;
     let dob_signed = birth_date
         .zip(h_dob)
-        .map(|(d, h)| sign(&build_dob_body(Uuid::now_v7(), patient_id, d, kid, h), sk))
+        .map(|((d, precision), h)| {
+            sign(
+                &build_dob_body(Uuid::now_v7(), patient_id, d, precision, kid, h),
+                sk,
+            )
+        })
         .transpose()?;
 
     // ONE transaction for every event this call authors — the #350 fix: a registration with
@@ -462,21 +518,46 @@ mod tests {
     }
 
     #[test]
-    fn dob_body_asserts_field_dob_with_day_precision_and_registrar_entered_provenance() {
+    fn dob_body_carries_the_supplied_precision_and_registrar_entered_provenance() {
         let pid = Uuid::from_u128(1);
-        let body = build_dob_body(Uuid::from_u128(2), pid, "1980-01-01", "kid", hlc(1));
+        // "day" here is a CALLER-SUPPLIED precision, not derived by this builder — the
+        // point of `dob_body_asserts_the_caller_supplied_precision_verbatim` below (and the
+        // `dob_precision_*` suite) is that `build_dob_body` never re-derives or second-
+        // guesses it, so this test uses a fixed literal to pin only the wiring.
+        let body = build_dob_body(Uuid::from_u128(2), pid, "1980-01-01", "day", "kid", hlc(1));
         assert_eq!(body.event_type, "demographic.field.asserted");
         assert_eq!(body.patient_id, pid.to_string());
         assert_eq!(body.payload["field"], "dob");
         assert_eq!(body.payload["value"], "1980-01-01");
         assert_eq!(body.payload["provenance"], "registrar-entered"); // literal — see above
-        assert_eq!(
-            body.payload["facets"]["precision"], "day",
-            "SearchQuery.birth_date is documented as a full ISO YYYY-MM-DD"
-        );
+        assert_eq!(body.payload["facets"]["precision"], "day");
         let twin = body.plaintext_twin.as_deref().unwrap();
         assert!(!twin.trim().is_empty());
         assert!(twin.contains("1980-01-01"));
+    }
+
+    #[test]
+    fn dob_body_asserts_the_caller_supplied_precision_verbatim() {
+        // `build_dob_body` must not hardcode or re-derive a precision (review round 1,
+        // #350, Important 1) — whatever the caller passes lands unchanged, for every shape
+        // `dob_precision` recognises.
+        let pid = Uuid::from_u128(1);
+        for (value, precision) in [
+            ("1980", "year"),
+            ("1980-06", "month"),
+            ("1980-06-15", "day"),
+        ] {
+            let body = build_dob_body(Uuid::from_u128(2), pid, value, precision, "kid", hlc(1));
+            assert_eq!(
+                body.payload["facets"]["precision"], precision,
+                "value={value}"
+            );
+            let twin = body.plaintext_twin.as_deref().unwrap();
+            assert!(
+                twin.contains(precision),
+                "twin must legibly state the precision: {twin}"
+            );
+        }
     }
 
     #[test]
@@ -484,13 +565,41 @@ mod tests {
         let pid = Uuid::from_u128(1);
         for body in [
             build_name_body(Uuid::from_u128(2), pid, "Jane", "kid", hlc(1)),
-            build_dob_body(Uuid::from_u128(2), pid, "1980-01-01", "kid", hlc(1)),
+            build_dob_body(Uuid::from_u128(2), pid, "1980-01-01", "day", "kid", hlc(1)),
         ] {
             let c = &body.contributors[0];
             assert_eq!(c["role"], "recorded");
             assert!(
                 c.get("responsibility").is_none(),
                 "additive events demand no attestation"
+            );
+        }
+    }
+
+    // --- review round 1, #350, Important 1: `dob_precision` must derive, never fabricate ---
+
+    #[test]
+    fn dob_precision_recognises_year_month_and_day_shapes() {
+        assert_eq!(dob_precision("1980").unwrap(), "year");
+        assert_eq!(dob_precision("1980-06").unwrap(), "month");
+        assert_eq!(dob_precision("1980-06-15").unwrap(), "day");
+    }
+
+    #[test]
+    fn dob_precision_refuses_an_unrecognised_shape_rather_than_guessing() {
+        for bad in [
+            "not-a-date",
+            "1980/06/15", // slash-separated — a real shape a clerk might type, still refused
+            "80-06-15",   // two-digit year
+            "1980-6-15",  // un-padded month
+            "1980-06-15-extra",
+            "",
+            "1980-",
+        ] {
+            assert!(
+                dob_precision(bad).is_err(),
+                "{bad:?} is not one of YYYY / YYYY-MM / YYYY-MM-DD and must be refused, not \
+                 silently coerced to a guessed precision"
             );
         }
     }

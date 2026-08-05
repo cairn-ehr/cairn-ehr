@@ -2,9 +2,13 @@
 //! search-before-create funnel it feeds can actually find the chart it just created.
 //!
 //! Split out of `patient_register.rs` (which covers Task 6's original registration-attestation
-//! behaviour) purely to keep both files under the house 500-line limit — this suite shares
-//! that file's `common` harness, `EXTRA_TABLES`-style truncation discipline, and general shape,
-//! and should be read alongside it.
+//! behaviour) by RESPONSIBILITY, not file size: that suite exercises the search-attestation
+//! act `register_patient` already authored before this task, this suite exercises the
+//! name/dob demographic facts #350 adds. This repo does not actually cap test-file length
+//! (`medication_attestation.rs` alone runs to 2301 lines) — the split mirrors the existing
+//! one-suite-per-concern convention (`john_doe.rs`/`patient_search.rs`/`patient_registration.rs`
+//! are already separate files for closely related concerns), not a line-count rule. (Corrected
+//! from an earlier, inaccurate "500-line house limit" claim — review round 1, #350 Minor.)
 //!
 //! **The bug this closes.** Task 8's own report reproduced it live: `register_patient`
 //! authored only the `identity.registration.asserted` act, never a `patient_name`/
@@ -65,20 +69,38 @@ async fn patient_dob(c: &Client, p: Uuid) -> Option<(String, String)> {
     .map(|r| (r.get(0), r.get(1)))
 }
 
+/// `patient_demographic`'s dob `facets.precision` for `p`, or `None`.
+async fn patient_dob_precision(c: &Client, p: Uuid) -> Option<String> {
+    c.query_opt(
+        "SELECT facets ->> 'precision' FROM patient_demographic \
+         WHERE patient_id = $1::text::uuid AND field = 'dob'",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .and_then(|r| r.get(0))
+}
+
 /// Every event this chart carries, ordered by HLC (registration first, by construction) —
-/// `(event_type, hlc_wall, hlc_counter)`. Reading straight from `event_log` rather than any
-/// projection is deliberate: this is what proves the events actually landed TOGETHER,
-/// independent of what each projection separately decided to keep.
-async fn events_of(c: &Client, p: Uuid) -> Vec<(String, i64, i32)> {
+/// `(event_type, field, hlc_wall, hlc_counter)`. `field` is `body ->> 'field'`: `None` for
+/// the registration act (which carries no such key), `Some("name")`/`Some("dob")` for a
+/// demographic assertion. Carrying `field` is load-bearing, not decorative (review round 1,
+/// #350 Minor): `event_type` alone is IDENTICAL ("demographic.field.asserted") for both the
+/// name and dob events, so an ordering assertion that only compares `event_type` cannot tell
+/// a name-then-dob run from a dob-then-name one — a swapped `h_name`/`h_dob` tick would still
+/// pass. Reading straight from `event_log` rather than any projection is deliberate too: this
+/// is what proves the events actually landed TOGETHER, independent of what each projection
+/// separately decided to keep.
+async fn events_of(c: &Client, p: Uuid) -> Vec<(String, Option<String>, i64, i32)> {
     c.query(
-        "SELECT event_type, hlc_wall, hlc_counter FROM event_log \
+        "SELECT event_type, body ->> 'field' AS field, hlc_wall, hlc_counter FROM event_log \
          WHERE patient_id::text = $1 ORDER BY hlc_wall, hlc_counter",
         &[&p.to_string()],
     )
     .await
     .unwrap()
     .iter()
-    .map(|r| (r.get(0), r.get(1), r.get(2)))
+    .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
     .collect()
 }
 
@@ -142,6 +164,97 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_same_name() {
 }
 
 #[tokio::test]
+async fn a_year_only_birth_date_asserts_year_precision_never_a_fabricated_day() {
+    // Review round 1, #350, Important 1: `register_patient` used to hardcode "day" for EVERY
+    // dob, so `--birth-date 1980` produced a permanent, signed twin claiming a precision
+    // nobody has. End-to-end proof the derivation is actually wired in (the `dob_precision`
+    // unit tests in `register.rs` cover the pure function in isolation; this proves
+    // `register_patient` itself calls it rather than still hardcoding something).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let query = SearchQuery::new("Year Only Patient", Some("1980"), &[]);
+    let pid = register_patient(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        Some("Year Only Patient"),
+        &query,
+        &no_candidates(),
+    )
+    .await
+    .expect("a year-only birth date is a recognised shape and must be accepted");
+
+    assert_eq!(
+        patient_dob_precision(&c, pid).await.as_deref(),
+        Some("year"),
+        "a year-only value must assert year precision, never a fabricated \"day\""
+    );
+
+    let query = SearchQuery::new("Month Only Patient", Some("1980-06"), &[]);
+    let pid = register_patient(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        Some("Month Only Patient"),
+        &query,
+        &no_candidates(),
+    )
+    .await
+    .expect("a year-month birth date is a recognised shape and must be accepted");
+    assert_eq!(
+        patient_dob_precision(&c, pid).await.as_deref(),
+        Some("month")
+    );
+}
+
+#[tokio::test]
+async fn an_unrecognised_birth_date_shape_is_refused_not_silently_coerced() {
+    // Review round 1, #350, Important 1: the WHOLE call must refuse — no chart minted at
+    // all — rather than silently coercing a malformed shape to some guessed precision.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let query = SearchQuery::new("Bad Date Patient", Some("15/06/1980"), &[]);
+    let result = register_patient(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        Some("Bad Date Patient"),
+        &query,
+        &no_candidates(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "an unrecognised birth-date shape must refuse the whole registration"
+    );
+
+    let total: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        total, 0,
+        "a refused precision must mint NOTHING — not even the registration act"
+    );
+}
+
+#[tokio::test]
 async fn a_name_with_no_birth_date_asserts_a_name_event_and_no_dob_event() {
     // Principle 4: never fabricate the field that was never supplied. A clerk who typed a
     // name but no dob must get a name assertion and NOTHING pretending to be a dob.
@@ -181,6 +294,43 @@ async fn a_name_with_no_birth_date_asserts_a_name_event_and_no_dob_event() {
     assert_eq!(events.len(), 2, "registration + name, no dob: {events:?}");
     assert_eq!(events[0].0, "identity.registration.asserted");
     assert_eq!(events[1].0, "demographic.field.asserted");
+    assert_eq!(events[1].1.as_deref(), Some("name"));
+}
+
+#[tokio::test]
+async fn a_birth_date_with_no_name_asserts_a_dob_event_and_no_name_event() {
+    // The mirror image of the test above (review round 1, #350 Minor: this case was
+    // missing). A clerk who knows the dob but not the name — e.g. reading it off a document
+    // while the patient cannot speak — must get a dob assertion and NOTHING pretending to
+    // be a name.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let dob = "1965-09-30";
+    let query = SearchQuery::new("", Some(dob), &[]);
+
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    assert!(
+        patient_names(&c, pid).await.is_empty(),
+        "no name was supplied — no name event must land"
+    );
+    let (dob_value, dob_provenance) = patient_dob(&c, pid).await.expect("dob row must exist");
+    assert_eq!(dob_value, dob);
+    assert_eq!(dob_provenance, "registrar-entered");
+
+    let events = events_of(&c, pid).await;
+    assert_eq!(events.len(), 2, "registration + dob, no name: {events:?}");
+    assert_eq!(events[0].0, "identity.registration.asserted");
+    assert_eq!(events[1].0, "demographic.field.asserted");
+    assert_eq!(events[1].1.as_deref(), Some("dob"));
 }
 
 #[tokio::test]
@@ -223,6 +373,75 @@ async fn neither_name_nor_birth_date_asserts_no_demographic_events() {
     );
     assert_eq!(events[0].0, "identity.registration.asserted");
     assert_eq!(registration_class(&c, pid).await, "standard");
+}
+
+// --- review round 1, #350, Important 2: the blank-name filter is the LIVE CLI shape ---
+//
+// `main.rs`'s `--name` defaults to `""` and is passed through UNCONDITIONALLY as
+// `Some(name.as_str())` — never `None`. So an identifier-only registration through the real
+// CLI reaches `register_patient` as `Some("")`, not `None`. The test above
+// (`neither_name_nor_birth_date_asserts_no_demographic_events`) only ever exercised `None`,
+// the library-caller shape a test finds easy to write but the CLI never actually sends. The
+// two tests below pin the ACTUAL shape.
+
+#[tokio::test]
+async fn a_blank_empty_string_name_the_live_cli_shape_asserts_no_name_event() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let query = SearchQuery::new(
+        "",
+        None,
+        &[("MRN".to_string(), "cli-blank-name-999".to_string())],
+    );
+    let pid = register_patient(&mut c, &sk, &kid, "n", Some(""), &query, &no_candidates())
+        .await
+        .expect("registration accepted despite an empty-string name");
+
+    assert!(
+        patient_names(&c, pid).await.is_empty(),
+        "Some(\"\") is the CLI's actual empty shape and must assert no name event"
+    );
+}
+
+#[tokio::test]
+async fn a_whitespace_only_name_asserts_no_name_event() {
+    // A clerk who fat-fingers a stray space into --name (or a UI that pads a text field)
+    // must not get a name event whose "value" is invisible whitespace.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let query = SearchQuery::new(
+        "",
+        None,
+        &[("MRN".to_string(), "cli-whitespace-name-999".to_string())],
+    );
+    let pid = register_patient(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        Some("   "),
+        &query,
+        &no_candidates(),
+    )
+    .await
+    .expect("registration accepted despite a whitespace-only name");
+
+    assert!(
+        patient_names(&c, pid).await.is_empty(),
+        "whitespace-only must trim to blank and assert no name event"
+    );
 }
 
 #[tokio::test]
@@ -288,14 +507,28 @@ async fn registration_name_and_dob_events_land_together_with_the_registration_fi
     assert_eq!(events[0].0, "identity.registration.asserted");
     assert_eq!(events[1].0, "demographic.field.asserted");
     assert_eq!(events[2].0, "demographic.field.asserted");
+    // `field`, not just `event_type` (review round 1, #350 Minor): the name and dob events
+    // are BOTH `demographic.field.asserted`, so an assertion that stopped at `event_type`
+    // could not tell a name-then-dob run from a dob-then-name one — a swapped `h_name`/
+    // `h_dob` tick in the implementation would still satisfy it. `field` closes that gap.
+    assert_eq!(
+        events[1].1.as_deref(),
+        Some("name"),
+        "name must be SECOND (after registration, before dob): {events:?}"
+    );
+    assert_eq!(
+        events[2].1.as_deref(),
+        Some("dob"),
+        "dob must be THIRD: {events:?}"
+    );
     // Strict HLC order, registration first — proves the ticks (and therefore the submits)
     // happened in the documented order, not merely that three rows exist.
     assert!(
-        (events[0].1, events[0].2) < (events[1].1, events[1].2),
+        (events[0].2, events[0].3) < (events[1].2, events[1].3),
         "registration must strictly precede the name event: {events:?}"
     );
     assert!(
-        (events[1].1, events[1].2) < (events[2].1, events[2].2),
+        (events[1].2, events[1].3) < (events[2].2, events[2].3),
         "name must strictly precede the dob event: {events:?}"
     );
 }
