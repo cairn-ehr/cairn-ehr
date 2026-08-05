@@ -121,7 +121,10 @@ but not surfaced in any UI yet.
 > rather than assuming it turned up two facts:
 >
 > 1. **`patient.created` already exists** — a walking-skeleton event type classified `additive` (`db/005`),
->    projecting to `patient_chart`, with a `{name, dob, sex}` payload superseded by demographics slices 1–5,
+>    driving **two** registered appliers, not one: `patient_chart_apply` → `patient_chart` (`db/005`, run
+>    order 10, and the branch at `db/002`) *and* `surrogate_project_apply` → `patient_ref` (`db/008`, run
+>    order 20). Retiring the type means retiring both. Its `{name, dob, sex}` payload is superseded by
+>    demographics slices 1–5,
 >    **no structural floor** and no twin-check row. It is an unfloored registration act, and it must be
 >    **retired** by the same change that turns the rule on. Grandfathering it as a permitted first event
 >    would put back exactly the "unless" decision 1 exists to remove.
@@ -230,6 +233,14 @@ it is the wrong rank for this one: a registrar's typed DOB currently loses to wo
 [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351) holds it open; ranking the term is a decision for
 whoever next audits the whole ladder, not a silent edit here.
 
+**A known residual on this same path, stated rather than left implied.** The argument above refuses a
+fabricated placeholder *name* as a precise untruth — while the DOB written beside it is validated only for
+**shape**, never for calendar validity, so `1980-13-45` is accepted as day precision and signed permanently.
+That is a fabricated *date* in an immutable record, i.e. the same fault this decision rejects, surviving one
+field over. It follows from the deliberately parse-free, culture-neutral floor rather than from an oversight,
+but the inconsistency is real and is tracked at
+[#352](https://github.com/cairn-ehr/cairn-ehr/issues/352).
+
 ### 7. John Doe is deliberately asymmetric, and the asymmetry is correct
 
 A §5.4 unidentified registration asserts a **callsign** (so the chart is findable and renders an obvious
@@ -265,9 +276,15 @@ differently: the matcher re-runs on every new evidence assertion, i.e. **search-
 - Every registration now writes a permanent record naming third parties in the clear, so rung-2 erasure has
   one more surface to reach (decision 5).
 - The attestation's honesty depends on the displaying surface and the attesting act never disagreeing about
-  what was shown. The mitigation is structural, not procedural: the attestation is *derived from* the
-  displayed list by a single constructor in a pure crate both consumers depend on, so it cannot be built
-  independently of one.
+  what was shown, and **the type system does not enforce that** — `SearchAttestation`'s fields are public and
+  the wire builder takes a bare `&[Uuid]`, so a caller *can* construct an attestation naming candidates
+  nobody displayed. What we have instead is convention plus one test: there is **one constructor**
+  (`SearchAttestation::from_displayed`, derived from the `CandidateList` that was shown) and **one conversion
+  site** between the read model and the wire builder (`register::build_registration_body`), pinned by the
+  round-trip test in `cairn-node/tests/patient_register.rs`. That is a *disciplined-caller* guarantee, not a
+  structural one — stated precisely because a permanent record that overclaims here would be trusted years
+  later. Closing the gap properly means a constructor-only type, and that is future work, not a claim to
+  make now.
 - The candidate search adds a latency-sensitive path to registration, which paper-parity
   ([§1.2](../vision.md#12-the-paper-parity-test-normative)) budgets at ≤ 5 s to find an existing chart and
   ≤ 20 s to register a new one. The interactive measurement is owed by the first slice with a runnable
@@ -277,8 +294,12 @@ differently: the matcher re-runs on every new evidence assertion, i.e. **search-
 search never blocks, never vetoes and never auto-decides, because a missed candidate produces a **false
 split** — §5.2's explicitly safe direction — and ADR-0014 already names the standing backstop: the hub-tier
 aggressive background duplicate sweep, whose worklist yield doubles as the miss-rate metric. What is
-safety-critical is not *finding* the duplicate but *recording the act*, which is a property of the event and
-therefore checkable in the database and unbypassable by a client talking raw SQL (principle 12).
+safety-critical is not *finding* the duplicate but **whether a registration carries a well-formed
+attestation** — a property of the event itself, therefore checkable in the database and, once db/045 is
+loaded, unbypassable even by a client talking raw SQL (principle 12). Note the exact scope, because it is
+narrower than it first reads: the floor governs the *shape* of a registration that occurs. That one
+**occurs at all** before clinical content lands is the precedence rule, and that is
+[#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) — see decision 3.
 
 **How we would know the bet fails.** The hub sweep's worklist yield rising rather than falling once the
 funnel is in routine use — duplicates being created at a rate the funnel is not reducing. Two distinct

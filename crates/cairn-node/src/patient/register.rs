@@ -15,8 +15,9 @@
 //! John Doe path (`john_doe::register_john_doe`) has nothing to search with and is registered
 //! elsewhere, and the §5.6 pseudonymous path is likewise out of scope here.
 //!
-//! No human-author requirement is added here, and none should ever be added: spec §2.6 says
-//! authorship confidence is a GRADE, not a gate (§5.11) — `db/045_patient_registration.sql`'s
+//! No human-author requirement is added here, and none should ever be added: ADR-0061 decision 4
+//! records the REJECTED alternative at length — authorship confidence is a GRADE, not a gate
+//! (spec §5.11) — and `db/045_patient_registration.sql`'s
 //! own header explains why a gate would block care documentation at 03:00 when a clerk's key
 //! is not unlocked. The contributor set below is the same "the NODE recorded it" shape every
 //! additive event in this codebase uses (see `john_doe::build_callsign_name_body`) — a human

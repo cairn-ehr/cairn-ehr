@@ -3,7 +3,8 @@
 //! What these must prove, beyond "the happy path works":
 //!   * absence for the non-standard classes is STRUCTURAL, not merely optional;
 //!   * an empty displayed list is ACCEPTED (the normal new-patient case);
-//!   * an unattested standard registration is ACCEPTED (spec §2.6 — a grade, not a gate).
+//!   * an unattested standard registration is ACCEPTED (ADR-0061 decision 4 — a grade, not a
+//!     gate; spec §5.11).
 //!
 //! # Why the floor is the thing under test, and not the Rust builders
 //!
@@ -681,7 +682,7 @@ async fn a_registration_naming_a_registrar_who_did_not_sign_is_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
-    // Proves spec §2.6's "unforgeable for free" claim rather than assuming it: the refusal
+    // Proves ADR-0061 decision 4's "unforgeable for free" claim rather than assuming it: the refusal
     // comes from db/005's UNCONDITIONAL cairn_authorship_bound (step 4b), with NO rule added
     // by db/045. That is why the previous test can safely accept an unattested registration
     // — an unattested one claims no author at all, whereas naming a registrar who neither

@@ -80,7 +80,7 @@ AS $$
     -- chart is silently unfindable.
     --
     -- Exact equality, NOT `LIKE '%token%'`: a leading-wildcard match cannot use an index at
-    -- all, and the §7 budget is 5 s to find an existing chart. Equality keeps the door open
+    -- all, and the §1.2 paper-parity budget is 5 s to find an existing chart. Equality keeps the door open
     -- to an expression index on the same expression when a node grows large enough to need
     -- one.
     --

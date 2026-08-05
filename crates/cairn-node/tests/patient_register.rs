@@ -126,7 +126,7 @@ async fn registering_mints_a_chart_and_records_what_was_displayed() {
 
 #[tokio::test]
 async fn the_attestation_round_trips_from_the_displayed_list_to_the_stored_body() {
-    // GUARDS THE CROSS-CRATE SEAM (design §6): cairn-event takes primitives and
+    // GUARDS THE CROSS-CRATE SEAM (ADR-0061 — the one conversion site): cairn-event takes primitives and
     // cairn-patient-search owns the read model, so nothing but this test stops the two
     // drifting. Build a CandidateList -> SearchAttestation -> body -> submit -> read the
     // stored body back -> assert the displayed set is IDENTICAL, in order.

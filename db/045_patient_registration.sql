@@ -31,7 +31,8 @@
 --     #345. Adding it here would change the admission contract for ~83 existing call
 --     sites in one commit; it gets its own slice.
 --   * Any AUTHORSHIP requirement. A standard registration with NO human author is
---     ACCEPTED — spec §2.6: authorship confidence is a GRADE, not a gate (§5.11). A gate
+--     ACCEPTED — ADR-0061 decision 4: authorship confidence is a GRADE, not a gate (spec
+--     §5.11), and that decision records the rejected alternative in full. A gate
 --     here would block care documentation at 03:00 when a clerk's key is not unlocked,
 --     push named patients through the John Doe path, and leave no forensic record in the
 --     case it fires. Naming a registrar who did not authenticate is already refused for
