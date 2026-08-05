@@ -5,7 +5,8 @@
 //! the drug chart.
 //!
 //! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. A candidate's display fields come from seven
-//! genuinely different projections (name, the repudiated-name overlay, dob, trust, chart
+//! genuinely different projections (the display-winner name, the raw retained name set used
+//! only to disambiguate a repudiated-away name from a never-asserted one, dob, trust, chart
 //! activity, address, photo evidence), several of which are retained SETS rather than single
 //! rows (an address has one row per USE; a chart may carry more than one photo-evidence
 //! event over its life; a rendition set may carry more than one rendition per attachment).
@@ -63,7 +64,20 @@ pub async fn search_patients<C: GenericClient + Sync>(
     }
 
     let names = read_display_names(client, &ids).await?;
-    let repudiated = read_repudiated_only(client, &ids).await?;
+    // N4 (review round 2, #344): only pay for the repudiation-vs-never-asserted distinction
+    // (below) when there is actually a gap to explain. Most searches return candidates that
+    // ALL have a display name, and this read path is §5.11-budgeted at "no spinner" — a
+    // second round trip nobody needs is not free just because it is small.
+    let missing_names: Vec<Uuid> = ids
+        .iter()
+        .filter(|id| !names.contains_key(id))
+        .copied()
+        .collect();
+    let ever_named = if missing_names.is_empty() {
+        HashSet::new()
+    } else {
+        read_names_ever_asserted(client, &missing_names).await?
+    };
     let dobs = read_dob(client, &ids).await?;
     let trust_states = read_trust_states(client, &ids).await?;
     let last_activity = read_last_activity(client, &ids).await?;
@@ -82,12 +96,13 @@ pub async fn search_patients<C: GenericClient + Sync>(
         .map(|id| {
             let display_name = match names.get(id) {
                 Some(name) => name.clone(),
-                // db/025: a chart whose ONLY asserted name was struck as known-false has NO
-                // winner row in `patient_name_current` BY DESIGN — showing the known-false
+                // db/025: a chart whose ONLY asserted name(s) were struck as known-false has
+                // NO winner row in `patient_name_current` BY DESIGN — showing the known-false
                 // name back would be a precise untruth (principle 4), so the view withholds
                 // it on purpose. That is an honest "name withheld", not a failed read, and
                 // must NOT count toward `incomplete` the way a genuine read failure does.
-                None if repudiated.contains(id) => "(name withheld)".to_string(),
+                // `ever_named` answers this precisely — see `read_names_ever_asserted`'s doc.
+                None if ever_named.contains(id) => "(name withheld)".to_string(),
                 None => {
                     unreadable_names += 1;
                     // Never drop the candidate: a silently-dropped row is precisely the
@@ -219,22 +234,37 @@ async fn read_display_names<C: GenericClient + Sync>(
     Ok(out)
 }
 
-/// Which of `ids` have at least one struck (known-false) name on `patient_alias_pool`
-/// (db/025) — used to tell "this chart's only name was repudiated" (an honest, by-design
-/// absence from `patient_name_current`) apart from "this chart never had a name asserted
-/// at all" (a genuine read gap the caller reports via `incomplete`).
+/// Which of `ids` have EVER had a `patient_name` row asserted (struck or not) — used to tell
+/// "this chart's only name(s) were repudiated" (an honest, by-design absence from
+/// `patient_name_current`) apart from "this chart never had a name asserted at all" (a
+/// genuine read gap the caller reports via `incomplete`). Called ONLY for ids already known
+/// to be missing from `read_display_names`'s result (see `missing_names` in the caller).
 ///
-/// Reads the `patient_alias_pool` VIEW, never `name_repudiation` directly: db/025
-/// deliberately grants NO broad SELECT on the base table (its `reason` column is
-/// forensic free text that must not leak cross-patient, ADR-0006) — the view is the
-/// reason-free projection this node's own agent role actually has access to.
-async fn read_repudiated_only<C: GenericClient + Sync>(
+/// PROVABLY SUFFICIENT, not a heuristic: `patient_name_current` (db/025) is `patient_name`
+/// filtered by exactly ONE condition — an anti-join against `name_repudiation` on
+/// `(patient_id, value)` — and nothing else. So a candidate already known to be ABSENT from
+/// `patient_name_current` that nonetheless HAS a `patient_name` row must have had every one
+/// of its rows individually struck; the view has no other mechanism to drop it. That makes
+/// "does `patient_name` have any row for this id" the exact question, not an approximation.
+///
+/// Review round 2 (N3): the PRIOR version of this check asked "does `patient_alias_pool`
+/// (db/025's cross-patient known-alias view) have any row naming this patient", which is the
+/// WRONG question — the alias pool has no requirement that a struck value ever belonged to
+/// THIS chart's own `patient_name` rows (it exists so the matcher can recognise a returning
+/// fabricated persona on ANY chart), so a chart with zero names ever asserted plus one
+/// unrelated repudiation would false-positive into "(name withheld)" and be silently dropped
+/// from `incomplete` — converting a genuine read gap into a claimed by-design absence, and
+/// suppressing exactly the ADR-0060 decision-2 signal that tells the clerk the search was not
+/// exhaustive. Reading `patient_name` (broadly granted, db/012) instead of `name_repudiation`
+/// or `patient_alias_pool` also sidesteps db/025's deliberate no-broad-grant on the base
+/// table (`reason` is forensic free text, ADR-0006) without needing the alias view at all.
+async fn read_names_ever_asserted<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
 ) -> anyhow::Result<HashSet<Uuid>> {
     let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
     let sql = "SELECT DISTINCT patient_id::text AS patient_id \
-               FROM patient_alias_pool \
+               FROM patient_name \
                WHERE patient_id = ANY($1::text[]::uuid[])";
     let mut out = HashSet::new();
     for row in client.query(sql, &[&id_strs]).await? {
@@ -347,21 +377,35 @@ async fn read_locale<C: GenericClient + Sync>(
     Ok(out)
 }
 
-/// The digest of the most recent `identity.evidence.asserted` PHOTO event's `original`
-/// rendition, per candidate — a content-addressed reference only, never bytes. Fetching the
-/// image is byte-tier work (ADR-0013) and must not sit on the search latency path §5.11
-/// budgets at "type a few chars and enter, no spinner".
+/// The digest of the candidate's `original` rendition, from their most recent
+/// `identity.evidence.asserted` PHOTO event THAT CARRIES ONE — a content-addressed
+/// reference only, never bytes. Fetching the image is byte-tier work (ADR-0013) and must
+/// not sit on the search latency path §5.11 budgets at "type a few chars and enter, no
+/// spinner". NOT simply "the most recent photo event": a newer photo event whose attachment
+/// carries only a preview rendition (no `original` yet — e.g. mid-upload) is silently
+/// skipped rather than blanking out an older original that IS still the best evidence on
+/// file (N2, review round 2 — the opening line above used to claim otherwise).
 ///
 /// Reads `event_log` directly rather than through a projection: `identity.evidence.asserted`
 /// is additive (db/028) and carries no dedicated "current" view the way a demographic field
 /// does, so the freshest row by HLC IS the read.
 ///
-/// SELECTS BY `role = 'original'`, NEVER BY POSITION (review-round fix, #344 Important 2).
+/// SELECTS BY `role = 'original'`, NEVER BY POSITION (review round 1, #344 Important 2).
 /// ADR-0042 exists precisely so one attachment can carry N renditions (a thumbnail preview
 /// alongside the original, say) — `renditions -> 0` is whichever the AUTHOR happened to
 /// list first, not necessarily the original, so indexing positionally would let a future
 /// preview-adding change silently swap what the picker displays. `jsonb_array_elements`
 /// over each attachment's rendition set, filtered on the named role, is index-order-proof.
+///
+/// TOTAL ORDER, INCLUDING TIES (N1, review round 2): `role` is an open string with NO
+/// uniqueness constraint in the wire shape (`cairn_event::attachment::Rendition`) or the DB,
+/// so two attachments on the SAME event — or, in principle, two renditions both marked
+/// "original" within one attachment's own set — can tie on `(hlc_wall, hlc_counter)`. Without
+/// a further tiebreak, `DISTINCT ON`'s pick among tied rows is Postgres's to make, not this
+/// query's, and could differ between two runs of the identical search: exactly the kind of
+/// silent non-determinism a wrong-chart-prevention surface cannot tolerate (a clerk must see
+/// the SAME photo every time they search the same name). `digest_hex` is a content hash, so
+/// ordering by it last makes the whole ORDER BY total and therefore the pick stable.
 async fn read_photo_refs<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
@@ -380,7 +424,7 @@ async fn read_photo_refs<C: GenericClient + Sync>(
                     AND NOT e.sealed \
                     AND rendition ->> 'role' = 'original' \
                ) matched \
-               ORDER BY patient_id, hlc_wall DESC, hlc_counter DESC";
+               ORDER BY patient_id, hlc_wall DESC, hlc_counter DESC, digest_hex";
     let mut out = HashMap::new();
     for row in client.query(sql, &[&id_strs]).await? {
         let id: Uuid = row.get::<_, String>("patient_id").parse()?;

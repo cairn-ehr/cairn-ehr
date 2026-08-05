@@ -14,15 +14,20 @@ use cairn_event::demographics::{
     dob_assertion_body, identifier_assertion_body, name_assertion_body, render_dob_twin,
     render_identifier_twin, render_name_twin, IdentifierAssertion,
 };
-use cairn_event::identity::{dispute_assertion_body, render_dispute_twin, DisputeAssertion};
+use cairn_event::identity::{
+    dispute_assertion_body, render_dispute_twin, render_repudiate_twin, repudiation_assertion_body,
+    DisputeAssertion, RepudiationAssertion,
+};
 use cairn_event::identity_evidence::{
     photo_evidence_body, render_identity_evidence_twin, IDENTITY_EVIDENCE_EVENT_TYPE,
     IDENTITY_EVIDENCE_SCHEMA_VERSION, PHOTO_EVIDENCE_KIND,
 };
-use cairn_event::{EventBody, Hlc, SigningKey};
+use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::{SearchQuery, TrustState};
-use common::{cs, setup, submit_patient_created, submit_signed, EventSpec};
+use common::{
+    cs, enroll_human, setup, submit_attested, submit_patient_created, submit_signed, EventSpec,
+};
 use std::collections::BTreeSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -32,8 +37,14 @@ use uuid::Uuid;
 /// `patient_name` holds the retained name set pass 3 tokenises; `chart_identity_state`
 /// is the John-Doe-registration overlay the callsign test composes onto (mirrors
 /// `john_doe.rs`'s `OVERLAY_TABLES`); `chart_dispute` backs the `chart_trust` `under-review`
-/// row `a_candidate_carries_name_age_trust_and_last_activity` asserts against.
-const EXTRA_TABLES: [&str; 3] = ["patient_name", "chart_identity_state", "chart_dispute"];
+/// row `a_candidate_carries_name_age_trust_and_last_activity` asserts against;
+/// `name_repudiation` backs `a_repudiated_only_name_reads_as_withheld_not_incomplete`.
+const EXTRA_TABLES: [&str; 4] = [
+    "patient_name",
+    "chart_identity_state",
+    "chart_dispute",
+    "name_repudiation",
+];
 
 /// Submit one §4.4 identifier assertion for `patient`, built by the typed builder.
 async fn submit_identifier(
@@ -943,7 +954,7 @@ async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is
         payload: photo_evidence_body(Some("on arrival")),
         attachments: vec![attachment],
         plaintext_twin: Some(twin),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        clock_grade: ClockGrade::SelfAsserted,
     };
     let signed = cairn_event::sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -966,4 +977,207 @@ async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is
         Some(preview.digest_hex.as_str()),
         "must never return the preview's digest: {list:?}"
     );
+}
+
+#[tokio::test]
+async fn two_tied_original_renditions_resolve_to_the_same_digest_every_time() {
+    // N1 regression coverage (review round 2, #344): `role` carries no uniqueness
+    // constraint (the wire shape, `cairn_event::attachment::Rendition`, or the DB), so two
+    // renditions both marked "original" — or two attachments on one event, each with its
+    // own original — tie on `(hlc_wall, hlc_counter)`. Without a total tiebreak,
+    // `DISTINCT ON`'s pick among tied rows is Postgres's to make, not this query's, and
+    // could differ between two runs of the SAME search — intolerable on a
+    // wrong-chart-prevention surface, where a clerk must see the same photo every time.
+    // `digest_hex` closes the `ORDER BY`, so the pick is content-derived and stable.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body("Tied Original", Some("legal"), "patient-stated"),
+        render_name_twin("Tied Original", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name accepted");
+
+    // TWO renditions, BOTH role="original", on one attachment — the exact tie N1
+    // describes. Distinct bytes so the two renditions have distinct, comparable digests.
+    let original_a =
+        Rendition::reference(RENDITION_ROLE_ORIGINAL, b"candidate-bytes-a", "image/jpeg");
+    let original_b =
+        Rendition::reference(RENDITION_ROLE_ORIGINAL, b"candidate-bytes-b", "image/jpeg");
+    // Deliberately array-ORDERED so the FIRST rendition is the one with the LARGER digest —
+    // i.e. NOT the one `ORDER BY ... digest_hex` (ascending) should pick. Without this, the
+    // test would be non-discriminating: `jsonb_array_elements` walks an array in its own
+    // stored order, so "whichever rendition happens to be listed first" is itself a stable,
+    // if accidental, order — a query that silently fell back to array position instead of
+    // sorting by `digest_hex` could still pass a test that never puts the "wrong" one first.
+    let (first_in_array, second_in_array) = if original_a.digest_hex > original_b.digest_hex {
+        (original_a.clone(), original_b.clone())
+    } else {
+        (original_b.clone(), original_a.clone())
+    };
+    let attachment = Attachment {
+        descriptor: "two tied originals on one attachment".to_string(),
+        renditions: vec![first_in_array, second_in_array],
+    };
+    let twin = render_identity_evidence_twin(PHOTO_EVIDENCE_KIND, None, &attachment);
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: IDENTITY_EVIDENCE_EVENT_TYPE.into(),
+        schema_version: IDENTITY_EVIDENCE_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall: 2,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: photo_evidence_body(None),
+        attachments: vec![attachment],
+        plaintext_twin: Some(twin),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&body, &sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("two-tied-original photo evidence accepted");
+
+    let query = SearchQuery::new("Tied", None, &[]);
+    let expected = [original_a.digest_hex.clone(), original_b.digest_hex.clone()]
+        .into_iter()
+        .min()
+        .unwrap();
+
+    // Run the search TWICE: the point under test is that the SAME digest comes back both
+    // times, not merely that a value exists.
+    for attempt in 1..=2 {
+        let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+            .await
+            .expect("search succeeds");
+        assert_eq!(
+            list.candidates.len(),
+            1,
+            "attempt {attempt}: the tied-original chart: {list:?}"
+        );
+        assert_eq!(
+            list.candidates[0].photo_ref.as_deref(),
+            Some(expected.as_str()),
+            "attempt {attempt}: the tie must resolve to the SAME digest every run: {list:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
+    // N3 regression coverage (review round 2, #344): a chart whose ONLY name was struck as
+    // known-false (db/025) has NO winner row in `patient_name_current` BY DESIGN — showing
+    // the known-false name back would be a lie (principle 4). That absence must read as an
+    // honest "(name withheld)", NOT count toward `incomplete`: a genuine read failure and an
+    // intentional withholding have OPPOSITE remedies for a clerk (search harder vs. accept
+    // the chart is real but unnamed), and conflating them would hide exactly the ADR-0060
+    // decision-2 signal that tells the clerk the search was not exhaustive.
+    //
+    // Driven through the REAL suppressing-mode path (a human attestation, via the harness
+    // lifted from `identity_repudiate.rs` into `common::enroll_human`/`submit_attested`),
+    // not a raw overlay-table INSERT: this codebase's tests exercise the actual floor.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    // Matched via an identifier so the chart is a real search candidate once its only name
+    // is struck — a repudiation alone, with no other evidence on the chart, would not
+    // surface it as a candidate at all, and this test would prove nothing.
+    let p = Uuid::now_v7();
+    let ident = IdentifierAssertion {
+        value: "with-repudiated-name",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &ident)
+        .await
+        .expect("identifier accepted");
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        2,
+        name_assertion_body("Fabricated Persona", Some("legal"), "patient-stated"),
+        render_name_twin("Fabricated Persona", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name accepted");
+
+    // Strike the chart's ONLY name. `identity.repudiate.asserted` is suppressing-mode, so
+    // db/005's attestation gate always demands a responsibility-bearing human (§5.7
+    // "Human") — the agent-only key `setup` enrolls cannot sign this off alone.
+    let subject_s = p.to_string();
+    let rep = RepudiationAssertion {
+        subject: &subject_s,
+        value: "Fabricated Persona",
+        reason: "confessed fabricated persona",
+    };
+    let repudiation_body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: subject_s.clone(),
+        event_type: "identity.repudiate.asserted".into(),
+        schema_version: "identity.repudiate.asserted/1".into(),
+        hlc: Hlc {
+            wall: 3,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: repudiation_assertion_body(&rep),
+        attachments: vec![],
+        plaintext_twin: Some(render_repudiate_twin(&rep)),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    submit_attested(&c, &sk, repudiation_body, &sk_h, &kid_h)
+        .await
+        .expect("repudiation accepted with human attestation");
+
+    let query = SearchQuery::new(
+        "",
+        None,
+        &[("MRN".to_string(), "with-repudiated-name".to_string())],
+    );
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the chart must still be found, never dropped: {list:?}"
+    );
+    assert_eq!(list.candidates[0].display_name, "(name withheld)");
+    assert!(
+        !list.incomplete,
+        "a by-design repudiated-name absence must NOT count as a read failure: {list:?}"
+    );
+    assert!(list.incomplete_reason.is_none());
 }
