@@ -529,6 +529,38 @@ enum Cmd {
         basis: String,
     },
 
+    /// Search this node's charts before creating one (§5.8 item 1). Advisory: it ranks
+    /// nothing and decides nothing — it shows a human what exists.
+    PatientSearch {
+        /// Name as typed; tokenised on non-alphanumerics, so order does not matter.
+        #[arg(long, default_value = "")]
+        name: String,
+        /// ISO YYYY-MM-DD.
+        #[arg(long)]
+        birth_date: Option<String>,
+        /// Repeatable `system=value`, e.g. --identifier MRN=12345
+        #[arg(long = "identifier")]
+        identifiers: Vec<String>,
+    },
+
+    /// Register a standard patient, recording the search that preceded it (§5.8).
+    ///
+    /// The search runs HERE, immediately before the write, and its result is what gets
+    /// attested — so the attestation always describes a real search this command ran,
+    /// never one an operator retyped.
+    PatientRegister {
+        #[arg(long, default_value = "")]
+        name: String,
+        #[arg(long)]
+        birth_date: Option<String>,
+        #[arg(long = "identifier")]
+        identifiers: Vec<String>,
+        /// Proceed even though candidates were displayed. Without it the command STOPS and
+        /// prints them: a funnel that auto-proceeds past near-matches is not a funnel.
+        #[arg(long)]
+        confirm_new: bool,
+    },
+
     /// Enroll a clinician's signing key as a `kind='human'` actor so it may sign+attest an
     /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
     /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
@@ -1561,6 +1593,84 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
+        }
+        Cmd::PatientSearch {
+            name,
+            birth_date,
+            identifiers,
+        } => {
+            // Malformed input is refused before any I/O — same discipline as EnrollHuman's
+            // pre-mint check: fail cheaply before spending a round trip on a query we'd have
+            // to explain was built from a silently-mangled identifier.
+            let identifiers = parse_identifier_pairs(&identifiers)?;
+            let query =
+                cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            // The John-Doe precedent: today's date comes from the node's own DB clock, never
+            // the operator's wall clock, so the offline-first age math the shared crate does
+            // is anchored the same way everywhere it runs.
+            let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            let list = cairn_node::patient::search::search_patients(&db, &query, &today).await?;
+            print_candidates(&list);
+        }
+        Cmd::PatientRegister {
+            name,
+            birth_date,
+            identifiers,
+            confirm_new,
+        } => {
+            let identifiers = parse_identifier_pairs(&identifiers)?;
+            let query =
+                cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
+
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            // Owner ceremony: make the signing key an enrolled actor so it may author the
+            // additive registration event (idempotent — enrolls only on first use), mirroring
+            // RegisterJohnDoe.
+            ensure_registration_actor(&db, &kid).await?;
+
+            // THE SEARCH RUNS HERE, immediately before the write, over THIS process's own DB
+            // connection — never a result an operator retyped from an earlier `patient-search`
+            // run. `register_patient` (below) attests exactly this `list`, so what gets signed
+            // into the permanent record is provably the search a human actually saw on THIS
+            // screen a moment ago, not a claim about a search that may never have happened.
+            let list = cairn_node::patient::search::search_patients(&db, &query, &today).await?;
+            print_candidates(&list);
+
+            if !list.candidates.is_empty() && !confirm_new {
+                // STOP HERE. This is NOT a confirmation dialog — principle 3 explicitly
+                // forbids those as a safety mechanism, because a dialog habituates a busy
+                // clerk to click through without reading. This is instead the PAPER
+                // affordance: a clerk working a physical card index sees the existing cards
+                // before they can pull a fresh blank one — the index itself is the barrier,
+                // not a prompt asking "are you sure?". Exiting non-zero with the candidates
+                // already printed above reproduces that same physical fact for a CLI: nothing
+                // is registered, and the only way past is the explicit `--confirm-new` a
+                // clerk types after having looked. If a future change turns this into an
+                // auto-proceed-past-candidates default, it quietly deletes the funnel this
+                // whole task exists to build — please don't "simplify" it away.
+                anyhow::bail!(
+                    "{} candidate(s) already on file for this search (printed above) — \
+                     re-run with --confirm-new to register a new chart anyway, or use one of \
+                     the patient_ids shown instead",
+                    list.candidates.len()
+                );
+            }
+
+            let patient_id = cairn_node::patient::register::register_patient(
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                &query,
+                &list,
+            )
+            .await?;
+            println!("registered patient {patient_id}");
         }
         Cmd::EnrollHuman {
             registration_id,
@@ -2619,6 +2729,84 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parse the repeatable `--identifier system=value` flag shared by `patient-search` and
+/// `patient-register`. Pure (no I/O) so it is directly unit-testable — see the `tests`
+/// module below.
+///
+/// STRICT ON PURPOSE. A silently-skipped malformed pair is worse than a loud error here: the
+/// caller feeds the result straight into a `SearchQuery` that `patient-register` also signs
+/// into a permanent attestation, so a pair this function quietly dropped would let that
+/// attestation claim a search was run against an identifier it never actually searched for.
+/// Splitting on only the FIRST `=` (not `split('=')`) deliberately allows a value that itself
+/// contains `=` (e.g. a base64-ish fragment) — only the separator between `system` and
+/// `value` is special.
+fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)>> {
+    raw.iter()
+        .map(|s| {
+            let (system, value) = s.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!(
+                    "malformed --identifier {s:?}: expected `system=value`, e.g. \
+                     --identifier MRN=12345"
+                )
+            })?;
+            if system.is_empty() || value.is_empty() {
+                anyhow::bail!(
+                    "malformed --identifier {s:?}: both `system` and `value` must be \
+                     non-empty (expected `system=value`, e.g. --identifier MRN=12345)"
+                );
+            }
+            Ok((system.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// Render a `CandidateList` the way `patient-search` and `patient-register` both show it: one
+/// line per candidate, in the exact order the list carries them (`patient-register` attests
+/// this same order — see `register::build_registration_body`'s doc — so the print order and
+/// the attested order must never be allowed to drift apart).
+///
+/// The `incomplete` reason is printed LAST and on its own line, deliberately AFTER every
+/// candidate row rather than as a header above them (ADR-0060 decision 2: partial completion
+/// must be reported, never implied). A reason printed first can scroll off the top of a
+/// terminal behind a long candidate list and never be seen; printed last, it is the last thing
+/// on screen no matter how many rows precede it.
+fn print_candidates(list: &cairn_patient_search::CandidateList) {
+    if list.candidates.is_empty() {
+        println!("no candidates found");
+    } else {
+        println!(
+            "{:<36}  {:<28}  {:>4}  {:<12}  {:<12}  locale",
+            "patient_id", "name", "age", "trust", "last activity"
+        );
+        for c in &list.candidates {
+            let age = c
+                .age
+                .as_ref()
+                .map(|a| a.years.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let last_activity = c.last_activity.as_deref().unwrap_or("-");
+            let locale = c.locale.as_deref().unwrap_or("-");
+            println!(
+                "{:<36}  {:<28}  {:>4}  {:<12}  {:<12}  {}",
+                c.patient_id,
+                c.display_name,
+                age,
+                c.trust.as_str(),
+                last_activity,
+                locale
+            );
+        }
+    }
+    // Deliberately last — see the fn doc. Do not hoist this above the loop.
+    if list.incomplete {
+        let reason = list
+            .incomplete_reason
+            .as_deref()
+            .unwrap_or("(no reason given)");
+        println!("! search incomplete: {reason}");
+    }
+}
+
 /// Ensure the node's signing key is enrolled as an actor that may author the additive §5.4
 /// John-Doe registration events. Enrolls a `device` actor ONLY when this key is not already
 /// enrolled under ANY kind. An owner ceremony — the runtime `cairn_agent` role deliberately
@@ -2669,5 +2857,70 @@ mod tests {
             "op-pass",
             "a non-empty flag is returned verbatim"
         );
+    }
+
+    #[test]
+    fn a_well_formed_identifier_pair_parses() {
+        let out = parse_identifier_pairs(&["MRN=12345".to_string()]).unwrap();
+        assert_eq!(out, vec![("MRN".to_string(), "12345".to_string())]);
+    }
+
+    #[test]
+    fn several_identifier_pairs_parse_in_order() {
+        let raw = vec!["MRN=12345".to_string(), "NHI=ABC1234".to_string()];
+        let out = parse_identifier_pairs(&raw).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                ("MRN".to_string(), "12345".to_string()),
+                ("NHI".to_string(), "ABC1234".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_may_itself_contain_an_equals_sign() {
+        // Only the FIRST `=` is the system/value separator — a base64-ish value carrying its
+        // own `=` must survive intact rather than being truncated or rejected.
+        let out = parse_identifier_pairs(&["TOKEN=abc=def=".to_string()]).unwrap();
+        assert_eq!(out, vec![("TOKEN".to_string(), "abc=def=".to_string())]);
+    }
+
+    #[test]
+    fn a_pair_with_no_equals_sign_is_rejected_not_dropped() {
+        // The load-bearing case (#344 brief): a malformed pair must be a loud, legible error
+        // naming the expected form — never silently skipped. A silent skip would let
+        // `patient-register` attest a search that never actually ran against this identifier.
+        let err = parse_identifier_pairs(&["MRN12345".to_string()]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MRN12345") && msg.contains("system=value"),
+            "error must name the offending input and the expected form: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_empty_system_is_rejected() {
+        let err = parse_identifier_pairs(&["=12345".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn an_empty_value_is_rejected() {
+        let err = parse_identifier_pairs(&["MRN=".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn one_malformed_pair_among_valid_ones_fails_the_whole_parse() {
+        // Strict, not best-effort: a single bad pair must not let the OTHER, well-formed
+        // pairs quietly proceed while it is dropped — the whole command refuses instead.
+        let raw = vec!["MRN=12345".to_string(), "bad-pair".to_string()];
+        assert!(parse_identifier_pairs(&raw).is_err());
+    }
+
+    #[test]
+    fn an_empty_list_of_identifiers_parses_to_empty() {
+        assert_eq!(parse_identifier_pairs(&[]).unwrap(), Vec::new());
     }
 }
