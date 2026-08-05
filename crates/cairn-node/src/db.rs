@@ -257,6 +257,35 @@ const SCHEMA: &[(&str, &str)] = &[
         "044_ui_gesture_timing",
         include_str!("../../../db/044_ui_gesture_timing.sql"),
     ),
+    // db/045 (#344, ADR-0061): the `identity.registration.asserted` floor — the act that
+    // brings a chart into being, its structural check, and the retained-set projection
+    // whose _current view picks the EARLIEST registration (a birth act, not a standing
+    // state).
+    //
+    // cairn-sync's subset legitimately lags here (#284), as it already does for every
+    // identity/demographic projection (db/010-019, 022-025, ...). A cairn-sync-only
+    // database therefore holds no classification for this type, so db/020 ADMITS a
+    // replicated registration and marks it DEFERRED (ADR-0056) rather than losing or
+    // refusing it; cairn_readjudicate_deferred (db/043) promotes it once that database
+    // gains the file. That is honest degradation, not drift — unlike db/043 itself, which
+    // had to land in both lists because cairn-sync's own door WRITES the deferral markers.
+    (
+        "045_patient_registration",
+        include_str!("../../../db/045_patient_registration.sql"),
+    ),
+    // db/046 (#344, §5.8): the advisory `cairn_search_candidates` three-pass search
+    // (shared identifier / exact DOB / shared name token). ADVISORY, NOT A FLOOR
+    // (ADR-0014) — adds no event type and no projection, so unlike db/045 it carries no
+    // twin-registry row and no cairn_projection_apply row.
+    //
+    // cairn-sync does NOT carry this file: its subset already omits the demographics
+    // migrations (db/010-013) this function reads, so the function would have nothing to
+    // query there — same "legitimately lags" discipline as every identity/demographic
+    // migration noted above.
+    (
+        "046_patient_search",
+        include_str!("../../../db/046_patient_search.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

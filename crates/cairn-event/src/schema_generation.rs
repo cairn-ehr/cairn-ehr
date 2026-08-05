@@ -38,10 +38,10 @@
 //! travels the wire core (principle 12) — it lives here only because `cairn-event` is the
 //! crate both loaders already depend on.
 
-/// The numeric prefix of the newest migration in `db/` (`db/044_ui_gesture_timing.sql` → 44).
+/// The numeric prefix of the newest migration in `db/` (`db/046_patient_search.sql` → 46).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 44;
+pub const SCHEMA_GENERATION: i32 = 46;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.

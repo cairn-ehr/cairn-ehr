@@ -314,6 +314,7 @@ dependencies = [
  "base64",
  "cairn-event",
  "cairn-medication-view",
+ "cairn-patient-search",
  "chacha20poly1305",
  "ciborium",
  "clap",
@@ -334,6 +335,15 @@ dependencies = [
  "uuid",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "cairn-patient-search"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

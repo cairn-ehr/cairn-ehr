@@ -34,7 +34,9 @@
 // test suite itself.
 #![allow(dead_code)]
 
-use cairn_event::{generate_key, sign, ClockGrade, EventBody, Hlc, SigningKey};
+use cairn_event::{
+    event_address, generate_key, sign, sign_attestation, ClockGrade, EventBody, Hlc, SigningKey,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -165,6 +167,48 @@ pub async fn submit_signed(
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await
+}
+
+/// Enroll a SECOND signer as a HUMAN actor, distinct from the agent key `setup` already
+/// enrolls. Lifted from `identity_repudiate.rs` (review round 2, #344 N3) so any suite that
+/// needs to author a genuine *suppressing*-mode event — one whose db/005 attestation gate
+/// always demands a responsibility-bearing human, §5.7 "Human" — can reach for it instead of
+/// re-copying the enrollment. Returns `(human sk, human kid)`.
+pub async fn enroll_human(c: &Client) -> (SigningKey, String) {
+    let (sk_h, kid_h) = generate_key().unwrap();
+    c.execute(
+        "SELECT enroll_actor('human', '{\"role\":\"records-officer\"}', $1)",
+        &[&kid_h],
+    )
+    .await
+    .unwrap();
+    (sk_h, kid_h)
+}
+
+/// Sign `body` with `sk` and submit it WITH a human attestation token from `sk_h`/`kid_h` —
+/// the 3-argument `submit_event` shape a *suppressing*-mode event (e.g.
+/// `identity.repudiate.asserted`) needs to pass db/005's attestation gate. Also lifted from
+/// `identity_repudiate.rs`; kept separate from [`submit_signed`] rather than folded into it
+/// because most suites never need an attestation token and [`EventSpec`] has no field for
+/// one — a caller that DOES need this builds its own `EventBody` (the suppressing event
+/// types' payload shapes are one-off enough that a shared `EventSpec` would not pull its
+/// weight for them the way it does for the additive types `submit_signed` serves).
+pub async fn submit_attested(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+    sk_h: &SigningKey,
+    kid_h: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, kid_h, "attested", sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT submit_event($1,$2,$3)",
+        &[&signed.signed_bytes, &token, &vk_h],
+    )
+    .await
 }
 
 /// Submit a minimal `patient.created` so a subject has a `patient_chart` row.

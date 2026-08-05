@@ -529,6 +529,46 @@ enum Cmd {
         basis: String,
     },
 
+    /// Search this node's charts before creating one (§5.8 item 1). Advisory: it ranks
+    /// nothing and decides nothing — it shows a human what exists.
+    PatientSearch {
+        /// Name as typed. Word order does not matter. Each whitespace-separated word
+        /// searches BOTH as a whole (edge punctuation trimmed, so "O'Brien-Smith" stays
+        /// one token) AND as its alphanumeric parts ("brien", "smith").
+        #[arg(long, default_value = "")]
+        name: String,
+        /// ISO YYYY-MM-DD (or YYYY / YYYY-MM — an exact match on the value as stored).
+        #[arg(long)]
+        birth_date: Option<String>,
+        /// Repeatable `system=value`, e.g. --identifier MRN=12345
+        #[arg(long = "identifier")]
+        identifiers: Vec<String>,
+    },
+
+    /// Register a standard patient, recording the search that preceded it (§5.8).
+    ///
+    /// The search runs HERE, immediately before the write, and its result is what gets
+    /// attested — so the attestation always describes a real search this command ran,
+    /// never one an operator retyped.
+    PatientRegister {
+        /// Name as typed. Searched exactly as `patient-search --name` searches it, and
+        /// recorded VERBATIM on the new chart — never re-ordered or re-punctuated.
+        #[arg(long, default_value = "")]
+        name: String,
+        /// ISO YYYY-MM-DD, or YYYY / YYYY-MM when only that much is known — the declared
+        /// precision follows the shape you type and is never rounded up.
+        #[arg(long)]
+        birth_date: Option<String>,
+        /// Repeatable `system=value`, e.g. --identifier MRN=12345. Searched AND recorded
+        /// on the new chart, so the chart is findable by this identifier afterwards.
+        #[arg(long = "identifier")]
+        identifiers: Vec<String>,
+        /// Proceed even though candidates were displayed. Without it the command STOPS and
+        /// prints them: a funnel that auto-proceeds past near-matches is not a funnel.
+        #[arg(long)]
+        confirm_new: bool,
+    },
+
     /// Enroll a clinician's signing key as a `kind='human'` actor so it may sign+attest an
     /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
     /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
@@ -1538,6 +1578,13 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::RegisterJohnDoe { class, site, basis } => {
+            // Fail cheap, before any key I/O or DB round trip — the same discipline
+            // `patient-register` applies to `--birth-date`, and the SAME function
+            // `register_john_doe` calls internally, so the CLI edge and the library call
+            // cannot drift into different opinions of "stated". Without it, `--basis ""`
+            // unsealed a key, opened a connection, minted a patient UUID and burned three
+            // HLC ticks before the db/045 floor refused the first submit.
+            cairn_node::john_doe::validate_basis(&basis)?;
             let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
@@ -1561,6 +1608,100 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
+        }
+        Cmd::PatientSearch {
+            name,
+            birth_date,
+            identifiers,
+        } => {
+            // Malformed input is refused before any I/O — same discipline as EnrollHuman's
+            // pre-mint check: fail cheaply before spending a round trip on a query we'd have
+            // to explain was built from a silently-mangled identifier.
+            let identifiers = parse_identifier_pairs(&identifiers)?;
+            let query =
+                cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            // The John-Doe precedent: today's date comes from the node's own DB clock, never
+            // the operator's wall clock, so the offline-first age math the shared crate does
+            // is anchored the same way everywhere it runs.
+            let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            let list = cairn_node::patient::search::search_patients(&db, &query, &today).await?;
+            print_candidates(&list);
+        }
+        Cmd::PatientRegister {
+            name,
+            birth_date,
+            identifiers,
+            confirm_new,
+        } => {
+            let identifiers = parse_identifier_pairs(&identifiers)?;
+            // Fail cheap, before any I/O (same discipline as `parse_identifier_pairs` above,
+            // review round 1 #350 Important 1): a malformed `--birth-date` must never reach
+            // the search/write path only to be discovered deep inside `register_patient`'s
+            // own transaction. Reuses the EXACT function `register_patient` calls internally
+            // — one function, so the CLI edge and the library call can never silently drift
+            // into two different opinions of "a valid shape".
+            if let Some(bd) = birth_date.as_deref() {
+                cairn_node::patient::register::dob_precision(bd)?;
+            }
+            let query =
+                cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
+
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
+            // Owner ceremony: make the signing key an enrolled actor so it may author the
+            // additive registration event (idempotent — enrolls only on first use), mirroring
+            // RegisterJohnDoe.
+            ensure_registration_actor(&db, &kid).await?;
+
+            // THE SEARCH RUNS HERE, immediately before the write, over THIS process's own DB
+            // connection — never a result an operator retyped from an earlier `patient-search`
+            // run. `register_patient` (below) attests exactly this `list`, so what gets signed
+            // into the permanent record is provably the search a human actually saw on THIS
+            // screen a moment ago, not a claim about a search that may never have happened.
+            let list = cairn_node::patient::search::search_patients(&db, &query, &today).await?;
+            print_candidates(&list);
+
+            if !list.candidates.is_empty() && !confirm_new {
+                // STOP HERE. This is NOT a confirmation dialog — principle 3 explicitly
+                // forbids those as a safety mechanism, because a dialog habituates a busy
+                // clerk to click through without reading. This is instead the PAPER
+                // affordance: a clerk working a physical card index sees the existing cards
+                // before they can pull a fresh blank one — the index itself is the barrier,
+                // not a prompt asking "are you sure?". Exiting non-zero with the candidates
+                // already printed above reproduces that same physical fact for a CLI: nothing
+                // is registered, and the only way past is the explicit `--confirm-new` a
+                // clerk types after having looked. If a future change turns this into an
+                // auto-proceed-past-candidates default, it quietly deletes the funnel this
+                // whole task exists to build — please don't "simplify" it away.
+                anyhow::bail!(
+                    "{} candidate(s) already on file for this search (printed above) — \
+                     re-run with --confirm-new to register a new chart anyway, or use one of \
+                     the patient_ids shown instead",
+                    list.candidates.len()
+                );
+            }
+
+            // The raw typed name — NOT `query.name_tokens` (`SearchQuery` retains only
+            // normalised search tokens, never the raw string; see
+            // `patient::register`'s module doc, "signature problem", for why). Passed through
+            // unconditionally: `register_patient` itself treats a blank/empty string the same
+            // as `None` (principle 4 — an empty `--name` default must never assert an
+            // empty-string name), so no pre-filtering is needed here.
+            let patient_id = cairn_node::patient::register::register_patient(
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                Some(name.as_str()),
+                &query,
+                &list,
+            )
+            .await?;
+            println!("registered patient {patient_id}");
         }
         Cmd::EnrollHuman {
             registration_id,
@@ -2619,6 +2760,149 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parse the repeatable `--identifier system=value` flag shared by `patient-search` and
+/// `patient-register`. Pure (no I/O) so it is directly unit-testable — see the `tests`
+/// module below.
+///
+/// STRICT ON PURPOSE. A silently-skipped malformed pair is worse than a loud error here: the
+/// caller feeds the result straight into a `SearchQuery` that `patient-register` also signs
+/// into a permanent attestation, so a pair this function quietly dropped would let that
+/// attestation claim a search was run against an identifier it never actually searched for.
+/// Splitting on only the FIRST `=` (not `split('=')`) deliberately allows a value that itself
+/// contains `=` (e.g. a base64-ish fragment) — only the separator between `system` and
+/// `value` is special.
+///
+/// **The blank check is `trim().is_empty()`, matching the persistence side (final review,
+/// N2/N3).** It used to be a bare `.is_empty()`, which let `--identifier "MRN=   "` (a
+/// whitespace-only value) past the CLI, into a `SearchQuery` that gets SIGNED into the
+/// permanent attestation — and then silently dropped by
+/// `cairn_node::patient::register::supplied_identifiers`'s own `trim().is_empty()` filter,
+/// never persisted. That is the "attested but not persisted" shape this whole slice exists to
+/// close, one edge later than the fix that closed the rest of it: refusing loudly here, before
+/// anything is signed, is strictly better than a downstream silent drop.
+fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)>> {
+    raw.iter()
+        .map(|s| {
+            let (system, value) = s.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!(
+                    "malformed --identifier {s:?}: expected `system=value`, e.g. \
+                     --identifier MRN=12345"
+                )
+            })?;
+            if system.trim().is_empty() || value.trim().is_empty() {
+                anyhow::bail!(
+                    "malformed --identifier {s:?}: both `system` and `value` must be \
+                     non-empty (expected `system=value`, e.g. --identifier MRN=12345)"
+                );
+            }
+            Ok((system.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// Width of the `name` column in `print_candidates`' fixed-column layout. Both the header's
+/// `{:<name_w$}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
+const NAME_COLUMN_WIDTH: usize = 28;
+
+/// Shorten `s` to at most `width` CHARACTERS, marking the cut with a trailing `…`.
+///
+/// Character-based, not byte-based: `&s[..width]` panics on a multi-byte boundary, and a
+/// patient name is exactly where multi-byte characters live ("田中 太郎", "José"). Culture-
+/// neutral in the §4.2 sense — it never inspects or parses the name, only counts characters.
+///
+/// The ellipsis is what keeps this honest (principle 4): a silently-clipped name reads as the
+/// whole name, and on a wrong-chart-prevention surface "Nguyen Thi Minh" clipped to
+/// "Nguyen Thi Min" is a precise untruth a clerk could act on. It costs one character of the
+/// budget — the returned string is still at most `width` characters wide, so the column holds.
+///
+/// Grapheme clusters, not chars, would be the fully correct unit (a combining sequence can
+/// span several `char`s and render as one column), as would East-Asian double-width handling.
+/// Both need a dependency and neither can make a row WIDER than this bound, so the column
+/// alignment this function exists to protect is safe either way; the residual is that a
+/// double-width name may render narrower than 28 columns, never wider.
+fn ellipsize(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    // `width - 1` leaves room for the ellipsis itself. `width == 0` cannot happen from the
+    // one call site (a compile-time constant of 28), but saturating keeps the function total
+    // rather than panicking if a future caller passes 0.
+    let keep = width.saturating_sub(1);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
+/// Render a `CandidateList` the way `patient-search` and `patient-register` both show it: one
+/// line per candidate, in the exact order the list carries them (`patient-register` attests
+/// this same order — see `register::build_registration_body`'s doc — so the print order and
+/// the attested order must never be allowed to drift apart).
+///
+/// The `incomplete` reason is printed LAST and on its own line, deliberately AFTER every
+/// candidate row rather than as a header above them (ADR-0060 decision 2: partial completion
+/// must be reported, never implied). A reason printed first can scroll off the top of a
+/// terminal behind a long candidate list and never be seen; printed last, it is the last thing
+/// on screen no matter how many rows precede it.
+fn print_candidates(list: &cairn_patient_search::CandidateList) {
+    if list.candidates.is_empty() {
+        println!("no candidates found");
+    } else {
+        // `{:name_w$}` on both this header and the row below, from ONE constant, so the
+        // header can never drift out of step with the width `ellipsize` truncates to.
+        println!(
+            "{:<36}  {:<name_w$}  {:>4}  {:<12}  {:<12}  locale",
+            "patient_id",
+            "name",
+            "age",
+            "trust",
+            "last activity",
+            name_w = NAME_COLUMN_WIDTH
+        );
+        for c in &list.candidates {
+            let age = c
+                .age
+                .as_ref()
+                .map(|a| a.years.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let last_activity = c.last_activity.as_deref().unwrap_or("-");
+            let locale = c.locale.as_deref().unwrap_or("-");
+            println!(
+                "{:<36}  {:<name_w$}  {:>4}  {:<12}  {:<12}  {}",
+                c.patient_id,
+                // TRUNCATED, not merely padded. Rust's `{:<n}` is a MINIMUM width: one
+                // long name would push the age/trust/last-activity columns right on that
+                // row alone, so a clerk scanning DOWN the age column to tell two same-named
+                // patients apart loses the alignment exactly when a name is unusual — i.e.
+                // exactly when this wrong-chart-prevention surface is being leaned on. The
+                // ellipsis is what keeps the truncation honest (principle 4: a shortened
+                // value must not read as the whole value).
+                //
+                // Only the NAME needs this. `patient_id` is a UUID (always 36), `age` is a
+                // small integer or "?", `trust` is a closed short vocabulary, and
+                // `last_activity` is an ISO date — all bounded. `locale` is unbounded too
+                // (its own doc warns it is not guaranteed to be suburb-only — issue #347),
+                // but it is the LAST column, so a long value can only wrap; it cannot
+                // misalign anything, and truncating it would hide the disambiguating detail
+                // it exists to show.
+                ellipsize(&c.display_name, NAME_COLUMN_WIDTH),
+                age,
+                c.trust.as_str(),
+                last_activity,
+                locale,
+                name_w = NAME_COLUMN_WIDTH
+            );
+        }
+    }
+    // Deliberately last — see the fn doc. Do not hoist this above the loop.
+    if list.incomplete {
+        let reason = list
+            .incomplete_reason
+            .as_deref()
+            .unwrap_or("(no reason given)");
+        println!("! search incomplete: {reason}");
+    }
+}
+
 /// Ensure the node's signing key is enrolled as an actor that may author the additive §5.4
 /// John-Doe registration events. Enrolls a `device` actor ONLY when this key is not already
 /// enrolled under ANY kind. An owner ceremony — the runtime `cairn_agent` role deliberately
@@ -2669,5 +2953,124 @@ mod tests {
             "op-pass",
             "a non-empty flag is returned verbatim"
         );
+    }
+
+    // --- `print_candidates`' name column must not shift on a long name (final review) ---
+
+    #[test]
+    fn a_short_name_is_returned_unchanged_and_never_gains_an_ellipsis() {
+        assert_eq!(ellipsize("Smith, John", NAME_COLUMN_WIDTH), "Smith, John");
+        // Exactly at the boundary: still whole, still no ellipsis.
+        let exact: String = std::iter::repeat_n('x', NAME_COLUMN_WIDTH).collect();
+        assert_eq!(ellipsize(&exact, NAME_COLUMN_WIDTH), exact);
+    }
+
+    #[test]
+    fn a_long_name_is_cut_to_the_column_width_and_says_so() {
+        let long: String = std::iter::repeat_n('x', NAME_COLUMN_WIDTH + 40).collect();
+        let out = ellipsize(&long, NAME_COLUMN_WIDTH);
+        assert_eq!(
+            out.chars().count(),
+            NAME_COLUMN_WIDTH,
+            "the whole point: the rendered cell must never exceed the column, or every \
+             later column shifts on that row alone"
+        );
+        assert!(
+            out.ends_with('…'),
+            "a clipped name must not read as the whole name (principle 4): {out}"
+        );
+    }
+
+    #[test]
+    fn a_multibyte_name_is_cut_on_a_character_boundary_not_a_byte_one() {
+        // Byte slicing here would PANIC mid-character. A patient name is exactly where
+        // multi-byte characters live, so this is the realistic case, not an exotic one.
+        let long: String = std::iter::repeat_n('田', NAME_COLUMN_WIDTH + 5).collect();
+        let out = ellipsize(&long, NAME_COLUMN_WIDTH);
+        assert_eq!(out.chars().count(), NAME_COLUMN_WIDTH);
+        assert!(out.ends_with('…'));
+        assert!(out.starts_with('田'));
+    }
+
+    #[test]
+    fn a_well_formed_identifier_pair_parses() {
+        let out = parse_identifier_pairs(&["MRN=12345".to_string()]).unwrap();
+        assert_eq!(out, vec![("MRN".to_string(), "12345".to_string())]);
+    }
+
+    #[test]
+    fn several_identifier_pairs_parse_in_order() {
+        let raw = vec!["MRN=12345".to_string(), "NHI=ABC1234".to_string()];
+        let out = parse_identifier_pairs(&raw).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                ("MRN".to_string(), "12345".to_string()),
+                ("NHI".to_string(), "ABC1234".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_value_may_itself_contain_an_equals_sign() {
+        // Only the FIRST `=` is the system/value separator — a base64-ish value carrying its
+        // own `=` must survive intact rather than being truncated or rejected.
+        let out = parse_identifier_pairs(&["TOKEN=abc=def=".to_string()]).unwrap();
+        assert_eq!(out, vec![("TOKEN".to_string(), "abc=def=".to_string())]);
+    }
+
+    #[test]
+    fn a_pair_with_no_equals_sign_is_rejected_not_dropped() {
+        // The load-bearing case (#344 brief): a malformed pair must be a loud, legible error
+        // naming the expected form — never silently skipped. A silent skip would let
+        // `patient-register` attest a search that never actually ran against this identifier.
+        let err = parse_identifier_pairs(&["MRN12345".to_string()]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("MRN12345") && msg.contains("system=value"),
+            "error must name the offending input and the expected form: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_empty_system_is_rejected() {
+        let err = parse_identifier_pairs(&["=12345".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn an_empty_value_is_rejected() {
+        let err = parse_identifier_pairs(&["MRN=".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn a_whitespace_only_value_is_rejected_at_the_cli_edge() {
+        // The N2 regression: a bare `.is_empty()` check let `--identifier "MRN=   "` (no
+        // real value, only spaces) past the CLI and into a `SearchQuery` that gets SIGNED
+        // into the permanent attestation, only to be silently dropped later by
+        // `supplied_identifiers`'s own `trim().is_empty()` filter — attested but never
+        // persisted. Refusing here, loudly, before anything is signed, is the fix.
+        let err = parse_identifier_pairs(&["MRN=   ".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn a_whitespace_only_system_is_rejected_at_the_cli_edge() {
+        let err = parse_identifier_pairs(&["   =12345".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn one_malformed_pair_among_valid_ones_fails_the_whole_parse() {
+        // Strict, not best-effort: a single bad pair must not let the OTHER, well-formed
+        // pairs quietly proceed while it is dropped — the whole command refuses instead.
+        let raw = vec!["MRN=12345".to_string(), "bad-pair".to_string()];
+        assert!(parse_identifier_pairs(&raw).is_err());
+    }
+
+    #[test]
+    fn an_empty_list_of_identifiers_parses_to_empty() {
+        assert_eq!(parse_identifier_pairs(&[]).unwrap(), Vec::new());
     }
 }

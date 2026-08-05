@@ -39,6 +39,7 @@ pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
 pub mod medication;
+pub mod registration;
 pub mod schema_generation;
 pub mod seal;
 

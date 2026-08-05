@@ -15,6 +15,7 @@ pub mod matcher_actor;
 pub mod medication;
 pub mod medium;
 pub mod pairing;
+pub mod patient;
 pub mod photo_evidence;
 pub mod restore;
 pub mod seal;

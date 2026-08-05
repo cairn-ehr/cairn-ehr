@@ -12,8 +12,12 @@ federating node `cairn-node` under `/crates`, Postgres-on-Android). The **first 
 (since 2026-06-27), and by mid-2026-07 it spans: demographics slices 1–5 (§4.4/§4.2/§4.3), the advisory
 §5.2 Python matcher, the §5.7 identity core C1–C5, the §5.4 John-Doe subsystem, the first
 clinical-content stream `clinical.medication` (§3.3, five slices) under **born-sealed bodies**
-(ADR-0052) with **per-write human authorship** (ADR-0053), and the first reference-UI shell slice
-(Tauri 2). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
+(ADR-0052) with **per-write human authorship** (ADR-0053), the first reference-UI shell slice
+(Tauri 2), and — 2026-08-05 — the **§5.3/§5.8 search-before-create funnel**: registration is an act
+carrying the search that preceded it, whose attestation *names* the displayed candidates rather than
+counting them ([ADR-0061](docs/spec/decisions/0061-registration-is-an-act-that-carries-its-search.md);
+its precedence rule is deliberately **not yet enforced** — issue #345 — so the funnel is complete but
+bypassable). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
 event/floor/projection spine into real product code, brainstorm→spec→plan→TDD) **and continued design
 work** (clinical case-mining, stress-testing the data model, refining spec prose). There is a Rust/Cargo
 workspace (`/crates`, `/extensions`, `/db`) and an mkdocs docs build; the clinical application is **early
