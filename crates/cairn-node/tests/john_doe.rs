@@ -20,7 +20,18 @@ use common::{cs, trust_of};
 /// no-op for a table that already exists and keeps the helper correct on a DB migrated only
 /// to an earlier stage. Nothing carries a foreign key to `patient_name`, so truncating it
 /// alongside the core list rather than inside its `CASCADE` is equivalent.
-const OVERLAY_TABLES: [&str; 2] = ["chart_identity_state", "patient_name"];
+///
+/// `patient_registration` joins the set with #344: the John Doe chart now begins with an
+/// `identity.registration.asserted` event (db/045), so this suite's TRUNCATE must reach that
+/// projection too or a row left behind by an earlier test would make
+/// `patient_registration_current` ambiguous for a reused patient_id (it never is reused in
+/// practice — UUIDv7 — but the truncate-everything-this-suite-touches discipline is what
+/// keeps every test here independent of run order).
+const OVERLAY_TABLES: [&str; 3] = [
+    "chart_identity_state",
+    "patient_name",
+    "patient_registration",
+];
 
 /// The standing identity state of a chart (db/024 overlay), or None if no row exists.
 async fn identity_state(c: &Client, subject: Uuid) -> Option<String> {
@@ -217,5 +228,132 @@ async fn ordinal_numbers_registrations_per_node_origin() {
     assert_eq!(
         total, 3,
         "only callsign name registrations appear in the VIEW"
+    );
+}
+
+// --- #344: the chart's birth act is a registration, same as every other class ---
+
+#[tokio::test]
+async fn a_john_doe_chart_begins_with_an_unidentified_registration() {
+    // §5.3's three classes finally recorded. The registration is the chart's FIRST event
+    // (lowest HLC of the three), which is what lets #345's precedence rule land later with
+    // no carve-out for John Doe.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
+
+    let (pid, _call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .unwrap();
+
+    let pid_s = pid.to_string();
+
+    // patient_registration_current.class == 'unidentified'.
+    let reg = c
+        .query_one(
+            "SELECT class, registered_hlc_wall, registered_hlc_count \
+             FROM patient_registration_current WHERE patient_id = $1::text::uuid",
+            &[&pid_s],
+        )
+        .await
+        .expect("a registration row must exist for every John Doe chart");
+    let class: String = reg.get(0);
+    let reg_wall: i64 = reg.get(1);
+    let reg_count: i32 = reg.get(2);
+    assert_eq!(class, "unidentified");
+
+    // The registration's HLC must strictly precede the callsign name event's — the
+    // registration is authored FIRST inside the transaction, at a strictly earlier tick.
+    let name = c
+        .query_one(
+            "SELECT hlc_wall, hlc_counter FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'demographic.field.asserted'",
+            &[&pid_s],
+        )
+        .await
+        .expect("the callsign name event must exist");
+    let name_wall: i64 = name.get(0);
+    let name_count: i32 = name.get(1);
+
+    assert!(
+        (reg_wall, reg_count) < (name_wall, name_count),
+        "the registration's HLC ({reg_wall}, {reg_count}) must strictly precede the \
+         callsign name's ({name_wall}, {name_count}) — the registration is the chart's \
+         FIRST event, not an afterthought bolted on beside the other two"
+    );
+}
+
+#[tokio::test]
+async fn the_unidentified_registration_carries_no_search_attestation() {
+    // Structural absence, not empty: there is nothing to search an unconscious patient
+    // with, and claiming otherwise would be a precise untruth (principle 4). The db/045
+    // floor refuses a non-standard registration carrying a `search` key at all — this test
+    // pins that this codepath never tries to hand it one.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
+
+    let (pid, _call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .unwrap();
+
+    let pid_s = pid.to_string();
+
+    // `body ? 'search'` is jsonb KEY-PRESENCE, not a null check — an explicit
+    // `"search": null` would still trip it. That is the same distinction db/045's own
+    // check function draws (§5.4), and it is what a merely-`Option`-shaped absence in Rust
+    // could get wrong without this test catching it: `None` must serialize to no key at
+    // all, not to a present `null`.
+    let has_search: bool = c
+        .query_one(
+            "SELECT body ? 'search' FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'identity.registration.asserted'",
+            &[&pid_s],
+        )
+        .await
+        .expect("the registration event must exist")
+        .get(0);
+    assert!(
+        !has_search,
+        "a John Doe registration must carry NO 'search' key — there is nothing to search \
+         an unconscious patient with"
+    );
+
+    // And at the projection layer: `search_incomplete` is the honest NULL that can only
+    // mean "no search ran" for a non-standard class (patient_registration.rs pins the same
+    // invariant for the floor directly; this pins that register_john_doe's real output
+    // lands the same way).
+    let incomplete: Option<bool> = c
+        .query_one(
+            "SELECT search_incomplete FROM patient_registration_current \
+             WHERE patient_id = $1::text::uuid",
+            &[&pid_s],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        incomplete, None,
+        "search_incomplete must be NULL — no search ran, so there is no completeness to state"
     );
 }

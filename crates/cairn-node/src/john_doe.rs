@@ -1,25 +1,48 @@
 //! §5.4 unidentified-registration ("John Doe") — the registration front door. Composes
 //! primitives C4 and the demographics slices already built: mint a patient UUID, then
-//! author TWO additive events through the existing 1-arg `submit_event` door —
-//!   1. a **callsign name assertion** (`demographic.field.asserted`, `facets.use =
+//! author THREE additive events through the existing 1-arg `submit_event` door, in this
+//! order —
+//!   1. the **§5.3 registration act** (`identity.registration.asserted`, `class =
+//!      "unidentified"`, db/045) — the chart's FIRST event, at the LOWEST HLC of the
+//!      three. This is what a follow-on floor rule (#345) needs to land with NO carve-out
+//!      for John Doe: "the first event carrying a new patient_id must be a registration" is
+//!      then true for every chart, unconditionally, rather than true-except-for-§5.4.
+//!   2. a **callsign name assertion** (`demographic.field.asserted`, `facets.use =
 //!      "callsign"`) so the chart renders an obvious placeholder header
 //!      (`Unknown-ED-<site>-<date>-<suffix>`) instead of a fake name; and
-//!   2. the **C4 `identity.pending.asserted`** marking the chart *unconfirmed* (§5.4
+//!   3. the **C4 `identity.pending.asserted`** marking the chart *unconfirmed* (§5.4
 //!      "identity-pending is an active workflow state").
 //!
-//! No new event types, no `db/` migration, no floor change: both events are additive and
-//! flow through the door with the low ceremony of any recorded demographic assertion. The
-//! callsign is a REAL name in `patient_name` (it is the display header); the advisory
+//! # Why the registration carries no search attestation — read this before "fixing" it
+//!
+//! There is nothing to search an unconscious, unidentified patient WITH: no name, no birth
+//! date, no identifier. Claiming a search ran would be a precise untruth, and principle 4
+//! holds that an imprecise near-truth always beats one. §5.4 answers "how is a possible
+//! duplicate ever found, then?" differently and correctly: the advisory matcher RE-RUNS on
+//! every new evidence assertion this chart later receives — search-AFTER-create by
+//! necessity, the mirror image of the standard §5.8 search-BEFORE-create path. The db/045
+//! floor REFUSES a non-standard registration that carries a `search` key at all (not merely
+//! an empty one — key PRESENCE is the test, so an explicit `"search": null` is refused too),
+//! so getting this wrong fails loudly at submit time rather than silently on read.
+//!
+//! This registration event is NOT a new event type: it reuses `identity.registration.asserted`
+//! (registered by db/045, issue #344) and `patient::register::build_registration_body`, the
+//! same pure builder the §5.8 STANDARD path uses — only the inputs differ (`class =
+//! Unidentified`, `basis` carried, `attestation = None`). The name assertion and pending
+//! marker remain additive with no new `db/` migration and no floor change of their own; the
+//! callsign is a REAL name in `patient_name` (it is the display header) and the advisory
 //! matcher excludes it from its feature space by its `use` (see `matcher/pipeline/db.py`),
 //! which is the correct layer for a matcher-feature decision (§5.2/§5.13, principle 12).
 //!
 //! Split: pure body assembly (unit-tested, no DB) + the async `register_john_doe`
-//! orchestrator (one transaction, so the callsign name and the pending marker land
-//! atomically — a chart is never half-registered).
+//! orchestrator (one transaction, so the registration, the callsign name, and the pending
+//! marker land atomically — a chart is never half-registered).
 
+use crate::patient::register::build_registration_body;
 use cairn_event::demographics::{name_assertion_body, render_name_twin};
 use cairn_event::identity::{pending_assertion_body, render_pending_twin, PendingAssertion};
 use cairn_event::john_doe::{callsign, CALLSIGN_USE};
+use cairn_event::registration::RegistrationClass;
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -121,13 +144,19 @@ pub fn build_pending_body(
 }
 
 /// Register an unidentified ("John Doe") patient: mint a UUID, derive a callsign, and
-/// author the callsign name + the identity-pending marker in ONE transaction (atomic —
-/// a chart is never half-registered). Returns the minted `(patient_id, callsign, node-local ordinal)`.
+/// author the §5.3 registration act + the callsign name + the identity-pending marker in
+/// ONE transaction (atomic — a chart is never half-registered). Returns the minted
+/// `(patient_id, callsign, node-local ordinal)`.
 ///
-/// `class` is the care context (`ED`, `ward`, …), `site` the registering location, `date`
-/// an already-formatted date string (the CLI edge owns the clock and format), and `basis`
-/// the value-open reason the chart is identity-pending. Care can proceed against the
-/// returned UUID immediately (§5.4 — "UUID minted immediately; care proceeds without delay").
+/// `class` is the care context (`ED`, `ward`, …) — NOT the §5.3 `RegistrationClass`; that
+/// one is hard-pinned to `Unidentified` below, because this function exists for exactly one
+/// registration class and callers have no way to pick another. `site` is the registering
+/// location, `date` an already-formatted date string (the CLI edge owns the clock and
+/// format), and `basis` the value-open reason the chart is identity-pending — carried as
+/// the registration event's `basis` AND the C4 pending marker's `basis` (the same fact,
+/// asked by two different questions: "why is this chart non-standard" and "why is it
+/// unconfirmed"). Care can proceed against the returned UUID immediately (§5.4 — "UUID
+/// minted immediately; care proceeds without delay").
 #[allow(clippy::too_many_arguments)] // signer + node context + the four callsign/basis inputs
 pub async fn register_john_doe(
     client: &mut Client,
@@ -143,19 +172,48 @@ pub async fn register_john_doe(
     let suffix = suffix_from_uuid(patient_id);
     let call = callsign(class, site, date, &suffix);
 
-    // Tick the HLC once per event (name @ h1 < pending @ h2 — strict order). These ticks
-    // run outside the transaction below and self-commit; if the submit txn then rolls back
-    // the clock has merely advanced by two with no matching events, which is fine — the HLC
-    // is monotonic and gaps are allowed (the same tick-then-submit shape auto_apply uses).
+    // Tick the HLC once per event, THREE times now (registration @ h0 < name @ h1 < pending
+    // @ h2 — strict order). h0 must be struck FIRST and submitted FIRST: the registration is
+    // the chart's birth act, and a follow-on floor rule (#345) is going to require the
+    // FIRST event carrying any given patient_id to be a registration, with NO carve-out for
+    // this path. These ticks run outside the transaction below and self-commit; if the
+    // submit txn then rolls back the clock has merely advanced by three with no matching
+    // events, which is fine — the HLC is monotonic and gaps are allowed (the same
+    // tick-then-submit shape auto_apply uses).
+    let h0 = crate::db::next_hlc(client, node_origin).await?;
     let h1 = crate::db::next_hlc(client, node_origin).await?;
     let h2 = crate::db::next_hlc(client, node_origin).await?;
 
+    // Built through the SAME pure builder the §5.8 STANDARD path uses
+    // (`patient::register::build_registration_body`) — reused, not re-implemented, so the
+    // wire shape for "a registration" has exactly one home regardless of which class
+    // authors it. `attestation: None` is what makes the `search` key structurally ABSENT
+    // from the payload (see this module's doc for why that must be absence, not an empty
+    // object): there is nothing to search an unconscious patient with, and the db/045 floor
+    // refuses a non-standard registration that carries a `search` key at all.
+    let registration_body = build_registration_body(
+        Uuid::now_v7(),
+        patient_id,
+        RegistrationClass::Unidentified,
+        Some(basis),
+        None,
+        kid,
+        h0,
+    );
     let name_body = build_callsign_name_body(Uuid::now_v7(), patient_id, &call, kid, h1);
     let pending_body = build_pending_body(Uuid::now_v7(), patient_id, basis, kid, h2);
+    let registration_signed = sign(&registration_body, sk)?;
     let name_signed = sign(&name_body, sk)?;
     let pending_signed = sign(&pending_body, sk)?;
 
     let tx = client.transaction().await?;
+    // Registration FIRST — see the doc comment above for why the ordering itself (not just
+    // the HLC values) is load-bearing for #345.
+    tx.execute(
+        "SELECT submit_event($1)",
+        &[&registration_signed.signed_bytes],
+    )
+    .await?;
     tx.execute("SELECT submit_event($1)", &[&name_signed.signed_bytes])
         .await?;
     tx.execute("SELECT submit_event($1)", &[&pending_signed.signed_bytes])
