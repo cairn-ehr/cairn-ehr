@@ -12,6 +12,12 @@
 //! `cairn-patient-search` (the read model) drifting apart. A drift there means a registration
 //! swearing to candidates the clerk never actually saw on screen — see this crate's
 //! `patient::register` module doc for the full argument.
+//!
+//! `register_patient`'s Task-8b addition (#350 — it must ALSO assert the typed name/dob so a
+//! registered chart is actually findable) is covered separately in
+//! `patient_register_demographics.rs`, split out purely to keep both files under the house
+//! 500-line limit; every call to `register_patient` in THIS file passes `None` for the new
+//! `name` parameter, since none of these tests are about the demographic assertions.
 mod common;
 
 use cairn_node::db;
@@ -104,7 +110,7 @@ async fn registering_mints_a_chart_and_records_what_was_displayed() {
     };
     let query = SearchQuery::new("smith", Some("1980-01-01"), &[]);
 
-    let pid = register_patient(&mut c, &sk, &kid, "n", &query, &list)
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &list)
         .await
         .expect("a well-formed standard registration must be accepted");
 
@@ -144,7 +150,7 @@ async fn the_attestation_round_trips_from_the_displayed_list_to_the_stored_body(
     };
     let query = SearchQuery::new("jones", None, &[]);
 
-    let pid = register_patient(&mut c, &sk, &kid, "n", &query, &list)
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &list)
         .await
         .expect("registration accepted");
 
@@ -176,7 +182,7 @@ async fn a_search_the_node_knew_was_partial_is_attested_as_incomplete() {
     };
     let query = SearchQuery::new("baker", None, &[]);
 
-    let pid = register_patient(&mut c, &sk, &kid, "n", &query, &list)
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &list)
         .await
         .expect("registration accepted even though the search was partial");
 
@@ -229,7 +235,7 @@ async fn registering_with_no_attester_key_succeeds() {
     };
     let query = SearchQuery::new("nobody-yet", None, &[]);
 
-    let pid = register_patient(&mut c, &sk, &kid, "n", &query, &list)
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &list)
         .await
         .expect(
             "SPEC §2.6 — DO NOT \"FIX\" THIS INTO A REFUSAL. Authorship confidence is a \

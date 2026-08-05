@@ -1661,11 +1661,18 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
 
+            // The raw typed name — NOT `query.name_tokens` (`SearchQuery` retains only
+            // normalised search tokens, never the raw string; see
+            // `patient::register`'s module doc, "signature problem", for why). Passed through
+            // unconditionally: `register_patient` itself treats a blank/empty string the same
+            // as `None` (principle 4 — an empty `--name` default must never assert an
+            // empty-string name), so no pre-filtering is needed here.
             let patient_id = cairn_node::patient::register::register_patient(
                 &mut db,
                 &sk,
                 &kid,
                 &id.node_id_hex,
+                Some(name.as_str()),
                 &query,
                 &list,
             )
