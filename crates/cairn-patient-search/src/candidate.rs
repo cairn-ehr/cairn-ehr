@@ -110,8 +110,10 @@ pub struct Candidate {
     pub trust: TrustState,
     /// ISO date of the chart's last activity, for "have I seen this person recently?".
     pub last_activity: Option<String>,
-    /// A one-line locale hint (suburb/town), never the full address: the point is to
-    /// disambiguate two people with one name, not to display a dossier.
+    /// A one-line locale hint, INTENDED to disambiguate two people with one name (suburb/
+    /// town), not to display a dossier. NOT YET GUARANTEED to be suburb/town-only rather
+    /// than a full address — the address data model has no culture-neutral locale-only
+    /// facet to draw on today (issue #347); a caller must not assume this is short.
     pub locale: Option<String>,
     /// A content-addressed blob reference, NEVER bytes. Fetching the image is byte-tier
     /// work (ADR-0013) and must not sit on the search latency path.

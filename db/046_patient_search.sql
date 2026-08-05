@@ -25,11 +25,20 @@ SET search_path = public
 AS $$
     -- Pass 1: shared identifier. Highest precision — the same system and the same
     -- match_key is near-conclusive, which is why it is also a db/016 hard-veto axis.
+    --
+    -- Matches EITHER match_key (= coalesce(normalized, value), db/010) OR the raw value,
+    -- not match_key alone (review-round fix, #344 Important 1). match_key is the
+    -- MATERIALISED canonical form when a §4.4 profile produced one (e.g. an NHS number's
+    -- digits-only "9434765919"), but a clerk searching types what is PRINTED on the card
+    -- ("943 476 5919") — the raw `value`, not its normalisation, which is profile-derived
+    -- and this query has no profile to re-derive it with (ADR-0033). Without the OR, a
+    -- chart registered with a materialised key is unfindable by anyone who types the
+    -- identifier exactly as the original registrar was handed it.
     SELECT DISTINCT pi.patient_id, 'identifier'::text
       FROM patient_identifier pi
       JOIN jsonb_array_elements(COALESCE(p_identifiers, '[]'::jsonb)) q
         ON pi.system = (q ->> 'system')
-       AND pi.match_key = (q ->> 'value')
+       AND (pi.match_key = (q ->> 'value') OR pi.value = (q ->> 'value'))
     UNION
     -- Pass 2: exact DOB. No date parsing, no range logic — an exact string compare on the
     -- projected value, matching the deliberately parse-free db/016 discipline.

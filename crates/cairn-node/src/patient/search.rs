@@ -4,14 +4,15 @@
 //! to wrap it rather than re-derive the joins — same discipline as `medication/read.rs` for
 //! the drug chart.
 //!
-//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. A candidate's display fields come from six
-//! genuinely different projections (name, dob, trust, chart activity, address, photo
-//! evidence), several of which are retained SETS rather than single rows (an address has one
-//! row per USE; a chart may carry more than one photo-evidence event over its life). Folding
-//! all of that into one query would need multiple levels of aggregation and would be far
-//! harder for a reviewer to check against each projection's own definition. Plain queries
-//! plus an explicit assembly step in Rust is the reviewer-legible shape §9 asks for — the
-//! same reasoning `medication/read.rs`'s module doc states for the drug chart.
+//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. A candidate's display fields come from seven
+//! genuinely different projections (name, the repudiated-name overlay, dob, trust, chart
+//! activity, address, photo evidence), several of which are retained SETS rather than single
+//! rows (an address has one row per USE; a chart may carry more than one photo-evidence
+//! event over its life; a rendition set may carry more than one rendition per attachment).
+//! Folding all of that into one query would need multiple levels of aggregation and would be
+//! far harder for a reviewer to check against each projection's own definition. Plain
+//! queries plus an explicit assembly step in Rust is the reviewer-legible shape §9 asks for
+//! — the same reasoning `medication/read.rs`'s module doc states for the drug chart.
 //!
 //! Generic over `GenericClient` so a caller can read through an open transaction (the
 //! `medication/read.rs` precedent) — e.g. the future `register.rs` re-checking the list
@@ -30,7 +31,7 @@
 //! idiom, so following it here keeps the binding convention uniform rather than one-off.
 
 use cairn_patient_search::{age_years, Age, Candidate, CandidateList, SearchQuery, TrustState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -62,6 +63,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
     }
 
     let names = read_display_names(client, &ids).await?;
+    let repudiated = read_repudiated_only(client, &ids).await?;
     let dobs = read_dob(client, &ids).await?;
     let trust_states = read_trust_states(client, &ids).await?;
     let last_activity = read_last_activity(client, &ids).await?;
@@ -80,6 +82,12 @@ pub async fn search_patients<C: GenericClient + Sync>(
         .map(|id| {
             let display_name = match names.get(id) {
                 Some(name) => name.clone(),
+                // db/025: a chart whose ONLY asserted name was struck as known-false has NO
+                // winner row in `patient_name_current` BY DESIGN — showing the known-false
+                // name back would be a precise untruth (principle 4), so the view withholds
+                // it on purpose. That is an honest "name withheld", not a failed read, and
+                // must NOT count toward `incomplete` the way a genuine read failure does.
+                None if repudiated.contains(id) => "(name withheld)".to_string(),
                 None => {
                     unreadable_names += 1;
                     // Never drop the candidate: a silently-dropped row is precisely the
@@ -211,6 +219,30 @@ async fn read_display_names<C: GenericClient + Sync>(
     Ok(out)
 }
 
+/// Which of `ids` have at least one struck (known-false) name on `patient_alias_pool`
+/// (db/025) — used to tell "this chart's only name was repudiated" (an honest, by-design
+/// absence from `patient_name_current`) apart from "this chart never had a name asserted
+/// at all" (a genuine read gap the caller reports via `incomplete`).
+///
+/// Reads the `patient_alias_pool` VIEW, never `name_repudiation` directly: db/025
+/// deliberately grants NO broad SELECT on the base table (its `reason` column is
+/// forensic free text that must not leak cross-patient, ADR-0006) — the view is the
+/// reason-free projection this node's own agent role actually has access to.
+async fn read_repudiated_only<C: GenericClient + Sync>(
+    client: &C,
+    ids: &[Uuid],
+) -> anyhow::Result<HashSet<Uuid>> {
+    let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
+    let sql = "SELECT DISTINCT patient_id::text AS patient_id \
+               FROM patient_alias_pool \
+               WHERE patient_id = ANY($1::text[]::uuid[])";
+    let mut out = HashSet::new();
+    for row in client.query(sql, &[&id_strs]).await? {
+        out.insert(row.get::<_, String>("patient_id").parse()?);
+    }
+    Ok(out)
+}
+
 /// Each candidate's dob VALUE together with the WINNING assertion's own `provenance` —
 /// carried through as `Age::basis` (principle 4: an age derived from a document-verified dob
 /// and one derived from a clinician's estimate are different claims, and a clerk comparing
@@ -289,13 +321,13 @@ async fn read_last_activity<C: GenericClient + Sync>(
 /// use — same recency-first tiebreak `patient_address_current` itself already applies within
 /// a use (db/014), just carried one level further to collapse across uses.
 ///
-/// KNOWN LIMITATION, not fixed here (out of this task's scope): this reads the address's
-/// `display` value verbatim, which is the mandatory FULL address string the §4.3 structural
-/// floor requires (`structured.parts` is deliberately culture-neutral and carries no
-/// guaranteed "suburb"/"town" key to extract instead — inventing one would be exactly the
-/// cultural-capture ADR-0014 forbids elsewhere in this codebase). So today's "locale
-/// one-liner" can be a full address, not only a suburb hint. A future slice that wants a
-/// true locale-only projection needs a new address facet, not a change to this query.
+/// KNOWN LIMITATION, tracked as issue #347 (not fixed here — a data-model gap, not a bug in
+/// this query): this reads the address's `display` value verbatim, which is the mandatory
+/// FULL address string the §4.3 structural floor requires (`structured.parts` is
+/// deliberately culture-neutral and carries no guaranteed "suburb"/"town" key to extract
+/// instead — inventing one would be exactly the cultural-capture ADR-0014 forbids elsewhere
+/// in this codebase). So today's "locale one-liner" can be a full address, not only a
+/// suburb hint. Issue #347 tracks the new address facet a true locale-only projection needs.
 async fn read_locale<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
@@ -323,18 +355,31 @@ async fn read_locale<C: GenericClient + Sync>(
 /// Reads `event_log` directly rather than through a projection: `identity.evidence.asserted`
 /// is additive (db/028) and carries no dedicated "current" view the way a demographic field
 /// does, so the freshest row by HLC IS the read.
+///
+/// SELECTS BY `role = 'original'`, NEVER BY POSITION (review-round fix, #344 Important 2).
+/// ADR-0042 exists precisely so one attachment can carry N renditions (a thumbnail preview
+/// alongside the original, say) — `renditions -> 0` is whichever the AUTHOR happened to
+/// list first, not necessarily the original, so indexing positionally would let a future
+/// preview-adding change silently swap what the picker displays. `jsonb_array_elements`
+/// over each attachment's rendition set, filtered on the named role, is index-order-proof.
 async fn read_photo_refs<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
 ) -> anyhow::Result<HashMap<Uuid, String>> {
     let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
-    let sql = "SELECT DISTINCT ON (patient_id) patient_id::text AS patient_id, \
-                      attachments -> 0 -> 'renditions' -> 0 ->> 'digest_hex' AS digest_hex \
-               FROM event_log \
-               WHERE patient_id = ANY($1::text[]::uuid[]) \
-                 AND event_type = 'identity.evidence.asserted' \
-                 AND body ->> 'kind' = 'photo' \
-                 AND NOT sealed \
+    let sql = "SELECT DISTINCT ON (patient_id) patient_id, digest_hex \
+               FROM ( \
+                 SELECT e.patient_id::text AS patient_id, e.hlc_wall, e.hlc_counter, \
+                        rendition ->> 'digest_hex' AS digest_hex \
+                   FROM event_log e \
+                   CROSS JOIN LATERAL jsonb_array_elements(e.attachments) AS attachment \
+                   CROSS JOIN LATERAL jsonb_array_elements(attachment -> 'renditions') AS rendition \
+                  WHERE e.patient_id = ANY($1::text[]::uuid[]) \
+                    AND e.event_type = 'identity.evidence.asserted' \
+                    AND e.body ->> 'kind' = 'photo' \
+                    AND NOT e.sealed \
+                    AND rendition ->> 'role' = 'original' \
+               ) matched \
                ORDER BY patient_id, hlc_wall DESC, hlc_counter DESC";
     let mut out = HashMap::new();
     for row in client.query(sql, &[&id_strs]).await? {

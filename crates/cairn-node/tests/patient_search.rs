@@ -9,11 +9,17 @@
 //! NOT exercised here.
 mod common;
 
+use cairn_event::attachment::{Attachment, Rendition, RENDITION_ROLE_ORIGINAL};
 use cairn_event::demographics::{
     dob_assertion_body, identifier_assertion_body, name_assertion_body, render_dob_twin,
     render_identifier_twin, render_name_twin, IdentifierAssertion,
 };
-use cairn_event::SigningKey;
+use cairn_event::identity::{dispute_assertion_body, render_dispute_twin, DisputeAssertion};
+use cairn_event::identity_evidence::{
+    photo_evidence_body, render_identity_evidence_twin, IDENTITY_EVIDENCE_EVENT_TYPE,
+    IDENTITY_EVIDENCE_SCHEMA_VERSION, PHOTO_EVIDENCE_KIND,
+};
+use cairn_event::{EventBody, Hlc, SigningKey};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::{SearchQuery, TrustState};
 use common::{cs, setup, submit_patient_created, submit_signed, EventSpec};
@@ -25,8 +31,9 @@ use uuid::Uuid;
 /// (`patient_identifier`, `patient_demographic` are already truncated there).
 /// `patient_name` holds the retained name set pass 3 tokenises; `chart_identity_state`
 /// is the John-Doe-registration overlay the callsign test composes onto (mirrors
-/// `john_doe.rs`'s `OVERLAY_TABLES`).
-const EXTRA_TABLES: [&str; 2] = ["patient_name", "chart_identity_state"];
+/// `john_doe.rs`'s `OVERLAY_TABLES`); `chart_dispute` backs the `chart_trust` `under-review`
+/// row `a_candidate_carries_name_age_trust_and_last_activity` asserts against.
+const EXTRA_TABLES: [&str; 3] = ["patient_name", "chart_identity_state", "chart_dispute"];
 
 /// Submit one §4.4 identifier assertion for `patient`, built by the typed builder.
 async fn submit_identifier(
@@ -462,9 +469,14 @@ async fn a_john_doe_callsign_chart_is_returned_by_its_callsign_token() {
     .await
     .expect("john doe registration accepted by the floor");
 
-    // The callsign contains no whitespace (dash-joined by `sanitize_part`), so it is a
-    // single token on both sides of the comparison: the retained name's own tokenisation
-    // (pass 3's `regexp_split_to_table`) and the clerk-typed query term alike.
+    // The callsign contains no whitespace (dash-joined by `sanitize_part`), so pass 3's
+    // OWN tokenisation (`regexp_split_to_table` splits only on `\s+`) treats it as ONE
+    // stored token. This test bypasses `SearchQuery::new` entirely and hands db/046 that
+    // single finished token directly, to exercise the SQL layer's tokenisation in
+    // isolation from the query layer above it. Whether `SearchQuery::new` itself produces
+    // that same whole token from raw clerk-typed text is a SEPARATE claim, covered by
+    // `an_identity_pending_chart_comes_back_marked_unconfirmed` below, which drives the
+    // real entry point end to end — do not read this test as proof of that claim too.
     let token = call.to_lowercase();
     let rows = search_candidates(&c, Some(&[token.as_str()]), None, None).await;
     assert_eq!(
@@ -558,6 +570,31 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
     // (`patient_chart_apply`'s registered types) — so last_activity needs one of those,
     // not the demographic assertions above, which land in their own overlay tables only.
     submit_patient_created(&c, &sk, &kid, p, 3).await;
+    // An OPEN dispute, so `cand.trust` below is asserted against a REAL `chart_trust` row
+    // rather than the `map_or` default `read_trust_states` falls back to when a candidate
+    // has no row at all — that default reads Confirmed whether or not the trust query ran
+    // at all, so asserting it alone would pass even with `read_trust_states` deleted.
+    let dispute_id = Uuid::now_v7();
+    let dispute = DisputeAssertion {
+        dispute_id: &dispute_id.to_string(),
+        subject: &p.to_string(),
+        reason: "wrong-chart flagged by triage",
+    };
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: "identity.dispute.asserted",
+            schema_version: "identity.dispute.asserted/1",
+            payload: dispute_assertion_body(&dispute),
+            plaintext_twin: Some(render_dispute_twin(&dispute)),
+            wall: 4,
+        },
+    )
+    .await
+    .expect("dispute accepted");
 
     let query = SearchQuery::new("smith", None, &[]);
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
@@ -582,7 +619,11 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
         Some("document-verified"),
         "the age's basis is the dob assertion's own provenance, not a constant: {cand:?}"
     );
-    assert_eq!(cand.trust, TrustState::Confirmed);
+    assert_eq!(
+        cand.trust,
+        TrustState::UnderReview,
+        "a real chart_trust row must actually be read, not merely defaulted: {cand:?}"
+    );
     assert!(
         cand.last_activity.is_some(),
         "patient.created gave this chart a patient_chart row: {cand:?}"
@@ -617,19 +658,14 @@ async fn an_identity_pending_chart_comes_back_marked_unconfirmed() {
 
     // The callsign IS the chart's only name (patient_name_current has nothing else to
     // pick), so searching by it is both the realistic clerk gesture and the display-name
-    // read path at once. Built as a single already-final token, NOT through
-    // `SearchQuery::new` — the callsign is dash-joined (`sanitize_part`) and `new`'s
-    // alphanumeric-only splitter would fragment it on every dash, where db/046's pass 3
-    // only splits the STORED value on whitespace (`\s+`) and so treats the whole,
-    // hyphens-and-all callsign as ONE token. `search_candidates` in this same file (the
-    // `db/046` SQL-layer test) hits the identical mismatch and sidesteps it the same way,
-    // by supplying the finished token directly rather than through a raw-text splitter.
-    let token = call.to_lowercase();
-    let query = SearchQuery {
-        name_tokens: vec![token],
-        birth_date: None,
-        identifiers: vec![],
-    };
+    // read path at once. Driven through the REAL entry point, `SearchQuery::new` — this
+    // is the only raw-text path any UI or the native API can use, so a test that bypasses
+    // it (as this one used to, via a hand-built struct literal) would certify a path that
+    // cannot work in production while hiding that fact. `SearchQuery::new` now keeps the
+    // whole dash-joined callsign as ONE token (its edge-trimmed "whole" form — see its
+    // doc comment) precisely so this works: pass 3 tokenises the STORED callsign on
+    // whitespace only, so the intact callsign is what it stores too.
+    let query = SearchQuery::new(&call, None, &[]);
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-07-03")
         .await
         .expect("search succeeds");
@@ -700,7 +736,9 @@ async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
     assert!(
         list.incomplete_reason
             .as_ref()
-            .is_some_and(|r| r.contains('1')),
+            .is_some_and(|r| r.starts_with("1 candidate")),
+        // `contains('1')` would also pass for "11 candidate(s)" or "21 candidate(s)" —
+        // anchoring on the leading count is what actually pins the number down.
         "the reason must name how many candidates were affected: {:?}",
         list.incomplete_reason
     );
@@ -750,4 +788,182 @@ async fn an_empty_query_yields_an_empty_complete_list() {
         "found-nothing is a complete answer, not a partial one: {list:?}"
     );
     assert!(list.incomplete_reason.is_none());
+}
+
+#[tokio::test]
+async fn a_hyphenated_surname_is_found_by_typing_the_surname_alone() {
+    // CRITICAL regression coverage (review round 1, #344): typing a compound surname back
+    // EXACTLY as printed — "the standard narrowing gesture" — used to fail. The OLD
+    // `SearchQuery::new` split on every non-alphanumeric character, so typing
+    // "O'Brien-Smith" fragmented into ["o","brien","smith"], none of which equalled the
+    // STORED token: pass 3 tokenises the stored name only on whitespace, so
+    // "O'Brien-Smith" stays ONE intact stored token ("o'brien-smith"). The signed
+    // attestation this search feeds (db/045) would have recorded a diligent-looking but
+    // useless search, indistinguishable from a genuine new patient.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body("Anne Marie O'Brien-Smith", Some("legal"), "patient-stated"),
+        render_name_twin("Anne Marie O'Brien-Smith", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name accepted");
+
+    // Searching by the surname ALONE, punctuation intact — not the given name, and not a
+    // fragment of the surname.
+    let query = SearchQuery::new("O'Brien-Smith", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the hyphenated surname, typed alone, must find the chart: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, p);
+}
+
+#[tokio::test]
+async fn an_identifier_with_a_materialised_key_is_found_by_its_printed_form() {
+    // IMPORTANT 1 regression coverage (review round 1, #344): db/046 pass 1 used to match
+    // ONLY `patient_identifier.match_key` (= coalesce(normalized, value), db/010) — the
+    // MATERIALISED canonical form a §4.4 profile derives (an NHS number's digits-only
+    // "9434765919"). A clerk types what is PRINTED on the card ("943 476 5919"), not its
+    // normalisation; the query side has no profile to re-derive `normalized` with
+    // (ADR-0033), so pass 1 must also match the raw `value` a clerk actually types.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    let a = IdentifierAssertion {
+        value: "943 476 5919",
+        system: "nhs-number",
+        provenance: "document-verified",
+        normalized: Some("9434765919"),
+        profile: Some("nhs-number@b3-abc"),
+        use_: Some("national-id"),
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &a)
+        .await
+        .expect("identifier with a materialised key accepted");
+
+    // The clerk types the number exactly as printed on the card, spaces and all — NOT the
+    // digits-only materialised form the registering profile computed.
+    let query = SearchQuery::new(
+        "",
+        None,
+        &[("nhs-number".to_string(), "943 476 5919".to_string())],
+    );
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the printed-form search must find the chart: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, p);
+}
+
+#[tokio::test]
+async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is_first() {
+    // IMPORTANT 2 regression coverage (review round 1, #344): `read_photo_refs` used to
+    // index `renditions -> 0` positionally rather than selecting by `role`. ADR-0042
+    // exists precisely so ONE attachment can carry N renditions (a thumbnail preview
+    // alongside the original), so this event is built with the PREVIEW listed FIRST and
+    // the ORIGINAL second — the ordering a positional read gets wrong. Nothing exercised
+    // this read path (`identity.evidence.asserted` -> `Candidate::photo_ref`) at all
+    // before this test. Built by hand rather than through `photo_evidence::
+    // assert_photo_evidence` (which always emits a single "original" rendition, so it
+    // cannot construct the two-rendition case this bug needs to be caught at all).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body("Priya Photo", Some("legal"), "patient-stated"),
+        render_name_twin("Priya Photo", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name accepted");
+
+    let preview = Rendition::reference("preview", b"thumbnail-bytes", "image/jpeg");
+    let original = Rendition::reference(
+        RENDITION_ROLE_ORIGINAL,
+        b"full-resolution-bytes",
+        "image/jpeg",
+    );
+    let attachment = Attachment {
+        descriptor: "frontal face photograph on arrival".to_string(),
+        renditions: vec![preview.clone(), original.clone()],
+    };
+    let twin = render_identity_evidence_twin(PHOTO_EVIDENCE_KIND, Some("on arrival"), &attachment);
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: IDENTITY_EVIDENCE_EVENT_TYPE.into(),
+        schema_version: IDENTITY_EVIDENCE_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall: 2,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: photo_evidence_body(Some("on arrival")),
+        attachments: vec![attachment],
+        plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&body, &sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("two-rendition photo evidence accepted");
+
+    let query = SearchQuery::new("Priya", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(list.candidates.len(), 1, "the photographed chart: {list:?}");
+    assert_eq!(
+        list.candidates[0].photo_ref.as_deref(),
+        Some(original.digest_hex.as_str()),
+        "photo_ref must be the ORIGINAL rendition, found by role, not whichever sits first: {list:?}"
+    );
+    assert_ne!(
+        list.candidates[0].photo_ref.as_deref(),
+        Some(preview.digest_hex.as_str()),
+        "must never return the preview's digest: {list:?}"
+    );
 }
