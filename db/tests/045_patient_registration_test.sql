@@ -80,6 +80,68 @@ EXCEPTION WHEN others THEN
     END IF;
 END $$;
 
+-- 3b. A non-standard registration STATES WHY (review finding I1: this rule shipped with no
+--     test that drove it — deleting it from db/045 left every other assertion here green,
+--     because block 3 above supplies a VALID basis and is refused for a different reason).
+--
+--     For `standard` the class IS the explanation, and a mandatory free-text box there would
+--     be a required field satisfiable only by fabrication (principle 4). For the
+--     non-standard classes the reverse holds: "unconscious ED arrival, no ID" is the only
+--     record of why this chart was born outside the normal path, and a John Doe chart with
+--     no stated reason is unauditable six months later.
+--
+--     All three failing shapes are exercised — absent, blank, and non-string — because the
+--     rule has three arms and a test that only omitted the key would leave two unproven.
+DO $$
+DECLARE
+    v_payload jsonb;
+    v_label   text;
+BEGIN
+    FOREACH v_label IN ARRAY ARRAY['absent', 'blank', 'non-string'] LOOP
+        v_payload := CASE v_label
+            WHEN 'absent'     THEN jsonb_build_object('class', 'unidentified')
+            WHEN 'blank'      THEN jsonb_build_object('class', 'unidentified', 'basis', '   ')
+            ELSE                   jsonb_build_object('class', 'unidentified', 'basis', 42)
+        END;
+        BEGIN
+            PERFORM cairn_check_registration_assertion('identity.registration.asserted',
+                jsonb_build_object(
+                    'plaintext_twin', 'Patient registered (unidentified registration)',
+                    'payload', v_payload));
+            RAISE EXCEPTION 'FAIL: a non-standard registration with a % basis was accepted', v_label;
+        EXCEPTION WHEN others THEN
+            IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;
+            IF position('non-standard registration states why' in SQLERRM) = 0 THEN
+                RAISE EXCEPTION 'FAIL: wrong refusal for a % basis: %', v_label, SQLERRM;
+            END IF;
+        END;
+    END LOOP;
+END $$;
+
+-- 3c. The non-standard ACCEPT path (review finding I2). Before this block every
+--     non-standard assertion in this file expected a REFUSAL, so the §5.4 John Doe birth
+--     act — the exact path the search-absence rule exists to protect — was never once
+--     shown to be admissible, and `pseudonymous` was never exercised at all. Both members
+--     are checked here so a divergence between §5.3's closed set and
+--     `RegistrationClass::as_str()` cannot hide in the rarely-used class.
+DO $$
+DECLARE v_class text;
+BEGIN
+    FOREACH v_class IN ARRAY ARRAY['unidentified', 'pseudonymous'] LOOP
+        BEGIN
+            PERFORM cairn_check_registration_assertion('identity.registration.asserted',
+                jsonb_build_object(
+                    'plaintext_twin', 'Patient registered (' || v_class || ' registration)',
+                    'payload', jsonb_build_object(
+                        'class', v_class,
+                        'basis', 'no ID available at presentation')));
+        EXCEPTION WHEN others THEN
+            RAISE EXCEPTION 'FAIL: a well-formed % registration must be accepted, got: %',
+                v_class, SQLERRM;
+        END;
+    END LOOP;
+END $$;
+
 -- 4. An EMPTY candidate list is ACCEPTED — the normal case for a genuinely new patient: the
 --    search ran and correctly found nothing. This is the anti-regression half of rule 3: a
 --    future "tightening" of `displayed` into a non-empty requirement would make registering

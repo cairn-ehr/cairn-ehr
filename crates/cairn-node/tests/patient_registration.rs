@@ -290,6 +290,45 @@ async fn unidentified_registration_carrying_a_search_is_refused() {
 }
 
 #[tokio::test]
+async fn a_non_standard_registration_without_a_basis_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Review finding I1: rule 2b shipped with no test that drove it. Deleting the whole
+    // `basis` IF block from db/045 left every other test in this file green, because
+    // `unidentified_registration_carrying_a_search_is_refused` supplies a VALID basis and
+    // is refused for a different reason entirely.
+    //
+    // Why the rule matters clinically: for `standard`, the class IS the explanation and a
+    // mandatory free-text box would be a required field satisfiable only by fabrication
+    // (principle 4). For the non-standard classes the reverse holds — "unconscious ED
+    // arrival, no ID" is the ONLY record of why this chart was born outside the normal
+    // path, and a John Doe chart with no stated reason is unauditable six months later.
+    //
+    // All three absent/blank/wrong-type shapes are covered: the rule is
+    // `jsonb_typeof(basis) IS DISTINCT FROM 'string' OR trim(basis) = ''`, and a test that
+    // only omitted the key would leave the blank-string and non-string arms unproven.
+    for (label, basis) in [
+        ("basis-absent", None),
+        ("basis-blank", Some(json!("   "))),
+        ("basis-non-string", Some(json!(42))),
+    ] {
+        let mut payload = json!({"class": "unidentified"});
+        if let Some(b) = basis {
+            payload["basis"] = b;
+        }
+        let p = Uuid::now_v7();
+        let r = submit_registration(&c, &sk, &kid, p, 1, payload, good_twin()).await;
+        assert_refused_and_empty(&c, r, p, "non-standard registration states why", label).await;
+    }
+}
+
+#[tokio::test]
 async fn an_unknown_class_is_refused() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
@@ -438,6 +477,114 @@ async fn an_empty_displayed_array_is_accepted() {
     assert_eq!(displayed_count, 0, "the search ran and found nothing");
 }
 
+/// Read back the whole projected row for `p`, as the tuple the non-standard accept tests
+/// assert on: `(class, basis, displayed_count, search_incomplete)`.
+///
+/// `search_incomplete` is deliberately an `Option<bool>`: NULL is a THIRD value here, not a
+/// missing one, and collapsing it to `false` in the reader would destroy the very
+/// distinction the tests below exist to pin.
+async fn projected_row(c: &Client, p: Uuid) -> (String, Option<String>, i32, Option<bool>) {
+    let row = c
+        .query_one(
+            "SELECT class, basis, displayed_count, search_incomplete \
+             FROM patient_registration WHERE patient_id::text = $1",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1), row.get(2), row.get(3))
+}
+
+#[tokio::test]
+async fn a_valid_unidentified_registration_is_accepted() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Review finding I2: before this test the non-standard ACCEPT path was entirely
+    // unproven — every non-standard test asserted a refusal. Three things ride on it:
+    //
+    //   1. This is the §5.4 John Doe birth act: the exact path the whole search-absence
+    //      rule exists to protect. A floor that refused it would make an unconscious
+    //      patient unregistrable, which is the failure the rule is meant to prevent.
+    //   2. It executes the non-standard PROJECTION write for the first time —
+    //      `COALESCE(jsonb_array_length(...), 0)` with no search, and the NULL-propagating
+    //      `(p -> 'search' -> 'incomplete')::boolean` cast. Both were reasoned about and
+    //      neither had ever run.
+    //   3. Built through the TASK-1 BUILDER, so it doubles as a seam test: it proves
+    //      `RegistrationClass::Unidentified.as_str()` is a member of db/045's closed set.
+    //      A one-character divergence between the Rust enum and the SQL `NOT IN (...)`
+    //      list would otherwise ship silently.
+    let p = Uuid::now_v7();
+    let a = RegistrationAssertion {
+        class: RegistrationClass::Unidentified,
+        basis: Some("unconscious ED arrival, no ID"),
+        search: None,
+    };
+    register(&c, &sk, &kid, p, 1, &a)
+        .await
+        .expect("a §5.4 John Doe registration must be accepted — there is nothing to search with");
+
+    let (class, basis, displayed_count, incomplete) = projected_row(&c, p).await;
+    assert_eq!(class, "unidentified");
+    assert_eq!(basis.as_deref(), Some("unconscious ED arrival, no ID"));
+    // THIS PAIR IS THE INVARIANT, and neither half means much alone. `displayed_count = 0`
+    // is ambiguous on its own — it reads identically for "a search ran and found nothing"
+    // and for "no search ran at all". `search_incomplete IS NULL` is what disambiguates
+    // it: a standard registration always stores a boolean there (the floor requires the
+    // flag), so NULL can ONLY mean no search ran. Assert them together, or a future change
+    // that defaulted the flag to FALSE would make the two cases indistinguishable in the
+    // projection while every other test stayed green.
+    assert_eq!(
+        displayed_count, 0,
+        "no search ran, so no candidates were displayed"
+    );
+    assert_eq!(
+        incomplete, None,
+        "search_incomplete must be NULL — the honest 'not applicable', and the only thing \
+         that tells a reader displayed_count = 0 here means 'no search ran' rather than \
+         'the search found nothing'"
+    );
+}
+
+#[tokio::test]
+async fn a_valid_pseudonymous_registration_is_accepted() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // The third member of §5.3's closed set, and the ONLY test that exercises it anywhere:
+    // without this, `RegistrationClass::Pseudonymous.as_str()` and db/045's `'pseudonymous'`
+    // literal were never once compared at runtime. §5.6 legally-sanctioned anonymous or
+    // protective care is rare, which is exactly why a silent divergence here would not be
+    // found by use — it would be found by a patient under protection failing to register.
+    //
+    // Also through the Task-1 builder, for the same seam reason as the test above.
+    let p = Uuid::now_v7();
+    let a = RegistrationAssertion {
+        class: RegistrationClass::Pseudonymous,
+        basis: Some("court-ordered protective care"),
+        search: None,
+    };
+    register(&c, &sk, &kid, p, 1, &a)
+        .await
+        .expect("a §5.6 pseudonymous registration must be accepted");
+
+    let (class, basis, displayed_count, incomplete) = projected_row(&c, p).await;
+    assert_eq!(class, "pseudonymous");
+    assert_eq!(basis.as_deref(), Some("court-ordered protective care"));
+    assert_eq!(displayed_count, 0);
+    assert_eq!(incomplete, None);
+}
+
 #[tokio::test]
 async fn a_standard_registration_with_no_human_author_is_accepted() {
     let Some(base) = cs() else {
@@ -460,6 +607,68 @@ async fn a_standard_registration_with_no_human_author_is_accepted() {
              when a clerk's key is not unlocked, push named patients through the John Doe \
              path, and produce NO forensic record in the case it fires.",
         );
+
+    // Review finding M4: the acceptance above is necessary but not sufficient. On its own
+    // this test was mechanically identical to `an_empty_displayed_array_is_accepted` — it
+    // would fail if someone added a gate, but it asserted NOTHING about its own subject, so
+    // it could not catch the outcome silently changing in any other way. The reads below
+    // pin what "no human author" actually LANDED AS, so the test fails if the shape of an
+    // unattested registration changes, not only if submission starts being refused.
+    let p_str = p.to_string();
+    let row = c
+        .query_one(
+            "SELECT
+                 -- 1. No human vouched: the door stored no verified attester.
+                 el.attester_key IS NULL,
+                 -- 2. No contributor claims a responsibility-BEARING role. Checked against
+                 --    the DB's own ratified vocabulary (contributor_role.bears) rather than
+                 --    a hard-coded role list, so ratifying a new bearing role cannot leave
+                 --    this assertion silently behind. `bearing:` prefix included for the
+                 --    same reason cairn_authorship_bound carries that arm.
+                 NOT EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(el.contributors) AS e
+                     WHERE coalesce(
+                               (SELECT r.bears FROM contributor_role r WHERE r.role = e ->> 'role'),
+                               (e ->> 'role') LIKE 'bearing:%')),
+                 -- 3. ...and none claims a responsibility object either.
+                 NOT EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(el.contributors) AS e
+                     WHERE e ? 'responsibility'),
+                 -- 4. The signer is a NON-human actor. This is the fact an authorship gate
+                 --    would have keyed on, so naming it here is what makes the §2.6
+                 --    decision testable rather than merely asserted in a comment.
+                 EXISTS (
+                     SELECT 1 FROM actor_current ac
+                     WHERE ac.signing_key_id = el.signer_key_id AND ac.kind <> 'human')
+             FROM event_log el WHERE el.patient_id::text = $1",
+            &[&p_str],
+        )
+        .await
+        .unwrap();
+    let (no_attester, no_bearing_role, no_responsibility, signer_is_not_human): (
+        bool,
+        bool,
+        bool,
+        bool,
+    ) = (row.get(0), row.get(1), row.get(2), row.get(3));
+    assert!(
+        no_attester && no_bearing_role && no_responsibility && signer_is_not_human,
+        "this registration must land as the genuinely UNATTESTED, device-signed case \
+         (attester {no_attester}, no-bearing-role {no_bearing_role}, no-responsibility \
+         {no_responsibility}, signer-not-human {signer_is_not_human}) — otherwise the test \
+         is not exercising §2.6's subject at all and its acceptance proves nothing"
+    );
+
+    // And the chart is fully born despite having no human author — the positive half of
+    // "a grade, not a gate": the record is usable, not quarantined.
+    let (class, _basis, displayed_count, incomplete) = projected_row(&c, p).await;
+    assert_eq!(class, "standard");
+    assert_eq!(displayed_count, 0);
+    assert_eq!(
+        incomplete,
+        Some(false),
+        "a standard registration always states completeness, unattested or not"
+    );
 }
 
 #[tokio::test]
