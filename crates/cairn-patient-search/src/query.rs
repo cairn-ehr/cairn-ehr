@@ -10,7 +10,18 @@ pub struct SearchQuery {
     /// Lower-cased name tokens from the typed name (see `new`'s doc for exactly which
     /// tokens land here). May be empty.
     pub name_tokens: Vec<String>,
-    /// ISO `YYYY-MM-DD` as typed, or `None`.
+    /// The birth date as typed, trimmed of surrounding whitespace, or `None` when the clerk
+    /// gave none. Deliberately NOT day-precision-only: a reduced-precision ISO date
+    /// (`YYYY` or `YYYY-MM`) is a first-class value here, because a registrar is frequently
+    /// told only a year (principle 4 — never force a commitment nobody can vouch for), and
+    /// `cairn_node::patient::register::dob_precision` derives the honest precision label
+    /// from this same shape. db/046 pass 2 is an exact string compare, so a reduced-precision
+    /// query matches a reduced-precision stored value and nothing else — narrower recall
+    /// than a range search would give, never a wrong match.
+    ///
+    /// No calendar validation happens here or at the floor (both are deliberately parse-free
+    /// and culture-neutral), so a shaped-but-impossible date such as `1980-13-45` survives
+    /// into a signed attestation — tracked, not accepted.
     pub birth_date: Option<String>,
     /// `(system, value)` pairs.
     pub identifiers: Vec<(String, String)>,

@@ -1,4 +1,4 @@
--- Cairn — patient registration (spec §5.3/§5.8, ADR-0060; issue #344).
+-- Cairn — patient registration (spec §5.3/§5.8, ADR-0061; issue #344).
 --
 -- The act that brings a patient chart into being, and the in-DB floor beneath it.
 --

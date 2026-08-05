@@ -7,7 +7,8 @@
 //! happened to carry its `patient_id` first. §5.8 requires the create act to record that N
 //! near-matches were displayed, and a side effect has nowhere to record anything. So
 //! registration becomes an act, with §5.3's three classes as one discriminant so the
-//! floor's precedence rule never needs an exception (design §2.2).
+//! floor's precedence rule never needs an exception (ADR-0061 decision 1 — an "unless" in a
+//! safety floor is where the next defect lives).
 //!
 //! # Why the attestation NAMES candidates rather than counting them
 //!
@@ -187,7 +188,7 @@ mod tests {
         assert_eq!(b["search"]["displayed"][0], ids[0].to_string());
         assert_eq!(b["search"]["incomplete"], false);
         // No count field: length(displayed) IS the count. Two representations of one
-        // number is a lie waiting to happen (design §3).
+        // number is a lie waiting to happen (ADR-0061 decision 2).
         assert!(b["search"].get("displayed_count").is_none());
         // basis is omitted entirely for a standard registration (principle 4: a
         // mandatory free-text box here would be satisfiable only by fabrication).
@@ -265,9 +266,15 @@ mod tests {
             "the floor requires a non-empty twin"
         );
         assert!(twin.contains("standard"));
+        // Anchor the count to its OWN phrase, and derive it from the fixture rather than
+        // writing a literal: `contains('2')` would have passed on any stray '2' anywhere in
+        // the sentence (a date, a version, a reworded basis), so it did not actually test
+        // that the twin states the candidate count at all.
+        let expected_count = format!("{} near-match", ids.len());
         assert!(
-            twin.contains('2'),
-            "the twin states how many candidates were displayed"
+            twin.contains(&expected_count),
+            "the twin must state how many candidates were displayed; \
+             expected {expected_count:?} in {twin:?}"
         );
     }
 

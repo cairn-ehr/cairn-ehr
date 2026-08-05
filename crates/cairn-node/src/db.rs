@@ -257,7 +257,7 @@ const SCHEMA: &[(&str, &str)] = &[
         "044_ui_gesture_timing",
         include_str!("../../../db/044_ui_gesture_timing.sql"),
     ),
-    // db/045 (#344, ADR-0060): the `identity.registration.asserted` floor — the act that
+    // db/045 (#344, ADR-0061): the `identity.registration.asserted` floor — the act that
     // brings a chart into being, its structural check, and the retained-set projection
     // whose _current view picks the EARLIEST registration (a birth act, not a standing
     // state).

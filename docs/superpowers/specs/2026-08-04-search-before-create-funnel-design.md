@@ -5,7 +5,7 @@
 **Layer:** in-DB enforcement floor + node library tier + CLI (no UI this slice)
 **Discharges:** [#344](https://github.com/cairn-ehr/cairn-ehr/issues/344)
 **Governing:** [§5.3](../../spec/identity.md#53-registration-classes) (registration classes) ·
-[§5.8](../../spec/identity.md#58-registration--documentation-workflow-normative) (the normative funnel) ·
+[§5.8](../../spec/identity.md#58-registration-documentation-workflow-normative) (the normative funnel) ·
 [§5.4](../../spec/identity.md#54-unidentified-registration-john-doe-baked-into-the-root) (John Doe) ·
 [ADR-0014](../../spec/decisions/0014-locale-pluggable-matcher-comparators.md) (advisory matcher; the hub sweep is the false-split backstop) ·
 [ADR-0022](../../spec/decisions/0022-validated-submit-surface-the-write-path.md) (the validated write door) ·
@@ -363,14 +363,16 @@ falls outside the budget, **that is the finding** — file it; do not move the b
   consent-gated linking §5.6 requires is its own slice.
 - **The precedence rule's enforcement, retiring `patient.created`, and the ~83-call-site fixture
   sweep** — [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), the reason in §2.3.
-- **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced. Issue to file.
+- **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced.
+  [#354](https://github.com/cairn-ehr/cairn-ehr/issues/354).
 - **No policy expression of "registrations must be attested"** (§2.6). The grade is shipped and the
   worklist query is trivial; turning that into a site requirement is ADR-0024 hard-policy work, and
   belongs to whoever has a deployment that wants it.
 - **No matcher convergence on the blocking keys.** `cairn_search_candidates` and
   `matcher/pipeline/db.py` will each extract identifier / DOB / name-token keys. They are not the
   same query (the sweep blocks all × all; the funnel maps query → set), so the shared part is the key
-  extraction, not the driver. Issue to file rather than let the drift pass silently (house rule 5).
+  extraction, not the driver. [#353](https://github.com/cairn-ehr/cairn-ehr/issues/353), rather than let
+  the drift pass silently (house rule 5).
 
 ## 9. Testing (TDD — failing test first)
 

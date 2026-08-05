@@ -1,6 +1,6 @@
 -- Cairn — §5.8 search-before-create: advisory candidate generation.
 --
--- ADVISORY, NOT A FLOOR (design §2.1, ADR-0014). A missed candidate produces a false
+-- ADVISORY, NOT A FLOOR (ADR-0061, ADR-0014). A missed candidate produces a false
 -- SPLIT — §5.2's explicitly safe direction — and ADR-0014 already names the standing
 -- backstop: the hub-tier background duplicate sweep. So this function never blocks,
 -- never vetoes and never decides; it offers rows to a human.
@@ -11,8 +11,29 @@
 --
 -- DRIFT NOTE: the three blocking keys below mirror matcher/pipeline/db.py's three-pass
 -- disjunction. They are NOT the same query — the sweep blocks all-by-all, this maps
--- query -> set — so only the KEY EXTRACTION is shared. Convergence is tracked as an issue;
+-- query -> set — so only the KEY EXTRACTION is shared. Convergence is tracked as issue #353;
 -- if you change a key here, check the matcher.
+--
+-- DELIBERATELY REDUNDANT DEDUPLICATION — read this before "cleaning it up". Each branch
+-- carries its own `SELECT DISTINCT` *and* the branches are combined with plain `UNION`
+-- (not `UNION ALL`), so every row is de-duplicated twice. That is on purpose and both
+-- halves stay:
+--
+--   * `UNION` alone would suffice — it re-dedups the whole input bag, and because
+--     `matched_pass` is a per-branch LITERAL ('identifier'/'dob'/'name'), two rows can only
+--     ever collide when they came from the SAME branch. So every possible duplicate is a
+--     within-branch duplicate, and the outer UNION already removes it.
+--   * The per-branch `DISTINCT` alone would ALSO suffice, for the same reason.
+--
+-- Keeping both is cheap (the planner sees one dedup opportunity per branch either way) and
+-- buys local legibility: each branch reads as "the set of patients this key matches",
+-- which is what a reviewer must check it against, without having to hold the combinator
+-- three branches below in their head. Dropping either one is safe TODAY and stops being
+-- safe the moment a branch gains a non-literal `matched_pass` or a fourth pass is added
+-- with an overlapping label — which is exactly the kind of change that would not think to
+-- re-derive this argument. The belt and the braces are both one word long.
+-- (Recorded here rather than only in the Rust tests, because a "drop the redundant
+-- DISTINCT" cleanup would happen in THIS file.)
 BEGIN;
 
 CREATE OR REPLACE FUNCTION cairn_search_candidates(

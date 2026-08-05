@@ -28,11 +28,23 @@
 > ([language-substrate §9.3–§9.4](language-substrate.md#93-integration-boundary)).
 
 ## 5.3 Registration classes
+
+**Registration is an act, recorded by one event type** — `identity.registration.asserted` — carrying the
+class below as a discriminant, so the [§5.8](#58-registration-documentation-workflow-normative)
+precedence rule (*the first event carrying a new patient UUID must be a registration*) needs no carve-out
+for any class. Only **Standard** carries a search attestation; for the other two a search attestation would
+be a claim about an act nobody performed, so it is structurally absent, not empty
+([ADR-0061](decisions/0061-registration-is-an-act-that-carries-its-search.md)).
+
 | Class | Use | Properties |
 |---|---|---|
-| **Standard** | Normal registration | Search-before-create enforced funnel |
-| **Unidentified** | Unconscious/unknown patient ("John Doe") | [§5.4](#54-unidentified-registration-john-doe-baked-into-the-root) |
+| **Standard** | Normal registration | Search-before-create funnel; the act carries the search that preceded it |
+| **Unidentified** | Unconscious/unknown patient ("John Doe") | [§5.4](#54-unidentified-registration-john-doe-baked-into-the-root); no search — search-*after*-create by necessity |
 | **Pseudonymous (sanctioned)** | Legally permitted anonymous/protective care | [§5.6](#56-pseudonymous-sanctioned-care) |
+
+A non-standard registration states its **basis** (the value-open reason the class applies); a standard one
+does not, because there the class *is* the explanation and a mandatory free-text box would be a required
+field satisfiable only by fabrication (principle 4).
 
 Registrations created during a partition are tagged and go to the **head of the upstream matching queue on reconnect** — post-partition reconciliation is a scheduled pipeline stage, not an error state.
 
@@ -85,7 +97,9 @@ The **reattribution event** — "event set E belongs to UUID-B, not UUID-A" — 
 **Biometrics:** excluded from core (vendor/AGPL minefield; poor offline performance on constrained hardware). Accommodated as one more identifier system in the multi-valued set via a pluggable module. The core must work with names, dates, photos, and human judgment alone.
 
 ## 5.8 Registration & documentation workflow (normative)
-1. **Search-before-create enforced funnel:** "new patient" unreachable until local-scope matching has run; candidates shown with photo/age/locale/last visit; the create button records that N near-matches were displayed.
+1. **Search-before-create funnel:** "new patient" unreachable until local-scope matching has run; candidates shown with photo/age/locale/last visit; the create act **names the near-matches that were displayed** — not merely how many, because six months later the only question that matters is whether *this* duplicate was on the screen, and "yes" (fix the UI) and "no" (fix the comparator) have opposite fixes a count cannot distinguish ([ADR-0061](decisions/0061-registration-is-an-act-that-carries-its-search.md)). Finding candidates is **advisory** — it never blocks, vetoes or auto-decides (a miss is a false split, [§5.2](#52-matching-pipeline-safety-asymmetric-false-merge-worse-than-false-split)'s safe direction, backstopped by the hub sweep, [ADR-0014](decisions/0014-locale-pluggable-matcher-comparators.md)); what is safety-critical is that the act carries a well-formed attestation, which is checkable in the database.
+   > [!WARNING]
+   > **"Enforced" is the target, not yet the state of the code.** The registration act, its structural floor and the candidate search are built; the **precedence rule that makes the funnel unbypassable** — *the first event carrying a new patient UUID must be a registration* — is **not yet turned on** ([#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), which also retires the legacy `patient.created`). Until it closes, a client can still mint a chart by asserting a name. The rule is enforced at local submit only, never at the remote door: set-union sync has no ordering, so a peer's clinical event legitimately precedes the registration licensing it, and a fail-closed remote door would wedge replication on honest traffic (ADR-0061 decision 3).
 2. **Partition-aware duplicate expectation** (see [§5.3](#53-registration-classes)).
 3. **Wrong-chart protection at point of care (read side):** demographic banner always shows photo + age + provenance-flagged identifiers; cheap "confirm patient" affordances emit verification assertions, raising provenance as a side effect of normal care.
 4. **Wrong-chart protection at point of documentation (write side):** every input surface carries persistent patient identity (photo, name, age, per-patient color coding consistent across all open windows). Documentation is bound to an explicit **armed write-context** designed on **possession semantics** (paper precedent: you physically held one chart; the misfile is a disease of windowing, which abstracted possession away). One chart is "in hand" for writing at a time; picking it up is a single natural gesture; which chart is held is as unmissable as the color of a folder. Cross-window paste of patient-bound content is flagged at paste time. The concrete possession model, its fusion with fast authentication, and the work-salvage primitive are [§5.11](#511-point-of-care-identity-possession-fast-authentication-and-salvage).
