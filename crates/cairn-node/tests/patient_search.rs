@@ -1093,6 +1093,14 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
     // Driven through the REAL suppressing-mode path (a human attestation, via the harness
     // lifted from `identity_repudiate.rs` into `common::enroll_human`/`submit_attested`),
     // not a raw overlay-table INSERT: this codebase's tests exercise the actual floor.
+    //
+    // PAIRED WITH `a_repudiation_naming_no_asserted_name_still_counts_as_incomplete` below:
+    // this test's repudiation strikes a value that IS the chart's own `patient_name` row, so
+    // it alone does NOT discriminate the fixed predicate (`read_names_ever_asserted`, which
+    // checks `patient_name`) from the review-round-2 predicate it replaced (`patient_alias_
+    // pool`, keyed only on the repudiation's subject) — both would answer identically here,
+    // since the repudiation's subject IS this chart either way (review round 3 finding).
+    // This test covers the honest by-design absence; the other one covers the fail-open case.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -1180,4 +1188,107 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
         "a by-design repudiated-name absence must NOT count as a read failure: {list:?}"
     );
     assert!(list.incomplete_reason.is_none());
+}
+
+#[tokio::test]
+async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
+    // N3's ACTUAL fail-open case (review round 3, #344): db/025's own structural floor
+    // explicitly permits a repudiation to arrive with no matching name evidence on the
+    // chart ("a repudiation may legitimately arrive before or independently of the name
+    // assertion it strikes" — offline-first sync ordering has no guarantee). So a chart can
+    // carry a `name_repudiation` row while its `patient_name` retained set stays EMPTY.
+    //
+    // The review-round-2 predicate this replaced (`patient_alias_pool`, keyed only on the
+    // repudiation's subject) would have answered "yes, repudiated" here purely because a
+    // repudiation NAMES this subject — with no requirement that the struck value ever
+    // corresponded to anything this chart actually asserted. That is precisely "a chart with
+    // zero names ever asserted plus one unrelated repudiation" (this crate's own round-2 doc
+    // comment already named the shape) rendering "(name withheld)" and being silently
+    // excluded from `incomplete` — a genuine read gap disguised as an intentional one. The
+    // FIXED predicate (`read_names_ever_asserted`, checking `patient_name` itself) must NOT
+    // make that mistake: zero `patient_name` rows means the honest answer is "unreadable",
+    // not "withheld".
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    // Matched via an identifier so the chart is a real search candidate. Deliberately NO
+    // `submit_field` name assertion at all — `patient_name` stays empty for this patient.
+    let p = Uuid::now_v7();
+    let ident = IdentifierAssertion {
+        value: "no-name-ever-asserted",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &ident)
+        .await
+        .expect("identifier accepted");
+
+    // A repudiation naming THIS chart, but for a value it never asserted — the "arrived
+    // independently of the name assertion it strikes" case db/025's floor permits.
+    let subject_s = p.to_string();
+    let rep = RepudiationAssertion {
+        subject: &subject_s,
+        value: "A Name This Chart Never Asserted",
+        reason: "advance notice: known alias, do not trust if it ever appears",
+    };
+    let repudiation_body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: subject_s.clone(),
+        event_type: "identity.repudiate.asserted".into(),
+        schema_version: "identity.repudiate.asserted/1".into(),
+        hlc: Hlc {
+            wall: 2,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: repudiation_assertion_body(&rep),
+        attachments: vec![],
+        plaintext_twin: Some(render_repudiate_twin(&rep)),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    submit_attested(&c, &sk, repudiation_body, &sk_h, &kid_h)
+        .await
+        .expect("repudiation with no matching name assertion accepted");
+
+    let query = SearchQuery::new(
+        "",
+        None,
+        &[("MRN".to_string(), "no-name-ever-asserted".to_string())],
+    );
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the chart must still be found, never dropped: {list:?}"
+    );
+    assert_eq!(
+        list.candidates[0].display_name, "(name unavailable)",
+        "an unrelated repudiation must NOT be read as this chart's own withheld name: {list:?}"
+    );
+    assert!(
+        list.incomplete,
+        "zero patient_name rows is a genuine read gap and MUST count as incomplete: {list:?}"
+    );
+    assert!(
+        list.incomplete_reason
+            .as_ref()
+            .is_some_and(|r| r.starts_with("1 candidate")),
+        "{:?}",
+        list.incomplete_reason
+    );
 }

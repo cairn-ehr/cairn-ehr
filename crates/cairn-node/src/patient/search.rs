@@ -406,6 +406,12 @@ async fn read_locale<C: GenericClient + Sync>(
 /// silent non-determinism a wrong-chart-prevention surface cannot tolerate (a clerk must see
 /// the SAME photo every time they search the same name). `digest_hex` is a content hash, so
 /// ordering by it last makes the whole ORDER BY total and therefore the pick stable.
+/// `COLLATE "C"` (review round 3, ADR-0045/#69 — the same fix `patient_address_current` and
+/// `patient_name_current` already carry, db/014/db/024): a TEXT tiebreak that trusts the
+/// node's DEFAULT collation could rank the SAME two hex strings differently on two nodes
+/// with different default collations, converging to different photos on the same data — the
+/// exact class of bug this crate's other tiebreaks already guard against, so this one must
+/// too rather than being the one silent exception.
 async fn read_photo_refs<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
@@ -424,7 +430,7 @@ async fn read_photo_refs<C: GenericClient + Sync>(
                     AND NOT e.sealed \
                     AND rendition ->> 'role' = 'original' \
                ) matched \
-               ORDER BY patient_id, hlc_wall DESC, hlc_counter DESC, digest_hex";
+               ORDER BY patient_id, hlc_wall DESC, hlc_counter DESC, digest_hex COLLATE \"C\"";
     let mut out = HashMap::new();
     for row in client.query(sql, &[&id_strs]).await? {
         let id: Uuid = row.get::<_, String>("patient_id").parse()?;
