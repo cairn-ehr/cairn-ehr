@@ -15,7 +15,8 @@ use cairn_event::demographics::{
 };
 use cairn_event::SigningKey;
 use cairn_node::{db, john_doe};
-use common::{cs, setup, submit_signed, EventSpec};
+use cairn_patient_search::{SearchQuery, TrustState};
+use common::{cs, setup, submit_patient_created, submit_signed, EventSpec};
 use std::collections::BTreeSet;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -509,4 +510,244 @@ async fn an_empty_query_returns_no_rows_rather_than_every_chart() {
         rows.is_empty(),
         "an empty query must return no rows, not the whole population: {rows:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// `search_patients` — Task 5's orchestrator, the ONE mapping from the projections above
+// into the shared `Candidate` model. The nine tests above cover `cairn_search_candidates`
+// (the SQL layer) directly; these four cover the Rust assembly on top of it: display-field
+// reads, the trust surface, and the two never-negotiable behaviours (never drop a
+// candidate; never touch the database on an empty query).
+// ---------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_candidate_carries_name_age_trust_and_last_activity() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body("John Smith", Some("legal"), "patient-stated"),
+        render_name_twin("John Smith", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name accepted");
+    let dob = "1980-06-15";
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        2,
+        dob_assertion_body(dob, "day", None, "document-verified"),
+        render_dob_twin(dob, "day", "document-verified"),
+    )
+    .await
+    .expect("dob accepted");
+    // Only patient.created/patient.amended/note.added give a chart a `patient_chart` row
+    // (`patient_chart_apply`'s registered types) — so last_activity needs one of those,
+    // not the demographic assertions above, which land in their own overlay tables only.
+    submit_patient_created(&c, &sk, &kid, p, 3).await;
+
+    let query = SearchQuery::new("smith", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "exactly one chart on file: {list:?}"
+    );
+    let cand = &list.candidates[0];
+    assert_eq!(cand.patient_id, p);
+    assert_eq!(cand.display_name, "John Smith");
+    assert_eq!(
+        cand.age.as_ref().map(|a| a.years),
+        Some(46),
+        "1980-06-15 -> 2026-06-16 is 46 (birthday already passed by a day): {cand:?}"
+    );
+    assert_eq!(
+        cand.age.as_ref().map(|a| a.basis.as_str()),
+        Some("document-verified"),
+        "the age's basis is the dob assertion's own provenance, not a constant: {cand:?}"
+    );
+    assert_eq!(cand.trust, TrustState::Confirmed);
+    assert!(
+        cand.last_activity.is_some(),
+        "patient.created gave this chart a patient_chart row: {cand:?}"
+    );
+    assert!(!list.incomplete, "every field read cleanly: {list:?}");
+}
+
+#[tokio::test]
+async fn an_identity_pending_chart_comes_back_marked_unconfirmed() {
+    // NOT merely "is returned" — the trust state must be visible, or a clerk cannot tell
+    // the John Doe from a confirmed chart and the §5.4 identification path breaks.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let (pid, call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("john doe registration accepted by the floor");
+
+    // The callsign IS the chart's only name (patient_name_current has nothing else to
+    // pick), so searching by it is both the realistic clerk gesture and the display-name
+    // read path at once. Built as a single already-final token, NOT through
+    // `SearchQuery::new` — the callsign is dash-joined (`sanitize_part`) and `new`'s
+    // alphanumeric-only splitter would fragment it on every dash, where db/046's pass 3
+    // only splits the STORED value on whitespace (`\s+`) and so treats the whole,
+    // hyphens-and-all callsign as ONE token. `search_candidates` in this same file (the
+    // `db/046` SQL-layer test) hits the identical mismatch and sidesteps it the same way,
+    // by supplying the finished token directly rather than through a raw-text splitter.
+    let token = call.to_lowercase();
+    let query = SearchQuery {
+        name_tokens: vec![token],
+        birth_date: None,
+        identifiers: vec![],
+    };
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-07-03")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the john doe chart must be found by its callsign: {list:?}"
+    );
+    let cand = &list.candidates[0];
+    assert_eq!(cand.patient_id, pid);
+    assert_eq!(
+        cand.trust,
+        TrustState::Unconfirmed,
+        "an identity-pending chart must read as unconfirmed, never as confirmed: {cand:?}"
+    );
+    // A registration event alone creates no `patient_chart` row (patient_chart_apply is
+    // registered only for patient.created/patient.amended/note.added) — this is an honest
+    // absence, not a read failure, and must not flip `incomplete`.
+    assert_eq!(cand.last_activity, None);
+    assert!(!list.incomplete);
+}
+
+#[tokio::test]
+async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
+    // ADR-0060 decision 2 at the read layer: a candidate the node cannot render must
+    // surface as `incomplete` with a reason, never vanish. A silently-dropped candidate is
+    // the exact duplicate-creating failure the funnel exists to prevent.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // A chart matched by identifier ALONE: no name assertion was ever authored for it, so
+    // patient_name_current holds no row for this patient_id at all — the display-name read
+    // genuinely cannot succeed, rather than merely being untested.
+    let p = Uuid::now_v7();
+    let a = IdentifierAssertion {
+        value: "999-no-name",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &a)
+        .await
+        .expect("identifier accepted");
+
+    let query = SearchQuery::new("", None, &[("MRN".to_string(), "999-no-name".to_string())]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the unreadable candidate must still be present, never dropped: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, p);
+    assert!(
+        list.incomplete,
+        "an unreadable display field must mark the list incomplete: {list:?}"
+    );
+    assert!(
+        list.incomplete_reason
+            .as_ref()
+            .is_some_and(|r| r.contains('1')),
+        "the reason must name how many candidates were affected: {:?}",
+        list.incomplete_reason
+    );
+}
+
+#[tokio::test]
+async fn an_empty_query_yields_an_empty_complete_list() {
+    // Empty AND complete: "found nothing" is a true, exhaustive answer, not a partial one.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Real charts on file, so a search that failed to short-circuit would visibly return
+    // rows instead of passing by accident on an empty database.
+    for (i, wall) in (0u8..3).zip(1i64..) {
+        let p = Uuid::now_v7();
+        let name = format!("Patient {i}");
+        submit_field(
+            &c,
+            &sk,
+            &kid,
+            p,
+            wall,
+            name_assertion_body(&name, Some("legal"), "patient-stated"),
+            render_name_twin(&name, Some("legal"), "patient-stated"),
+        )
+        .await
+        .expect("name assertion accepted");
+    }
+
+    let query = SearchQuery::new("", None, &[]);
+    assert!(query.is_empty(), "precondition: this query is empty");
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
+        .await
+        .expect("search succeeds");
+
+    assert!(
+        list.candidates.is_empty(),
+        "an empty query must yield an empty list, not the whole population: {list:?}"
+    );
+    assert!(
+        !list.incomplete,
+        "found-nothing is a complete answer, not a partial one: {list:?}"
+    );
+    assert!(list.incomplete_reason.is_none());
 }

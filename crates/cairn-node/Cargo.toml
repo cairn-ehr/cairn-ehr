@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 cairn-event = { path = "../cairn-event" }
 cairn-medication-view = { path = "../cairn-medication-view" }
+cairn-patient-search = { path = "../cairn-patient-search" }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7"

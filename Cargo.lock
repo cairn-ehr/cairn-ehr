@@ -314,6 +314,7 @@ dependencies = [
  "base64",
  "cairn-event",
  "cairn-medication-view",
+ "cairn-patient-search",
  "chacha20poly1305",
  "ciborium",
  "clap",
