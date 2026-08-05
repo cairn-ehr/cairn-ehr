@@ -294,18 +294,28 @@ pub fn build_dob_body(
 ///     record"). Order is otherwise preserved: the clerk's entry order is the submission
 ///     order, exactly as with the attested candidate list.
 ///
-/// **The surviving values are returned UNTRIMMED, deliberately.** `SearchQuery` stores
-/// identifier values verbatim and db/046 pass 1 compares `pi.value = (q ->> 'value')`
-/// EXACTLY, so trimming here would store a value that the very query it came from can no
-/// longer match — reintroducing the C1 unfindability one character at a time. Trimming is
-/// used only to DECIDE emptiness, never to rewrite what gets asserted.
+/// **The surviving values are returned TRIMMED — maintainer decision, final review (N3),
+/// reversing the original "leave it untrimmed" call.** That call read: "`SearchQuery` stores
+/// identifier values verbatim and db/046 pass 1 compares EXACTLY, so trimming here would store
+/// a value the very query it came from can no longer match." That was only true because the
+/// QUERY side did not trim either — the fix is to trim BOTH sides, the same shape `birth_date`
+/// already uses (`SearchQuery::new`, `cairn-patient-search/src/query.rs:84-87` — "a clerk's
+/// stray leading/trailing space … must not silently defeat it"). `SearchQuery::new` now trims
+/// `system`/`value` the same way, so the stored value and the value a later search compares
+/// against agree bit-for-bit. Before this fix, registering with a pasted
+/// `--identifier "MRN= 12345"` (trailing space intact) and later searching
+/// `--identifier MRN=12345` (no space) did not match — db/046 pass 1's exact compare saw two
+/// different strings. Trimming is no longer merely how emptiness is decided; it is also what
+/// gets asserted.
 pub fn supplied_identifiers(identifiers: &[(String, String)]) -> Vec<(&str, &str)> {
     let mut out: Vec<(&str, &str)> = Vec::new();
     for (system, value) in identifiers {
-        if system.trim().is_empty() || value.trim().is_empty() {
+        let system = system.trim();
+        let value = value.trim();
+        if system.is_empty() || value.is_empty() {
             continue;
         }
-        let pair = (system.as_str(), value.as_str());
+        let pair = (system, value);
         if !out.contains(&pair) {
             out.push(pair);
         }
@@ -387,8 +397,9 @@ pub fn build_identifier_body(
 /// typed (e.g. identifier-only). No name event is authored in that case (principle 4). The
 /// dob needs no separate parameter — `query.birth_date` already carries the raw ISO string,
 /// and the identical "only if actually supplied" rule applies to it. Nor do the identifiers:
-/// `query.identifiers` carries the `(system, value)` pairs verbatim, which is exactly what
-/// must be asserted so a later search on the same value matches (see `supplied_identifiers`).
+/// `query.identifiers` carries the `(system, value)` pairs `SearchQuery::new` already trimmed,
+/// which is exactly what must be asserted so a later search on the same value matches (see
+/// `supplied_identifiers`).
 ///
 /// **`name` MUST be the same typed string `query` was built FROM** (i.e. from the very same
 /// clerk keystroke that fed `SearchQuery::new`'s `raw_name` argument). Nothing in this
@@ -788,17 +799,22 @@ mod tests {
     }
 
     #[test]
-    fn supplied_identifiers_keeps_entry_order_and_the_value_verbatim() {
+    fn supplied_identifiers_keeps_entry_order_and_trims_the_value() {
+        // Maintainer decision, final review (N3): reverses the earlier "keep it verbatim"
+        // test. `SearchQuery::new` now trims identifiers on the way in too (query.rs), so
+        // trimming here as well is what keeps the STORED value and a later QUERY's value in
+        // agreement — db/046 pass 1's exact compare would otherwise be defeated by a pasted
+        // MRN's stray whitespace on one side but not the other.
         let input = vec![
             ("MRN".to_string(), " 12345 ".to_string()),
             ("NHI".to_string(), "ZZZ9999".to_string()),
         ];
         assert_eq!(
             supplied_identifiers(&input),
-            vec![("MRN", " 12345 "), ("NHI", "ZZZ9999")],
-            "the value must be asserted EXACTLY as the query carried it — db/046 pass 1 \
-             compares it with `=`, so trimming here would make the chart unfindable by the \
-             very query it was registered from"
+            vec![("MRN", "12345"), ("NHI", "ZZZ9999")],
+            "the value must be asserted TRIMMED — db/046 pass 1 compares it with `=`, and \
+             the query side (SearchQuery::new) now trims too, so a mismatch here would make \
+             the chart unfindable by the very query it was registered from"
         );
     }
 

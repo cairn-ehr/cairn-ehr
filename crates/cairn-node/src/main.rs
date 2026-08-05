@@ -2771,6 +2771,15 @@ async fn main() -> anyhow::Result<()> {
 /// Splitting on only the FIRST `=` (not `split('=')`) deliberately allows a value that itself
 /// contains `=` (e.g. a base64-ish fragment) — only the separator between `system` and
 /// `value` is special.
+///
+/// **The blank check is `trim().is_empty()`, matching the persistence side (final review,
+/// N2/N3).** It used to be a bare `.is_empty()`, which let `--identifier "MRN=   "` (a
+/// whitespace-only value) past the CLI, into a `SearchQuery` that gets SIGNED into the
+/// permanent attestation — and then silently dropped by
+/// `cairn_node::patient::register::supplied_identifiers`'s own `trim().is_empty()` filter,
+/// never persisted. That is the "attested but not persisted" shape this whole slice exists to
+/// close, one edge later than the fix that closed the rest of it: refusing loudly here, before
+/// anything is signed, is strictly better than a downstream silent drop.
 fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)>> {
     raw.iter()
         .map(|s| {
@@ -2780,7 +2789,7 @@ fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)
                      --identifier MRN=12345"
                 )
             })?;
-            if system.is_empty() || value.is_empty() {
+            if system.trim().is_empty() || value.trim().is_empty() {
                 anyhow::bail!(
                     "malformed --identifier {s:?}: both `system` and `value` must be \
                      non-empty (expected `system=value`, e.g. --identifier MRN=12345)"
@@ -2792,7 +2801,7 @@ fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)
 }
 
 /// Width of the `name` column in `print_candidates`' fixed-column layout. Both the header's
-/// `{:<28}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
+/// `{:<name_w$}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
 const NAME_COLUMN_WIDTH: usize = 28;
 
 /// Shorten `s` to at most `width` CHARACTERS, marking the cut with a trailing `…`.
@@ -3032,6 +3041,23 @@ mod tests {
     #[test]
     fn an_empty_value_is_rejected() {
         let err = parse_identifier_pairs(&["MRN=".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn a_whitespace_only_value_is_rejected_at_the_cli_edge() {
+        // The N2 regression: a bare `.is_empty()` check let `--identifier "MRN=   "` (no
+        // real value, only spaces) past the CLI and into a `SearchQuery` that gets SIGNED
+        // into the permanent attestation, only to be silently dropped later by
+        // `supplied_identifiers`'s own `trim().is_empty()` filter — attested but never
+        // persisted. Refusing here, loudly, before anything is signed, is the fix.
+        let err = parse_identifier_pairs(&["MRN=   ".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("system=value"));
+    }
+
+    #[test]
+    fn a_whitespace_only_system_is_rejected_at_the_cli_edge() {
+        let err = parse_identifier_pairs(&["   =12345".to_string()]).unwrap_err();
         assert!(err.to_string().contains("system=value"));
     }
 

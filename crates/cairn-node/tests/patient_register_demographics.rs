@@ -479,6 +479,62 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_identifier_al
 }
 
 #[tokio::test]
+async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
+    // The N3 cross-gesture case (ADR-0061, final review, maintainer decision: trim BOTH
+    // sides). A clerk pastes an MRN straight off a scanned card, whitespace and all —
+    // `patient-register --identifier "MRN= 55512"` — and weeks later a different clerk types
+    // the same MRN clean, no padding — `patient-search --identifier MRN=55512`. Before this
+    // fix `SearchQuery::new` and `supplied_identifiers` left the value exactly as typed, so
+    // the stored value carried the paste's whitespace while the query never did, and db/046
+    // pass 1's exact `=` compare silently missed the very chart the funnel had just created
+    // and signed a diligent-looking attestation for.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let name = "Padded Mrn Patient";
+    // Registered from a pasted card: leading/trailing whitespace on both system and value.
+    let padded_identifiers = [("  MRN  ".to_string(), "  55512  ".to_string())];
+    let query = SearchQuery::new(name, None, &padded_identifiers);
+
+    let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    // What actually landed must be trimmed — the whole point of the fix, checked directly
+    // against the projection rather than inferred from the search below.
+    let stored = patient_identifiers(&c, pid).await;
+    assert_eq!(
+        stored,
+        vec![(
+            "MRN".to_string(),
+            "55512".to_string(),
+            "55512".to_string(),
+            "registrar-entered".to_string(),
+        )],
+        "the padded identifier must be stored TRIMMED, or a clean later search can never \
+         match it: {stored:?}"
+    );
+
+    // A different clerk, weeks later, types the same MRN clean — no padding on either side.
+    let clean_identifiers = [("MRN".to_string(), "55512".to_string())];
+    let by_identifier = SearchQuery::new("", None, &clean_identifiers);
+    let list = search_patients(&c, &by_identifier, "2026-08-05")
+        .await
+        .expect("search succeeds");
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "a clean, unpadded search must find the chart registered from a padded paste: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, pid);
+}
+
+#[tokio::test]
 async fn every_supplied_identifier_lands_and_each_one_finds_the_chart() {
     // A patient handing over two cards (a hospital MRN and a national number) must be
     // findable by EITHER. One dropped identifier is a silently-unfindable chart on the

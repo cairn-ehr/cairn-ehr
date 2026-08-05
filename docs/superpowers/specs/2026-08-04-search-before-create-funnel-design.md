@@ -299,7 +299,9 @@ is registered in the ADR-0057 dispatcher like every projection since.
 function returning candidate `patient_id`s from a three-pass disjunction, mirroring the matcher's
 existing blocking design:
 
-1. **shared identifier** — `patient_identifier` on `(system, normalized value)`
+1. **shared identifier** — `patient_identifier` on `system` plus (`match_key` OR the raw `value`) —
+   widened after an earlier fix so a stored row with no `normalized` key still matches on its
+   as-entered value (`db/046_patient_search.sql`)
 2. **exact DOB** — `patient_demographic` on the birth-date field
 3. **shared name token** — `patient_name` token overlap
 
@@ -370,7 +372,7 @@ falls outside the budget, **that is the finding** — file it; do not move the b
 - **The precedence rule's enforcement, retiring `patient.created`, and the ~83-call-site fixture
   sweep** — [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), the reason in §2.3.
 - **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced.
-  [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357).
+  [#354](https://github.com/cairn-ehr/cairn-ehr/issues/354).
 - **No policy expression of "registrations must be attested"** (§2.6). The grade is shipped and the
   worklist query is trivial; turning that into a site requirement is ADR-0024 hard-policy work, and
   belongs to whoever has a deployment that wants it.

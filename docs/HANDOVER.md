@@ -150,17 +150,26 @@ things worth carrying:
    path, and **produces no forensic record at all** in the case it fires. §5.11: a grade, not a gate. A test
    asserts an unattested standard registration **succeeds**.
 5. **A funnel that writes no demographics cannot catch its own duplicate** — found by running the real CLI
-   end to end, not by a test ([#350](https://github.com/cairn-ehr/cairn-ehr/issues/350), closed). Registration now writes the typed name/DOB in the
-   same transaction with provenance **`registrar-entered`**: `patient-stated` would frequently be a
-   *precise untruth*, because at a registration desk the speaker is often a third party (a parent, a carer).
-   Live consequence: that term is unranked in db/011's ladder, so it ranks 0 and loses to worse evidence —
-   [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351).
+   end to end, not by a test ([#350](https://github.com/cairn-ehr/cairn-ehr/issues/350), closed). Registration now writes the typed name/DOB **and any
+   supplied identifiers** in the same transaction with provenance **`registrar-entered`**: `patient-stated`
+   would frequently be a *precise untruth*, because at a registration desk the speaker is often a third
+   party (a parent, a carer). Live consequence: that term is unranked in db/011's ladder, so it ranks 0 and
+   loses to worse evidence — [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351). Final review also
+   found the identifier value itself needed trimming on **both** the store and the query side (matching
+   `birth_date`'s existing rule), or a padded paste at registration silently failed to match a clean typed
+   search later (ADR-0061's rationale now records this).
 
 **Deliberately NOT done (Slice 63):** all UI; candidate scoring/ranking; photo bytes; the §5.6 pseudonymous
 workflow; the interactive §1.2 measurement. **Open:** [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), [#346](https://github.com/cairn-ehr/cairn-ehr/issues/346), [#347](https://github.com/cairn-ehr/cairn-ehr/issues/347),
 [#348](https://github.com/cairn-ehr/cairn-ehr/issues/348), [#349](https://github.com/cairn-ehr/cairn-ehr/issues/349), [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351), [#352](https://github.com/cairn-ehr/cairn-ehr/issues/352) (calendar-invalid but well-shaped dates
 — `2026-02-30` — are signed permanently), [#353](https://github.com/cairn-ehr/cairn-ehr/issues/353) (converge the blocking keys with the matcher),
-[#354](https://github.com/cairn-ehr/cairn-ehr/issues/354) (flag a chart with no registration act on file).
+[#354](https://github.com/cairn-ehr/cairn-ehr/issues/354) (flag a chart with no registration act on file),
+[#355](https://github.com/cairn-ehr/cairn-ehr/issues/355) (`SearchAttestation`'s displayed-list
+invariant is convention-plus-one-test, not structural — make the constructor the only way in),
+[#356](https://github.com/cairn-ehr/cairn-ehr/issues/356) (two stale `design §N` citations, unrelated
+files, found by the same review sweep), [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357)
+(`cairn_search_candidates` has no result-set ceiling, no guard and no index-backed pass — a common
+surname can print thousands of candidates).
 
 ---
 

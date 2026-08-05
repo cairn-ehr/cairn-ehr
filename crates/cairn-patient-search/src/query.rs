@@ -23,7 +23,9 @@ pub struct SearchQuery {
     /// and culture-neutral), so a shaped-but-impossible date such as `1980-13-45` survives
     /// into a signed attestation — tracked, not accepted.
     pub birth_date: Option<String>,
-    /// `(system, value)` pairs.
+    /// `(system, value)` pairs, each trimmed of surrounding whitespace (see `new`'s doc) —
+    /// the same reason `birth_date` above is trimmed: db/046 pass 1 is an exact string
+    /// compare, so a stray leading/trailing space must not silently defeat it.
     pub identifiers: Vec<(String, String)>,
 }
 
@@ -85,7 +87,19 @@ impl SearchQuery {
                 .map(str::trim)
                 .filter(|d| !d.is_empty())
                 .map(str::to_string),
-            identifiers: identifiers.to_vec(),
+            // Trimmed the same way as `birth_date` just above — maintainer decision, final
+            // review (N3), reversing the original "leave identifiers untrimmed" call in
+            // `cairn_node::patient::register::supplied_identifiers`. That call was right only
+            // as long as this side did not trim either: db/046 pass 1 compares a stored
+            // identifier's `value` EXACTLY, so an untrimmed query here paired with a now-
+            // trimmed stored value would defeat the very search a registration just attested
+            // to running. Trimming BOTH sides keeps them in agreement, exactly as `birth_date`
+            // already does — "a clerk's stray leading/trailing space … must not silently
+            // defeat it" applies to a pasted MRN precisely as it does to a typed date.
+            identifiers: identifiers
+                .iter()
+                .map(|(system, value)| (system.trim().to_string(), value.trim().to_string()))
+                .collect(),
         }
     }
 
@@ -149,6 +163,24 @@ mod tests {
         // silently defeat the exact match.
         let q = SearchQuery::new("", Some("  1980-06-15  "), &[]);
         assert_eq!(q.birth_date.as_deref(), Some("1980-06-15"));
+    }
+
+    #[test]
+    fn an_identifier_with_surrounding_whitespace_is_trimmed_not_merely_checked() {
+        // Mirrors `a_birth_date_with_surrounding_whitespace_is_trimmed_not_merely_checked`
+        // (maintainer decision, final review N3): db/046 pass 1 is an exact string compare
+        // against the stored value, and `supplied_identifiers` now stores the TRIMMED value
+        // too, so a query that kept the untrimmed pasted form would no longer match its own
+        // registration's stored identifier.
+        let q = SearchQuery::new(
+            "",
+            None,
+            &[("  MRN  ".to_string(), "  12345  ".to_string())],
+        );
+        assert_eq!(
+            q.identifiers,
+            vec![("MRN".to_string(), "12345".to_string())]
+        );
     }
 
     #[test]

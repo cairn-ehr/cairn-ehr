@@ -236,9 +236,28 @@ the record cannot later be found by.
 rather than a stub. A registration desk holds no §4.4 comparator profile ([ADR-0014](0014-locale-pluggable-matcher-comparators.md)),
 so naming one would be a fabrication, and the floor refuses a materialised `normalized` key that does not name
 the profile which produced it. With both absent the projection's `match_key` falls back to the as-entered
-`value`, which is exactly what the identifier pass compares a clerk's typed value against. For the same
-reason the value is stored **verbatim, untrimmed**: the pass is an exact compare, so silently tidying the
-stored value would make the chart unfindable by the very query it was registered from.
+`value`, which is exactly what the identifier pass compares a clerk's typed value against.
+
+**The value is stored TRIMMED, and so is the query — maintainer decision, final review.** The original text
+here read *"the value is stored verbatim, untrimmed: the pass is an exact compare, so silently tidying the
+stored value would make the chart unfindable by the very query it was registered from."* That reasoning was
+correct as far as it went, but it was solving only half the problem: it is true only because the *query*
+side did not trim either, so leaving the stored side untrimmed merely kept the two sides consistently wrong
+together. The maintainer's fix is to trim BOTH sides — `crates/cairn-node/src/patient/register.rs`'s
+`supplied_identifiers` on the way in, `crates/cairn-patient-search/src/query.rs`'s `SearchQuery::new` on the
+way out — matching what `birth_date` already does one field over
+(`crates/cairn-patient-search/src/query.rs:84-87`: *"a clerk's stray leading/trailing space … must not
+silently defeat it"*). There is no principled reason a pasted identifier should be held to a laxer standard
+than a typed date; the earlier asymmetry was an oversight, not a considered distinction.
+
+This closes a real cross-gesture miss, not a hypothetical one: a clerk pastes an MRN card into
+`patient-register --identifier "MRN= 12345"` (trailing space intact, as pasted), the chart is created and
+the space-padded value stored; later, at `patient-search --identifier MRN=12345` (typed clean, no padding),
+db/046 pass 1's `pi.value = (q ->> 'value')` compares `"12345 "` against `"12345"` and finds nothing. The
+funnel had just attested to searching on that exact identifier and signed it into a permanent record — and
+the very next search for it, by anyone, missed the chart it created. Trimming both sides makes the stored
+value and every future query's value agree bit-for-bit, so a search on the same identifier — padded or not,
+on either end — always finds what was registered.
 
 **The provenance is `registrar-entered`, not `patient-stated`**, and the reasoning is the maintainer's:
 
