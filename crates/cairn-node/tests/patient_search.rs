@@ -215,8 +215,17 @@ async fn the_name_token_pass_finds_a_chart_by_one_shared_token() {
 }
 
 #[tokio::test]
-async fn a_chart_matching_two_passes_is_returned_once() {
-    // Union + dedup. A duplicate row would double-count a candidate in the attestation.
+async fn a_chart_matching_two_passes_returns_one_row_per_pass() {
+    // One chart genuinely matching TWO DIFFERENT passes (identifier + dob) legitimately
+    // returns TWO rows — matched_pass differs ('identifier' vs 'dob'), so the tuples are
+    // not literal duplicates and UNION correctly keeps both. That is the intended shape:
+    // it tells a caller building the attestation WHY the chart matched, on each axis it
+    // matched on. This test does NOT exercise the within-pass dedup mechanism at all (the
+    // two passes' tuples can never collide on matched_pass, so no combination of
+    // DISTINCT/UNION-vs-UNION-ALL choices could make this specific test fail) — see
+    // `two_identifiers_matching_the_same_patient_are_deduped_to_one_row` and
+    // `two_name_rows_matching_the_same_patient_are_deduped_to_one_row` below for tests that
+    // exercise a genuine within-pass duplicate.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -269,6 +278,159 @@ async fn a_chart_matching_two_passes_is_returned_once() {
         rows.len(),
         2,
         "each pass that genuinely matched contributes its own labelled row, no more: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn two_identifiers_matching_the_same_patient_are_deduped_to_one_row() {
+    // `patient_identifier` is a set-union projection keyed (patient_id, system, match_key),
+    // so a patient with two ON-FILE identifiers (MRN *and* Medicare number, both typed by
+    // the clerk) legitimately produces TWO rows out of pass 1's
+    // `patient_identifier pi JOIN jsonb_array_elements(p_identifiers) q` — one per matching
+    // (system, match_key) pair, both labelled 'identifier'.
+    //
+    // VERIFIED NON-VACUOUS BY HAND (see the fix report for the full derivation): plain SQL
+    // `UNION` (as opposed to `UNION ALL`) already re-distincts the ENTIRE final combined
+    // result, so removing JUST this pass's own `SELECT DISTINCT` does NOT make this test
+    // fail — the outermost `UNION` in the three-branch chain independently catches the
+    // same duplicate. The two protections are genuinely redundant with each other; this
+    // test only fails once BOTH are gone at once (this pass's `SELECT DISTINCT` AND the
+    // final `UNION` becoming `UNION ALL`), which is the real single point of total failure.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    let mrn = IdentifierAssertion {
+        value: "12345",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    let medicare = IdentifierAssertion {
+        value: "67890",
+        system: "Medicare",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &mrn)
+        .await
+        .expect("MRN accepted");
+    submit_identifier(&c, &sk, &kid, p, 2, &medicare)
+        .await
+        .expect("Medicare accepted");
+
+    // Both identifiers typed by the clerk, so BOTH join rows match this one chart.
+    let identifiers = serde_json::json!([
+        {"system": "MRN", "value": "12345"},
+        {"system": "Medicare", "value": "67890"},
+    ])
+    .to_string();
+    let rows = search_candidates(&c, None, None, Some(&identifiers)).await;
+    assert_eq!(
+        rows,
+        vec![(p, "identifier".to_string())],
+        "two matching identifiers on ONE chart must collapse to ONE row, not two: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn two_name_rows_matching_the_same_patient_are_deduped_to_one_row() {
+    // `patient_name` is a RETAINED SET — one row per distinct (patient, use, value) name —
+    // so a patient with a legal name AND an alias that both carry the SAME shared token
+    // legitimately produces TWO matching rows under pass 3's
+    // `CROSS JOIN LATERAL regexp_split_to_table(...)`, both labelled 'name'.
+    //
+    // VERIFIED NON-VACUOUS BY HAND (see the fix report): same finding as the identifier
+    // test above — the outermost `UNION` in the three-branch chain already re-distincts
+    // the whole final result, so this pass's own `SELECT DISTINCT` is independently
+    // redundant with it. This test only fails once BOTH this pass's `SELECT DISTINCT` AND
+    // the final `UNION` are gone at once.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    // Legal name and an alias, distinct (use, value) retained-set members, both sharing
+    // the "smith" token.
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body("John Smith", Some("legal"), "patient-stated"),
+        render_name_twin("John Smith", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("legal name accepted");
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        2,
+        name_assertion_body("Robert Smith", Some("alias"), "patient-stated"),
+        render_name_twin("Robert Smith", Some("alias"), "patient-stated"),
+    )
+    .await
+    .expect("alias accepted");
+
+    let rows = search_candidates(&c, Some(&["smith"]), None, None).await;
+    assert_eq!(
+        rows,
+        vec![(p, "name".to_string())],
+        "two retained names sharing one token on ONE chart must collapse to ONE row: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_stored_name_with_surrounding_whitespace_is_not_matched_by_an_empty_query_token() {
+    // The §4.2/§4.4 structural floor only requires a non-BLANK (trimmed) name — it never
+    // reformats the authored value — so a stored name with leading/trailing whitespace is
+    // legitimately admitted, and `regexp_split_to_table` on that raw value emits an EMPTY
+    // string as one of its tokens (confirmed directly against Postgres: splitting
+    // `' smith'` on `\s+` yields `('', 'smith')`). Without the `tok <> ''` guard, a stray
+    // empty element in `p_name_tokens` (e.g. a caller's own naive split producing a
+    // leading/trailing blank) would equal that empty projected token and surface a chart
+    // with no typed evidence behind the match at all.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body(" Smith", Some("legal"), "patient-stated"),
+        render_name_twin(" Smith", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("whitespace-padded name accepted by the floor (non-blank after trim)");
+
+    let rows = search_candidates(&c, Some(&[""]), None, None).await;
+    assert!(
+        rows.is_empty(),
+        "an empty query token must never match an empty projected token: {rows:?}"
     );
 }
 

@@ -43,10 +43,11 @@ AS $$
     -- a name typed in a different order still finds the chart, with no name-order model.
     --
     -- The tokenising expression is COPIED VERBATIM from matcher/src/cairn_matcher/pipeline/
-    -- db.py's _GROUPS_SQL: `regexp_split_to_table(lower(normalize(value, NFC)), '\s+')`.
-    -- Same key extraction, so a chart the sweep would pair is a chart this search finds.
-    -- NFC normalisation is load-bearing, not decoration: without it a composed and a
-    -- decomposed "José" are different tokens and the chart is silently unfindable.
+    -- db.py's _GROUPS_SQL: `regexp_split_to_table(lower(normalize(value, NFC)), '\s+')`,
+    -- including its `token <> ''` guard (see below). Same key extraction, so a chart the
+    -- sweep would pair is a chart this search finds. NFC normalisation is load-bearing, not
+    -- decoration: without it a composed and a decomposed "José" are different tokens and the
+    -- chart is silently unfindable.
     --
     -- Exact equality, NOT `LIKE '%token%'`: a leading-wildcard match cannot use an index at
     -- all, and the §7 budget is 5 s to find an existing chart. Equality keeps the door open
@@ -57,11 +58,20 @@ AS $$
     -- `use_key <> ALL(...)`). Both are right: a callsign is not evidence of identity, so it
     -- must not feed the scorer — but a clerk must be able to find the John Doe in front of
     -- them.
+    --
+    -- `tok <> ''` mirrors the matcher's own guard: the §4.2/§4.4 structural floor only
+    -- requires a non-BLANK (trimmed) name, so a value with leading/trailing whitespace
+    -- (" Smith", "Smith  ") is legitimately admitted and `regexp_split_to_table` on that
+    -- value emits an EMPTY string as one of its tokens. Without this guard, a stray empty
+    -- element in p_name_tokens (e.g. from a caller's own naive split producing a leading or
+    -- trailing blank) would equal that empty projected token and surface a chart with no
+    -- typed evidence behind the match at all.
     SELECT DISTINCT pn.patient_id, 'name'::text
       FROM patient_name pn
       CROSS JOIN LATERAL regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS tok
       JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
         ON tok = lower(normalize(t, NFC))
+     WHERE tok <> ''
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_search_candidates(text[], text, jsonb) FROM PUBLIC;
