@@ -1787,4 +1787,33 @@ assertions* but not every full body, because each needs the DB-gated harness pre
 copied from the neighbouring suite (`demographics.rs`) rather than invented. An implementer must read
 that file first. Tasks 1 and 2 — the pure, harness-free ones — carry complete test code.
 
-**Paper-parity benchmark:** carried in the spec (§7), not restated here.
+## Paper-parity benchmark (§1.2)
+
+Transcribed from the design doc's §7
+(`docs/superpowers/specs/2026-08-04-search-before-create-funnel-design.md`), which is the
+authoring home for these figures. It is restated here rather than referenced because house
+rule 7's guard (`crates/cairn-node/tests/paper_parity_plan_section.rs`) reads
+`docs/superpowers/plans/*.md` and nothing else — a plan that points elsewhere leaves the
+benchmark invisible to the one check that enforces it, and the earlier
+"carried in the spec (§7), not restated here" line failed that guard.
+
+**Paper counterpart:** the registration desk — clerk, card index or day book, folder tabs.
+
+| | Acts |
+|---|---|
+| **Paper N** | **3** — ask name + DOB · look it up in the index · write a new card and folder tab if absent |
+| **Architecture-forced M** | **3** — the architecture forces a search *to have run* and its attestation to be *carried*; neither forces a discrete second gesture, because type-ahead fuses entry and search (§5.11: "type a few chars and enter, no spinner") |
+| **UI bundling target K** | **2** — type-and-see → commit. Reviewing candidates is reading, not an act |
+
+`M = N`, so no architecture defect under house rule 7.
+
+**Steps:** paper 3 → architecture-forced 3 → UI bundling target 2, as tabulated above.
+
+**Time + cognitive load:** budget ≤ **5 s** to find an existing chart (by far the commoner
+path) and ≤ **20 s** to register a new one, first keystroke to committed chart.
+
+**Measurement owed:** by the slice that first exposes a runnable surface. This slice is
+CLI-only, so it measures the **node-tier write cost** as Slices 61/62 did (`cairn-node`'s
+existing `ui_timing`/gesture-timing capture), and states the interactive half as owed. If a
+measured figure falls outside the budget, **that is the finding** — file it; do not move the
+budget to fit.
