@@ -35,20 +35,57 @@ pub struct Age {
     pub basis: String,
 }
 
+/// Gregorian leap-year rule: divisible by 4, except centuries, except every 4th century.
+/// Hand-rolled rather than pulling in a date crate (house rule: no new date/time
+/// dependency for this task) — the rule is three integer divisions, not worth a dependency.
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// How many days `month` (1-12) actually has in `year`. `month` is assumed already
+/// range-checked by the caller (`ymd` below) — this only resolves the leap-year-dependent
+/// case for February.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        // Unreachable given `ymd`'s own `1..=12` guard runs before this is ever called;
+        // 0 rather than panicking keeps this fn total, so a future caller that skips the
+        // guard fails a date-validity comparison rather than crashing the read path.
+        _ => 0,
+    }
+}
+
 /// Whole years between two ISO `YYYY-MM-DD` dates, or `None` when that cannot be said
 /// honestly.
 ///
-/// Returns `None` for a partial date (`"1980"`), an unparseable one, or a birth date after
-/// `today`. It deliberately does NOT fill in a missing month/day: a year-only DOB silently
-/// becoming "1 January" is a precise untruth, and principle 4 prefers showing no age at all.
-/// `today` is a parameter so this stays pure and the edge owns the clock.
+/// Returns `None` for a partial date (`"1980"`), an unparseable one, a birth date after
+/// `today`, OR a calendrically impossible one (`"2026-02-30"`, `"2026-04-31"`, a Feb 29 in a
+/// non-leap year) — a malformed DOB must yield an honest "no age", never a confident-looking
+/// number computed from a date that never happened (principle 4: this age is displayed
+/// beside a patient's name on a wrong-chart-prevention surface). It deliberately does NOT
+/// fill in a missing month/day either: a year-only DOB silently becoming "1 January" is the
+/// same kind of precise untruth. `today` is a parameter so this stays pure and the edge owns
+/// the clock.
 pub fn age_years(birth_date: &str, today: &str) -> Option<u32> {
     let ymd = |s: &str| -> Option<(i32, u32, u32)> {
         let mut it = s.split('-');
         let y = it.next()?.parse::<i32>().ok()?;
         let m = it.next()?.parse::<u32>().ok()?;
         let d = it.next()?.parse::<u32>().ok()?;
-        if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        if it.next().is_some() || !(1..=12).contains(&m) {
+            return None;
+        }
+        // Real per-month validation (leap years included), not the old blanket 1..=31:
+        // that accepted "2026-02-30" and "2026-04-31" as if every month had 31 days.
+        if !(1..=days_in_month(y, m)).contains(&d) {
             return None;
         }
         Some((y, m, d))
@@ -117,6 +154,44 @@ mod tests {
     #[test]
     fn a_future_birth_date_yields_no_age_rather_than_underflowing() {
         assert_eq!(age_years("2030-01-01", "2026-01-01"), None);
+    }
+
+    #[test]
+    fn a_calendrically_impossible_date_yields_no_age_rather_than_a_confident_wrong_one() {
+        // Task 2 review finding, carried into Task 5: the old range checks (1..=12,
+        // 1..=31) accepted any day 1-31 for any month, so "2026-02-30" and "2026-04-31"
+        // parsed as if they were real dates and produced a confident, wrong-looking age.
+        // Principle 4: an imprecise near-truth (no age shown) beats a precise untruth (an
+        // age computed from a date that never happened) — this age is displayed right next
+        // to a patient's name on a wrong-chart-prevention surface, so a fabricated-looking
+        // number here is not a cosmetic bug.
+        assert_eq!(
+            age_years("2026-02-30", "2026-06-01"),
+            None,
+            "February never has 30 days, leap year or not"
+        );
+        assert_eq!(
+            age_years("2026-04-31", "2026-06-01"),
+            None,
+            "April has 30 days, never 31"
+        );
+    }
+
+    #[test]
+    fn a_leap_day_birth_date_is_honoured_only_in_a_leap_year() {
+        // 2024 is a leap year (divisible by 4, not by 100) so Feb 29 is real; 2023 is not,
+        // so the identical string is calendrically impossible and must yield no age at all
+        // rather than silently rolling over to a nearby real date.
+        assert_eq!(
+            age_years("2024-02-29", "2026-03-01"),
+            Some(2),
+            "2024-02-29 is a real date (2024 is a leap year)"
+        );
+        assert_eq!(
+            age_years("2023-02-29", "2026-03-01"),
+            None,
+            "2023-02-29 never happened (2023 is not a leap year)"
+        );
     }
 
     #[test]
