@@ -72,6 +72,27 @@ AS $$
     -- Pass 3: shared name token. Culture-neutral: EXACT token equality in ANY position, so
     -- a name typed in a different order still finds the chart, with no name-order model.
     --
+    -- KNOWN ASYMMETRY, issue #348 — the two sides no longer agree on edge punctuation.
+    -- This side splits on whitespace ONLY and keeps a token's edge punctuation verbatim;
+    -- `SearchQuery::new` (query side) TRIMS edge punctuation from each word. So a chart
+    -- registered as "Smith, John" — the registration-desk convention, and what
+    -- `register_patient` stores, raw and unparsed, by design — holds the token "smith,"
+    -- while a clerk typing the surname alone produces "smith", and they do not match. The
+    -- given-name token still matches, so it is a PARTIAL miss (safe direction: a false
+    -- split, never a false merge) and easy to miss when testing with a full name. Not fixed
+    -- here because this expression is copied verbatim from the matcher (see the DRIFT NOTE
+    -- above); fixing it is a joint decision with #353.
+    --
+    -- READS `patient_name`, NOT `patient_name_current` — DELIBERATE, issue #349. This is
+    -- the RETAINED name set, which INCLUDES values later struck by
+    -- `identity.repudiate.asserted` (db/025); the `_current` view anti-joins those out for
+    -- DISPLAY. That is exactly the right split: a struck name must not head a chart, but a
+    -- clerk must still be able to FIND the chart by the alias a fabricated persona presented
+    -- under (§5.5(a)) — otherwise repudiation itself manufactures a duplicate for precisely
+    -- the patients that subsystem exists for. `search.rs`'s `read_names_ever_asserted` also
+    -- depends on this table holding the row. A "surely this should read the _current view"
+    -- cleanup would silently reverse both, with no test failing to say so.
+    --
     -- The tokenising expression is COPIED VERBATIM from matcher/src/cairn_matcher/pipeline/
     -- db.py's _GROUPS_SQL: `regexp_split_to_table(lower(normalize(value, NFC)), '\s+')`,
     -- including its `token <> ''` guard (see below). Same key extraction, so a chart the

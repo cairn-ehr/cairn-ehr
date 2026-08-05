@@ -16,6 +16,16 @@
 //! found NOTHING, and a second registration silently minted a duplicate chart. Filed as
 //! issue #350. `a_registered_patient_is_findable_by_a_later_search_on_the_same_name` below is
 //! that exact scenario, now fixed, driven through the real `search_patients` entry point.
+//!
+//! **The final review found the same hole one pass over (C1).** #350 closed db/046's passes 2
+//! (dob) and 3 (name) and left pass 1 — the HIGHEST-precision one — open: `register_patient`
+//! searched on every `--identifier`, signed it into the permanent attestation, and never wrote
+//! a `demographic.identifier.asserted` event, the only thing that populates `patient_identifier`
+//! (db/010). So an MRN search could not find a chart the funnel itself created, and an
+//! identifier-only registration was unreachable on every pass, forever.
+//! `a_registered_patient_is_findable_by_a_later_search_on_the_identifier_alone` and
+//! `an_identifier_only_registration_asserts_an_identifier_and_no_name_or_dob` below are the
+//! end-to-end closure.
 mod common;
 
 use cairn_node::db;
@@ -104,9 +114,27 @@ async fn events_of(c: &Client, p: Uuid) -> Vec<(String, Option<String>, i64, i32
     .collect()
 }
 
+/// Every retained identifier on `p`, as `(system, value, match_key, provenance)`, ordered
+/// for determinism. `match_key` is read explicitly because it is what db/046 pass 1's
+/// `pi.match_key = ...` arm compares against — see
+/// `an_identifier_is_asserted_with_no_normalized_form_and_no_profile` for why it must equal
+/// `value` on this path.
+async fn patient_identifiers(c: &Client, p: Uuid) -> Vec<(String, String, String, String)> {
+    c.query(
+        "SELECT system, value, match_key, provenance FROM patient_identifier \
+         WHERE patient_id = $1::text::uuid ORDER BY system, match_key",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3)))
+    .collect()
+}
+
 /// `patient_registration.class` for `p` — used only by the identifier-only test below to
 /// confirm registration still succeeded as a normal Standard chart despite asserting no
-/// demographic fact.
+/// name and no dob.
 async fn registration_class(c: &Client, p: Uuid) -> String {
     c.query_one(
         "SELECT class FROM patient_registration WHERE patient_id::text = $1",
@@ -334,10 +362,18 @@ async fn a_birth_date_with_no_name_asserts_a_dob_event_and_no_name_event() {
 }
 
 #[tokio::test]
-async fn neither_name_nor_birth_date_asserts_no_demographic_events() {
+async fn an_identifier_only_registration_asserts_an_identifier_and_no_name_or_dob() {
     // The identifier-only case: a clerk registering off an MRN card alone, no name spoken,
     // no dob given. Registration must still succeed (principle 4 — no required field may be
-    // satisfiable only by fabrication) and assert NOTHING demographic.
+    // satisfiable only by fabrication), must assert the IDENTIFIER that was actually
+    // supplied, and must assert nothing pretending to be a name or a dob.
+    //
+    // THIS TEST PREVIOUSLY ASSERTED THE BUG (final review, C1). It read
+    // `assert_eq!(events.len(), 1, "the registration act alone, no demographic events at
+    // all")` — locking in a chart with ZERO searchable content on ANY of db/046's three
+    // passes: unreachable, forever, by every search this slice ships. The rule was never
+    // "assert nothing"; it is "assert only what was actually supplied", and an identifier
+    // WAS supplied here.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -346,11 +382,8 @@ async fn neither_name_nor_birth_date_asserts_no_demographic_events() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
-    let query = SearchQuery::new(
-        "",
-        None,
-        &[("MRN".to_string(), "identifier-only-999".to_string())],
-    );
+    let identifiers = [("MRN".to_string(), "identifier-only-999".to_string())];
+    let query = SearchQuery::new("", None, &identifiers);
 
     let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &no_candidates())
         .await
@@ -365,14 +398,217 @@ async fn neither_name_nor_birth_date_asserts_no_demographic_events() {
         None,
         "no dob was supplied — no dob event must land"
     );
+    assert_eq!(
+        patient_identifiers(&c, pid).await,
+        vec![(
+            "MRN".to_string(),
+            "identifier-only-999".to_string(),
+            "identifier-only-999".to_string(),
+            "registrar-entered".to_string(),
+        )],
+        "the identifier the clerk read off the card is the ONLY thing this chart can ever \
+         be found by — it must land"
+    );
     let events = events_of(&c, pid).await;
     assert_eq!(
         events.len(),
-        1,
-        "the registration act alone, no demographic events at all: {events:?}"
+        2,
+        "the registration act plus the identifier that was actually supplied: {events:?}"
     );
     assert_eq!(events[0].0, "identity.registration.asserted");
+    assert_eq!(events[1].0, "demographic.identifier.asserted");
+    assert_eq!(events[1].1.as_deref(), Some("identifier"));
     assert_eq!(registration_class(&c, pid).await, "standard");
+
+    // And the whole point: this chart, which has no name and no dob at all, is REACHABLE.
+    let by_identifier = SearchQuery::new("", None, &identifiers);
+    let list = search_patients(&c, &by_identifier, "2026-08-05")
+        .await
+        .expect("search succeeds");
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "an identifier-only chart must be findable by its identifier, or it is unreachable \
+         by every search this slice ships: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, pid);
+}
+
+// --- final review, C1: the identifiers the funnel searched on must be PERSISTED ---
+//
+// `register_patient` authored the registration act, a name and a dob — and discarded every
+// `--identifier` it had just searched on and signed into the permanent attestation. So db/046
+// pass 1, the HIGHEST-PRECISION pass and the gesture db/045 explicitly blesses as "a complete
+// and often better search", could never find a chart the funnel itself created. The tests
+// below are the end-to-end closure on that pass.
+
+#[tokio::test]
+async fn a_registered_patient_is_findable_by_a_later_search_on_the_identifier_alone() {
+    // The C1 failure scenario, driven end to end: a clerk registers from an MRN card, then
+    // three weeks later searches that same MRN — the precise, correct gesture — and must
+    // find the chart rather than "no candidates found" plus a duplicate whose signed
+    // attestation reads as perfectly diligent.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let name = "Mrn Card Patient";
+    let identifiers = [("MRN".to_string(), "12345".to_string())];
+    let query = SearchQuery::new(name, Some("1980-01-01"), &identifiers);
+
+    let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    // Searching on the identifier ALONE — no name, no dob. This is the pass-1 gesture.
+    let by_identifier = SearchQuery::new("", None, &identifiers);
+    let list = search_patients(&c, &by_identifier, "2026-08-05")
+        .await
+        .expect("search succeeds");
+    assert_eq!(
+        list.candidates.len(),
+        1,
+        "the chart just registered must be found by a later search on the identifier it was \
+         registered with: {list:?}"
+    );
+    assert_eq!(list.candidates[0].patient_id, pid);
+}
+
+#[tokio::test]
+async fn every_supplied_identifier_lands_and_each_one_finds_the_chart() {
+    // A patient handing over two cards (a hospital MRN and a national number) must be
+    // findable by EITHER. One dropped identifier is a silently-unfindable chart on the
+    // highest-precision pass.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let name = "Two Card Patient";
+    let identifiers = [
+        ("MRN".to_string(), "MC-001".to_string()),
+        ("NHI".to_string(), "ZZZ9999".to_string()),
+    ];
+    let query = SearchQuery::new(name, None, &identifiers);
+
+    let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    let stored = patient_identifiers(&c, pid).await;
+    assert_eq!(
+        stored.len(),
+        2,
+        "both supplied identifiers must land, not just the first: {stored:?}"
+    );
+    assert_eq!(stored[0].0, "MRN");
+    assert_eq!(stored[0].1, "MC-001");
+    assert_eq!(stored[1].0, "NHI");
+    assert_eq!(stored[1].1, "ZZZ9999");
+
+    // Each, on its own, finds the chart.
+    for pair in &identifiers {
+        let q = SearchQuery::new("", None, std::slice::from_ref(pair));
+        let list = search_patients(&c, &q, "2026-08-05")
+            .await
+            .expect("search succeeds");
+        assert_eq!(
+            list.candidates.len(),
+            1,
+            "searching {pair:?} alone must find the chart: {list:?}"
+        );
+        assert_eq!(list.candidates[0].patient_id, pid);
+    }
+
+    // Wire level: registration + name + two identifiers, no phantom extras.
+    let events = events_of(&c, pid).await;
+    assert_eq!(
+        events.len(),
+        4,
+        "registration + name + two identifiers: {events:?}"
+    );
+    assert_eq!(events[0].0, "identity.registration.asserted");
+    assert_eq!(events[1].1.as_deref(), Some("name"));
+    assert_eq!(events[2].1.as_deref(), Some("identifier"));
+    assert_eq!(events[3].1.as_deref(), Some("identifier"));
+}
+
+#[tokio::test]
+async fn no_identifier_supplied_means_no_identifier_event() {
+    // Principle 4, the mirror of the name/dob rule: nothing is invented to fill the gap.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let name = "No Identifier Patient";
+    let query = SearchQuery::new(name, None, &[]);
+
+    let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    assert!(
+        patient_identifiers(&c, pid).await.is_empty(),
+        "no identifier was supplied — asserting one would be a fabricated placeholder"
+    );
+    let events = events_of(&c, pid).await;
+    assert_eq!(events.len(), 2, "registration + name only: {events:?}");
+}
+
+#[tokio::test]
+async fn an_identifier_is_asserted_with_no_normalized_form_and_no_profile() {
+    // The registrar holds no §4.4 comparator profile (ADR-0014/ADR-0033), so claiming one —
+    // or materialising a `normalized` key without naming the profile that produced it, which
+    // the db/010 floor refuses outright — would be a fabrication. With both absent,
+    // `match_key` falls back to `value` (db/010 `COALESCE(norm, value)`), which is exactly
+    // what db/046 pass 1's `pi.match_key = ...` arm compares a clerk's typed value against.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let identifiers = [("MRN".to_string(), "943 476 5919".to_string())];
+    let query = SearchQuery::new("", None, &identifiers);
+    let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &no_candidates())
+        .await
+        .expect("registration accepted");
+
+    let row = c
+        .query_one(
+            "SELECT normalized, profile, match_key, value FROM patient_identifier \
+             WHERE patient_id = $1::text::uuid",
+            &[&pid.to_string()],
+        )
+        .await
+        .unwrap();
+    let normalized: Option<String> = row.get(0);
+    let profile: Option<String> = row.get(1);
+    let match_key: String = row.get(2);
+    let value: String = row.get(3);
+    assert_eq!(
+        normalized, None,
+        "the registrar materialised no key — claiming one would be a fabrication"
+    );
+    assert_eq!(profile, None, "the registrar holds no §4.4 profile");
+    assert_eq!(
+        match_key, value,
+        "with no normalized form, match_key must fall back to the as-entered value"
+    );
+    assert_eq!(value, "943 476 5919");
 }
 
 // --- review round 1, #350, Important 2: the blank-name filter is the LIVE CLI shape ---

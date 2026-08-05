@@ -197,14 +197,25 @@ mod tests {
     }
 
     #[test]
-    fn an_incomplete_list_says_so_and_says_why() {
+    fn an_incomplete_list_survives_a_serde_round_trip_with_its_reason_intact() {
+        // Converted from a tautology (final review, minor): the old version asserted the two
+        // fields it had just assigned in the line above and could not fail except by not
+        // compiling. The round trip is the real contract — `CandidateList` crosses a process
+        // boundary (the CLI renders it; the future picker window and native API will carry
+        // it), and ADR-0060 decision 2 requires partial completion to be REPORTED, never
+        // implied. A `#[serde(skip)]` or a renamed field on the reason would silently drop
+        // the "why" and leave a bare `incomplete: true` a clerk cannot act on.
         let list = CandidateList {
             candidates: vec![],
             incomplete: true,
             incomplete_reason: Some("2 candidates could not be read".into()),
         };
-        assert!(list.incomplete);
-        assert!(list.incomplete_reason.is_some());
+        let round: CandidateList =
+            serde_json::from_str(&serde_json::to_string(&list).unwrap()).unwrap();
+        assert_eq!(
+            round, list,
+            "the reason must survive the wire, not just the flag"
+        );
     }
 
     #[test]
@@ -218,7 +229,13 @@ mod tests {
     }
 
     #[test]
-    fn a_candidate_carries_a_photo_reference_never_bytes() {
+    fn a_candidate_survives_a_serde_round_trip_and_carries_a_photo_reference_never_bytes() {
+        // Converted from a tautology (final review, minor): the old version read back the
+        // `photo_ref` it had assigned two lines earlier. The round trip tests something that
+        // can actually break — every §5.8 item-1 field must survive the wire, and
+        // `photo_ref` must stay a REFERENCE (ADR-0013: fetching the image is byte-tier work
+        // and must never sit on the search latency path), which is a property of the
+        // SERIALIZED form, not of a struct literal.
         let c = Candidate {
             patient_id: Uuid::from_u128(1),
             display_name: "Smith, John".into(),
@@ -231,6 +248,18 @@ mod tests {
             locale: Some("Bamaga QLD".into()),
             photo_ref: Some("b3:deadbeef".into()),
         };
-        assert_eq!(c.photo_ref.as_deref(), Some("b3:deadbeef"));
+        let json = serde_json::to_string(&c).unwrap();
+        let round: Candidate = serde_json::from_str(&json).unwrap();
+        assert_eq!(round, c, "every displayed field must survive the wire");
+        // The digest travels; bytes never do. A future `photo: Vec<u8>` would have to add a
+        // field here, and this assertion is what would notice.
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["photo_ref"], "b3:deadbeef");
+        assert_eq!(
+            v.as_object().unwrap().len(),
+            7,
+            "a new field on the search-latency path is a deliberate decision, not a drive-by \
+             — if you added one, check it is not image bytes (ADR-0013): {json}"
+        );
     }
 }

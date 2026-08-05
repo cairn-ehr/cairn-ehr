@@ -99,6 +99,46 @@ async fn register_john_doe_creates_an_unconfirmed_chart() {
 }
 
 #[tokio::test]
+async fn a_blank_basis_is_refused_before_anything_is_minted_or_ticked() {
+    // Final review (minor). `register-john-doe --basis ""` used to hard-fail at the db/045
+    // floor only AFTER minting a patient UUID and ticking three HLCs. The floor stays the
+    // enforcement point (principle 12) — this pins the CHEAP refusal in front of it, the
+    // same discipline `patient-register` already applies to `--birth-date`.
+    //
+    // Zero side effects is the assertion that matters, and it is checked against
+    // `event_log` (the wire) rather than any projection: an empty log is only meaningful
+    // because `common::setup` truncates it, so a partial write could not hide behind a
+    // projection that happened to reject the row.
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
+
+    for blank in ["", "   "] {
+        let err =
+            john_doe::register_john_doe(&mut c, &sk, &kid, "n", "ED", "site1", "2026-07-03", blank)
+                .await
+                .expect_err("a non-standard registration states why (§5.3/§5.4)");
+        assert!(
+            err.to_string().contains("--basis"),
+            "the refusal must name the flag the operator got wrong, not surface a raw \
+             Postgres exception: {err}"
+        );
+    }
+
+    let total: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        total, 0,
+        "a refused basis must mint NOTHING — not the registration, not the callsign, not \
+         the pending marker"
+    );
+}
+
+#[tokio::test]
 async fn callsign_is_stored_as_a_placeholder_use_name_and_is_the_display_winner() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();

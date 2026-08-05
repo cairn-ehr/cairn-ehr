@@ -1,8 +1,8 @@
 //! §5.3/§5.8 STANDARD patient registration — the funnel's create act. Composes the `cairn-event`
 //! wire shape (`RegistrationAssertion`) with the `cairn-patient-search` read model
 //! (`SearchAttestation`) `search::search_patients` produced, and authors the
-//! `identity.registration.asserted` act PLUS the name/dob facts that make the chart findable
-//! (#350 / Task 8b — see below), through `submit_event`.
+//! `identity.registration.asserted` act PLUS the name/dob/identifier facts that make the chart
+//! findable (#350 / Task 8b and the final review's C1 — see below), through `submit_event`.
 //!
 //! # Why this module exists, and what it deliberately does NOT do
 //!
@@ -48,9 +48,26 @@
 //! for an empty `--name` (never `None`), and that shape had no test; see
 //! `tests/patient_register_demographics.rs` for the added coverage.
 //!
+//! # Final review, C1 — the identifiers were searched on, attested, and then thrown away
+//!
+//! The #350 fix above closed passes 2 and 3 and left pass 1 — the HIGHEST-precision one —
+//! wide open. `patient-register` accepts repeatable `--identifier system=value`, parses it
+//! strictly, searches on it and signs it into the permanent attestation, and this module
+//! never wrote a `demographic.identifier.asserted` event. db/046 pass 1 reads
+//! `patient_identifier`, which only that event type writes (db/010), and `--identifier` on
+//! `patient-register` is the only place in the entire CLI an operator can enter an MRN. So a
+//! clerk who registered off an MRN card and later ran `patient-search --identifier MRN=…` —
+//! the precise, correct gesture db/045 blesses as "a complete and often better search" — got
+//! `no candidates found` and minted a duplicate carrying a signed attestation that reads as
+//! perfectly diligent. Worse, an identifier-only registration (no name, no dob — explicitly
+//! supported) produced a chart with NO searchable content on any of the three passes:
+//! permanently unreachable. `build_identifier_body` closes it, under the same
+//! "assert only what was actually supplied" rule, in the same transaction.
+//!
 //! Split, mirroring `john_doe.rs`: pure body assembly (`build_registration_body`/
-//! `build_name_body`/`build_dob_body`, unit-tested, no DB) plus the async `register_patient`
-//! orchestrator. And the one-home rule for the cross-crate conversion:
+//! `build_name_body`/`build_dob_body`/`build_identifier_body`, plus the pure
+//! `supplied_identifiers` selection rule — all unit-tested, no DB) plus the async
+//! `register_patient` orchestrator. And the one-home rule for the cross-crate conversion:
 //!
 //! `cairn_event::registration::SearchAttestationInput` takes borrowed primitives (`cairn-event`
 //! is the wire core and must not depend on a read-model crate — see that module's own doc for
@@ -62,7 +79,8 @@
 //! what keeps this the only place it happens.
 
 use cairn_event::demographics::{
-    dob_assertion_body, name_assertion_body, render_dob_twin, render_name_twin,
+    dob_assertion_body, identifier_assertion_body, name_assertion_body, render_dob_twin,
+    render_identifier_twin, render_name_twin, IdentifierAssertion,
 };
 use cairn_event::registration::{
     registration_assertion_body, render_registration_twin, RegistrationAssertion,
@@ -78,7 +96,12 @@ use uuid::Uuid;
 /// private copy — no shared location exports one today).
 const DEMOGRAPHIC_FIELD_SCHEMA_VERSION: &str = "demographic.field/1";
 
-/// The §4.1 provenance stamped on the name/dob asserted at STANDARD registration. See this
+/// schema_version for a `demographic.identifier.asserted` event (§4.4, db/010). Same
+/// "no shared location exports one today" caveat as the field version above.
+const DEMOGRAPHIC_IDENTIFIER_SCHEMA_VERSION: &str = "demographic.identifier/1";
+
+/// The §4.1 provenance stamped on the name/dob/identifier asserted at STANDARD registration.
+/// See this
 /// module's own doc ("#350 / Task 8b") for the full reasoning; in short: `patient-stated`
 /// would often be a precise untruth (the speaker at a registration desk is frequently a
 /// third party — a parent, a carer), and `registrar-entered` is the honest description of
@@ -255,10 +278,101 @@ pub fn build_dob_body(
     }
 }
 
+/// The `(system, value)` pairs a registration should actually ASSERT, out of everything the
+/// query carried. Pure, so the rule is checkable without a database.
+///
+/// Two filters, and each one has a reason:
+///
+///   * **Blank after trimming is "nothing supplied"** — the same principle-4 boundary rule
+///     `register_patient` applies to a blank `--name`. The db/010 floor refuses a
+///     whitespace-only `system` or `value` outright, so without this filter a stray pair
+///     from a library caller would fail the WHOLE registration inside the transaction rather
+///     than simply not being asserted.
+///   * **Exact duplicates collapse** — the same claim supplied twice is one claim, and two
+///     identical signed events in an append-only log are permanent noise. Mirrors
+///     `SearchQuery::new`'s own dedup of name tokens ("no duplicate tokens belong in that
+///     record"). Order is otherwise preserved: the clerk's entry order is the submission
+///     order, exactly as with the attested candidate list.
+///
+/// **The surviving values are returned UNTRIMMED, deliberately.** `SearchQuery` stores
+/// identifier values verbatim and db/046 pass 1 compares `pi.value = (q ->> 'value')`
+/// EXACTLY, so trimming here would store a value that the very query it came from can no
+/// longer match — reintroducing the C1 unfindability one character at a time. Trimming is
+/// used only to DECIDE emptiness, never to rewrite what gets asserted.
+pub fn supplied_identifiers(identifiers: &[(String, String)]) -> Vec<(&str, &str)> {
+    let mut out: Vec<(&str, &str)> = Vec::new();
+    for (system, value) in identifiers {
+        if system.trim().is_empty() || value.trim().is_empty() {
+            continue;
+        }
+        let pair = (system.as_str(), value.as_str());
+        if !out.contains(&pair) {
+            out.push(pair);
+        }
+    }
+    out
+}
+
+/// Assemble a §4.4 IDENTIFIER `demographic.identifier.asserted` `EventBody` for the
+/// registration path. Pure, mirroring `build_name_body`/`build_dob_body`.
+///
+/// # Why this exists (final review, C1) — do not remove it
+///
+/// `patient-register` accepts repeatable `--identifier system=value`, parses it strictly,
+/// SEARCHES on it and signs it into the permanent §5.8 attestation — and used to discard it.
+/// db/046 pass 1 reads `patient_identifier`, which ONLY this event type writes (db/010), and
+/// `patient-register --identifier` is the only place in the whole CLI an operator can enter
+/// an MRN. So the highest-precision pass could never find a chart the funnel itself had
+/// created, and an identifier-only registration produced a chart with zero searchable
+/// content on ANY pass — unreachable, permanently.
+///
+/// `normalized` and `profile` are both `None`, and that is a correctness choice, not a stub:
+/// a registration desk holds no §4.4 comparator profile (ADR-0014/ADR-0033), so naming one
+/// would be a fabrication, and db/010's floor refuses a `normalized` key that does not name
+/// the profile which produced it. With both absent, db/010's projection sets
+/// `match_key = COALESCE(normalized, value) = value` — precisely what db/046 pass 1's
+/// `pi.match_key = ...` arm (and its `OR pi.value = ...` arm) compares a clerk's typed value
+/// against.
+///
+/// `use_` is `None` for the same reason `build_name_body` claims no name `use`: no category
+/// (primary/secondary/…) is being asserted, only "the identifier given at registration".
+pub fn build_identifier_body(
+    event_id: Uuid,
+    patient_id: Uuid,
+    system: &str,
+    value: &str,
+    kid: &str,
+    hlc: Hlc,
+) -> EventBody {
+    let assertion = IdentifierAssertion {
+        value,
+        system,
+        provenance: REGISTRATION_DEMOGRAPHIC_PROVENANCE,
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient_id.to_string(),
+        event_type: "demographic.identifier.asserted".into(),
+        schema_version: DEMOGRAPHIC_IDENTIFIER_SCHEMA_VERSION.into(),
+        hlc,
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: identifier_assertion_body(&assertion),
+        attachments: vec![],
+        plaintext_twin: Some(render_identifier_twin(&assertion)),
+        clock_grade: ClockGrade::SelfAsserted,
+    }
+}
+
 /// Register a standard patient: mint a UUID, derive the §5.8 search attestation from the
 /// query and candidate list the clerk actually saw, and author the
 /// `identity.registration.asserted` act PLUS a name and/or dob `demographic.field.asserted`
-/// event for whatever was actually supplied — ALL through the real `submit_event` door,
+/// event and one `demographic.identifier.asserted` event per supplied identifier — for
+/// whatever was actually supplied — ALL through the real `submit_event` door,
 /// inside ONE transaction, mirroring `register_john_doe` (a chart is never half-registered;
 /// see the module doc's "#350 / Task 8b" section for why that means "never
 /// registered-but-unfindable").
@@ -272,7 +386,9 @@ pub fn build_dob_body(
 /// `SearchQuery` cannot supply this) — `None`, or blank after trimming, when nothing was
 /// typed (e.g. identifier-only). No name event is authored in that case (principle 4). The
 /// dob needs no separate parameter — `query.birth_date` already carries the raw ISO string,
-/// and the identical "only if actually supplied" rule applies to it.
+/// and the identical "only if actually supplied" rule applies to it. Nor do the identifiers:
+/// `query.identifiers` carries the `(system, value)` pairs verbatim, which is exactly what
+/// must be asserted so a later search on the same value matches (see `supplied_identifiers`).
 ///
 /// **`name` MUST be the same typed string `query` was built FROM** (i.e. from the very same
 /// clerk keystroke that fed `SearchQuery::new`'s `raw_name` argument). Nothing in this
@@ -317,11 +433,18 @@ pub async fn register_patient(
         .map(|d| dob_precision(d).map(|p| (d, p)))
         .transpose()?;
 
+    // The identifiers to assert, decided BEFORE any HLC tick (same discipline as the dob
+    // precision above) so the number of ticks matches the number of events exactly. See
+    // `supplied_identifiers` for the blank/duplicate rules and for why the values are NOT
+    // trimmed on their way into the record.
+    let identifiers = supplied_identifiers(&query.identifiers);
+
     // Tick the HLC once per event actually being authored, in submission order: the
     // registration act FIRST (the chart's birth act — #345 is expected to require the FIRST
     // event on any patient_id to be a registration, no carve-out here either), then name,
-    // then dob. These self-commit outside the transaction below; a rollback merely leaves a
-    // monotonic HLC gap, which is fine (the same shape `register_john_doe`/`auto_apply` use).
+    // then dob, then one per identifier. These self-commit outside the transaction below; a
+    // rollback merely leaves a monotonic HLC gap, which is fine (the same shape
+    // `register_john_doe`/`auto_apply` use).
     let h_registration = crate::db::next_hlc(client, node_origin).await?;
     let h_name = match name {
         Some(_) => Some(crate::db::next_hlc(client, node_origin).await?),
@@ -331,6 +454,10 @@ pub async fn register_patient(
         Some(_) => Some(crate::db::next_hlc(client, node_origin).await?),
         None => None,
     };
+    let mut h_identifiers = Vec::with_capacity(identifiers.len());
+    for _ in &identifiers {
+        h_identifiers.push(crate::db::next_hlc(client, node_origin).await?);
+    }
 
     let registration_body = build_registration_body(
         Uuid::now_v7(),
@@ -358,9 +485,25 @@ pub async fn register_patient(
             )
         })
         .transpose()?;
+    // One signed identifier event per supplied pair, paired with its already-ticked HLC.
+    // `zip` is length-safe by construction (`h_identifiers` was built by iterating the same
+    // vec), and `collect::<Result<_,_>>()` propagates a real signing error rather than
+    // silently authoring a short list.
+    let identifier_signed = identifiers
+        .iter()
+        .zip(h_identifiers)
+        .map(|((system, value), h)| {
+            sign(
+                &build_identifier_body(Uuid::now_v7(), patient_id, system, value, kid, h),
+                sk,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     // ONE transaction for every event this call authors — the #350 fix: a registration with
-    // no matching demographic facts is exactly the half-registered state to avoid.
+    // no matching demographic facts is exactly the half-registered state to avoid. The
+    // identifiers (final review, C1) are part of that same rule: a registration that searched
+    // on an MRN and then did not record it is unfindable on the highest-precision pass.
     let tx = client.transaction().await?;
     tx.execute(
         "SELECT submit_event($1)",
@@ -372,6 +515,10 @@ pub async fn register_patient(
             .await?;
     }
     if let Some(s) = &dob_signed {
+        tx.execute("SELECT submit_event($1)", &[&s.signed_bytes])
+            .await?;
+    }
+    for s in &identifier_signed {
         tx.execute("SELECT submit_event($1)", &[&s.signed_bytes])
             .await?;
     }
@@ -575,6 +722,116 @@ mod tests {
                 "additive events demand no attestation"
             );
         }
+    }
+
+    // --- final review, C1: the §4.4 identifier assertion ---
+
+    #[test]
+    fn identifier_body_asserts_field_identifier_with_registrar_entered_provenance() {
+        let pid = Uuid::from_u128(1);
+        let body = build_identifier_body(Uuid::from_u128(2), pid, "MRN", "12345", "kid", hlc(1));
+        assert_eq!(body.event_type, "demographic.identifier.asserted");
+        assert_eq!(body.schema_version, "demographic.identifier/1");
+        assert_eq!(body.patient_id, pid.to_string());
+        assert_eq!(body.payload["field"], "identifier");
+        assert_eq!(body.payload["system"], "MRN");
+        assert_eq!(body.payload["value"], "12345");
+        // Literal, not the imported constant — see `name_body_asserts_…` above for why.
+        assert_eq!(body.payload["provenance"], "registrar-entered");
+        let twin = body.plaintext_twin.as_deref().unwrap();
+        assert!(
+            !twin.trim().is_empty(),
+            "the demographic floor HARD-requires a non-empty twin"
+        );
+        assert!(twin.contains("12345"), "{twin}");
+        assert!(twin.contains("MRN"), "{twin}");
+    }
+
+    #[test]
+    fn identifier_body_claims_no_normalized_key_no_profile_and_no_use() {
+        // Not decoration: db/010 sets `match_key = COALESCE(normalized, value)`, so a
+        // `normalized` key here would move the stored match_key AWAY from the value db/046
+        // pass 1 compares a clerk's typed identifier against — and a `profile` would claim a
+        // §4.4 comparator bundle a registration desk does not hold (ADR-0014/ADR-0033).
+        let body = build_identifier_body(
+            Uuid::from_u128(2),
+            Uuid::from_u128(1),
+            "NHS",
+            "943 476 5919",
+            "kid",
+            hlc(1),
+        );
+        assert!(
+            body.payload.get("normalized").is_none(),
+            "no comparator profile is held, so no materialised key may be claimed"
+        );
+        assert!(body.payload.get("profile").is_none());
+        assert!(
+            body.payload.get("use").is_none(),
+            "no use category is claimed for a registration-desk identifier"
+        );
+    }
+
+    #[test]
+    fn identifier_body_is_recorded_only_no_responsibility_claimed() {
+        let body = build_identifier_body(
+            Uuid::from_u128(2),
+            Uuid::from_u128(1),
+            "MRN",
+            "1",
+            "kid",
+            hlc(1),
+        );
+        let c = &body.contributors[0];
+        assert_eq!(c["role"], "recorded");
+        assert!(c.get("responsibility").is_none());
+    }
+
+    #[test]
+    fn supplied_identifiers_keeps_entry_order_and_the_value_verbatim() {
+        let input = vec![
+            ("MRN".to_string(), " 12345 ".to_string()),
+            ("NHI".to_string(), "ZZZ9999".to_string()),
+        ];
+        assert_eq!(
+            supplied_identifiers(&input),
+            vec![("MRN", " 12345 "), ("NHI", "ZZZ9999")],
+            "the value must be asserted EXACTLY as the query carried it — db/046 pass 1 \
+             compares it with `=`, so trimming here would make the chart unfindable by the \
+             very query it was registered from"
+        );
+    }
+
+    #[test]
+    fn supplied_identifiers_drops_blank_pairs_rather_than_failing_the_registration() {
+        let input = vec![
+            ("".to_string(), "12345".to_string()),
+            ("MRN".to_string(), "".to_string()),
+            ("   ".to_string(), "12345".to_string()),
+            ("MRN".to_string(), "   ".to_string()),
+            ("MRN".to_string(), "real".to_string()),
+        ];
+        assert_eq!(
+            supplied_identifiers(&input),
+            vec![("MRN", "real")],
+            "a blank system or value is 'nothing supplied' (principle 4), not an identifier \
+             — and the db/010 floor would refuse it, failing the whole registration"
+        );
+    }
+
+    #[test]
+    fn supplied_identifiers_collapses_exact_duplicates_only() {
+        let input = vec![
+            ("MRN".to_string(), "12345".to_string()),
+            ("MRN".to_string(), "12345".to_string()),
+            // Same system, DIFFERENT value: two distinct claims, both must survive (§4.4
+            // keeps both as the veto SIGNAL — see db/010's projection comment).
+            ("MRN".to_string(), "67890".to_string()),
+        ];
+        assert_eq!(
+            supplied_identifiers(&input),
+            vec![("MRN", "12345"), ("MRN", "67890")]
+        );
     }
 
     // --- review round 1, #350, Important 1: `dob_precision` must derive, never fabricate ---

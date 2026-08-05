@@ -303,9 +303,15 @@ existing blocking design:
 2. **exact DOB** — `patient_demographic` on the birth-date field
 3. **shared name token** — `patient_name` token overlap
 
-Union, dedup, no scoring, no ranking, no ceiling on the result set beyond an oversized-block guard
-that **reports rather than silently caps** (the existing matcher discipline, and the source of the
-`incomplete` flag in §3).
+Union, dedup, no scoring, no ranking, and — **as built** — no ceiling on the result set at all.
+
+> **Corrected after implementation (final review of this branch).** This section originally promised
+> "an oversized-block guard that **reports rather than silently caps**". No such guard was built and
+> none exists. The `incomplete` flag in §3 is raised by a *different* condition — a candidate whose
+> display name could not be read — and never by result-set size. Nothing anywhere caps, reports on,
+> or even measures how many candidates a blocking pass returns. Tracked as
+> [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357); it is not shipped and must not be
+> assumed by anything reading this document.
 
 Candidate assembly happens in Rust over the existing projections and carries, per §5.8 item 1:
 display name, **age with its basis**, §5.7 **trust state**, last activity (`patient_chart`), a locale
@@ -364,7 +370,7 @@ falls outside the budget, **that is the finding** — file it; do not move the b
 - **The precedence rule's enforcement, retiring `patient.created`, and the ~83-call-site fixture
   sweep** — [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), the reason in §2.3.
 - **No unregistered-chart UI flag** (§2.3) — queryable, not surfaced.
-  [#354](https://github.com/cairn-ehr/cairn-ehr/issues/354).
+  [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357).
 - **No policy expression of "registrations must be attested"** (§2.6). The grade is shipped and the
   worklist query is trivial; turning that into a site requirement is ADR-0024 hard-policy work, and
   belongs to whoever has a deployment that wants it.
@@ -403,7 +409,9 @@ out-of-order clinical event with no registration — belong to the follow-on PR 
 
 **Search, DB-gated:** each blocking pass finds its candidate; an identity-pending (John Doe) chart is
 returned **with** trust state `unconfirmed`; a candidate whose demographics cannot be read is
-reported through `incomplete`, never silently dropped; the oversized-block guard reports.
+reported through `incomplete`, never silently dropped. *(An "oversized-block guard reports" test was
+listed here and is NOT part of the shipped suite — no such guard was built; see the correction in §5
+and [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357).)*
 
 **Regression:** the existing `john_doe.rs` suite passes with the new first event, and its
 registration remains atomic in one transaction.
@@ -424,7 +432,7 @@ registration remains atomic in one transaction.
 | Risk | Mitigation |
 |---|---|
 | The precedence rule converts ~83 fixture call sites and requires retiring `patient.created` | Measured, not estimated (§2.3), and split into its own PR for that reason. Those call sites *are* the bypass the funnel exists to close; each becomes an explicit registration, and any that resists is a finding, not a nuisance |
-| Search latency on a large node makes the funnel slower than paper | The blocking passes are index-backed and the oversized-block guard reports rather than scans; the §7 budget is falsifiable and measured, not assumed |
+| Search latency on a large node makes the funnel slower than paper | **Accepted, NOT mitigated — corrected after implementation.** The original entry read "the blocking passes are index-backed and the oversized-block guard reports rather than scans"; **neither half is true of what shipped.** There is no index on `patient_identifier(system, match_key)` (the PK `(patient_id, system, match_key)` has the wrong leading column), none on `patient_demographic(field, value)` (PK is `(patient_id, field)`), and pass 3 is a per-row `regexp_split_to_table` over the whole of `patient_name` with no usable expression index. There is no guard, no ceiling and no reporting path. What actually holds the risk down today is node size, not design. Tracked as [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357); the §7 budget remains falsifiable and owed |
 | The attestation's third-party UUIDs are a disclosure surface | Recorded in §2.5 and in ADR-0061 as a rung-2 erasure obligation; not silently accepted |
 | Re-expressing John Doe regresses a shipped, tested subsystem | Its suite runs unchanged as a regression gate; the new event joins the existing transaction rather than adding one |
 | A future reader "fixes" the missing authorship requirement by gating it (§2.6) | §2.6 records the three failure scenarios and ADR-0061 carries it as a rejected alternative; a test asserts an unattested standard registration **succeeds**, so the gate cannot be added silently |

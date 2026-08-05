@@ -204,15 +204,41 @@ by anyone who can read the funnel's record. This is structurally the same footno
 known-alias pool: derived or incidental state that names a subject is part of the erasure surface, even when
 it was never the subject's own record.
 
-### 6. A registration asserts the typed name and DOB, with provenance `registrar-entered`
+### 6. A registration asserts everything it was given — name, DOB and identifiers — with provenance `registrar-entered`
 
-A standard registration authors the `demographic.field.asserted` name and/or DOB **in the same transaction**
-as the registration act, when and only when they were actually supplied. Without this the funnel does not
-close: the search reads `patient_name`/`patient_demographic`, so a registration that wrote neither left the
-chart unfindable and the very next search for the same person minted a duplicate — found by running the real
-CLI end to end ([#350](https://github.com/cairn-ehr/cairn-ehr/issues/350)). Nothing is fabricated to fill a
-gap: an identifier-only registration writes no name, because a placeholder would be a precise untruth
-(principle 4) and worse than the honest absence.
+A standard registration authors the `demographic.field.asserted` name and/or DOB **and one
+`demographic.identifier.asserted` event per supplied identifier**, all **in the same transaction** as the
+registration act, when and only when each was actually supplied. Without this the funnel does not close: the
+search reads **`patient_identifier`, `patient_demographic` and `patient_name`** — one projection per blocking
+pass — so a registration that wrote none of them left the chart unfindable and the very next search for the
+same person minted a duplicate. Nothing is fabricated to fill a gap: a registration with no name given writes
+no name, because a placeholder would be a precise untruth (principle 4) and worse than the honest absence.
+
+The rule was found by running the real CLI end to end, in two halves, and the second half is the more
+instructive one:
+
+- **[#350](https://github.com/cairn-ehr/cairn-ehr/issues/350)** — the act wrote no name and no DOB, so passes
+  2 and 3 could not find the chart the funnel had just created.
+- **The same defect one pass over, caught in this branch's final review.** `patient-register` accepts
+  repeatable `--identifier system=value`, parses it strictly, **searches on it and signs it into the permanent
+  attestation** — and then discarded it. Pass 1 is the *highest-precision* pass and the one gesture the floor
+  blesses as "a complete and often better search", and `--identifier` on `patient-register` is the only place
+  in the CLI an operator can enter an MRN at all. So a clerk registering from an MRN card and later searching
+  that same MRN got nothing back, and — worse — an identifier-only registration (no name, no DOB, explicitly
+  supported) produced a chart with **no searchable content on any of the three passes**: unreachable,
+  permanently, by every search the slice ships.
+
+The lesson recorded, because two rounds found the same shape: **an act that searches on a term and attests to
+that term must also persist it.** Anything else signs a diligent-looking record of a search whose own subject
+the record cannot later be found by.
+
+**The identifiers are asserted with no `normalized` key and no `profile`**, and that is a correctness choice
+rather than a stub. A registration desk holds no §4.4 comparator profile ([ADR-0014](0014-locale-pluggable-matcher-comparators.md)),
+so naming one would be a fabrication, and the floor refuses a materialised `normalized` key that does not name
+the profile which produced it. With both absent the projection's `match_key` falls back to the as-entered
+`value`, which is exactly what the identifier pass compares a clerk's typed value against. For the same
+reason the value is stored **verbatim, untrimmed**: the pass is an exact compare, so silently tidying the
+stored value would make the chart unfindable by the very query it was registered from.
 
 **The provenance is `registrar-entered`, not `patient-stated`**, and the reasoning is the maintainer's:
 

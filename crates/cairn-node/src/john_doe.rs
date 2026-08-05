@@ -112,6 +112,34 @@ pub fn build_callsign_name_body(
     }
 }
 
+/// Refuse a blank `basis` BEFORE anything is minted or ticked, rather than letting the
+/// db/045 floor refuse it afterwards.
+///
+/// Pure and total — no clock, no DB, no key — so the CLI edge and `register_john_doe` can
+/// both call the SAME function and never drift into two different opinions of "stated".
+/// This is exactly the `patient::register::dob_precision` precedent applied to the other
+/// value the floor hard-requires: `--birth-date` is validated at the CLI edge before any
+/// I/O, and `--basis` was not, so `register-john-doe --basis ""` minted a patient UUID and
+/// burned three HLC ticks before the floor rejected the first submit. The registration
+/// correctly did not land — but "fail cheaply, before the side effects" is the discipline
+/// everywhere else on this path, and a UUID minted for a chart that will never exist is a
+/// confusing artifact for whoever reads the logs.
+///
+/// The rule mirrors db/045's own (`length(trim(basis)) = 0`) rather than inventing a
+/// stricter one: whitespace-only is blank, and NOTHING else is judged — the basis is §4.1
+/// value-open free text and no vocabulary is imposed on a clerk describing why a patient
+/// could not be identified (principle 4 / principle 12).
+pub fn validate_basis(basis: &str) -> anyhow::Result<()> {
+    if basis.trim().is_empty() {
+        anyhow::bail!(
+            "--basis must say why this chart is identity-pending (e.g. \"unconscious ED \
+             arrival, no ID\") — a non-standard registration states why (§5.3/§5.4), and a \
+             blank one is refused by the floor"
+        );
+    }
+    Ok(())
+}
+
 /// Assemble the C4 `identity.pending.asserted` `EventBody` marking the chart *unconfirmed*.
 /// Pure. `basis` is the §4.1 value-open reason the chart is identity-pending (e.g.
 /// "unconscious ED arrival, no ID"); the db/024 floor requires it non-empty.
@@ -168,6 +196,12 @@ pub async fn register_john_doe(
     date: &str,
     basis: &str,
 ) -> anyhow::Result<(Uuid, String, i64)> {
+    // Refuse a blank basis with ZERO side effects — before a UUID is minted, before any
+    // HLC is ticked. The db/045 floor is still the enforcement point (principle 12: this is
+    // a client-side courtesy, not the guarantee); this only stops the wasted mint. Same
+    // function the CLI edge calls, so the two can never disagree.
+    validate_basis(basis)?;
+
     let patient_id = Uuid::now_v7();
     let suffix = suffix_from_uuid(patient_id);
     let call = callsign(class, site, date, &suffix);
@@ -252,6 +286,34 @@ mod tests {
         let eid = Uuid::parse_str("22222222-0000-0000-0000-000000000000").unwrap();
         let pid = Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap();
         (eid, pid)
+    }
+
+    // --- final review (minor): `--basis` is validated at the edge, like `--birth-date` ---
+
+    #[test]
+    fn a_stated_basis_passes_and_is_not_second_guessed() {
+        // Value-open free text: no vocabulary is imposed (principle 12). Anything a clerk
+        // can actually say passes, including a value with surrounding whitespace, which the
+        // floor also accepts.
+        for ok in [
+            "unconscious ED arrival, no ID",
+            "  brought in by police, refuses to speak  ",
+            "?",
+        ] {
+            assert!(validate_basis(ok).is_ok(), "{ok:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn a_blank_or_whitespace_only_basis_is_refused_with_a_legible_reason() {
+        for bad in ["", "   ", "\t\n"] {
+            let err = validate_basis(bad).expect_err("a blank basis states nothing");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("--basis"),
+                "the message must name the flag the operator got wrong: {msg}"
+            );
+        }
     }
 
     #[test]

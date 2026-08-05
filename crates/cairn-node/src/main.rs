@@ -532,10 +532,12 @@ enum Cmd {
     /// Search this node's charts before creating one (§5.8 item 1). Advisory: it ranks
     /// nothing and decides nothing — it shows a human what exists.
     PatientSearch {
-        /// Name as typed; tokenised on non-alphanumerics, so order does not matter.
+        /// Name as typed. Word order does not matter. Each whitespace-separated word
+        /// searches BOTH as a whole (edge punctuation trimmed, so "O'Brien-Smith" stays
+        /// one token) AND as its alphanumeric parts ("brien", "smith").
         #[arg(long, default_value = "")]
         name: String,
-        /// ISO YYYY-MM-DD.
+        /// ISO YYYY-MM-DD (or YYYY / YYYY-MM — an exact match on the value as stored).
         #[arg(long)]
         birth_date: Option<String>,
         /// Repeatable `system=value`, e.g. --identifier MRN=12345
@@ -549,10 +551,16 @@ enum Cmd {
     /// attested — so the attestation always describes a real search this command ran,
     /// never one an operator retyped.
     PatientRegister {
+        /// Name as typed. Searched exactly as `patient-search --name` searches it, and
+        /// recorded VERBATIM on the new chart — never re-ordered or re-punctuated.
         #[arg(long, default_value = "")]
         name: String,
+        /// ISO YYYY-MM-DD, or YYYY / YYYY-MM when only that much is known — the declared
+        /// precision follows the shape you type and is never rounded up.
         #[arg(long)]
         birth_date: Option<String>,
+        /// Repeatable `system=value`, e.g. --identifier MRN=12345. Searched AND recorded
+        /// on the new chart, so the chart is findable by this identifier afterwards.
         #[arg(long = "identifier")]
         identifiers: Vec<String>,
         /// Proceed even though candidates were displayed. Without it the command STOPS and
@@ -1570,6 +1578,13 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::RegisterJohnDoe { class, site, basis } => {
+            // Fail cheap, before any key I/O or DB round trip — the same discipline
+            // `patient-register` applies to `--birth-date`, and the SAME function
+            // `register_john_doe` calls internally, so the CLI edge and the library call
+            // cannot drift into different opinions of "stated". Without it, `--basis ""`
+            // unsealed a key, opened a connection, minted a patient UUID and burned three
+            // HLC ticks before the db/045 floor refused the first submit.
+            cairn_node::john_doe::validate_basis(&basis)?;
             let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
@@ -2776,6 +2791,39 @@ fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)
         .collect()
 }
 
+/// Width of the `name` column in `print_candidates`' fixed-column layout. Both the header's
+/// `{:<28}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
+const NAME_COLUMN_WIDTH: usize = 28;
+
+/// Shorten `s` to at most `width` CHARACTERS, marking the cut with a trailing `…`.
+///
+/// Character-based, not byte-based: `&s[..width]` panics on a multi-byte boundary, and a
+/// patient name is exactly where multi-byte characters live ("田中 太郎", "José"). Culture-
+/// neutral in the §4.2 sense — it never inspects or parses the name, only counts characters.
+///
+/// The ellipsis is what keeps this honest (principle 4): a silently-clipped name reads as the
+/// whole name, and on a wrong-chart-prevention surface "Nguyen Thi Minh" clipped to
+/// "Nguyen Thi Min" is a precise untruth a clerk could act on. It costs one character of the
+/// budget — the returned string is still at most `width` characters wide, so the column holds.
+///
+/// Grapheme clusters, not chars, would be the fully correct unit (a combining sequence can
+/// span several `char`s and render as one column), as would East-Asian double-width handling.
+/// Both need a dependency and neither can make a row WIDER than this bound, so the column
+/// alignment this function exists to protect is safe either way; the residual is that a
+/// double-width name may render narrower than 28 columns, never wider.
+fn ellipsize(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        return s.to_string();
+    }
+    // `width - 1` leaves room for the ellipsis itself. `width == 0` cannot happen from the
+    // one call site (a compile-time constant of 28), but saturating keeps the function total
+    // rather than panicking if a future caller passes 0.
+    let keep = width.saturating_sub(1);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
 /// Render a `CandidateList` the way `patient-search` and `patient-register` both show it: one
 /// line per candidate, in the exact order the list carries them (`patient-register` attests
 /// this same order — see `register::build_registration_body`'s doc — so the print order and
@@ -2790,9 +2838,16 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
     if list.candidates.is_empty() {
         println!("no candidates found");
     } else {
+        // `{:name_w$}` on both this header and the row below, from ONE constant, so the
+        // header can never drift out of step with the width `ellipsize` truncates to.
         println!(
-            "{:<36}  {:<28}  {:>4}  {:<12}  {:<12}  locale",
-            "patient_id", "name", "age", "trust", "last activity"
+            "{:<36}  {:<name_w$}  {:>4}  {:<12}  {:<12}  locale",
+            "patient_id",
+            "name",
+            "age",
+            "trust",
+            "last activity",
+            name_w = NAME_COLUMN_WIDTH
         );
         for c in &list.candidates {
             let age = c
@@ -2803,13 +2858,29 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
             let last_activity = c.last_activity.as_deref().unwrap_or("-");
             let locale = c.locale.as_deref().unwrap_or("-");
             println!(
-                "{:<36}  {:<28}  {:>4}  {:<12}  {:<12}  {}",
+                "{:<36}  {:<name_w$}  {:>4}  {:<12}  {:<12}  {}",
                 c.patient_id,
-                c.display_name,
+                // TRUNCATED, not merely padded. Rust's `{:<n}` is a MINIMUM width: one
+                // long name would push the age/trust/last-activity columns right on that
+                // row alone, so a clerk scanning DOWN the age column to tell two same-named
+                // patients apart loses the alignment exactly when a name is unusual — i.e.
+                // exactly when this wrong-chart-prevention surface is being leaned on. The
+                // ellipsis is what keeps the truncation honest (principle 4: a shortened
+                // value must not read as the whole value).
+                //
+                // Only the NAME needs this. `patient_id` is a UUID (always 36), `age` is a
+                // small integer or "?", `trust` is a closed short vocabulary, and
+                // `last_activity` is an ISO date — all bounded. `locale` is unbounded too
+                // (its own doc warns it is not guaranteed to be suburb-only — issue #347),
+                // but it is the LAST column, so a long value can only wrap; it cannot
+                // misalign anything, and truncating it would hide the disambiguating detail
+                // it exists to show.
+                ellipsize(&c.display_name, NAME_COLUMN_WIDTH),
                 age,
                 c.trust.as_str(),
                 last_activity,
-                locale
+                locale,
+                name_w = NAME_COLUMN_WIDTH
             );
         }
     }
@@ -2873,6 +2944,43 @@ mod tests {
             "op-pass",
             "a non-empty flag is returned verbatim"
         );
+    }
+
+    // --- `print_candidates`' name column must not shift on a long name (final review) ---
+
+    #[test]
+    fn a_short_name_is_returned_unchanged_and_never_gains_an_ellipsis() {
+        assert_eq!(ellipsize("Smith, John", NAME_COLUMN_WIDTH), "Smith, John");
+        // Exactly at the boundary: still whole, still no ellipsis.
+        let exact: String = std::iter::repeat_n('x', NAME_COLUMN_WIDTH).collect();
+        assert_eq!(ellipsize(&exact, NAME_COLUMN_WIDTH), exact);
+    }
+
+    #[test]
+    fn a_long_name_is_cut_to_the_column_width_and_says_so() {
+        let long: String = std::iter::repeat_n('x', NAME_COLUMN_WIDTH + 40).collect();
+        let out = ellipsize(&long, NAME_COLUMN_WIDTH);
+        assert_eq!(
+            out.chars().count(),
+            NAME_COLUMN_WIDTH,
+            "the whole point: the rendered cell must never exceed the column, or every \
+             later column shifts on that row alone"
+        );
+        assert!(
+            out.ends_with('…'),
+            "a clipped name must not read as the whole name (principle 4): {out}"
+        );
+    }
+
+    #[test]
+    fn a_multibyte_name_is_cut_on_a_character_boundary_not_a_byte_one() {
+        // Byte slicing here would PANIC mid-character. A patient name is exactly where
+        // multi-byte characters live, so this is the realistic case, not an exotic one.
+        let long: String = std::iter::repeat_n('田', NAME_COLUMN_WIDTH + 5).collect();
+        let out = ellipsize(&long, NAME_COLUMN_WIDTH);
+        assert_eq!(out.chars().count(), NAME_COLUMN_WIDTH);
+        assert!(out.ends_with('…'));
+        assert!(out.starts_with('田'));
     }
 
     #[test]
