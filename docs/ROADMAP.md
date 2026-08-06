@@ -441,7 +441,10 @@ an unattested standard registration **succeeds**, so the gate cannot be re-added
 
 **Deliberately NOT done.** All UI (the picker must **open** a chart, never retarget one — retargeting
 re-creates the §5.8 item 4 windowing misfile possession exists to prevent); candidate scoring/ranking;
-photo bytes; the §5.6 pseudonymous *workflow*; the interactive half of the §1.2 measurement.
+photo bytes; the §5.6 pseudonymous *workflow*; BOTH halves of the §1.2 measurement (the interactive
+half by the first runnable surface; the node-tier write-cost half is
+[#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) — nothing was wired, and db/044's
+`gesture_kind` CHECK must first be widened).
 **Still open:** [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) (enforcement + retiring
 `patient.created`), [#346](https://github.com/cairn-ehr/cairn-ehr/issues/346) (audit db/*.sql for the
 `jsonb_typeof` NULL fail-OPEN pattern), [#347](https://github.com/cairn-ehr/cairn-ehr/issues/347)
@@ -457,7 +460,14 @@ searches repudiated names — correct but undocumented and now load-bearing),
 [#356](https://github.com/cairn-ehr/cairn-ehr/issues/356) (two stale `design §N` citations in
 unrelated files, found by the same review sweep), [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357)
 (`cairn_search_candidates` has no result-set ceiling, no guard and no index-backed pass — a common
-surname can print thousands of candidates and sign them all).
+surname can print thousands of candidates and sign them all). The second whole-branch review
+(2026-08-06, PR #358) added [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) (the optional
+registrar/attester key ADR-0061 decision 4 described was never built),
+[#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) (above),
+[#361](https://github.com/cairn-ehr/cairn-ehr/issues/361) (db/045 rule 2e accepts an identifier term
+with a blank/absent `system` that pass 1 can never match), and
+[#362](https://github.com/cairn-ehr/cairn-ehr/issues/362) (`matched_pass` computed and discarded —
+no ranking signal reaches the display).
 
 ## Phase 5 — Security & compliance core
 

@@ -99,7 +99,8 @@ some candidate it found, the attestation says so rather than implying the search
 
 ### 3. Strict local submit, lenient remote apply — and the enforcement is deliberately deferred
 
-The precedence rule is enforced at `submit_event` and **not** at `apply_remote_event`.
+The precedence rule, once turned on ([#345](https://github.com/cairn-ehr/cairn-ehr/issues/345)), is
+enforced at `submit_event` and **not** at `apply_remote_event`.
 
 Set-union sync has no ordering guarantee, so a peer's clinical event legitimately arrives *before* the
 registration event that licenses it. A fail-closed remote door would then wedge replication on **entirely
@@ -128,8 +129,10 @@ but not surfaced in any UI yet.
 >    **no structural floor** and no twin-check row. It is an unfloored registration act, and it must be
 >    **retired** by the same change that turns the rule on. Grandfathering it as a permitted first event
 >    would put back exactly the "unless" decision 1 exists to remove.
-> 2. **The rule converts ~83 submit call sites across ~38 `cairn-node` test files**, plus 37
->    `patient.created` references in `cairn-sync`/`cairn-event`. That is the whole DB-gated suite, and a
+> 2. **The rule converts ~83 submit call sites across ~38 `cairn-node` test files**, plus a handful of
+>    `patient.created` references in `cairn-sync`/`cairn-event` (8 literal event-type strings, 13 counting
+>    `submit_patient_created`-style helper names — the bulk of the crate-wide total lives in the
+>    `cairn-node` tests the ~83 figure already covers). That is the whole DB-gated suite, and a
 >    mechanical rewrite of 38 fixtures deserves its own review where each converted fixture's intent can be
 >    checked.
 >
@@ -177,11 +180,13 @@ follow from gating, and each is worse than the problem it purports to solve:
    present in the record when the investigator arrives. The gate destroys the evidence it was installed to
    collect.
 
-**So: no floor change, and no new authorship rule anywhere.** The registration path takes an *optional*
-registrar key. When the registrar signs, the existing binding makes the claim unforgeable and the existing
-classifier grades it `Attested`. When they cannot, the event records `Device` — *authored at this node,
-registrar unattributed* — never a guess (principle 4's explicit unknown), composing into the §5.7/§5.10
-trust projection with **no new stream**.
+**So: no floor change, and no new authorship rule anywhere.** The design leaves room for an *optional*
+registrar key on the registration path: when a registrar signs, the existing binding makes the claim
+unforgeable and the existing classifier grades it `Attested`. **The first slice does not yet take one**
+([#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) — `identify-patient` already carries the
+attester plumbing to mirror); every registration it authors therefore records `Device` — *authored at
+this node, registrar unattributed* — never a guess (principle 4's explicit unknown), composing into the
+§5.7/§5.10 trust projection with **no new stream**.
 
 **Wanting attested registrations is policy, not mechanism** (principle 9). A deployment that requires it
 expresses it as [ADR-0024](0024-hard-policy-expression-the-policy-assertion-stream.md) hard policy or a
@@ -246,8 +251,8 @@ side did not trim either, so leaving the stored side untrimmed merely kept the t
 together. The maintainer's fix is to trim BOTH sides — `crates/cairn-node/src/patient/register.rs`'s
 `supplied_identifiers` on the way in, `crates/cairn-patient-search/src/query.rs`'s `SearchQuery::new` on the
 way out — matching what `birth_date` already does one field over
-(`crates/cairn-patient-search/src/query.rs:84-87`: *"a clerk's stray leading/trailing space … must not
-silently defeat it"*). There is no principled reason a pasted identifier should be held to a laxer standard
+(`SearchQuery::new` in `crates/cairn-patient-search/src/query.rs`: *"a clerk's stray leading/trailing
+space … must not silently defeat it"*). There is no principled reason a pasted identifier should be held to a laxer standard
 than a typed date; the earlier asymmetry was an oversight, not a considered distinction.
 
 This closes a real cross-gesture miss, not a hypothetical one: a clerk pastes an MRN card into
@@ -332,8 +337,11 @@ differently: the matcher re-runs on every new evidence assertion, i.e. **search-
   make now.
 - The candidate search adds a latency-sensitive path to registration, which paper-parity
   ([§1.2](../vision.md#12-the-paper-parity-test-normative)) budgets at ≤ 5 s to find an existing chart and
-  ≤ 20 s to register a new one. The interactive measurement is owed by the first slice with a runnable
-  surface; the CLI slice measures the node-tier write cost only.
+  ≤ 20 s to register a new one. **Both halves of that measurement are still owed.** The interactive half
+  is owed by the first slice with a runnable surface; the node-tier write-cost half is
+  [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) — nothing is wired into the CLI slice, and
+  `db/044`'s gesture vocabulary (`signoff`, `cease`) must first be widened by an additive migration
+  before a registration gesture row can even be recorded.
 
 **The bet.** That an honest, *advisory* funnel plus a named-candidate record beats an enforcing one. The
 search never blocks, never vetoes and never auto-decides, because a missed candidate produces a **false

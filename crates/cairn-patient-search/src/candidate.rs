@@ -9,7 +9,15 @@ use uuid::Uuid;
 /// the chart a clerk must find when the family arrives with a name. A search that hid
 /// identity-pending charts would manufacture a duplicate every time an unidentified patient
 /// is later named.
+///
+/// `rename_all = "kebab-case"` keeps the SERIALIZED spelling identical to the §5.7 tokens
+/// `as_str` returns (`"under-review"`, not serde's default `"UnderReview"`): `Candidate`
+/// crosses a process boundary (the CLI renders it; the future picker window and native API
+/// will carry it as JSON), and two spellings of one closed vocabulary is exactly the kind of
+/// wire divergence that is free to prevent now and an additive-evolution headache to heal
+/// after anything has consumed the other form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TrustState {
     Confirmed,
     Unconfirmed,
@@ -226,6 +234,14 @@ mod tests {
         assert_eq!(TrustState::Confirmed.as_str(), "confirmed");
         assert_eq!(TrustState::Unconfirmed.as_str(), "unconfirmed");
         assert_eq!(TrustState::UnderReview.as_str(), "under-review");
+        // And the SERDE spelling agrees with `as_str` on the one variant where kebab-case
+        // and the default variant name actually differ — the whole point of the
+        // `rename_all` on the enum.
+        assert_eq!(
+            serde_json::to_string(&TrustState::UnderReview).unwrap(),
+            "\"under-review\"",
+            "wire spelling and as_str must be the same token"
+        );
     }
 
     #[test]
@@ -255,6 +271,10 @@ mod tests {
         // field here, and this assertion is what would notice.
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["photo_ref"], "b3:deadbeef");
+        // The WIRE spelling of the trust vocabulary is the §5.7 token, same as `as_str` —
+        // not serde's default variant name ("Confirmed"). One closed vocabulary, one
+        // spelling, on every surface that carries it.
+        assert_eq!(v["trust"], "confirmed");
         assert_eq!(
             v.as_object().unwrap().len(),
             7,
