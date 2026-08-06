@@ -15,9 +15,11 @@
 //!
 //! `register_patient`'s Task-8b addition (#350 — it must ALSO assert the typed name/dob so a
 //! registered chart is actually findable) is covered separately in
-//! `patient_register_demographics.rs`, split out purely to keep both files under the house
-//! 500-line limit; every call to `register_patient` in THIS file passes `None` for the new
-//! `name` parameter, since none of these tests are about the demographic assertions.
+//! `patient_register_demographics.rs`, split out to keep each file focused on one concern
+//! (the plan's under-500-lines-where-feasible guideline; there is no hard house limit —
+//! that sibling's own header records the same correction); every call to `register_patient`
+//! in THIS file passes `None` for the new `name` parameter, since none of these tests are
+//! about the demographic assertions.
 mod common;
 
 use cairn_node::db;
@@ -46,9 +48,10 @@ fn candidate(id: Uuid) -> Candidate {
 
 /// Read back the projected `patient_registration` row for `p`, as
 /// `(class, basis, displayed_count, search_incomplete)` — the same tuple
-/// `patient_registration.rs`'s `projected_row` reads, kept local here because this suite
-/// only ever exercises the Standard/accepted path (no need to import test-only helpers
-/// across a suite boundary Cargo does not share).
+/// `patient_registration.rs`'s `projected_row` reads. Knowingly duplicated: `tests/common/`
+/// COULD share it (an earlier version of this comment wrongly claimed Cargo cannot share
+/// across suites), and folding the copied per-suite helpers into `common` is exactly the
+/// #327 cleanup — this pair should go with it.
 async fn projected_row(c: &Client, p: Uuid) -> (String, Option<String>, i32, Option<bool>) {
     let row = c
         .query_one(
@@ -138,11 +141,16 @@ async fn the_attestation_round_trips_from_the_displayed_list_to_the_stored_body(
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
-    // Three distinct, freshly-minted UUIDv7s. UUIDv7 sorts close to creation order, so
-    // generating them in this exact sequence and then asserting the SAME sequence comes back
-    // is a genuine order check, not an accident of a value that happens to equal its own
-    // sorted form.
-    let ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+    // Three distinct, freshly-minted UUIDv7s — then REVERSED, and the reversal is the whole
+    // test. Within-process `Uuid::now_v7()` is monotonic, so the generation order IS sorted
+    // order: an earlier version of this test displayed them as generated, which meant a
+    // "sort `displayed` for tidiness" regression anywhere downstream (the exact drift
+    // `build_registration_body`'s comment warns against) could never fail the assertion —
+    // display order and sorted order were the same sequence by construction. Reversing
+    // makes the display order the DESCENDING sequence, so anything that re-sorts, re-derives
+    // or otherwise "tidies" the list on its way to the stored body now breaks this test.
+    let mut ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+    ids.reverse();
     let list = CandidateList {
         candidates: ids.iter().map(|id| candidate(*id)).collect(),
         incomplete: false,
@@ -213,13 +221,18 @@ async fn a_search_the_node_knew_was_partial_is_attested_as_incomplete() {
 }
 
 #[tokio::test]
-async fn registering_with_no_attester_key_succeeds() {
+async fn registering_with_no_human_author_succeeds() {
     // SPEC §2.6 — a grade, not a gate. See the identical guard in patient_registration.rs
     // (`a_standard_registration_with_no_human_author_is_accepted`). `common::setup` enrolls
     // only an AGENT signer, and `register_patient`'s contributor set is a single `recorded`
     // entry naming it — a device-recorded registration with NO human author and no
     // attestation token. Exactly the 03:00 shape the brief calls out: this MUST succeed, or
     // care documentation is blocked at the worst possible moment.
+    //
+    // (Named for what it exercises — NO HUMAN AUTHOR — not for an `--attester-key` flag: the
+    // design spec's optional attester key was never built, so there is no flag to omit; the
+    // attested registration path is future work, #359. When #359 lands, THIS test is the
+    // one that keeps its absence-side green.)
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

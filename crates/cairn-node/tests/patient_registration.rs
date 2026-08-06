@@ -370,6 +370,46 @@ async fn a_non_uuid_in_displayed_is_refused() {
 }
 
 #[tokio::test]
+async fn an_absent_or_wrong_typed_displayed_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Second whole-branch review: only a non-uuid ELEMENT was driven; the key itself being
+    // absent (or the wrong type) never was. The absent-key case is the three-valued-logic
+    // trap this floor has already fallen to once (the `{}` empty-query fail-open): rule 2f
+    // is `jsonb_typeof(v_displayed) IS DISTINCT FROM 'array'`, and a regression to the
+    // "obvious" `<>` spelling makes `jsonb_typeof(<absent>)` — SQL NULL — compare to NULL,
+    // the branch not taken, the element-check EXISTS over NULL yield zero rows, and the
+    // projection COALESCE the count to 0: a standard registration with NO candidate list at
+    // all admitted permanently, indistinguishable from a diligent search that found
+    // nothing. This test is what makes that one-token regression fail loudly.
+    for (label, mutate) in [
+        ("displayed-absent", None),
+        ("displayed-string", Some(json!("abc"))),
+        ("displayed-number", Some(json!(3))),
+    ] {
+        let mut payload = standard_payload();
+        match mutate {
+            None => {
+                payload["search"]
+                    .as_object_mut()
+                    .expect("search is an object")
+                    .remove("displayed");
+            }
+            Some(v) => payload["search"]["displayed"] = v,
+        }
+        let p = Uuid::now_v7();
+        let r = submit_registration(&c, &sk, &kid, p, 1, payload, good_twin()).await;
+        assert_refused_and_empty(&c, r, p, "candidate list malformed", label).await;
+    }
+}
+
+#[tokio::test]
 async fn a_missing_incomplete_flag_is_refused() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
@@ -395,6 +435,67 @@ async fn a_missing_incomplete_flag_is_refused() {
         p,
         "completeness must be stated, not assumed",
         "incomplete-missing",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_wrong_typed_incomplete_flag_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Second whole-branch review: rule 2g's whole stated reason for `jsonb_typeof ...
+    // 'boolean'` (rather than a `::boolean` cast) is refusing Postgres's permissive
+    // spellings — `"true"`, `1`, `"yes"` would all cast clean and read as stated-complete.
+    // Only ABSENCE was ever driven; these are the wrong-TYPE arms. Without this test, a
+    // regression to a presence-only check leaves the `"true"` shape to fail later at the
+    // projection's raw cast — an error naming no field, at the door that must never wedge.
+    for (label, bad) in [
+        ("incomplete-string-true", json!("true")),
+        ("incomplete-number-one", json!(1)),
+    ] {
+        let mut payload = standard_payload();
+        payload["search"]["incomplete"] = bad;
+        let p = Uuid::now_v7();
+        let r = submit_registration(&c, &sk, &kid, p, 1, payload, good_twin()).await;
+        assert_refused_and_empty(&c, r, p, "a JSON boolean", label).await;
+    }
+}
+
+#[tokio::test]
+async fn an_explicit_search_null_on_a_non_standard_registration_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Rule 2c is a KEY-PRESENCE test (`p ? 'search'`), not a null test, and both db/045's
+    // comment and john_doe.rs's module doc lean on that distinction — an explicit
+    // `"search": null` is still an author asserting something about a search, and this is
+    // the one door that can refuse it. Until this test, no submission ever drove the null
+    // shape, so a regression to a typeof-based check (which reads absent and null alike)
+    // would have admitted it with the whole suite green.
+    let mut payload = json!({
+        "class": "unidentified",
+        "basis": "unconscious ED arrival, no ID"
+    });
+    payload["search"] = json!(null);
+    let p = Uuid::now_v7();
+    let r = submit_registration(&c, &sk, &kid, p, 1, payload, good_twin()).await;
+    assert_refused_and_empty(
+        &c,
+        r,
+        p,
+        "a search attestation the registrar could not have made",
+        "unidentified-with-null-search",
     )
     .await;
 }

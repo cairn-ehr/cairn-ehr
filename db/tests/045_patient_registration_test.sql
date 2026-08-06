@@ -2,11 +2,15 @@
 -- #344 / ADR-0060 — the SQL mirror of the registration floor (db/045).
 --
 -- SCOPE. These assertions call `cairn_check_registration_assertion` DIRECTLY, so they cover
--- exactly the part of the contract that is pure structure: the closed class set, the
--- both-directions search rule, and the empty-candidate-list acceptance. Everything that
--- needs a SIGNATURE to exercise — the door admitting a real registration, the twin
--- requirement raised by the registry row, the retained-set projection and the earliest-wins
--- view, the ADR-0053 authorship refusal — lives in
+-- the whole pure-structure contract: the closed class set (2a), the basis rule (2b), BOTH
+-- directions of the search rule including the explicit-null shape (2c/2d), the term rules
+-- with their three-valued-logic trap (2e), the displayed-list rules (2f), the
+-- incomplete-must-be-a-JSON-boolean rule (2g), and the two accept paths. (An earlier
+-- version of this file mirrored only 2a-2d and claimed that WAS the pure-structure
+-- contract — second whole-branch review; 2e-2g are exactly as PERFORM-able as the rest.)
+-- Everything that needs a SIGNATURE to exercise — the door admitting a real registration,
+-- the twin requirement raised by the registry row, the retained-set projection and the
+-- earliest-wins view, the ADR-0053 authorship refusal — lives in
 -- crates/cairn-node/tests/patient_registration.rs, which can sign; SQL alone cannot.
 --
 -- WHY MIRROR AT ALL: the Rust suite self-skips without $CAIRN_TEST_PG, and db/tests/*.sql
@@ -142,6 +146,27 @@ BEGIN
     END LOOP;
 END $$;
 
+-- 3d. An EXPLICIT `"search": null` on a non-standard registration is refused too. Rule 2c is
+--     a KEY-PRESENCE test (`p ? 'search'`), not a null test — a null is still an author
+--     asserting something about a search — and a regression to a typeof-based check would
+--     read absent and null alike, admitting the null shape. Block 3 above drives only the
+--     full-object shape, so this one drives the null.
+DO $$
+BEGIN
+    PERFORM cairn_check_registration_assertion('identity.registration.asserted', jsonb_build_object(
+        'plaintext_twin', 'Patient registered (unidentified registration)',
+        'payload', jsonb_build_object(
+            'class', 'unidentified',
+            'basis', 'unconscious ED arrival, no ID',
+            'search', NULL::jsonb)));
+    RAISE EXCEPTION 'FAIL: an unidentified registration carrying an explicit null search was accepted';
+EXCEPTION WHEN others THEN
+    IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;
+    IF position('a search attestation the registrar could not have made' in SQLERRM) = 0 THEN
+        RAISE EXCEPTION 'FAIL: wrong refusal for an explicit null search: %', SQLERRM;
+    END IF;
+END $$;
+
 -- 4. An EMPTY candidate list is ACCEPTED — the normal case for a genuinely new patient: the
 --    search ran and correctly found nothing. This is the anti-regression half of rule 3: a
 --    future "tightening" of `displayed` into a non-empty requirement would make registering
@@ -160,6 +185,117 @@ BEGIN
                 'incomplete', false))));
 EXCEPTION WHEN others THEN
     RAISE EXCEPTION 'FAIL: an empty candidate list must be accepted (the search ran and found nothing), got: %', SQLERRM;
+END $$;
+
+-- 5. Rule 2e: a search with NO terms is refused — the `{}` all-keys-absent shape FIRST,
+--    because it is the one that actually failed open while db/045 was being written
+--    (`jsonb_typeof(<absent key>)` is SQL NULL; NULL propagates through the OR-chain; the
+--    obvious `IF NOT ...` spelling is then not taken). The present-but-blank shape drives
+--    the other arms of the same expression.
+DO $$
+DECLARE
+    v_query jsonb;
+    v_label text;
+BEGIN
+    FOR v_label, v_query IN VALUES
+        ('all keys absent', '{}'::jsonb),
+        ('blank terms',     jsonb_build_object(
+                                'name_tokens', jsonb_build_array('   '),
+                                'birth_date', '',
+                                'identifiers', jsonb_build_array(
+                                    jsonb_build_object('system', 'MRN', 'value', ''))))
+    LOOP
+        BEGIN
+            PERFORM cairn_check_registration_assertion('identity.registration.asserted',
+                jsonb_build_object(
+                    'plaintext_twin', 'Patient registered (standard registration)',
+                    'payload', jsonb_build_object(
+                        'class', 'standard',
+                        'search', jsonb_build_object(
+                            'query', v_query,
+                            'displayed', jsonb_build_array(),
+                            'incomplete', false))));
+            RAISE EXCEPTION 'FAIL: a term-less search (%) was accepted', v_label;
+        EXCEPTION WHEN others THEN
+            IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;
+            IF position('a search with no terms is not a search' in SQLERRM) = 0 THEN
+                RAISE EXCEPTION 'FAIL: wrong refusal for a term-less search (%): %', v_label, SQLERRM;
+            END IF;
+        END;
+    END LOOP;
+END $$;
+
+-- 6. Rule 2f: `displayed` must be PRESENT and an ARRAY of uuid strings. The absent-key
+--    shape is the same three-valued-logic trap as block 5 (`IS DISTINCT FROM` vs `<>` on an
+--    absent key's NULL typeof); the wrong-type and non-uuid-element shapes drive the other
+--    two arms.
+DO $$
+DECLARE
+    v_search jsonb;
+    v_label  text;
+BEGIN
+    FOR v_label, v_search IN VALUES
+        ('displayed absent',   jsonb_build_object(
+                                   'query', jsonb_build_object('name_tokens', jsonb_build_array('smith')),
+                                   'incomplete', false)),
+        ('displayed a string', jsonb_build_object(
+                                   'query', jsonb_build_object('name_tokens', jsonb_build_array('smith')),
+                                   'displayed', to_jsonb('abc'::text),
+                                   'incomplete', false)),
+        ('non-uuid element',   jsonb_build_object(
+                                   'query', jsonb_build_object('name_tokens', jsonb_build_array('smith')),
+                                   'displayed', jsonb_build_array('not-a-uuid'),
+                                   'incomplete', false))
+    LOOP
+        BEGIN
+            PERFORM cairn_check_registration_assertion('identity.registration.asserted',
+                jsonb_build_object(
+                    'plaintext_twin', 'Patient registered (standard registration)',
+                    'payload', jsonb_build_object('class', 'standard', 'search', v_search)));
+            RAISE EXCEPTION 'FAIL: a malformed candidate list (%) was accepted', v_label;
+        EXCEPTION WHEN others THEN
+            IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;
+            IF position('candidate list malformed' in SQLERRM) = 0 THEN
+                RAISE EXCEPTION 'FAIL: wrong refusal for a malformed candidate list (%): %', v_label, SQLERRM;
+            END IF;
+        END;
+    END LOOP;
+END $$;
+
+-- 7. Rule 2g: `incomplete` must be present AND a JSON boolean. The typed check exists to
+--    refuse Postgres's permissive boolean spellings (`"true"`, `1`) that a `::boolean` cast
+--    would silently accept — so those wrong-TYPE shapes are driven here alongside absence.
+DO $$
+DECLARE
+    v_search jsonb;
+    v_label  text;
+    v_base   jsonb := jsonb_build_object(
+                          'query', jsonb_build_object('name_tokens', jsonb_build_array('smith')),
+                          'displayed', jsonb_build_array());
+BEGIN
+    FOR v_label, v_search IN VALUES
+        ('incomplete absent',       NULL::jsonb),
+        ('incomplete string true',  to_jsonb('true'::text)),
+        ('incomplete number one',   to_jsonb(1))
+    LOOP
+        BEGIN
+            PERFORM cairn_check_registration_assertion('identity.registration.asserted',
+                jsonb_build_object(
+                    'plaintext_twin', 'Patient registered (standard registration)',
+                    'payload', jsonb_build_object(
+                        'class', 'standard',
+                        'search', CASE WHEN v_search IS NULL
+                                       THEN v_base
+                                       ELSE v_base || jsonb_build_object('incomplete', v_search)
+                                  END)));
+            RAISE EXCEPTION 'FAIL: a registration with % was accepted', v_label;
+        EXCEPTION WHEN others THEN
+            IF position('FAIL:' in SQLERRM) = 1 THEN RAISE; END IF;
+            IF position('a JSON boolean' in SQLERRM) = 0 THEN
+                RAISE EXCEPTION 'FAIL: wrong refusal for %: %', v_label, SQLERRM;
+            END IF;
+        END;
+    END LOOP;
 END $$;
 
 ROLLBACK;

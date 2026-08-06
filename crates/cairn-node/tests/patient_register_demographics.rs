@@ -226,7 +226,7 @@ async fn a_year_only_birth_date_asserts_year_precision_never_a_fabricated_day() 
     );
 
     let query = SearchQuery::new("Month Only Patient", Some("1980-06"), &[]);
-    let pid = register_patient(
+    let pid_month = register_patient(
         &mut c,
         &sk,
         &kid,
@@ -238,9 +238,40 @@ async fn a_year_only_birth_date_asserts_year_precision_never_a_fabricated_day() 
     .await
     .expect("a year-month birth date is a recognised shape and must be accepted");
     assert_eq!(
-        patient_dob_precision(&c, pid).await.as_deref(),
+        patient_dob_precision(&c, pid_month).await.as_deref(),
         Some("month")
     );
+
+    // And CLOSE THE LOOP (second whole-branch review): the #350 findability guarantee was
+    // proven for names and identifiers but never for the reduced-precision dates this very
+    // test legitimises. Searching the same partial date back through the REAL
+    // `search_patients` entry point must find exactly the chart registered with it —
+    // db/046 pass 2 is an exact string compare, so "1980" finds the year-only chart and
+    // does not sweep in the month-only one, and vice versa.
+    let by_year = search_patients(&c, &SearchQuery::new("", Some("1980"), &[]), "2026-08-05")
+        .await
+        .expect("search succeeds");
+    assert_eq!(
+        by_year.candidates.len(),
+        1,
+        "a year-only registration must be findable by the same year-only date: {by_year:?}"
+    );
+    assert_eq!(by_year.candidates[0].patient_id, pid);
+
+    let by_month = search_patients(
+        &c,
+        &SearchQuery::new("", Some("1980-06"), &[]),
+        "2026-08-05",
+    )
+    .await
+    .expect("search succeeds");
+    assert_eq!(
+        by_month.candidates.len(),
+        1,
+        "a month-only registration must be findable by the same partial date, and the \
+         year-only chart must not leak into it: {by_month:?}"
+    );
+    assert_eq!(by_month.candidates[0].patient_id, pid_month);
 }
 
 #[tokio::test]
@@ -671,10 +702,11 @@ async fn an_identifier_is_asserted_with_no_normalized_form_and_no_profile() {
 //
 // `main.rs`'s `--name` defaults to `""` and is passed through UNCONDITIONALLY as
 // `Some(name.as_str())` — never `None`. So an identifier-only registration through the real
-// CLI reaches `register_patient` as `Some("")`, not `None`. The test above
-// (`neither_name_nor_birth_date_asserts_no_demographic_events`) only ever exercised `None`,
-// the library-caller shape a test finds easy to write but the CLI never actually sends. The
-// two tests below pin the ACTUAL shape.
+// CLI reaches `register_patient` as `Some("")`, not `None`. The pre-review version of this
+// suite covered only the `None` shape (in a since-superseded test — today
+// `an_identifier_only_registration_asserts_an_identifier_and_no_name_or_dob` carries the
+// `None` case), the library-caller shape a test finds easy to write but the CLI never
+// actually sends. The two tests below pin the ACTUAL shape.
 
 #[tokio::test]
 async fn a_blank_empty_string_name_the_live_cli_shape_asserts_no_name_event() {

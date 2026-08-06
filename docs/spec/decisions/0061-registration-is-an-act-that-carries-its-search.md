@@ -17,6 +17,10 @@
   is reported, never implied)
 - **Canonical spec home:** [§5.3](../identity.md#53-registration-classes) /
   [§5.8](../identity.md#58-registration-documentation-workflow-normative)
+- **Errata:** **E1**–**E3**, appended 2026-08-06 after the implementation review found three passages
+  describing code that was never built. Each is a marked blockquote immediately below the passage it
+  corrects, the original wording is preserved above it, and **no decision content changes** — see the
+  errata rule in [README](README.md#rules).
 
 ## Context
 
@@ -99,7 +103,8 @@ some candidate it found, the attestation says so rather than implying the search
 
 ### 3. Strict local submit, lenient remote apply — and the enforcement is deliberately deferred
 
-The precedence rule is enforced at `submit_event` and **not** at `apply_remote_event`.
+The precedence rule, once turned on ([#345](https://github.com/cairn-ehr/cairn-ehr/issues/345)), is
+enforced at `submit_event` and **not** at `apply_remote_event`.
 
 Set-union sync has no ordering guarantee, so a peer's clinical event legitimately arrives *before* the
 registration event that licenses it. A fail-closed remote door would then wedge replication on **entirely
@@ -132,6 +137,25 @@ but not surfaced in any UI yet.
 >    `patient.created` references in `cairn-sync`/`cairn-event`. That is the whole DB-gated suite, and a
 >    mechanical rewrite of 38 fixtures deserves its own review where each converted fixture's intent can be
 >    checked.
+>
+> > **Erratum E1 (2026-08-06) — factual; the decision is unchanged.** The *"37 `patient.created`
+> > references in `cairn-sync`/`cairn-event`"* in item 2 is a **large overcount**, and the figure should
+> > not be planned against. As measured on this branch, those two crates contain **9** textual occurrences
+> > of the string (6 in `cairn-sync`, 3 in `cairn-event`), of which only **5** are event-type literals in
+> > code — the other 4 are prose in comments. `submit_patient_created` appears in **neither** crate: all
+> > 19 of its uses are `cairn-node` tests, already inside the ~83-call-site / ~38-file figure, so any
+> > count combining the two was double-counting the same call sites.
+> >
+> > The more useful correction is what those 5 literals *are*, since it changes the shape of the work and
+> > not just its size. `cairn-event` has **no Postgres dependency at all** — its 3 occurrences are
+> > CBOR/serialization fixtures in which the event-type string is arbitrary and nothing is ever submitted.
+> > In `cairn-sync`, two are bench/seed emitters and one is a test-helper body, and `emit_event` persists
+> > through a raw `INSERT INTO event_log` rather than through `submit_event` — which is where decision 3
+> > places the precedence rule. So the rule as specified does not reach these crates the way a reader of
+> > *"plus 37 references"* would reasonably assume; whether #345 also retires the event-type *name* in
+> > fixtures is a separate scoping choice, and one it should make deliberately rather than inherit from a
+> > number. Item 2's **conclusion** is untouched: #345 remains a whole-suite rewrite deserving its own
+> > review, on the strength of the ~83/~38 `cairn-node` figure, which this erratum does not disturb.
 >
 > Tracked as [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345).
 >
@@ -182,6 +206,17 @@ registrar key. When the registrar signs, the existing binding makes the claim un
 classifier grades it `Attested`. When they cannot, the event records `Device` — *authored at this node,
 registrar unattributed* — never a guess (principle 4's explicit unknown), composing into the §5.7/§5.10
 trust projection with **no new stream**.
+
+> **Erratum E2 (2026-08-06) — factual; the decision is unchanged.** *"The registration path takes an
+> optional registrar key"* describes a path that **was never built**. `patient-register` has no such flag,
+> `register_patient` takes no attester parameter, and there is no `Attested` registration anywhere in the
+> shipped slice: **every** registration it authors records `Device`. What this section *decides* — no floor
+> change, no new authorship rule, and `Device` rather than a guess when the registrar is unattributed —
+> stands exactly as written, and the floor half of it is real (`db/005`'s unconditional
+> `cairn_authorship_bound`). Only the claim that the opt-in half already exists is wrong. The attested path
+> is future work, tracked as [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) (`identify-patient`
+> already carries the attester plumbing to mirror); nothing reading this ADR may assume it until #359
+> closes.
 
 **Wanting attested registrations is policy, not mechanism** (principle 9). A deployment that requires it
 expresses it as [ADR-0024](0024-hard-policy-expression-the-policy-assertion-stream.md) hard policy or a
@@ -246,9 +281,10 @@ side did not trim either, so leaving the stored side untrimmed merely kept the t
 together. The maintainer's fix is to trim BOTH sides — `crates/cairn-node/src/patient/register.rs`'s
 `supplied_identifiers` on the way in, `crates/cairn-patient-search/src/query.rs`'s `SearchQuery::new` on the
 way out — matching what `birth_date` already does one field over
-(`crates/cairn-patient-search/src/query.rs:84-87`: *"a clerk's stray leading/trailing space … must not
-silently defeat it"*). There is no principled reason a pasted identifier should be held to a laxer standard
-than a typed date; the earlier asymmetry was an oversight, not a considered distinction.
+(`SearchQuery::new` in `crates/cairn-patient-search/src/query.rs`: *"a clerk's stray leading/trailing
+space … must not silently defeat it"*). There is no principled reason a pasted identifier should be held
+to a laxer standard than a typed date; the earlier asymmetry was an oversight, not a considered
+distinction.
 
 This closes a real cross-gesture miss, not a hypothetical one: a clerk pastes an MRN card into
 `patient-register --identifier "MRN= 12345"` (trailing space intact, as pasted), the chart is created and
@@ -334,6 +370,15 @@ differently: the matcher re-runs on every new evidence assertion, i.e. **search-
   ([§1.2](../vision.md#12-the-paper-parity-test-normative)) budgets at ≤ 5 s to find an existing chart and
   ≤ 20 s to register a new one. The interactive measurement is owed by the first slice with a runnable
   surface; the CLI slice measures the node-tier write cost only.
+
+  > **Erratum E3 (2026-08-06) — factual; the decision is unchanged.** *"the CLI slice measures the
+  > node-tier write cost"* describes work that **was not done**: nothing is wired into `patient-register`,
+  > no results artifact exists, and `db/044`'s `gesture_kind` CHECK (`signoff`, `cease`) would refuse a
+  > registration gesture row outright until an additive migration widens it. **BOTH** halves of the §1.2
+  > measurement are therefore owed — the interactive half by the first slice with a runnable surface, the
+  > node-tier write-cost half as [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360). The budget
+  > itself (≤ 5 s to find an existing chart, ≤ 20 s to register a new one) is unchanged; only the claim
+  > that half of it had already been measured is wrong.
 
 **The bet.** That an honest, *advisory* funnel plus a named-candidate record beats an enforcing one. The
 search never blocks, never vetoes and never auto-decides, because a missed candidate produces a **false

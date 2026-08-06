@@ -446,8 +446,9 @@ pub async fn register_patient(
 
     // The identifiers to assert, decided BEFORE any HLC tick (same discipline as the dob
     // precision above) so the number of ticks matches the number of events exactly. See
-    // `supplied_identifiers` for the blank/duplicate rules and for why the values are NOT
-    // trimmed on their way into the record.
+    // `supplied_identifiers` for the blank/duplicate rules and for why the surviving values
+    // are asserted TRIMMED (final review N3 — both sides trim, so a later search on the
+    // same identifier matches bit-for-bit).
     let identifiers = supplied_identifiers(&query.identifiers);
 
     // Tick the HLC once per event actually being authored, in submission order: the

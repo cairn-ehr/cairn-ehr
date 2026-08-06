@@ -1646,6 +1646,22 @@ async fn main() -> anyhow::Result<()> {
             }
             let query =
                 cairn_patient_search::SearchQuery::new(&name, birth_date.as_deref(), &identifiers);
+            // Fail cheap on "nothing to search on" too — the same pre-I/O discipline as the
+            // two checks above, and the `validate_basis` fix on `register-john-doe`. Without
+            // this, a bare `patient-register` unseals the key, enrolls the actor and ticks an
+            // HLC before the db/045 floor refuses the term-less search inside the
+            // transaction. `is_empty` is the already-tested pure rule the search
+            // short-circuit and the floor both key off; this only moves the refusal to the
+            // cheapest point. (A STANDARD registration with no searchable terms cannot
+            // exist — that is what `register-john-doe` is for.)
+            if query.is_empty() {
+                anyhow::bail!(
+                    "nothing to search on — a standard registration must record the search \
+                     that preceded it (§5.8), so provide at least one of --name, \
+                     --birth-date, or --identifier (an unidentified patient is \
+                     `register-john-doe`)"
+                );
+            }
 
             let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
             let kid = hex::encode(sk.verifying_key().to_bytes());

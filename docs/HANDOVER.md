@@ -21,8 +21,10 @@ search, a pure read-model crate, two CLI verbs, and John Doe re-expressed onto t
    (its commands are verified working) and record into a dated copy of `TEMPLATE.md`. Only the
    *write* half is measured so far — median 222 ms, in
    `results/2026-08-03-node-tier-write-cost.md`, which says **PARTIAL** in its title for this reason.
-   Slice 63 owes the same interactive half for registration (budget: ≤ 5 s to find an existing chart,
-   ≤ 20 s to register a new one).
+   Slice 63 owes BOTH halves for registration (budget: ≤ 5 s to find an existing chart, ≤ 20 s to
+   register a new one) — the interactive half by the first runnable surface, and the node-tier
+   write-cost half as [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) (nothing is wired;
+   db/044's `gesture_kind` CHECK refuses a registration row until widened).
 2. **The accessibility pass** — a live screen-reader run (VoiceOver) through the runbook's eight
    checks, keyboard-only. Run `cargo run -p cairn-gui-tauri -- --mock --patient
    00000000-0000-0000-0000-000000000001`; the fixture chart deliberately carries a cross-patient
@@ -169,7 +171,17 @@ invariant is convention-plus-one-test, not structural — make the constructor t
 [#356](https://github.com/cairn-ehr/cairn-ehr/issues/356) (two stale `design §N` citations, unrelated
 files, found by the same review sweep), [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357)
 (`cairn_search_candidates` has no result-set ceiling, no guard and no index-backed pass — a common
-surname can print thousands of candidates).
+surname can print thousands of candidates). The second whole-branch review (2026-08-06, PR #358)
+added four more: [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) (the optional
+registrar/attester key ADR-0061 decision 4 described was never built — recorded as ADR-0061 **erratum
+E2**, appended below the original wording rather than replacing it, per the new appended-errata rule in
+`docs/spec/decisions/README.md`; the decision itself is unchanged),
+[#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) (the node-tier write-cost §1.2 measurement
+is not wired; db/044's `gesture_kind` CHECK must be widened first),
+[#361](https://github.com/cairn-ehr/cairn-ehr/issues/361) (db/045 rule 2e accepts an identifier term
+with a blank/absent `system` that pass 1 can never match — fold into the #353 audit), and
+[#362](https://github.com/cairn-ehr/cairn-ehr/issues/362) (`matched_pass` is computed and discarded,
+so the identifier match can be buried in UUID display order).
 
 ---
 
@@ -522,7 +534,7 @@ ADR before reopening any of these.
 | [0058](spec/decisions/0058-grade-gated-teffective-ceiling.md) | Grade-gated `t_effective` ceiling: a born `clock_grade` bounds the ceiling's rejecting power — `self-asserted`/`unknown` flag-never-reject (principle-4 fix for slow/dead clocks), remote door admits-and-flags never rejects (closes a sync-wedge DoS), interval derived not stored, mint constrained to self-asserted, gate-effect-not-presence; `cairn_clock_health` honest-assembly read; corrects ADR-0027 §6 `upper=RTC`→`RTC+W` | §3.6/§3.17 (refines 0003/0027; upholds 0051/0056) |
 | [0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) | Medication drug-identity coding (drug-axis companion to 0025): anchor on `drugref`'s immortal `moiety_uuid` (INN is display, never key); structured `substance.coding {system, code, display}` **replacing** the reserved `inn_code` slot; separately-authored inline-or-overlay coding act (`clinical.medication-coding.asserted` + `-correction.asserted`); **advisory + honest-degrading** — drugref-absent nodes still read/sync/reconcile, and the §5.9 safety class is **captured pre-seal on the coding node and carried**, never re-derived by the reader; dup-key on `(system, code)`, closing coded↔coded only; inline shape shipped as code slice 6a 2026-07-27 (ROADMAP Slice 56), the coding-overlay event types are slice 6b | §3.16/§3.3 (refines 0025/0047; applies 0007/0014/0052/0057) |
 | [0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md) | Partial validity: a defect on one element of a composite clinical object never invalidates the others — never refuse the whole for a defect in a part; partial completion must be REPORTED, never implied; the exclusion must name what would repair it; the sole admissible whole-operation refusal is "is this the same object the human reviewed?"; cancellation needs an owner and a rationale, and only a clinical actor may author one (local-authoring rule, never a wire rule); transaction scope must match clinical atomicity. Framing: *the system may fail to record an order; it may never cancel one* | §1.2 (corollary of principle 3; applies principle 4 + 0007/0047/0049) |
-| [0061](spec/decisions/0061-registration-is-an-act-that-carries-its-search.md) | Registration is an act that carries its search: one `identity.registration.asserted` type with §5.3's three classes so the precedence rule has no "unless"; the attestation **names** the displayed candidates (a count cannot separate "the UI failed" from "the search failed"); strict local submit / lenient remote apply with **enforcement deferred to #345** — the funnel is complete but not yet unbypassable; gating a standard registration on a bound human author is **rejected** (blocks care documentation, pushes named patients through John Doe, leaves no forensic record; §5.11 — a grade, not a gate); the body is not born-sealed, so rung-2 erasure must reach attestations naming a candidate; the typed name/DOB are asserted `registrar-entered` (`patient-stated` would often be a precise untruth); John Doe asserts a callsign and no name/DOB — symmetric rule, asymmetric content | §5.3/§5.8 (applies principles 2/3/4 and 0014/0022/0048/0051/0060; refines none) |
+| [0061](spec/decisions/0061-registration-is-an-act-that-carries-its-search.md) | Registration is an act that carries its search: one `identity.registration.asserted` type with §5.3's three classes so the precedence rule has no "unless"; the attestation **names** the displayed candidates (a count cannot separate "the UI failed" from "the search failed"); strict local submit / lenient remote apply with **enforcement deferred to #345** — the funnel is complete but not yet unbypassable; gating a standard registration on a bound human author is **rejected** (blocks care documentation, pushes named patients through John Doe, leaves no forensic record; §5.11 — a grade, not a gate); the body is not born-sealed, so rung-2 erasure must reach attestations naming a candidate; the typed name/DOB are asserted `registrar-entered` (`patient-stated` would often be a precise untruth); John Doe asserts a callsign and no name/DOB — symmetric rule, asymmetric content | §5.3/§5.8 (applies principles 2/3/4 and 0014/0022/0048/0051/0052/0053/0058/0060; refines none) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

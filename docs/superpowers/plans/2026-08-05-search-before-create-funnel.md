@@ -32,6 +32,9 @@ PL/pgSQL, `serde_json`, `uuid`.
   `cairn_patient_has_events` or touch `db/005`'s step ordering here.
 - **NO authorship gate.** `--attester-key` is optional; a standard registration with no human author
   must SUCCEED (graded `Device`). See spec §2.6 — this is a decision, not an oversight.
+  *(Corrected after implementation: the optional `--attester-key` itself was never built — every
+  registration the shipped slice authors is graded `Device`; the attested path is
+  [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359). The no-gate decision stands.)*
 - **`search.displayed` MAY be empty** — the normal case for a genuinely new patient.
 - **UUIDs bind as text.** `cairn-node` does not enable `tokio-postgres`'s `with-uuid-1`, so a `Uuid`
   parameter has no `ToSql`. Bind `&uuid.to_string()` and cast in SQL: `$1::text::uuid`. Cast UUID
@@ -1817,3 +1820,6 @@ CLI-only, so it measures the **node-tier write cost** as Slices 61/62 did (`cair
 existing `ui_timing`/gesture-timing capture), and states the interactive half as owed. If a
 measured figure falls outside the budget, **that is the finding** — file it; do not move the
 budget to fit.
+*(Corrected after implementation: the write-cost measurement was not wired either — `db/044`'s
+`gesture_kind` CHECK would refuse a registration row until widened. Both halves are owed;
+the node-tier half is [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360).)*

@@ -38,12 +38,16 @@ use uuid::Uuid;
 /// is the John-Doe-registration overlay the callsign test composes onto (mirrors
 /// `john_doe.rs`'s `OVERLAY_TABLES`); `chart_dispute` backs the `chart_trust` `under-review`
 /// row `a_candidate_carries_name_age_trust_and_last_activity` asserts against;
-/// `name_repudiation` backs `a_repudiated_only_name_reads_as_withheld_not_incomplete`.
-const EXTRA_TABLES: [&str; 4] = [
+/// `name_repudiation` backs `a_repudiated_only_name_reads_as_withheld_not_incomplete`;
+/// `patient_registration` is written by the John-Doe registrations this suite performs
+/// (`register_john_doe` authors the §5.3 birth act since #344) — truncated for the same
+/// leave-no-residue discipline as the rest, even though no test here reads it.
+const EXTRA_TABLES: [&str; 5] = [
     "patient_name",
     "chart_identity_state",
     "chart_dispute",
     "name_repudiation",
+    "patient_registration",
 ];
 
 /// Submit one §4.4 identifier assertion for `patient`, built by the typed builder.
@@ -230,6 +234,177 @@ async fn the_name_token_pass_finds_a_chart_by_one_shared_token() {
         rows,
         vec![(p, "name".to_string())],
         "the name pass must find the chart by ONE shared token"
+    );
+}
+
+#[tokio::test]
+async fn nfc_normalisation_matches_composed_and_decomposed_unicode_forms() {
+    // db/046 calls its NFC normalisation "load-bearing, not decoration" — without it a
+    // composed and a decomposed "José" are different byte strings, different tokens, and
+    // the chart is silently unfindable. Until this test (second whole-branch review),
+    // nothing drove that claim: deleting `normalize(..., NFC)` from either side of pass 3
+    // left every test green. BOTH directions are driven because each guards a different
+    // side of the join — a decomposed QUERY against a composed stored name exercises the
+    // query-side normalize (composed input is already NFC, so the stored side is identity
+    // there), and a composed query against a DECOMPOSED stored name exercises the
+    // stored-side normalize.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Composed: U+00E9 (é as one code point). Decomposed: 'e' + U+0301 combining acute.
+    // Derived from each other at runtime rather than two eyeball-identical literals, so a
+    // reader can see they differ only in normal form.
+    let composed = "jos\u{00e9}";
+    let decomposed = "jose\u{0301}";
+    assert_ne!(composed, decomposed, "the two forms differ as byte strings");
+
+    let p_composed = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p_composed,
+        1,
+        name_assertion_body("Jos\u{00e9} Silva", Some("legal"), "patient-stated"),
+        render_name_twin("Jos\u{00e9} Silva", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("composed-form name accepted");
+
+    let rows = search_candidates(&c, Some(&[decomposed]), None, None).await;
+    assert_eq!(
+        rows,
+        vec![(p_composed, "name".to_string())],
+        "a decomposed query token must find the composed stored name (query-side NFC)"
+    );
+
+    let p_decomposed = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p_decomposed,
+        2,
+        name_assertion_body("Jose\u{0301} Moreira", Some("legal"), "patient-stated"),
+        render_name_twin("Jose\u{0301} Moreira", Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("decomposed-form name accepted");
+
+    // NOTE the deliberate asymmetry with the first assertion above, which could use exact
+    // equality only because `p_composed` was then the sole chart in the table. Both charts
+    // now exist and BOTH names carry the same first token in different normal forms, so
+    // they normalise to the identical NFC token — a composed query legitimately matches the
+    // pair. `contains` is therefore the correct assertion here; "tightening" it into an
+    // `assert_eq!` against a one-element vec would fail on a perfectly correct pass 3.
+    let rows = search_candidates(&c, Some(&[composed]), None, None).await;
+    let found: Vec<Uuid> = rows.iter().map(|(id, _)| *id).collect();
+    assert!(
+        found.contains(&p_decomposed),
+        "a composed query token must find the decomposed stored name (stored-side NFC): {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_identifier_value_under_a_different_system_does_not_match() {
+    // The negative half of pass 1's (system, value) pair — nothing drove it until the
+    // second whole-branch review. If the `pi.system = (q ->> 'system')` join arm were
+    // dropped, an MRN query would surface every chart whose Medicare number (or any other
+    // system's value) happens to collide on the digits — and that unrelated chart would be
+    // signed into the registration's permanent displayed list. Advisory surface, permanent
+    // record: the false candidate is cheap to dismiss on screen and impossible to unsign.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    let a = IdentifierAssertion {
+        value: "12345",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    submit_identifier(&c, &sk, &kid, p, 1, &a)
+        .await
+        .expect("identifier assertion accepted");
+
+    let other_system = serde_json::json!([{"system": "Medicare", "value": "12345"}]).to_string();
+    let rows = search_candidates(&c, None, None, Some(&other_system)).await;
+    assert!(
+        rows.is_empty(),
+        "the same value under a DIFFERENT system is a different identifier and must not \
+         match: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_reduced_precision_dob_matches_that_stored_value_and_nothing_else() {
+    // `SearchQuery`'s doc promises: "a reduced-precision query matches a reduced-precision
+    // stored value and nothing else — narrower recall than a range search would give,
+    // never a wrong match." Both halves are driven here (second whole-branch review —
+    // year-only patients were registered elsewhere but never searched back): a "1980"
+    // query finds the year-precision chart and does NOT find the day-precision
+    // "1980-01-01" chart, and vice versa. Pass 2 is a deliberately parse-free exact string
+    // compare (db/016 discipline), so this is exactly what it should do.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p_year = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p_year,
+        1,
+        dob_assertion_body("1980", "year", None, "patient-stated"),
+        render_dob_twin("1980", "year", "patient-stated"),
+    )
+    .await
+    .expect("year-precision dob accepted");
+
+    let p_day = Uuid::now_v7();
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p_day,
+        2,
+        dob_assertion_body("1980-01-01", "day", None, "patient-stated"),
+        render_dob_twin("1980-01-01", "day", "patient-stated"),
+    )
+    .await
+    .expect("day-precision dob accepted");
+
+    let year_rows = search_candidates(&c, None, Some("1980"), None).await;
+    assert_eq!(
+        year_rows,
+        vec![(p_year, "dob".to_string())],
+        "a year-only query matches the year-only stored value and must NOT sweep in the \
+         day-precision chart"
+    );
+
+    let day_rows = search_candidates(&c, None, Some("1980-01-01"), None).await;
+    assert_eq!(
+        day_rows,
+        vec![(p_day, "dob".to_string())],
+        "a day-precision query matches the day-precision stored value and must NOT match \
+         the year-only chart"
     );
 }
 
