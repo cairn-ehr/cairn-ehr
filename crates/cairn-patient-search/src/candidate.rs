@@ -242,6 +242,14 @@ mod tests {
             "\"under-review\"",
             "wire spelling and as_str must be the same token"
         );
+        // And the READ side, pinned separately: the picker window and the native API will
+        // both deserialize this vocabulary, and a change that broke only the read direction
+        // would sail past a write-only assertion.
+        assert_eq!(
+            serde_json::from_str::<TrustState>("\"under-review\"").unwrap(),
+            TrustState::UnderReview,
+            "the wire token must read back as the variant that wrote it"
+        );
     }
 
     #[test]

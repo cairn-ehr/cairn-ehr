@@ -173,8 +173,9 @@ files, found by the same review sweep), [#357](https://github.com/cairn-ehr/cair
 (`cairn_search_candidates` has no result-set ceiling, no guard and no index-backed pass — a common
 surname can print thousands of candidates). The second whole-branch review (2026-08-06, PR #358)
 added four more: [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) (the optional
-registrar/attester key ADR-0061 decision 4 described was never built — ADR text corrected in the
-follow-up PR, as an erratum of fact: the decision itself is unchanged),
+registrar/attester key ADR-0061 decision 4 described was never built — recorded as ADR-0061 **erratum
+E2**, appended below the original wording rather than replacing it, per the new appended-errata rule in
+`docs/spec/decisions/README.md`; the decision itself is unchanged),
 [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) (the node-tier write-cost §1.2 measurement
 is not wired; db/044's `gesture_kind` CHECK must be widened first),
 [#361](https://github.com/cairn-ehr/cairn-ehr/issues/361) (db/045 rule 2e accepts an identifier term

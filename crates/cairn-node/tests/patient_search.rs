@@ -296,6 +296,12 @@ async fn nfc_normalisation_matches_composed_and_decomposed_unicode_forms() {
     .await
     .expect("decomposed-form name accepted");
 
+    // NOTE the deliberate asymmetry with the first assertion above, which could use exact
+    // equality only because `p_composed` was then the sole chart in the table. Both charts
+    // now exist and BOTH names carry the same first token in different normal forms, so
+    // they normalise to the identical NFC token — a composed query legitimately matches the
+    // pair. `contains` is therefore the correct assertion here; "tightening" it into an
+    // `assert_eq!` against a one-element vec would fail on a perfectly correct pass 3.
     let rows = search_candidates(&c, Some(&[composed]), None, None).await;
     let found: Vec<Uuid> = rows.iter().map(|(id, _)| *id).collect();
     assert!(

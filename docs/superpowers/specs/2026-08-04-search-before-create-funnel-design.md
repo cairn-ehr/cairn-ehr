@@ -98,12 +98,11 @@ enforced at `submit_event` and **not** at `apply_remote_event`.
 >    twin-check row. It is an unfloored registration act. It must be **retired** by the same change
 >    that turns the rule on — grandfathering it as a permitted first event would put back exactly the
 >    "unless" §2.2 exists to remove.
-> 2. **The rule converts ~83 submit call sites across ~38 `cairn-node` test files**, plus a handful
->    of `patient.created` references in `cairn-sync`/`cairn-event` (8 literal event-type strings, 13
->    counting `submit_patient_created`-style helper names — the "37" this section originally stated
->    was a miscount; the bulk of the crate-wide total lives in the `cairn-node` tests the ~83 figure
->    already covers). Only 4 files use the existing `submit_patient_created` helper; the rest build
->    bodies inline. That is the whole DB-gated suite.
+> 2. **The rule converts ~83 submit call sites across ~38 `cairn-node` test files**, plus a *very
+>    small* number of `patient.created` references in `cairn-sync`/`cairn-event` — the "37" this
+>    section originally stated was a large overcount (see the correction note below). Only 4 files use
+>    the existing `submit_patient_created` helper; the rest build bodies inline. That is the whole
+>    DB-gated suite.
 >
 > A mechanical rewrite of 38 test fixtures deserves its own review, where each converted fixture's
 > intent can be checked. Bundled into this slice it would swamp ~8 files of actual design. So this
@@ -112,6 +111,20 @@ enforced at `submit_event` and **not** at `apply_remote_event`.
 > **The funnel is therefore complete but not yet unbypassable when this slice lands.** A client can
 > still mint a chart by asserting a name. Stated plainly rather than implied — the same discipline
 > ADR-0060 decision 2 applies to clinical output.
+
+> **Corrected after implementation (second whole-branch review).** Item 2's *"37 `patient.created`
+> references in `cairn-sync`/`cairn-event`"* was a large overcount, and a first pass at correcting it
+> ("8 literal strings, 13 counting helper names") was wrong too — recorded here so #345 is not scoped
+> from either figure. As measured: those two crates hold **9** textual occurrences (6 `cairn-sync`, 3
+> `cairn-event`), of which only **5** are event-type literals in code; the other 4 are comments.
+> `submit_patient_created` appears in **neither** crate — all 19 uses are `cairn-node` tests already
+> counted by the ~83/~38 figure, so any combined total double-counted them. What matters more than the
+> size is the shape: `cairn-event` has **no Postgres dependency**, so its 3 occurrences are
+> CBOR/serialization fixtures that never submit anything, and `cairn-sync`'s `emit_event` persists via
+> a raw `INSERT INTO event_log` rather than `submit_event`, where §2.2 places the precedence rule.
+> Whether #345 also retires the event-type *name* in fixtures is a separate, deliberate scoping call.
+> The ~83/~38 `cairn-node` figure — the reason this is a separate slice — is unaffected. Mirrored as
+> [ADR-0061](../../spec/decisions/0061-registration-is-an-act-that-carries-its-search.md) erratum E1.
 
 Set-union sync has no ordering guarantee, so a peer's clinical event legitimately arrives *before*
 the registration event that licenses it. A fail-closed remote door would then wedge replication on

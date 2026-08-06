@@ -11,6 +11,16 @@ was made — the context, the choice, and its consequences. Aspect documents in
   the new one `Supersedes: ADR-NNNN`. This is the project's own *"never erase, always overlay"*
   ([identity §5.1](../identity.md#51-linkage-layer-never-merge-always-link)) applied to its
   documentation. (Typo/clarity fixes that don't change meaning are fine.)
+- **Errata are appended, never substituted.** An accepted ADR sometimes turns out to state something
+  factually false *about the code* — describing a parameter that was never built, a count that was
+  miscounted, a measurement that was never taken. That is neither a reversal (no decision changes) nor a
+  typo, so neither rule above covers it. Correct it by **appending a marked erratum**: a blockquote headed
+  **`Erratum EN (date) — factual; the decision is unchanged`**, placed immediately below the passage it
+  corrects, naming the false claim, stating the fact, and pointing at the tracking issue. **Leave the
+  original wording standing above it** and list the errata in the ADR header. Never silently substitute the
+  corrected text — a reader must be able to see what the record actually said when it was accepted, which
+  is the point of immutability. Anything that changes a *decision* remains a superseding ADR, never an
+  erratum. First applied in [ADR-0061](0061-registration-is-an-act-that-carries-its-search.md) (E1–E3).
 - **Numbered and dated.** `NNNN-short-slug.md`, zero-padded, allocated in order.
 - **Read before reopening.** Before reopening a settled question, read its ADR — the rationale is
   there on purpose.
