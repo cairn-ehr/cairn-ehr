@@ -9,6 +9,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -98,6 +102,8 @@ async fn happy_path_and_retained_set() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A legal, a maiden, and an alias — ALL retained as evidence; current = the legal.
     for (val, use_, prov, wall) in [
@@ -151,6 +157,8 @@ async fn recency_first_within_legal_diverges_from_dob() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Old, HIGHER-provenance legal name (document-verified, wall=1).
     submit_field(
@@ -214,6 +222,8 @@ async fn no_legal_name_falls_back_to_most_recent_any_use() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Unidentified patient: only a triage alias exists — it MUST still display (paper-parity).
     submit_field(
@@ -249,6 +259,8 @@ async fn legal_name_takes_over_from_a_newer_alias() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A legal name asserted EARLY (wall=1), then a NEWER alias (wall=2). The legal tier
     // always outranks any non-legal, so the legal name stays the display winner even
@@ -298,6 +310,8 @@ async fn legal_tier_is_case_insensitive() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // `use` is an OPEN, author-chosen vocabulary — a peer node, a FHIR import, or a UI
     // may legitimately author the legal-use token with different casing ("Legal", "LEGAL").
@@ -363,6 +377,8 @@ async fn set_union_reassertion_is_idempotent() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // The same (use, value) re-asserted at a later HLC stays ONE member (its representative
     // advances); never a duplicate row.
@@ -402,6 +418,8 @@ async fn cross_field_isolation_with_dob() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A name event must NOT create a patient_demographic row; a dob event must NOT create
     // a patient_name row. The two projections are blind to each other's fields.
@@ -469,6 +487,9 @@ async fn floor_rejects_empty_name_value() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: deliberately NOT registered. This is a refusal case, and every floor check it
+    // exercises runs BEFORE the precedence rule (db/005 step 8b) — so the refusal message is
+    // still the one under test, and "nothing was appended" stays literally true.
 
     // The generic §4.2 floor rejects an empty value — for field="name" too (no name-specific
     // floor code exists; the generic invariant covers it). Nothing is appended or projected.

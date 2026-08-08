@@ -10,6 +10,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `register_pair` (#345, #120/#327 — one copy; `auto_apply.rs` needs
+// the identical helper, so it lives in `common` rather than in either suite).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -86,6 +90,9 @@ async fn accepted_proposal_becomes_attested_link_and_projects_person() {
     let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_h, kid_h) = setup(&c).await;
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
+    // projection seed, not an event, so both charts are registered first.
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     let eid = apply_accepted_proposal(
@@ -171,6 +178,9 @@ async fn pair_passed_in_reverse_order_still_applies() {
     let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_h, kid_h) = setup(&c).await;
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
+    // projection seed, not an event, so both charts are registered first.
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     // Call with the arguments deliberately reversed.
@@ -218,6 +228,9 @@ async fn re_applying_is_idempotent_no_second_link_event() {
     let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_h, kid_h) = setup(&c).await;
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
+    // projection seed, not an event, so both charts are registered first.
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     // First apply succeeds.
@@ -274,7 +287,9 @@ async fn non_human_attester_is_refused_and_nothing_leaks() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
-    let (_sk_h, _kid_h) = setup(&c).await;
+    // The human key is bound here (rather than `_`-prefixed) only to REGISTER the two charts:
+    // the refusal under test is about who may author the LINK, not about who made the charts.
+    let (sk_h, kid_h) = setup(&c).await;
     // Enroll an AGENT (non-human) and try to apply with its key: the db/005 gate must
     // refuse the identity link (identity links cannot be forged without a human vouch).
     let (sk_a, kid_a) = generate_key().unwrap();
@@ -283,6 +298,9 @@ async fn non_human_attester_is_refused_and_nothing_leaks() {
         &[&kid_a],
     ).await.unwrap();
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
+    // projection seed, not an event, so both charts are registered first.
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     let r = apply_accepted_proposal(
@@ -331,6 +349,9 @@ async fn pending_proposal_is_not_applied() {
     let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_h, kid_h) = setup(&c).await;
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
+    // projection seed, not an event, so both charts are registered first.
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "pending").await;
 
     let r = apply_accepted_proposal(

@@ -11,6 +11,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -121,6 +125,8 @@ async fn assert_appears_as_current() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -162,6 +168,8 @@ async fn asserted_at_is_the_convergent_hlc_wall_not_the_local_fold_clock() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -203,6 +211,8 @@ async fn empty_term_is_rejected_by_the_floor() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Bypass the Rust validate_term guard: hand-build a whitespace-only-term event
     // and submit it directly, proving the DB FLOOR rejects it (defense in depth).
@@ -231,6 +241,8 @@ async fn empty_info_source_is_rejected_by_the_floor() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Bypass the Rust guard: hand-build a whitespace-only-info_source event (term
     // stays valid) and submit it directly, proving the DB FLOOR rejects it (defense
@@ -296,6 +308,8 @@ async fn cease_flips_current_to_past() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -349,6 +363,8 @@ async fn orphan_cessation_has_no_row_then_resolves_on_assert_arrival() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = Uuid::now_v7();
 
     // Cessation authored BEFORE its assert exists locally (offline-first).
@@ -408,6 +424,8 @@ async fn two_active_same_term_are_flagged() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Same drug, asserted twice (two clinicians) — differing case/whitespace must still collide.
     let mut a1 = sample_input();
@@ -433,6 +451,8 @@ async fn ceasing_one_clears_the_flag() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let m1 = assert_medication(
         &mut c,
@@ -491,6 +511,8 @@ async fn distinct_terms_are_not_flagged() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let mut a1 = sample_input();
     a1.term = "atorvastatin";

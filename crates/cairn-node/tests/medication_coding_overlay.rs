@@ -14,6 +14,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -108,9 +112,10 @@ async fn submit_raw_overlay(
     payload: serde_json::Value,
 ) -> Result<u64, tokio_postgres::Error> {
     let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let patient = Uuid::now_v7();
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
-        patient_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
         event_type: event_type.into(),
         schema_version: schema_version.into(),
         hlc,
@@ -123,7 +128,20 @@ async fn submit_raw_overlay(
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     match door {
-        "submit_event" => seal_and_submit(c, sk, body).await,
+        // #345: this helper has always minted the chart it writes to, so it owns making that
+        // chart exist — but only the LOCAL door needs it. `apply_remote_event` is lenient about
+        // the precedence rule by design (ADR-0061 decision 3), and registering there would add a
+        // local write to a test about the remote path.
+        //
+        // The registration lives INSIDE this arm rather than behind a second `door ==` test
+        // further up, so the decision to register and the decision to route are one decision. A
+        // renamed or aliased door name could otherwise satisfy one and not the other, and the
+        // submit would then fail with "no chart exists for patient …" instead of the malformed-
+        // payload refusal under test.
+        "submit_event" => {
+            common::submit_registration(c, sk, kid, patient, 0).await;
+            seal_and_submit(c, sk, body).await
+        }
         _ => {
             let signed = sign(&body, sk).unwrap();
             c.execute(&format!("SELECT {door}($1)")[..], &[&signed.signed_bytes])
@@ -527,6 +545,8 @@ async fn an_overlay_codes_a_previously_uncoded_thread() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
     assert_eq!(coding_state(&c, med).await, None, "uncoded to begin with");
 
@@ -560,6 +580,8 @@ async fn a_correction_replaces_the_claim() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
     let coding_event = cairn_node::medication::code_medication(
         &mut c,
@@ -614,6 +636,8 @@ async fn a_strike_nulls_the_anchor_and_flags_the_row() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
     let coding_event = cairn_node::medication::code_medication(
         &mut c,
@@ -661,6 +685,8 @@ async fn a_lower_hlc_overlay_arriving_later_does_not_win() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
 
     // Build TWO coding bodies by hand so the HLCs are ours to order, then submit the
@@ -715,6 +741,8 @@ async fn an_overlay_for_an_absent_thread_still_lands() {
     // to the coding event's own patient claim (medication_coding.patient_id is NOT NULL).
     let orphan = Uuid::now_v7();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     cairn_node::medication::code_medication(
         &mut c,
         &sk,
@@ -757,6 +785,10 @@ async fn an_orphan_coding_claims_the_thread_for_its_chart() {
     // admitted and the two projections would disagree about the thread's chart forever.
     let orphan = Uuid::now_v7();
     let coder_patient = Uuid::now_v7();
+    // #345: the coder's chart is registered — the coding below is a real local write, and the
+    // point of the test is which CHART the orphan thread ends up filed under, which presupposes
+    // that chart exists.
+    common::submit_registration(&c, &sk, &kid, coder_patient, 0).await;
     cairn_node::medication::code_medication(
         &mut c,
         &sk,
@@ -862,6 +894,8 @@ async fn a_struck_coding_stops_winning_the_group_display() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // A vague thread and a coded thread, reconciled into one group. Slice 6a makes the
     // coded member the group's display; after a strike it must stop being preferred, or
@@ -918,6 +952,8 @@ async fn a_struck_thread_returns_to_the_term_dup_key() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Two threads with the SAME term, one coded: they key apart (6a's documented
     // coded<->uncoded blind spot). Striking the coding makes both key on the term, so the
@@ -984,6 +1020,8 @@ async fn a_struck_coding_clears_the_anchor_conflict() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Two DIFFERENTLY-coded threads reconciled into one group raise 6a's advisory
     // anchor-conflict row. Striking one anchor resolves the disagreement honestly — one
@@ -1061,6 +1099,8 @@ async fn the_worklist_distinguishes_never_coded_from_struck() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let never = assert_uncoded(&mut c, &sk, &kid, patient).await;
     let struck_thread = assert_uncoded(&mut c, &sk, &kid, patient).await;
@@ -1123,6 +1163,8 @@ async fn a_ceased_thread_leaves_the_worklist() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_uncoded(&mut c, &sk, &kid, patient).await;
     let listed: i64 = c
         .query_one(
@@ -1200,6 +1242,8 @@ async fn struck_is_arrival_order_independent_against_an_inline_recoding() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // One helper per thread so the two orders are otherwise identical. The strike always
     // carries the LOWER HLC, so the inline coding always WINS — only arrival order differs.
@@ -1273,6 +1317,8 @@ async fn no_row_ever_claims_both_a_live_anchor_and_a_strike() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Exercise every writer of the table: inline (db/031), overlay (db/042 part 5),
     // correction-replacement and correction-strike (db/042 part 6) — plus the ordering
@@ -1345,6 +1391,8 @@ async fn a_struck_member_is_not_listed_as_an_anchor_in_a_conflicted_group() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Three threads reconciled into ONE group: two distinct live anchors (the conflict
     // itself) plus a third whose coding is struck.

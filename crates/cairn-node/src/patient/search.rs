@@ -324,12 +324,17 @@ async fn read_trust_states<C: GenericClient + Sync>(
 /// ISO `YYYY-MM-DD` of `patient_chart.last_activity` for each candidate that HAS a
 /// `patient_chart` row with one set.
 ///
-/// A registration event alone (§5.4 John Doe included) never creates this row —
-/// `patient_chart_apply` is registered only for `patient.created` / `patient.amended` /
-/// `note.added` — so a fresh registration-only chart legitimately has none. That absence is
-/// read here as `None` exactly like every other candidate with no matching row, NOT
-/// distinguished as an error: `last_activity` is an honest "no activity recorded yet",
-/// consistent with `Candidate::last_activity` being `Option`-typed in the shared model.
+/// Since #345 the registration act itself creates this row (`patient_chart_apply` is
+/// registered for `identity.registration.asserted`, `patient.amended` and `note.added`), so a
+/// chart registered moments ago reports its registration date rather than nothing — the birth
+/// of a chart is activity, and an empty column read as "nothing ever happened here".
+///
+/// A row can still be legitimately absent: a chart known only from a peer's replicated
+/// demographic or clinical events, whose registration has not synced yet (the remote door is
+/// lenient by design, ADR-0061 decision 3). That absence is read here as `None` exactly like
+/// every other candidate with no matching row, NOT distinguished as an error: `last_activity`
+/// is an honest "no activity recorded yet", consistent with `Candidate::last_activity` being
+/// `Option`-typed in the shared model.
 async fn read_last_activity<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],

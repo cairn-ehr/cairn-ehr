@@ -92,7 +92,7 @@ BEGIN
     -- below would drive NULLs into this projection and freeze the sync watermark — so a sealed
     -- row projects NOTHING (harmless ciphertext noise; no custody, no leak).
     IF e.sealed THEN RETURN; END IF;
-    IF e.event_type IN ('patient.created', 'patient.amended') THEN
+    IF e.event_type = 'patient.amended' THEN
         -- #157: before overlaying, detect a Byzantine HLC-triple collision against the current
         -- demographic winner and record an advisory signal. Reads the demo_* provenance columns
         -- aliased to the predicate's parameter names; a note-only row has null demo_* → the
@@ -148,6 +148,29 @@ BEGIN
         VALUES (e.patient_id, 1, e.recorded_at, clock_timestamp())
         ON CONFLICT (patient_id) DO UPDATE SET
             note_count    = pc.note_count + 1,
+            last_activity = GREATEST(pc.last_activity, e.recorded_at),
+            updated_at    = clock_timestamp();
+
+    ELSIF e.event_type = 'identity.registration.asserted' THEN
+        -- The chart's BIRTH (§5.3/§5.8, issue #345). Registration took this projection over
+        -- from the retired `patient.created` (db/047), but it is deliberately NOT the same
+        -- write: a registration asserts no demographics, so it materialises the ROW and
+        -- nothing else. Name/dob/sex come from the demographic streams (db/010-014) that
+        -- superseded patient.created's payload; the demo_* provenance columns stay NULL, which
+        -- cairn_hlc_overlay_wins reads as "no winner yet" (its COALESCE(-1) arm), so the first
+        -- real demographic event still wins cleanly against them.
+        --
+        -- last_activity: the birth act IS activity. It is what a candidate list shows as "last
+        -- seen" for a chart registered moments ago and not yet written to — before this branch
+        -- such a chart displayed no date at all, which reads as "nothing ever happened here"
+        -- rather than "created today" (crates/cairn-node/src/patient/search.rs).
+        --
+        -- No #157 HLC-collision probe here, unlike the demographic branch above: this branch
+        -- picks no winner (it writes no demo_* provenance), so there is no ranking for a
+        -- Byzantine triple to corrupt and nothing to signal.
+        INSERT INTO patient_chart AS pc (patient_id, last_activity, updated_at)
+        VALUES (e.patient_id, e.recorded_at, clock_timestamp())
+        ON CONFLICT (patient_id) DO UPDATE SET
             last_activity = GREATEST(pc.last_activity, e.recorded_at),
             updated_at    = clock_timestamp();
     END IF;

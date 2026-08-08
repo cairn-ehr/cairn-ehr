@@ -18,6 +18,10 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -126,6 +130,8 @@ async fn sealed_submit_with_dek_projects_and_stores_custody() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Register this node's X25519 unwrap key so the door can wrap the DEK into custody.
     let secret = derive_unwrap_secret(&sk.to_bytes());
@@ -228,6 +234,8 @@ async fn sealed_submit_without_dek_is_refused_legibly() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let (body, _dek) = sealed_assert_body(&kid, patient, hlc);
@@ -251,6 +259,8 @@ async fn unsealed_clinical_body_is_refused_at_the_strict_door() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let body = unsealed_assert_body(&kid, patient, hlc);
@@ -274,6 +284,8 @@ async fn wrong_dek_is_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let secret = derive_unwrap_secret(&sk.to_bytes());
     c.execute(
@@ -349,6 +361,8 @@ async fn sealed_non_clinical_body_is_refused_at_the_strict_door() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Register the node unwrap key so that — WITHOUT the scope check — the door would run
     // the full sealed path all the way to the projection INSERT that detonates. The scope

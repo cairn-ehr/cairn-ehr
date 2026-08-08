@@ -215,7 +215,7 @@ DECLARE
     n int;
     got uuid;
 BEGIN
-    PERFORM _b5_seed_event(p, 'patient.created', 1000);
+    PERFORM _b5_seed_event(p, 'patient.amended', 1000);
     PERFORM _b5_seed_event(p, 'note.added', 1001);
     PERFORM _b5_seed_event(p, 'note.added', 1002);
 

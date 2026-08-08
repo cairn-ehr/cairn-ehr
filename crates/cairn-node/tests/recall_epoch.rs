@@ -23,6 +23,9 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -131,6 +134,12 @@ async fn superseded_epoch_events_remain_selectable() {
 
     // Epoch A: enroll, author one event while A is the key's unique identity.
     let actor_a = enroll_epoch(&c, &kid, "epoch-a").await;
+    // #345: the chart's registration must precede the notes recorded on it. Authored under
+    // epoch A deliberately, and its id is kept: a chart's birth act is a real event by that
+    // actor, so a recall of epoch A must select it too. That is the property under test working
+    // — a contamination cascade over a recalled actor has to reach everything it wrote,
+    // including the charts it created.
+    let reg = common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let e1 = note(patient, &kid, 1);
     submit(&c, &e1, &sk).await;
 
@@ -140,11 +149,16 @@ async fn superseded_epoch_events_remain_selectable() {
     let e2 = note(patient, &kid, 2);
     submit(&c, &e2, &sk).await;
 
-    // The old epoch's recall set: exactly e1, exactly attributed.
+    // The old epoch's recall set: exactly its own events — the chart's registration and e1 —
+    // each exactly attributed.
+    let mut expected_a = vec![
+        (reg.to_string(), "pinned".to_string()),
+        (e1.event_id.clone(), "pinned".to_string()),
+    ];
+    expected_a.sort(); // epoch_events orders by event_id text; mirror that here
     let a = epoch_events(&c, &kid, "epoch-a").await;
     assert_eq!(
-        a,
-        vec![(e1.event_id.clone(), "pinned".to_string())],
+        a, expected_a,
         "a superseded epoch must keep selecting exactly its own events (issue #99)"
     );
 
@@ -153,6 +167,7 @@ async fn superseded_epoch_events_remain_selectable() {
     // B, so its stamp was written without knowledge of B and cannot be trusted to
     // exclude it here (over-select, never silently miss).
     let mut expected_b = vec![
+        (reg.to_string(), "pre-registration".to_string()),
         (e1.event_id.clone(), "pre-registration".to_string()),
         (e2.event_id.clone(), "pinned".to_string()),
     ];
@@ -187,10 +202,20 @@ async fn ambiguous_attribution_over_selects_never_buries() {
     // Both epochs current for the same key (no revoke): resolution is ambiguous.
     enroll_epoch(&c, &kid, "epoch-a").await;
     enroll_epoch(&c, &kid, "epoch-b").await;
+    // #345: the chart is registered before the note is authored, and the registration is itself
+    // an ambiguous-attribution event — same key, same two current actors — so it belongs in both
+    // recall sets exactly as the note does. (The three apply_remote_event tests below
+    // deliberately do NOT register: the remote door is lenient about the precedence rule by
+    // design, and their charts exist only from a peer's event.)
+    let reg = common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let e1 = note(patient, &kid, 1);
     submit(&c, &e1, &sk).await;
 
-    let expected = vec![(e1.event_id.clone(), "unattributed".to_string())];
+    let mut expected = vec![
+        (reg.to_string(), "unattributed".to_string()),
+        (e1.event_id.clone(), "unattributed".to_string()),
+    ];
+    expected.sort(); // epoch_events orders by event_id text; mirror that here
     assert_eq!(
         epoch_events(&c, &kid, "epoch-a").await,
         expected,
@@ -348,7 +373,11 @@ async fn recall_of_unknown_target_fails_loud() {
     // And a recall of a REAL event still works (the FK does not over-block).
     let (sk, kid) = generate_key().unwrap();
     enroll_epoch(&c, &kid, "epoch-a").await;
-    let e1 = note(Uuid::now_v7(), &kid, 1);
+    // #345: the note needs a chart. Minted here rather than inline in `note(...)` so the
+    // registration and the note name the same one.
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let e1 = note(patient, &kid, 1);
     submit(&c, &e1, &sk).await;
     c.execute(
         "SELECT recall_event($1::text::uuid, 'skill-epoch contamination')",

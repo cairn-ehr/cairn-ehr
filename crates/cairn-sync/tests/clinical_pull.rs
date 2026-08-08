@@ -266,6 +266,61 @@ async fn register_unwrap_key(c: &Client, sk: &SigningKey) {
     .unwrap();
 }
 
+/// HLC wall for the fixture registrations below — mid-2026, comfortably in the past relative to
+/// the real clock the production orchestrators tick from, so a chart's birth act never sorts
+/// after the events authored on it (`patient_registration_current` picks the EARLIEST).
+const REG_WALL: i64 = 1_780_000_000_000;
+
+/// Register a chart so events may be authored about it (§5.3/§5.8, issue #345).
+///
+/// Since #345 the strict door refuses the FIRST event carrying a `patient_id` unless it is a
+/// registration, so every patient these tests author on must be registered first — exactly as a
+/// clerk must make a folder before anything can be filed in it. This is the cairn-sync-side twin
+/// of `cairn-node`'s `tests/common/submit_registration`; it is written out here rather than
+/// shared because `tests/common/` belongs to the other crate's test target.
+///
+/// Deliberately authored on node A only: node B receives it by SYNC, like every other event, so
+/// these tests keep proving that a replicated chart needs no local ceremony (the remote door is
+/// lenient about the precedence rule by design — ADR-0061 decision 3).
+async fn register_chart(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall: i64) {
+    let tokens = [patient.to_string()];
+    let a = cairn_event::registration::RegistrationAssertion {
+        class: cairn_event::registration::RegistrationClass::Standard,
+        basis: None,
+        search: Some(cairn_event::registration::SearchAttestationInput {
+            terms: cairn_event::registration::SearchTerms {
+                name_tokens: &tokens,
+                birth_date: None,
+                identifiers: &[],
+            },
+            displayed: &[],
+            incomplete: false,
+        }),
+    };
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: cairn_event::registration::REGISTRATION_EVENT_TYPE.into(),
+        schema_version: cairn_event::registration::REGISTRATION_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "node-a".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: cairn_event::registration::registration_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("registration accepted");
+}
+
 /// One node's complete medication read-state, rendered to comparable strings:
 /// the event set (ids + content addresses + whether an attestation is held), the
 /// current/past medication views, the group collapse, and the standing vouches.
@@ -462,6 +517,9 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     // --- author a realistic little chart on A through the production orchestrators ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -837,6 +895,9 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
 
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     assert_medication(
         &mut a,
         &sk_d,
@@ -1386,6 +1447,9 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     // --- 1. A seal-submits a medication assert; it projects on A with custody ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -1550,9 +1614,12 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         0,
         "the shred scrubbed A's projection"
     );
+    // Scoped past the chart's registration act (#345): the claim is about what a SHRED does to
+    // the two clinical rows, not about how many events the chart holds in total.
     let a_log_rows: i64 = a
         .query_one(
-            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid \
+             AND event_type <> 'identity.registration.asserted'",
             &[&patient.to_string()],
         )
         .await
@@ -1605,9 +1672,12 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         0,
         "the propagated shred scrubbed B's projection"
     );
+    // Scoped past the registration (#345), like A's count above: the claim is about the two
+    // clinical rows a shred leaves behind, not the chart's total event count.
     let b_log_rows: i64 = b
         .query_one(
-            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid \
+             AND event_type <> 'identity.registration.asserted'",
             &[&patient.to_string()],
         )
         .await
@@ -1722,6 +1792,9 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
 
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -1838,6 +1911,9 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     // A authors one sealed medication assert → a LIVE event_dek row on A.
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -2033,8 +2109,13 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     register_unwrap_key(&b, &sk_b).await;
 
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    // `reset` did RESTART IDENTITY, so this registration takes **seq 1** and every seq
+    // named below counts from there. Insert another event ahead of it and they all shift.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
-    // seq 1: a legit medication, born sealed + projected on A (with custody).
+    // seq 2: a legit medication, born sealed + projected on A (with custody).
     assert_medication(
         &mut a,
         &sk_d,
@@ -2058,7 +2139,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     .await
     .unwrap();
 
-    // seq 2: the wrongly-sealed demographic. INJECTED onto A with the projection triggers
+    // seq 3: the wrongly-sealed demographic. INJECTED onto A with the projection triggers
     // SUPPRESSED (session_replication_role=replica) — the strict door would refuse it and
     // (pre-fix) the apply door would detonate on A too; suppressing the triggers on the
     // INJECTING node isolates the RED to B's PULL, modelling "A received this from a third
@@ -2075,7 +2156,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         .unwrap();
     injected.expect("A holds the sealed demographic (projection triggers suppressed on inject)");
 
-    // seq 3: the SUBSEQUENT legitimate medication that must still reach B if sync is unwedged.
+    // seq 4: the SUBSEQUENT legitimate medication that must still reach B if sync is unwedged.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2137,8 +2218,8 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         String::from_utf8_lossy(&pull.stderr)
     );
 
-    // The watermark sailed past the sealed noise: B holds the SUBSEQUENT ibuprofen (seq 3),
-    // so the seq cursor was never frozen at the sealed demographic (seq 2). Pre-fix it froze
+    // The watermark sailed past the sealed noise: B holds the SUBSEQUENT ibuprofen (seq 4),
+    // so the seq cursor was never frozen at the sealed demographic (seq 3). Pre-fix it froze
     // there and ibuprofen never arrived.
     let ibuprofen_on_b: i64 = b
         .query_one(
@@ -2228,8 +2309,9 @@ async fn author_forward_dated_note(
 /// is ADMITTED + FLAGGED, never rejected.
 ///
 /// Mirrors `sealed_non_clinical_pull_does_not_freeze_the_watermark`'s two-node harness
-/// exactly: seq 1 is a legit medication, seq 2 is the pathological event, seq 3 is a
-/// SUBSEQUENT legit medication whose arrival on B is the proof the watermark never froze.
+/// exactly: seq 1 is the chart's registration (#345), seq 2 a legit medication, seq 3 the
+/// pathological event, seq 4 a SUBSEQUENT legit medication whose arrival on B is the proof
+/// the watermark never froze.
 ///
 /// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
 #[tokio::test]
@@ -2262,8 +2344,13 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     register_unwrap_key(&b, &sk_b).await;
 
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    // `reset` did RESTART IDENTITY, so this registration takes **seq 1** and every seq
+    // named below counts from there. Insert another event ahead of it and they all shift.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
-    // seq 1: a legit medication, authored + projected on A.
+    // seq 2: a legit medication, authored + projected on A.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2287,14 +2374,14 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     .await
     .unwrap();
 
-    // seq 2: the forward-dated event — self-asserted grade, t_effective ~4.5 years past its
+    // seq 3: the forward-dated event — self-asserted grade, t_effective ~4.5 years past its
     // own HLC wall. A legitimately holds it (admitted at the already grade-gated STRICT
     // door); B's REMOTE apply is the door under test when it pulls it over the wire.
     let (signed_forward, forward_event_id) =
         author_forward_dated_note(&a, &sk_d, &kid_d, patient, WALL).await;
     let forward_ca = event_address(&signed_forward);
 
-    // seq 3: the SUBSEQUENT legit medication that must still reach B if sync is unwedged.
+    // seq 4: the SUBSEQUENT legit medication that must still reach B if sync is unwedged.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2357,7 +2444,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     );
 
     // The watermark sailed past the forward-dated event: B holds the SUBSEQUENT
-    // ibuprofen (seq 3), so the seq cursor was never frozen at seq 2. Pre-fix it froze
+    // ibuprofen (seq 4), so the seq cursor was never frozen at seq 3. Pre-fix it froze
     // there and ibuprofen never arrived — the #216 F1/F2 DoS.
     let ibuprofen_on_b: i64 = b
         .query_one(

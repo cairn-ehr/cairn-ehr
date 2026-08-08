@@ -60,9 +60,17 @@ The benchmark's row: *review a 5-drug list, sign 3 unsigned/stale lines.* So two
 already carry **someone else's** current signature — that is what proves the gesture leaves
 another clinician's vouch alone rather than reassigning it.
 
+Since [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) a chart must be **registered**
+before anything can be recorded about it — the §5.3/§5.8 precedence rule, enforced in the
+database. A hand-minted `uuidgen` id is refused by `medication-assert`, which is the point: you
+cannot write on a chart nobody made, exactly as on paper. `patient-register` runs the
+search-before-create funnel and prints the new id on its last line.
+
 ```bash
-PATIENT=$(uuidgen | tr 'A-Z' 'a-z')
 NODE="cairn-node --conn $CONN --key $NODE_KEY"
+PATIENT=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p')
+[ -n "$PATIENT" ] || { echo "registration failed — read the output above" >&2; exit 1; }
 
 # Three lines nobody has signed.
 $NODE medication-assert "$PATIENT" \

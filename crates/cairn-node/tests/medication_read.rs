@@ -136,6 +136,8 @@ async fn a_single_unvouched_medication_reads_as_absent() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
 
@@ -164,6 +166,8 @@ async fn an_attested_thread_reads_as_fresh_with_its_attester() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let params = AttestParams {
@@ -194,6 +198,8 @@ async fn a_reconciled_pair_reads_as_one_row_with_two_members() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let a = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let b = assert_one(&mut c, &sk, &kid, "origin-a", patient, "Metformin XR").await;
@@ -247,6 +253,8 @@ async fn a_ceased_medication_is_retained_and_marked_ceased() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     cease_medication(
@@ -282,7 +290,11 @@ async fn another_patients_medications_are_not_returned() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let mine = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, mine, 0).await;
     let theirs = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, theirs, 0).await;
 
     assert_one(&mut c, &sk, &kid, "origin-a", theirs, "warfarin").await;
 
@@ -327,6 +339,8 @@ async fn a_thread_grown_after_attestation_reads_as_stale() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let params = AttestParams {
@@ -387,6 +401,8 @@ async fn two_un_reconciled_threads_sharing_a_term_are_flagged_for_reconciliation
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
@@ -419,6 +435,8 @@ async fn a_reconciled_group_with_conflicting_codings_is_flagged() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     const MOIETY_ATORVASTATIN: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01";
     const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
 
@@ -494,7 +512,11 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient_a = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
     let patient_b = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
 
     let thread_a = assert_one(&mut c, &sk, &kid, "origin-a", patient_a, "metformin").await;
     let thread_b = assert_one(&mut c, &sk, &kid, "origin-a", patient_b, "amlodipine").await;
@@ -644,7 +666,11 @@ async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient_a = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
     let patient_b = Uuid::now_v7();
+    // #345: every chart this test writes to exists first.
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
 
     let thread_a = assert_one(&mut c, &sk, &kid, "origin-a", patient_a, "metformin").await;
     let thread_b = assert_one(&mut c, &sk, &kid, "origin-a", patient_b, "amlodipine").await;

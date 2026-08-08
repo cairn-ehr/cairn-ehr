@@ -11,6 +11,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -109,6 +113,8 @@ async fn floor_accepts_valid_reconciliation() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = Uuid::now_v7();
     let b = Uuid::now_v7();
     let input = ReconcileInput {
@@ -148,6 +154,8 @@ async fn floor_rejects_self_reconcile() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = Uuid::now_v7();
     // Hand-build a self-reconcile (bypass the Rust guard) and submit directly.
     let input = ReconcileInput {
@@ -171,6 +179,8 @@ async fn floor_rejects_missing_provenance() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let input = ReconcileInput {
         provenance: "   ",
         reason: None,
@@ -212,6 +222,8 @@ async fn reconcile_maps_both_threads_to_min_uuid_group() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -270,6 +282,8 @@ async fn transitive_component_and_clean_split() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -377,6 +391,8 @@ async fn reconciliation_before_threads_converges() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = Uuid::now_v7();
     let b = Uuid::now_v7();
     let input = ReconcileInput {
@@ -425,6 +441,8 @@ async fn oversize_group_over_cap_is_refused() {
         .await
         .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let (a, b, cc, d) = (
         Uuid::now_v7(),
         Uuid::now_v7(),
@@ -504,6 +522,8 @@ async fn oversize_group_at_cap_is_accepted() {
         .await
         .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     let input = ReconcileInput {
         provenance: "clinician-judgment",
@@ -585,6 +605,8 @@ async fn reconcile_collapses_to_one_row_and_clears_flag() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -670,6 +692,8 @@ async fn brand_generic_collapse_without_shared_key() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -732,6 +756,8 @@ async fn group_current_dose_is_latest_effective_across_members() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -802,6 +828,8 @@ async fn mixed_status_resolves_latest_effective() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     // A active (dose change effective 2025-06); B ceased effective 2024-01 (earlier).
     let a = assert_medication(
         &mut c,
@@ -934,6 +962,8 @@ async fn corrected_effective_flips_group_status_across_cessation() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     // A: active member with a dose point effective 2024-03 (earlier than B's cessation).
     let a = assert_medication(
         &mut c,
@@ -1070,6 +1100,8 @@ async fn single_thread_semantics_unchanged() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,
@@ -1132,6 +1164,8 @@ async fn pre_slice2_assert_without_dose_event_falls_back_to_statement_dose() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let a = assert_medication(
         &mut c,
         &sk,

@@ -11,6 +11,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 const SUBMIT3: &str = "SELECT submit_event($1,$2,$3)";
 
 fn cs() -> Option<String> {
@@ -95,6 +99,8 @@ async fn accepts_responsibility_bearing_additive_event_with_valid_human_token() 
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, patient, 0).await;
 
     // P1: a note.added carrying `responsibility` triggers the attestation gate on an
     // additive event (no target/provenance machinery) — isolates the accept.
@@ -129,6 +135,8 @@ async fn accepts_suppressing_event_with_valid_human_token() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, patient, 0).await;
 
     // Baseline additive note (no token) to be the suppress target — step-5 needs it.
     let baseline = body("note.added", patient, &kid_a, None, None);
@@ -178,6 +186,10 @@ async fn rejects_bad_attestations_and_keeps_the_floor() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: registered, because the BASELINE target below is a real local write that must
+    // succeed — only the attestations after it are the refusals under test. (The `n == 0`
+    // assertions count SUPPRESSING events, so the chart's birth act does not disturb them.)
+    common::submit_registration(&c, &sk_a, &kid_a, patient, 0).await;
 
     // One baseline target + one suppress event reused across all rejections (none
     // append, so there is no idempotency interaction).
@@ -278,6 +290,8 @@ async fn responsibility_claim_not_bound_to_attester_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, patient, 0).await;
 
     // The agent signs a body naming the AGENT's own key as responsibility-holder,
     // while the HUMAN's token accompanies it.
@@ -316,6 +330,8 @@ async fn remote_apply_responsibility_claim_not_bound_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, patient, 0).await;
 
     let b = body("note.added", patient, &kid_a, Some(&kid_a), None); // responsibility = kid_a
     let signed = sign(&b, &sk_a).unwrap();

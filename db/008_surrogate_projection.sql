@@ -166,7 +166,12 @@ CREATE OR REPLACE FUNCTION surrogate_project_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE v_lref BIGINT;
 BEGIN
-    IF e.event_type IN ('patient.created', 'patient.amended') THEN
+    IF e.event_type = 'patient.amended' THEN
+        -- `patient.created` sat beside `patient.amended` here until issue #345 retired it;
+        -- this spike rig follows the product registry rather than keeping a type the
+        -- product doors no longer admit. The interning below is unchanged — it is keyed on
+        -- the patient, not on which demographic event happened to arrive first.
+        --
         -- Establish the anchor binding as soon as the patient is first seen.
         -- intern_patient is idempotent-by-design (ON CONFLICT (patient_id) DO NOTHING +
         -- read-back, db/008 part "Ingress" above) — no further replay guard needed here.
@@ -195,15 +200,14 @@ REVOKE EXECUTE ON FUNCTION surrogate_project_apply(event_log) FROM PUBLIC;
 -- Registered apply fn for the #208/ADR-0057 generic dispatcher (db/005) +
 -- cairn_reproject heal/rebuild (db/039) — registered HERE (not db/005) because this
 -- migration is spike-only (see the header note above): only a rig that loads db/008
--- ever sees these three rows, which is exactly right (the product loaders' registry
+-- ever sees these two rows, which is exactly right (the product loaders' registry
 -- stays at its product-scope row count). run_order 20 (after db/005's own
--- patient_chart_apply registration at run_order 10 for the SAME three event types) —
+-- patient_chart_apply registration at run_order 10 for the SAME two event types) —
 -- both fire per event, patient_chart_apply first, mirroring the old alphabetical
 -- trigger-name firing order. #214 + steady-state discipline: converge these rows to
 -- the migration text on every connect, but stay write-free once already converged
 -- (no dead tuples, no validate-trigger fire).
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
-    ('patient.created', 'surrogate_project_apply', ARRAY['patient_ref'], 20, TRUE),
     ('patient.amended', 'surrogate_project_apply', ARRAY['patient_ref'], 20, TRUE),
     ('note.added',      'surrogate_project_apply', ARRAY['patient_ref', 'chart_note_u', 'chart_note_s'], 20, TRUE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET

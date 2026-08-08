@@ -19,6 +19,11 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// NOTE (#345): this suite registers NO charts — every event it authors arrives through
+// `apply_remote_event`, the door where the §5.3/§5.8 precedence rule deliberately does not apply.
+// A chart this node knows only from a peer's medication event is exactly the shape these tests
+// exist to exercise.
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }

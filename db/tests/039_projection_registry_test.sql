@@ -7,9 +7,16 @@ BEGIN;
 -- 1. Registry membership pinned. The throwaway DB this script builds loads
 --    every migration in numeric order (scripts/run-db-sql-tests.sh), including
 --    the spike-only db/008 the product loaders deliberately skip (issue #67) —
---    so the expected count here is the product count 25 + db/008's 3 = 28.
+--    so the expected count here is the product count 25 + db/008's 2 = 27.
 --    (25 = 22 + the two db/042 ADR-0059 coding-overlay verbs + db/045's #344
 --    identity.registration.asserted → patient_registration_apply.)
+--
+--    #345 left the PRODUCT count unchanged at 25 and dropped db/008's from 3 to 2:
+--    retiring `patient.created` removed one product row (its patient_chart_apply
+--    registration in db/005) and one spike row (its surrogate_project_apply
+--    registration in db/008), while db/047 added exactly one product row back —
+--    `identity.registration.asserted` → patient_chart_apply, the chart-birth
+--    projection registration took over.
 --    Kept in lockstep with the Rust mirror
 --    (projection_registry.rs::registry_row_count_is_pinned, which asserts 25 on
 --    the product-loader DB that never loads db/008).
@@ -17,8 +24,8 @@ DO $$
 DECLARE n bigint;
 BEGIN
     SELECT count(*) INTO n FROM cairn_projection_apply;
-    IF n <> 28 THEN
-        RAISE EXCEPTION 'cairn_projection_apply: expected 28 rows on the sqltest DB, found %', n;
+    IF n <> 27 THEN
+        RAISE EXCEPTION 'cairn_projection_apply: expected 27 rows on the sqltest DB, found %', n;
     END IF;
 END $$;
 

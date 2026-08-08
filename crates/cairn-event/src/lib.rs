@@ -257,7 +257,7 @@ pub enum ClockGrade {
 pub struct EventBody {
     pub event_id: String,   // UUIDv7
     pub patient_id: String, // immortal subject UUID
-    pub event_type: String, // patient.created | patient.amended | note.added
+    pub event_type: String, // patient.amended | note.added | clinical.* | identity.* | demographic.*
     pub schema_version: String,
     pub hlc: Hlc,
     pub t_effective: Option<String>, // asserted effective time (ISO-8601); None = unknown
@@ -793,7 +793,7 @@ mod tests {
         EventBody {
             event_id: uuid::Uuid::now_v7().to_string(),
             patient_id: uuid::Uuid::now_v7().to_string(),
-            event_type: "patient.created".into(),
+            event_type: "patient.amended".into(),
             schema_version: "patient/1".into(),
             hlc: Hlc {
                 wall: 1_700_000_000_000,
