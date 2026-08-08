@@ -23,6 +23,12 @@ for f in 001_envelope 002_projection 008_surrogate_projection; do
 done
 
 echo "== leakage / interning guard (db/tests/008_surrogate_test.sql) =="
+# The mirror refuses to run unless the database is marked disposable (issue #169,
+# db/tests/_scratch_database_guard.sql). This script is already destructive by contract — see the
+# DESTRUCTIVE note in the header — so stamping the marker here just states in the database what the
+# caller has already asserted by pointing us at a bench database.
+psql "$CONN" -v ON_ERROR_STOP=1 -q \
+    -c "CREATE TABLE IF NOT EXISTS cairn_scratch_database ();"
 psql "$CONN" -v ON_ERROR_STOP=1 -f "$ROOT/db/tests/008_surrogate_test.sql"
 
 echo "== B5 size/read benchmark (db/bench/b5_surrogate.sql) =="
