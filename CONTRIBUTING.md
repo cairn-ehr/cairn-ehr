@@ -45,7 +45,7 @@ Three things that have bitten us, so they are worth stating outright:
   fixtures — several commit, and `017` drops constraints and replays a migration — so since
   [#169](https://github.com/cairn-ehr/cairn-ehr/issues/169) each one refuses any database that does not
   carry the `cairn_scratch_database` marker table, which that script stamps on the throwaway
-  `cairn_sqltest` it creates and drops for you. Pointing a mirror at the shared `cairn_test` by hand used
+  `cairn_sqltest` it drops and recreates at the start of every run. Pointing a mirror at the shared `cairn_test` by hand used
   to collide with residue left by a finished `cargo test`; pointing one at a real node would have been
   much worse. Use `-f`, not stdin: psql's `\ir` cannot resolve the shared preamble from a piped script.
 - **Renaming any required job means updating branch protection in lockstep.** Because required checks are

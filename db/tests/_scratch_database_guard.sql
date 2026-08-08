@@ -20,10 +20,14 @@
 -- WHY AN ALLOW-LIST. Refusing a known-bad list of database *names* would close the first case and
 -- leave the second wide open, since the dangerous target is precisely the one nobody thought to
 -- name. So the polarity is inverted: a mirror refuses to run ANYWHERE unless the database carries an
--- explicit marker saying "I am a throwaway, feel free to wreck me". Both sanctioned runners stamp
--- that marker on the disposable database they create — scripts/run-db-sql-tests.sh (cairn_sqltest)
--- and db/bench/run_b5.sh (a bench database) — so the normal paths need no thought, and every other
--- database in the cluster, shared rig and real node alike, is refused by default. Fail closed.
+-- explicit marker saying "I am a throwaway, feel free to wreck me". scripts/run-db-sql-tests.sh —
+-- the sanctioned runner, and what CI uses — stamps it on the `cairn_sqltest` it recreated from
+-- scratch moments earlier, so the marker there states a fact the script itself just made true. Any
+-- other disposable database is marked by a human typing the `CREATE TABLE` deliberately (the
+-- db/bench flow does this; see poc/walking-skeleton/PI-RUNBOOK.md). Note what is NOT done: no script
+-- stamps a caller-supplied connection string on the strength of a comment telling the operator to
+-- point it somewhere safe — inferring consent that way is the very reasoning this replaces. Every
+-- other database in the cluster, shared rig and real node alike, is refused by default. Fail closed.
 --
 -- WHY A REFUSAL AND NOT A `TRUNCATE`. Issue #169 suggested opening each mirror with an idempotent
 -- TRUNCATE instead. That would also close the nuisance, but TRUNCATE does not fire the row-level
@@ -62,6 +66,6 @@ BEGIN
             'throwaway. These mirrors are destructive — several commit, and one drops constraints '
             'and replays a migration — so they run only where the marker table '
             '"public.cairn_scratch_database" exists (issue #169). Use scripts/run-db-sql-tests.sh, '
-            'which creates, marks and drops cairn_sqltest for you.', current_database();
+            'which recreates and marks a throwaway cairn_sqltest for you.', current_database();
     END IF;
 END $$;

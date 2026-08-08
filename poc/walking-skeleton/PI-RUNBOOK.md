@@ -268,6 +268,11 @@ Run it against a **throwaway** bench database (it `TRUNCATE`s the projections):
 psql "$CONN" -c "CREATE DATABASE cairn_b5" 2>/dev/null || true
 B5="host=127.0.0.1 port=5444 user=cairn dbname=cairn_b5"
 
+# run_b5.sh runs db/tests/008_surrogate_test.sql, which since #169 refuses any database not
+# explicitly marked disposable. Marking it is a deliberate act, not something a script infers on
+# your behalf: it declares THIS database destructible, and run_b5.sh does TRUNCATE.
+psql "$B5" -c "CREATE TABLE IF NOT EXISTS cairn_scratch_database ();"
+
 # Loads 001+002+008, runs the leakage/interning guard, then the size/read bench.
 # Scale the second/third args up on the Pi to a realistic fleet (patients, notes each):
 db/bench/run_b5.sh "$B5" 20000 100
@@ -286,7 +291,9 @@ alongside the B1–B4 table.
 > surrogate-free — the load-bearing guarantee, since that plane is typed `uuid` and
 > `bigint <> uuid`), that the `local_ref` domain gives its one-directional guard (a
 > `uuid` won't coerce to a surrogate) while being honest it is *not* a two-way barrier,
-> and that egress rehydrates the canonical UUID. It runs anywhere `psql` does — including in review, off-Pi.
+> and that egress rehydrates the canonical UUID. It runs anywhere `psql` does — including in review,
+> off-Pi — but since #169 only against a database you have explicitly marked disposable with the
+> `cairn_scratch_database` step above.
 
 ---
 

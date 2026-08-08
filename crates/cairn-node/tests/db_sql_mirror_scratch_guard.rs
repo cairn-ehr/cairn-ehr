@@ -13,9 +13,10 @@
 //! therefore COMMIT, and `017` even drops constraints and replays a migration, so a mistyped `-d`
 //! aimed at a real node mutilates a clinical record. The dangerous target is precisely the one
 //! nobody thought to name, so the polarity is inverted — a mirror refuses everywhere unless the
-//! database carries an explicit marker table saying it is a throwaway. Both sanctioned runners
-//! (`scripts/run-db-sql-tests.sh`, `db/bench/run_b5.sh`) stamp that marker on the disposable
-//! database they use; every other database in the cluster is refused by default.
+//! database carries an explicit marker table saying it is a throwaway. `scripts/run-db-sql-tests.sh`
+//! stamps that marker on the `cairn_sqltest` it recreated moments earlier — a fact it made true
+//! itself, not one a caller asserted — and any other disposable database is marked by a human
+//! deliberately. Every other database in the cluster is refused by default.
 //!
 //! Issue #169's own suggestion — open each mirror with an idempotent `TRUNCATE` — was declined for
 //! the same reason: `TRUNCATE` does not fire the row-level append-only triggers, so it would put the

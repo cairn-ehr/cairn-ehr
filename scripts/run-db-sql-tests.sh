@@ -48,8 +48,11 @@ psql -d "$DBNAME" -v ON_ERROR_STOP=1 -q -c "CREATE EXTENSION cairn_pgx;"
 # Mark the database disposable. Every mirror opens with db/tests/_scratch_database_guard.sql,
 # which refuses to run unless this marker exists (issue #169) — an allow-list, so a mirror
 # pointed at a shared rig database or, far worse, at a real node refuses by default rather than
-# committing its fixtures there. The marker is the ONLY thing that makes a database eligible, so
-# it is stamped here, on the throwaway this script just created and will drop again.
+# committing its fixtures there. The marker is the ONLY thing that makes a database eligible, and
+# stamping it is trustworthy HERE because the two lines above just dropped and recreated this exact
+# database — the marker states a fact this script itself made true, rather than one a caller
+# asserted. (The database is recreated at the START of each run, so one is left standing in between;
+# the mirrors' residue is why it is never reused without that recreate.)
 psql -d "$DBNAME" -v ON_ERROR_STOP=1 -q \
     -c "CREATE TABLE IF NOT EXISTS cairn_scratch_database ();" \
     -c "COMMENT ON TABLE cairn_scratch_database IS 'db/tests mirrors may run here; see db/tests/_scratch_database_guard.sql';"

@@ -50,8 +50,14 @@ canonical UUID on the wire, node-local `bigint` surrogate as the physical join k
 lives wholly in the projection plane, so its guard runs against plain PostgreSQL:
 
 ```sh
+CONN="host=/var/run/postgresql dbname=cairn_b5 user=postgres"
+
+# The guard below refuses any database not explicitly marked disposable (#169), and the
+# benchmark TRUNCATEs — so declare this database destructible before pointing them at it.
+psql "$CONN" -c "CREATE TABLE IF NOT EXISTS cairn_scratch_database ();"
+
 # loads 001+002+008, runs the leakage/interning guard, then the size/read benchmark
-db/bench/run_b5.sh "host=/var/run/postgresql dbname=cairn_b5 user=postgres" 2000 50
+db/bench/run_b5.sh "$CONN" 2000 50
 ```
 
 `db/tests/008_surrogate_test.sql` mechanically asserts the surrogate never escapes the

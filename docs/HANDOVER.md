@@ -390,7 +390,8 @@ current build state, open threads, and time-sensitive items.
   tests self-skip locally — CI sets all three since #199). Matcher integration: `cd matcher &&
   CAIRN_TEST_PG=… uv run --extra pipeline pytest`. The pure matcher suite is dependency-free:
   `cd matcher && uv run pytest` (uv, never venv/pip). The `db/tests/*.sql` **mirrors run only via
-  `scripts/run-db-sql-tests.sh`**, which creates, marks and drops a throwaway `cairn_sqltest`: since
+  `scripts/run-db-sql-tests.sh`**, which drops, recreates and marks a throwaway `cairn_sqltest` (it is
+  recreated at the *start* of each run, so one is left standing between runs): since
   #169 each mirror refuses any database lacking the `cairn_scratch_database` marker table, because
   the mirrors are destructive (several commit; `017` drops constraints) and `cairn_test` carries
   residue from finished `cargo test` runs. `scripts/run-db-gated-tests.sh` runs the mirrors *and* the
