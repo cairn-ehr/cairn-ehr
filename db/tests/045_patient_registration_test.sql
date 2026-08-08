@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/tests/045_patient_registration_test.sql
 -- #344 / ADR-0060 — the SQL mirror of the registration floor (db/045).
 --

@@ -389,7 +389,14 @@ current build state, open threads, and time-sensitive items.
   `CAIRN_TEST_PG2`/`PG3` pointing at `cairn_test2`/`cairn_test3` on the same cluster (without them those
   tests self-skip locally — CI sets all three since #199). Matcher integration: `cd matcher &&
   CAIRN_TEST_PG=… uv run --extra pipeline pytest`. The pure matcher suite is dependency-free:
-  `cd matcher && uv run pytest` (uv, never venv/pip).
+  `cd matcher && uv run pytest` (uv, never venv/pip). The `db/tests/*.sql` **mirrors run only via
+  `scripts/run-db-sql-tests.sh`**, which drops, recreates and marks a throwaway `cairn_sqltest` (it is
+  recreated at the *start* of each run, so one is left standing between runs): since
+  #169 each mirror refuses any database lacking the `cairn_scratch_database` marker table, because
+  the mirrors are destructive (several commit; `017` drops constraints) and `cairn_test` carries
+  residue from finished `cargo test` runs. `scripts/run-db-gated-tests.sh` runs the mirrors *and* the
+  full workspace with all three connection strings baked in — the one command for the DB slice of the
+  local gate.
 - **Clinical case-mining** — historically the highest-signal generative mode; the event-overlay + key-custody +
   actor primitives have absorbed every case so far without new architecture. Bring a real ED/hospital failure mode.
   The record now lives in [`docs/case-studies/`](case-studies/README.md). First entry

@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- Cairn walking skeleton — leakage-guard + interning-correctness tests for the
 -- dual-identifier discipline (ADR-0031 / data-model §3.18, Spike 0001 Bet B5).
 --

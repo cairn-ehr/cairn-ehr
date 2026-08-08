@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/tests/017_match_proposal_test.sql
 -- Issue #79 — the advisory match_proposal band CHECK (matcher B2 follow-up minor).
 --

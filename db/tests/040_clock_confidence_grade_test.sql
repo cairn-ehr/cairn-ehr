@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- Issue #216 / ADR-0058 — the grade-gated ceiling classifier truth table.
 DO $$
 DECLARE w bigint := 1_700_000_000_000;  -- an arbitrary hlc wall (ms)

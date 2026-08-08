@@ -1,9 +1,12 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- ADR-0026 slice C — schema tests for the node-level supersede op + lineage view.
 -- PURE SQL (no pgrx / no cairn_verify): inserts as the table OWNER straight into
 -- node_event (the door REVOKEs bind cairn_node/PUBLIC, not the owner), so this
 -- exercises the op CHECK constraint and the node_lineage view in isolation.
--- Run with: psql -v ON_ERROR_STOP=1 -f db/001..009 then this file.
+-- Run with: scripts/run-db-sql-tests.sh (it loads db/001..009 first). Since #169 this file refuses
+-- any database not marked disposable, so running it by hand against a dev database stops at the
+-- guard — see db/tests/_scratch_database_guard.sql.
 
 -- Helper: a content-address that satisfies the 001/007 CHECK for given bytes.
 -- node_event.content_address must equal '\x1220' || sha256(signed_bytes).

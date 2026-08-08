@@ -33,14 +33,21 @@ job's `name:` and GitHub matches required checks by that **exact name**.
 | `rustfmt` | `rust.yml` · `fmt` | `cargo fmt --check` across **both** cargo trees (workspace + the `cairn_pgx` extension), against the pinned toolchain (`rust-toolchain.toml`). |
 | `cargo-deny` | `rust.yml` · `deny` | AGPL-compatible license allow-list + RUSTSEC advisories + wildcard/source bans (`deny.toml`), on both trees. |
 | `ruff + pytest` | `matcher.yml` · `lint-test` | The advisory Python matcher: `ruff check` + the **pure** pytest suite (no database). |
-| `clippy + cargo test (cairn_pgx floor)` | `rust.yml` · `test` | The **in-DB safety floor**: builds `cairn_pgx` into a real PostgreSQL 18, then `cargo clippy -D warnings` + `cargo test --workspace` **and** the matcher's DB-gated suite, all with `CAIRN_TEST_PG` set so the gated tests actually run (they self-skip when it is unset). |
+| `clippy + cargo test (cairn_pgx floor)` | `rust.yml` · `test` | The **in-DB safety floor**: builds `cairn_pgx` into a real PostgreSQL 18, then `cargo clippy -D warnings` + `cargo test --workspace` **and** the matcher's DB-gated suite, all with `CAIRN_TEST_PG` set so the gated tests actually run (they self-skip when it is unset). The same job also runs the `db/tests/*.sql` **mirrors** via `scripts/run-db-sql-tests.sh`. |
 
-Two things that have bitten us, so they are worth stating outright:
+Three things that have bitten us, so they are worth stating outright:
 
 - **The floor check's name is deliberately PostgreSQL-version-independent** (`… (cairn_pgx floor)`, not
   `… (PG18 …)`). Encoding the PG major renames the check on every version bump, which *orphans* the
   required name in branch protection — the required check then never reports and every PR is silently
   blocked (this is exactly what a `PG16 → PG18` rename did once). Do not put the PG major in the job name.
+- **Run the `db/tests/*.sql` mirrors only through `scripts/run-db-sql-tests.sh`.** They are destructive
+  fixtures — several commit, and `017` drops constraints and replays a migration — so since
+  [#169](https://github.com/cairn-ehr/cairn-ehr/issues/169) each one refuses any database that does not
+  carry the `cairn_scratch_database` marker table, which that script stamps on the throwaway
+  `cairn_sqltest` it drops and recreates at the start of every run. Pointing a mirror at the shared `cairn_test` by hand used
+  to collide with residue left by a finished `cargo test`; pointing one at a real node would have been
+  much worse. Use `-f`, not stdin: psql's `\ir` cannot resolve the shared preamble from a piped script.
 - **Renaming any required job means updating branch protection in lockstep.** Because required checks are
   matched by exact name, changing a job's `name:` without updating `main`'s required-checks list orphans
   the old name. If you must rename, coordinate the branch-protection change with a maintainer.

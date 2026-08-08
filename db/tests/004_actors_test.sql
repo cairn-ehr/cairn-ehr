@@ -1,5 +1,8 @@
--- Run with:  psql "$CONN" -v ON_ERROR_STOP=1 -f db/004_actors.sql -f db/tests/004_actors_test.sql
+-- Run with:  scripts/run-db-sql-tests.sh — since #169 this file refuses any database that is not
+-- marked disposable, so an ad-hoc `psql -f db/004_actors.sql -f db/tests/004_actors_test.sql`
+-- against a dev database now stops at the guard. See db/tests/_scratch_database_guard.sql.
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 BEGIN;
 
 -- Enroll an agent; its actor_id is the hash of its pinned set (C4).

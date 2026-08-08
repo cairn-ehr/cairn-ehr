@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- #208/ADR-0057 — the cairn_projection_apply structural guards, SQL mirror of
 -- crates/cairn-node/tests/projection_registry.rs's dispatcher_is_the_only_event_log_insert_trigger
 -- and registry_row_count_is_pinned. Run after the schema is loaded. Uses a

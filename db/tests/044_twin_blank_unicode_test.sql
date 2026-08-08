@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- #75 — the §3.13 twin blank-test is ONE definition, and it is collation-DETERMINISTIC.
 --
 -- SQL mirror of crates/cairn-node/tests/twin_blank_parity.rs (cross-boundary equality with
