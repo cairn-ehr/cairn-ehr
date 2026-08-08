@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- ADR-0026 slice C — schema tests for the node-level supersede op + lineage view.
 -- PURE SQL (no pgrx / no cairn_verify): inserts as the table OWNER straight into
 -- node_event (the door REVOKEs bind cairn_node/PUBLIC, not the owner), so this

@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/020 apply_remote_event — grant-floor and legible-rejection tests (issue #91).
 -- Mirrors 005_submit_test.sql: self-checking DO blocks; positive-path coverage with
 -- real signed events lives in crates/cairn-node/tests/apply_remote_event.rs.

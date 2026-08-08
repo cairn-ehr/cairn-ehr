@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- #345 — the §5.3/§5.8 precedence rule's DB-side half, SQL mirror of
 -- crates/cairn-node/tests/patient_precedence.rs.
 --

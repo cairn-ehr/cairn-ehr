@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- Helper: assert that a statement raises with a message matching a pattern.
 -- Usage relies on DO blocks; each negative case below is self-checking.
 

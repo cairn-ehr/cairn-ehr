@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 BEGIN;
 
 -- A genesis enroll row maps its signer key to its node_id (= content_address).

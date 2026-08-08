@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- recall_event marks a target without deleting it (principle 2).
 DO $$
 DECLARE n_before bigint; n_after bigint; tgt uuid;

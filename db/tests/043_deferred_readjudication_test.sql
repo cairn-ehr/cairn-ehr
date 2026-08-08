@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/tests/043_deferred_readjudication_test.sql
 -- ADR-0056 decisions 1 + 4 (issues #265/#266) — the SQL mirror of the floor.
 --

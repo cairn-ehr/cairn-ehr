@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/022 node_event_quarantine — grant-floor tests (issue #111). Mirrors
 -- 021_sync_quarantine_test.sql: self-checking DO blocks. Behavioral coverage
 -- (quarantine on pull, dedupe, derived floor re-offer, auto-release on success,

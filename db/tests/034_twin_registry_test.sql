@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- #173 — twin-check registry mechanism, SQL mirror of crates/cairn-node/tests/twin_registry.rs.
 -- Run after the schema is loaded. Uses a transaction that ROLLBACKs so it leaves no residue.
 BEGIN;

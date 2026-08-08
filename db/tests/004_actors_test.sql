@@ -1,5 +1,6 @@
 -- Run with:  psql "$CONN" -v ON_ERROR_STOP=1 -f db/004_actors.sql -f db/tests/004_actors_test.sql
 \set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 BEGIN;
 
 -- Enroll an agent; its actor_id is the hash of its pinned set (C4).
