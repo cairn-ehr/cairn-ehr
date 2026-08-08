@@ -29,6 +29,9 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -102,6 +105,10 @@ async fn submit_dob(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall:
 async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
     let a = Uuid::now_v7();
     let b = Uuid::now_v7();
+    // #345: both charts are registered before their dob assertions — the precedence rule means a
+    // demographic assertion can no longer be a chart's first event.
+    common::submit_registration(c, sk, kid, a, 0).await;
+    common::submit_registration(c, sk, kid, b, 0).await;
     submit_dob(c, sk, kid, a, 1, "1980-07-15").await;
     submit_dob(c, sk, kid, b, 2, "1975-01-02").await;
     let vetoed: bool = c
@@ -590,7 +597,7 @@ async fn an_unvouched_token_is_not_a_link_attestation() {
     let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
 
     // Simulate "this node has no code for identity.link.asserted yet" the same way
-    // deferred_admission.rs does for patient.created: remove BOTH things the migration
+    // deferred_admission.rs does for patient.amended: remove BOTH things the migration
     // provides. Removing only the class row produces a registered-but-unclassified state no
     // real node can reach, and the AFTER-INSERT dispatcher would still fire. All three rows
     // are restored by the next connect's migration replay, so this is self-healing.

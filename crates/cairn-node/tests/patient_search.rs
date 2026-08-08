@@ -26,7 +26,7 @@ use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::{SearchQuery, TrustState};
 use common::{
-    cs, enroll_human, setup, submit_attested, submit_patient_created, submit_signed, EventSpec,
+    cs, enroll_human, setup, submit_attested, submit_registration, submit_signed, EventSpec,
 };
 use std::collections::BTreeSet;
 use tokio_postgres::Client;
@@ -152,6 +152,7 @@ async fn the_identifier_pass_finds_a_chart_by_system_and_value() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "12345",
         system: "MRN",
@@ -184,6 +185,7 @@ async fn the_dob_pass_finds_a_chart_by_exact_birth_date() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let dob = "1980-01-01";
     submit_field(
         &c,
@@ -216,6 +218,7 @@ async fn the_name_token_pass_finds_a_chart_by_one_shared_token() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -264,6 +267,7 @@ async fn nfc_normalisation_matches_composed_and_decomposed_unicode_forms() {
     assert_ne!(composed, decomposed, "the two forms differ as byte strings");
 
     let p_composed = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p_composed, 0).await;
     submit_field(
         &c,
         &sk,
@@ -284,6 +288,7 @@ async fn nfc_normalisation_matches_composed_and_decomposed_unicode_forms() {
     );
 
     let p_decomposed = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p_decomposed, 0).await;
     submit_field(
         &c,
         &sk,
@@ -327,6 +332,7 @@ async fn an_identifier_value_under_a_different_system_does_not_match() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "12345",
         system: "MRN",
@@ -366,6 +372,7 @@ async fn a_reduced_precision_dob_matches_that_stored_value_and_nothing_else() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p_year = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p_year, 0).await;
     submit_field(
         &c,
         &sk,
@@ -379,6 +386,7 @@ async fn a_reduced_precision_dob_matches_that_stored_value_and_nothing_else() {
     .expect("year-precision dob accepted");
 
     let p_day = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p_day, 0).await;
     submit_field(
         &c,
         &sk,
@@ -430,6 +438,7 @@ async fn a_chart_matching_two_passes_returns_one_row_per_pass() {
 
     // One chart, matched via BOTH the identifier pass and the dob pass.
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "999",
         system: "MRN",
@@ -499,6 +508,7 @@ async fn two_identifiers_matching_the_same_patient_are_deduped_to_one_row() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let mrn = IdentifierAssertion {
         value: "12345",
         system: "MRN",
@@ -557,6 +567,7 @@ async fn two_name_rows_matching_the_same_patient_are_deduped_to_one_row() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     // Legal name and an alias, distinct (use, value) retained-set members, both sharing
     // the "smith" token.
     submit_field(
@@ -609,6 +620,7 @@ async fn a_stored_name_with_surrounding_whitespace_is_not_matched_by_an_empty_qu
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -688,6 +700,7 @@ async fn an_empty_query_returns_no_rows_rather_than_every_chart() {
     // rather than passing by accident on an empty database.
     for (i, wall) in (0u8..3).zip(1i64..) {
         let p = Uuid::now_v7();
+        submit_registration(&c, &sk, &kid, p, 0).await;
         let name = format!("Patient {i}");
         submit_field(
             &c,
@@ -729,6 +742,7 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -752,10 +766,11 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
     )
     .await
     .expect("dob accepted");
-    // Only patient.created/patient.amended/note.added give a chart a `patient_chart` row
-    // (`patient_chart_apply`'s registered types) — so last_activity needs one of those,
-    // not the demographic assertions above, which land in their own overlay tables only.
-    submit_patient_created(&c, &sk, &kid, p, 3).await;
+    // last_activity comes from `patient_chart`, which the demographic assertions above do
+    // NOT write — they land in their own overlay tables. Since #345 the registration act
+    // itself materialises that row (`patient_chart_apply`'s registered types are
+    // `identity.registration.asserted`, `patient.amended` and `note.added`), and this chart
+    // was registered at the top of the test, so nothing further is needed here.
     // An OPEN dispute, so `cand.trust` below is asserted against a REAL `chart_trust` row
     // rather than the `map_or` default `read_trust_states` falls back to when a candidate
     // has no row at all — that default reads Confirmed whether or not the trust query ran
@@ -812,7 +827,7 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
     );
     assert!(
         cand.last_activity.is_some(),
-        "patient.created gave this chart a patient_chart row: {cand:?}"
+        "the registration act gave this chart a patient_chart row: {cand:?}"
     );
     assert!(!list.incomplete, "every field read cleanly: {list:?}");
 }
@@ -868,10 +883,14 @@ async fn an_identity_pending_chart_comes_back_marked_unconfirmed() {
         TrustState::Unconfirmed,
         "an identity-pending chart must read as unconfirmed, never as confirmed: {cand:?}"
     );
-    // A registration event alone creates no `patient_chart` row (patient_chart_apply is
-    // registered only for patient.created/patient.amended/note.added) — this is an honest
-    // absence, not a read failure, and must not flip `incomplete`.
-    assert_eq!(cand.last_activity, None);
+    // Since #345 the registration act DOES materialise a `patient_chart` row (the chart's
+    // birth is activity), so a John Doe registered moments ago reports its registration date
+    // rather than an empty column — the honest answer for a chart that exists but has had
+    // nothing written to it yet. Either way this must not flip `incomplete`.
+    assert!(
+        cand.last_activity.is_some(),
+        "the §5.4 registration act is itself activity: {cand:?}"
+    );
     assert!(!list.incomplete);
 }
 
@@ -892,6 +911,7 @@ async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
     // patient_name_current holds no row for this patient_id at all — the display-name read
     // genuinely cannot succeed, rather than merely being untested.
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "999-no-name",
         system: "MRN",
@@ -945,6 +965,7 @@ async fn an_empty_query_yields_an_empty_complete_list() {
     // rows instead of passing by accident on an empty database.
     for (i, wall) in (0u8..3).zip(1i64..) {
         let p = Uuid::now_v7();
+        submit_registration(&c, &sk, &kid, p, 0).await;
         let name = format!("Patient {i}");
         submit_field(
             &c,
@@ -995,6 +1016,7 @@ async fn a_hyphenated_surname_is_found_by_typing_the_surname_alone() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -1039,6 +1061,7 @@ async fn an_identifier_with_a_materialised_key_is_found_by_its_printed_form() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "943 476 5919",
         system: "nhs-number",
@@ -1090,6 +1113,7 @@ async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -1173,6 +1197,7 @@ async fn two_tied_original_renditions_resolve_to_the_same_digest_every_time() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     submit_field(
         &c,
         &sk,
@@ -1289,6 +1314,7 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
     // is struck — a repudiation alone, with no other evidence on the chart, would not
     // surface it as a candidate at all, and this test would prove nothing.
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let ident = IdentifierAssertion {
         value: "with-repudiated-name",
         system: "MRN",
@@ -1395,6 +1421,7 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
     // Matched via an identifier so the chart is a real search candidate. Deliberately NO
     // `submit_field` name assertion at all — `patient_name` stays empty for this patient.
     let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
     let ident = IdentifierAssertion {
         value: "no-name-ever-asserted",
         system: "MRN",

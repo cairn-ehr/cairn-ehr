@@ -11,6 +11,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -105,6 +109,8 @@ async fn floor_rejects_dose_change_without_info_source() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = Uuid::now_v7();
 
     // Hand-build a dose-change with a blank info_source; submit directly.
@@ -131,6 +137,8 @@ async fn floor_rejects_empty_dose_change_noop() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // info_source present but no dose / effective / reason → a pure no-op.
     let input = ChangeDoseInput {
@@ -156,6 +164,8 @@ async fn floor_rejects_empty_dose_object_noop() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // A raw-SQL client could submit `{"dose":{}}` — present key, empty content.
     // The floor's no-op guard must reject on CONTENT, not mere key-presence.
@@ -190,6 +200,8 @@ async fn floor_accepts_wellformed_change_and_correction_into_log() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -341,6 +353,8 @@ async fn assert_seeds_point0_and_it_is_current() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -372,6 +386,8 @@ async fn change_moves_current_and_keeps_history() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -422,6 +438,8 @@ async fn backdated_change_does_not_override_later_effective() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // assert dose 40 @2024 (point 0), then a real increase to 80 @2025-06.
     let med_id = assert_medication(
@@ -493,6 +511,8 @@ async fn undated_change_becomes_current_over_older_effective() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -544,6 +564,8 @@ async fn correction_overlays_current_and_sets_flag() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -599,6 +621,8 @@ async fn correct_to_unknown_shows_unknown_not_original() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -654,6 +678,10 @@ async fn orphan_correction_converges_when_target_arrives() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it. (The `n == 0`
+    // assertion below counts DOSE rows, not events — an orphan correction renders nothing until
+    // its target arrives — so the chart's registration does not disturb it.)
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = Uuid::now_v7();
 
     // Pick a target dose_event_id that does not exist locally yet.
@@ -726,6 +754,8 @@ async fn later_correction_of_same_point_wins() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -809,6 +839,8 @@ async fn cross_thread_correction_does_not_overlay_wrong_thread() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Thread Y (the victim): point 0 = 40 mg.
     let med_y = assert_medication(
@@ -891,6 +923,8 @@ async fn correcting_older_point_leaves_current_unchanged() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Point 0 = 40 mg @2024 (from sample_assert), then a change to 80 mg @2025-06 (current).
     let med_id = assert_medication(
@@ -997,6 +1031,8 @@ async fn corrected_effective_flips_current_dose_winner() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let med_id = assert_medication(
         &mut c,
@@ -1105,6 +1141,8 @@ async fn floor_rejects_no_op_correction() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1156,6 +1194,8 @@ async fn floor_rejects_unknown_strike_token() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1206,6 +1246,8 @@ async fn floor_rejects_set_and_struck_same_group() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1257,6 +1299,8 @@ async fn corrected_reason_surfaces_and_other_groups_kept() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1330,6 +1374,8 @@ async fn strike_dose_reads_unknown_others_kept() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1405,6 +1451,8 @@ async fn later_correction_supersedes_earlier_wholesale() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1600,6 +1648,8 @@ async fn floor_rejects_non_string_correction_reason() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1655,6 +1705,8 @@ async fn floor_rejects_non_string_correction_note() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,
@@ -1701,6 +1753,8 @@ async fn floor_rejects_non_string_correction_info_source() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med_id = assert_medication(
         &mut c,
         &sk,

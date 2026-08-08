@@ -15,6 +15,9 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -39,9 +42,13 @@ async fn submit_with_attachments(
     atts: Vec<Attachment>,
 ) {
     let h = db::next_hlc(db_, node).await.unwrap();
+    // #345: the note lands on a chart that exists. The patient is minted HERE rather than
+    // inline in the body below so the registration and the note name the same chart.
+    let patient = Uuid::now_v7();
+    common::submit_registration(db_, sk, kid, patient, 0).await;
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
-        patient_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
         event_type: "note.added".into(), // registered fail-closed type, allows attachments
         schema_version: "advisory/1".into(),
         hlc: h,

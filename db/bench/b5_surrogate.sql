@@ -76,7 +76,7 @@ BEGIN
     FOR i IN 1..n_patients LOOP
         p := gen_random_uuid();
         IF i = (n_patients / 2) THEN target := p; END IF;
-        PERFORM _b5_seed(p, 'patient.created', 1000 + i);
+        PERFORM _b5_seed(p, 'patient.amended', 1000 + i);
         FOR j IN 1..n_notes LOOP
             PERFORM _b5_seed(p, 'note.added', 2000 + (i * 1000) + j);
         END LOOP;

@@ -25,6 +25,10 @@ use cairn_node::{db, identity, keystore};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -291,6 +295,8 @@ async fn clinical_plane_admits_but_clamps_the_clock() {
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let insane = now_ms() + 10 * 365 * 24 * 3_600_000; // ~10 years ahead
     let e = note(&kid, patient, insane);
     let signed = sign(&e, &sk).unwrap().signed_bytes;
@@ -352,6 +358,8 @@ async fn local_door_rejects_insane_future_hlc_wall() {
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let insane = now_ms() + 10 * 365 * 24 * 3_600_000; // ~10 years ahead
     let e = note(&kid, patient, insane);
     let signed = sign(&e, &sk).unwrap().signed_bytes;
@@ -390,6 +398,8 @@ async fn local_door_admits_within_ceiling_future_wall() {
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let sane_future = now_ms() + 3_600_000; // 1h ahead, inside the 24h ceiling
     let e = note(&kid, patient, sane_future);
     let signed = sign(&e, &sk).unwrap().signed_bytes;
@@ -424,6 +434,8 @@ async fn clinical_plane_within_ceiling_is_not_clamped() {
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let sane_future = now_ms() + 3_600_000; // 1h ahead, inside the ceiling
     let e = note(&kid, patient, sane_future);
     let signed = sign(&e, &sk).unwrap().signed_bytes;

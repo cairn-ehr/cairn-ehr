@@ -71,6 +71,8 @@ async fn one_gesture_attests_every_unvouched_thread() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let a = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let b = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
@@ -125,6 +127,8 @@ async fn a_thread_with_a_fresh_vouch_is_left_untouched() {
     .await
     .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let signed_by_other = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let unsigned = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
@@ -182,6 +186,8 @@ async fn a_ceased_thread_is_not_signed() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     cease_medication(
@@ -281,6 +287,8 @@ async fn a_fully_vouched_chart_reports_its_current_rows() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let params = AttestParams {
@@ -329,6 +337,8 @@ async fn an_unenrolled_attester_fails_every_line_and_commits_nothing() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, _hsk, _hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let a = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let b = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
@@ -385,6 +395,8 @@ async fn a_line_that_cannot_be_attested_never_rolls_back_the_others() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let first = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let broken = assert_one(&mut c, &sk, &kid, "origin-a", patient, "amlodipine").await;
@@ -470,6 +482,8 @@ async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid, hsk, hkid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let thread = assert_one(&mut c, &sk, &kid, "origin-a", patient, "metformin").await;
     let params = AttestParams {

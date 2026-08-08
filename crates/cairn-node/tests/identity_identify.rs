@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 mod common;
 use common::{
-    cs, db_msg, person_chart_trust, submit_patient_created, submit_signed, trust_of, EventSpec,
+    cs, db_msg, person_chart_trust, submit_registration, submit_signed, trust_of, EventSpec,
 };
 
 /// The identity-overlay tables this suite writes to, truncated per test by
@@ -97,6 +97,40 @@ async fn mark_pending(
         "unconscious ED arrival, no ID",
     )
     .await
+}
+
+/// Apply an identity-pending marker through the REMOTE door, so it can name a chart this node
+/// has never seen. Same body `submit_identity_state` builds; the point is which door it enters
+/// by (#345: the local door refuses a first event that is not a registration, the remote door
+/// deliberately does not).
+async fn apply_pending_remotely(c: &Client, sk: &SigningKey, kid: &str, subject: Uuid, wall: i64) {
+    let s_s = subject.to_string();
+    let a = PendingAssertion {
+        subject: &s_s,
+        basis: "unconscious ED arrival, no ID",
+    };
+    let body = cairn_event::EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: s_s.clone(),
+        event_type: "identity.pending.asserted".into(),
+        schema_version: "identity.pending.asserted/1".into(),
+        hlc: cairn_event::Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: pending_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(render_pending_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&body, sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("a peer's pending marker about a chart we do not hold must be admitted");
 }
 
 /// Convenience: identify a subject with a canned method.
@@ -191,6 +225,8 @@ async fn valid_pending_is_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     mark_pending(&c, &sk, &kid, subj, 100)
         .await
         .expect("valid pending accepted");
@@ -204,6 +240,8 @@ async fn newer_identify_overlays_pending() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     mark_pending(&c, &sk, &kid, subj, 100).await.unwrap(); // pending @100
     identify(&c, &sk, &kid, subj, 200).await.unwrap(); // identify @200 (newer)
     assert_eq!(
@@ -221,6 +259,8 @@ async fn older_pending_does_not_reopen_identified() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     identify(&c, &sk, &kid, subj, 200).await.unwrap(); // identify @200 lands first
     mark_pending(&c, &sk, &kid, subj, 100).await.unwrap(); // pending @100 lands later (older)
     assert_eq!(
@@ -239,6 +279,8 @@ async fn newer_pending_reopens_after_identify() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     mark_pending(&c, &sk, &kid, subj, 100).await.unwrap();
     identify(&c, &sk, &kid, subj, 200).await.unwrap();
     mark_pending(&c, &sk, &kid, subj, 300).await.unwrap(); // re-registered pending @300 (newest)
@@ -256,6 +298,8 @@ async fn reassert_same_pending_is_one_row() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     mark_pending(&c, &sk, &kid, subj, 100).await.unwrap();
     mark_pending(&c, &sk, &kid, subj, 105).await.unwrap(); // a second, later pending on the same subject
     let n: i64 = c
@@ -281,7 +325,7 @@ async fn pending_marks_chart_unconfirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     mark_pending(&c, &sk, &kid, subj, 110).await.unwrap();
     assert_eq!(trust_of(&c, subj).await.as_deref(), Some("unconfirmed"));
     assert_eq!(
@@ -298,7 +342,7 @@ async fn identify_returns_to_confirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     mark_pending(&c, &sk, &kid, subj, 110).await.unwrap();
     identify(&c, &sk, &kid, subj, 120).await.unwrap();
     assert_eq!(
@@ -320,7 +364,7 @@ async fn no_identity_reads_confirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     assert_eq!(trust_of(&c, subj).await, None);
     assert_eq!(
         person_chart_trust(&c, subj).await.as_deref(),
@@ -340,7 +384,13 @@ async fn pending_before_chart_still_unconfirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    mark_pending(&c, &sk, &kid, subj, 100).await.unwrap(); // no patient.created for subj
+    // #345 changed HOW this state is reached, not whether it exists: a chart this node has
+    // never seen can no longer be marked pending by a LOCAL author (the precedence rule
+    // refuses a first event that is not a registration), so the marker now arrives the way it
+    // really would — through the lenient remote door, from the peer that holds the chart
+    // (ADR-0061 decision 3). The claim under test is unchanged and now stronger: the trust
+    // signal survives even when the marker and the chart are on different nodes.
+    apply_pending_remotely(&c, &sk, &kid, subj, 100).await; // no registration for subj
     assert_eq!(
         trust_of(&c, subj).await.as_deref(),
         Some("unconfirmed"),
@@ -366,7 +416,7 @@ async fn dispute_outranks_pending_then_resolves_and_identifies() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (subj, d) = (Uuid::now_v7(), Uuid::now_v7());
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     mark_pending(&c, &sk, &kid, subj, 110).await.unwrap();
     assert_eq!(
         trust_of(&c, subj).await.as_deref(),
@@ -428,6 +478,8 @@ async fn empty_basis_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     let err = submit_identity_state(&c, &sk, &kid, subj, 100, true, "   ")
         .await
         .unwrap_err();
@@ -445,6 +497,8 @@ async fn empty_method_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     let err = submit_identity_state(&c, &sk, &kid, subj, 100, false, "")
         .await
         .unwrap_err();
@@ -462,6 +516,8 @@ async fn missing_twin_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
+    // #345: the chart exists before its identity state is asserted.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     // Build a pending event with NO authored twin — the identity floor HARD-requires one.
     let s_s = subj.to_string();
     let pa = PendingAssertion {

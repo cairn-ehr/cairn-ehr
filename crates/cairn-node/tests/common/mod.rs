@@ -22,7 +22,7 @@
 //! them. The line is: if two suites would write it identically, it goes here.
 //!
 //! `tests/identity_scaffolding_shared.rs` enforces adoption — but only of the helpers that
-//! are specific to this cluster: `submit_signed`, `submit_patient_created`, `trust_of`,
+//! are specific to this cluster: `submit_signed`, `submit_registration`, `trust_of`,
 //! `person_chart_trust`. It deliberately does NOT bind `cs` / `db_msg` / `setup`, which are
 //! project-wide test idioms declared in dozens of this directory's files; see that file's
 //! `REPO_WIDE` const for why, and #327 for unifying them. So a suite re-declaring its own
@@ -34,6 +34,11 @@
 // test suite itself.
 #![allow(dead_code)]
 
+use cairn_event::registration::{
+    registration_assertion_body, render_registration_twin, RegistrationAssertion,
+    RegistrationClass, SearchAttestationInput, SearchTerms, REGISTRATION_EVENT_TYPE,
+    REGISTRATION_SCHEMA_VERSION,
+};
 use cairn_event::{
     event_address, generate_key, sign, sign_attestation, ClockGrade, EventBody, Hlc, SigningKey,
 };
@@ -146,8 +151,23 @@ pub async fn submit_signed(
     kid: &str,
     spec: EventSpec<'_>,
 ) -> Result<u64, tokio_postgres::Error> {
+    submit_signed_with_id(c, sk, kid, Uuid::now_v7(), spec).await
+}
+
+/// As [`submit_signed`], but with the event id CHOSEN by the caller.
+///
+/// Only needed when a test must name the event afterwards — a recall query over the authoring
+/// actor's epoch, say, which selects every event that actor wrote and therefore has to be
+/// compared against ids the test knows. Everything else should call [`submit_signed`].
+pub async fn submit_signed_with_id(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    event_id: Uuid,
+    spec: EventSpec<'_>,
+) -> Result<u64, tokio_postgres::Error> {
     let body = EventBody {
-        event_id: Uuid::now_v7().to_string(),
+        event_id: event_id.to_string(),
         patient_id: spec.patient.to_string(),
         event_type: spec.event_type.into(),
         schema_version: spec.schema_version.into(),
@@ -211,28 +231,86 @@ pub async fn submit_attested(
     .await
 }
 
-/// Submit a minimal `patient.created` so a subject has a `patient_chart` row.
+/// Submit the §5.3 registration act that brings a chart into being.
 ///
-/// Several projections (`person_chart`, and the trust reads composed on top of it) are
-/// chart reads: they list a subject only once its chart exists. A test that wants to
-/// observe a subject through one of those must create the chart first. Unwrapped, because
-/// this is always setup for the real assertion, never the thing under test.
-pub async fn submit_patient_created(c: &Client, sk: &SigningKey, kid: &str, p: Uuid, wall: i64) {
-    submit_signed(
+/// **Call this before any other event for a fresh `patient_id`.** Since #345 the in-DB floor
+/// requires the FIRST event carrying a `patient_id` to be a registration (`submit_event`,
+/// db/005 step 8b), so this is not a convenience — it is the arrangement step every chart
+/// needs, and a suite that skips it gets a legible refusal naming the rule. It also
+/// materialises the `patient_chart` row that chart-shaped reads (`person_chart` and the trust
+/// reads composed on it, the candidate list's last-activity) join against, which is the job the
+/// retired `submit_registration` used to do here.
+///
+/// Class `standard` with a search that found nothing (`displayed: []`) is the honest fixture:
+/// it is the NORMAL case for a genuinely new patient, and it exercises the fuller floor path —
+/// the non-standard classes skip db/045's search rules (2d–2g) entirely. The query names the
+/// patient's own UUID as its single token so the attestation is well-formed without inventing a
+/// name the suite would then have to keep consistent with its own assertions.
+///
+/// `wall` orders the registration against the suite's own events: pass something BELOW them. A
+/// registration is the chart's birth act, and `patient_registration_current` picks the EARLIEST
+/// by HLC — a fixture registering above its own events would assert a birth that came after the
+/// life. Unwrapped, because this is always setup for the real assertion, never the thing under
+/// test.
+/// Returns the registration event's own `event_id`, because a chart's birth act is a real event
+/// on the log: a recall over the authoring actor's epoch selects it like any other, and a suite
+/// asserting an exact recall set has to be able to name it (`recall_epoch.rs`).
+pub async fn submit_registration(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    p: Uuid,
+    wall: i64,
+) -> Uuid {
+    let tokens = [p.to_string()];
+    let a = RegistrationAssertion {
+        class: RegistrationClass::Standard,
+        basis: None,
+        search: Some(SearchAttestationInput {
+            terms: SearchTerms {
+                name_tokens: &tokens,
+                birth_date: None,
+                identifiers: &[],
+            },
+            displayed: &[],
+            incomplete: false,
+        }),
+    };
+    let event_id = Uuid::now_v7();
+    submit_signed_with_id(
         c,
         sk,
         kid,
+        event_id,
         EventSpec {
             patient: p,
-            event_type: "patient.created",
-            schema_version: "patient/1",
-            payload: serde_json::json!({"name": "T", "dob": "1990", "sex": "x"}),
-            plaintext_twin: None, // non-demographic type → honest-degrade skeleton (db/015)
+            event_type: REGISTRATION_EVENT_TYPE,
+            schema_version: REGISTRATION_SCHEMA_VERSION,
+            payload: registration_assertion_body(&a),
+            plaintext_twin: Some(render_registration_twin(&a)),
             wall,
         },
     )
     .await
-    .expect("patient.created accepted");
+    .expect("registration accepted");
+    event_id
+}
+
+/// Register BOTH charts of a candidate/proposed pair (#345).
+///
+/// The matching suites (`apply_proposal.rs`, `auto_apply.rs`) seed a `match_proposal` row
+/// directly, which is a projection seed rather than an event — so neither chart exists yet, and
+/// since the precedence rule landed a link may only be authored between charts that DO. Both
+/// wrote this pair of [`submit_registration`] calls identically, which is exactly the drift
+/// #120/#327 exist to stop, so it lives here once.
+///
+/// The registrations are authored by the caller's SEEDER key, never the matcher's: registration
+/// is a registrar act, and the matcher never registers anyone — it only ever proposes links
+/// between charts other actors created. Wall 1 keeps the birth act below every event these
+/// suites author (see [`submit_registration`] on why the wall must be low).
+pub async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, high: Uuid) {
+    submit_registration(c, sk, kid, low, 1).await;
+    submit_registration(c, sk, kid, high, 1).await;
 }
 
 /// The effective trust state `chart_trust` reports for a subject, or `None` (== confirmed).

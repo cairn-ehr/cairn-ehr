@@ -10,6 +10,10 @@ use cairn_node::medication::{assert_medication, build_assert_body, AssertMedicat
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -158,6 +162,8 @@ async fn a_complete_coding_is_accepted() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     assert_medication(
         &mut c,
         &sk,
@@ -180,19 +186,14 @@ async fn an_uncoded_assertion_still_passes() {
     let (sk, kid) = setup_node(&c).await;
     let mut input = coded_input("little white pill", MOIETY_ATORVASTATIN);
     input.coding = None;
+    // #345: the chart is minted and registered here rather than inline below, so the
+    // registration and the medication name the same patient.
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     // The principle-4 floor and the §1.2 M = N = 1 pin: coding is never required.
-    assert_medication(
-        &mut c,
-        &sk,
-        &kid,
-        "test-node",
-        Uuid::now_v7(),
-        &input,
-        None,
-        None,
-    )
-    .await
-    .expect("uncoded must stay a first-class recordable value");
+    assert_medication(&mut c, &sk, &kid, "test-node", patient, &input, None, None)
+        .await
+        .expect("uncoded must stay a first-class recordable value");
 }
 
 /// Submit a raw payload at a chosen door, bypassing the Rust builder — the only way to
@@ -437,6 +438,8 @@ async fn an_opaque_format_system_is_accepted_and_projects() {
         started_precision: Some("year"),
     };
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_medication(&mut c, &sk, &kid, "test-node", patient, &input, None, None)
         .await
         .expect("a registered opaque-format system must be accepted at the strict local door");
@@ -513,6 +516,8 @@ async fn a_coded_assertion_projects_its_coding() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -555,18 +560,12 @@ async fn an_uncoded_assertion_projects_no_coding_row() {
     let (sk, kid) = setup_node(&c).await;
     let mut input = coded_input("little white pill", MOIETY_ATORVASTATIN);
     input.coding = None;
-    let med = assert_medication(
-        &mut c,
-        &sk,
-        &kid,
-        "test-node",
-        Uuid::now_v7(),
-        &input,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    // #345: minted and registered before the thread is asserted on it.
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    let med = assert_medication(&mut c, &sk, &kid, "test-node", patient, &input, None, None)
+        .await
+        .unwrap();
     assert_eq!(
         coding_row(&c, med).await,
         None,
@@ -611,6 +610,8 @@ async fn an_uncoded_reassert_does_not_clear_an_existing_coding() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -656,6 +657,8 @@ async fn an_explicit_null_reassert_does_not_clear_an_existing_coding() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -746,6 +749,8 @@ async fn two_coded_threads_sharing_an_anchor_raise_one_flag() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     // The case ADR-0059 exists for: brand and generic, different words, same substance.
     for term in ["Lipitor", "atorvastatin"] {
         assert_medication(
@@ -778,6 +783,8 @@ async fn a_coded_and_an_uncoded_thread_still_key_apart() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     assert_medication(
         &mut c,
         &sk,
@@ -820,6 +827,8 @@ async fn a_reconciled_group_displays_its_coded_member() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let mut vague = coded_input("little white pill", MOIETY_ATORVASTATIN);
     vague.coding = None;
     let m_vague = assert_medication(&mut c, &sk, &kid, "test-node", patient, &vague, None, None)
@@ -884,6 +893,8 @@ async fn two_anchors_in_one_group_raise_a_conflict() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     const MOIETY_METFORMIN: &str = "3c7d9a52-4e18-5f60-8b21-6d4a0e9c7f33";
     let m1 = assert_medication(
         &mut c,
@@ -1003,6 +1014,8 @@ async fn the_anchor_conflict_count_is_collation_pinned() {
     //    state legitimately arises, and the reason it must be caught rather than assumed
     //    away.
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let m1 = assert_medication(
         &mut c,
         &sk,
@@ -1096,6 +1109,10 @@ async fn a_losing_cross_patient_reassert_cannot_misfile_the_coding_patient() {
     let (sk, kid) = setup_node(&c).await;
     let p1 = Uuid::now_v7();
     let p2 = Uuid::now_v7();
+    // #345: BOTH charts exist before anything is recorded about them — the cross-patient
+    // misfile this test guards is only meaningful between two real charts.
+    common::submit_registration(&c, &sk, &kid, p1, 0).await;
+    common::submit_registration(&c, &sk, &kid, p2, 0).await;
 
     // Thread M, patient P1, UNCODED — so no coding row exists yet.
     let mut uncoded = coded_input("atorvastatin", MOIETY_ATORVASTATIN);

@@ -78,7 +78,7 @@ const SCHEMA: &[(&str, &str)] = &[
         include_str!("../../../db/027_attachment_rendition_references.sql"),
     ),
     // Same late-binding trap: the db/002 patient_chart trigger calls the #157
-    // Byzantine HLC-collision predicate/recorder on every patient.created — the
+    // Byzantine HLC-collision predicate/recorder on every patient.amended — the
     // first demographic write fails without this file (issue #198 again).
     (
         "029_hlc_collision_log",
@@ -142,6 +142,26 @@ const SCHEMA: &[(&str, &str)] = &[
     (
         "043_deferred_readjudication",
         include_str!("../../../db/043_deferred_readjudication.sql"),
+    ),
+    // db/045 + db/047 (#344/#345, ADR-0061). This subset carried NEITHER while db/005 had no
+    // opinion about registration — every identity/demographic projection is legitimately absent
+    // here (#284), and a replicated registration was simply admitted-and-deferred (ADR-0056).
+    //
+    // The §5.3/§5.8 precedence rule ended that: db/005 — which this subset DOES carry — now
+    // refuses any first event on a chart that is not a registration, and
+    // `identity.registration.asserted` is classified only by db/045. A subset with db/005 and
+    // without db/045 would be a door carrying a rule it cannot satisfy: no chart could ever be
+    // authored against it, and `schema_subset_tests`' local-door case proves exactly that by
+    // failing. db/047 follows db/045 because its projection registration is validated against
+    // that classification — and it is also what retires `patient.created` on a database this
+    // loader built alone.
+    (
+        "045_patient_registration",
+        include_str!("../../../db/045_patient_registration.sql"),
+    ),
+    (
+        "047_registration_precedence",
+        include_str!("../../../db/047_registration_precedence.sql"),
     ),
 ];
 
@@ -1184,7 +1204,12 @@ fn cmd_gen(
             node,
             &sk,
             &kid,
-            "patient.created",
+            // #345 retired `patient.created`; the bench emits `patient.amended`, whose
+            // db/002 branch is the SAME demographic-overlay path, so the Bet-B numbers
+            // measured before the retirement stay comparable. `emit_event` INSERTs
+            // directly and never passes the submit door, so the precedence rule does not
+            // apply to it either way.
+            "patient.amended",
             &pid,
             "patient/1",
             serde_json::json!({"name": format!("Patient {i:04}"), "dob": "1980-01-01", "sex": "U"}),
@@ -1326,7 +1351,8 @@ fn cmd_bench_insert(conn: &str, node: &str, key_path: &str, count: usize) -> R<(
         node,
         &sk,
         &kid,
-        "patient.created",
+        // See the seeding loop above: `patient.amended` since #345, same projection path.
+        "patient.amended",
         &pid,
         "patient/1",
         serde_json::json!({"name":"Bench Patient","dob":"1980-01-01","sex":"U"}),
@@ -5235,7 +5261,7 @@ mod fingerprint_db_tests {
 ///     lazy blob reference must land in `blob_store`;
 ///   * the db/002 `patient_chart` trigger → `cairn_hlc_triple_collision` +
 ///     `cairn_record_hlc_collision` (db/029) — parsed on the first
-///     `patient.created`, EXECUTED here by applying a genuine Byzantine pair (two
+///     `patient.amended`, EXECUTED here by applying a genuine Byzantine pair (two
 ///     different signed bodies under one HLC triple) through `apply_remote_event`;
 ///
 /// and the two db/006 recall-ceremony doors (`recall_event`,
@@ -5260,10 +5286,57 @@ mod schema_subset_tests {
     use super::*;
     use cairn_event::{Attachment, Rendition};
 
-    /// Build + sign one `patient.created` event. The body mirrors what `emit_event`
-    /// authors (payload name/dob/sex is what the db/002 projection reads), with the
-    /// HLC triple caller-chosen so the Byzantine-collision case can be constructed.
-    fn signed_patient_created(
+    /// Build + sign one `identity.registration.asserted` (§5.3 standard class, an empty
+    /// displayed set — the normal case for a genuinely new patient). Needed because the
+    /// precedence rule (#345) makes registration the only legal FIRST event on a chart, so
+    /// every chart these tests write to has to be opened with one of these first.
+    fn signed_registration(
+        sk: &SigningKey,
+        kid: &str,
+        patient_id: &str,
+        wall: i64,
+        origin: &str,
+    ) -> Vec<u8> {
+        let tokens = [patient_id.to_string()];
+        let a = cairn_event::registration::RegistrationAssertion {
+            class: cairn_event::registration::RegistrationClass::Standard,
+            basis: None,
+            search: Some(cairn_event::registration::SearchAttestationInput {
+                terms: cairn_event::registration::SearchTerms {
+                    name_tokens: &tokens,
+                    birth_date: None,
+                    identifiers: &[],
+                },
+                displayed: &[],
+                incomplete: false,
+            }),
+        };
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: patient_id.to_string(),
+            event_type: cairn_event::registration::REGISTRATION_EVENT_TYPE.into(),
+            schema_version: cairn_event::registration::REGISTRATION_SCHEMA_VERSION.into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: origin.into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: cairn_event::registration::registration_assertion_body(&a),
+            attachments: vec![],
+            plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        };
+        sign(&body, sk).unwrap().signed_bytes.to_vec()
+    }
+
+    /// Build + sign one `patient.amended` event (`patient.created` was retired by #345;
+    /// the demographic-overlay projection it drives is unchanged). The body mirrors what
+    /// `emit_event` authors (payload name/dob/sex is what the db/002 projection reads), with
+    /// the HLC triple caller-chosen so the Byzantine-collision case can be constructed.
+    fn signed_patient_amended(
         sk: &SigningKey,
         kid: &str,
         patient_id: &str,
@@ -5275,7 +5348,7 @@ mod schema_subset_tests {
         let body = EventBody {
             event_id: uuid::Uuid::now_v7().to_string(),
             patient_id: patient_id.to_string(),
-            event_type: "patient.created".into(),
+            event_type: "patient.amended".into(),
             schema_version: "patient/1".into(),
             hlc: Hlc {
                 wall,
@@ -5367,8 +5440,17 @@ mod schema_subset_tests {
         // (db/005); with db/027 missing this is the first-write outage the review
         // predicted. The attachment also proves the 027 path end-to-end: the lazy
         // blob reference must land in blob_store (reference-eager, byte-lazy).
+        //
+        // #345: the chart is registered first — the subset carries db/005's precedence rule, so
+        // this local write would otherwise be refused as a first event on a chart nobody made.
+        // That dependency is precisely why db/045 + db/047 joined this subset (see SCHEMA).
+        {
+            let reg = signed_registration(&sk, &kid, &patient_id, now_ms(), "subset-local");
+            c.query_one("SELECT submit_event($1)::text", &[&reg])
+                .expect("the subset alone must be able to register a chart");
+        }
         let photo_bytes = b"subset-test-attachment-bytes";
-        let local = signed_patient_created(
+        let local = signed_patient_amended(
             &sk,
             &kid,
             &patient_id,
@@ -5408,7 +5490,7 @@ mod schema_subset_tests {
         // with a current demographic winner standing, the db/002 trigger now parses
         // AND executes the db/029 collision predicate (FOUND = true, collision false).
         let wall_b = now_ms() + 1;
-        let remote = signed_patient_created(
+        let remote = signed_patient_amended(
             &sk,
             &kid,
             &patient_id,
@@ -5435,7 +5517,7 @@ mod schema_subset_tests {
         // A different signed body under the SAME (wall, counter, origin) triple as the
         // standing winner — provably a broken or hostile signer (#157). The apply must
         // still converge (content-address tiebreak) AND record the advisory signal.
-        let byzantine = signed_patient_created(
+        let byzantine = signed_patient_amended(
             &sk,
             &kid,
             &patient_id,
@@ -5478,8 +5560,10 @@ mod schema_subset_tests {
             "the recall must land in the append-only overlay"
         );
 
-        // The contamination-cascade query: one enrollment of (key, epoch 'e')
-        // preceded all three admissions, so every event is selected, stamped 'pinned'.
+        // The contamination-cascade query: one enrollment of (key, epoch 'e') preceded every
+        // admission, so all of them are selected and stamped 'pinned'. FOUR, not three: the
+        // chart's REGISTRATION (#345) is an event this same key authored, and a cascade over a
+        // recalled actor must reach the charts it created, not only the content it wrote.
         let cascade: i64 = c
             .query_one(
                 "SELECT count(*) FROM events_by_actor_epoch($1, 'e') WHERE attribution = 'pinned'",
@@ -5488,16 +5572,17 @@ mod schema_subset_tests {
             .expect("events_by_actor_epoch must succeed against the subset alone")
             .get(0);
         assert_eq!(
-            cascade, 3,
+            cascade, 4,
             "the cascade must select every event this key/epoch authored"
         );
 
-        // Three admitted events total — nothing quarantined, nothing lost.
+        // Four admitted events total (registration + the three doors) — nothing quarantined,
+        // nothing lost.
         let events: i64 = c
             .query_one("SELECT count(*) FROM event_log", &[])
             .unwrap()
             .get(0);
-        assert_eq!(events, 3);
+        assert_eq!(events, 4);
     }
 }
 

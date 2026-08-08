@@ -2,17 +2,15 @@
 
 ## ⇒ NEXT
 
-**Slice 63 landed the §5.3/§5.8 search-before-create funnel** (2026-08-05,
+**The §5.3/§5.8 search-before-create funnel is now UNBYPASSABLE** (Slice 63 built it, 2026-08-05,
 [ADR-0061](spec/decisions/0061-registration-is-an-act-that-carries-its-search.md), closing
-[#344](https://github.com/cairn-ehr/cairn-ehr/issues/344), spec v0.63): registration is now an **act** carrying the search that preceded it, plus the node's first patient
-search, a pure read-model crate, two CLI verbs, and John Doe re-expressed onto the same act.
-
-> [!IMPORTANT]
-> **The funnel is complete but NOT yet unbypassable.** The precedence rule's *enforcement* is deliberately
-> split to [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) — measured, not assumed: ~83 submit call sites across ~38 test files, plus a
-> legacy unfloored `patient.created` that must be **retired** by the same change. Until then a client can
-> still mint a chart by asserting a name. **This is the obvious next slice**, and it is a mechanical
-> fixture sweep whose review value is in checking each converted fixture's intent.
+[#344](https://github.com/cairn-ehr/cairn-ehr/issues/344), spec v0.63; **Slice 64 closed its bypass**,
+2026-08-08, closing [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345)). Registration is an
+**act** carrying the search that preceded it; **the first event carrying a `patient_id` must be that
+chart's registration**, refused at `submit_event` — and the legacy unfloored `patient.created` is
+**retired**, so the rule has no "unless". The remote apply door stays lenient **by design** (set-union
+sync has no ordering; a fail-closed remote door would wedge replication), and that asymmetry is
+tested, not merely commented.
 
 **Three things the med-list slice still owes are HUMAN acts and cannot be done by an agent:**
 
@@ -50,24 +48,23 @@ harness; cycles complete by tight polling, which burns tokens.
 
 **ADR-0056 is now fully built on the clinical plane** (Slice 58 admits an unclassifiable type and
 re-adjudicates before reprojecting, #265/#266; Slice 60 closed the residual refusal half, #267/#270). The
-node/actor plane still diverges by design-gap, not design — see candidate 4.
+node/actor plane still diverges by design-gap, not design — see candidate 4 below.
 
 **The genuinely next candidates** (nothing blocks a choice between them):
 
-1. **[#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) — close the funnel's bypass** (above). The natural continuation of Slice 63.
-2. **The §5.9 safety-projection slice** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) — the largest unbuilt piece of settled
+1. **The §5.9 safety-projection slice** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) — the largest unbuilt piece of settled
    architecture (sequester + the sensitivity stream + the de-identified safety projection). Carries
    [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294): the projection must *carry* the coding-derived drug class, never re-derive it.
-3. **The registration/search UI slice** — now that the node tier exists, the picker is the wrong-chart
+2. **The registration/search UI slice** — now that the node tier exists, the picker is the wrong-chart
    affordance paper has and the med-list window does not. **Constraint from Slice 63:** the picker must
    **open** a chart, never *retarget* an open window — retargeting re-creates the §5.8 item 4 / §5.11
    windowing misfile that possession semantics exist to prevent. Also wires the kept-but-unwired
    pane/routing/freshness state machine.
-4. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
+3. **The drugref term→anchor lookup** — the §9 *advisory* tier, and what actually closes the
    **coded↔uncoded** duplicate case ADR-0059 decision 5 deliberately leaves open. Needs a design
    decision first: the cross-service connection model. The slice-6a/6b source guard keeps the trusted
    surface drugref-free and must stay passing.
-5. **The node/actor plane's two divergences** — one slice, one prerequisite. `db/007` still fail-closes on
+4. **The node/actor plane's two divergences** — one slice, one prerequisite. `db/007` still fail-closes on
    an unmappable type ([#301](https://github.com/cairn-ehr/cairn-ehr/issues/301), slice 58), and it still skips-and-advances a verifiable refusal
    where the clinical plane now pens ([#268](https://github.com/cairn-ehr/cairn-ehr/issues/268), slice 60). **Neither is a symmetric fix.**
    `node_event` is type-shaped, so #301 needs a carried-not-interpreted row shape plus an audit of every
@@ -84,9 +81,11 @@ closed**. A runnable clinical surface now exists, so the next pass should includ
 ---
 
 
-**Session date:** 2026-08-05 (Slice 63 — the §5.3/§5.8 search-before-create funnel) ·
+**Session date:** 2026-08-08 (Slice 64 — closing the search-before-create funnel's bypass) ·
 **Spec/ADRs:** v0.63 (through **ADR-0061**, *registration is an act that carries its search*; the previous
-bump was ADR-0060, *partial validity*, forced out of the med-list slice by a clinician ruling) ·
+bump was ADR-0060, *partial validity*, forced out of the med-list slice by a clinician ruling). **Slice 64
+lands no ADR** — ADR-0061 decision 3 already decided the precedence rule and deferred only its enforcement,
+so this session changed spec §5.8's prose (the rule is live) without a version bump ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical surface
 RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
@@ -103,8 +102,9 @@ the **§5.4 John-Doe subsystem** (slices A–D + finishers + photo/text evidence
 ceremony CLI; still open: the §5.12 push-alert) ·
 the **§5.3/§5.8 search-before-create funnel** (ADR-0061 — `identity.registration.asserted` + its db/045
 floor and retained-set projection, the advisory db/046 candidate search, the pure `cairn-patient-search`
-read model, `patient-search`/`patient-register`, John Doe re-expressed onto the same act; the precedence
-rule's **enforcement** is [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), so the funnel is not yet unbypassable) ·
+read model, `patient-search`/`patient-register`, John Doe re-expressed onto the same act) and its
+**precedence rule** (#345 — `cairn_patient_has_events` + db/005 step 8b; `patient.created` retired in
+db/047, which also handed registration the `patient_chart` chart-birth projection) ·
 the **first clinical-content stream `clinical.medication`, slices 1–6b** (assert/cease + the E1
 reconciliation flag · bitemporal dose timeline · cross-thread reconciliation ADR-0047 · the attestation
 responsibility overlay ADR-0049 · per-field dose correction ADR-0050 · the inline `substance.coding`
@@ -131,59 +131,57 @@ Postgres-on-Android).
 
 ---
 
-**Session (2026-08-05) — Slice 63: the §5.3/§5.8 search-before-create funnel (node tier).** Branch
-`feat/search-before-create-funnel-344`, owes [#344](https://github.com/cairn-ehr/cairn-ehr/issues/344). Full narrative in **ROADMAP Slice 63**; five
-things worth carrying:
+**Session (2026-08-08) — Slice 64: closing the funnel's bypass.** Branch
+`feat/close-funnel-bypass-345`, owes [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345). No new
+ADR (ADR-0061 decision 3 already decided this and deferred only its enforcement); spec **v0.63**
+unchanged, §5.8's "not yet turned on" warning replaced by the enforced statement; `SCHEMA_GENERATION`
+46→47 for `db/047`. Full narrative in **ROADMAP Slice 64**; five things worth carrying:
 
-1. **The attestation NAMES the candidates; it does not count them.** Six months later the investigator has
-   one question — *was the duplicate on the screen when the clerk clicked create?* **Yes** means human
-   judgement failed (fix the UI); **no** means the search failed (fix the comparator). **Opposite fixes, and
-   a bare `N = 3` cannot tell them apart.** That single observation decided the wire shape.
-2. **One act, three classes, so the floor rule has no "unless."** An "unless" in a safety floor is where the
-   next defect lives — which is also why John Doe was re-expressed onto the same event type rather than
-   grandfathered.
-3. **The funnel is complete but NOT unbypassable, and every doc says so.** Enforcement is [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345)
-   (~83 call sites, and `patient.created` must be retired). Strict local submit / lenient remote apply:
-   set-union sync has no ordering, so a peer's clinical event legitimately precedes the registration
-   licensing it, and a fail-closed remote door would wedge replication on honest traffic.
-4. **The rejected alternative is recorded at length** (ADR-0061 decision 4) because it is the one a future
-   reader will try to "fix": gating a standard registration on a bound human author blocks *care
-   documentation* (registration is the chart's first event), pushes named patients through the John Doe
-   path, and **produces no forensic record at all** in the case it fires. §5.11: a grade, not a gate. A test
-   asserts an unattested standard registration **succeeds**.
-5. **A funnel that writes no demographics cannot catch its own duplicate** — found by running the real CLI
-   end to end, not by a test ([#350](https://github.com/cairn-ehr/cairn-ehr/issues/350), closed). Registration now writes the typed name/DOB **and any
-   supplied identifiers** in the same transaction with provenance **`registrar-entered`**: `patient-stated`
-   would frequently be a *precise untruth*, because at a registration desk the speaker is often a third
-   party (a parent, a carer). Live consequence: that term is unranked in db/011's ladder, so it ranks 0 and
-   loses to worse evidence — [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351). Final review also
-   found the identifier value itself needed trimming on **both** the store and the query side (matching
-   `birth_date`'s existing rule), or a padded paste at registration silently failed to match a clean typed
-   search later (ADR-0061's rationale now records this).
+1. **Retiring `patient.created` was the load-bearing half, not a tidy-up.** Leaving an unfloored
+   walking-skeleton registration act classified would have made the rule read *"…must be a
+   registration, unless it is `patient.created`"*. **db/047 deletes its projection rows BEFORE its
+   classification row** — the order db/005's own registry-validation trigger requires — and db/005's
+   residual note, which claimed *no migration ever deletes a classification*, is corrected in the same
+   commit to name db/047 as the precedent every future retirement copies.
+2. **A safety rule can end a documented "legitimate lag."** `cairn-sync`'s SCHEMA subset carried db/005
+   but not db/045 — honest while db/005 had no opinion about registration, and **a door carrying a rule
+   it cannot satisfy** the moment the rule landed (nothing could ever author a chart there). Both
+   loaders now carry db/045 + db/047. **When you add a rule to a shared file, re-check every subset
+   that loads it.**
+3. **Placement among refusals is a legibility decision, and worth making deliberately.** The rule sits
+   after every check that judges the event ITSELF — not last in `submit_event`, since four refusals
+   that read the log's own state (custody, substitution, the two erasure-target checks) necessarily
+   follow it. A defect in the event is the author's first problem; the chart's history is the second —
+   so an event wrong in two ways still reports the reason it always reported, and the ~300-fixture
+   sweep did not have to re-learn every other refusal message.
+4. **The fixtures now model the reality they always described**, and where they should NOT, that is
+   explicit. 377 registration calls across 44 `cairn-node` test files plus `cairn-sync`'s cross-crate
+   suite (versus the design doc's third estimate of *~83 submit call sites across ~38 files* — a
+   different unit, recorded so the next reader compares like with like). **Three suites deliberately
+   register nothing and say so at the top** — `deferred_admission`, `overlay_tiebreaker`,
+   `medication_remote_apply` — because every event they author arrives through the lenient remote
+   door, and a registration there would only add a row their absence-assertions count (with
+   `deferred_admission`'s one local-door test naming why it is the exception). Where a test's *point*
+   is a chart nobody registered — the lenient remote door — that is now explicit and commented, in
+   `patient_precedence.rs` and `recall_epoch.rs`'s three `apply_remote_event` cases.
+5. **A chart's registration is part of its author's RECALL set** — found by `recall_epoch`'s
+   exact-set assertions failing by exactly one entry. That is the property working, not fixture
+   noise: an ADR-0011 contamination cascade over a recalled actor must reach **the charts that
+   actor created**, not only the notes it wrote. The assertions now name the registration
+   explicitly, which is why `common::submit_registration` returns its own `event_id`.
 
-**Deliberately NOT done (Slice 63):** all UI; candidate scoring/ranking; photo bytes; the §5.6 pseudonymous
-workflow; the interactive §1.2 measurement. **Open:** [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345), [#346](https://github.com/cairn-ehr/cairn-ehr/issues/346), [#347](https://github.com/cairn-ehr/cairn-ehr/issues/347),
-[#348](https://github.com/cairn-ehr/cairn-ehr/issues/348), [#349](https://github.com/cairn-ehr/cairn-ehr/issues/349), [#351](https://github.com/cairn-ehr/cairn-ehr/issues/351), [#352](https://github.com/cairn-ehr/cairn-ehr/issues/352) (calendar-invalid but well-shaped dates
-— `2026-02-30` — are signed permanently), [#353](https://github.com/cairn-ehr/cairn-ehr/issues/353) (converge the blocking keys with the matcher),
-[#354](https://github.com/cairn-ehr/cairn-ehr/issues/354) (flag a chart with no registration act on file),
-[#355](https://github.com/cairn-ehr/cairn-ehr/issues/355) (`SearchAttestation`'s displayed-list
-invariant is convention-plus-one-test, not structural — make the constructor the only way in),
-[#356](https://github.com/cairn-ehr/cairn-ehr/issues/356) (two stale `design §N` citations, unrelated
-files, found by the same review sweep), [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357)
-(`cairn_search_candidates` has no result-set ceiling, no guard and no index-backed pass — a common
-surname can print thousands of candidates). The second whole-branch review (2026-08-06, PR #358)
-added four more: [#359](https://github.com/cairn-ehr/cairn-ehr/issues/359) (the optional
-registrar/attester key ADR-0061 decision 4 described was never built — recorded as ADR-0061 **erratum
-E2**, appended below the original wording rather than replacing it, per the new appended-errata rule in
-`docs/spec/decisions/README.md`; the decision itself is unchanged),
-[#360](https://github.com/cairn-ehr/cairn-ehr/issues/360) (the node-tier write-cost §1.2 measurement
-is not wired; db/044's `gesture_kind` CHECK must be widened first),
-[#361](https://github.com/cairn-ehr/cairn-ehr/issues/361) (db/045 rule 2e accepts an identifier term
-with a blank/absent `system` that pass 1 can never match — fold into the #353 audit), and
-[#362](https://github.com/cairn-ehr/cairn-ehr/issues/362) (`matched_pass` is computed and discarded,
-so the identifier match can be buried in UUID display order).
+**Deliberately NOT done (Slice 64):** the rule never reaches a patient named in a *payload* (an
+`identity.link`'s target chart may be remote-only and legitimately unregistered) — it is
+envelope-scoped and says so; `patient.amended` / `note.added` survive as unfloored walking-skeleton
+projection vehicles (they can no longer create a chart, but retiring them needs a replacement vehicle
+for the overlay/dispatcher tests they carry — worth an issue when someone touches them next).
 
----
+**Slice 63 (2026-08-05) — the funnel itself.** Full narrative in **ROADMAP Slice 63**; the one thing to
+carry into any future registration work: **the attestation NAMES the displayed candidates, it does not
+count them**, because *was the duplicate on screen when the clerk clicked create?* has opposite fixes
+for yes (fix the UI) and no (fix the comparator), and `N = 3` cannot separate them. Open follow-ons are
+enumerated in ROADMAP Slice 63 (#346–#357, #359–#362).
+
 
 **Session (2026-08-03) — Slices 61+62: the med-list node tier and WINDOW.** Branches
 `feat/med-list-ui-slice-288` (PRs #338/#341) and `feat/med-list-ui-tauri-288` (PR #343), owe
@@ -377,7 +375,7 @@ current build state, open threads, and time-sensitive items.
   *clinical documentation* — **waits on a clinical-note surface**; note a pending+disputed Doe already reads
   `'under-review'`, severity-max, so the slice-D forcing rule stands down while a dispute is open); the
   §5.12 "prior history now available" push-alert. The §5.3/§5.8 search-before-create funnel **shipped**
-  (Slice 63, ADR-0061); its enforcement half is [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345).
+  (Slice 63, ADR-0061) and its precedence rule is ENFORCED at the strict door (Slice 64, #345).
   Karyotype is resolved as a distinct field ([ADR-0037](spec/decisions/0037-demographic-administrative-sex-and-per-field-winner-policy.md)) —
   no code yet. Smaller deferred items live in the issues:
   [#79](https://github.com/cairn-ehr/cairn-ehr/issues/79) (B2 minors),
@@ -534,7 +532,7 @@ ADR before reopening any of these.
 | [0058](spec/decisions/0058-grade-gated-teffective-ceiling.md) | Grade-gated `t_effective` ceiling: a born `clock_grade` bounds the ceiling's rejecting power — `self-asserted`/`unknown` flag-never-reject (principle-4 fix for slow/dead clocks), remote door admits-and-flags never rejects (closes a sync-wedge DoS), interval derived not stored, mint constrained to self-asserted, gate-effect-not-presence; `cairn_clock_health` honest-assembly read; corrects ADR-0027 §6 `upper=RTC`→`RTC+W` | §3.6/§3.17 (refines 0003/0027; upholds 0051/0056) |
 | [0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) | Medication drug-identity coding (drug-axis companion to 0025): anchor on `drugref`'s immortal `moiety_uuid` (INN is display, never key); structured `substance.coding {system, code, display}` **replacing** the reserved `inn_code` slot; separately-authored inline-or-overlay coding act (`clinical.medication-coding.asserted` + `-correction.asserted`); **advisory + honest-degrading** — drugref-absent nodes still read/sync/reconcile, and the §5.9 safety class is **captured pre-seal on the coding node and carried**, never re-derived by the reader; dup-key on `(system, code)`, closing coded↔coded only; inline shape shipped as code slice 6a 2026-07-27 (ROADMAP Slice 56), the coding-overlay event types are slice 6b | §3.16/§3.3 (refines 0025/0047; applies 0007/0014/0052/0057) |
 | [0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md) | Partial validity: a defect on one element of a composite clinical object never invalidates the others — never refuse the whole for a defect in a part; partial completion must be REPORTED, never implied; the exclusion must name what would repair it; the sole admissible whole-operation refusal is "is this the same object the human reviewed?"; cancellation needs an owner and a rationale, and only a clinical actor may author one (local-authoring rule, never a wire rule); transaction scope must match clinical atomicity. Framing: *the system may fail to record an order; it may never cancel one* | §1.2 (corollary of principle 3; applies principle 4 + 0007/0047/0049) |
-| [0061](spec/decisions/0061-registration-is-an-act-that-carries-its-search.md) | Registration is an act that carries its search: one `identity.registration.asserted` type with §5.3's three classes so the precedence rule has no "unless"; the attestation **names** the displayed candidates (a count cannot separate "the UI failed" from "the search failed"); strict local submit / lenient remote apply with **enforcement deferred to #345** — the funnel is complete but not yet unbypassable; gating a standard registration on a bound human author is **rejected** (blocks care documentation, pushes named patients through John Doe, leaves no forensic record; §5.11 — a grade, not a gate); the body is not born-sealed, so rung-2 erasure must reach attestations naming a candidate; the typed name/DOB are asserted `registrar-entered` (`patient-stated` would often be a precise untruth); John Doe asserts a callsign and no name/DOB — symmetric rule, asymmetric content | §5.3/§5.8 (applies principles 2/3/4 and 0014/0022/0048/0051/0052/0053/0058/0060; refines none) |
+| [0061](spec/decisions/0061-registration-is-an-act-that-carries-its-search.md) | Registration is an act that carries its search: one `identity.registration.asserted` type with §5.3's three classes so the precedence rule has no "unless"; the attestation **names** the displayed candidates (a count cannot separate "the UI failed" from "the search failed"); strict local submit / lenient remote apply, enforcement deferred to #345 and **shipped there 2026-08-08** (the funnel is unbypassable at the strict door; the remote door stays lenient by design); gating a standard registration on a bound human author is **rejected** (blocks care documentation, pushes named patients through John Doe, leaves no forensic record; §5.11 — a grade, not a gate); the body is not born-sealed, so rung-2 erasure must reach attestations naming a candidate; the typed name/DOB are asserted `registrar-entered` (`patient-stated` would often be a precise untruth); John Doe asserts a callsign and no name/DOB — symmetric rule, asymmetric content | §5.3/§5.8 (applies principles 2/3/4 and 0014/0022/0048/0051/0052/0053/0058/0060; refines none) |
 
 **Ecosystem evals** (`docs/ecosystem/`, neither spec nor ADR): 0001 (kastellan/localmail plugins), 0003
 (reference-data sourcing — medicines/terminologies, fed ADR-0025).

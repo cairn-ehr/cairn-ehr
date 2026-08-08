@@ -304,6 +304,17 @@ cairn_patient_has_events(p_patient_id uuid) RETURNS boolean   -- pure, one index
 `patient.created` retirement and the fixture sweep, so the enforcement and the ~83 call sites it
 converts are reviewed together.
 
+> **Shipped 2026-08-08 (#345).** The predicate is `cairn_patient_has_events(uuid)` in **db/001**
+> (beside the `event_log_patient_idx` it reads); the refusal is **db/005 step 8b**, placed last
+> among the door's refusals so an event that is wrong in two ways still reports the defect in
+> ITSELF first. `apply_remote_event` was left untouched, and `patient_precedence.rs` asserts the
+> lenient remote admission directly so a future "make the doors symmetric" change fails loudly.
+> The retirement is **db/047**, which drops `patient.created`'s projection rows before its
+> classification row — the order db/005's own registry-validation trigger requires, now recorded
+> there as the precedent for any future retirement. Registration also took over the
+> `patient_chart` chart-birth projection, so a chart registered moments ago reports its
+> registration date as last activity instead of nothing.
+
 ### 4.3 Projection
 
 `patient_registration` — a **retained set**: every registration event keeps a row, exactly as

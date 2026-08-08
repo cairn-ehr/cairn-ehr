@@ -30,6 +30,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -170,6 +174,10 @@ async fn local_reassert_under_different_patient_refused() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -221,6 +229,10 @@ async fn local_cessation_under_different_patient_refused() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -267,6 +279,10 @@ async fn local_dose_change_under_different_patient_refused() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -309,6 +325,8 @@ async fn local_orphan_cessation_still_accepted() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let unknown_thread = Uuid::now_v7();
     cease_medication(
         &mut c,
@@ -343,6 +361,10 @@ async fn remote_reassert_converges_and_flags() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -405,6 +427,10 @@ async fn local_cross_patient_reconcile_refused() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let m1 = assert_medication(
         &mut c,
         &sk,
@@ -466,6 +492,10 @@ async fn cross_patient_group_surfaced_by_view() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let m1 = Uuid::now_v7();
     let m2 = Uuid::now_v7();
 
@@ -527,6 +557,10 @@ async fn cross_patient_group_via_cessation_only_thread_surfaced() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let m1 = Uuid::now_v7();
     let m2 = Uuid::now_v7();
 
@@ -600,6 +634,11 @@ async fn separation_of_cross_patient_group_still_accepted() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist — the reconcile/separate calls below are real local writes on
+    // patient_a, and the cross-patient state this test builds is only meaningful between two
+    // charts somebody actually made.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let m1 = Uuid::now_v7();
     let m2 = Uuid::now_v7();
     reconcile_medications(
@@ -674,6 +713,10 @@ async fn local_dose_correction_under_different_patient_refused() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,
@@ -737,6 +780,10 @@ async fn remote_dose_correction_converges_and_flags() {
     let (sk, kid) = setup_node(&c).await;
     let patient_a = Uuid::now_v7();
     let patient_b = Uuid::now_v7();
+    // #345: BOTH charts exist. The cross-patient refusal under test is only meaningful between
+    // two real charts — a misfile onto a chart nobody made is a different (and now impossible) bug.
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
     let med = assert_medication(
         &mut c,
         &sk,

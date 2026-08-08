@@ -26,10 +26,11 @@
 --
 -- # What is deliberately NOT here
 --
---   * The PRECEDENCE rule (`cairn_patient_has_events` and the db/005 call site that
---     would refuse clinical content on a chart with no registration) belongs to issue
---     #345. Adding it here would change the admission contract for ~83 existing call
---     sites in one commit; it gets its own slice.
+--   * The PRECEDENCE rule is NOT here — it shipped in the follow-on slice (issue #345),
+--     where it belongs to the door that enforces it: `cairn_patient_has_events` in db/001
+--     and the refusal at db/005 step 8b, with the `patient.created` retirement in db/047.
+--     It was split out because turning it on changed the admission contract for every
+--     existing test fixture in one go, and that sweep deserved its own review.
 --   * Any AUTHORSHIP requirement. A standard registration with NO human author is
 --     ACCEPTED — ADR-0061 decision 4: authorship confidence is a GRADE, not a gate (spec
 --     §5.11), and that decision records the rejected alternative in full. A gate

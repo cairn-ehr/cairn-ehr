@@ -17,6 +17,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -222,6 +226,8 @@ async fn repudiated_name_leaves_the_winner_but_a_surviving_name_takes_over() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
 
     // A fabricated legal name (newer, so it would win) + a true alias (older).
     submit_name(
@@ -317,6 +323,8 @@ async fn repudiating_the_only_name_yields_no_winner_not_a_lie() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
 
     submit_name(
         &c,
@@ -365,6 +373,8 @@ async fn reassert_is_idempotent_and_reason_is_hlc_latest_wins() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     submit_name(&c, &sk_a, &kid_a, p, 1, "Al Ias", "legal", "patient-stated").await;
 
     repudiate(
@@ -443,6 +453,8 @@ async fn newer_reassertion_does_not_unstrike_a_repudiated_name() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     submit_name(
         &c,
         &sk_a,
@@ -507,6 +519,8 @@ async fn unattested_repudiation_is_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     submit_name(
         &c,
         &sk_a,
@@ -551,6 +565,8 @@ async fn agent_attested_repudiation_is_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     submit_name(
         &c,
         &sk_a,
@@ -601,6 +617,8 @@ async fn empty_value_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let err = repudiate(&c, &sk_a, &kid_a, &sk_h, &kid_h, p, "   ", "reason", 1)
         .await
         .unwrap_err();
@@ -622,6 +640,8 @@ async fn empty_reason_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let err = repudiate(&c, &sk_a, &kid_a, &sk_h, &kid_h, p, "A Name", "", 1)
         .await
         .unwrap_err();
@@ -690,6 +710,8 @@ async fn missing_twin_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let body = repudiation_body(&kid_a, p, "Twinless", "reason", false); // no authored twin
     let signed = sign(&body, &sk_a).unwrap();
     let ca = event_address(&signed.signed_bytes);

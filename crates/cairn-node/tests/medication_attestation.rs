@@ -26,6 +26,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -221,6 +225,8 @@ async fn floor_accepts_well_formed_attestation() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // A real thread with one content event, so the commitment reflects genuine review.
     let medication_id = assert_medication(
@@ -279,6 +285,9 @@ async fn floor_rejects_bad_medication_id() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: deliberately NOT registered. This is a refusal case, and every floor check it
+    // exercises runs BEFORE the precedence rule (db/005 step 8b) — so the refusal message is
+    // still the one under test, and "nothing was appended" stays literally true.
 
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let payload = serde_json::json!({
@@ -316,6 +325,8 @@ async fn floor_rejects_malformed_commitment() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_h, &kid_h, patient, 0).await;
 
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let payload = serde_json::json!({
@@ -385,6 +396,8 @@ async fn floor_rejects_negative_count() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_h, &kid_h, patient, 0).await;
 
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
     let payload = serde_json::json!({
@@ -549,6 +562,9 @@ async fn device_key_cannot_attest_only_humans_vouch() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: registered, because the thread below is a real local write that must SUCCEED —
+    // only the device-key vouch after it is the refusal under test.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // A real thread with genuine content, so the floor + twin all pass and the ONLY
     // thing that can reject the vouch is the human gate — isolating the guarantee.
@@ -608,6 +624,8 @@ async fn commitment_fn_is_deterministic_and_null_when_absent() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -786,6 +804,8 @@ async fn post_hoc_attestation_shows_attester_and_not_stale() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // Assert a real thread, then have the human attest exactly what it now contains.
     let medication_id = assert_medication(
@@ -833,6 +853,8 @@ async fn later_change_flips_stale_true() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -911,6 +933,8 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -1025,6 +1049,8 @@ async fn group_current_only_when_all_members_current() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let a = assert_medication(
         &mut c,
@@ -1142,6 +1168,10 @@ async fn orphan_attestation_renders_nothing_until_thread_arrives() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_d, _kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: the CHART exists — what is deliberately absent is the medication THREAD. Those are
+    // different absences, and this test is about the second one: an attestation may name a
+    // thread set-union has not delivered yet, and must still be accepted.
+    common::submit_registration(&c, &sk_h, &kid_h, patient, 0).await;
 
     // Offline-first: a human attests a medication_id that has NO local content events
     // at all (set-union sync may deliver the attestation before the thread itself).
@@ -1274,6 +1304,8 @@ async fn attest_medication_thread_end_to_end() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // A real thread with one content event, so there is something genuine to vouch for.
     let medication_id = assert_medication(
@@ -1400,6 +1432,8 @@ async fn author_time_assert_is_attested_current_in_one_txn() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let params = AttestParams {
         human_sk: &sk_h,
@@ -1472,6 +1506,8 @@ async fn author_time_rejection_rolls_the_verb_back() {
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let (unenrolled_sk, unenrolled_kid) = generate_key().unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let params = AttestParams {
         human_sk: &unenrolled_sk,
@@ -1538,6 +1574,8 @@ async fn author_time_dose_change_is_attested_current() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -1613,6 +1651,8 @@ async fn reconcile_attest_as_vouches_for_both_threads() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let a = assert_medication(
         &mut c,
@@ -1707,6 +1747,8 @@ async fn supersede_not_retract_correction_flips_prior_vouch_stale() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -1912,6 +1954,8 @@ async fn reconcile_attest_second_subject_rejection_rolls_back_first() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // subject_a is a real thread (attested FIRST, would succeed); subject_b is an ORPHAN
     // (never asserted -> attested SECOND, bails "nothing to vouch for"). The reconcile
@@ -1977,6 +2021,8 @@ async fn separate_attest_second_subject_rejection_rolls_back_first() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let subject_a = assert_medication(
         &mut c,
@@ -2062,6 +2108,8 @@ async fn group_rollup_flags_an_unattested_member() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let a = assert_medication(
         &mut c,
@@ -2140,6 +2188,8 @@ async fn singleton_group_reduces_to_its_thread() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,
@@ -2209,6 +2259,8 @@ async fn equal_hlc_vouches_resolve_deterministically_by_content_address() {
     .await
     .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let medication_id = assert_medication(
         &mut c,

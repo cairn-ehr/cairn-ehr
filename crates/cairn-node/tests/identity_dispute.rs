@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 mod common;
 use common::{
-    cs, db_msg, person_chart_trust, submit_patient_created, submit_signed, trust_of, EventSpec,
+    cs, db_msg, person_chart_trust, submit_registration, submit_signed, trust_of, EventSpec,
 };
 
 /// The identity-overlay table this suite writes to, truncated per test by `common::setup`.
@@ -123,6 +123,50 @@ async fn resolve_dispute(
     .await
 }
 
+/// Apply a dispute through the REMOTE door, so it can name a chart this node has never seen.
+///
+/// The local door refuses a first event that is not a registration (#345); the remote door
+/// deliberately does not, because set-union sync has no ordering and a peer legitimately holds
+/// the chart this dispute is about. Signs the same body `submit_dispute` builds — the point is
+/// which door it enters by, not what it says.
+async fn apply_dispute_remotely(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    dispute_id: Uuid,
+    subject: Uuid,
+    wall: i64,
+) {
+    let (d_s, s_s) = (dispute_id.to_string(), subject.to_string());
+    let d = DisputeAssertion {
+        dispute_id: &d_s,
+        subject: &s_s,
+        reason: "patient states never attended",
+    };
+    let body = cairn_event::EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: s_s.clone(),
+        event_type: "identity.dispute.asserted".into(),
+        schema_version: "identity.dispute.asserted/1".into(),
+        hlc: cairn_event::Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: dispute_assertion_body(&d),
+        attachments: vec![],
+        plaintext_twin: Some(render_dispute_twin(&d)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&body, sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("a peer's dispute about a chart we do not hold must be admitted");
+}
+
 /// The standing state of a dispute row, or None if no row exists.
 async fn dispute_state(c: &Client, dispute_id: Uuid) -> Option<String> {
     let d_s = dispute_id.to_string();
@@ -144,6 +188,8 @@ async fn valid_dispute_is_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     open_dispute(&c, &sk, &kid, d, subj, 100)
         .await
         .expect("valid dispute accepted");
@@ -157,6 +203,8 @@ async fn newer_resolve_overlays_open() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // open @100
     resolve_dispute(&c, &sk, &kid, d, subj, 200).await.unwrap(); // resolve @200 (newer)
     assert_eq!(dispute_state(&c, d).await.as_deref(), Some("resolved"));
@@ -171,6 +219,8 @@ async fn older_open_does_not_reopen_resolved() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     resolve_dispute(&c, &sk, &kid, d, subj, 200).await.unwrap(); // resolve @200 lands first
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // open @100 lands later (older)
     assert_eq!(
@@ -187,6 +237,8 @@ async fn reassert_same_dispute_is_one_row() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap();
     open_dispute(&c, &sk, &kid, d, subj, 105).await.unwrap(); // a second, later open of the same dispute
     let n: i64 = c
@@ -215,6 +267,14 @@ async fn local_subject_change_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj_a, subj_b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // #345: BOTH charts are registered. `subj_a` because the first open must succeed — and
+    // `subj_b` because the refusal under test lives in the PROJECTION apply (db/023, after the
+    // event_log INSERT), while the precedence rule sits before it: an unregistered `subj_b`
+    // would be refused for having no chart, and this test would stop exercising the
+    // one-dispute-one-chart rule it exists for. Re-binding a dispute to a different REAL chart
+    // is also the only version of this bug a caller can actually commit.
+    submit_registration(&c, &sk, &kid, subj_a, 1).await;
+    submit_registration(&c, &sk, &kid, subj_b, 1).await;
     open_dispute(&c, &sk, &kid, d, subj_a, 100).await.unwrap();
     let err = open_dispute(&c, &sk, &kid, d, subj_b, 110)
         .await
@@ -243,7 +303,7 @@ async fn open_marks_chart_under_review() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d, subj, 110).await.unwrap();
     assert_eq!(trust_of(&c, subj).await.as_deref(), Some("under-review"));
     assert_eq!(
@@ -260,7 +320,7 @@ async fn resolve_returns_to_confirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d, subj, 110).await.unwrap();
     resolve_dispute(&c, &sk, &kid, d, subj, 120).await.unwrap();
     assert_eq!(
@@ -282,7 +342,7 @@ async fn no_dispute_reads_confirmed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let subj = Uuid::now_v7();
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     assert_eq!(trust_of(&c, subj).await, None);
     assert_eq!(
         person_chart_trust(&c, subj).await.as_deref(),
@@ -301,7 +361,7 @@ async fn resolve_one_of_two_stays_under_review() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d1, d2, subj) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-    submit_patient_created(&c, &sk, &kid, subj, 100).await;
+    submit_registration(&c, &sk, &kid, subj, 100).await;
     open_dispute(&c, &sk, &kid, d1, subj, 110).await.unwrap();
     open_dispute(&c, &sk, &kid, d2, subj, 111).await.unwrap();
     resolve_dispute(&c, &sk, &kid, d1, subj, 120).await.unwrap();
@@ -324,12 +384,20 @@ async fn dispute_before_chart_still_under_review() {
     // reports under-review for that subject (the safety signal exists without the body,
     // mirroring §5.9). person_chart only lists it once the chart arrives, which is
     // correct for a *chart* read.
+    //
+    // #345 changed HOW this state is reached, not whether it exists. A chart this node has
+    // never seen can no longer be disputed by a LOCAL author — the precedence rule refuses a
+    // first event that is not a registration — so the dispute now arrives the way it really
+    // would: through `apply_remote_event`, from a peer that holds the chart. That is the
+    // lenient door working as designed (ADR-0061 decision 3), and it makes this test a
+    // stronger statement than before: the safety signal survives even when the disputing
+    // event and the chart it names are on different nodes.
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
-    open_dispute(&c, &sk, &kid, d, subj, 100).await.unwrap(); // no patient.created for subj
+    apply_dispute_remotely(&c, &sk, &kid, d, subj, 100).await; // no registration for subj
     assert_eq!(
         trust_of(&c, subj).await.as_deref(),
         Some("under-review"),
@@ -351,6 +419,8 @@ async fn empty_reason_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     let err = submit_dispute(&c, &sk, &kid, d, subj, 100, true, "   ")
         .await
         .unwrap_err();
@@ -368,6 +438,8 @@ async fn empty_resolution_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     let err = submit_dispute(&c, &sk, &kid, d, subj, 100, false, "")
         .await
         .unwrap_err();
@@ -385,6 +457,8 @@ async fn missing_twin_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (d, subj) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the disputed chart exists before it can be disputed.
+    submit_registration(&c, &sk, &kid, subj, 1).await;
     // Build a dispute event with NO authored twin — the identity floor HARD-requires one.
     let (d_s, s_s) = (d.to_string(), subj.to_string());
     let da = DisputeAssertion {

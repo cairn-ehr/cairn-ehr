@@ -116,9 +116,11 @@ async fn registry_rejects_missing_projection_table() {
 }
 
 /// The dispatcher replaces db/002's per-type trigger: a directly-inserted
-/// patient.created event still materializes its patient_chart row.
+/// patient.amended event still materializes its patient_chart row.
+/// (`patient.created` played this role until #345 retired it; `patient.amended` shares the
+/// identical db/002 branch, so the dispatch path under test is unchanged.)
 #[tokio::test]
-async fn dispatcher_routes_patient_created_to_patient_chart() {
+async fn dispatcher_routes_patient_amended_to_patient_chart() {
     let Some(base) = cs() else { return };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
@@ -134,7 +136,7 @@ async fn dispatcher_routes_patient_created_to_patient_chart() {
          INSERT INTO event_log (event_id, patient_id, event_type, schema_version,
              hlc_wall, hlc_counter, node_origin, signed_bytes, content_address,
              body, contributors, signer_key_id, plaintext_twin)
-         SELECT $1::text::uuid, $1::text::uuid, 'patient.created', 'test-1',
+         SELECT $1::text::uuid, $1::text::uuid, 'patient.amended', 'test-1',
              (extract(epoch from now()) * 1000)::bigint, 0, 'test-node', b,
              '\\x1220'::bytea || digest(b, 'sha256'),
              jsonb_build_object('name', 'Reproject Probe'),
@@ -157,7 +159,9 @@ async fn dispatcher_routes_patient_created_to_patient_chart() {
     // probe event stays, which is fine on the shared test DB (fresh UUID each run).
 }
 
-/// Steady-state replay must not rewrite the three seeded patient_chart_apply rows
+/// Steady-state replay must not rewrite the three patient_chart_apply rows
+/// (`patient.amended` + `note.added` from db/005, `identity.registration.asserted` from
+/// db/047 — #345 swapped the retired `patient.created` for the registration act)
 /// (modeled on twin_registry.rs's steady_state_replay_leaves_registry_rows_untouched).
 /// connect_and_load_schema replays db/005's registration INSERT on every connect; without
 /// the `WHERE ... IS DISTINCT FROM` guard, an unconditional DO UPDATE writes a new row
@@ -187,7 +191,8 @@ async fn steady_state_replay_leaves_projection_rows_untouched() {
     assert_eq!(
         before.len(),
         3,
-        "expected the 3 seeded patient_chart_apply registration rows"
+        "expected 3 registered patient_chart_apply rows (patient.amended, note.added, \
+         identity.registration.asserted)"
     );
     drop(c);
 
@@ -224,7 +229,7 @@ async fn reproject_heals_tampered_projection_row() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     // uuid crate types have no tokio-postgres ToSql/FromSql impl in this workspace —
     // bind as text and cast in SQL via `$N::text::uuid` (established idiom, see
-    // dispatcher_routes_patient_created_to_patient_chart above).
+    // dispatcher_routes_patient_amended_to_patient_chart above).
     let pid: String = c
         .query_one("SELECT uuidv7()::text", &[])
         .await
@@ -235,7 +240,7 @@ async fn reproject_heals_tampered_projection_row() {
          INSERT INTO event_log (event_id, patient_id, event_type, schema_version,
              hlc_wall, hlc_counter, node_origin, signed_bytes, content_address,
              body, contributors, signer_key_id, plaintext_twin)
-         SELECT $1::text::uuid, $1::text::uuid, 'patient.created', 'test-1',
+         SELECT $1::text::uuid, $1::text::uuid, 'patient.amended', 'test-1',
              (extract(epoch from now()) * 1000)::bigint, 0, 'test-node', b,
              '\\x1220'::bytea || digest(b, 'sha256'),
              jsonb_build_object('name', 'True Winner'),
@@ -307,7 +312,7 @@ async fn heal_skips_counter_shaped_rows() {
         .await
         .unwrap()
         .get(0);
-    for (i, ty) in ["patient.created", "note.added"].iter().enumerate() {
+    for (i, ty) in ["patient.amended", "note.added"].iter().enumerate() {
         c.execute(
             "WITH sb AS (SELECT ('skip-test-' || $2::text || $1::text)::bytea AS b)
              INSERT INTO event_log (event_id, patient_id, event_type, schema_version,
@@ -397,7 +402,7 @@ async fn replay_respects_eligibility_seam() {
          INSERT INTO event_log (event_id, patient_id, event_type, schema_version,
              hlc_wall, hlc_counter, node_origin, signed_bytes, content_address,
              body, contributors, signer_key_id, plaintext_twin)
-         SELECT $1::text::uuid, $1::text::uuid, 'patient.created', 'test-1',
+         SELECT $1::text::uuid, $1::text::uuid, 'patient.amended', 'test-1',
              (extract(epoch from now()) * 1000)::bigint, 0, 'test-node', b,
              '\\x1220'::bytea || digest(b, 'sha256'),
              jsonb_build_object('name', 'Eligible Winner'),

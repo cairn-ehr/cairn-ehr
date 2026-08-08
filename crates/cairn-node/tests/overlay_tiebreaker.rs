@@ -21,6 +21,11 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// NOTE (#345): this suite registers NO charts. Every event here is applied through
+// `apply_remote_event` — the door where the §5.3/§5.8 precedence rule deliberately does not apply
+// — because a Byzantine HLC collision is a property of REPLICATED events. Adding a registration
+// would only add an event to the overlays these tests count.
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
