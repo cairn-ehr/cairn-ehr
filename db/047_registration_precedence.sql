@@ -35,9 +35,16 @@
 -- They stay in the log, exactly as principle 1 requires — nothing is rewritten and nothing is
 -- erased. Their existing `patient_chart` rows stay too, because a heal-mode reproject never
 -- truncates. A `reproject --rebuild` would NOT re-derive them, since the type no longer
--- resolves to an apply fn: the chart row would come back only from the events that still
--- project. That is acceptable and deliberate on a pre-clinical project, and it is stated here
--- so it is discovered by reading rather than by surprise.
+-- resolves to an apply fn: a chart whose only demographic event was a `patient.created` comes
+-- back without its name/dob/sex, with no error and no warning anywhere. That is acceptable and
+-- deliberate on a pre-clinical project (no real data, dev rigs are wiped freely), and it is
+-- stated here so it is discovered by reading rather than by surprise.
+--
+-- It is NOT, however, folklore: **issue #365** tracks it. What is missing is generic and
+-- outlives this file — a rebuild has no way to tell an operator that some of what it just
+-- truncated cannot be re-derived — so the fix is a decision about `cairn_reproject` (warn?
+-- refuse without --force? keep a retired-projection ledger?), not a patch to this migration.
+-- The SECOND retirement is where it stops being inert; #364 is already queued behind this one.
 --
 -- A PEER still running older code may keep sending `patient.created`. The remote door admits
 -- it UNINTERPRETED (ADR-0056: custody total, interpretation deferred, power earned) — no

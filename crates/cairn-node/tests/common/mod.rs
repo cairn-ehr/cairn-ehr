@@ -296,6 +296,23 @@ pub async fn submit_registration(
     event_id
 }
 
+/// Register BOTH charts of a candidate/proposed pair (#345).
+///
+/// The matching suites (`apply_proposal.rs`, `auto_apply.rs`) seed a `match_proposal` row
+/// directly, which is a projection seed rather than an event — so neither chart exists yet, and
+/// since the precedence rule landed a link may only be authored between charts that DO. Both
+/// wrote this pair of [`submit_registration`] calls identically, which is exactly the drift
+/// #120/#327 exist to stop, so it lives here once.
+///
+/// The registrations are authored by the caller's SEEDER key, never the matcher's: registration
+/// is a registrar act, and the matcher never registers anyone — it only ever proposes links
+/// between charts other actors created. Wall 1 keeps the birth act below every event these
+/// suites author (see [`submit_registration`] on why the wall must be low).
+pub async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, high: Uuid) {
+    submit_registration(c, sk, kid, low, 1).await;
+    submit_registration(c, sk, kid, high, 1).await;
+}
+
 /// The effective trust state `chart_trust` reports for a subject, or `None` (== confirmed).
 ///
 /// `chart_trust` is the authoritative pre-sync safety signal: it answers for a chart

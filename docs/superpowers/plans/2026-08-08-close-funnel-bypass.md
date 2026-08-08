@@ -616,6 +616,12 @@ Immediately after step 8 (`v_twin := cairn_event_twin(v_type, b_clear);`) and be
     END IF;
 ```
 
+> **Post-review correction (2026-08-09).** The PLACEMENT paragraph above says *"last of the
+> refusals"*. That is false and the shipped comment says so instead: four refusals follow step 8b —
+> the step-9 custody check (no registered node unwrap key), the post-INSERT substitution check, and
+> step 10's two erasure-target checks — each correctly placed after it because each judges the log's
+> own state rather than the event. Copy the shipped `db/005` wording, not this block's.
+
 - [ ] **Step 5: Add the SQL mirror**
 
 Append to `db/tests/005_submit_test.sql`, following that file's existing `DO $$ ... EXCEPTION` idiom:

@@ -14,10 +14,19 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-// NOTE (#345): this suite registers NO charts. Every event here arrives through
+// NOTE (#345): this suite registers NO charts. Almost every event here arrives through
 // `apply_remote_event`, where the §5.3/§5.8 precedence rule deliberately does not apply — a chart
 // known only from a peer's event is the honest fixture for a deferral test, and registering one
 // would add an event the "a deferred event must project nothing" assertions would then count.
+//
+// The ONE exception is `strict_door_still_refuses_an_unclassifiable_type`, which authors through
+// the local `submit_event` door on purpose (the strict door is the thing under test) and equally
+// on purpose leaves its chart unregistered: that door refuses the unknown type at db/005 step 3,
+// well before the precedence rule at step 8b, so the refusal it asserts is still its own.
+//
+// So: a NEW test here that authors locally and expects to SUCCEED — or that expects a refusal
+// from a check at or after step 8b — must register its chart first, or it will fail with
+// "no chart exists for patient …", which has nothing to do with deferred admission.
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()

@@ -135,7 +135,7 @@ Postgres-on-Android).
 `feat/close-funnel-bypass-345`, owes [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345). No new
 ADR (ADR-0061 decision 3 already decided this and deferred only its enforcement); spec **v0.63**
 unchanged, §5.8's "not yet turned on" warning replaced by the enforced statement; `SCHEMA_GENERATION`
-46→47 for `db/047`. Full narrative in **ROADMAP Slice 64**; four things worth carrying:
+46→47 for `db/047`. Full narrative in **ROADMAP Slice 64**; five things worth carrying:
 
 1. **Retiring `patient.created` was the load-bearing half, not a tidy-up.** Leaving an unfloored
    walking-skeleton registration act classified would have made the rule read *"…must be a
@@ -149,20 +149,21 @@ unchanged, §5.8's "not yet turned on" warning replaced by the enforced statemen
    loaders now carry db/045 + db/047. **When you add a rule to a shared file, re-check every subset
    that loads it.**
 3. **Placement among refusals is a legibility decision, and worth making deliberately.** The rule sits
-   LAST in `submit_event`, after every check that judges the event ITSELF. A defect in the event is the
-   author's first problem; the chart's history is the second — so an event wrong in two ways still
-   reports the reason it always reported, and the ~300-fixture sweep did not have to re-learn every
-   other refusal message.
+   after every check that judges the event ITSELF — not last in `submit_event`, since four refusals
+   that read the log's own state (custody, substitution, the two erasure-target checks) necessarily
+   follow it. A defect in the event is the author's first problem; the chart's history is the second —
+   so an event wrong in two ways still reports the reason it always reported, and the ~300-fixture
+   sweep did not have to re-learn every other refusal message.
 4. **The fixtures now model the reality they always described**, and where they should NOT, that is
    explicit. 377 registration calls across 44 `cairn-node` test files plus `cairn-sync`'s cross-crate
    suite (versus the design doc's third estimate of *~83 submit call sites across ~38 files* — a
    different unit, recorded so the next reader compares like with like). **Three suites deliberately
    register nothing and say so at the top** — `deferred_admission`, `overlay_tiebreaker`,
    `medication_remote_apply` — because every event they author arrives through the lenient remote
-   door, and a registration there would only add a row their absence-assertions count. Where a test's *point* is a chart nobody
-   registered — the lenient remote door — that is now explicit and commented, in
+   door, and a registration there would only add a row their absence-assertions count (with
+   `deferred_admission`'s one local-door test naming why it is the exception). Where a test's *point*
+   is a chart nobody registered — the lenient remote door — that is now explicit and commented, in
    `patient_precedence.rs` and `recall_epoch.rs`'s three `apply_remote_event` cases.
-
 5. **A chart's registration is part of its author's RECALL set** — found by `recall_epoch`'s
    exact-set assertions failing by exactly one entry. That is the property working, not fixture
    noise: an ADR-0011 contamination cascade over a recalled actor must reach **the charts that

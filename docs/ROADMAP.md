@@ -430,8 +430,10 @@ registration licensing it, and a fail-closed remote door would wedge replication
    call sites across ~38 files* was the third estimate of this work; the actual conversion added
    **377 registration calls across 44 `cairn-node` test files**, plus a local helper in `cairn-sync`'s
    cross-crate suite — and three suites that deliberately register NOTHING, with a header saying why
-   (`deferred_admission`, `overlay_tiebreaker`, `medication_remote_apply`: every event they author
-   arrives through the lenient remote door). The
+   (`deferred_admission`, `overlay_tiebreaker`, `medication_remote_apply`: essentially every event
+   they author arrives through the lenient remote door, and `deferred_admission`'s one local-door
+   test — the strict door refusing an unclassifiable type — is refused at db/005 step 3, well before
+   the precedence rule, which its header now names). The
    fixtures now model the production reality they always described: a chart exists because someone
    registered it. Where a test's *point* is a chart nobody registered — the lenient remote door — that
    is now explicit (`patient_precedence.rs`, and `recall_epoch.rs`'s three `apply_remote_event`

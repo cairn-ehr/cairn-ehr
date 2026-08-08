@@ -376,8 +376,12 @@ async fn floor_rejects_each_invariant_violation() {
 /// Regression guard: a legacy event type with NO authored twin must still be accepted
 /// by the updated submit_event and receive the derived skeleton twin (not a panic or
 /// a rejection).  Proves the §4.5 demographic branch does not break ordinary events.
+///
+/// The legacy type it drives is `patient.amended`: this guard was written against
+/// `patient.created`, which #345 retired (db/047) — same shape, same untwinned legacy
+/// status, so the guard is unchanged in substance and only its carrier moved.
 #[tokio::test]
-async fn legacy_patient_created_still_uses_derived_twin() {
+async fn legacy_untwinned_type_still_uses_derived_twin() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

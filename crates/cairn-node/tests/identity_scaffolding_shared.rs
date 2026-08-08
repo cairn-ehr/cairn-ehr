@@ -192,11 +192,13 @@ fn derivation_finds_the_expected_helpers() {
             // suppressing-mode repudiation test). Their presence here does not mean they
             // are identity-specific — only that an identity-bound file (BOUND above) must
             // not declare its own copy of them. See the module header's widened first
-            // paragraph.
+            // paragraph. `register_pair` joined them in #345's review: the matching suites
+            // (`apply_proposal.rs`, `auto_apply.rs`) had written it identically.
             "async fn attestation_count(",
             "async fn enroll_human(",
             "async fn medication_setup(",
             "async fn person_chart_trust(",
+            "async fn register_pair(",
             "async fn submit_attested(",
             "async fn submit_registration(",
             "async fn submit_signed(",

@@ -21,6 +21,9 @@
   describing code that was never built. Each is a marked blockquote immediately below the passage it
   corrects, the original wording is preserved above it, and **no decision content changes** — see the
   errata rule in [README](README.md#rules).
+- **Implementation notes:** **N1** (2026-08-08) — decision 3's deferred enforcement shipped. Appended
+  below decision 3 in the same never-substitute form as the errata; nothing above it is edited, and this
+  ADR's index row in [README](README.md) still reads as it did on the day it was accepted.
 
 ## Context
 
@@ -163,6 +166,17 @@ but not surfaced in any UI yet.
 > chart by asserting a name.** Stated plainly rather than implied — the same discipline ADR-0060 decision 2
 > applies to clinical output, applied here to our own build state. Nothing in §5.3/§5.8 may be read as a
 > guarantee until #345 closes.
+>
+> > **Implementation note N1 (2026-08-08) — the deferral above is now closed; the decision is unchanged.**
+> > #345 shipped as slice 64. The paragraph above stands as written — it was true of slice 63, and it is
+> > left standing rather than rewritten so the ADR keeps reading as it did on the day it was accepted. What
+> > changed is only the build state it describes: `submit_event` step 8b (`db/005`, over the
+> > `cairn_patient_has_events` predicate in `db/001`) now refuses any first event on a chart that is not an
+> > `identity.registration.asserted`, and `apply_remote_event` deliberately still does not — exactly the
+> > split this decision specifies. `db/047` retires `patient.created` in the same change, so decision 1's
+> > "no unless" holds literally. **§5.3/§5.8 may now be read as a guarantee at the strict local door**, and
+> > only there. Pinned by `crates/cairn-node/tests/patient_precedence.rs` and
+> > `db/tests/047_registration_precedence_test.sql`.
 
 ### 4. Rejected alternative: gating a standard registration on a bound human author
 

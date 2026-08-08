@@ -112,14 +112,7 @@ async fn submit_raw_overlay(
     payload: serde_json::Value,
 ) -> Result<u64, tokio_postgres::Error> {
     let hlc = db::next_hlc(c, "test-node").await.unwrap();
-    // #345: this helper has always minted the chart it writes to, so it owns making that chart
-    // exist. Only the LOCAL door needs it — `apply_remote_event` is lenient about the
-    // precedence rule by design (ADR-0061 decision 3), and registering there would add a local
-    // write to a test about the remote path.
     let patient = Uuid::now_v7();
-    if door == "submit_event" {
-        common::submit_registration(c, sk, kid, patient, 0).await;
-    }
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: patient.to_string(),
@@ -135,7 +128,20 @@ async fn submit_raw_overlay(
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
     };
     match door {
-        "submit_event" => seal_and_submit(c, sk, body).await,
+        // #345: this helper has always minted the chart it writes to, so it owns making that
+        // chart exist — but only the LOCAL door needs it. `apply_remote_event` is lenient about
+        // the precedence rule by design (ADR-0061 decision 3), and registering there would add a
+        // local write to a test about the remote path.
+        //
+        // The registration lives INSIDE this arm rather than behind a second `door ==` test
+        // further up, so the decision to register and the decision to route are one decision. A
+        // renamed or aliased door name could otherwise satisfy one and not the other, and the
+        // submit would then fail with "no chart exists for patient …" instead of the malformed-
+        // payload refusal under test.
+        "submit_event" => {
+            common::submit_registration(c, sk, kid, patient, 0).await;
+            seal_and_submit(c, sk, body).await
+        }
         _ => {
             let signed = sign(&body, sk).unwrap();
             c.execute(&format!("SELECT {door}($1)")[..], &[&signed.signed_bytes])

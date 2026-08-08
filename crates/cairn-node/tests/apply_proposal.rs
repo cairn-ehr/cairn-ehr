@@ -10,7 +10,8 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+// Shared scaffolding, for `register_pair` (#345, #120/#327 — one copy; `auto_apply.rs` needs
+// the identical helper, so it lives in `common` rather than in either suite).
 mod common;
 
 fn cs() -> Option<String> {
@@ -82,14 +83,6 @@ fn canonical(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
     }
 }
 
-/// Register both charts of a proposed pair (#345): the precedence rule means the first event on a
-/// chart must be its registration, and these suites seed proposals rather than authoring the
-/// demographic events a real pair would already carry.
-async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, high: Uuid) {
-    common::submit_registration(c, sk, kid, low, 1).await;
-    common::submit_registration(c, sk, kid, high, 1).await;
-}
-
 #[tokio::test]
 async fn accepted_proposal_becomes_attested_link_and_projects_person() {
     let Some(base) = cs() else { return };
@@ -99,7 +92,7 @@ async fn accepted_proposal_becomes_attested_link_and_projects_person() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
     // projection seed, not an event, so both charts are registered first.
-    register_pair(&c, &sk_h, &kid_h, low, high).await;
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     let eid = apply_accepted_proposal(
@@ -187,7 +180,7 @@ async fn pair_passed_in_reverse_order_still_applies() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
     // projection seed, not an event, so both charts are registered first.
-    register_pair(&c, &sk_h, &kid_h, low, high).await;
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     // Call with the arguments deliberately reversed.
@@ -237,7 +230,7 @@ async fn re_applying_is_idempotent_no_second_link_event() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
     // projection seed, not an event, so both charts are registered first.
-    register_pair(&c, &sk_h, &kid_h, low, high).await;
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     // First apply succeeds.
@@ -307,7 +300,7 @@ async fn non_human_attester_is_refused_and_nothing_leaks() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
     // projection seed, not an event, so both charts are registered first.
-    register_pair(&c, &sk_h, &kid_h, low, high).await;
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "accepted").await;
 
     let r = apply_accepted_proposal(
@@ -358,7 +351,7 @@ async fn pending_proposal_is_not_applied() {
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
     // #345: a link may only be authored between charts that EXIST — a match_proposal row is a
     // projection seed, not an event, so both charts are registered first.
-    register_pair(&c, &sk_h, &kid_h, low, high).await;
+    common::register_pair(&c, &sk_h, &kid_h, low, high).await;
     seed_accepted_proposal(&c, low, high, "pending").await;
 
     let r = apply_accepted_proposal(

@@ -5286,13 +5286,10 @@ mod schema_subset_tests {
     use super::*;
     use cairn_event::{Attachment, Rendition};
 
-    /// Build + sign one `patient.amended` event (`patient.created` was retired by #345;
-    /// the demographic-overlay projection it drives is unchanged). The body mirrors what
-    /// `emit_event` authors (payload name/dob/sex is what the db/002 projection reads), with
-    /// the HLC triple caller-chosen so the Byzantine-collision case can be constructed.
     /// Build + sign one `identity.registration.asserted` (§5.3 standard class, an empty
     /// displayed set — the normal case for a genuinely new patient). Needed because the
-    /// precedence rule (#345) makes registration the only legal FIRST event on a chart.
+    /// precedence rule (#345) makes registration the only legal FIRST event on a chart, so
+    /// every chart these tests write to has to be opened with one of these first.
     fn signed_registration(
         sk: &SigningKey,
         kid: &str,
@@ -5335,6 +5332,10 @@ mod schema_subset_tests {
         sign(&body, sk).unwrap().signed_bytes.to_vec()
     }
 
+    /// Build + sign one `patient.amended` event (`patient.created` was retired by #345;
+    /// the demographic-overlay projection it drives is unchanged). The body mirrors what
+    /// `emit_event` authors (payload name/dob/sex is what the db/002 projection reads), with
+    /// the HLC triple caller-chosen so the Byzantine-collision case can be constructed.
     fn signed_patient_amended(
         sk: &SigningKey,
         kid: &str,

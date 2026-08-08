@@ -2111,9 +2111,11 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     let patient = Uuid::now_v7();
     // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
     // about it. Authored on A only — B receives it by sync like every other event.
+    // `reset` did RESTART IDENTITY, so this registration takes **seq 1** and every seq
+    // named below counts from there. Insert another event ahead of it and they all shift.
     register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
-    // seq 1: a legit medication, born sealed + projected on A (with custody).
+    // seq 2: a legit medication, born sealed + projected on A (with custody).
     assert_medication(
         &mut a,
         &sk_d,
@@ -2137,7 +2139,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     .await
     .unwrap();
 
-    // seq 2: the wrongly-sealed demographic. INJECTED onto A with the projection triggers
+    // seq 3: the wrongly-sealed demographic. INJECTED onto A with the projection triggers
     // SUPPRESSED (session_replication_role=replica) — the strict door would refuse it and
     // (pre-fix) the apply door would detonate on A too; suppressing the triggers on the
     // INJECTING node isolates the RED to B's PULL, modelling "A received this from a third
@@ -2154,7 +2156,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         .unwrap();
     injected.expect("A holds the sealed demographic (projection triggers suppressed on inject)");
 
-    // seq 3: the SUBSEQUENT legitimate medication that must still reach B if sync is unwedged.
+    // seq 4: the SUBSEQUENT legitimate medication that must still reach B if sync is unwedged.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2216,8 +2218,8 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
         String::from_utf8_lossy(&pull.stderr)
     );
 
-    // The watermark sailed past the sealed noise: B holds the SUBSEQUENT ibuprofen (seq 3),
-    // so the seq cursor was never frozen at the sealed demographic (seq 2). Pre-fix it froze
+    // The watermark sailed past the sealed noise: B holds the SUBSEQUENT ibuprofen (seq 4),
+    // so the seq cursor was never frozen at the sealed demographic (seq 3). Pre-fix it froze
     // there and ibuprofen never arrived.
     let ibuprofen_on_b: i64 = b
         .query_one(
@@ -2307,8 +2309,9 @@ async fn author_forward_dated_note(
 /// is ADMITTED + FLAGGED, never rejected.
 ///
 /// Mirrors `sealed_non_clinical_pull_does_not_freeze_the_watermark`'s two-node harness
-/// exactly: seq 1 is a legit medication, seq 2 is the pathological event, seq 3 is a
-/// SUBSEQUENT legit medication whose arrival on B is the proof the watermark never froze.
+/// exactly: seq 1 is the chart's registration (#345), seq 2 a legit medication, seq 3 the
+/// pathological event, seq 4 a SUBSEQUENT legit medication whose arrival on B is the proof
+/// the watermark never froze.
 ///
 /// Skips unless BOTH CAIRN_TEST_PG (A) and CAIRN_TEST_PG2 (B) are set.
 #[tokio::test]
@@ -2343,9 +2346,11 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     let patient = Uuid::now_v7();
     // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
     // about it. Authored on A only — B receives it by sync like every other event.
+    // `reset` did RESTART IDENTITY, so this registration takes **seq 1** and every seq
+    // named below counts from there. Insert another event ahead of it and they all shift.
     register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
-    // seq 1: a legit medication, authored + projected on A.
+    // seq 2: a legit medication, authored + projected on A.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2369,14 +2374,14 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     .await
     .unwrap();
 
-    // seq 2: the forward-dated event — self-asserted grade, t_effective ~4.5 years past its
+    // seq 3: the forward-dated event — self-asserted grade, t_effective ~4.5 years past its
     // own HLC wall. A legitimately holds it (admitted at the already grade-gated STRICT
     // door); B's REMOTE apply is the door under test when it pulls it over the wire.
     let (signed_forward, forward_event_id) =
         author_forward_dated_note(&a, &sk_d, &kid_d, patient, WALL).await;
     let forward_ca = event_address(&signed_forward);
 
-    // seq 3: the SUBSEQUENT legit medication that must still reach B if sync is unwedged.
+    // seq 4: the SUBSEQUENT legit medication that must still reach B if sync is unwedged.
     assert_medication(
         &mut a,
         &sk_d,
@@ -2439,7 +2444,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     );
 
     // The watermark sailed past the forward-dated event: B holds the SUBSEQUENT
-    // ibuprofen (seq 3), so the seq cursor was never frozen at seq 2. Pre-fix it froze
+    // ibuprofen (seq 4), so the seq cursor was never frozen at seq 3. Pre-fix it froze
     // there and ibuprofen never arrived — the #216 F1/F2 DoS.
     let ibuprofen_on_b: i64 = b
         .query_one(

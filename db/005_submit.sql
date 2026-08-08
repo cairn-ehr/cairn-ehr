@@ -976,12 +976,28 @@ BEGIN
     --     the legacy patient.created (retired in db/047). An "unless" in a safety floor is
     --     where the next defect lives.
     --
-    --     PLACEMENT is deliberate: last of the refusals, after every check that judges the
-    --     EVENT itself (signature, clock, contributors, actor, attestation, seal, twin,
-    --     structural floor) and before anything is written. A defect in the event is the
-    --     author's first problem; the chart's history is the second. Ordering among refusals is
-    --     a legibility property, never a safety one — every path here refuses — but it means an
-    --     event that is wrong in two ways keeps reporting the reason it always reported.
+    --     PLACEMENT is deliberate: after every check that judges the EVENT itself (signature,
+    --     clock, contributors, actor, attestation, seal, twin, structural floor) and before
+    --     anything is written. A defect in the event is the author's first problem; the chart's
+    --     history is the second.
+    --
+    --     It is NOT the last refusal in this function, and a check added after it does not
+    --     inherit this position. Four refusals still follow, and none of them judges the event:
+    --       * step 9 refuses a sealed submit when THIS NODE has no registered unwrap key — a
+    --         node-configuration failure, not an event defect. It sits with the custody writes it
+    --         guards rather than up here, so the check and the INSERT it protects stay adjacent.
+    --       * the post-INSERT arm refuses a substitution: it can only compare against what the
+    --         log already holds, so it cannot run before the INSERT at all.
+    --       * step 10's two erasure refusals judge the shred TARGET's presence and sealedness —
+    --         again the log's state, read after the tombstone itself has been admitted.
+    --     A NEW check belongs HERE if it judges the event; if it judges the node's configuration
+    --     or the log's contents, it belongs down there, next to the write it guards.
+    --
+    --     All four are therefore SHADOWED on a chart-less write: a raw-SQL shred whose envelope
+    --     names an unregistered patient now reports this rule rather than "targets unknown event".
+    --     That is intended. Ordering among refusals is a legibility property, never a safety one
+    --     — every path here refuses, nothing is written either way — and an event that is wrong
+    --     in two ways keeps reporting the reason it always reported.
     --
     --     STRICT DOOR ONLY. db/020 (apply_remote_event) must NEVER call this: set-union sync
     --     has no ordering, so a peer's clinical event legitimately precedes the registration
