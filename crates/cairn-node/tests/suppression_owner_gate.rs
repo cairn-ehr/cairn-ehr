@@ -10,6 +10,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 const SUBMIT1: &str = "SELECT submit_event($1)";
 const SUBMIT3: &str = "SELECT submit_event($1,$2,$3)";
 
@@ -148,6 +152,8 @@ async fn self_suppression_by_human_signer_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     // Human A signs a note, then A downgrades A's own note.
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
     let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt).await;
@@ -167,6 +173,8 @@ async fn cross_human_salience_downgrade_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     // Human A authors; human B tries to downgrade A's note.
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
     let r = try_suppress(&c, p, "salience.downgrade", &kid_b, &sk_b, &tgt).await;
@@ -187,6 +195,8 @@ async fn cross_human_visibility_suppress_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
     let r = try_suppress(&c, p, "visibility.suppress", &kid_b, &sk_b, &tgt).await;
     assert!(r.is_err(), "cross-human hide must be refused");
@@ -206,6 +216,8 @@ async fn self_suppression_by_human_attester_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_ag, kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_ag, &kid_ag, p, 0).await;
     // Target: an AGENT-signed note that human A vouches for (responsibility) — so the
     // target's ONLY human author is the attester A (attester_key = A, signer = agent).
     let b = body("note.added", p, &kid_ag, Some(&kid_a), None);
@@ -234,6 +246,8 @@ async fn cross_human_suppress_refused_at_apply_door() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     // Human A authors a note through the LOCAL door (submit_event) — establishes
     // A as the target's sole human author-of-record.
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
@@ -283,6 +297,8 @@ async fn cross_human_suppress_refused_after_author_key_rotation() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
 
     // Human A signs a plain note through the local door — establishes A as the
     // target's sole human author-of-record under A's ORIGINAL key (kid_a).
@@ -331,6 +347,8 @@ async fn agent_advisory_dismissable_by_any_human() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_ag, kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_ag, &kid_ag, p, 0).await;
     // Target: an agent-authored, un-owned note (no human author). Human A dismisses it.
     let tgt = author_note(&c, p, &kid_ag, &sk_ag).await;
     let r = try_suppress(&c, p, "salience.downgrade", &kid_a, &sk_a, &tgt).await;
@@ -360,6 +378,8 @@ async fn cross_human_suppress_of_human_attested_advisory_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_ag, kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_ag, &kid_ag, p, 0).await;
     // Agent signs a note; human A vouches for it (responsibility) — attester_key = A.
     let b = body("note.added", p, &kid_ag, Some(&kid_a), None);
     let signed = sign(&b, &sk_ag).unwrap();
@@ -396,6 +416,8 @@ async fn self_visibility_suppress_by_human_signer_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let tgt = author_note(&c, p, &kid_a, &sk_a).await;
     let r = try_suppress(&c, p, "visibility.suppress", &kid_a, &sk_a, &tgt).await;
     assert!(
@@ -445,6 +467,8 @@ async fn suppression_without_target_refused_fail_closed() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let r = try_suppress_payload(
         &c,
         p,
@@ -474,6 +498,8 @@ async fn suppression_with_misnamed_target_key_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, sk_b, kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     // A real target authored by ANOTHER human — the exact cross-human shape the
     // owner-gate exists for, smuggled under the wrong key name.
     let tgt = author_note(&c, p, &kid_b, &sk_b).await;
@@ -506,6 +532,8 @@ async fn suppression_with_malformed_target_refused_legibly() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let r = try_suppress_payload(
         &c,
         p,
@@ -534,6 +562,8 @@ async fn remote_apply_suppression_without_target_refused() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_sk_ag, _kid_ag, sk_a, kid_a, _sk_b, _kid_b) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_a, &kid_a, p, 0).await;
     let mut supp = body("visibility.suppress", p, &kid_a, None, None);
     supp.payload = serde_json::json!({ "text": "no target named at all" });
     let signed = sign(&supp, &sk_a).unwrap();

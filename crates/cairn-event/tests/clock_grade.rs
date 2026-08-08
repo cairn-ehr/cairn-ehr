@@ -6,7 +6,7 @@ fn body(grade: ClockGrade) -> EventBody {
     EventBody {
         event_id: "018f00000000000000000000000000aa".into(),
         patient_id: "018f00000000000000000000000000bb".into(),
-        event_type: "patient.created".into(),
+        event_type: "patient.amended".into(),
         schema_version: "1".into(),
         hlc: Hlc {
             wall: 1_700_000_000_000,

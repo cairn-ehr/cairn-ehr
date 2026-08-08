@@ -13,7 +13,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 mod common;
-use common::{cs, db_msg, submit_patient_created, submit_signed, EventSpec};
+use common::{cs, db_msg, submit_registration, submit_signed, EventSpec};
 
 /// The identity-overlay tables this suite writes to, truncated per test by
 /// `common::setup`. Created by LATER sections of db/018 (Tasks 3–4) than the core
@@ -95,6 +95,9 @@ async fn valid_link_is_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true)
         .await
         .expect("valid link accepted");
@@ -107,6 +110,8 @@ async fn self_link_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let a = Uuid::now_v7();
+    // #345: the chart exists before it is named by a link.
+    submit_registration(&c, &sk, &kid, a, 1).await;
     let err = submit_link(&c, &sk, &kid, a, a, 100, true)
         .await
         .unwrap_err();
@@ -124,6 +129,9 @@ async fn empty_provenance_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     let err = submit_link_prov(&c, &sk, &kid, a, b, 100, true, "   ")
         .await
         .unwrap_err();
@@ -157,6 +165,9 @@ async fn link_creates_a_standing_edge() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     assert_eq!(edge_state(&c, a, b).await.as_deref(), Some("link"));
 }
@@ -168,6 +179,9 @@ async fn newer_unlink_overlays_older_link() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // link @100
     submit_link(&c, &sk, &kid, a, b, 200, false).await.unwrap(); // unlink @200 (newer)
     assert_eq!(edge_state(&c, a, b).await.as_deref(), Some("unlink"));
@@ -182,6 +196,9 @@ async fn older_link_does_not_overlay_newer_unlink() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 200, false).await.unwrap(); // unlink @200 lands first
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // link @100 lands later (older)
     assert_eq!(
@@ -198,6 +215,9 @@ async fn missing_twin_is_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     // Build a link event with NO authored twin — the identity floor HARD-requires one.
     let (a_s, b_s) = (a.to_string(), b.to_string());
     let la = LinkAssertion {
@@ -250,6 +270,9 @@ async fn linked_pair_shares_min_uuid_person() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     let expected = a.min(b);
     assert_eq!(person_of(&c, a).await, Some(expected));
@@ -263,6 +286,10 @@ async fn transitive_links_form_one_person() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
+    submit_registration(&c, &sk, &kid, d, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, d, 110, true).await.unwrap();
     let expected = a.min(b).min(d);
@@ -279,6 +306,10 @@ async fn diamond_unlink_stays_merged() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
+    submit_registration(&c, &sk, &kid, cc, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
     submit_link(&c, &sk, &kid, a, cc, 120, true).await.unwrap();
@@ -297,6 +328,10 @@ async fn chain_unlink_splits_component() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
+    submit_registration(&c, &sk, &kid, cc, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap();
     submit_link(&c, &sk, &kid, a, b, 120, false).await.unwrap(); // unlink the A-B bridge
@@ -317,6 +352,9 @@ async fn re_link_is_idempotent() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap();
     submit_link(&c, &sk, &kid, a, b, 105, true).await.unwrap(); // a second, later link of the same pair
     let expected = a.min(b);
@@ -340,8 +378,8 @@ async fn person_chart_unions_member_streams() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-    submit_patient_created(&c, &sk, &kid, a, 100).await;
-    submit_patient_created(&c, &sk, &kid, b, 101).await;
+    submit_registration(&c, &sk, &kid, a, 100).await;
+    submit_registration(&c, &sk, &kid, b, 101).await;
     submit_link(&c, &sk, &kid, a, b, 110, true).await.unwrap();
     let person = a.min(b).to_string();
     // Selecting by the shared person_id returns BOTH member charts.
@@ -366,7 +404,7 @@ async fn person_chart_defaults_unlinked_to_self() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
     let a = Uuid::now_v7();
-    submit_patient_created(&c, &sk, &kid, a, 100).await; // never linked → no person_member row
+    submit_registration(&c, &sk, &kid, a, 100).await; // never linked → no person_member row
     let a_s = a.to_string();
     let pid: String = c
         .query_one(
@@ -399,6 +437,13 @@ async fn oversize_component_guard_rejects() {
         Uuid::now_v7(),
         Uuid::now_v7(),
     );
+    // #345: all FOUR charts exist, `d` included. The oversize refusal lives in the projection
+    // apply (db/018, after the event_log INSERT) while the precedence rule sits before it — an
+    // unregistered `d` would be refused for having no chart and this test would stop exercising
+    // the component guard it exists for.
+    for chart in [a, b, cc, d] {
+        submit_registration(&c, &sk, &kid, chart, 1).await;
+    }
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // {A,B} size 2 — ok
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap(); // {A,B,C} size 3 — ok
     let err = submit_link(&c, &sk, &kid, cc, d, 120, true)
@@ -424,6 +469,10 @@ async fn component_at_exactly_cap_is_accepted() {
         .await
         .unwrap();
     let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // #345: every chart a link names exists before it is linked.
+    submit_registration(&c, &sk, &kid, a, 1).await;
+    submit_registration(&c, &sk, &kid, b, 1).await;
+    submit_registration(&c, &sk, &kid, cc, 1).await;
     submit_link(&c, &sk, &kid, a, b, 100, true).await.unwrap(); // {A,B} size 2
     submit_link(&c, &sk, &kid, b, cc, 110, true).await.unwrap(); // {A,B,C} size 3 == cap — accepted
     let expected = a.min(b).min(cc);

@@ -10,6 +10,10 @@ use serde_json::json;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -122,6 +126,8 @@ async fn identifier_origin_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         // Same value ("ABC123") → same match_key → same PK; same (wall,counter); origin differs.
         submit_generic(
             &c,
@@ -192,6 +198,8 @@ async fn demographic_value_tiebreak_is_collation_independent_both_branches() {
         for (first, second) in [("B", "a"), ("a", "B")] {
             let (sk, kid) = setup(&c).await;
             let p = Uuid::now_v7();
+            // #345: a chart must be registered before anything is recorded about it.
+            common::submit_registration(&c, &sk, &kid, p, 0).await;
             // Same field+provenance (→ equal rank), same (wall,counter,origin); value differs.
             submit_generic(
                 &c,
@@ -259,6 +267,8 @@ async fn name_display_value_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         // Two legal names, equal (wall,counter,provenance,origin); values differ → VIEW tiebreak.
         submit_generic(
             &c,
@@ -334,6 +344,8 @@ async fn backfill_value_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         // Same field+provenance (→ equal rank), same (wall,counter,origin); value differs.
         submit_generic(
             &c,
@@ -413,6 +425,8 @@ async fn name_trigger_origin_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         // Same value+use+provenance+(wall,counter) → same retained-set PK, equal rank/HLC;
         // only origin differs → the second submit's ON CONFLICT WHERE decides the winner.
         submit_generic(
@@ -480,6 +494,8 @@ async fn address_display_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         submit_generic(
             &c,
             &sk,
@@ -545,6 +561,8 @@ async fn address_trigger_origin_tiebreak_is_collation_independent() {
     for (first, second) in [("B", "a"), ("a", "B")] {
         let (sk, kid) = setup(&c).await;
         let p = Uuid::now_v7();
+        // #345: a chart must be registered before anything is recorded about it.
+        common::submit_registration(&c, &sk, &kid, p, 0).await;
         // Same display+use+provenance+(wall,counter) → same retained-set PK
         // (patient_id, use_key, display), equal rank/HLC; only origin differs → the second
         // submit's ON CONFLICT WHERE decides the winner.

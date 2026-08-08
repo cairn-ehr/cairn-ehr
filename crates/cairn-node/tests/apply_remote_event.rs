@@ -20,6 +20,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -201,7 +205,7 @@ async fn enrolled_signer_event_applies_projects_and_merges_hlc() {
     let (sk, kid, _, _) = setup(&c).await;
     let p = Uuid::now_v7();
     let mut b = note(&kid, p, WALL_2026, None);
-    b.event_type = "patient.created".into();
+    b.event_type = "patient.amended".into();
     b.schema_version = "patient/1".into();
     b.payload = serde_json::json!({"name": "Synced Patient", "dob": "1980-01-01", "sex": "U"});
     let signed = sign(&b, &sk).unwrap();
@@ -671,6 +675,12 @@ async fn oversize_component_clamps_and_flags_at_apply_never_vetoes() {
     // Local authoring keeps the fail-loud veto: the same pathology REFUSED at submit
     // (nothing accepted anywhere yet, so refusal loses no data).
     let (d, e_) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: the two fresh charts are registered before the LOCAL link names them. Every other
+    // chart in this suite is deliberately left unregistered — its events arrive through
+    // apply_remote_event, where the precedence rule does not apply (ADR-0061 decision 3), and
+    // that is the honest fixture for a chart this node learned of from a peer.
+    common::submit_registration(&c, &sk, &kid, d, WALL_2026).await;
+    common::submit_registration(&c, &sk, &kid, e_, WALL_2026).await;
     let l3 = link_event(&kid, d, e_, WALL_2026 + 20);
     c.execute(
         "SELECT submit_event($1)",

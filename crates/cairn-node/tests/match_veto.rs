@@ -13,6 +13,9 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -167,6 +170,9 @@ async fn no_veto_when_no_shared_system() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_identifier(
         &c,
         &sk,
@@ -202,6 +208,9 @@ async fn identifier_hard_veto_when_normalized_present_and_disjoint() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_identifier(
         &c,
         &sk,
@@ -242,6 +251,9 @@ async fn identifier_same_normalized_is_no_veto() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // Same identifier, formatted differently, identical normalized -> match signal, NOT a veto.
     submit_identifier(
         &c,
@@ -277,6 +289,9 @@ async fn identifier_degrade_hold_when_profile_absent_and_values_differ() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // No normalized on either side (profile-less node); raw values differ -> cannot trust
     // (may be formatting noise) -> degrade_hold, never a hard veto.
     submit_identifier(&c, &sk, &kid, a, 1, &idassert("local-mrn", "00123", None)).await;
@@ -306,6 +321,9 @@ async fn identifier_degrade_hold_when_one_side_normalized_other_not() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // A carries a normalized form (profile present); B is profile-less (normalized absent).
     // The two sides cannot be trustworthily compared (B's difference may be pure formatting
     // noise), so a same-system mismatch must DEGRADE to human review — never escalate to a
@@ -345,6 +363,9 @@ async fn unknown_system_never_vetoes() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_identifier(
         &c,
         &sk,
@@ -379,6 +400,9 @@ async fn multi_valued_shared_value_is_no_veto() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // A holds {X, Y}; B holds {Y} in one system -> they share Y -> no veto (set-based).
     submit_identifier(
         &c,
@@ -475,6 +499,9 @@ async fn dob_hard_veto_when_both_verified_same_precision_differ() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_dob(
         &c,
         &sk,
@@ -512,6 +539,9 @@ async fn dob_no_veto_when_precision_differs() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // `1980` (year) vs `1980-03-15` (day): a consistent coarsening, not a clash (principle 4).
     submit_dob(&c, &sk, &kid, a, 1, "1980", "year", "document-verified").await;
     submit_dob(
@@ -541,6 +571,9 @@ async fn dob_no_veto_when_not_both_verified() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     // One verified, one patient-stated (rank < 60) -> not a hard veto.
     submit_dob(
         &c,
@@ -570,6 +603,9 @@ async fn sex_at_birth_hard_veto_when_both_verified_differ() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_sex(&c, &sk, &kid, a, 1, "female", "document-verified").await;
     submit_sex(&c, &sk, &kid, b, 2, "male", "document-verified").await;
     let rows = veto_rows(&c, a, b).await;
@@ -594,6 +630,9 @@ async fn multiple_findings_identifier_and_dob() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_identifier(
         &c,
         &sk,
@@ -660,6 +699,9 @@ async fn veto_is_symmetric() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    // #345: both charts registered before any assertion about them.
+    common::submit_registration(&c, &sk, &kid, a, 0).await;
+    common::submit_registration(&c, &sk, &kid, b, 0).await;
     submit_identifier(
         &c,
         &sk,

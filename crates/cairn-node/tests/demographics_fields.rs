@@ -11,6 +11,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -73,6 +77,8 @@ async fn happy_path_projects_dob_and_sex_with_rank_and_facets() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     submit_field(
         &c,
@@ -152,6 +158,8 @@ async fn provenance_beats_recency_and_verified_locks() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // 1) An early patient-stated dob (rank 50).
     submit_field(
@@ -215,6 +223,8 @@ async fn recency_breaks_ties_among_equal_provenance() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Two document-verified dobs (equal rank) — the HLC-later one wins.
     submit_field(
@@ -375,6 +385,8 @@ async fn unknown_field_is_carried_but_not_projected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A well-formed assertion for a field this node has no projection policy for.
     // The floor ACCEPTS it (generic checks pass), it lands in event_log and is legible
@@ -393,9 +405,12 @@ async fn unknown_field_is_carried_but_not_projected() {
     .expect("well-formed unknown field accepted (carried, legible)");
 
     let p_str = p.to_string();
+    // Scoped past the chart's registration act (#345): the claim is about the UNKNOWN FIELD
+    // being carried, not about how many events the chart happens to hold.
     let in_log: i64 = c
         .query_one(
-            "SELECT count(*) FROM event_log WHERE patient_id::text=$1",
+            "SELECT count(*) FROM event_log WHERE patient_id::text=$1 \
+             AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -421,7 +436,8 @@ async fn unknown_field_is_carried_but_not_projected() {
     // is only half the federation contract — "carried AND legible" needs the twin too.
     let twin: String = c
         .query_one(
-            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1",
+            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1 \
+             AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -434,7 +450,7 @@ async fn unknown_field_is_carried_but_not_projected() {
 }
 
 #[tokio::test]
-async fn regression_identifier_and_legacy_patient_created_still_work() {
+async fn regression_identifier_and_legacy_untwinned_type_still_work() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -443,6 +459,8 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Slice-1 identifier assertion still projects through the (now re-declared) twin hook.
     let id_body = serde_json::json!({
@@ -484,7 +502,8 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
     // verbatim (not just the projection — the legibility twin is the second half).
     let id_twin: String = c
         .query_one(
-            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1",
+            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1 \
+             AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -495,12 +514,16 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
         "identifier authored twin carried by re-declared hook"
     );
 
-    // Legacy patient.created (no authored twin) still gets the derived skeleton twin.
+    // A legacy type with no authored twin still gets the derived skeleton twin.
+    // (`patient.amended` since #345 retired `patient.created`; both are walking-skeleton
+    // types with no twin-check row, which is exactly what this case needs.)
     let p2 = Uuid::now_v7();
+    // #345: a second chart, so it needs its own registration before the legacy write.
+    common::submit_registration(&c, &sk, &kid, p2, 0).await;
     let body2 = EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: p2.to_string(),
-        event_type: "patient.created".into(),
+        event_type: "patient.amended".into(),
         schema_version: "demo/1".into(),
         hlc: Hlc {
             wall: 1,
@@ -528,7 +551,7 @@ async fn regression_identifier_and_legacy_patient_created_still_work() {
         .unwrap()
         .get(0);
     assert!(
-        twin.starts_with("[patient.created]"),
+        twin.starts_with("[patient.amended]"),
         "legacy still derives the skeleton twin"
     );
 }
@@ -543,6 +566,8 @@ async fn fact_proven_displaces_document_verified() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A document-verified dob (rank 60), then a later fact-proven dob (rank 70).
     // fact-proven is the new top tier, so it WINS — it can override what an official

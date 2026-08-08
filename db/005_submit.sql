@@ -15,8 +15,11 @@ CREATE TABLE IF NOT EXISTS event_type_class (
     mode                  TEXT NOT NULL CHECK (mode IN ('additive','suppressing')),
     targets_other_author  BOOLEAN NOT NULL DEFAULT FALSE
 );
+-- `patient.created` was seeded here until issue #345 RETIRED it: an unfloored walking-skeleton
+-- registration act cannot remain a permitted first event once db/047 turns on the §5.3/§5.8
+-- precedence rule (step 8b below). Its removal from this seed covers a FRESH database; db/047
+-- carries the DELETEs that converge one migrated in place.
 INSERT INTO event_type_class (event_type, mode, targets_other_author) VALUES
-    ('patient.created', 'additive',    FALSE),
     ('patient.amended', 'additive',    FALSE),
     ('note.added',      'additive',    FALSE),
     ('advisory.added',  'additive',    FALSE),
@@ -155,11 +158,16 @@ BEGIN
     -- type would leave the AFTER-INSERT dispatcher firing for a deferred event, because the
     -- dispatcher reads cairn_projection_apply and never consults event_type_class. The state
     -- is unreachable in practice for two reasons — a type's classification and its
-    -- projection registration arrive in the SAME migration, and no migration ever DELETEs
-    -- from event_type_class (every write is INSERT ... ON CONFLICT DO NOTHING) — and
-    -- event_type_class is REVOKEd from PUBLIC, so only an owner could create it by hand.
-    -- Same privilege tier as cairn_reproject. A future migration that wants to retire a type
-    -- must drop its projection registration FIRST, or restore this invariant some other way.
+    -- projection registration arrive in the SAME migration, and the one migration that DOES
+    -- delete from event_type_class obeys the retirement order below — and event_type_class is
+    -- REVOKEd from PUBLIC, so only an owner could create it by hand. Same privilege tier as
+    -- cairn_reproject.
+    --
+    -- RETIREMENT ORDER (issue #345, db/047 — the first and so far only migration to delete a
+    -- classification): a migration retiring a type must DELETE its cairn_projection_apply rows
+    -- FIRST and its event_type_class row second. Reversed, it would leave precisely the
+    -- registered-but-unclassified state this check exists to make unreachable, and no later
+    -- validation would notice. db/047 is the worked precedent; copy its order.
     IF NOT EXISTS (SELECT 1 FROM event_type_class WHERE event_type = NEW.event_type) THEN
         RAISE EXCEPTION
             'cairn_projection_apply: event_type "%" is not classified in event_type_class (fail closed) — classify it before registering a projection, or the dispatcher would project an event admitted uninterpreted',
@@ -957,6 +965,46 @@ BEGIN
     --    structural floor is checked on its real payload, never the ciphertext.
     v_twin := cairn_event_twin(v_type, b_clear);
 
+    -- 8b. The §5.3/§5.8 PRECEDENCE RULE (ADR-0061 decision 3, issue #345): the first event
+    --     carrying a patient_id must be that chart's registration. This is what makes the
+    --     search-before-create funnel unbypassable — without it a client mints a chart simply
+    --     by asserting a name, and §5.8's obligation to record the search that preceded the
+    --     create has nothing to attach to.
+    --
+    --     ONE RULE, NO "UNLESS". Every registration class rides one event type (§5.3, ADR-0061
+    --     decision 2) precisely so this sentence needs no carve-out — not for John Doe, not for
+    --     the legacy patient.created (retired in db/047). An "unless" in a safety floor is
+    --     where the next defect lives.
+    --
+    --     PLACEMENT is deliberate: last of the refusals, after every check that judges the
+    --     EVENT itself (signature, clock, contributors, actor, attestation, seal, twin,
+    --     structural floor) and before anything is written. A defect in the event is the
+    --     author's first problem; the chart's history is the second. Ordering among refusals is
+    --     a legibility property, never a safety one — every path here refuses — but it means an
+    --     event that is wrong in two ways keeps reporting the reason it always reported.
+    --
+    --     STRICT DOOR ONLY. db/020 (apply_remote_event) must NEVER call this: set-union sync
+    --     has no ordering, so a peer's clinical event legitimately precedes the registration
+    --     that licenses it, and a fail-closed remote door would freeze the puller's watermark
+    --     on entirely honest traffic. Same strict-submit/lenient-apply shape as ADR-0051, and
+    --     the same lesson as ADR-0056 / ADR-0058 / issue #268. The rule is self-satisfying
+    --     afterwards: once a peer's event has landed, a local write to that chart is no longer
+    --     a FIRST event, so the lenient admission costs no later refusal.
+    --
+    --     Scoped to the ENVELOPE's patient_id, never to a patient named in a payload (an
+    --     identity.link's target chart may be remote-only and legitimately unregistered here).
+    --
+    --     WHY THE LENIENT REMOTE DOOR DOES NOT REOPEN THE BYPASS (principle 12): a client role
+    --     cannot reach it. cairn_agent has no EXECUTE on apply_remote_event (db/020) and no
+    --     INSERT on event_log (db/001), so THIS function is the only way a client writes at all
+    --     — which is what makes the rule unbypassable even for one talking raw SQL. The lenient
+    --     door is the sync daemon's (cairn_node), carrying events another node already accepted.
+    IF v_type <> 'identity.registration.asserted'
+       AND NOT cairn_patient_has_events((b ->> 'patient_id')::uuid) THEN
+        RAISE EXCEPTION 'submit_event: no chart exists for patient % — the first event on a chart must be its registration (identity.registration.asserted, §5.3/§5.8); register the patient before recording anything about them',
+            b ->> 'patient_id';
+    END IF;
+
     -- 9. Custody + operational clear view — BEFORE the log INSERT so the AFTER
     --     INSERT projection triggers can already read the shadow (same txn).
     --     An already-shredded target gets NEITHER: set-union may re-deliver the
@@ -1062,8 +1110,10 @@ GRANT SELECT ON event_log, patient_chart, actor_current TO cairn_agent;
 -- migration text. The IS DISTINCT FROM guard keeps the steady-state replay write-free —
 -- without it every connect rewrites all three rows (dead tuple + validate-trigger fire)
 -- even when nothing changed.
+-- `patient.created`'s row is gone with the type (#345, see the event_type_class seed above);
+-- `identity.registration.asserted` takes over the chart-birth projection, registered in db/047
+-- because the type is not classified until db/045 — later in the replay order than this file.
 INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES
-    ('patient.created', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
     ('patient.amended', 'patient_chart_apply', ARRAY['patient_chart'], 10, TRUE),
     ('note.added',      'patient_chart_apply', ARRAY['patient_chart'], 10, FALSE)
 ON CONFLICT (event_type, apply_fn) DO UPDATE SET

@@ -11,6 +11,10 @@ use cairn_node::medication::{
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -64,6 +68,8 @@ async fn human_authored_medication_is_signed_by_the_human_node_keeps_custody() {
     let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
 
     let input = AssertMedicationInput {
         term: "atorvastatin",
@@ -147,6 +153,8 @@ async fn human_authored_cessation_is_signed_by_the_human() {
     let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
     let author = AuthorParams {
         human_sk: &human_sk,
         human_kid: &human_kid,
@@ -270,6 +278,8 @@ async fn forged_authorship_refused_at_the_strict_door() {
     let c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, _human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
 
     let (signed, dek) = craft_forged_authorship_event(&node_sk, &node_kid, &human_kid, patient);
     let err = c
@@ -296,6 +306,8 @@ async fn device_additive_assert_still_valid_with_no_author() {
     let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, _hs, _hk) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
     let input = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -338,6 +350,8 @@ async fn human_author_owns_suppression_rights() {
     let mut c = db::connect_and_load_schema(&cs).await.unwrap();
     let (node_sk, node_kid, human_sk, human_kid) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
     let author = AuthorParams {
         human_sk: &human_sk,
         human_kid: &human_kid,
@@ -439,6 +453,8 @@ async fn author_and_attest_compose_with_different_humans_on_reconcile() {
     .await
     .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &node_sk, &node_kid, patient, 0).await;
 
     let input = AssertMedicationInput {
         term: "atorvastatin",

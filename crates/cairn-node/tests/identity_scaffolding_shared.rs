@@ -198,8 +198,9 @@ fn derivation_finds_the_expected_helpers() {
             "async fn medication_setup(",
             "async fn person_chart_trust(",
             "async fn submit_attested(",
-            "async fn submit_patient_created(",
+            "async fn submit_registration(",
             "async fn submit_signed(",
+            "async fn submit_signed_with_id(",
             "async fn trust_of(",
         ],
         "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"

@@ -19,6 +19,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -130,6 +134,8 @@ async fn try_submit_with_offset(
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let event_id = Uuid::now_v7();
     let body = offset_note(&kid, patient, event_id, grade, offset_secs);
     let signed = sign(&body, &sk).unwrap();
@@ -320,6 +326,8 @@ async fn try_apply_with_offset(
     let (sk, kid) = clinical_setup(&c).await;
 
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
     let event_id = Uuid::now_v7();
     let body = offset_note(&kid, patient, event_id, grade, offset_secs);
     let signed = sign(&body, &sk).unwrap();

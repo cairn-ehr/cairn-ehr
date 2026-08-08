@@ -12,6 +12,10 @@ use serde_json::json;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -131,6 +135,8 @@ async fn happy_path_display_only() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     let a = addr(
         "12 Main St, Springfield",
@@ -155,6 +161,8 @@ async fn geo_and_structured_carried_into_retained_set() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     let a = AddressAssertion {
         display: "12 Main St, Springfield",
@@ -203,6 +211,8 @@ async fn each_use_is_independently_current() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A residential AND a postal address are BOTH current — one winner per use.
     submit_addr(
@@ -245,6 +255,8 @@ async fn recency_beats_provenance_within_a_use() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Old, HIGHER-provenance address (document-verified, wall=1).
     submit_addr(
@@ -290,6 +302,8 @@ async fn set_union_reassertion_is_idempotent_and_order_independent() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Apply newer first, then older — winner must still be the newer (apply-order-independent),
     // and the same (use, display) re-asserted stays ONE member.
@@ -344,6 +358,9 @@ async fn floor_rejects_structured_without_profile() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: deliberately NOT registered. This is a refusal case, and every floor check it
+    // exercises runs BEFORE the precedence rule (db/005 step 8b) — so the refusal message is
+    // still the one under test, and "nothing was appended" stays literally true.
 
     // structured present without a profile violates the §4.3 structural invariant.
     let r = submit(
@@ -389,6 +406,8 @@ async fn floor_rejects_non_text_structured_part() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A non-text parts value (number) violates "parts values are opaque TEXT to the core".
     let r = submit(
@@ -467,6 +486,8 @@ async fn unknown_field_and_legacy_unaffected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A name event must NOT create a patient_address row; an address event must NOT
     // create a patient_name row. The projections are blind to each other's fields.

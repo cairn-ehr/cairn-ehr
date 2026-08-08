@@ -14,6 +14,11 @@ use cairn_node::matcher_actor::resolve_matcher_actor;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// The shared scaffolding, for `submit_registration` alone: since #345 a chart must be
+// registered before any event may be authored about it, and copying a fourth registration
+// builder into this suite is exactly the drift #120/#327 exist to stop.
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -35,6 +40,19 @@ async fn reset(c: &Client) {
     )
     .await
     .unwrap();
+}
+
+/// Register both charts of a candidate pair (#345).
+///
+/// A link may only be authored between charts that EXIST: since the precedence rule landed, the
+/// first event carrying a `patient_id` must be its registration, and a `match_proposal` row is a
+/// projection seed, not an event. The registrations are authored by the caller's SEEDER key
+/// rather than the matcher's: registration is a registrar act, and the matcher never registers
+/// anyone — it only ever proposes links between charts other actors created. Wall 1 keeps the
+/// birth act below every event these tests author.
+async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, high: Uuid) {
+    common::submit_registration(c, sk, kid, low, 1).await;
+    common::submit_registration(c, sk, kid, high, 1).await;
 }
 
 /// Seed one match_proposal for the canonical (low, high) pair with the given band/status.
@@ -281,6 +299,8 @@ async fn auto_candidate_becomes_unattested_link_and_projects_person() {
     reset(&c).await;
     let dir = tempfile::tempdir().unwrap();
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    register_pair(&c, &seed_sk, &seed_kid, low, high).await;
     seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
     let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
@@ -362,10 +382,11 @@ async fn veto_appeared_since_propose_kicks_to_review_no_event() {
     reset(&c).await;
     let dir = tempfile::tempdir().unwrap();
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    register_pair(&c, &seed_sk, &seed_kid, low, high).await;
     seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
     // A hard veto now exists (appeared after the propose-time band was computed).
-    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
     assert_identifier_clash(&c, &seed_sk, &seed_kid, low, high).await;
 
     let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
@@ -415,6 +436,8 @@ async fn human_rejected_auto_candidate_is_skipped() {
     reset(&c).await;
     let dir = tempfile::tempdir().unwrap();
     let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    register_pair(&c, &seed_sk, &seed_kid, low, high).await;
     // A human already REJECTED this auto_candidate -> must NOT be auto-applied.
     seed_proposal(&c, low, high, "auto_candidate", "rejected", "0.3.0+aaa").await;
 
@@ -470,9 +493,13 @@ async fn batch_applies_all_pending_auto_candidates_across_epochs_and_is_idempote
 
     let (l1, h1) = canonical(Uuid::now_v7(), Uuid::now_v7());
     let (l2, h2) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    register_pair(&c, &seed_sk, &seed_kid, l1, h1).await;
+    register_pair(&c, &seed_sk, &seed_kid, l2, h2).await;
     seed_proposal(&c, l1, h1, "auto_candidate", "pending", "0.3.0+aaa").await;
     seed_proposal(&c, l2, h2, "auto_candidate", "pending", "0.3.0+bbb").await;
-    // A review-band pair must be ignored by the driver.
+    // A review-band pair must be ignored by the driver — deliberately NOT registered either,
+    // since nothing is ever authored about it.
     let (l3, h3) = canonical(Uuid::now_v7(), Uuid::now_v7());
     seed_proposal(&c, l3, h3, "review", "pending", "0.3.0+aaa").await;
 
@@ -518,6 +545,8 @@ async fn recall_over_the_matcher_epoch_selects_its_autolinks_precisely() {
     let dir = tempfile::tempdir().unwrap();
 
     let (l1, h1) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    register_pair(&c, &seed_sk, &seed_kid, l1, h1).await;
     seed_proposal(&c, l1, h1, "auto_candidate", "pending", "0.3.0+aaa").await;
     apply_auto_candidates(&mut c, dir.path(), None, "testnode")
         .await

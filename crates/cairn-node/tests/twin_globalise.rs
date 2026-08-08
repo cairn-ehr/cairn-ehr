@@ -9,6 +9,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -68,6 +72,8 @@ async fn authored_twin_on_note_passes_through_verbatim_and_reads_authored() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     submit_note(
         &c,
         &sk,
@@ -81,7 +87,8 @@ async fn authored_twin_on_note_passes_through_verbatim_and_reads_authored() {
     let p_str = p.to_string();
     let twin: String = c
         .query_one(
-            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1",
+            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1 \
+             AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -93,7 +100,8 @@ async fn authored_twin_on_note_passes_through_verbatim_and_reads_authored() {
     );
     let authored: bool = c
         .query_one(
-            "SELECT cairn_twin_is_authored(signed_bytes) FROM event_log WHERE patient_id::text=$1",
+            "SELECT cairn_twin_is_authored(signed_bytes) FROM event_log \
+             WHERE patient_id::text=$1 AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -104,7 +112,8 @@ async fn authored_twin_on_note_passes_through_verbatim_and_reads_authored() {
     let view_authored: bool = c
         .query_one(
             "SELECT ep.twin_authored FROM event_twin_provenance ep
-           JOIN event_log el USING (event_id) WHERE el.patient_id::text=$1",
+           JOIN event_log el USING (event_id) WHERE el.patient_id::text=$1
+             AND el.event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -123,13 +132,16 @@ async fn twinless_note_degrades_to_flagged_skeleton() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     submit_note(&c, &sk, &kid, p, 1, None)
         .await
         .expect("twin-less note still accepted (set-union preserved)");
     let p_str = p.to_string();
     let twin: String = c
         .query_one(
-            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1",
+            "SELECT plaintext_twin FROM event_log WHERE patient_id::text=$1 \
+             AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -145,7 +157,8 @@ async fn twinless_note_degrades_to_flagged_skeleton() {
     );
     let authored: bool = c
         .query_one(
-            "SELECT cairn_twin_is_authored(signed_bytes) FROM event_log WHERE patient_id::text=$1",
+            "SELECT cairn_twin_is_authored(signed_bytes) FROM event_log \
+             WHERE patient_id::text=$1 AND event_type <> 'identity.registration.asserted'",
             &[&p_str],
         )
         .await
@@ -167,6 +180,9 @@ async fn twinless_demographic_is_still_hard_rejected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: deliberately NOT registered. This is a refusal case, and every floor check it
+    // exercises runs BEFORE the precedence rule (db/005 step 8b) — so the refusal message is
+    // still the one under test, and "nothing was appended" stays literally true.
     // A structurally VALID identifier assertion, but with the authored twin DROPPED.
     let a = IdentifierAssertion {
         value: "943 476 5919",

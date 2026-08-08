@@ -14,6 +14,11 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// NOTE (#345): this suite registers NO charts. Every event here arrives through
+// `apply_remote_event`, where the §5.3/§5.8 precedence rule deliberately does not apply — a chart
+// known only from a peer's event is the honest fixture for a deferral test, and registering one
+// would add an event the "a deferred event must project nothing" assertions would then count.
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -625,29 +630,37 @@ async fn connect_promotes_and_reprojects_a_deferred_event() {
     let (sk, kid, _, _) = setup(&c).await;
     let p = Uuid::now_v7();
 
-    // Simulate "this node does not yet have the code for `patient.created`" by removing BOTH
+    // Simulate "this node does not yet have the code for `patient.amended`" by removing BOTH
     // things the migration that introduces a type provides: its classification AND its
     // projection registration. Removing only the class row would be an unfaithful
-    // simulation — it produces a registered-but-unclassified state that no real node can
-    // reach (db/005 registers the projection after classifying, and class rows are never
-    // deleted by any migration), and in it the AFTER-INSERT dispatcher would still fire
-    // because it reads cairn_projection_apply, not event_type_class.
+    // simulation — it produces a registered-but-unclassified state no real node reaches
+    // (db/005 registers the projection after classifying, and the ONE migration that retires
+    // a type — db/047, #345 — deletes the projection row FIRST for exactly this reason), and
+    // in it the AFTER-INSERT dispatcher would still fire because it reads
+    // cairn_projection_apply, not event_type_class.
     //
-    // Both rows are restored by the next connect's migration replay (db/005:18 and
-    // db/005:997), so this is self-healing even if the test dies partway.
+    // The victim used to be `patient.created`; #345 retired that type, so this simulation
+    // moved to `patient.amended` — still a classified, projected, twin-free walking-skeleton
+    // type, which is all the simulation needs. Do NOT move it back to a type this node no
+    // longer classifies: the deletions would then be no-ops and the test would pass without
+    // simulating anything.
+    //
+    // Both rows are restored by the next connect's migration replay (db/005's
+    // event_type_class and cairn_projection_apply seeds), so this is self-healing even if the
+    // test dies partway.
     c.execute(
-        "DELETE FROM cairn_projection_apply WHERE event_type = 'patient.created'",
+        "DELETE FROM cairn_projection_apply WHERE event_type = 'patient.amended'",
         &[],
     )
     .await
     .unwrap();
     c.execute(
-        "DELETE FROM event_type_class WHERE event_type = 'patient.created'",
+        "DELETE FROM event_type_class WHERE event_type = 'patient.amended'",
         &[],
     )
     .await
     .unwrap();
-    let mut b = peer_event(&kid, p, "patient.created", WALL_2026);
+    let mut b = peer_event(&kid, p, "patient.amended", WALL_2026);
     b.payload = serde_json::json!({"name": "Deferred Then Promoted"});
     let signed = sign(&b, &sk).unwrap();
     c.execute(

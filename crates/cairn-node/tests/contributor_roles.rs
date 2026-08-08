@@ -27,6 +27,9 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration` (#345, #120/#327 — one copy).
+mod common;
+
 const SUBMIT1: &str = "SELECT submit_event($1)";
 const SUBMIT3: &str = "SELECT submit_event($1,$2,$3)";
 const APPLY1: &str = "SELECT apply_remote_event($1)";
@@ -264,11 +267,17 @@ async fn submit_accepts_object_responsibility_self_attested() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (_, _, sk_h, kid_h) = setup(&c).await;
+    // #345: this is the suite's ONE success path, so it is the only test here that needs a
+    // chart. Every other case expects a REFUSAL from the contributor floor (db/005 step 1c),
+    // which runs long before the precedence rule at step 8b — so those keep reporting the
+    // vocabulary/authorship reason they were written to assert, on a chart nobody made.
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk_h, &kid_h, patient, 0).await;
     let b = note_with(
         serde_json::json!([{"actor_id": kid_h, "role": "attested",
                             "responsibility": {"held_by": kid_h}}]),
         &kid_h,
-        Uuid::now_v7(),
+        patient,
     );
     let signed = sign(&b, &sk_h).unwrap();
     let ca = event_address(&signed.signed_bytes);

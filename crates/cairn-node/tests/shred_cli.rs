@@ -16,6 +16,10 @@ use cairn_node::shred::{build_shred_body, shred_event};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -150,6 +154,8 @@ async fn shred_event_appends_tombstone_and_scrubs() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // 1. Seal-submit a medication assert (device-additive, no attestation) via the
     //    real product orchestrator — exactly what a clinician's CLI call would do.
@@ -293,6 +299,8 @@ async fn shred_event_with_attest_scrubs_and_records_human_responsibility() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup_node_and_human(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // 1. A real sealed target with real custody — the device authors it device-
     //    additively (attest = None here just means THIS assert isn't vouched for; the
@@ -455,6 +463,8 @@ async fn shred_scrubs_every_derived_projection_not_just_statement() {
     .await
     .unwrap();
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // Two threads, so a reconciliation has something to link.
     let med_a = assert_medication(
@@ -637,6 +647,8 @@ async fn shred_scrubs_the_drug_coding_projection() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // A CODED assert — the only shape that writes medication_coding.
     let coded = AssertMedicationInput {
@@ -753,6 +765,8 @@ async fn shred_refuses_a_non_sealed_plaintext_target() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup_node(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     let target = submit_plaintext_note(&c, &sk, &kid, patient).await;
     let sealed: bool = c

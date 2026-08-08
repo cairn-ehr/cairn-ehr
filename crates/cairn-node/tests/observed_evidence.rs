@@ -10,6 +10,10 @@ use cairn_node::evidence::{self, AgeObservation, ObservedEvidence, SexObservatio
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -108,6 +112,8 @@ async fn estimated_age_lands_as_a_clinician_observed_year_range_dob() {
     let mut db = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&db).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
 
     let ev = ObservedEvidence {
         age: Some(AgeObservation {
@@ -136,6 +142,8 @@ async fn a_document_verified_dob_displaces_the_estimate() {
     let mut db = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&db).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
 
     // First the clinician estimate (rank 30)...
     let est = ObservedEvidence {
@@ -169,6 +177,8 @@ async fn observed_sex_lands_on_administrative_sex() {
     let mut db = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&db).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
 
     let ev = ObservedEvidence {
         age: None,
@@ -201,6 +211,8 @@ async fn observed_year_override_sets_the_birth_year_range() {
     let mut db = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&db).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
 
     // The CLI edge resolves the observed year via the real validator, same as production.
     let oy = cairn_node::evidence::resolve_observed_year(Some(2000), 2026).unwrap();
@@ -233,6 +245,8 @@ async fn age_and_sex_are_authored_atomically() {
     let mut db = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&db).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
 
     let ev = ObservedEvidence {
         age: Some(AgeObservation {

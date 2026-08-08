@@ -262,13 +262,14 @@ const SCHEMA: &[(&str, &str)] = &[
     // whose _current view picks the EARLIEST registration (a birth act, not a standing
     // state).
     //
-    // cairn-sync's subset legitimately lags here (#284), as it already does for every
-    // identity/demographic projection (db/010-019, 022-025, ...). A cairn-sync-only
-    // database therefore holds no classification for this type, so db/020 ADMITS a
-    // replicated registration and marks it DEFERRED (ADR-0056) rather than losing or
-    // refusing it; cairn_readjudicate_deferred (db/043) promotes it once that database
-    // gains the file. That is honest degradation, not drift — unlike db/043 itself, which
-    // had to land in both lists because cairn-sync's own door WRITES the deferral markers.
+    // cairn-sync's subset lagged here until #345 (#284), as it still does for every
+    // identity/demographic projection (db/010-019, 022-025, ...). The precedence rule ended
+    // that lag for THIS file: db/005 (which that subset carries) now refuses a first event
+    // that is not a registration, so a subset without this classification could never author
+    // a chart at all. Both loaders therefore carry db/045 + db/047; everything else about the
+    // subset's honest degradation for identity/demographic projections is unchanged (a
+    // replicated event of a type it does not classify is ADMITTED and DEFERRED per ADR-0056,
+    // and cairn_readjudicate_deferred promotes it once that database gains the file).
     (
         "045_patient_registration",
         include_str!("../../../db/045_patient_registration.sql"),
@@ -285,6 +286,19 @@ const SCHEMA: &[(&str, &str)] = &[
     (
         "046_patient_search",
         include_str!("../../../db/046_patient_search.sql"),
+    ),
+    // db/047 (#345, ADR-0061 decision 3): the other half of the precedence rule — retire the
+    // unfloored `patient.created` and hand its `patient_chart` chart-birth projection to
+    // `identity.registration.asserted`. The rule itself lives at its door (db/005 step 8b over
+    // db/001's `cairn_patient_has_events`), so only the registry work is here.
+    //
+    // cairn-sync carries this file AND db/045 (its list says why): the precedence rule lives in
+    // db/005, which that subset already loads, so a subset without the registration type would
+    // be a door carrying a rule nothing could satisfy. The db/045 "legitimately lags" note above
+    // was written before the rule existed and no longer applies to these two files.
+    (
+        "047_registration_precedence",
+        include_str!("../../../db/047_registration_precedence.sql"),
     ),
 ];
 

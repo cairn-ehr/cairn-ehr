@@ -11,6 +11,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -74,6 +78,8 @@ async fn happy_path_appends_and_projects_with_authored_twin() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "943 476 5919",
         system: "nhs-number",
@@ -105,9 +111,13 @@ async fn happy_path_appends_and_projects_with_authored_twin() {
     assert_eq!(value, "943 476 5919");
     // The AUTHORED twin is stored verbatim (proving cairn_body passed the top-level
     // plaintext_twin field through to submit_event, which carried it for a demographic event).
+    // Scoped to the event under test: since #345 the chart also holds its registration act,
+    // so an unscoped read would return two rows and `query_one` would fail on the count rather
+    // than on anything this test is about.
     let twin: String = c
         .query_one(
-            "SELECT plaintext_twin FROM event_log WHERE patient_id::text = $1",
+            "SELECT plaintext_twin FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'demographic.identifier.asserted'",
             &[&p_str],
         )
         .await
@@ -126,6 +136,8 @@ async fn set_union_dedups_same_key_keeps_different_key() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     let same = IdentifierAssertion {
         value: "943 476 5919",
         system: "nhs-number",
@@ -185,6 +197,8 @@ async fn honest_degradation_no_normalized_no_profile_accepted() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "OLD-CARD-77",
         system: "unknown",
@@ -372,12 +386,14 @@ async fn legacy_patient_created_still_uses_derived_twin() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
     // A legacy additive event with NO authored twin must still be accepted and get
     // the derived skeleton twin (the demographics-only twin scope, regression guard).
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: p.to_string(),
-        event_type: "patient.created".into(),
+        event_type: "patient.amended".into(),
         schema_version: "demo/1".into(),
         hlc: Hlc {
             wall: 1,
@@ -406,7 +422,7 @@ async fn legacy_patient_created_still_uses_derived_twin() {
         .unwrap()
         .get(0);
     assert!(
-        twin.starts_with("[patient.created]"),
+        twin.starts_with("[patient.amended]"),
         "legacy derives the skeleton twin"
     );
 }
@@ -445,6 +461,8 @@ async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
 
     // Node 1: apply earlier (wall=1) THEN later (wall=2).
     let p1 = Uuid::now_v7();
+    // #345: both charts are registered before their identifier assertions.
+    common::submit_registration(&c, &sk, &kid, p1, 0).await;
     assert_identifier(&c, &sk, &kid, p1, 1, &earlier)
         .await
         .unwrap();
@@ -454,6 +472,7 @@ async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
 
     // Node 2 (same DB, distinct patient): apply later (wall=2) FIRST, then earlier (wall=1).
     let p2 = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, p2, 0).await;
     assert_identifier(&c, &sk, &kid, p2, 2, &later)
         .await
         .unwrap();
@@ -545,6 +564,9 @@ async fn self_asserted_forward_t_effective_is_admitted_and_flagged_but_backdatin
     // 'reject' arm survives only for a credible high-grade clock — see
     // teffective_ceiling.rs for that dormant-this-slice case, exercised by synthesis.
     let p_future = Uuid::now_v7();
+    // #345: registered first — which is why the per-patient count below is 2, not 1: the chart's
+    // birth act plus the forward-dated event under test.
+    common::submit_registration(&c, &sk, &kid, p_future, 0).await;
     submit_with_t_effective(
         &c,
         &sk,
@@ -563,7 +585,10 @@ async fn self_asserted_forward_t_effective_is_admitted_and_flagged_but_backdatin
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 1, "the admitted forward-dated event must be appended");
+    assert_eq!(
+        n, 2,
+        "the admitted forward-dated event must be appended (alongside the chart's registration)"
+    );
     let flags: i64 = c
         .query_one(
             "SELECT count(*) FROM t_effective_ceiling_flag WHERE hlc_wall = $1",
@@ -581,6 +606,7 @@ async fn self_asserted_forward_t_effective_is_admitted_and_flagged_but_backdatin
     // must be ACCEPTED, cleanly (no flag) — the whole point of a freely-backdatable
     // t_effective.
     let p_past = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, p_past, 0).await;
     submit_with_t_effective(
         &c,
         &sk,

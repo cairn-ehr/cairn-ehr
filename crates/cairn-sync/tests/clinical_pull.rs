@@ -266,6 +266,61 @@ async fn register_unwrap_key(c: &Client, sk: &SigningKey) {
     .unwrap();
 }
 
+/// HLC wall for the fixture registrations below — mid-2026, comfortably in the past relative to
+/// the real clock the production orchestrators tick from, so a chart's birth act never sorts
+/// after the events authored on it (`patient_registration_current` picks the EARLIEST).
+const REG_WALL: i64 = 1_780_000_000_000;
+
+/// Register a chart so events may be authored about it (§5.3/§5.8, issue #345).
+///
+/// Since #345 the strict door refuses the FIRST event carrying a `patient_id` unless it is a
+/// registration, so every patient these tests author on must be registered first — exactly as a
+/// clerk must make a folder before anything can be filed in it. This is the cairn-sync-side twin
+/// of `cairn-node`'s `tests/common/submit_registration`; it is written out here rather than
+/// shared because `tests/common/` belongs to the other crate's test target.
+///
+/// Deliberately authored on node A only: node B receives it by SYNC, like every other event, so
+/// these tests keep proving that a replicated chart needs no local ceremony (the remote door is
+/// lenient about the precedence rule by design — ADR-0061 decision 3).
+async fn register_chart(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall: i64) {
+    let tokens = [patient.to_string()];
+    let a = cairn_event::registration::RegistrationAssertion {
+        class: cairn_event::registration::RegistrationClass::Standard,
+        basis: None,
+        search: Some(cairn_event::registration::SearchAttestationInput {
+            terms: cairn_event::registration::SearchTerms {
+                name_tokens: &tokens,
+                birth_date: None,
+                identifiers: &[],
+            },
+            displayed: &[],
+            incomplete: false,
+        }),
+    };
+    let body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: patient.to_string(),
+        event_type: cairn_event::registration::REGISTRATION_EVENT_TYPE.into(),
+        schema_version: cairn_event::registration::REGISTRATION_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "node-a".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: cairn_event::registration::registration_assertion_body(&a),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("registration accepted");
+}
+
 /// One node's complete medication read-state, rendered to comparable strings:
 /// the event set (ids + content addresses + whether an attestation is held), the
 /// current/past medication views, the group collapse, and the standing vouches.
@@ -462,6 +517,9 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     // --- author a realistic little chart on A through the production orchestrators ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -837,6 +895,9 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
 
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     assert_medication(
         &mut a,
         &sk_d,
@@ -1386,6 +1447,9 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     // --- 1. A seal-submits a medication assert; it projects on A with custody ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -1550,9 +1614,12 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         0,
         "the shred scrubbed A's projection"
     );
+    // Scoped past the chart's registration act (#345): the claim is about what a SHRED does to
+    // the two clinical rows, not about how many events the chart holds in total.
     let a_log_rows: i64 = a
         .query_one(
-            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid \
+             AND event_type <> 'identity.registration.asserted'",
             &[&patient.to_string()],
         )
         .await
@@ -1605,9 +1672,12 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         0,
         "the propagated shred scrubbed B's projection"
     );
+    // Scoped past the registration (#345), like A's count above: the claim is about the two
+    // clinical rows a shred leaves behind, not the chart's total event count.
     let b_log_rows: i64 = b
         .query_one(
-            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid",
+            "SELECT count(*) FROM event_log WHERE patient_id = $1::text::uuid \
+             AND event_type <> 'identity.registration.asserted'",
             &[&patient.to_string()],
         )
         .await
@@ -1722,6 +1792,9 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
 
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -1838,6 +1911,9 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     // A authors one sealed medication assert → a LIVE event_dek row on A.
     let mut a = a;
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
     let metformin = AssertMedicationInput {
         term: "metformin",
         coding: None,
@@ -2033,6 +2109,9 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     register_unwrap_key(&b, &sk_b).await;
 
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
     // seq 1: a legit medication, born sealed + projected on A (with custody).
     assert_medication(
@@ -2262,6 +2341,9 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     register_unwrap_key(&b, &sk_b).await;
 
     let patient = Uuid::now_v7();
+    // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
+    // about it. Authored on A only — B receives it by sync like every other event.
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
 
     // seq 1: a legit medication, authored + projected on A.
     assert_medication(

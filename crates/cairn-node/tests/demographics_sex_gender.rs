@@ -13,6 +13,10 @@ use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -88,6 +92,8 @@ async fn administrative_sex_provenance_locks_then_recency_among_equals() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // document-verified marker first.
     submit_field(
@@ -151,6 +157,8 @@ async fn gender_identity_recency_wins_regardless_of_provenance() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // a high-provenance value first.
     submit_field(
@@ -195,6 +203,8 @@ async fn gender_identity_equal_hlc_breaks_on_provenance() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Same (wall, counter): the recency-first tuple falls through to provenance_rank.
     submit_field(
@@ -238,6 +248,8 @@ async fn administrative_sex_converges_regardless_of_apply_order() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // The same three assertions as the forward lock test, but applied NEWEST-first
     // (set-union sync delivers events in arbitrary order). The provenance-first tuple is
@@ -298,6 +310,8 @@ async fn backfill_projects_carried_events_after_upgrade() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // Two gender-identity assertions land in event_log; recency-first => "non-binary" wins.
     submit_field(
@@ -384,6 +398,8 @@ async fn unknown_field_is_carried_but_not_projected() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     let p = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk, &kid, p, 0).await;
 
     // A field this node has no policy for: passes the floor, lands in event_log, but
     // is NOT projected (the ADR-0012 federation-forward degrade is intact).

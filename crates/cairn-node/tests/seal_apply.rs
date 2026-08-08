@@ -35,6 +35,10 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+// Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
+// be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
+mod common;
+
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
@@ -268,6 +272,8 @@ async fn sealed_apply_with_dek_projects_like_submit() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
     let event_id = body.event_id.clone();
@@ -339,6 +345,8 @@ async fn sealed_apply_without_dek_admits_structurally_never_rejects() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let (body, _dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
     let event_id = body.event_id.clone();
@@ -397,6 +405,8 @@ async fn plaintext_clinical_apply_is_admitted_leniently() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let body = unsealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
     let event_id = body.event_id.clone();
@@ -434,6 +444,8 @@ async fn custody_is_never_granted_to_a_shredded_event() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // 1. Author a sealed medication assert locally, with custody + projection.
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
@@ -518,6 +530,8 @@ async fn partial_custody_thread_reads_stale_not_fresh() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // One content event, applied WITH custody → readable = 1.
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
@@ -630,6 +644,8 @@ async fn shred_after_event_scrubs_everything_but_the_log_row() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // 1. Full sealed local submit — custody + shadow + projection all present.
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
@@ -736,6 +752,8 @@ async fn shred_is_idempotent_under_replay() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // Content event, authored locally with custody.
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
@@ -802,6 +820,8 @@ async fn schema_reload_rebuilds_the_shred_log() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
     let event_id = body.event_id.clone();
@@ -882,6 +902,8 @@ async fn sealed_apply_with_wrong_dek_admits_without_custody() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     let (body, dek) = sealed_assert_body(&kid_d, patient, peer_hlc(WALL_2026));
     let event_id = body.event_id.clone();
@@ -927,6 +949,8 @@ async fn custody_is_withheld_when_shred_arrives_before_its_target() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // The content event's id is minted before it is ever applied — exactly the shape a
     // real shred-before-content race takes on the wire.
@@ -1036,6 +1060,8 @@ async fn sealed_non_clinical_admits_without_projection_or_wedge() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
 
     // Pre-fix this DETONATES patient_address_apply: on the ciphertext body `p ->> 'field'`
     // is NULL, so `fld <> 'address'` is NULL (NOT true) and the trigger falls through to
@@ -1128,6 +1154,8 @@ async fn sealed_identity_link_with_malformed_field_admits_without_wedge() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_d, kid_d, _sk_h, _kid_h) = setup(&c).await;
     let patient = Uuid::now_v7();
+    // #345: a chart must be registered before anything is recorded about it.
+    common::submit_registration(&c, &sk_d, &kid_d, patient, 0).await;
     // setup() does not truncate the identity projection (no FK to event_log): clear it so the
     // "no edge projected" assertion below is exact regardless of sibling-test residue.
     c.execute("TRUNCATE patient_link CASCADE", &[])
