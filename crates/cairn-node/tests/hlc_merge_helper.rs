@@ -37,12 +37,23 @@
 //!    worked). Fail closed and say so instead.
 //! 4. **The merge is monotone.** The property every caller depends on: an older event
 //!    can never drag the clock BACKWARDS, no matter what a peer asserts.
+//! 5. **Every door still CALLS the helper.** The mirror image of guard 1, and the one
+//!    this suite originally missed: forbidding a new copy does nothing about a call
+//!    site quietly disappearing.
 //!
-//! The doors' own behaviour (which event is admitted, which is refused, and each door's
-//! drift ceiling) is covered by `hlc_drift.rs`, `restore.rs`, `apply_remote_event.rs`
-//! and `cairn-sync`'s `clinical_pull.rs`. Those suites staying green across this
-//! refactor is the actual regression proof; this file pins the properties of the
-//! extracted helper itself.
+//! ## What the door suites do and do not cover
+//!
+//! `hlc_drift.rs`, `restore.rs`, `apply_remote_event.rs` and `cairn-sync`'s
+//! `clinical_pull.rs` cover each door's ADMISSION behaviour — which event is accepted,
+//! which is refused, and each door's drift ceiling — and they stay green across this
+//! refactor, which is the regression proof for that behaviour.
+//!
+//! They do NOT cover the clock advance at every site. A positive "`hlc_state` moved
+//! forward after admission" assertion exists for only two of the five call sites:
+//! db/007's enroll arm (`hlc_drift.rs`) and db/020 (`apply_remote_event.rs`). The
+//! supersede arm, the peer/revoke arm and `restore_node_event` have none — dropping
+//! their merge leaves the entire tree green. That is precisely why guard 5 exists, and
+//! why it is a source-level count rather than a behavioural assertion.
 //!
 //! DB-backed cases use real Postgres, gated on `$CAIRN_TEST_PG`, serialized
 //! cluster-wide via `db::test_serial_guard` (shared-DB pattern).
@@ -124,6 +135,69 @@ fn the_helper_is_declared_in_db001_so_the_sync_subset_can_reach_it() {
         "cairn_node_hlc_merge must be declared ONLY in db/001 — cairn-sync's SCHEMA subset \
          omits db/007, and PL/pgSQL late binding turns a misplaced declaration into a \
          first-write outage (#198). Found in: {declaring:?}"
+    );
+}
+
+/// Every door that admits someone else's event must still CALL the merge — the mirror
+/// image of the guard above.
+///
+/// The two guards above forbid a sixth COPY of the merge from re-growing. Neither
+/// notices the opposite failure: a call site silently VANISHING. Both still pass with
+/// every `PERFORM cairn_node_hlc_merge(...)` deleted, including all five at once. The
+/// de-duplication itself made that failure easier to miss — removing the eight-line
+/// block was conspicuous in review, removing one `PERFORM` line is not.
+///
+/// A source-level count is the right tool here because behavioural coverage does not
+/// exist for three of the five sites (see the header): the supersede arm, the
+/// peer/revoke arm and `restore_node_event` have no assertion anywhere in the tree that
+/// the clock advanced, so their merge could be dropped with the whole suite green.
+///
+/// Concretely, what that would cost — take `restore_node_event`. A node restored from a
+/// sneakernet medium whose events carry honest forward skew (walls inside the 24h
+/// ceiling, so all admitted) would leave `hlc_state` at its fresh-database 0.
+/// `node_hlc_tick` then returns `GREATEST(now_ms, 0)` = now, which is BELOW the restored
+/// events' walls — so the first node event this node authors sorts causally BEFORE
+/// history it already holds. An A3 violation inside an append-only log, surfacing only
+/// as unexplained ordering weirdness much later: the exact defect class issue #227 was
+/// filed to make impossible.
+///
+/// Shares the whitespace-sensitivity limitation of the #173 guard it is modelled on: a
+/// call written `PERFORM  cairn_node_hlc_merge(` or `SELECT cairn_node_hlc_merge(` would
+/// not be counted. That direction fails CLOSED (the test goes red and a human looks), so
+/// it is the safe way for the needle to be wrong.
+#[test]
+fn every_door_still_calls_the_helper() {
+    let needle = "PERFORM cairn_node_hlc_merge(";
+    // (migration, how many of its arms merge the clock)
+    let want: Vec<(String, usize)> = [
+        ("007_node_federation.sql", 3), // apply_remote_node_event: enroll, supersede, peer/revoke
+        ("009_node_supersede_and_restore.sql", 1), // restore_node_event
+        ("020_apply_remote_event.sql", 1), // the clinical door, passing its clamped wall
+    ]
+    .iter()
+    .map(|(f, n)| (f.to_string(), *n))
+    .collect();
+
+    let mut got: Vec<(String, usize)> = Vec::new();
+    for entry in fs::read_dir(db_dir()).expect("read db/") {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+            continue;
+        }
+        let sql = fs::read_to_string(&path).expect("read sql");
+        let calls = sql.matches(needle).count();
+        if calls > 0 {
+            got.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                calls,
+            ));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got, want,
+        "every admission door must still PERFORM cairn_node_hlc_merge — a dropped call \
+         leaves the clock behind events this node has already admitted (A3, issue #227)"
     );
 }
 
@@ -276,4 +350,12 @@ async fn the_merge_never_moves_the_clock_backwards() {
             "merging ({wall}, {counter}) into (100, 5): {why}"
         );
     }
+
+    // Leave the shared singleton at its zero baseline rather than at this suite's last
+    // case (the PR #285 convention `status.rs` follows). Harmless either way — the walls
+    // above are 1970 timestamps, so `node_hlc_tick` self-corrects on the next tick — but
+    // suites that share a database should not hand each other residue.
+    c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0 WHERE id")
+        .await
+        .unwrap();
 }

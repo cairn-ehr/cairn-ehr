@@ -3,7 +3,9 @@
 -- The A3 HLC merge (drag our clock past every event we admit) used to be pasted
 -- verbatim into five doors; it now lives once in cairn_node_hlc_merge (db/001). The
 -- Rust suite crates/cairn-node/tests/hlc_merge_helper.rs carries the same assertions
--- and additionally pins, at source level, that no migration re-grows a copy.
+-- and adds two SOURCE-level guards this file cannot express, because they read the
+-- migration text rather than the loaded schema: that no migration re-grows a copy of
+-- the merge, and that all five doors still PERFORM the helper.
 --
 -- Mirrored here so the properties are checked by scripts/run-db-sql-tests.sh too — the
 -- lesson of PR #182, where a guard living in only one of the two places drifted.
