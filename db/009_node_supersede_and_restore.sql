@@ -63,8 +63,9 @@ BEGIN
     b := cairn_body(p_signed);
     -- Clock-drift ceiling (issue #193, mirroring db/007's node door — the THIRD
     -- signed-bytes admission door gets the same bound). Restore is self-trusting (any
-    -- signed enroll applies; a fresh node has no trust set) and the hlc_state merge
-    -- below is a monotone GREATEST — so ONE attacker-appended event on the sneakernet
+    -- signed enroll applies; a fresh node has no trust set) and the hlc_state merge at
+    -- the end of this door (cairn_node_hlc_merge, db/001) is monotone by construction —
+    -- so ONE attacker-appended event on the sneakernet
     -- medium carrying an absurd future wall would ratchet the fresh node's clock into
     -- the far future, and every event it subsequently authors would be rejected by
     -- every peer's drift ceiling: the node is wedged out of the federation with no

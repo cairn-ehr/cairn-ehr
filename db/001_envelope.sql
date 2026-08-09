@@ -270,10 +270,18 @@ BEGIN
             p_wall, p_counter;
     END IF;
     -- Monotone by construction: the wall only ever rises; on a strictly higher incoming
-    -- wall we ADOPT the incoming counter (a counter is only meaningful against its own
-    -- wall); on a tie we keep the higher counter; on a lower wall nothing moves at all.
-    -- Every SET expression reads the pre-UPDATE row, so the CASE sees the same hlc_wall
-    -- the GREATEST above it does.
+    -- wall we ADOPT the incoming counter rather than keeping ours (a counter only orders
+    -- events that share its wall, so ours says nothing against a wall it never saw); on a
+    -- tie we keep the higher counter; on a lower wall nothing moves at all. Every SET
+    -- expression reads the pre-UPDATE row, so the CASE sees the same hlc_wall the
+    -- GREATEST beside it does.
+    --
+    -- Pairing the two arguments correctly is the CALLER's job, and one caller knowingly
+    -- does not: db/020 hands over a CLAMPED wall with the event's raw counter, so on a
+    -- clamped path the adopted counter was asserted against a wall we refused. That is
+    -- deliberate and pre-dates this helper (see the clamp rationale there) — and it is
+    -- bounded, because a counter only tiebreaks within a single millisecond and so cannot
+    -- carry the clock past the ceiling the wall was just clamped to.
     UPDATE hlc_state SET
         hlc_wall    = GREATEST(hlc_wall, p_wall),
         hlc_counter = CASE
