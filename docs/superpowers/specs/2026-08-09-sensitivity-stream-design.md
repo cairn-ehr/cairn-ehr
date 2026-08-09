@@ -44,7 +44,8 @@ erasure. It leaves six things open, each decided here:
    grade of an event is the **max** over standing assertions on all three (§4).
 2. **An unrecognized grade ranks MAX**, inverting the `clock_grade` precedent (§5).
 3. **Declassification is withdraw-by-reference**, with the ceremony enforced at the **local authoring
-   door only** (§6).
+   door only** (§6). A corollary the ADR must also carry: **the effective grade is node-relative**,
+   because thread membership is knowable only with custody (§10b) — the ADR-0052 §9 pattern again.
 4. **Sensitivity assertions are plaintext by necessity** — extending ADR-0052 §2's list (§3).
 5. **The matched category never travels on the wire** (§3).
 6. **ADR-0043's "agent advisories are dismissable by anyone" does not reach a protective auto-tag** —
@@ -388,6 +389,39 @@ needs no artificial MAX value, and the third rule keeps the uncertainty from bit
 matter — without it, every medication event on every custody-less node would coarsen maximally,
 recreating the everything-is-blurred problem in §4.
 
+**Where the cost actually lands.** Under sequester the unresolvable set is *exactly* the sequestered
+set, so a node that holds custody of the chart's other threads coarsens nothing extra. The cost falls
+on a node with **no** custody at all — a phone-tier node that has synced a chart but fetched no DEKs —
+where a chart with one graded thread and twenty ungraded ones coarsens all twenty-one. Two things bound
+that: such a node cannot render any body anyway, so the blurred projection is all it was ever going to
+show; and the warning still fires, so the §5.9 safety floor holds. The damage is friction and
+break-glass pressure, never a missed signal.
+
+**This rule is required by §5.9 today, not only by part C.** When an event is crypto-shredded (rung 3),
+`db/037` scrubs its derived projection rows, so `cairn_event_thread` returns NULL for it **on every node
+permanently** — including the authoring one. Event-scoped and chart-scoped assertions still apply (they
+need no resolution); only thread membership is lost. Without the bound, a shredded event's thread grade
+evaporates at the moment of shred and its safety projection renders uncoarsened — contradicting §5.9's
+*"the safety projection outlives the body it protects — coarsens but survives."* So the bound is what
+makes coarsen-but-survive true after a shred, independent of sequester.
+
+**Consequence: effective grade is non-monotone in custody.** Gaining custody can *lower* a displayed
+grade, as the bound collapses to the true value — so the grade is a function of **local custody, not a
+global fact**. This is a known pattern here rather than a surprise: ADR-0052 §9 found the same thing
+about ADR-0049's thread commitment, which born-sealing turned from a pure function of the content-event
+*set* into a function of local *custody*. Two consequences: a UI showing a grade must tolerate it
+dropping as DEKs arrive, and the §12 convergence test is only valid **given equal custody** (below).
+
+It opens **no new inference channel**: the bound reveals the chart's highest thread grade to a node that
+can resolve nothing, but the assertions are plaintext and replicate unconditionally (§3), so that grade
+was already readable there.
+
+**Rejected alternative — a plaintext thread reference on `event_log`**, which would make resolution
+custody-free and delete this whole rule. It fails on its own terms: *"these eight events form one
+thread"* is itself linkage information, and thread size and timing re-identify — so it trades a
+coarsening cost for a disclosure. It is also an envelope wire change, which ADR-0052 §2 scopes
+deliberately. Named here so the next reader sees it was weighed.
+
 ### 10c. Recall marks; it must never lower
 
 `recall_overlay` is append-only, node-local, and **consulted by nothing outside `db/006`** — it marks
@@ -464,8 +498,11 @@ SQLSTATE, not the message, because a message-only assertion stays green through 
 **Blacklist:** empty map yields no candidate; a populated map yields grade + category; the function
 authors nothing; **no input can produce a chart-wide candidate**.
 
-**Convergence:** two nodes receiving the assertions in opposite orders compute the same effective grade
-(the CRDT property of §4).
+**Convergence, *given equal custody*:** two nodes receiving the assertions in opposite orders compute
+the same effective grade (the CRDT property of §4). The custody qualifier is load-bearing and belongs
+in the test name — §10b makes the effective grade non-monotone in custody, so two honest nodes with
+*different* custody may legitimately disagree. Stated loosely this test either fails spuriously or, far
+worse, gets "fixed" by deleting the §10b bound — reopening the leak it exists to close.
 
 **Registration precedence (Slice 64):** a sensitivity assertion bears `patient_id`, so it cannot be a
 chart's first event — fixtures register first, and one test pins the refusal.
