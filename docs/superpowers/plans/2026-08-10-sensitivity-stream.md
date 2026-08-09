@@ -1333,9 +1333,12 @@ async fn recall_marks_an_assertion_but_never_lowers_the_grade() {
     // Recall the assertion's own event. recall_overlay MARKS; it must never remove the
     // assertion from the standing set — otherwise recalling a bad actor would silently
     // strip protection from every patient they graded.
+    // recall_overlay is (recall_id PK DEFAULT gen_random_uuid(), target_event_id, reason,
+    // recorded_at) — db/006. target_event_id carries an FK to event_log, which is why the
+    // assertion's own event_id is fetched above rather than invented.
     c.execute(
-        "INSERT INTO recall_overlay (event_id, reason) VALUES ($1::text::uuid, 'test recall')
-         ON CONFLICT DO NOTHING",
+        "INSERT INTO recall_overlay (target_event_id, reason)
+         VALUES ($1::text::uuid, 'test recall')",
         &[&assertion_event.to_string()],
     )
     .await
@@ -1350,8 +1353,8 @@ async fn recall_marks_an_assertion_but_never_lowers_the_grade() {
 }
 ```
 
-> If `recall_overlay`'s column names differ from `(event_id, reason)`, read `db/006_recall.sql`
-> and use its actual columns — the assertion being pinned is the grade, not the insert shape.
+> The insert shape above is verified against `db/006_recall.sql`. What is being pinned is the
+> grade, not the insert.
 
 - [ ] **Step 2: Run and watch fail**
 
@@ -1392,17 +1395,43 @@ $$;
 --     projection rows db/037 scrubbed — which is exactly why the bound is needed today and
 --     not only after sequester lands.
 CREATE OR REPLACE FUNCTION cairn_event_thread(p_event_id uuid)
-RETURNS uuid LANGUAGE sql STABLE AS $$
-    WITH ca AS (SELECT content_address FROM event_log WHERE event_id = p_event_id)
-    SELECT medication_id FROM (
+RETURNS uuid LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_ca     bytea;
+    v_thread uuid;
+BEGIN
+    -- !! LANGUAGE plpgsql, NOT sql, AND THE GUARD IS LOAD-BEARING !!
+    -- cairn-sync loads a SUBSET of the migrations that does NOT include db/031/032, so the
+    -- medication projections DO NOT EXIST on that node. A LANGUAGE sql body binds its table
+    -- references EAGERLY at CREATE time, so this function would fail to create there and
+    -- db/048 would fail to load — taking clinical sync down entirely. (Same late-binding
+    -- lesson as #198/#227, and the reason db/005 hosts cairn_clear_payload.) plpgsql binds
+    -- at first EXECUTION, and the short-circuit below means the medication SELECT is never
+    -- planned on a schema that lacks those tables.
+    --
+    -- Returning NULL there is not a workaround, it is the honest answer: a node that cannot
+    -- see medication threads cannot resolve one, which is the SAME state as holding no
+    -- custody. Section 11's conservative bound then applies. Safe direction by construction.
+    IF to_regclass('public.medication_statement') IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_event_id;
+    IF v_ca IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT medication_id INTO v_thread FROM (
         SELECT medication_id, content_address FROM medication_statement
         UNION ALL SELECT medication_id, content_address FROM medication_cessation
         UNION ALL SELECT medication_id, content_address FROM medication_coding
         UNION ALL SELECT medication_id, content_address FROM medication_dose
         UNION ALL SELECT medication_id, content_address FROM medication_dose_correction
     ) t
-    WHERE t.content_address = (SELECT content_address FROM ca)
+    WHERE t.content_address = v_ca
     LIMIT 1;
+    RETURN v_thread;
+END;
 $$;
 
 -- ---------------------------------------------------------------------------
