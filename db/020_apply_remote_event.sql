@@ -514,15 +514,19 @@ BEGIN
     -- worsened by this clamp; see issue #97.) The A3 invariant is intentionally relaxed for a
     -- Byzantine future-claim: Cairn contains dishonest events with signatures + recall, not by
     -- dragging every honest node's clock to the lie.
+    -- The CLAMP is this door's admission policy and stays here; the merge itself is the
+    -- shared monotone helper in db/001 (issue #227), so the node plane and the clinical
+    -- plane can never drift into different clock semantics. Note the split: what differs
+    -- between the doors is which wall they hand over, never how it is merged.
+    --
+    -- LEAST() ignores NULLs, so a body carrying no hlc.wall would yield the CEILING here
+    -- rather than NULL — i.e. it would ratchet the clock a full drift-window forward. That
+    -- is unreachable by construction: event_log.hlc_wall is NOT NULL and the event is
+    -- inserted above, so such a body is refused by the column before reaching this line.
+    -- Stated explicitly because the helper's own NULL guard cannot see through the LEAST.
     v_merge_wall := LEAST((b -> 'hlc' ->> 'wall')::bigint,
                           (extract(epoch FROM clock_timestamp()) * 1000)::bigint + cairn_max_hlc_drift_ms());
-    UPDATE hlc_state SET
-        hlc_wall    = GREATEST(hlc_wall, v_merge_wall),
-        hlc_counter = CASE
-            WHEN v_merge_wall > hlc_wall THEN (b -> 'hlc' ->> 'counter')::int
-            WHEN v_merge_wall = hlc_wall THEN GREATEST(hlc_counter, (b -> 'hlc' ->> 'counter')::int)
-            ELSE hlc_counter END
-        WHERE id;
+    PERFORM cairn_node_hlc_merge(v_merge_wall, (b -> 'hlc' ->> 'counter')::int);
 
     RETURN v_event_id;
 END;

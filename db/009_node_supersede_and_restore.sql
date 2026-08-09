@@ -120,13 +120,10 @@ BEGIN
         ON CONFLICT (node_event_id) DO NOTHING;
     END IF;
     -- Clock never falls behind a restored event (HLC invariant A3, mirrors the apply path).
-    UPDATE hlc_state SET
-        hlc_wall    = GREATEST(hlc_wall, (b -> 'hlc' ->> 'wall')::bigint),
-        hlc_counter = CASE
-            WHEN (b -> 'hlc' ->> 'wall')::bigint > hlc_wall THEN (b -> 'hlc' ->> 'counter')::int
-            WHEN (b -> 'hlc' ->> 'wall')::bigint = hlc_wall THEN GREATEST(hlc_counter, (b -> 'hlc' ->> 'counter')::int)
-            ELSE hlc_counter END
-        WHERE id;
+    -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge —
+    -- and the merge being monotone is exactly why that ceiling has to sit in front of it.
+    PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
+                                 (b -> 'hlc' ->> 'counter')::int);
     RETURN v_eid;
 END;
 $$;
