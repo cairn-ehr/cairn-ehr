@@ -229,7 +229,8 @@ BEGIN
         INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
             signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
         VALUES (v_eid, 'supersede', v_local_node,
-            decode(v_payload ->> 'superseded_node_id_hex','hex'),
+            cairn_decode_hex_or_raise('superseded_node_id_hex',
+                v_payload ->> 'superseded_node_id_hex', 'submit_node_event'),
             v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
@@ -237,7 +238,10 @@ BEGIN
     END IF;
 
     -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
-    -- as an opaque constraint error rather than a legible rejection.
+    -- as an opaque constraint error rather than a legible rejection. The sibling case —
+    -- present but MALFORMED — is caught inside cairn_decode_hex_or_raise below (issue
+    -- #228). This guard is kept rather than folded into the helper because it names
+    -- v_type, which the helper cannot see.
     IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
         RAISE EXCEPTION 'submit_node_event: % missing peer_node_id_hex in payload', v_type;
     END IF;
@@ -246,7 +250,8 @@ BEGIN
         signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
         hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
     VALUES (v_eid, v_op, v_local_node,
-        decode(v_payload ->> 'peer_node_id_hex','hex'),
+        cairn_decode_hex_or_raise('peer_node_id_hex',
+            v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
         v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
         v_payload ->> 'role', v_payload ->> 'scope_hint',
         NULLIF(v_payload ->> 'target_event_id','')::uuid,
@@ -397,7 +402,8 @@ BEGIN
         INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
             signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
         VALUES (v_eid, 'supersede', v_author_node,
-            decode(v_payload ->> 'superseded_node_id_hex','hex'),
+            cairn_decode_hex_or_raise('superseded_node_id_hex',
+                v_payload ->> 'superseded_node_id_hex', 'apply_remote_node_event'),
             v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
@@ -409,7 +415,10 @@ BEGIN
     END IF;
 
     -- Mirror the local door's legible guard: a trusted-but-malformed peer event
-    -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject.
+    -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject. Present but
+    -- MALFORMED is caught by cairn_decode_hex_or_raise below (issue #228). Both guards
+    -- stay here rather than moving into the helper: they can name the AUTHOR, which is
+    -- what tells the operator which peer to go and fix, and the helper cannot see it.
     IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
         RAISE EXCEPTION 'apply_remote_node_event: % from % missing peer_node_id_hex in payload', v_type, encode(v_author_node,'hex');
     END IF;
@@ -417,7 +426,8 @@ BEGIN
         signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
         hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
     VALUES (v_eid, v_op, v_author_node,
-        decode(v_payload ->> 'peer_node_id_hex','hex'),
+        cairn_decode_hex_or_raise('peer_node_id_hex',
+            v_payload ->> 'peer_node_id_hex', 'apply_remote_node_event'),
         v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
         v_payload ->> 'role', v_payload ->> 'scope_hint',
         NULLIF(v_payload ->> 'target_event_id','')::uuid,
