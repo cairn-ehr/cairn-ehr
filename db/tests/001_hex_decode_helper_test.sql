@@ -100,30 +100,77 @@ BEGIN
     END LOOP;
 END $$;
 
--- The refusal characterises the value (length + short prefix) rather than echoing it.
--- Node-ids carry nothing secret, so this is not a leak fix today — it is the habit that
--- keeps it from becoming one when a later door decodes a key or a wrapped DEK, since
--- door errors land in logs that outlive the session.
+-- The refusal characterises the value (length + a strict prefix) rather than echoing it,
+-- AT EVERY LENGTH. Node-ids carry nothing secret, so this is not a leak fix today — it is
+-- the habit that keeps it from becoming one when a later door decodes a key or a wrapped
+-- DEK, since door errors land in logs that outlive the session.
+--
+-- The lengths straddle the 8-character cap on purpose. "At most 8" reads as safe and is
+-- not: for anything 8 characters or shorter it degrades to the whole value, and 8 hex
+-- characters is a 4-byte secret. The first version of this file asserted non-echo only
+-- against the 42-char fixture and so proved nothing about the case that actually leaks
+-- (PR #371 review). The helper now shows at most HALF the value, capped at 8, and always
+-- marks the elision — so something is hidden at every length and the '...' never lies.
 DO $$
 DECLARE
-    v_val TEXT := repeat('aabbccdd', 5) || 'zz';   -- 42 chars, invalid hex
+    c RECORD;
     v_msg TEXT;
 BEGIN
-    BEGIN
-        PERFORM cairn_decode_hex_or_raise('superseded_node_id_hex', v_val, 'restore_node_event');
-    EXCEPTION WHEN others THEN
-        v_msg := SQLERRM;
-    END;
-    IF v_msg IS NULL THEN
-        RAISE EXCEPTION 'value-characterisation FAILED: an invalid value was accepted';
-    END IF;
-    IF strpos(v_msg, v_val) > 0 THEN
-        RAISE EXCEPTION 'value-characterisation FAILED: the refusal echoed the whole value: %', v_msg;
-    END IF;
-    IF v_msg NOT LIKE '%42%' OR v_msg NOT LIKE '%aabbccdd%' THEN
-        RAISE EXCEPTION 'value-characterisation FAILED: refusal must report length and a short prefix; got: %', v_msg;
-    END IF;
-    RAISE NOTICE 'value-characterisation OK: %', v_msg;
+    FOR c IN SELECT * FROM (VALUES
+        ('zzzz',                            'a 4-char value, far under the cap'),
+        ('zzzzzzzz',                        'an 8-char value, exactly at the cap'),
+        (repeat('aabbccdd', 5) || 'zz',     'a 42-char value, over the cap')
+    ) AS t(val, why)
+    LOOP
+        v_msg := NULL;
+        BEGIN
+            PERFORM cairn_decode_hex_or_raise('superseded_node_id_hex', c.val, 'restore_node_event');
+        EXCEPTION WHEN others THEN
+            v_msg := SQLERRM;
+        END;
+        IF v_msg IS NULL THEN
+            RAISE EXCEPTION 'value-characterisation FAILED: % was accepted', c.why;
+        END IF;
+        IF strpos(v_msg, c.val) > 0 THEN
+            RAISE EXCEPTION 'value-characterisation FAILED for % — the refusal echoed the whole value: %',
+                c.why, v_msg;
+        END IF;
+        IF v_msg NOT LIKE '%' || length(c.val)::text || ' chars%' OR v_msg NOT LIKE '%...%' THEN
+            RAISE EXCEPTION 'value-characterisation FAILED for % — refusal must report the length and mark the elision; got: %',
+                c.why, v_msg;
+        END IF;
+        RAISE NOTICE 'value-characterisation OK (%): %', c.why, v_msg;
+    END LOOP;
+END $$;
+
+-- DETAIL names WHICH of the two hex faults it was. The helper checks the shape itself
+-- rather than catching what decode() raises (db/034's idiom — a catch-all WHEN others
+-- relabels an unrelated internal fault as bad caller input, which db/041's review removed
+-- for that reason), so the helper owns this text and it has to be asserted or it can rot.
+-- The two faults want opposite responses: an odd digit count means the value was
+-- TRUNCATED, a bad character means it was ENCODED wrongly.
+DO $$
+DECLARE
+    c RECORD;
+    v_detail TEXT;
+BEGIN
+    FOR c IN SELECT * FROM (VALUES
+        ('abcde', 'odd number',      'all hex digits but an odd count -> truncation'),
+        ('zzzz',  'not a hex digit', 'an even count of non-hex characters -> wrong encoding')
+    ) AS t(val, needle, why)
+    LOOP
+        v_detail := NULL;
+        BEGIN
+            PERFORM cairn_decode_hex_or_raise('peer_node_id_hex', c.val, 'submit_node_event');
+        EXCEPTION WHEN others THEN
+            GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+        END;
+        IF v_detail IS NULL OR v_detail NOT LIKE '%' || c.needle || '%' THEN
+            RAISE EXCEPTION 'detail-guard FAILED for % — DETAIL must say "%"; got: %',
+                c.why, c.needle, coalesce(v_detail, '<none>');
+        END IF;
+        RAISE NOTICE 'detail-guard OK (%): %', c.why, v_detail;
+    END LOOP;
 END $$;
 
 -- NULL fails closed, by field name. Not reachable from db/007's doors (they keep their

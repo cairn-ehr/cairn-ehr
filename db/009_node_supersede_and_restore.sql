@@ -116,9 +116,10 @@ BEGIN
         -- costs nothing worth a guard, because the FIELD NAME already carries the op —
         -- superseded_node_id_hex can only be node.superseded, peer_node_id_hex only a
         -- peer.added/peer.revoked — and added-vs-revoked tells nobody anything useful
-        -- about a malformed subject. db/007's guards name the AUTHORING PEER too, which is
-        -- what says whose node to go and fix; restore has no peer to name (it reads a
-        -- sneakernet medium), so there is nothing lost there either.
+        -- about a malformed subject. db/007's REMOTE door additionally names the authoring
+        -- peer (its local door has no peer to name, and neither has restore, which reads a
+        -- sneakernet medium) — that is the context worth a hand-written guard, and it is
+        -- context this door does not have.
         v_subject := CASE v_op
             WHEN 'supersede' THEN cairn_decode_hex_or_raise('superseded_node_id_hex',
                 v_payload ->> 'superseded_node_id_hex', 'restore_node_event')

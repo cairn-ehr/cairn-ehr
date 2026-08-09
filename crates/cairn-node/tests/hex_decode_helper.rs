@@ -4,9 +4,10 @@
 //!
 //! Three node-plane doors read a node-id out of an event payload as a hex string and
 //! `decode(…, 'hex')` it: `submit_node_event` and `apply_remote_node_event` (db/007) and
-//! `restore_node_event` (db/009). All of them guarded the **NULL** case legibly — "missing
-//! peer_node_id_hex in payload", door named — and then passed the **non-NULL, malformed**
-//! case straight into `decode`, which raises PostgreSQL's own
+//! `restore_node_event` (db/009). All of them guarded the **NULL** case — db/007's four
+//! guards by field name ("missing peer_node_id_hex in payload", door named), db/009's with
+//! a generic "missing subject node id" — and then passed the **non-NULL, malformed** case
+//! straight into `decode`, which raises PostgreSQL's own
 //! `invalid hexadecimal digit: "x"` (or the odd-length variant) with **no door name, no
 //! field name, no author**.
 //!
@@ -45,18 +46,22 @@
 //!    silently vanishing, and a vanished call restores exactly the illegible error #228
 //!    was filed about, with the whole tree green.
 //! 3. **Behaviour: a malformed value names door, field and reason** — and is not
-//!    PostgreSQL's bare hex error.
-//! 4. **Behaviour: the refusal does not echo the whole value.** Node-ids are not secret,
-//!    but a general-purpose hex decoder outlives that assumption and door errors land in
-//!    logs.
+//!    PostgreSQL's bare hex error. Its DETAIL says WHICH hex fault, because truncation and
+//!    wrong-encoding want opposite responses from whoever reads the log.
+//! 4. **Behaviour: the refusal never echoes the whole value, AT ANY LENGTH.** Node-ids are
+//!    not secret, but a general-purpose hex decoder outlives that assumption and door
+//!    errors land in logs. The lengths tested straddle the cap on purpose — see
+//!    `the_refusal_characterises_the_value_instead_of_echoing_it` for the version of this
+//!    that a review had to catch.
 //! 5. **Behaviour: NULL fails closed, valid hex is unchanged.** The helper must be a
 //!    drop-in for `decode(…, 'hex')` on the happy path or the doors' semantics moved.
 //! 6. **Behaviour: the refusal carries P0001**, the skip-and-advance code — the contract
 //!    with the pull loop described above, invisible to every message-only assertion.
-//! 7. **End-to-end: the message actually reaches a caller** through all three doors —
-//!    proof the helper is wired in, not just declared. `apply_remote_node_event` matters
-//!    most of the three: it is the only one on the peer path, so it is the one whose
-//!    refusal a *program* consumes.
+//! 7. **End-to-end: the message actually reaches a caller** through all three doors, and
+//!    through BOTH payload fields (`peer_node_id_hex` and `superseded_node_id_hex`) on the
+//!    peer path — proof the helper is wired in, not just declared.
+//!    `apply_remote_node_event` matters most of the three: it is the only one on the peer
+//!    path, so it is the one whose refusal a *program* consumes.
 //!
 //! DB-backed cases use real Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide
 //! via `db::test_serial_guard` (shared-DB pattern).
@@ -87,8 +92,8 @@ fn db_dir() -> PathBuf {
 ///
 /// Whole-line `--` comments are stripped, and that is load-bearing rather than tidy: the
 /// counting guard below would otherwise be the one way these source-level checks can fail
-/// OPEN. These migrations discuss the helper by name in prose — db/007 alone does so three
-/// times — so a future comment that quotes an example call would hold the count at its
+/// OPEN. These migrations discuss the helper by name in prose — db/007 twice, db/009 once,
+/// db/001 throughout — so a future comment that quotes an example call would hold the count at its
 /// expected value while a real call site was deleted, and the guard would pass. Stripping
 /// comments makes prose unable to substitute for code. Trailing comments after code are
 /// left alone: a line is only dropped if it *starts* with `--`, so a real call can never
@@ -196,10 +201,18 @@ fn every_hex_door_still_calls_the_helper() {
 // 2. Behaviour of the helper itself.
 // ---------------------------------------------------------------------------
 
-/// Ask the helper to decode `value`; return the refusal as (message, SQLSTATE).
-///
-/// Both halves are asserted on in this suite, and for different audiences: the message is
-/// what a human reads, the SQLSTATE is what `sync.rs`'s pull loop branches on.
+/// The three parts of a refusal this suite asserts on, each for a different audience.
+struct Refusal {
+    /// What a human reads in a log: door, field, reason, value characterisation.
+    message: String,
+    /// Which of the two hex faults it was — the part that tells a truncated value apart
+    /// from a wrongly-encoded one.
+    detail: String,
+    /// What `sync.rs`'s pull loop branches on. Must be P0001.
+    code: String,
+}
+
+/// Ask the helper to decode `value` and return the refusal it raised.
 ///
 /// Passing the value as a bound parameter rather than interpolating it keeps the odd
 /// shapes below (a `0x` prefix, stray quotes) from having to be SQL-escaped, and makes the
@@ -210,7 +223,7 @@ async fn decode_error(
     field: &str,
     value: Option<&str>,
     door: &str,
-) -> (String, String) {
+) -> Refusal {
     let err = c
         .query_one(
             "SELECT cairn_decode_hex_or_raise($1, $2, $3)",
@@ -221,7 +234,11 @@ async fn decode_error(
     let db = err
         .as_db_error()
         .expect("the refusal must be a database error, not a transport failure");
-    (db.message().to_string(), db.code().code().to_string())
+    Refusal {
+        message: db.message().to_string(),
+        detail: db.detail().unwrap_or_default().to_string(),
+        code: db.code().code().to_string(),
+    }
 }
 
 /// The refusal must carry P0001 — the code the pull loop reads as "deliberate, skip past
@@ -256,15 +273,52 @@ async fn refuses_malformed_hex_with_the_skip_and_advance_code() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
     for (value, case) in [(Some("0xABC"), "a malformed value"), (None, "a NULL value")] {
-        let (_msg, code) =
-            decode_error(&c, "peer_node_id_hex", value, "apply_remote_node_event").await;
+        let r = decode_error(&c, "peer_node_id_hex", value, "apply_remote_node_event").await;
         assert_eq!(
-            code,
+            r.code,
             SqlState::RAISE_EXCEPTION.code(),
             "{case} must be refused with P0001 (deliberate → skip-and-advance); a 22-class \
              code puts sync.rs's pull loop on its FREEZE arm and stalls the peer forever"
         );
     }
+}
+
+/// DETAIL names WHICH hex fault it was, so the message's characterisation is actionable.
+///
+/// The helper checks the value's shape itself rather than catching what `decode` raises
+/// (db/034's idiom — see the helper's header for why a catch-all `WHEN others` was the
+/// wrong tool: it relabels an unrelated internal fault as bad caller input). Checking
+/// first means the helper owns the reason text, so the reason has to be asserted here or
+/// it can rot into something useless without anything going red.
+///
+/// The two faults want opposite responses from whoever reads the log: an odd digit count
+/// says the value was TRUNCATED in transit or assembly, a bad character says it was
+/// ENCODED wrongly (a `0x` prefix, a UUID's dashes, base64). Collapsing them to one
+/// message would put the operator back to guessing.
+#[tokio::test]
+async fn the_detail_says_which_of_the_two_hex_faults_it_was() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // "abcde" is all hex digits but an odd count → truncation. "zzzz" is an even count of
+    // non-hex characters → wrong encoding. One case per arm, chosen so neither can be
+    // explained by the other.
+    let truncated = decode_error(&c, "peer_node_id_hex", Some("abcde"), "submit_node_event").await;
+    assert!(
+        truncated.detail.contains("odd number"),
+        "an odd digit count must be reported as truncation; got detail: {}",
+        truncated.detail
+    );
+    let misencoded = decode_error(&c, "peer_node_id_hex", Some("zzzz"), "submit_node_event").await;
+    assert!(
+        misencoded.detail.contains("not a hex digit"),
+        "a bad character must be reported as a wrong encoding; got detail: {}",
+        misencoded.detail
+    );
 }
 
 /// A malformed value is refused with a message that names the DOOR, the FIELD and the
@@ -287,8 +341,8 @@ async fn a_malformed_value_names_the_door_the_field_and_the_reason() {
         ("abc", "an odd number of nibbles"),
         ("zzzz", "a non-hex digit"),
     ] {
-        let (msg, _code) =
-            decode_error(&c, "peer_node_id_hex", Some(value), "submit_node_event").await;
+        let r = decode_error(&c, "peer_node_id_hex", Some(value), "submit_node_event").await;
+        let msg = &r.message;
         assert!(
             msg.contains("submit_node_event"),
             "{why} must name the door it was refused at; got: {msg}"
@@ -301,16 +355,32 @@ async fn a_malformed_value_names_the_door_the_field_and_the_reason() {
             msg.contains("not valid hex"),
             "{why} must state the reason in the message, not only in DETAIL; got: {msg}"
         );
+        // SHORT values must be truncated too — see the non-echo test below for why this
+        // assertion lives here as well. These three fixtures are all under 8 characters,
+        // and a cap of "at most 8" silently shows them whole.
+        assert!(
+            !msg.contains(value),
+            "{why} must not be echoed in full even though it is short; got: {msg}"
+        );
     }
 }
 
-/// The refusal characterises the value (length + a short prefix) instead of echoing it.
+/// The refusal characterises the value (length + a strict prefix) instead of echoing it —
+/// at EVERY length, which is the part the first version of this suite got wrong.
 ///
 /// Node-ids are content addresses and carry nothing secret, so this is not a leak fix
 /// today — it is the habit that keeps it from becoming one. A general-purpose hex decoder
 /// is exactly the helper a later door reaches for when reading a key, a token or a
 /// wrapped DEK out of a payload, and a door error is written to logs that outlive the
 /// session. The length and prefix are what a human debugging a buggy peer actually needs.
+///
+/// The lengths below are deliberately spread across the interesting boundary. A cap of
+/// "at most 8 characters" reads as safe and is not: for anything 8 characters or shorter
+/// it degrades to the whole value, and 8 hex characters is a 4-byte secret. This suite
+/// originally asserted non-echo only against a 42-char fixture and so proved nothing about
+/// the case that actually leaks (PR #371 review). The helper now shows at most HALF the
+/// value, capped at 8, and always marks the elision — so something is hidden at every
+/// length, and the `...` never lies.
 #[tokio::test]
 async fn the_refusal_characterises_the_value_instead_of_echoing_it() {
     let Some(base) = cs() else {
@@ -320,27 +390,51 @@ async fn the_refusal_characterises_the_value_instead_of_echoing_it() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
-    // 42 chars, invalid hex. Long enough that a prefix is genuinely shorter than the whole.
-    let value = "aabbccdd".repeat(5) + "zz";
-    let (msg, _code) = decode_error(
+    // Straddling the 8-char cap: well under it, exactly on it, and well over.
+    for (value, why) in [
+        ("zzzz".to_string(), "a 4-char value, far under the cap"),
+        (
+            "zzzzzzzz".to_string(),
+            "an 8-char value, exactly at the cap",
+        ),
+        ("aabbccdd".repeat(5) + "zz", "a 42-char value, over the cap"),
+    ] {
+        let r = decode_error(
+            &c,
+            "superseded_node_id_hex",
+            Some(&value),
+            "restore_node_event",
+        )
+        .await;
+        let msg = &r.message;
+        assert!(
+            !msg.contains(&value),
+            "{why}: the refusal must not echo the whole value; got: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("{} chars", value.len())),
+            "{why}: the refusal must report the value's length so a truncation is obvious; \
+             got: {msg}"
+        );
+        assert!(
+            msg.contains("..."),
+            "{why}: the refusal must mark that the value was elided; got: {msg}"
+        );
+    }
+
+    // The prefix still has to be worth printing: enough leading characters survive to
+    // identify the value and to spot a wrong encoding at a glance.
+    let r = decode_error(
         &c,
-        "superseded_node_id_hex",
-        Some(&value),
-        "restore_node_event",
+        "peer_node_id_hex",
+        Some("0xABCDEF"),
+        "submit_node_event",
     )
     .await;
-
     assert!(
-        !msg.contains(&value),
-        "the refusal must not echo the whole value; got: {msg}"
-    );
-    assert!(
-        msg.contains("42"),
-        "the refusal must report the value's length so a truncation is obvious; got: {msg}"
-    );
-    assert!(
-        msg.contains("aabbccdd"),
-        "the refusal must show a short prefix so the value is identifiable; got: {msg}"
+        r.message.contains("0x"),
+        "the prefix must keep enough to see a 0x-style encoding error; got: {}",
+        r.message
     );
 }
 
@@ -361,7 +455,8 @@ async fn a_null_value_fails_closed_and_names_the_field() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
 
-    let (msg, _code) = decode_error(&c, "peer_node_id_hex", None, "restore_node_event").await;
+    let r = decode_error(&c, "peer_node_id_hex", None, "restore_node_event").await;
+    let msg = &r.message;
     // Both halves matter: naming the helper's caller alone would also be satisfied by
     // Postgres's own "function … does not exist", i.e. it would pass before the helper is
     // written at all.
@@ -431,6 +526,32 @@ fn synth_peer(sk: &SigningKey, name: &str, peer_node_id_hex: &str) -> Vec<u8> {
             "peer_node_id_hex": peer_node_id_hex, "peer_pubkey": kid,
             "fingerprint": "fp", "role": "peer"
         }),
+        attachments: vec![],
+        plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    sign(&body, sk).unwrap().signed_bytes
+}
+
+/// Mint a signed `node.superseded` event for an arbitrary key (no DB), with a
+/// caller-chosen `superseded_node_id_hex`. The supersede arm reads a DIFFERENT payload
+/// field from the peer arm, so it needs its own fixture to be exercised end-to-end.
+fn synth_supersede(sk: &SigningKey, name: &str, superseded_node_id_hex: &str) -> Vec<u8> {
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    let body = EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.superseded".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall: 3,
+            counter: 0,
+            node_origin: name.into(),
+        },
+        t_effective: None,
+        signer_key_id: kid,
+        contributors: serde_json::json!([]),
+        payload: serde_json::json!({ "superseded_node_id_hex": superseded_node_id_hex }),
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
@@ -520,7 +641,30 @@ async fn apply_remote_node_event_refuses_malformed_hex_legibly_and_skippably() {
         .await
         .expect("B's genesis is admitted once B is a confirmed peer");
 
-    // Now the case under test: a TRUSTED peer ships a malformed node-id.
+    // The door's OTHER arm reads a different payload field, so it is a separate call site
+    // and gets its own case: a trusted peer's node.superseded with a malformed subject.
+    let sup = synth_supersede(&sk_b, "B", "not-hex");
+    let err = a
+        .execute("SELECT apply_remote_node_event($1)", &[&sup])
+        .await
+        .expect_err("a malformed superseded_node_id_hex must be refused");
+    let sup_err = err
+        .as_db_error()
+        .expect("the refusal must be a database error, not a transport failure");
+    assert!(
+        sup_err.message().contains("apply_remote_node_event")
+            && sup_err.message().contains("superseded_node_id_hex")
+            && sup_err.message().contains("not valid hex"),
+        "the supersede arm's refusal must name itself, the field and the reason; got: {}",
+        sup_err.message()
+    );
+    assert_eq!(
+        sup_err.code(),
+        &SqlState::RAISE_EXCEPTION,
+        "the supersede arm must be skippable too — it is on the same pull path"
+    );
+
+    // Now the peer/revoke arm: a TRUSTED peer ships a malformed node-id.
     let ev = synth_peer(&sk_b, "B", "0xABC");
     let err = a
         .execute("SELECT apply_remote_node_event($1)", &[&ev])
