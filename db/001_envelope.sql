@@ -220,6 +220,79 @@ CREATE TABLE IF NOT EXISTS hlc_state (
 INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
     VALUES (TRUE, 0, 0) ON CONFLICT (id) DO NOTHING;
 
+-- The A3 clock merge: drag this node's HLC forward past an event we have just ADMITTED,
+-- so the local clock never falls behind anything in our own log (§3.6, ADR-0003).
+--
+-- ONE copy, five callers (issue #227). This block used to be pasted verbatim into every
+-- admission door — the three arms of apply_remote_node_event (db/007), restore_node_event
+-- (db/009), and apply_remote_event (db/020). A later edit that fixed one copy and missed
+-- another would leave two doors with DIFFERENT clock semantics: silent divergence between
+-- the node plane and the clinical plane, exactly the class of drift the twin-registry
+-- row-count already cost us once (PR #182).
+--
+-- IT LIVES IN db/001 ON PURPOSE, not next to the node door in db/007. hlc_state is created
+-- here, and — the load-bearing half — cairn-sync loads a SUBSET of the migrations that
+-- includes db/001 and db/020 but NOT db/007. PL/pgSQL binds a function call at first
+-- EXECUTION, so declaring this in db/007 would let cairn-sync's schema load cleanly and
+-- then fail on its first admitted event: a first-write outage, which is the trap issue
+-- #198 was filed for.
+--
+-- WHAT THIS IS NOT: it is not the drift ceiling. Each door decides ADMISSION for itself
+-- before calling this — db/007 and db/009 REJECT a too-future event, db/020 CLAMPS the
+-- wall it passes in — because their pull loops react differently to a refusal (issues
+-- #102/#193; the reasoning lives at each call site). Keeping this function the pure
+-- monotone merge and nothing else is what stops one door accidentally inheriting
+-- another's admission policy.
+--
+-- NOT A DOOR: it writes hlc_state, so the runtime must never be able to call it directly
+-- — that would bypass the ceiling each door applies first, and one ratcheting connection
+-- wedges this node out of the federation (every peer would refuse the far-future events
+-- it then authors). Hence INVOKER rights, deliberately NOT SECURITY DEFINER, plus REVOKE
+-- FROM PUBLIC: the SECURITY DEFINER doors call it as the migration-defining owner so no
+-- grant is needed, and invoker rights leave a SECOND barrier standing if a future edit
+-- ever GRANTs EXECUTE by mistake — cairn_node holds no UPDATE on hlc_state. Same pattern
+-- as cairn_patient_has_events above.
+CREATE OR REPLACE FUNCTION cairn_node_hlc_merge(p_wall BIGINT, p_counter INTEGER)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+    -- Fail closed on NULL. Left unguarded, a NULL degrades the whole statement into a
+    -- silent no-op that LOOKS like it worked: GREATEST() ignores NULLs, and `NULL > x` is
+    -- NULL (never true), so every branch below would fall through to "keep what we have".
+    -- Unreachable from today's callers — node_event.hlc_wall and event_log.hlc_wall are
+    -- NOT NULL and are inserted BEFORE the merge runs — but a function signature outlives
+    -- the accident of ordering that makes it unreachable, and the next caller does not
+    -- inherit it.
+    IF p_wall IS NULL OR p_counter IS NULL THEN
+        RAISE EXCEPTION 'cairn_node_hlc_merge: wall and counter must not be NULL (got %, %) — fail closed',
+            p_wall, p_counter;
+    END IF;
+    -- Monotone by construction: the wall only ever rises; on a strictly higher incoming
+    -- wall we ADOPT the incoming counter rather than keeping ours (a counter only orders
+    -- events that share its wall, so ours says nothing against a wall it never saw); on a
+    -- tie we keep the higher counter; on a lower wall nothing moves at all. Every SET
+    -- expression reads the pre-UPDATE row, so the CASE sees the same hlc_wall the
+    -- GREATEST beside it does.
+    --
+    -- Pairing the two arguments correctly is the CALLER's job, and one caller knowingly
+    -- does not: db/020 hands over a CLAMPED wall with the event's raw counter, so on a
+    -- clamped path the adopted counter was asserted against a wall we refused. That is
+    -- deliberate and pre-dates this helper (see the clamp rationale there) — and it is
+    -- bounded, because a counter only tiebreaks within a single millisecond and so cannot
+    -- carry the clock past the ceiling the wall was just clamped to.
+    UPDATE hlc_state SET
+        hlc_wall    = GREATEST(hlc_wall, p_wall),
+        hlc_counter = CASE
+            WHEN p_wall > hlc_wall THEN p_counter
+            WHEN p_wall = hlc_wall THEN GREATEST(hlc_counter, p_counter)
+            ELSE hlc_counter END
+        WHERE id;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
+
 -- ---------------------------------------------------------------------------
 -- Sync watermark per peer: the highest HLC this node has pulled from a peer.
 -- Pull is a resumable set-union; the watermark is a hint, never an authority
