@@ -103,12 +103,27 @@ BEGIN
         IF v_author_node IS NULL THEN
             RAISE EXCEPTION 'restore_node_event: author key % maps to no restored enroll (apply genesis first)', v_signer;
         END IF;
+        -- Both the MISSING and the MALFORMED case are refused by name here (issue #228).
+        -- This site used to decode bare and then test `v_subject IS NULL`, which caught
+        -- only the missing case, reported it as the generic "missing subject node id"
+        -- (never saying WHICH field), and could not catch the malformed one at all — a
+        -- payload carrying "0xABC" raised PostgreSQL's own hex error from inside the
+        -- CASE, before the guard was reached. The helper covers both and names the field,
+        -- so the old guard below it is gone rather than left as unreachable code.
+        --
+        -- One thing IS given up, deliberately, and db/007 keeps its own NULL guards
+        -- precisely to avoid giving it up: the old message interpolated v_type. Here that
+        -- costs nothing worth a guard, because the FIELD NAME already carries the op —
+        -- superseded_node_id_hex can only be node.superseded, peer_node_id_hex only a
+        -- peer.added/peer.revoked — and added-vs-revoked tells nobody anything useful
+        -- about a malformed subject. db/007's guards name the AUTHORING PEER too, which is
+        -- what says whose node to go and fix; restore has no peer to name (it reads a
+        -- sneakernet medium), so there is nothing lost there either.
         v_subject := CASE v_op
-            WHEN 'supersede' THEN decode(v_payload ->> 'superseded_node_id_hex','hex')
-            ELSE decode(v_payload ->> 'peer_node_id_hex','hex') END;
-        IF v_subject IS NULL THEN
-            RAISE EXCEPTION 'restore_node_event: % missing subject node id in payload', v_type;
-        END IF;
+            WHEN 'supersede' THEN cairn_decode_hex_or_raise('superseded_node_id_hex',
+                v_payload ->> 'superseded_node_id_hex', 'restore_node_event')
+            ELSE cairn_decode_hex_or_raise('peer_node_id_hex',
+                v_payload ->> 'peer_node_id_hex', 'restore_node_event') END;
         INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
             signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
             hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)

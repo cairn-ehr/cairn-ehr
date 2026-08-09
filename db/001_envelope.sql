@@ -293,6 +293,86 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 
+-- Decode a hex payload field, or refuse LEGIBLY (issue #228).
+--
+-- Node-plane payloads carry node-ids as hex strings, and three doors decode them:
+-- submit_node_event and apply_remote_node_event (db/007) and restore_node_event (db/009).
+-- Each already guarded the NULL case by name, and then handed the non-NULL MALFORMED case
+-- straight to decode(), which raises PostgreSQL's own `invalid hexadecimal digit: "x"` —
+-- no door, no field, no author. A trusted-but-buggy peer shipping
+-- `"peer_node_id_hex": "0xABC"` produced an error indistinguishable from any other hex
+-- failure in the session. The house rule the db/007 header states is *every rejection is
+-- legible*, and this was the exception.
+--
+-- IT WAS ALSO A SYNC STALL, which issue #228 did not know. The pull loop classifies a
+-- door's refusal BY SQLSTATE (crates/cairn-node/src/sync.rs): a bare `RAISE EXCEPTION`
+-- (P0001) is a deliberate, self-healing deny-all → skip-and-advance, while any OTHER code
+-- is read as a transient DB fault and FREEZES the cursor below that seq rather than risk
+-- losing a valid event (#111 review, A1). A bare decode() raises in PostgreSQL's 22 class,
+-- so one trusted-but-buggy peer shipping `"peer_node_id_hex": "0xABC"` froze node-plane
+-- pull from that peer PERMANENTLY — re-fetched and re-frozen every cycle, logged as
+-- "transient?". Routing through this helper makes the refusal P0001, so the malformed
+-- event is skipped and sync continues.
+--
+-- THE P0001 IS THEREFORE A CONTRACT, not an accident of using RAISE EXCEPTION. Do not add
+-- `USING ERRCODE = …` to either RAISE below to "preserve Postgres's own code": the reason
+-- is already preserved as DETAIL, and re-adopting a 22-class code reinstates the freeze.
+-- Pinned by hex_decode_helper.rs (`refuses_malformed_hex_with_the_skip_and_advance_code`)
+-- and by the SQL mirror, because a message-only assertion would stay green through it.
+--
+-- Arguments read as a sentence at the call site: which FIELD, its VALUE, which DOOR.
+--
+-- IT LIVES IN db/001 for the same reason cairn_node_hlc_merge above does: cairn-sync loads
+-- a SUBSET of the migrations that includes db/001 but not db/007 or db/009, and PL/pgSQL
+-- binds a function call at first EXECUTION. Declaring a shared helper beside its current
+-- callers is what turns a later clinical-plane call site into a first-write outage — the
+-- late-binding trap of issue #198. Today's six call sites are all node-plane; a
+-- decode-hex helper is exactly what the next door reaches for.
+--
+-- DELIBERATELY NOT `STRICT`: a STRICT function returns NULL on NULL input without ever
+-- entering the body, which would skip the guard below and hand the caller's NOT NULL
+-- column an opaque constraint error — reintroducing the illegibility this exists to end.
+--
+-- The refusal CHARACTERISES the value (length + a capped prefix) instead of echoing it.
+-- Node-ids are content addresses and carry nothing secret, so that is not a leak fix
+-- today; it is the habit that keeps it from becoming one, because a general hex decoder is
+-- what a later door will use for a key, a token or a wrapped DEK, and door errors are
+-- written to logs that outlive the session. Length + prefix is also what a human debugging
+-- a buggy peer actually needs: it separates "truncated" from "wrong encoding" at a glance.
+CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
+RETURNS BYTEA
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+    v_prefix TEXT;
+BEGIN
+    IF p_value IS NULL THEN
+        RAISE EXCEPTION '%: % is missing from the payload', p_door, p_field;
+    END IF;
+    -- Eight characters is four bytes: enough to tell one node-id from another at a glance
+    -- and to spot a '0x' or a '-' where hex should be, without reproducing the value.
+    v_prefix := left(p_value, 8) || CASE WHEN length(p_value) > 8 THEN '...' ELSE '' END;
+    BEGIN
+        RETURN decode(p_value, 'hex');
+    EXCEPTION WHEN others THEN
+        -- Postgres's own reason (odd length vs. invalid digit) is genuinely useful, so it
+        -- is kept — as DETAIL, the same place the doors put cairn_verify_error(). The
+        -- MESSAGE stays the legible one, because that is the line a caller logs, and the
+        -- SQLSTATE stays P0001, because that is the line the PULL LOOP reads (see above).
+        --
+        -- `WHEN others` is the right net here even though it is usually a smell: it wraps
+        -- exactly one expression, and every caught error is re-raised, so nothing is
+        -- swallowed. PL/pgSQL's OTHERS deliberately does not catch query_canceled or
+        -- assert_failure, so a statement timeout or a cancel still propagates as itself.
+        RAISE EXCEPTION '%: % is not valid hex (% chars, starts "%")',
+            p_door, p_field, length(p_value), v_prefix
+            USING DETAIL = SQLERRM;
+    END;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_decode_hex_or_raise(text, text, text) FROM PUBLIC;
+
 -- ---------------------------------------------------------------------------
 -- Sync watermark per peer: the highest HLC this node has pulled from a peer.
 -- Pull is a resumable set-union; the watermark is a hint, never an authority
