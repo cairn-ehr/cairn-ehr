@@ -965,6 +965,30 @@ BEGIN
     --    structural floor is checked on its real payload, never the ciphertext.
     v_twin := cairn_event_twin(v_type, b_clear);
 
+    -- 8a. The §5.9 sensitivity ceremony (ADR-0062, issue #232 part A/db/048): raising a
+    --     grade is frictionless, but a CHART-WIDE raise states why, and a WITHDRAWAL
+    --     (lowering) needs a bound human author. Grouped here with step 8, right after the
+    --     twin/structural-floor dispatch, because this is one more judgement about the
+    --     EVENT ITSELF — same footing as step 8b's own list (signature/clock/contributors/
+    --     actor/attestation/seal/twin/structural floor) — so it belongs before step 8b's
+    --     chart-history check, not after it (8b's own rule: the event's own defects are the
+    --     author's first problem; the chart's history is the second).
+    --
+    --     v_att_key is the value db/005 already computes for step 4b's
+    --     cairn_authorship_bound call: NULL unless a valid attestation token from an
+    --     enrolled HUMAN actor was verified for this event (step 4). Reusing it here rather
+    --     than re-resolving the attester keeps this call a read of state the door already
+    --     established, not a second, possibly-drifting lookup.
+    --
+    --     STRICT DOOR ONLY — see cairn_sensitivity_ceremony_ok's own header (db/048) for why
+    --     apply_remote_event must NEVER call this: a door check at APPLY would let one
+    --     peer's honestly rationale-less act be refused by another peer's stricter node,
+    --     forking the event set and wedging replication, and for a RAISE specifically it
+    --     would be worse than a wedge — refusing a peer's protective assertion would leave
+    --     THIS node computing a LOWER grade than the peer already holds, so the refusal
+    --     would itself be a disclosure (ADR-0060, the #342 trap).
+    PERFORM cairn_sensitivity_ceremony_ok(v_type, b, v_att_key);
+
     -- 8b. The §5.3/§5.8 PRECEDENCE RULE (ADR-0061 decision 3, issue #345): the first event
     --     carrying a patient_id must be that chart's registration. This is what makes the
     --     search-before-create funnel unbypassable — without it a client mints a chart simply

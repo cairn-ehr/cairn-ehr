@@ -542,4 +542,56 @@ GRANT EXECUTE ON FUNCTION cairn_event_thread(uuid) TO cairn_agent;
 -- explicitly on purpose.
 GRANT EXECUTE ON FUNCTION cairn_event_type_has_no_thread(text) TO cairn_agent;
 
+-- ---------------------------------------------------------------------------
+-- 12. The ceremony. Called from db/005 (LOCAL authoring) and from NOWHERE ELSE.
+--
+--     Raising is frictionless — err toward confidential — with ONE exception: a chart-wide
+--     raise states why. It is the only act here whose blast radius is the entire record,
+--     and once part B coarsens safety projections a chart-wide grade blurs every signal on
+--     the chart, including the ones with nothing sensitive about them. The rationale is
+--     what the person who later has to unwind it gets to read.
+--
+--     Lowering always costs: a bound human author (ADR-0053) plus a rationale. ADR-0061
+--     decision 4 REFUSED an authorship gate on registration because that blocks CARE
+--     DOCUMENTATION; a withdrawal is an administrative act with a consent basis, blocks
+--     nothing clinical (the content stays readable to everyone who already has custody —
+--     only the GRADE stays high), so the asymmetry is deliberate, not an oversight.
+--
+--     WHY NOT HERE, WHY NOT AT db/020: this function judges the EVENT ITSELF (its type and
+--     payload shape), so by db/005 step 8b's own rule it belongs among the checks that run
+--     BEFORE anything is written — never among the four refusals that read the log's own
+--     state (custody, substitution, the two erasure-target checks). And it must never be
+--     called from apply_remote_event: set-union sync has no ordering and peers run
+--     different local policies, so a door check at APPLY would let one peer's honestly
+--     rationale-less act be refused by another peer's stricter node, forking the event set
+--     and wedging replication (ADR-0060, the #342 trap). For a RAISE specifically that
+--     refusal would be worse than a wedge: refusing a peer's protective assertion would
+--     leave THIS node computing a LOWER grade than the peer already holds — the refusal
+--     would itself be a disclosure. crates/cairn-node/tests/sensitivity_ceremony.rs pins
+--     both halves of the asymmetry so it is tested, not merely commented.
+--
+--     p_authorship_actor is the verified-human-attester bytea db/005 already computes at
+--     its step 4b (the value fed to cairn_authorship_bound) — NULL unless a valid
+--     attestation token from an enrolled human actor was presented for this event. Passing
+--     it in rather than re-deriving it keeps this function a pure judgement over its three
+--     inputs, with no second lookup that could drift from what step 4b already verified.
+CREATE OR REPLACE FUNCTION cairn_sensitivity_ceremony_ok(
+    p_type text, b jsonb, p_authorship_actor bytea
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := b -> 'payload';
+BEGIN
+    IF p_type = 'sensitivity.grade.asserted'
+       AND (p ->> 'subject_kind') = 'patient'
+       AND (jsonb_typeof(p -> 'rationale') IS DISTINCT FROM 'string'
+            OR length(trim(p ->> 'rationale')) = 0) THEN
+        RAISE EXCEPTION 'sensitivity: a chart-wide grade states why — supply a rationale (it coarsens every signal on this chart; a thread- or event-scoped grade needs none)';
+    END IF;
+
+    IF p_type = 'sensitivity.grade-withdrawal.asserted' AND p_authorship_actor IS NULL THEN
+        RAISE EXCEPTION 'sensitivity: withdrawing a grade requires a bound human author — removing protection is accountable (ADR-0053; raising one is not)';
+    END IF;
+END;
+$$;
+
 COMMIT;

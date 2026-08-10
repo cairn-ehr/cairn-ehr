@@ -3,7 +3,10 @@
 //! no conformant door of any version could have minted.
 mod common;
 use cairn_event::sensitivity::*;
-use common::{cs, db_msg, setup, submit_registration, submit_signed, EventSpec};
+use cairn_event::{ClockGrade, EventBody, Hlc};
+use common::{
+    cs, db_msg, enroll_human, setup, submit_attested, submit_registration, submit_signed, EventSpec,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -184,22 +187,42 @@ async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arriva
 
     // The withdrawal is authored FIRST, naming an assertion that does not exist yet. Set-
     // union sync has no ordering, so this is normal traffic, and no FK may forbid it.
+    //
+    // Task 6's ceremony (db/048 `cairn_sensitivity_ceremony_ok`, called from db/005) added
+    // a second local-door requirement on top of the structural floor's rationale: a
+    // withdrawal now also needs a BOUND HUMAN AUTHOR — a contributor claiming
+    // responsibility, verified by attestation (ADR-0053). That authorship gate is what
+    // `sensitivity_ceremony.rs` exists to pin; this test is about arrival-order
+    // independence, so it only needs to SATISFY the gate here, not exercise it — hence the
+    // plain `submit_signed` (an un-attested `recorded` contributor) is swapped for
+    // `submit_attested` with an enrolled human holding responsibility.
+    let (sk_h, kid_h) = enroll_human(&c).await;
     let ghost = "aa".repeat(34); // a syntactically valid multihash-shaped hex value
-    submit_signed(
-        &c,
-        &sk,
-        &kid,
-        EventSpec {
-            patient: p,
-            event_type: WITHDRAWAL_EVENT_TYPE,
-            schema_version: WITHDRAWAL_SCHEMA_VERSION,
-            payload: json!({ "withdraws": ghost, "rationale": "consent" }),
-            plaintext_twin: Some("withdrawn".into()),
+    let withdrawal_body = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: WITHDRAWAL_EVENT_TYPE.into(),
+        schema_version: WITHDRAWAL_SCHEMA_VERSION.into(),
+        hlc: Hlc {
             wall: 10,
+            counter: 0,
+            node_origin: "n".into(),
         },
-    )
-    .await
-    .expect("a withdrawal naming an unseen assertion must be accepted");
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: json!([{"actor_id": kid_h, "role": "attested",
+                              "responsibility": {"held_by": kid_h}}]),
+        payload: json!({ "withdraws": ghost, "rationale": "consent" }),
+        attachments: vec![],
+        plaintext_twin: Some("withdrawn".into()),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    submit_attested(&c, &sk, withdrawal_body, &sk_h, &kid_h)
+        .await
+        .expect(
+            "a withdrawal naming an unseen assertion must be accepted, once it carries the \
+             bound human author the ceremony requires",
+        );
 
     let rows: i64 = c
         .query_one(

@@ -11,8 +11,8 @@ use cairn_node::medication::{
     CodeMedicationInput, CorrectCodingInput, SubstanceCoding,
 };
 use common::{
-    cs, db_msg, medication_setup, setup, submit_registration, submit_signed, submit_signed_with_id,
-    EventSpec,
+    cs, db_msg, enroll_human, medication_setup, setup, submit_attested, submit_registration,
+    submit_signed, submit_signed_with_id, EventSpec,
 };
 
 #[tokio::test]
@@ -206,21 +206,35 @@ async fn a_withdrawal_lowers_the_effective_grade_and_the_assertion_survives() {
         .unwrap()
         .get(0);
 
-    submit_signed(
-        &c,
-        &sk,
-        &kid,
-        EventSpec {
-            patient: p,
-            event_type: WITHDRAWAL_EVENT_TYPE,
-            schema_version: WITHDRAWAL_SCHEMA_VERSION,
-            payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "patient consent" }),
-            plaintext_twin: Some("withdrawn".into()),
+    // Task 6's ceremony (db/048 `cairn_sensitivity_ceremony_ok`) added a second local-door
+    // requirement on top of the structural floor's rationale: a withdrawal now also needs a
+    // BOUND HUMAN AUTHOR — a contributor claiming responsibility, verified by attestation
+    // (ADR-0053). This test is about the effective-grade projection, so it only needs to
+    // satisfy the gate, not exercise it — hence `submit_attested` with an enrolled human in
+    // place of the plain `submit_signed` this test used before the ceremony existed.
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let withdrawal_body = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: WITHDRAWAL_EVENT_TYPE.into(),
+        schema_version: WITHDRAWAL_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
             wall: 12,
+            counter: 0,
+            node_origin: "n".into(),
         },
-    )
-    .await
-    .expect("withdrawal accepted");
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid_h, "role": "attested",
+                                          "responsibility": {"held_by": kid_h}}]),
+        payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "patient consent" }),
+        attachments: vec![],
+        plaintext_twin: Some("withdrawn".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    submit_attested(&c, &sk, withdrawal_body, &sk_h, &kid_h)
+        .await
+        .expect("withdrawal accepted");
 
     let g: String = c
         .query_one(
@@ -443,26 +457,36 @@ async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart
         .unwrap()
         .get(0);
 
-    // A withdrawal authored on a DIFFERENT chart, naming the victim's content_address. The
-    // remote door admits this leniently (the human-author ceremony is a LOCAL-door-only
-    // rule — db/048's header), so this is exactly the shape a mis-targeted or hostile peer
-    // can produce: same content_address (globally unique, so unambiguous about WHICH
-    // assertion it names), but authored under a different envelope's patient_id.
-    submit_signed(
-        &c,
-        &sk,
-        &kid,
-        EventSpec {
-            patient: attacker,
-            event_type: WITHDRAWAL_EVENT_TYPE,
-            schema_version: WITHDRAWAL_SCHEMA_VERSION,
-            payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "cross-chart" }),
-            plaintext_twin: Some("withdrawn".into()),
+    // A withdrawal authored on a DIFFERENT chart, naming the victim's content_address,
+    // arriving as a PEER's event (`node_origin: "peer"`, applied through `apply_remote_event`
+    // rather than `submit_signed`). Task 6's local-door-only human-author ceremony (db/048's
+    // header) now refuses a rationale-only, unattested withdrawal at the LOCAL door — so this
+    // shape can only be exercised through the remote door, exactly the one ADR-0060 keeps
+    // lenient (a peer's honestly-authored-but-locally-non-conformant act must not fork the
+    // event set). Same content_address (globally unique, so unambiguous about WHICH assertion
+    // it names), but authored under a different envelope's patient_id.
+    let cross_chart_withdrawal = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: attacker.to_string(),
+        event_type: WITHDRAWAL_EVENT_TYPE.into(),
+        schema_version: WITHDRAWAL_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
             wall: 3,
+            counter: 0,
+            node_origin: "peer".into(),
         },
-    )
-    .await
-    .expect("the remote door admits this leniently — the ceremony is local-only");
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "cross-chart" }),
+        attachments: vec![],
+        plaintext_twin: Some("withdrawn".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&cross_chart_withdrawal, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the remote door admits this leniently — the ceremony is local-only");
 
     let target = uuid::Uuid::now_v7();
     submit_signed_with_id(
@@ -520,9 +544,12 @@ async fn f2_a_mis_targeted_known_subject_kind_coarsens_instead_of_evaporating() 
             patient: chart_a,
             event_type: SENSITIVITY_EVENT_TYPE,
             schema_version: SENSITIVITY_SCHEMA_VERSION,
+            // Task 6's ceremony requires a rationale on every CHART-WIDE ('patient') raise —
+            // this is still a raise (grade going up), never a withdrawal, so no attestation
+            // is needed, only the rationale string.
             payload: serde_json::json!({
                 "subject_kind": "patient", "subject_id": elsewhere.to_string(),
-                "grade": "restricted", "source": "human"
+                "grade": "restricted", "source": "human", "rationale": "test fixture (F2i)"
             }),
             plaintext_twin: Some("mis-targeted patient assertion".into()),
             wall: 2,
