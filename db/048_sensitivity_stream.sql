@@ -272,4 +272,155 @@ ON CONFLICT (event_type, apply_fn) DO UPDATE SET
 WHERE (r.projection_tables, r.run_order, r.heal_safe)
       IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
 
+-- ---------------------------------------------------------------------------
+-- 9. Standing = asserted minus withdrawn. ONE definition, so nothing can disagree about
+--    what "still applies" means. Matching on content_address alone is correct: a content
+--    address is globally unique, so a withdrawal cannot name a different chart's assertion
+--    by accident.
+CREATE OR REPLACE FUNCTION cairn_sensitivity_standing(p_patient_id uuid)
+RETURNS TABLE (content_address bytea, subject_kind text, subject_id uuid, grade text)
+LANGUAGE sql STABLE AS $$
+    SELECT a.content_address, a.subject_kind, a.subject_id, a.grade
+    FROM sensitivity_assertion a
+    WHERE a.patient_id = p_patient_id
+      AND NOT EXISTS (SELECT 1 FROM sensitivity_withdrawal w
+                       WHERE w.withdraws = a.content_address);
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 10. Event -> thread. Returns NULL when the thread cannot be determined HERE.
+--
+--     medication_id lives INSIDE the sealed payload, and every medication projection is
+--     populated through cairn_clear_payload — so on a node holding no custody the rows are
+--     absent and this returns NULL. That is not a bug to route around; section 11 turns the
+--     NULL into a conservative bound. It also returns NULL for a SHREDDED event, whose
+--     projection rows db/037 scrubbed — which is exactly why the bound is needed today and
+--     not only after sequester lands.
+CREATE OR REPLACE FUNCTION cairn_event_thread(p_event_id uuid)
+RETURNS uuid LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_ca     bytea;
+    v_thread uuid;
+BEGIN
+    -- !! LANGUAGE plpgsql, NOT sql, AND THE GUARD IS LOAD-BEARING !!
+    -- cairn-sync loads a SUBSET of the migrations that does NOT include db/031/032, so the
+    -- medication projections DO NOT EXIST on that node. A LANGUAGE sql body binds its table
+    -- references EAGERLY at CREATE time, so this function would fail to create there and
+    -- db/048 would fail to load — taking clinical sync down entirely. (Same late-binding
+    -- lesson as #198/#227, and the reason db/005 hosts cairn_clear_payload.) plpgsql binds
+    -- at first EXECUTION, and the short-circuit below means the medication SELECT is never
+    -- planned on a schema that lacks those tables.
+    --
+    -- Returning NULL there is not a workaround, it is the honest answer: a node that cannot
+    -- see medication threads cannot resolve one, which is the SAME state as holding no
+    -- custody. Section 11's conservative bound then applies. Safe direction by construction.
+    IF to_regclass('public.medication_statement') IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_event_id;
+    IF v_ca IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- Every medication-thread projection table, unioned on their shared (medication_id,
+    -- content_address) shape. NOTE: db/032's dose-point table is named
+    -- medication_dose_event (not medication_dose) — checked against the actual db/032
+    -- CREATE TABLE rather than assumed, since a wrong name here would bind at first
+    -- EXECUTION (plpgsql), not at CREATE time, and fail silently until an event on that
+    -- specific thread type was looked up.
+    SELECT medication_id INTO v_thread FROM (
+        SELECT medication_id, content_address FROM medication_statement
+        UNION ALL SELECT medication_id, content_address FROM medication_cessation
+        UNION ALL SELECT medication_id, content_address FROM medication_coding
+        UNION ALL SELECT medication_id, content_address FROM medication_dose_event
+        UNION ALL SELECT medication_id, content_address FROM medication_dose_correction
+    ) t
+    WHERE t.content_address = v_ca
+    LIMIT 1;
+    RETURN v_thread;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 11. The effective grade: max by rank over standing assertions on
+--     {this event, its thread, its patient}, with the winning subject named.
+--
+--     THE THREAD BRANCH IS THE SUBTLE ONE (ADR-0062, design §10b):
+--       * thread resolves            -> that thread's standing assertions
+--       * unresolved, chart HAS any thread-scoped assertion
+--                                    -> ALL of the chart's thread assertions. A precise
+--                                       conservative bound, not a sentinel: the event
+--                                       belongs to SOME thread here, so the tightest safe
+--                                       answer is the max over the chart's thread grades.
+--       * unresolved, chart has none -> nothing. Without this clause every medication event
+--                                       on every custody-less node would coarsen maximally.
+--
+--     CONSEQUENCE, stated so nobody "fixes" it: the effective grade is NON-MONOTONE IN
+--     CUSTODY — gaining custody can LOWER it, as the bound collapses to the true value. The
+--     grade is a function of local custody, not a global fact. ADR-0052 §9 found the same
+--     about ADR-0049's thread commitment. Any cross-node equality test must therefore hold
+--     custody equal.
+--
+--     Absence of every assertion reads as 'routine' (the coalesce below), never as unknown.
+CREATE OR REPLACE FUNCTION cairn_effective_sensitivity(p_event_id uuid)
+RETURNS TABLE (grade text, subject_kind text, content_address bytea)
+LANGUAGE sql STABLE AS $$
+    WITH ev AS (
+        SELECT e.event_id, e.patient_id, cairn_event_thread(e.event_id) AS thread
+        FROM event_log e WHERE e.event_id = p_event_id
+    ),
+    standing AS (
+        SELECT s.* FROM ev, LATERAL cairn_sensitivity_standing(ev.patient_id) s
+    ),
+    applicable AS (
+        -- event-scoped
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s, ev
+        WHERE s.subject_kind = 'event' AND s.subject_id = ev.event_id
+        UNION ALL
+        -- chart-scoped
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s, ev
+        WHERE s.subject_kind = 'patient' AND s.subject_id = ev.patient_id
+        UNION ALL
+        -- thread-scoped, resolved
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s, ev
+        WHERE s.subject_kind = 'thread' AND ev.thread IS NOT NULL
+          AND s.subject_id = ev.thread
+        UNION ALL
+        -- thread-scoped, UNRESOLVED: the conservative bound (design §10b)
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s, ev
+        WHERE s.subject_kind = 'thread' AND ev.thread IS NULL
+        UNION ALL
+        -- an UNRECOGNISED subject kind: read as chart-wide, bounded by this envelope's
+        -- patient (over-select, never silently miss — db/006's recall discipline)
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s
+        WHERE s.subject_kind NOT IN ('event', 'thread', 'patient')
+    )
+    -- The LEFT JOIN LATERAL over a one-row constant is what makes this return EXACTLY ONE
+    -- row even when nothing applies — so every caller can use query_one and read 'routine'
+    -- rather than having to distinguish "no row" from "not sensitive". Absence is not
+    -- unknown (principle 4), and that distinction is easiest to get wrong at the call site.
+    SELECT COALESCE(a.grade, 'routine'),
+           COALESCE(a.subject_kind, 'none'),
+           a.content_address
+    FROM (SELECT 1) AS one_row
+    LEFT JOIN LATERAL (
+        SELECT ap.grade, ap.subject_kind, ap.content_address
+        FROM applicable ap
+        -- Rank first; content_address breaks a tie between two equally-ranked grades
+        -- deterministically (BYTEA has no collation — ADR-0045/#115).
+        ORDER BY cairn_sensitivity_rank(ap.grade) DESC, ap.content_address ASC
+        LIMIT 1
+    ) a ON TRUE;
+$$;
+
+GRANT EXECUTE ON FUNCTION cairn_effective_sensitivity(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_sensitivity_standing(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_event_thread(uuid) TO cairn_agent;
+
 COMMIT;
