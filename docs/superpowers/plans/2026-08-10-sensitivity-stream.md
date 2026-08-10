@@ -26,6 +26,33 @@
 
 ---
 
+## Paper-parity benchmark (§1.2)
+
+This slice adds a clinical workflow — grading and declassifying clinical content — so house rule 7
+binds it. (The design doc carries the same figures; the benchmark belongs *here*, in the plan, which
+is what `crates/cairn-node/tests/paper_parity_plan_section.rs` enforces.)
+
+- **Paper counterpart:** the *confidential* sticker, or the sealed envelope clipped inside a paper
+  file. Declassifying is crossing that marker out, initialling it, and noting why.
+- **Steps:** grade a thread — paper N=2 (retrieve the file, affix the marker) → architecture-forced
+  M=1 (one assertion event) → UI bundling target K=1. Grade a whole chart — N=2 → M=1 (assertion and
+  rationale in one act) → K=1. Declassify — N=3 (remove the marker, initial it, note why) → M=1 (one
+  withdrawal event) → K=2. **`M > N` nowhere**, so there is no architecture defect to file. K=2 for
+  declassification is the price `medication-cease` already charges for the same ADR-0060 reason — a
+  cancellation carries an owner *and* a rationale — and it still beats paper's N=3.
+- **Time + cognitive load:** budget ≤ 10 s to grade a thread, ≤ 20 s to declassify (the rationale is
+  the cost). Cognitive load sits *below* paper's: the grade comes from a named ladder rather than
+  from recalled local convention, and the read surface names which subject won, so a clinician never
+  has to reconstruct why a chart is blurred. **Measurement is owed by the first UI surface** — this
+  slice ships only a CLI. The node-tier write cost is **not measurable yet either**: `db/044`'s
+  `ui_gesture_timing_kind_ck` is `CHECK (gesture_kind IN ('signoff','cease'))` and refuses a
+  sensitivity row exactly as it refuses a registration one, so the sensitivity gesture kinds are
+  added to [#360](https://github.com/cairn-ehr/cairn-ehr/issues/360)'s widening rather than widened
+  twice here. **If either measurement later falls outside its budget, that is the finding — file an
+  issue; do not adjust the budget to match.**
+
+---
+
 ## File Structure
 
 | File | Responsibility |
