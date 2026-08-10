@@ -987,7 +987,16 @@ BEGIN
     --     would be worse than a wedge — refusing a peer's protective assertion would leave
     --     THIS node computing a LOWER grade than the peer already holds, so the refusal
     --     would itself be a disclosure (ADR-0060, the #342 trap).
-    PERFORM cairn_sensitivity_ceremony_ok(v_type, b, v_att_key);
+    --
+    --     b_clear, NOT b (review finding F3): identical today because step 7 refuses a
+    --     sealed non-clinical body, so a sensitivity event's b_clear always equals b — but
+    --     reading b here is a latent fail-open, not a no-op. If seal policy ever widens,
+    --     `p ->> 'subject_kind'` would read CIPHERTEXT off b, jsonb_typeof would see NULL,
+    --     and this gate would silently PASS the chart-wide-raise/withdrawal-authorship
+    --     checks — the disclosure direction. Passing b_clear (the CLEAR view every other
+    --     event-shape check in this door already reads) keeps this check correct under a
+    --     seal-policy change instead of merely correct today.
+    PERFORM cairn_sensitivity_ceremony_ok(v_type, b_clear, v_att_key);
 
     -- 8b. The §5.3/§5.8 PRECEDENCE RULE (ADR-0061 decision 3, issue #345): the first event
     --     carrying a patient_id must be that chart's registration. This is what makes the

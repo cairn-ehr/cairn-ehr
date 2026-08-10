@@ -488,6 +488,26 @@ async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart
         .await
         .expect("the remote door admits this leniently — the ceremony is local-only");
 
+    // Review finding F2: `apply_remote_event` is lenient enough to have a deferred/
+    // unclassified path that admits an event while writing NO projection rows and raising
+    // no error — so the grade-stayed-`sequestered` assertion below would be equally true
+    // if this withdrawal never projected at all, and the F1 `patient_id` pin in
+    // `cairn_sensitivity_standing` this test exists to cover would go unexercised while the
+    // test still read green. Pin that the withdrawal actually LANDED before trusting what
+    // it did or didn't do to the grade.
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_withdrawal WHERE withdraws = decode($1,'hex')",
+            &[&ca_hex],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        landed, 1,
+        "the cross-chart withdrawal must actually project"
+    );
+
     let target = uuid::Uuid::now_v7();
     submit_signed_with_id(
         &c,
