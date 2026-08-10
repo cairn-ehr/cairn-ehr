@@ -13,12 +13,17 @@ use serde_json::json;
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
-/// The same rationale-less chart-wide raise `the_local_door_requires_a_rationale_for_a_chart_wide_raise`
-/// exercises at the LOCAL door, built by hand as a PEER's event (`node_origin: "peer"`) for
-/// the remote door instead. `submit_signed` only ever drives `submit_event` (the local
-/// door), so the remote-door test cannot reuse it — this mirrors the `peer_dob` idiom
-/// `patient_precedence.rs` already uses for the identical local-vs-remote asymmetry.
-fn peer_chart_wide_raise(kid: &str, p: Uuid, wall: i64) -> EventBody {
+/// A chart-wide (`subject_kind: "patient"`) raise built by hand as a PEER's event
+/// (`node_origin: "peer"`) for the REMOTE door. `submit_signed` only ever drives
+/// `submit_event` (the local door), so a remote-door test cannot reuse it — this mirrors
+/// the `peer_dob` idiom `patient_precedence.rs` already uses for the identical
+/// local-vs-remote asymmetry.
+///
+/// `subject` is separate from `p` on purpose: with `subject == p` this is the rationale-less
+/// raise the local door refuses for want of a rationale, and with `subject != p` it is the
+/// MIS-TARGETED raise the local door refuses for naming another chart. Both must be admitted
+/// remotely, and one helper covering both keeps that pairing visible.
+fn peer_chart_wide_raise(kid: &str, p: Uuid, subject: Uuid, wall: i64) -> EventBody {
     EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: p.to_string(),
@@ -33,7 +38,7 @@ fn peer_chart_wide_raise(kid: &str, p: Uuid, wall: i64) -> EventBody {
         signer_key_id: kid.into(),
         contributors: json!([{"actor_id": kid, "role": "recorded"}]),
         payload: json!({
-            "subject_kind": "patient", "subject_id": p.to_string(),
+            "subject_kind": "patient", "subject_id": subject.to_string(),
             "grade": "restricted", "source": "human"
         }),
         attachments: vec![],
@@ -135,8 +140,8 @@ async fn the_local_door_requires_a_rationale_for_a_chart_wide_raise() {
         SqlState::RAISE_EXCEPTION.code(),
         "deliberate refusal: {msg}"
     );
-    // "rationale" alone does not pin WHICH refusal fired (review finding F4): the db/048
-    // structural floor's withdrawal-rationale message also contains the word "rationale".
+    // "rationale" alone does not pin WHICH refusal fired: the db/048 structural floor's
+    // withdrawal-rationale message also contains the word "rationale".
     // "chart-wide" is unique to this ceremony's raise refusal.
     assert!(
         msg.contains("chart-wide"),
@@ -157,7 +162,7 @@ async fn the_remote_door_admits_what_the_local_door_refuses() {
 
     // The same rationale-less chart-wide raise, arriving from a peer. It MUST apply: a
     // refusal would both wedge replication and leave us less protected than the peer.
-    let signed = sign(&peer_chart_wide_raise(&kid, p, 12), &sk).unwrap();
+    let signed = sign(&peer_chart_wide_raise(&kid, p, p, 12), &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
         .await
         .expect("the remote door is lenient BY DESIGN");
@@ -174,12 +179,128 @@ async fn the_remote_door_admits_what_the_local_door_refuses() {
 }
 
 // ===========================================================================
-// Review round 1, finding F1: the raise half of the ceremony was pinned above, but the
-// WITHDRAWAL half (the bound-human-author requirement) had no failing test behind it —
-// deleting `cairn_sensitivity_ceremony_ok`'s second `IF` block left every test in this
-// crate green, because `sensitivity_ceremony.rs` never submitted a withdrawal at all and
-// the pre-existing suites this task fixed only ever SATISFY the gate. These two tests are
-// that half's local-refuses / remote-admits pair, mirroring the raise pair above.
+// A chart-wide raise that names ANOTHER chart: the silent-failure half of a mis-target.
+//
+// The read model (db/048 section 11) already makes such an assertion coarsen the chart it
+// was AUTHORED on, so the over-protecting half is covered. What it cannot do is anything at
+// all for the chart the author MEANT to seal: `sensitivity-assert --patient A
+// --subject-kind patient --subject-id B` is two hand-typed UUIDs, and chart B goes on
+// reading `routine` forever with nothing anywhere surfacing the mismatch. "The clinician
+// believes they sealed a chart and did not" is unrecoverable, so the local authoring door
+// refuses it — and, being a local ceremony rule, the remote door still admits it (a refusal
+// there would fork the event set and, for a protective act, be a disclosure in itself).
+// ===========================================================================
+
+#[tokio::test]
+async fn the_local_door_refuses_a_chart_wide_grade_that_names_another_chart() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = Uuid::now_v7();
+    let other = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // A rationale IS supplied, so only the mis-target rule can fire — this pins the new
+    // refusal rather than accidentally re-testing the rationale one.
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: json!({
+                "subject_kind": "patient", "subject_id": other.to_string(),
+                "grade": "restricted", "source": "human",
+                "rationale": "staff member treated here"
+            }),
+            plaintext_twin: Some("chart-wide".into()),
+            wall: 10,
+        },
+    )
+    .await
+    .expect_err("a chart-wide grade naming a different chart must be refused locally");
+
+    let msg = db_msg(&err);
+    assert!(
+        msg.contains("must name THIS chart"),
+        "the refusal names what would repair it: {msg}"
+    );
+    // The mis-typed value itself is in the message: the operator has to see WHICH of the two
+    // hand-typed UUIDs was wrong to fix it.
+    assert!(
+        msg.contains(&other.to_string()) && msg.contains(&p.to_string()),
+        "the refusal names both the offered subject and this chart: {msg}"
+    );
+
+    // A thread-scoped grade naming something other than this chart is NOT affected — a
+    // thread id is not a patient id, and narrowing that would break every thread raise.
+    let a = SensitivityAssertion {
+        subject_kind: SubjectKind::Thread,
+        subject_id: Uuid::now_v7(),
+        grade: "restricted",
+        source: "human",
+        rationale: None,
+    };
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: sensitivity_assertion_body(&a),
+            plaintext_twin: Some(render_sensitivity_twin(&a)),
+            wall: 11,
+        },
+    )
+    .await
+    .expect("only a 'patient'-kind subject is pinned to the envelope");
+}
+
+#[tokio::test]
+async fn the_remote_door_admits_a_chart_wide_grade_that_names_another_chart() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = Uuid::now_v7();
+    let other = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // The identical mis-targeted body, arriving from a peer. It MUST apply: this rule lives
+    // in the local ceremony and NOT in db/020 precisely so a peer's event can never be
+    // refused at apply and wedge replication (ADR-0060) — and the row it writes is what
+    // db/048 section 11's catch-all arm then coarsens this chart with.
+    let signed = sign(&peer_chart_wide_raise(&kid, p, other, 12), &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the remote door is lenient BY DESIGN");
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_assertion WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 1, "the peer's mis-targeted assertion stands here too");
+}
+
+// ===========================================================================
+// The WITHDRAWAL half of the ceremony (the bound-human-author requirement) had no failing
+// test behind it at first: deleting `cairn_sensitivity_ceremony_ok`'s second `IF` block left
+// every test in this crate green, because this file never submitted a withdrawal at all and
+// the pre-existing suites only ever SATISFY the gate. These two tests are that half's
+// local-refuses / remote-admits pair, mirroring the raise pairs above.
 // ===========================================================================
 
 #[tokio::test]

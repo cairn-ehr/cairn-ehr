@@ -157,8 +157,11 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
    *reject power* (safe); here it would withhold *protection*, so an older node reads a peer's newer grade
    as "not sensitive" and renders a confidential body in the clear. **Do not "fix" it into consistency.**
    Absence still ranks 0 — no assertion is `routine`; only an unrecognised grade *value* coarsens.
-2. **The ceremony is exactly two rules and is LOCAL-door only** — a rationale on a chart-wide raise, a
-   bound human author on a withdrawal — and the remote door is *tested* to admit both. A check at apply
+2. **The ceremony is exactly three rules and is LOCAL-door only** — a chart-wide raise must name its own
+   chart and must carry a rationale; a withdrawal needs a bound human author — and the remote door is
+   *tested* to admit all three. (The naming rule is the silent half of a mis-target: the authored-on chart
+   coarsens visibly, while the chart the author meant to seal keeps reading `routine` undetectably —
+   ADR-0062 erratum E3.) A check at apply
    forks the event set (#342), and for a *raise* the refusal would itself be a disclosure, since this
    node would then compute a lower grade than the peer. **The withdrawal's non-empty rationale is NOT
    ceremony**: it is a structural floor in `cairn_check_sensitivity_withdrawal`, dispatched through

@@ -582,7 +582,10 @@ enum Cmd {
         /// What is being graded: an "event", a medication "thread", or the whole "patient".
         #[arg(long, value_parser = ["event", "thread", "patient"])]
         subject_kind: String,
-        /// The event id, medication thread id, or patient id named by --subject-kind.
+        /// The event id, medication thread id, or patient id named by --subject-kind. With
+        /// --subject-kind patient this MUST equal --patient: two hand-typed UUIDs that do not
+        /// match would coarsen this chart while leaving the chart you meant to seal reading
+        /// "routine", so db/048's ceremony refuses the mismatch rather than half-applying it.
         #[arg(long)]
         subject_id: Uuid,
         /// Open vocabulary — today's ladder is routine < sensitive < restricted <
@@ -1800,8 +1803,9 @@ async fn main() -> anyhow::Result<()> {
                 other => anyhow::bail!("unreachable --subject-kind value {other:?}"),
             };
             // Raising is device-additive — no human attester needed (db/048 section 12
-            // reserves the ceremony for a chart-wide raise's rationale and for every
-            // withdrawal, never for a plain raise).
+            // reserves the ceremony for a chart-wide raise's two rules — it must name THIS
+            // chart, and it must state why — and for every withdrawal, never for a plain
+            // event- or thread-scoped raise).
             let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;

@@ -553,30 +553,56 @@ async fn f2_a_mis_targeted_known_subject_kind_coarsens_instead_of_evaporating() 
     // DIFFERENT patient (a typo, a UI bug, a hostile peer). Before F2 this matched NO arm
     // of cairn_effective_sensitivity and contributed nothing — a silent fail-open on
     // exactly the field most likely to be mis-set.
+    //
+    // Arrives through the REMOTE door (`node_origin: "peer"`, `apply_remote_event`), because
+    // the local ceremony now refuses a chart-wide grade that does not name its own chart
+    // (db/048 section 12 — the silent-failure half of a mis-target, pinned in
+    // sensitivity_ceremony.rs). The remote door stays lenient by design (ADR-0060), so a
+    // peer's mis-typed assertion is exactly how this row still reaches a node — and what
+    // this test exists to prove is that once here, it COARSENS rather than evaporating.
     let chart_a = uuid::Uuid::now_v7();
     let elsewhere = uuid::Uuid::now_v7();
     submit_registration(&c, &sk, &kid, chart_a, 1).await;
-    submit_signed(
-        &c,
-        &sk,
-        &kid,
-        EventSpec {
-            patient: chart_a,
-            event_type: SENSITIVITY_EVENT_TYPE,
-            schema_version: SENSITIVITY_SCHEMA_VERSION,
-            // Task 6's ceremony requires a rationale on every CHART-WIDE ('patient') raise —
-            // this is still a raise (grade going up), never a withdrawal, so no attestation
-            // is needed, only the rationale string.
-            payload: serde_json::json!({
-                "subject_kind": "patient", "subject_id": elsewhere.to_string(),
-                "grade": "restricted", "source": "human", "rationale": "test fixture (F2i)"
-            }),
-            plaintext_twin: Some("mis-targeted patient assertion".into()),
+    let mis_targeted = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: chart_a.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
             wall: 2,
+            counter: 0,
+            node_origin: "peer".into(),
         },
-    )
-    .await
-    .expect("structurally well-formed, so admitted");
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({
+            "subject_kind": "patient", "subject_id": elsewhere.to_string(),
+            "grade": "restricted", "source": "human", "rationale": "test fixture (F2i)"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("mis-targeted patient assertion".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the remote door admits it — the naming rule is a LOCAL ceremony");
+    // apply_remote_event has lenient paths that admit an event while writing no projection
+    // row, which would leave the grade assertion below true for the wrong reason. Pin that
+    // the assertion actually LANDED first.
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_assertion WHERE patient_id = $1::text::uuid",
+            &[&chart_a.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        landed, 1,
+        "the mis-targeted assertion must actually project"
+    );
 
     let note_a = uuid::Uuid::now_v7();
     submit_signed_with_id(

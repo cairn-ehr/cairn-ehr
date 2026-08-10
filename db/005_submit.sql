@@ -988,7 +988,7 @@ BEGIN
     --     THIS node computing a LOWER grade than the peer already holds, so the refusal
     --     would itself be a disclosure (ADR-0060, the #342 trap).
     --
-    --     b_clear, NOT b (review finding F3): identical today because step 7 refuses a
+    --     b_clear, NOT b — DELIBERATE: identical today because step 7 refuses a
     --     sealed non-clinical body, so a sensitivity event's b_clear always equals b — but
     --     reading b here is a latent fail-open, not a no-op. If seal policy ever widens,
     --     `p ->> 'subject_kind'` would read CIPHERTEXT off b, jsonb_typeof would see NULL,

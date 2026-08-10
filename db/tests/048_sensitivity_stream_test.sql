@@ -1,4 +1,5 @@
--- SQL mirror of crates/cairn-node/tests/sensitivity_* (see db/tests/README.md).
+-- SQL mirror of crates/cairn-node/tests/sensitivity_* (run by scripts/run-db-sql-tests.sh;
+-- the disposable-database rule these mirrors share is in _scratch_database_guard.sql).
 -- DESTRUCTIVE: runs only against a database marked disposable (#169).
 \set ON_ERROR_STOP on
 \ir _scratch_database_guard.sql

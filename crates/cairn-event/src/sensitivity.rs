@@ -60,6 +60,10 @@ impl SubjectKind {
 /// A single graded claim. Raising is frictionless by design — err toward confidential.
 pub struct SensitivityAssertion<'a> {
     pub subject_kind: SubjectKind,
+    /// The event, medication thread, or chart being graded. When `subject_kind` is
+    /// `Patient` the local door requires this to equal the envelope's `patient_id`: a
+    /// mis-typed pair coarsens the chart it was authored on while leaving the chart the
+    /// author meant to seal silently reading `routine` (db/048 section 12).
     pub subject_id: Uuid,
     /// Open vocabulary: db/048 ranks the named ladder and treats anything else as MAX.
     pub grade: &'a str,

@@ -59,8 +59,18 @@ $$;
 --    by AUTHORITY, not the ADR-0043 self-only suppression rule, because the self-only rule
 --    deadlocks every real case (the asserting clinician retired; the patient who asserted
 --    has left the practice). So it must NOT be routed through the suppression owner-gate.
---    The substitute control is the §6 ceremony in db/005: a bound human author plus a
---    rationale, enforced at the LOCAL door only.
+--
+--    The substitute control is the SECTION 12 ceremony below (called from db/005): a bound
+--    human author, enforced at the LOCAL authoring door only.
+--
+--    Do NOT fold the withdrawal's non-empty `rationale` into that sentence — it is a
+--    SEPARATE rule with a DIFFERENT scope: a structural floor in section 4, registered in
+--    the ADR-0048 twin-check registry and dispatched through cairn_event_twin, which BOTH
+--    doors call (db/005 step 8, db/020 step 8). So a rationale-less peer withdrawal IS
+--    refused remotely; only the bound-human-author half is local-only. Conflating the two
+--    is what ADR-0062's erratum E2 was written to correct, and it matters in both
+--    directions: it overstates what the remote door lets through, and it understates what
+--    a peer must already supply.
 INSERT INTO event_type_class AS r (event_type, mode, targets_other_author) VALUES
     ('sensitivity.grade.asserted',            'additive', FALSE),
     ('sensitivity.grade-withdrawal.asserted', 'additive', FALSE)
@@ -276,7 +286,8 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 -- 9. Standing = asserted minus withdrawn. ONE definition, so nothing can disagree about
 --    what "still applies" means.
 --
---    F1 FIX (review round 1): the `NOT EXISTS` must also pin `w.patient_id = p_patient_id`.
+--    THE `w.patient_id = p_patient_id` PIN IN THE `NOT EXISTS` IS LOAD-BEARING — without it
+--    a withdrawal authored on chart B could strip chart A's protection.
 --    A content address being globally unique makes a withdrawal UNAMBIGUOUS about which
 --    assertion it names — it does NOT make a cross-chart withdrawal impossible. The
 --    human-author ceremony (db/005) is a LOCAL-door-only rule, so a peer's mis-targeted or
@@ -324,8 +335,8 @@ BEGIN
     -- see medication threads cannot resolve one, which is the SAME state as holding no
     -- custody. Section 11's conservative bound then applies. Safe direction by construction.
     --
-    -- Minor fix (review round 1): the UNION below spans FIVE tables from TWO migration
-    -- files (medication_statement/medication_cessation/medication_coding from db/031;
+    -- WHY TWO to_regclass PROBES AND NOT ONE: the UNION below spans FIVE tables from TWO
+    -- migration files (medication_statement/medication_cessation/medication_coding from db/031;
     -- medication_dose_event/medication_dose_correction from db/032). Checking only
     -- medication_statement silently assumed the other four always arrive with it. Every
     -- shipped loader (cairn-node's full set, cairn-sync's subset) does load 031 and 032
@@ -351,17 +362,24 @@ BEGIN
     -- EXECUTION (plpgsql), not at CREATE time, and fail silently until an event on that
     -- specific thread type was looked up.
     --
-    -- F4 (review round 1) — WHAT THIS ACTUALLY RESOLVES, stated plainly so the comment
-    -- cannot be read as promising more than it does: medication_statement,
-    -- medication_cessation and medication_coding are `PRIMARY KEY (medication_id)` tables
-    -- with `ON CONFLICT (medication_id) DO UPDATE` apply functions (db/031) — ONE row per
-    -- medication_id, HLC-overlaid, carrying only the CURRENT WINNING event's
-    -- content_address. A superseded assert/cessation/coding event's content_address is
-    -- therefore GONE from these three tables the moment a later event overlays it — even
-    -- on a node holding full custody, looking that old event up here finds nothing.
-    -- medication_dose_event (and medication_dose_correction, keyed on the dose event it
-    -- corrects) is the ONE table here with true per-event granularity, so only dose-point
-    -- history resolves precisely.
+    -- WHAT THIS RESOLVES, AND WHAT IT DOES NOT — stated plainly so the comment cannot be
+    -- read as promising more than it does. FOUR of these five tables are one-row-per-key
+    -- upserts carrying only the CURRENT WINNING event's content_address:
+    --   * medication_statement, medication_cessation, medication_coding —
+    --     `PRIMARY KEY (medication_id)` with `ON CONFLICT (medication_id) DO UPDATE` apply
+    --     functions (db/031), HLC-overlaid, ONE row per medication_id.
+    --   * medication_dose_correction — `PRIMARY KEY (corrected_dose_event_id)` with
+    --     `ON CONFLICT (corrected_dose_event_id) DO UPDATE SET ... content_address =
+    --     EXCLUDED.content_address` (db/032). Being keyed on the dose event it CORRECTS is
+    --     not per-event granularity for the correction itself: re-correcting the same dose
+    --     point overwrites the address, so the earlier correction stops resolving here.
+    -- A superseded event's content_address is therefore GONE from those four the moment a
+    -- later event overlays it — even on a node holding full custody, looking that old event
+    -- up here finds nothing. Only medication_dose_event is keyed PER EVENT
+    -- (`PRIMARY KEY (dose_event_id)`, `ON CONFLICT ... DO NOTHING`), so only unsuperseded
+    -- dose points resolve precisely. ADR-0062's "Known limitations" (issue #374) states the
+    -- same four-of-five split; if this comment and that section ever disagree, the ADR is
+    -- the one that was checked against db/031 and db/032.
     --
     -- This does not make thread resolution wrong: a query that gets NULL back is exactly
     -- what makes it fall through to section 11's conservative bound, which is a SAFE
@@ -383,10 +401,10 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 10b. F3 (review round 1, maintainer ruling): scope the unresolved-thread BOUND (section
---      11) to event types that could plausibly carry a medication thread.
+-- 10b. THE TYPE GATE ON THE UNRESOLVED-THREAD BOUND (maintainer ruling): scope the bound
+--      (section 11) to event types that could plausibly carry a medication thread.
 --
---      Before this fix, `cairn_event_thread(...) IS NULL` was ALSO true for every note,
+--      Without this gate, `cairn_event_thread(...) IS NULL` was ALSO true for every note,
 --      demographic edit, identity assertion, registration and sensitivity event — none of
 --      which can EVER belong to a medication thread, resolved or not — so a single
 --      thread-scoped 'sequestered' assertion coarsened the ENTIRE CHART: every note,
@@ -415,7 +433,7 @@ $$;
 --
 --     THE THREAD BRANCH IS THE SUBTLE ONE (ADR-0062, design §10b):
 --       * thread resolves            -> that thread's standing assertions
---       * unresolved, EVENT TYPE COULD carry a thread (F3, review round 1 — gated by
+--       * unresolved, EVENT TYPE COULD carry a thread (the section 10b type gate —
 --         cairn_event_type_has_no_thread), chart HAS any thread-scoped assertion
 --                                    -> ALL of the chart's thread assertions. A precise
 --                                       conservative bound, not a sentinel: the event
@@ -424,7 +442,7 @@ $$;
 --       * unresolved, chart has none, OR the event type is one we KNOW has no thread
 --         concept at all (a note, a demographic edit, ...) -> nothing. Without the
 --         "chart has none" half every medication event on every custody-less node would
---         coarsen maximally; without the type gate (F3) EVERY event on the chart —
+--         coarsen maximally; without the section 10b type gate EVERY event on the chart —
 --         including ones that structurally cannot be on a medication thread — would too.
 --
 --     CONSEQUENCE, stated so nobody "fixes" it: the effective grade is NON-MONOTONE IN
@@ -439,9 +457,9 @@ $$;
 --     to know whether a real assertion won just checks `subject_kind <> 'none'` instead of
 --     needing a second, address-shaped "no winner" value.
 --
---     F2 FIX (review round 1) — a MIS-TARGETED known subject_kind now coarsens instead of
---     silently matching nothing. Before this fix, a 'patient'-kind assertion whose
---     subject_id names a DIFFERENT patient (a typo, a UI bug, a hostile peer), or an
+--     A MIS-TARGETED KNOWN subject_kind COARSENS INSTEAD OF SILENTLY MATCHING NOTHING.
+--     Without the two extra OR arms in the last branch below, a 'patient'-kind assertion
+--     whose subject_id names a DIFFERENT patient (a typo, a UI bug, a hostile peer), or an
 --     'event'-kind assertion whose subject_id names no event on THIS chart, matched none
 --     of the arms above and contributed nothing — while an entirely UNRECOGNISED kind
 --     correctly coarsened. That asymmetry meant the safer path (coarsen on confusion) was
@@ -449,6 +467,12 @@ $$;
 --     mis-used. An assertion that names something we cannot match here was still an
 --     ATTEMPT to protect something, so — like the unrecognised-kind case it now joins —
 --     it coarsens rather than evaporating.
+--
+--     That is the OVER-protecting half of a mis-target, and it is all this read model can
+--     do: chart B, the one the author meant to seal, is not mentioned by this query at all.
+--     The UNDER-protecting half — chart B silently keeping 'routine' — is unfixable at read
+--     time and is refused at authoring instead (section 12), which is why both halves of a
+--     mis-typed chart-wide raise are now covered.
 CREATE OR REPLACE FUNCTION cairn_effective_sensitivity(p_event_id uuid)
 RETURNS TABLE (grade text, subject_kind text, content_address bytea)
 LANGUAGE sql STABLE AS $$
@@ -477,13 +501,13 @@ LANGUAGE sql STABLE AS $$
           AND s.subject_id = ev.thread
         UNION ALL
         -- thread-scoped, UNRESOLVED: the conservative bound (design §10b), gated to event
-        -- types that could plausibly carry a thread (F3 — cairn_event_type_has_no_thread).
+        -- types that could plausibly carry a thread (cairn_event_type_has_no_thread, §10b).
         SELECT s.grade, s.subject_kind, s.content_address
         FROM standing s, ev
         WHERE s.subject_kind = 'thread' AND ev.thread IS NULL
           AND NOT cairn_event_type_has_no_thread(ev.event_type)
         UNION ALL
-        -- an UNRECOGNISED subject kind, OR a KNOWN kind that is MIS-TARGETED (F2): read as
+        -- an UNRECOGNISED subject kind, OR a KNOWN kind that is MIS-TARGETED: read as
         -- chart-wide, bounded by this envelope's patient (over-select, never silently miss
         -- — db/006's recall discipline). The two extra OR arms catch exactly the shapes the
         -- arms above cannot: a 'patient' assertion naming a DIFFERENT patient, and an
@@ -491,8 +515,8 @@ LANGUAGE sql STABLE AS $$
         -- once per standing row, not per queried event, so it fires identically for every
         -- event on the chart, exactly like the unrecognised-kind arm it now sits beside.
         --
-        -- R2-1 (review round 2) — THE 'event' ARM HAS THREE CAUSES, NOT TWO, AND THE THIRD
-        -- IS DELIBERATE, NOT A BUG TO "FIX" LATER. "No event x with x.event_id = s.subject_id
+        -- THE 'event' ARM HAS THREE CAUSES, NOT TWO, AND THE THIRD IS DELIBERATE, NOT A BUG
+        -- TO "FIX" LATER. "No event x with x.event_id = s.subject_id
         -- AND x.patient_id = ev.patient_id" is true for (a) a genuinely wrong chart, (b) an
         -- invalid/dangling id, and (c) an event that IS real and IS on this chart but has
         -- simply NOT REPLICATED to this node YET — set-union sync has no ordering, so an
@@ -536,7 +560,7 @@ $$;
 GRANT EXECUTE ON FUNCTION cairn_effective_sensitivity(uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_sensitivity_standing(uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_event_thread(uuid) TO cairn_agent;
--- R2-3 (review round 2): explicit, matching the other three — it worked today on the
+-- Granted EXPLICITLY, matching the other three — it worked without this line on the
 -- default PUBLIC EXECUTE grant, but that left it one blanket REVOKE away from silently
 -- breaking cairn_effective_sensitivity's read path, and the rest of this file grants
 -- explicitly on purpose.
@@ -545,11 +569,13 @@ GRANT EXECUTE ON FUNCTION cairn_event_type_has_no_thread(text) TO cairn_agent;
 -- ---------------------------------------------------------------------------
 -- 12. The ceremony. Called from db/005 (LOCAL authoring) and from NOWHERE ELSE.
 --
---     Raising is frictionless — err toward confidential — with ONE exception: a chart-wide
---     raise states why. It is the only act here whose blast radius is the entire record,
---     and once part B coarsens safety projections a chart-wide grade blurs every signal on
---     the chart, including the ones with nothing sensitive about them. The rationale is
---     what the person who later has to unwind it gets to read.
+--     Raising is frictionless — err toward confidential — with ONE exception, the chart-wide
+--     raise, which carries TWO rules. It is the only act here whose blast radius is the
+--     entire record, and once part B coarsens safety projections a chart-wide grade blurs
+--     every signal on the chart, including the ones with nothing sensitive about them. So it
+--     (a) must name THIS chart, because a mis-typed subject silently leaves the intended
+--     chart ungraded, and (b) states why — the rationale is what the person who later has to
+--     unwind it gets to read.
 --
 --     Lowering always costs: a bound human author (ADR-0053) plus a rationale. ADR-0061
 --     decision 4 REFUSED an authorship gate on registration because that blocks CARE
@@ -581,6 +607,40 @@ CREATE OR REPLACE FUNCTION cairn_sensitivity_ceremony_ok(
 DECLARE
     p jsonb := b -> 'payload';
 BEGIN
+    -- A CHART-WIDE GRADE MUST NAME THE CHART IT IS AUTHORED ON.
+    --
+    -- `sensitivity-assert --patient A --subject-kind patient --subject-id B` is two
+    -- hand-typed UUIDs, and a mis-typed pair fails in BOTH directions at once. Section 11's
+    -- catch-all arm covers the over-protecting direction (chart A coarsens). It cannot
+    -- cover the other: chart B — the chart the author meant to seal — keeps reading
+    -- 'routine' forever, with no error and nothing anywhere surfacing the mismatch. A
+    -- clinician who believes they sealed a chart and did not is the unrecoverable failure
+    -- (a grade computed too HIGH is honest degradation; too LOW discloses), and no read
+    -- model can detect it after the fact, because nothing on chart B ever mentions the
+    -- assertion. So it is refused at authoring, where the author is still present to fix it.
+    --
+    -- Checked FIRST, before the rationale rule below: on a mis-targeted rationale-less
+    -- raise, demanding a rationale first would send the author away to write a justification
+    -- for the wrong chart.
+    --
+    -- Compared AS uuid, not as text: both values are hand-typed or hand-assembled, and
+    -- casing/whitespace differences must not read as "different chart". Section 3's
+    -- structural floor has already proved subject_id parses (db/005 dispatches
+    -- cairn_event_twin at step 8, BEFORE this call at step 8a), and if that ever changed the
+    -- cast would RAISE — refusing the event, which is the safe direction for this door.
+    --
+    -- LOCAL DOOR ONLY, and deliberately NOT in db/020: a peer that mis-typed the same pair
+    -- must still be admitted, or its event forks the event set and wedges replication
+    -- (ADR-0060). The peer's chart A coarsens here exactly as section 11 says — refusing a
+    -- protective act is never the answer, so this rule stops at the door the author is
+    -- standing in front of.
+    IF p_type = 'sensitivity.grade.asserted'
+       AND (p ->> 'subject_kind') = 'patient'
+       AND (p ->> 'subject_id')::uuid IS DISTINCT FROM (b ->> 'patient_id')::uuid THEN
+        RAISE EXCEPTION 'sensitivity: a chart-wide grade must name THIS chart — subject_id % is not this chart (patient_id %); set subject_id to the chart being graded, or grade a thread or a single event instead',
+            p ->> 'subject_id', b ->> 'patient_id';
+    END IF;
+
     IF p_type = 'sensitivity.grade.asserted'
        AND (p ->> 'subject_kind') = 'patient'
        AND (jsonb_typeof(p -> 'rationale') IS DISTINCT FROM 'string'
@@ -630,6 +690,10 @@ LANGUAGE sql STABLE AS $$
     SELECT m.grade, m.category
     FROM sensitivity_category_map m
     WHERE m.category = (p_coded ->> 'category')
+    -- A deliberate no-op TODAY (`category` is the primary key, so this WHERE matches at most
+    -- one row) kept for the day a deployment widens that key — e.g. per-locale or per-source
+    -- rows — at which point "highest grade wins" is the only safe tie-break. Cheap to keep,
+    -- and adding it later means remembering to.
     ORDER BY cairn_sensitivity_rank(m.grade) DESC
     LIMIT 1;
 $$;

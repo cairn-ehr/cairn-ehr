@@ -21,10 +21,12 @@
   local-authoring rule is never a wire rule) · [ADR-0061](0061-registration-is-an-act-that-carries-its-search.md)
   decision 4 (the authorship gate that was *refused*, and why this one is not that one)
 - **Canonical spec home:** [identity §5.9](../identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)
-- **Errata:** **E1** (under decision 1) and **E2** (under decision 7), appended 2026-08-10 after the
-  implementation review found two passages describing code that does not exist in the shape stated. Each
-  is a marked blockquote immediately below the passage it corrects, the original wording is preserved
-  above it, and **no decision content changes** — see the errata rule in [README](README.md#rules).
+- **Errata:** **E1** (under decision 1) and **E2**/**E3** (under decision 7), appended 2026-08-10 — E1 and
+  E2 after the implementation review found two passages describing code that does not exist in the shape
+  stated, E3 after the final whole-branch review added a third local-door ceremony judgement (a chart-wide
+  grade must name its own chart). Each is a marked blockquote immediately below the passage it corrects,
+  the original wording is preserved above it, and **no decision content changes** — see the errata rule in
+  [README](README.md#rules).
 
 ## Context
 
@@ -249,6 +251,21 @@ through the ADR-0043 self-only suppression owner-gate, and the ceremony is its s
 > registration floor works exactly the same way, for exactly this reason. The decision's substance is
 > untouched: raising stays frictionless, lowering stays accountable, and the reasoning in both numbered
 > points below — including *the refusal of a raise is itself a disclosure* — stands as written.
+
+> **Erratum E3 (2026-08-10) — factual; the decision is unchanged.** The final whole-branch review added a
+> **third** local-door judgement before merge, so the table's `Raise, patient (chart-wide)` row and E2's
+> count above are both now understated. `cairn_sensitivity_ceremony_ok` refuses a chart-wide raise whose
+> payload `subject_id` is not the envelope's `patient_id`, and
+> `crates/cairn-node/tests/sensitivity_ceremony.rs` pins **three** local-refuses/remote-admits pairs.
+> The reason is the one asymmetry this whole ADR turns on, applied to a mis-typed pair of hand-entered
+> UUIDs: decision 9's catch-all makes the *authored-on* chart coarsen (honest, visible), but nothing can
+> make the chart the author *meant* to seal stop reading `routine` — no read model can detect it, because
+> nothing on that chart ever mentions the assertion. A clinician who believes they sealed a chart and did
+> not is the unrecoverable direction, so it is refused where the author is still present. It is a
+> **ceremony**, not a structural floor, by this section's own test: a peer's identically mis-typed event
+> is still admitted at the apply door, where refusing a protective act would fork the event set and be a
+> disclosure in itself. Raising stays frictionless for `event`- and `thread`-scoped grades, which is
+> where decision 8 says the friction must not fall.
 
 The asymmetry is the matcher's *false merge ≫ false split* one axis over: **never block a protective act;
 always make a protection-removing act accountable.**
