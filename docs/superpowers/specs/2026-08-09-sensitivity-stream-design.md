@@ -222,6 +222,14 @@ act; always block a protection-removing act until it is accountable.**
 | Raise, `patient` (chart-wide) | **`rationale` required** | admit |
 | Withdrawal | **bound human author (ADR-0053) + `rationale` required** | admit |
 
+> **Corrected in implementation — see [ADR-0062](../../spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md) erratum E2.**
+> The withdrawal row above is wrong, and this table is where the error started. The `rationale` is a
+> **structural** floor (`cairn_check_sensitivity_withdrawal`), dispatched through `cairn_event_twin`
+> at **both** doors — so a rationale-less withdrawal is refused remotely too. Only the
+> **bound-human-author** half is local-door-only, which makes **two** lenient shapes on the remote
+> door, not three. The row is left standing rather than rewritten: this file is the point-in-time
+> design record, and ADR-0062 carries the corrected decision.
+
 ### The doors are asymmetric on purpose, and doubly so for raises
 
 The ceremony is a **local-authoring rule, never a wire rule** (ADR-0060; the #342 trap). A door check
