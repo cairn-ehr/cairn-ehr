@@ -1011,3 +1011,338 @@ async fn f5e_a_tie_between_two_equally_ranked_grades_resolves_deterministically(
         "a tie in rank must resolve to the assertion with the SMALLER content_address, deterministically (F5e)"
     );
 }
+
+// ===========================================================================
+// Task 8: the operator surface (crates/cairn-node/src/sensitivity.rs). The projection
+// itself is fully covered above; these tests are about the ORCHESTRATOR — does it build
+// the right wire shape, submit through the real door, and (for the report) NAME the
+// winning subject rather than just the grade.
+// ===========================================================================
+
+/// The `db_msg` idiom (common/mod.rs), one layer further out: `assert_sensitivity` /
+/// `withdraw_sensitivity` return `anyhow::Result`, so a door refusal arrives here as an
+/// `anyhow::Error` wrapping the original `tokio_postgres::Error` (via `?`). `anyhow::Error`'s
+/// `Display` — and therefore `{err}` / `err.to_string()` — renders only
+/// `tokio_postgres::Error`'s OWN generic wrapper text ("db error"), never the actual
+/// `RAISE EXCEPTION` message; that message lives in the `DbError` payload underneath, the
+/// exact trap `db_msg`'s own doc comment warns about. Downcasting back to
+/// `tokio_postgres::Error` and reusing `db_msg` is what actually gets at it.
+fn anyhow_db_msg(err: &anyhow::Error) -> String {
+    err.downcast_ref::<tokio_postgres::Error>()
+        .map(db_msg)
+        .unwrap_or_else(|| err.to_string())
+}
+
+#[tokio::test]
+async fn the_chart_report_names_the_winning_subject_for_every_graded_thread() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    assert_grade(&c, &sk, &kid, p, SubjectKind::Patient, p, "sensitive", 11).await;
+
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap();
+    assert_eq!(report.chart_grade, "sensitive");
+    assert_eq!(
+        report.chart_source, "chart-wide",
+        "the report must name WHICH subject won — otherwise nobody can tell why a whole \
+         chart is blurred, and therefore nobody can fix it"
+    );
+}
+
+#[tokio::test]
+async fn a_chart_with_no_assertions_reports_routine_and_names_no_winner() {
+    // The other half of "names the winning subject": a chart with nothing graded must
+    // report the honest absence ('routine' / 'none'), not merely omit the field or crash.
+    // Exercises chart_sensitivity's zero-assertion path, which
+    // the_chart_report_names_the_winning_subject_for_every_graded_thread never reaches.
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap();
+    assert_eq!(report.chart_grade, "routine");
+    assert_eq!(report.chart_source, "none");
+    assert!(
+        report.threads.is_empty(),
+        "no medication threads exist on this chart"
+    );
+}
+
+#[tokio::test]
+async fn assert_sensitivity_writes_a_well_formed_event_and_still_needs_a_rationale_chart_wide() {
+    // The orchestrator must not quietly bypass the db/048 ceremony it wraps: a thread
+    // raise with no rationale succeeds, a chart-wide raise with no rationale is refused —
+    // exactly the asymmetry sensitivity_ceremony.rs pins at the door, now proven to survive
+    // being routed through assert_sensitivity rather than a hand-built EventBody.
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    let thread = uuid::Uuid::now_v7();
+    let event_id = cairn_node::sensitivity::assert_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        SubjectKind::Thread,
+        thread,
+        "restricted",
+        None,
+    )
+    .await
+    .expect("a thread raise carries no ceremony");
+
+    let row = c
+        .query_one(
+            "SELECT subject_kind, subject_id::text, grade, source
+               FROM sensitivity_assertion WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "thread");
+    assert_eq!(row.get::<_, String>(1), thread.to_string());
+    assert_eq!(row.get::<_, String>(2), "restricted");
+    assert_eq!(row.get::<_, String>(3), "human");
+
+    // The event the orchestrator returns is the SAME one that landed — not an opaque
+    // internal id the caller has no way to correlate with what actually happened.
+    let landed_id: String = c
+        .query_one(
+            "SELECT event_id::text FROM event_log WHERE content_address =
+                (SELECT content_address FROM sensitivity_assertion WHERE patient_id = $1::text::uuid)",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(landed_id, event_id.to_string());
+
+    // A chart-wide raise with no rationale must still be refused — the orchestrator is a
+    // thin builder, not a second, laxer door.
+    let err = cairn_node::sensitivity::assert_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        SubjectKind::Patient,
+        p,
+        "restricted",
+        None,
+    )
+    .await
+    .expect_err("a chart-wide raise with no rationale must be refused locally");
+    let msg = anyhow_db_msg(&err);
+    assert!(
+        msg.contains("chart-wide"),
+        "the refusal names what would repair it: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn withdraw_sensitivity_requires_the_human_key_and_then_lowers_the_grade() {
+    // Mirrors sensitivity_ceremony.rs's two withdrawal tests, but through the real
+    // orchestrator rather than a hand-built EventBody: an un-enrolled-as-human signer is
+    // refused (the ceremony's bound-human-author rule, ADR-0053), and an enrolled human
+    // succeeds and the standing grade actually drops.
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    assert_grade(&c, &sk, &kid, p, SubjectKind::Patient, p, "sequestered", 2).await;
+
+    // The hex `content_address` an operator would actually have to copy off
+    // `patient-sensitivity`'s own printed output to fill in `--withdraws` — sourced from
+    // `chart_sensitivity` itself (not a direct table query) so this test also proves
+    // `chart_content_address` round-trips a real, usable value end to end.
+    let ca_hex = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap()
+        .chart_content_address
+        .expect("a standing chart-wide assertion must carry a withdrawable content_address");
+
+    // The plain device/agent key `setup` enrolled is NOT a human actor — withdraw_sensitivity
+    // must refuse it, proving this orchestrator carries no separate, laxer path to this event
+    // type. `withdraw_sensitivity` always mints an attestation token (it treats its sk/kid as
+    // THE human by design — see the function's own doc), so passing a non-human key trips
+    // db/005 step 4b's "is the attester actually an enrolled human" check BEFORE db/048's
+    // ceremony (`cairn_sensitivity_ceremony_ok`) ever gets a chance to run — an earlier, more
+    // fundamental refusal than the plain-un-attested shape
+    // `the_local_door_requires_a_bound_human_author_for_a_withdrawal` in sensitivity_ceremony.rs
+    // exercises, but the same underlying rule: no bound human, no withdrawal.
+    let err = cairn_node::sensitivity::withdraw_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &ca_hex,
+        "patient consent",
+    )
+    .await
+    .expect_err("a non-human signer must be refused");
+    let msg = anyhow_db_msg(&err);
+    assert!(
+        msg.contains("enrolled human actor"),
+        "the refusal names what would repair it: {msg}"
+    );
+
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let event_id = cairn_node::sensitivity::withdraw_sensitivity(
+        &mut c,
+        &sk_h,
+        &kid_h,
+        "test-node",
+        p,
+        &ca_hex,
+        "patient consent",
+    )
+    .await
+    .expect("an enrolled human's withdrawal is accepted");
+
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_withdrawal WHERE withdraws = decode($1,'hex')",
+            &[&ca_hex],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(landed, 1, "the withdrawal actually projected");
+
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.chart_grade, "routine",
+        "the withdrawn assertion no longer stands: event {event_id}"
+    );
+}
+
+#[tokio::test]
+async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subject() {
+    // threads is the per-thread half of the report — proven separately from chart_grade
+    // because a thread's OWN standing grade can still be OUTRANKED by a chart-wide one, and
+    // the report must say so rather than parroting the thread's own assertion.
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+
+    let thread_a = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("A"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread A asserted");
+    let thread_b = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("B"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread B asserted");
+
+    // thread_a carries its own, thread-scoped grade.
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        p,
+        SubjectKind::Thread,
+        thread_a,
+        "restricted",
+        10,
+    )
+    .await;
+
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap();
+    assert_eq!(report.threads.len(), 2, "both threads are reported");
+    let a = report
+        .threads
+        .iter()
+        .find(|t| t.thread_id == thread_a)
+        .expect("thread A present");
+    assert_eq!(a.grade, "restricted");
+    assert_eq!(a.source, "this thread");
+    assert!(
+        a.content_address.is_some(),
+        "a real winning assertion must carry a withdrawable content_address"
+    );
+    let b = report
+        .threads
+        .iter()
+        .find(|t| t.thread_id == thread_b)
+        .expect("thread B present");
+    assert_eq!(
+        b.grade, "routine",
+        "thread B's own grade must not pick up thread A's"
+    );
+    assert_eq!(b.source, "none");
+    assert!(
+        b.content_address.is_none(),
+        "nothing applies to thread B, so there is nothing to withdraw"
+    );
+
+    // Now a chart-wide raise OUTRANKS thread_a's own 'restricted' — the report must follow
+    // the true winner, not the thread's own standing row.
+    assert_grade(&c, &sk, &kid, p, SubjectKind::Patient, p, "sequestered", 11).await;
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .unwrap();
+    let a = report
+        .threads
+        .iter()
+        .find(|t| t.thread_id == thread_a)
+        .expect("thread A present");
+    assert_eq!(
+        a.grade, "sequestered",
+        "a higher chart-wide grade must win over the thread's own"
+    );
+    assert_eq!(
+        a.source, "chart-wide",
+        "and the report must say the CHART is what actually won, not the thread"
+    );
+}

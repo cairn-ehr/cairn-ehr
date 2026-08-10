@@ -569,6 +569,69 @@ enum Cmd {
         confirm_new: bool,
     },
 
+    /// Assert a §5.9 confidentiality grade over an event, a medication thread, or a whole
+    /// chart (`sensitivity.grade.asserted`). Raising is deliberately cheap for an event or a
+    /// thread — no rationale required. A whole-chart grade DOES require `--rationale`: it
+    /// coarsens every signal on that chart, and the person who later has to unwind it needs
+    /// something to read (db/048's ceremony refuses a rationale-less chart-wide raise; this
+    /// command does not relax that, it only builds and submits the event).
+    SensitivityAssert {
+        /// The chart this grade applies to.
+        #[arg(long)]
+        patient: Uuid,
+        /// What is being graded: an "event", a medication "thread", or the whole "patient".
+        #[arg(long, value_parser = ["event", "thread", "patient"])]
+        subject_kind: String,
+        /// The event id, medication thread id, or patient id named by --subject-kind.
+        #[arg(long)]
+        subject_id: Uuid,
+        /// Open vocabulary — today's ladder is routine < sensitive < restricted <
+        /// sequestered; an unrecognised value is admitted but ranks MAXIMUM (coarsen, never
+        /// silently expose).
+        #[arg(long)]
+        grade: String,
+        /// Why. REQUIRED when --subject-kind patient (see above); optional otherwise.
+        #[arg(long)]
+        rationale: Option<String>,
+    },
+    /// Withdraw a standing §5.9 grade (`sensitivity.grade-withdrawal.asserted`). The
+    /// withdrawn assertion is NOT erased — it stays on the record, readable and
+    /// re-assertable; only the standing set changes. Removing protection is accountable
+    /// (ADR-0053), so this always needs a bound human author: --attester-key must name an
+    /// enrolled `kind='human'` actor (run `enroll-human` first), and db/048's ceremony
+    /// refuses the event otherwise.
+    SensitivityWithdraw {
+        /// The chart the withdrawn assertion belongs to.
+        #[arg(long)]
+        patient: Uuid,
+        /// Hex content_address of the assertion being withdrawn, as `patient-sensitivity`
+        /// prints it.
+        #[arg(long)]
+        withdraws: String,
+        /// The audited why — clear text forever, and it replicates. A rationale naming the
+        /// condition leaks exactly what the grade protected; word it accordingly.
+        #[arg(long)]
+        rationale: String,
+        /// Human signing key that attests the withdrawal (must already be enrolled via
+        /// `enroll-human`).
+        #[arg(long)]
+        attester_key: PathBuf,
+        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        attester_passphrase: Option<String>,
+    },
+    /// Report a chart's current §5.9 sensitivity grades: the chart-wide reading plus one
+    /// line per medication thread, each naming WHICH subject actually won (chart-wide /
+    /// this thread / this event / none) — never just the grade, because a grade with no
+    /// named source cannot be fixed. REPORTS ONLY: this slice withholds no content.
+    /// Enforcement needs custody narrowing (#232 part C), a later, separate slice — a
+    /// projection-layer filter with no floor beneath it is theatre a raw-SQL reader walks
+    /// straight past.
+    PatientSensitivity {
+        #[arg(long)]
+        patient: Uuid,
+    },
+
     /// Enroll a clinician's signing key as a `kind='human'` actor so it may sign+attest an
     /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
     /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
@@ -1718,6 +1781,121 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("registered patient {patient_id}");
+        }
+        Cmd::SensitivityAssert {
+            patient,
+            subject_kind,
+            subject_id,
+            grade,
+            rationale,
+        } => {
+            // clap's --subject-kind value_parser already restricts input to these three
+            // strings, so the fallback arm is genuinely unreachable — matches the same
+            // discipline `parse_identifier_pairs`/`dob_precision` use elsewhere: refuse
+            // early and legibly rather than let a typo become a confusing enum default.
+            let kind = match subject_kind.as_str() {
+                "event" => cairn_event::sensitivity::SubjectKind::Event,
+                "thread" => cairn_event::sensitivity::SubjectKind::Thread,
+                "patient" => cairn_event::sensitivity::SubjectKind::Patient,
+                other => anyhow::bail!("unreachable --subject-kind value {other:?}"),
+            };
+            // Raising is device-additive — no human attester needed (db/048 section 12
+            // reserves the ceremony for a chart-wide raise's rationale and for every
+            // withdrawal, never for a plain raise).
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            ensure_registration_actor(&db, &kid).await?;
+            let event_id = cairn_node::sensitivity::assert_sensitivity(
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                patient,
+                kind,
+                subject_id,
+                &grade,
+                rationale.as_deref(),
+            )
+            .await?;
+            println!(
+                "asserted sensitivity grade {grade:?} over {subject_kind} {subject_id} on \
+                 chart {patient} (event {event_id})"
+            );
+        }
+        Cmd::SensitivityWithdraw {
+            patient,
+            withdraws,
+            rationale,
+            attester_key,
+            attester_passphrase,
+        } => {
+            // Withdrawing costs: db/048's ceremony refuses a withdrawal with no bound human
+            // author, so this verb loads a HUMAN attester key (never the node's own device
+            // key) and pre-checks it is actually enrolled as `kind='human'` — the same
+            // legible pre-check `resolve_attester` runs before `medication-attest`, giving
+            // a clean error before any event is authored rather than a bare floor refusal.
+            let human_sk = load_attester_key(&attester_key, attester_passphrase)?;
+            let human_kid = hex::encode(human_sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            if !cairn_node::identify::attester_is_enrolled_human(&db, &human_kid).await? {
+                anyhow::bail!(
+                    "--attester-key is not an enrolled human actor; run `enroll-human` first"
+                );
+            }
+            let id = cairn_node::identity::load_local(&db).await?;
+            let event_id = cairn_node::sensitivity::withdraw_sensitivity(
+                &mut db,
+                &human_sk,
+                &human_kid,
+                &id.node_id_hex,
+                patient,
+                &withdraws,
+                &rationale,
+            )
+            .await?;
+            println!(
+                "withdrew sensitivity assertion {withdraws} on chart {patient} (event {event_id})"
+            );
+        }
+        Cmd::PatientSensitivity { patient } => {
+            // A pure read — no signing key, no HLC tick, nothing authored.
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let report = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
+            // The printed hex content_address is what `sensitivity-withdraw --withdraws`
+            // takes — this line is the one place an operator can get that value without
+            // dropping to raw SQL, so `chart_content_address`/`ThreadGrade::content_address`
+            // are surfaced here, not just the grade and its source.
+            println!(
+                "chart {patient}: {} (winning subject: {}{})",
+                report.chart_grade,
+                report.chart_source,
+                match &report.chart_content_address {
+                    Some(ca) => format!(", withdraws={ca}"),
+                    None => String::new(),
+                }
+            );
+            if report.threads.is_empty() {
+                println!("  no medication threads on this chart");
+            } else {
+                for t in &report.threads {
+                    println!(
+                        "  thread {}: {} (winning subject: {}{})",
+                        t.thread_id,
+                        t.grade,
+                        t.source,
+                        match &t.content_address {
+                            Some(ca) => format!(", withdraws={ca}"),
+                            None => String::new(),
+                        }
+                    );
+                }
+            }
+            println!(
+                "(report only — nothing is withheld; enforcement needs custody narrowing, \
+                 #232 part C)"
+            );
         }
         Cmd::EnrollHuman {
             registration_id,
