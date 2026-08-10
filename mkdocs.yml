@@ -166,6 +166,7 @@ nav:
       - ADR-0059 · Medication drug-identity coding — the drugref moiety anchor: spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md
       - ADR-0060 · Partial validity — a defect on one line never invalidates another: spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md
       - ADR-0061 · Registration is an act that carries its search: spec/decisions/0061-registration-is-an-act-that-carries-its-search.md
+      - ADR-0062 · The sensitivity stream and the inverted unknown: spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

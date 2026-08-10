@@ -2,14 +2,35 @@
 
 ## ⇒ NEXT
 
-**In progress: the §5.9 safety-projection slice** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232))
-— chosen 2026-08-09 as the next build thread. It is the largest unbuilt piece of settled architecture:
-sequester (custody narrowing) + the graded sensitivity stream + the de-identified, severity-graded safety
-projection, on top of the ADR-0052 born-sealed substrate. Read
-[ADR-0006](spec/decisions/0006-visibility-scope-replication-and-the-safety-projection.md) and
-[identity §5.9](spec/identity.md) before designing. It carries
-[#294](https://github.com/cairn-ehr/cairn-ehr/issues/294): the projection must *carry* the coding-derived
-drug class, never re-derive it (ADR-0059 decision 4).
+**The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems, and
+only PART A is built.** Slice 65 (2026-08-10, branch `feat/sensitivity-stream-232`,
+[ADR-0062](spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md), spec v0.64,
+`SCHEMA_GENERATION` 48) shipped the **sensitivity stream**: graded, append-only confidentiality assertions
+over an event / a medication thread / a whole chart, whose effective grade is the **max** over standing
+assertions on all three. **It enforces nothing** — it computes and reports a grade. Read ADR-0062 before
+touching any of the remaining parts; do not re-derive its ten decisions.
+
+Three parts remain, and their order is forced:
+
+- **Part B — safety-projection emission** ([#375](https://github.com/cairn-ehr/cairn-ehr/issues/375)):
+  de-identified class + severity, coarsened by the grade. **Buildable now.** Carries
+  [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294) — the class must be captured **pre-seal and
+  carried**, never re-derived by the reader (ADR-0059 decision 4).
+- **Part C — sequester / custody narrowing** ([#376](https://github.com/cairn-ehr/cairn-ehr/issues/376)).
+  **BLOCKED on [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231)**, and this is not a preference.
+  `cairn-sync serve` verifies an unwrap-key certificate against its own signature and self-consistency
+  only — it never checks the cert's `kid` against the admitted-peer trust set, so **transport is currently
+  the sole gate on read-custody**. Narrowing a body's custody to two named clinicians while that hole
+  stands is defeated by asking the serve port for the DEK: protection real in the projection layer, absent
+  at the wire.
+- **Part D — break-glass** ([#377](https://github.com/cairn-ehr/cairn-ehr/issues/377)): audited key-*use*,
+  partition-honest. Blocked on C.
+
+Slice 65's own follow-ons: [#374](https://github.com/cairn-ehr/cairn-ehr/issues/374) (thread resolution
+resolves only a thread's *current head*), [#378](https://github.com/cairn-ehr/cairn-ehr/issues/378) (the
+withdrawal rationale is clear text forever and replicates — the UI must warn at entry today),
+[#379](https://github.com/cairn-ehr/cairn-ehr/issues/379) (the grade in the legibility twin), and the
+sensitivity gesture kinds added to #360's `ui_gesture_timing_kind_ck` widening.
 
 **Three things the med-list slice still owes are HUMAN acts and cannot be done by an agent:**
 
@@ -128,6 +149,23 @@ Postgres-on-Android).
 ## Recent sessions — what to carry forward
 
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
+
+**2026-08-10 — Slice 65: the §5.9 sensitivity stream, part A** (#232 part A; **ADR-0062**, spec v0.64,
+`SCHEMA_GENERATION` 47→48 for `db/048`). Full reasoning is ADR-0062 — four things a next session needs:
+
+1. **Unknown ranks MAX, inverting db/040's `ELSE 0`.** There an unrecognised value ranking 0 withholds
+   *reject power* (safe); here it would withhold *protection*, so an older node reads a peer's newer grade
+   as "not sensitive" and renders a confidential body in the clear. **Do not "fix" it into consistency.**
+   Absence still ranks 0 — no assertion is `routine`; only an unrecognised grade *value* coarsens.
+2. **The ceremony (rationale for a chart-wide raise; bound human author + rationale for a withdrawal) is
+   a LOCAL-door rule only**, and the remote door is *tested* to admit exactly what the local door refuses.
+   A check at apply forks the event set (#342) — and for a *raise* the refusal would itself be a
+   disclosure, since this node would then compute a lower grade than the peer.
+3. **The effective grade is node-relative.** Thread membership needs custody, so a node with less custody
+   deliberately computes a *higher* grade; **gaining custody can lower a displayed grade.** Any cross-node
+   equality test is valid only *given equal custody* — the qualifier is in the test's name for that reason.
+4. **It enforces nothing, on purpose.** A projection-layer filter with no custody narrowing beneath it is
+   theatre a raw-SQL client walks past. Enforcement is part C, and part C is blocked on #231 (⇒ NEXT).
 
 **2026-08-09 — the loop's second unattended run + this doc prune.** `/techdebt-loop --max-issues 3`
 merged three PRs and closed three issues (ROADMAP "Interlude — 08-09"): **#169** (PR #367 — `db/tests`
@@ -320,12 +358,13 @@ current build state, open threads, and time-sensitive items.
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **§5.9 safety projection** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) — **the current
-  thread**, see ⇒ NEXT. Related open issues: [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231)
-  (pin the sync unwrap-cert kid to the node-plane trust set — `loop:ready`),
-  [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294) (carry the drug class, don't re-derive it),
-  [#235](https://github.com/cairn-ehr/cairn-ehr/issues/235) (shred authorization policy hooks),
-  [#236](https://github.com/cairn-ehr/cairn-ehr/issues/236) (FTS/RAG must build on `event_clear` only).
+- **§5.9 parts B/C/D** ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) — **part A shipped as
+  Slice 65**; see ⇒ NEXT for what remains and why **C is blocked on
+  [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231)** (pin the sync unwrap-cert kid to the
+  node-plane trust set — `loop:ready`). Related: [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294)
+  (carry the drug class, don't re-derive it), [#235](https://github.com/cairn-ehr/cairn-ehr/issues/235)
+  (shred authorization policy hooks), [#236](https://github.com/cairn-ehr/cairn-ehr/issues/236) (FTS/RAG
+  must build on `event_clear` only).
 - **`clinical.medication` — slices 1–6b are DONE** (ADR-0059 fully implemented 2026-07-28). **Next
   candidates:** the **drugref term→anchor lookup** (§9 advisory tier — the thing that actually closes the
   coded↔uncoded duplicate case; needs a cross-service connection-model decision first, and the source
