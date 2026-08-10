@@ -94,13 +94,13 @@ async fn registry_is_seeded_with_the_expected_mapping() {
     .await
     .unwrap();
 
-    // Assert the full 22-row mapping is present so a dropped registration is caught.
+    // Assert the full 24-row mapping is present so a dropped registration is caught.
     let n: i64 = c
         .query_one("SELECT count(*) FROM cairn_event_twin_check", &[])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 22, "expected 22 seeded twin-check rows");
+    assert_eq!(n, 24, "expected 24 seeded twin-check rows");
 
     // Lock the FULL registry contract. This table is now the single source of floor-wiring
     // truth, so assert every (event_type → check_fn, twin_required_msg) mapping byte-for-byte
@@ -223,6 +223,17 @@ async fn registry_is_seeded_with_the_expected_mapping() {
             "identity.registration.asserted",
             "cairn_check_registration_assertion",
             Some("registration requires a non-empty authored twin (§3.13)"),
+        ),
+        // db/048 (#232): the §5.9 sensitivity stream's two verbs.
+        (
+            "sensitivity.grade.asserted",
+            "cairn_check_sensitivity_grade",
+            Some("sensitivity assertion requires a non-empty authored twin (a grade must be legible without a schema — principle 11)"),
+        ),
+        (
+            "sensitivity.grade-withdrawal.asserted",
+            "cairn_check_sensitivity_withdrawal",
+            Some("sensitivity withdrawal requires a non-empty authored twin (the audited why must be legible)"),
         ),
     ];
     expected.sort();
