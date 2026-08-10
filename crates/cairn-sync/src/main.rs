@@ -163,6 +163,10 @@ const SCHEMA: &[(&str, &str)] = &[
         "047_registration_precedence",
         include_str!("../../../db/047_registration_precedence.sql"),
     ),
+    (
+        "048_sensitivity_stream",
+        include_str!("../../../db/048_sensitivity_stream.sql"),
+    ),
 ];
 
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
