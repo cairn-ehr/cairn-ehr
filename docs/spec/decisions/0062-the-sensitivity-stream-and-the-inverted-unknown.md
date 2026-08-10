@@ -21,6 +21,10 @@
   local-authoring rule is never a wire rule) · [ADR-0061](0061-registration-is-an-act-that-carries-its-search.md)
   decision 4 (the authorship gate that was *refused*, and why this one is not that one)
 - **Canonical spec home:** [identity §5.9](../identity.md#59-sensitivity-grade-the-safety-projection-and-break-glass-visibility-scope)
+- **Errata:** **E1** (under decision 1) and **E2** (under decision 7), appended 2026-08-10 after the
+  implementation review found two passages describing code that does not exist in the shape stated. Each
+  is a marked blockquote immediately below the passage it corrects, the original wording is preserved
+  above it, and **no decision content changes** — see the errata rule in [README](README.md#rules).
 
 ## Context
 
@@ -70,6 +74,30 @@ standing     = asserted AND NOT withdrawn
 with ties broken on `content_address` — a `BYTEA` multihash, collation-free per
 [ADR-0045](0045-collation-independent-projection-tiebreaks.md)/[#115](https://github.com/cairn-ehr/cairn-ehr/issues/115).
 The tiebreak decides only *which assertion is named as the reason*; the grade itself is order-free.
+
+> **Erratum E1 (2026-08-10) — factual; the decision is unchanged.** The rule as written above is
+> **incomplete**, and this ADR is its only *why* home, so a reader implementing from it alone would
+> rebuild a fail-open the code deliberately closed. `cairn_effective_sensitivity` (`db/048` section 11)
+> carries a **fourth arm** beyond `{E, E's thread, E's patient}`: an assertion that **cannot be matched to
+> a subject on this chart still coarsens chart-wide**, bounded by the querying event's own envelope
+> `patient_id`. Three shapes take that arm — an **unrecognised `subject_kind`** (a future peer's
+> `episode`, which ADR-0056 requires the floor to admit); a **`patient`-kind assertion whose `subject_id`
+> names a different patient**; and an **`event`-kind assertion naming an event not present on this chart**.
+>
+> It exists because the earlier shape **failed open**. A mis-targeted assertion — a UI bug, a typo, a
+> hostile peer — matched none of the three arms and therefore contributed *nothing*, silently withholding
+> protection, while an entirely unrecognised kind correctly coarsened. That reserved the safe behaviour
+> (coarsen on confusion) for kinds a future peer invents and withheld it from a kind we already know,
+> mis-used. An assertion naming something we cannot match here was still an **attempt to protect
+> something**, so it coarsens rather than evaporating — the same direction every other decision here takes.
+>
+> **The third shape includes an event that has simply not replicated yet, and that is deliberate.**
+> Set-union sync has no ordering, so an event-scoped assertion can arrive before the event it targets —
+> the same arrival-order independence decision 3 states for withdrawals. On a partially-replicated node
+> that transiently coarsens the whole chart, and it **self-resolves the moment the target event lands**,
+> at which point the row moves to the precisely-targeted `event` arm. The code carries an explicit *do not
+> narrow this arm* comment: there is **no local signal** that distinguishes "not yet arrived" from "never
+> will", and guessing wrong in that narrowing is the disclosure direction the arm exists to prevent.
 
 **Max is the whole reason this converges.** It is commutative, associative and idempotent — a
 join-semilattice, i.e. a grow-only CRDT — so set-union sync converges on the grade with **HLC ordering
@@ -196,6 +224,31 @@ through the ADR-0043 self-only suppression owner-gate, and the ceremony is its s
 | Raise, `event` / `thread` | no ceremony — any accountable contributor | **admit** |
 | Raise, `patient` (chart-wide) | **rationale required** | **admit** |
 | Withdrawal (lowering) | **bound human author (ADR-0053) + rationale** | **admit** |
+
+> **Erratum E2 (2026-08-10) — factual; the decision is unchanged.** The table's withdrawal row, and the
+> sentence at the end of this section claiming the remote door admits *"exactly the **three** shapes the
+> local door refuses"*, both misdescribe the shipped split. Two corrections, and the second is the one
+> that matters:
+>
+> 1. **The ceremony is two shapes, not three.** `cairn_sensitivity_ceremony_ok` (`db/048` section 12)
+>    makes exactly two judgements — a rationale on a chart-wide raise, and a bound human author on a
+>    withdrawal. `crates/cairn-node/tests/sensitivity_ceremony.rs` accordingly pins **two**
+>    local-refuses/remote-admits pairs, not three.
+> 2. **A withdrawal's non-empty `rationale` is NOT part of the local ceremony.** It is a **structural
+>    floor** in `cairn_check_sensitivity_withdrawal` (`db/048` section 4), registered in the ADR-0048
+>    twin-check registry and dispatched through `cairn_event_twin` — which **both** doors call
+>    (`db/005_submit.sql` step 8, `db/020_apply_remote_event.sql` step 8). So a rationale-less peer
+>    withdrawal **is refused remotely**, contrary to the `admit` in the table's withdrawal row. Only the
+>    **bound-human-author half is local-door-only.**
+>
+> This is consistent with the file's own structural-vs-ceremony split rather than an exception to it. A
+> **structural** check judges the *shape of the claim being made* — is this event well-formed as the thing
+> it says it is — which every honest peer's event satisfies regardless of local policy, so it is safe at
+> both doors and wedges nothing. A **ceremony** check judges *who authored it and under what local
+> accountability*, which peers legitimately answer differently, so it must stay local. `db/045`'s
+> registration floor works exactly the same way, for exactly this reason. The decision's substance is
+> untouched: raising stays frictionless, lowering stays accountable, and the reasoning in both numbered
+> points below — including *the refusal of a raise is itself a disclosure* — stands as written.
 
 The asymmetry is the matcher's *false merge ≫ false split* one axis over: **never block a protective act;
 always make a protection-removing act accountable.**

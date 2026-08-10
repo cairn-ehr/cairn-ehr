@@ -157,10 +157,13 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
    *reject power* (safe); here it would withhold *protection*, so an older node reads a peer's newer grade
    as "not sensitive" and renders a confidential body in the clear. **Do not "fix" it into consistency.**
    Absence still ranks 0 — no assertion is `routine`; only an unrecognised grade *value* coarsens.
-2. **The ceremony (rationale for a chart-wide raise; bound human author + rationale for a withdrawal) is
-   a LOCAL-door rule only**, and the remote door is *tested* to admit exactly what the local door refuses.
-   A check at apply forks the event set (#342) — and for a *raise* the refusal would itself be a
-   disclosure, since this node would then compute a lower grade than the peer.
+2. **The ceremony is exactly two rules and is LOCAL-door only** — a rationale on a chart-wide raise, a
+   bound human author on a withdrawal — and the remote door is *tested* to admit both. A check at apply
+   forks the event set (#342), and for a *raise* the refusal would itself be a disclosure, since this
+   node would then compute a lower grade than the peer. **The withdrawal's non-empty rationale is NOT
+   ceremony**: it is a structural floor in `cairn_check_sensitivity_withdrawal`, dispatched through
+   `cairn_event_twin` at **both** doors. Structural checks judge the *shape of the claim* and are safe
+   everywhere; ceremony checks judge *who authored it* and must stay local.
 3. **The effective grade is node-relative.** Thread membership needs custody, so a node with less custody
    deliberately computes a *higher* grade; **gaining custody can lower a displayed grade.** Any cross-node
    equality test is valid only *given equal custody* — the qualifier is in the test's name for that reason.
