@@ -4,9 +4,15 @@
 //! which is the exact opposite of `cairn_clock_grade_rank`'s `ELSE 0`. See the comment
 //! on `cairn_sensitivity_rank` in db/048 — a "fix" that aligns the two is a leak.
 mod common;
+use cairn_event::medication::CodingClaim;
 use cairn_event::sensitivity::*;
+use cairn_node::medication::{
+    assert_medication, code_medication, correct_medication_coding, AssertMedicationInput,
+    CodeMedicationInput, CorrectCodingInput, SubstanceCoding,
+};
 use common::{
-    cs, db_msg, setup, submit_registration, submit_signed, submit_signed_with_id, EventSpec,
+    cs, db_msg, medication_setup, setup, submit_registration, submit_signed, submit_signed_with_id,
+    EventSpec,
 };
 
 #[tokio::test]
@@ -396,4 +402,551 @@ async fn recall_marks_an_assertion_but_never_lowers_the_grade() {
         .unwrap()
         .get(0);
     assert_eq!(g, "restricted", "recall marks; it must never lower a grade");
+}
+
+// ===========================================================================
+// Review round 1 fixes.
+// ===========================================================================
+
+#[tokio::test]
+async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart_s_grade() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let victim = uuid::Uuid::now_v7();
+    let attacker = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, victim, 1).await;
+    submit_registration(&c, &sk, &kid, attacker, 1).await;
+
+    // The chart being protected: a chart-wide 'sequestered' grade.
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        victim,
+        SubjectKind::Patient,
+        victim,
+        "sequestered",
+        2,
+    )
+    .await;
+    let ca_hex: String = c
+        .query_one(
+            "SELECT encode(content_address, 'hex') FROM sensitivity_assertion
+              WHERE patient_id = $1::text::uuid",
+            &[&victim.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    // A withdrawal authored on a DIFFERENT chart, naming the victim's content_address. The
+    // remote door admits this leniently (the human-author ceremony is a LOCAL-door-only
+    // rule — db/048's header), so this is exactly the shape a mis-targeted or hostile peer
+    // can produce: same content_address (globally unique, so unambiguous about WHICH
+    // assertion it names), but authored under a different envelope's patient_id.
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: attacker,
+            event_type: WITHDRAWAL_EVENT_TYPE,
+            schema_version: WITHDRAWAL_SCHEMA_VERSION,
+            payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "cross-chart" }),
+            plaintext_twin: Some("withdrawn".into()),
+            wall: 3,
+        },
+    )
+    .await
+    .expect("the remote door admits this leniently — the ceremony is local-only");
+
+    let target = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        target,
+        EventSpec {
+            patient: victim,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "n" }),
+            plaintext_twin: Some("n".into()),
+            wall: 4,
+        },
+    )
+    .await
+    .expect("note accepted");
+
+    let g: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&target.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        g, "sequestered",
+        "a withdrawal from a DIFFERENT chart must never strip this chart's protection (F1)"
+    );
+}
+
+#[tokio::test]
+async fn f2_a_mis_targeted_known_subject_kind_coarsens_instead_of_evaporating() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    // Case i: a 'patient'-kind assertion authored on chart A whose subject_id names a
+    // DIFFERENT patient (a typo, a UI bug, a hostile peer). Before F2 this matched NO arm
+    // of cairn_effective_sensitivity and contributed nothing — a silent fail-open on
+    // exactly the field most likely to be mis-set.
+    let chart_a = uuid::Uuid::now_v7();
+    let elsewhere = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_a, 1).await;
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: chart_a,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: serde_json::json!({
+                "subject_kind": "patient", "subject_id": elsewhere.to_string(),
+                "grade": "restricted", "source": "human"
+            }),
+            plaintext_twin: Some("mis-targeted patient assertion".into()),
+            wall: 2,
+        },
+    )
+    .await
+    .expect("structurally well-formed, so admitted");
+
+    let note_a = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_a,
+        EventSpec {
+            patient: chart_a,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "n" }),
+            plaintext_twin: Some("n".into()),
+            wall: 3,
+        },
+    )
+    .await
+    .expect("note accepted");
+    let g_a: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note_a.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        g_a, "restricted",
+        "a 'patient' assertion naming a DIFFERENT patient must coarsen its own chart, not evaporate (F2i)"
+    );
+
+    // Case ii: an 'event'-kind assertion whose subject_id names no event on THIS chart
+    // (invalid/dangling — could equally be a real event on someone else's chart).
+    let chart_b = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_b, 1).await;
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: chart_b,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: serde_json::json!({
+                "subject_kind": "event", "subject_id": uuid::Uuid::now_v7().to_string(),
+                "grade": "sensitive", "source": "human"
+            }),
+            plaintext_twin: Some("mis-targeted event assertion".into()),
+            wall: 2,
+        },
+    )
+    .await
+    .expect("structurally well-formed, so admitted");
+
+    let note_b = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_b,
+        EventSpec {
+            patient: chart_b,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "n" }),
+            plaintext_twin: Some("n".into()),
+            wall: 3,
+        },
+    )
+    .await
+    .expect("note accepted");
+    let g_b: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note_b.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        g_b, "sensitive",
+        "an 'event' assertion naming no event on THIS chart must coarsen the chart, not evaporate (F2ii)"
+    );
+}
+
+/// Shared by the F5 thread-coverage tests: the minimal input `assert_medication` needs to
+/// mint a fresh thread. `term` is the only field the tests vary.
+fn med_input(term: &'static str) -> AssertMedicationInput<'static> {
+    AssertMedicationInput {
+        term,
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "patient-reported",
+        started: None,
+        started_precision: None,
+    }
+}
+
+/// Code a thread once, then immediately correct it (strike). Returns the FIRST coding
+/// event's id — its content_address is now superseded in `medication_coding` (an
+/// `ON CONFLICT (medication_id) DO UPDATE`, HLC-overlaid table — db/042), so
+/// `cairn_event_thread` can no longer resolve it even though the correction, and the
+/// thread's own assert event, remain fully resolvable. This is the real-door way to
+/// produce the "unresolved despite full custody" case F4/F5(b)/F5(c) need, matching
+/// exactly the mechanism db/048's F4 comment now documents.
+async fn supersede_a_coding_event(
+    c: &mut tokio_postgres::Client,
+    sk: &cairn_event::SigningKey,
+    kid: &str,
+    p: uuid::Uuid,
+    thread: uuid::Uuid,
+) -> uuid::Uuid {
+    let coding = CodeMedicationInput {
+        coding: SubstanceCoding {
+            system: "drugref-moiety",
+            code: "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e01",
+            display: "test substance",
+        },
+    };
+    let first = code_medication(c, sk, kid, "test-node", p, thread, &coding, None, None)
+        .await
+        .expect("initial coding accepted");
+    let correction = CorrectCodingInput {
+        corrects: first,
+        claim: CodingClaim::Strike,
+        note: Some("test correction — forces supersession for the F5 fixture"),
+    };
+    correct_medication_coding(c, sk, kid, "test-node", p, thread, &correction, None, None)
+        .await
+        .expect("correction accepted");
+    first
+}
+
+#[tokio::test]
+async fn f5a_a_resolved_thread_carries_its_own_grade_and_not_a_different_threads() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    // A real medication-thread fixture, authored through the actual clinical door
+    // (assert_medication) rather than a hand-seeded row — this three-way rule (resolved /
+    // bounded / contributes-nothing) had ZERO test coverage before this fix.
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+
+    let thread_a = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("A"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread A asserted");
+    let thread_b = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("B"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread B asserted");
+
+    // Each thread's own (only, so far) assert event, found via medication_statement's
+    // content_address — precise here because neither thread has been re-asserted yet.
+    let assert_event_of = |med: uuid::Uuid| {
+        let c = &c;
+        async move {
+            let s: String = c
+                .query_one(
+                    "SELECT e.event_id::text FROM medication_statement m
+                       JOIN event_log e ON e.content_address = m.content_address
+                      WHERE m.medication_id = $1::text::uuid",
+                    &[&med.to_string()],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            s
+        }
+    };
+    let event_a = assert_event_of(thread_a).await;
+    let event_b = assert_event_of(thread_b).await;
+
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        p,
+        SubjectKind::Thread,
+        thread_a,
+        "restricted",
+        10,
+    )
+    .await;
+
+    let grade_of = |ev: String| {
+        let c = &c;
+        async move {
+            c.query_one(
+                "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+                &[&ev],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+        }
+    };
+    assert_eq!(
+        grade_of(event_a).await,
+        "restricted",
+        "a resolved thread's own grade applies to its events"
+    );
+    assert_eq!(
+        grade_of(event_b).await,
+        "routine",
+        "a DIFFERENT thread's grade must never leak onto this one"
+    );
+}
+
+#[tokio::test]
+async fn f5bd_unresolved_thread_takes_the_bounded_max_but_a_threadless_event_type_does_not() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+
+    let thread = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("Warfarin"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread asserted");
+    let first_coding_event = supersede_a_coding_event(&mut c, &sk, &kid, p, thread).await;
+
+    // A note on the SAME chart: cairn_event_type_has_no_thread('note.added') is TRUE, so
+    // F3's gate keeps a note OUT of the bound no matter what thread-scoped assertions the
+    // chart carries (a note can never be on a medication thread).
+    let note = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note,
+        EventSpec {
+            patient: p,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "unrelated note" }),
+            plaintext_twin: Some("unrelated note".into()),
+            wall: 30,
+        },
+    )
+    .await
+    .expect("note accepted");
+
+    // The thread-scoped assertion that gives this chart something to bound TO.
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        p,
+        SubjectKind::Thread,
+        thread,
+        "sequestered",
+        31,
+    )
+    .await;
+
+    let grade_of = |ev: uuid::Uuid| {
+        let c = &c;
+        async move {
+            c.query_one(
+                "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+                &[&ev.to_string()],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+        }
+    };
+    assert_eq!(
+        grade_of(first_coding_event).await,
+        "sequestered",
+        "unresolved + the chart HAS a thread-scoped assertion -> the bounded max applies (F5b)"
+    );
+    assert_eq!(
+        grade_of(note).await,
+        "routine",
+        "a note can never be on a medication thread, so the SAME chart's thread-scoped \
+         'sequestered' assertion must not coarsen it (F3's maintainer ruling, F5d)"
+    );
+}
+
+#[tokio::test]
+async fn f5c_unresolved_thread_contributes_nothing_when_the_chart_has_no_thread_assertions() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+
+    let thread = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        p,
+        &med_input("Metformin"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread asserted");
+    let first_coding_event = supersede_a_coding_event(&mut c, &sk, &kid, p, thread).await;
+
+    // NO thread-scoped (or any) assertion anywhere on this chart. Without the "chart has
+    // none" half of section 11's bound, every medication event on a custody-less node
+    // would coarsen maximally the instant ANY thread anywhere carried a grade — this case
+    // is what proves that half of the clause is load-bearing, not dead code.
+    let g: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&first_coding_event.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        g, "routine",
+        "unresolved + no thread assertions anywhere on the chart -> contributes nothing (F5c)"
+    );
+}
+
+#[tokio::test]
+async fn f5e_a_tie_between_two_equally_ranked_grades_resolves_deterministically() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // Two DIFFERENT chart-wide assertions at the SAME rank ('sensitive' both times) — a
+    // genuine tie for cairn_effective_sensitivity's ORDER BY to break. Before this test the
+    // tie-break line (`ORDER BY rank DESC, content_address ASC`) had never been exercised
+    // by a real tie.
+    assert_grade(&c, &sk, &kid, p, SubjectKind::Patient, p, "sensitive", 10).await;
+    assert_grade(&c, &sk, &kid, p, SubjectKind::Patient, p, "sensitive", 11).await;
+
+    let target = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        target,
+        EventSpec {
+            patient: p,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "n" }),
+            plaintext_twin: Some("n".into()),
+            wall: 12,
+        },
+    )
+    .await
+    .expect("note accepted");
+
+    let expected_ca: Vec<u8> = c
+        .query_one(
+            "SELECT content_address FROM sensitivity_assertion
+              WHERE patient_id = $1::text::uuid
+              ORDER BY content_address ASC LIMIT 1",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    let row = c
+        .query_one(
+            "SELECT grade, content_address FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&target.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "sensitive");
+    let got_ca: Vec<u8> = row.get(1);
+    assert_eq!(
+        got_ca, expected_ca,
+        "a tie in rank must resolve to the assertion with the SMALLER content_address, deterministically (F5e)"
+    );
 }
