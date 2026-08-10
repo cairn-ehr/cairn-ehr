@@ -106,7 +106,7 @@ use common::{cs, db_msg};
 #[tokio::test]
 async fn the_ladder_orders_the_named_grades_and_ranks_the_unknown_maximum() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
 
     let rank = |g: &'static str| {
@@ -586,7 +586,7 @@ use uuid::Uuid;
 #[tokio::test]
 async fn the_floor_refuses_a_malformed_assertion_and_admits_a_well_formed_one() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
 
@@ -660,7 +660,7 @@ async fn the_floor_refuses_a_malformed_assertion_and_admits_a_well_formed_one() 
 #[tokio::test]
 async fn an_unknown_subject_kind_is_admitted_because_the_floor_gates_effect_not_presence() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = Uuid::now_v7();
@@ -690,38 +690,42 @@ async fn an_unknown_subject_kind_is_admitted_because_the_floor_gates_effect_not_
 #[tokio::test]
 async fn a_malformed_withdraws_hex_fails_legibly_with_p0001() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
-    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
-    let p = Uuid::now_v7();
-    submit_registration(&c, &sk, &kid, p, 1).await;
 
-    let err = submit_signed(
-        &c, &sk, &kid,
-        EventSpec {
-            patient: p,
-            event_type: WITHDRAWAL_EVENT_TYPE,
-            schema_version: WITHDRAWAL_SCHEMA_VERSION,
-            payload: json!({ "withdraws": "0xNOTHEX", "rationale": "consent" }),
-            plaintext_twin: Some("x".into()),
-            wall: 10,
-        },
-    )
-    .await
-    .expect_err("malformed hex must be refused");
+    // Call the floor check DIRECTLY rather than through submit_event: `common::db_msg`
+    // returns only `message()`, and the SQLSTATE is the entire point of this test. Same
+    // approach, and the same reasoning, as crates/cairn-node/tests/hex_decode_helper.rs —
+    // read its section 2 before changing this.
+    let body = json!({ "payload": { "withdraws": "0xNOTHEX", "rationale": "consent" } });
+    let err = c
+        .query_one(
+            "SELECT cairn_check_sensitivity_withdrawal(
+                 'sensitivity.grade-withdrawal.asserted', $1::jsonb)",
+            &[&body.to_string()],
+        )
+        .await
+        .expect_err("a malformed hex value must be refused");
+    let db = err
+        .as_db_error()
+        .expect("the refusal must be a database error, not a transport failure");
 
-    // Asserted on the SQLSTATE, not only the message: cairn-sync reads P0001 as "deliberate,
-    // skip and re-offer" and ANYTHING ELSE as a transient fault it freezes the cursor on. A
-    // message-only assertion would stay green through a well-meaning
-    // `USING ERRCODE = SQLSTATE` and reintroduce the #228 permanent stall.
-    assert!(err.contains("P0001"), "must raise P0001, got: {err}");
-    assert!(err.contains("withdraws"), "the refusal names the field: {err}");
+    // P0001 is a CONTRACT with cairn-sync's pull loop: it means "deliberate, skip and
+    // re-offer". Any other SQLSTATE is read as a transient fault, which FREEZES the cursor
+    // and stalls sync from that peer forever — the #228 defect. A message-only assertion
+    // would stay green through a well-meaning `USING ERRCODE = SQLSTATE`.
+    assert_eq!(db.code().code(), "P0001", "message was: {}", db.message());
+    assert!(
+        db.message().contains("withdraws"),
+        "the refusal names the field: {}",
+        db.message()
+    );
 }
 ```
 
-> `common::submit_signed` returns `Result<_, String>` carrying the formatted DB error
-> (see `common::db_msg`); if the SQLSTATE is not already in that string, extend `db_msg`
-> to prefix it rather than weakening the assertion.
+> This test needs no `setup()` or registration: it calls the check function directly, so
+> there is no envelope and no chart. That is deliberate — it isolates the floor check from
+> the door.
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -903,7 +907,7 @@ Append to `crates/cairn-node/tests/sensitivity_floor.rs`:
 #[tokio::test]
 async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arrival_order() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = Uuid::now_v7();
@@ -1172,7 +1176,7 @@ async fn assert_grade(
 #[tokio::test]
 async fn the_effective_grade_is_the_max_over_event_thread_and_chart() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = uuid::Uuid::now_v7();
@@ -1222,7 +1226,7 @@ async fn the_effective_grade_is_the_max_over_event_thread_and_chart() {
 #[tokio::test]
 async fn a_withdrawal_lowers_the_effective_grade_and_the_assertion_survives() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = uuid::Uuid::now_v7();
@@ -1291,7 +1295,7 @@ async fn a_withdrawal_lowers_the_effective_grade_and_the_assertion_survives() {
 #[tokio::test]
 async fn an_unknown_subject_kind_is_read_as_chart_wide_and_never_crosses_charts() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = uuid::Uuid::now_v7();
@@ -1340,7 +1344,7 @@ async fn an_unknown_subject_kind_is_read_as_chart_wide_and_never_crosses_charts(
 #[tokio::test]
 async fn recall_marks_an_assertion_but_never_lowers_the_grade() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = uuid::Uuid::now_v7();
@@ -1616,7 +1620,7 @@ use uuid::Uuid;
 #[tokio::test]
 async fn the_local_door_requires_a_rationale_for_a_chart_wide_raise() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = Uuid::now_v7();
@@ -1654,7 +1658,7 @@ async fn the_local_door_requires_a_rationale_for_a_chart_wide_raise() {
 #[tokio::test]
 async fn the_remote_door_admits_what_the_local_door_refuses() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = Uuid::now_v7();
@@ -1912,7 +1916,7 @@ Append to `crates/cairn-node/tests/sensitivity_ladder.rs`:
 #[tokio::test]
 async fn the_chart_report_names_the_winning_subject_for_every_graded_thread() {
     let Some(base) = cs() else { return };
-    cairn_node::db::test_serial_guard(&base).await;
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let mut c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let p = uuid::Uuid::now_v7();
