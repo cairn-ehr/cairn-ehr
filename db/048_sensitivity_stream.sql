@@ -594,4 +594,45 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 13. The category blacklist — the AUTOMATIC source (ADR-0006 §3).
+--
+--     Ships EMPTY. Cairn provides the lookup MECHANISM, never the list: what is sensitive
+--     is cultural, regional and personal, and shipping a list would be Cairn making the
+--     policy (principle 9). A deployment (a clinic, a region, a single practitioner) is who
+--     decides that e.g. "sti-screen" or "termination-of-pregnancy" belongs on this table, by
+--     writing rows into it — and the SQL mirror below asserts the shipped table is empty
+--     precisely so this stays true: a non-empty seed here would be an un-reviewable policy
+--     choice smuggled into "infrastructure".
+CREATE TABLE IF NOT EXISTS sensitivity_category_map (
+    category TEXT PRIMARY KEY,
+    grade    TEXT NOT NULL,
+    note     TEXT NOT NULL DEFAULT ''
+);
+GRANT SELECT ON sensitivity_category_map TO cairn_agent;
+REVOKE INSERT, UPDATE, DELETE ON sensitivity_category_map FROM PUBLIC;
+
+--     A PURE lookup that yields a CANDIDATE. It authors nothing — all three ADR-0006
+--     workflows are the same call site with different callers:
+--       silent apply     -> the caller authors the assertion as an advisory actor
+--       acceptance first -> the caller shows the candidate, a human authors it
+--       manual only      -> the caller never calls this
+--
+--     THE SUBJECT IS NEVER THE PATIENT. This function cannot express a chart-wide candidate
+--     at all: a coded hit on one drug blanket-grading an entire chart is exactly
+--     "chart-wide as the default for highly sensitive records", which is the thing the
+--     friction in section 12 exists to prevent. The caller pairs the returned grade with
+--     the event or thread that carried the coded field — the return shape (grade, category)
+--     has no patient/subject column to fill in even by accident.
+CREATE OR REPLACE FUNCTION cairn_sensitivity_candidate(p_coded jsonb)
+RETURNS TABLE (grade text, category text)
+LANGUAGE sql STABLE AS $$
+    SELECT m.grade, m.category
+    FROM sensitivity_category_map m
+    WHERE m.category = (p_coded ->> 'category')
+    ORDER BY cairn_sensitivity_rank(m.grade) DESC
+    LIMIT 1;
+$$;
+GRANT EXECUTE ON FUNCTION cairn_sensitivity_candidate(jsonb) TO cairn_agent;
+
 COMMIT;

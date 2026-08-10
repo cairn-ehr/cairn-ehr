@@ -136,3 +136,37 @@ END $$;
 DROP FUNCTION _sensitivity_seed_event(uuid, text, jsonb, bigint);
 
 ROLLBACK;
+
+-- ---------------------------------------------------------------------------
+-- The category blacklist (Task 7, issue #232 part A continued): the AUTOMATIC tagging
+-- source. Runs as its own top-level, autocommitting block, deliberately OUTSIDE the
+-- BEGIN/ROLLBACK transaction above — that transaction's own seeded 'sensitivity.grade.asserted'
+-- rows are still live inside it until the ROLLBACK unwinds them, so a block sharing that
+-- transaction would see non-zero event_log rows of that type and the "authors nothing"
+-- assertion below would be testing stale state, not a clean one. Being outside it also means
+-- this block's own writes are real, hence the explicit DELETE at the end (note 4): these
+-- mirrors share one throwaway database across the whole file list, so residue here would
+-- leak into whatever mirror runs next.
+DO $$
+DECLARE r record; n int;
+BEGIN
+    -- Ships EMPTY. Cairn provides the lookup mechanism, never the list (ADR-0006 §3).
+    SELECT count(*) INTO n FROM sensitivity_category_map;
+    ASSERT n = 0, 'the category map ships empty — the list is deployment configuration';
+
+    SELECT count(*) INTO n FROM cairn_sensitivity_candidate('{"category":"sti-screen"}'::jsonb);
+    ASSERT n = 0, 'an unmapped category yields no candidate';
+
+    INSERT INTO sensitivity_category_map (category, grade, note)
+    VALUES ('sti-screen', 'restricted', 'test fixture');
+
+    SELECT * INTO r FROM cairn_sensitivity_candidate('{"category":"sti-screen"}'::jsonb);
+    ASSERT r.grade = 'restricted', 'a mapped category yields its grade';
+    ASSERT r.category = 'sti-screen', 'and names what matched, for LOCAL audit only';
+
+    -- The function authors nothing: policy decides whether a candidate becomes an event.
+    SELECT count(*) INTO n FROM event_log WHERE event_type = 'sensitivity.grade.asserted';
+    ASSERT n = 0, 'the lookup must never author an assertion by itself';
+
+    DELETE FROM sensitivity_category_map WHERE category = 'sti-screen';
+END $$;
