@@ -164,4 +164,112 @@ ON CONFLICT (event_type) DO UPDATE SET
 WHERE (r.check_fn, r.twin_required_msg)
       IS DISTINCT FROM (EXCLUDED.check_fn, EXCLUDED.twin_required_msg);
 
+-- ---------------------------------------------------------------------------
+-- 6. The retained sets.
+--
+--    patient_id is on EVERY row regardless of subject kind: it makes the whole effective-
+--    grade computation one indexed scan per chart, instead of repeating #336 (the med-list
+--    read path is O(all medications on the node) per chart open).
+--
+--    NO CHECK on subject_kind or grade: both are open vocabularies (ADR-0056/principle 11).
+CREATE TABLE IF NOT EXISTS sensitivity_assertion (
+    content_address BYTEA   PRIMARY KEY,   -- the producing event; provenance-precise
+    event_id        UUID    NOT NULL,
+    patient_id      UUID    NOT NULL,
+    subject_kind    TEXT    NOT NULL,
+    subject_id      UUID    NOT NULL,
+    grade           TEXT    NOT NULL,
+    source          TEXT    NOT NULL,
+    rationale       TEXT,
+    hlc_wall        BIGINT  NOT NULL,
+    hlc_counter     INTEGER NOT NULL,
+    node_origin     TEXT    NOT NULL,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS sensitivity_assertion_patient_idx
+    ON sensitivity_assertion (patient_id);
+
+--    NO FOREIGN KEY from `withdraws` to sensitivity_assertion. A withdrawal can arrive
+--    BEFORE the assertion it withdraws (set-union sync has no ordering) and must still take
+--    effect when the assertion lands — so "standing" is a set difference evaluated at READ
+--    (section 7), never a row deletion at apply. Same arrival-order independence as
+--    ADR-0059's "a strike NULLs the anchor rather than deleting the row".
+CREATE TABLE IF NOT EXISTS sensitivity_withdrawal (
+    content_address BYTEA   PRIMARY KEY,
+    event_id        UUID    NOT NULL,
+    withdraws       BYTEA   NOT NULL,
+    patient_id      UUID    NOT NULL,
+    rationale       TEXT    NOT NULL,
+    hlc_wall        BIGINT  NOT NULL,
+    hlc_counter     INTEGER NOT NULL,
+    node_origin     TEXT    NOT NULL,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS sensitivity_withdrawal_target_idx
+    ON sensitivity_withdrawal (withdraws);
+
+GRANT SELECT ON sensitivity_assertion, sensitivity_withdrawal TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
+-- 7. Apply. ON CONFLICT DO NOTHING is genuinely idempotent here (not the #254 bug): the PK
+--    IS the content address, so a conflict means the SAME event applying twice and the
+--    existing row is byte-for-byte what we would write.
+--
+--    The `e.sealed` guard mirrors every other non-clinical projection: only clinical.* is
+--    born-sealed and db/005 refuses a sealed sensitivity body, but the APPLY door stays
+--    lenient, so such a row can still reach here. Reading its ciphertext would drive NULLs
+--    into NOT NULL columns and wedge the watermark; projecting nothing is harmless noise.
+CREATE OR REPLACE FUNCTION sensitivity_assertion_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := e.body;
+BEGIN
+    IF e.sealed THEN RETURN; END IF;
+    INSERT INTO sensitivity_assertion
+        (content_address, event_id, patient_id, subject_kind, subject_id,
+         grade, source, rationale, hlc_wall, hlc_counter, node_origin)
+    VALUES (
+        e.content_address, e.event_id, e.patient_id,
+        p ->> 'subject_kind', (p ->> 'subject_id')::uuid,
+        p ->> 'grade', p ->> 'source', p ->> 'rationale',
+        e.hlc_wall, e.hlc_counter, e.node_origin)
+    ON CONFLICT (content_address) DO NOTHING;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION sensitivity_assertion_apply(event_log) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION sensitivity_withdrawal_apply(e event_log)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    p jsonb := e.body;
+BEGIN
+    IF e.sealed THEN RETURN; END IF;
+    INSERT INTO sensitivity_withdrawal
+        (content_address, event_id, withdraws, patient_id, rationale,
+         hlc_wall, hlc_counter, node_origin)
+    VALUES (
+        e.content_address, e.event_id,
+        cairn_decode_hex_or_raise('withdraws', p ->> 'withdraws', 'sensitivity withdrawal apply'),
+        e.patient_id, p ->> 'rationale',
+        e.hlc_wall, e.hlc_counter, e.node_origin)
+    ON CONFLICT (content_address) DO NOTHING;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION sensitivity_withdrawal_apply(event_log) FROM PUBLIC;
+
+-- ---------------------------------------------------------------------------
+-- 8. Register both apply fns with the ADR-0057 dispatcher + cairn_reproject heal/rebuild.
+--    heal_safe = TRUE: content-addressed PK + DO NOTHING makes replay a no-op.
+INSERT INTO cairn_projection_apply AS r (event_type, apply_fn, projection_tables, run_order, heal_safe)
+VALUES ('sensitivity.grade.asserted', 'sensitivity_assertion_apply',
+        ARRAY['sensitivity_assertion'], 10, TRUE),
+       ('sensitivity.grade-withdrawal.asserted', 'sensitivity_withdrawal_apply',
+        ARRAY['sensitivity_withdrawal'], 10, TRUE)
+ON CONFLICT (event_type, apply_fn) DO UPDATE SET
+    projection_tables = EXCLUDED.projection_tables,
+    run_order         = EXCLUDED.run_order,
+    heal_safe         = EXCLUDED.heal_safe
+WHERE (r.projection_tables, r.run_order, r.heal_safe)
+      IS DISTINCT FROM (EXCLUDED.projection_tables, EXCLUDED.run_order, EXCLUDED.heal_safe);
+
 COMMIT;

@@ -170,3 +170,83 @@ async fn a_malformed_withdraws_hex_fails_legibly_with_p0001() {
         db.message()
     );
 }
+
+#[tokio::test]
+async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arrival_order() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // The withdrawal is authored FIRST, naming an assertion that does not exist yet. Set-
+    // union sync has no ordering, so this is normal traffic, and no FK may forbid it.
+    let ghost = "aa".repeat(34); // a syntactically valid multihash-shaped hex value
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: WITHDRAWAL_EVENT_TYPE,
+            schema_version: WITHDRAWAL_SCHEMA_VERSION,
+            payload: json!({ "withdraws": ghost, "rationale": "consent" }),
+            plaintext_twin: Some("withdrawn".into()),
+            wall: 10,
+        },
+    )
+    .await
+    .expect("a withdrawal naming an unseen assertion must be accepted");
+
+    let rows: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_withdrawal WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        rows, 1,
+        "the withdrawal projects even with no target present"
+    );
+
+    let a = SensitivityAssertion {
+        subject_kind: SubjectKind::Patient,
+        subject_id: p,
+        grade: "sensitive",
+        source: "human",
+        rationale: Some("staff member treated here"),
+    };
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: sensitivity_assertion_body(&a),
+            plaintext_twin: Some(render_sensitivity_twin(&a)),
+            wall: 11,
+        },
+    )
+    .await
+    .expect("assertion accepted");
+
+    let row = c
+        .query_one(
+            "SELECT subject_kind, grade, source FROM sensitivity_assertion
+              WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .map_err(|e| db_msg(&e))
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "patient");
+    assert_eq!(row.get::<_, String>(1), "sensitive");
+    assert_eq!(row.get::<_, String>(2), "human");
+}
