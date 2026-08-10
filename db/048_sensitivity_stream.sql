@@ -487,10 +487,26 @@ LANGUAGE sql STABLE AS $$
         -- chart-wide, bounded by this envelope's patient (over-select, never silently miss
         -- — db/006's recall discipline). The two extra OR arms catch exactly the shapes the
         -- arms above cannot: a 'patient' assertion naming a DIFFERENT patient, and an
-        -- 'event' assertion naming an event that does not exist ON THIS CHART (wrong chart
-        -- or simply invalid) — checked once per standing row, not per queried event, so it
-        -- fires identically for every event on the chart, exactly like the unrecognised-kind
-        -- arm it now sits beside.
+        -- 'event' assertion naming an event that does not exist ON THIS CHART — checked
+        -- once per standing row, not per queried event, so it fires identically for every
+        -- event on the chart, exactly like the unrecognised-kind arm it now sits beside.
+        --
+        -- R2-1 (review round 2) — THE 'event' ARM HAS THREE CAUSES, NOT TWO, AND THE THIRD
+        -- IS DELIBERATE, NOT A BUG TO "FIX" LATER. "No event x with x.event_id = s.subject_id
+        -- AND x.patient_id = ev.patient_id" is true for (a) a genuinely wrong chart, (b) an
+        -- invalid/dangling id, and (c) an event that IS real and IS on this chart but has
+        -- simply NOT REPLICATED to this node YET — set-union sync has no ordering, so an
+        -- event-scoped sensitivity assertion can arrive before the event it targets, exactly
+        -- the same arrival-order independence section 9 already states for withdrawals
+        -- ("a withdrawal can arrive BEFORE the assertion it withdraws"). Case (c) means this
+        -- arm can TRANSIENTLY coarsen the whole chart on a partially-replicated node until
+        -- the target event lands, at which point the row moves to the precisely-targeted
+        -- 'event' arm above and the coarsening self-resolves. That is the correct,
+        -- over-protective direction (principle 4: an imprecise near-truth beats a precise
+        -- untruth) — DO NOT narrow this arm to exclude case (c), e.g. by trying to tell
+        -- "not yet arrived" apart from "never will": there is no local signal that
+        -- distinguishes them, and guessing wrong in that narrowing is the disclosure
+        -- direction this whole arm exists to prevent.
         SELECT s.grade, s.subject_kind, s.content_address
         FROM standing s, ev
         WHERE s.subject_kind NOT IN ('event', 'thread', 'patient')
@@ -520,5 +536,10 @@ $$;
 GRANT EXECUTE ON FUNCTION cairn_effective_sensitivity(uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_sensitivity_standing(uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_event_thread(uuid) TO cairn_agent;
+-- R2-3 (review round 2): explicit, matching the other three — it worked today on the
+-- default PUBLIC EXECUTE grant, but that left it one blanket REVOKE away from silently
+-- breaking cairn_effective_sensitivity's read path, and the rest of this file grants
+-- explicitly on purpose.
+GRANT EXECUTE ON FUNCTION cairn_event_type_has_no_thread(text) TO cairn_agent;
 
 COMMIT;

@@ -871,10 +871,24 @@ async fn f5c_unresolved_thread_contributes_nothing_when_the_chart_has_no_thread_
     .expect("thread asserted");
     let first_coding_event = supersede_a_coding_event(&mut c, &sk, &kid, p, thread).await;
 
-    // NO thread-scoped (or any) assertion anywhere on this chart. Without the "chart has
-    // none" half of section 11's bound, every medication event on a custody-less node
-    // would coarsen maximally the instant ANY thread anywhere carried a grade — this case
-    // is what proves that half of the clause is load-bearing, not dead code.
+    // NO thread-scoped (or any) assertion anywhere on this chart, so `standing` is EMPTY
+    // and no arm of cairn_effective_sensitivity's `applicable` CTE can fire regardless of
+    // the thread logic — this test is NOT discriminating between the fixed and pre-fix
+    // code (it passes identically against either): with no thread-scoped rows there is
+    // nothing to bound OR to leave unbounded, because "the chart has none" is not a
+    // separate clause anywhere in the SQL — it is EMERGENT from the bound arm matching
+    // zero standing rows. Resolution itself (that a real thread-scoped grade DOES apply
+    // when it exists) is what f5a pins, and that is the test that actually fails if
+    // thread resolution regresses.
+    //
+    // What THIS test guards (review round 2, R2-2): a future rewrite that turned "nothing
+    // applies" into a SENTINEL max-coarsening grade instead of contributing nothing at
+    // all — e.g. someone "simplifying" the unresolved-thread branch into an unconditional
+    // maximal grade whenever `cairn_event_thread` returns NULL, rather than only when the
+    // chart ALSO carries a thread-scoped assertion to bound to. That regression would
+    // coarsen every medication event on every custody-less node, chart-wide, with no
+    // sensitivity assertion anywhere — and this is the test that would catch it, by
+    // asserting 'routine' rather than merely asserting "not wrong in some way".
     let g: String = c
         .query_one(
             "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
