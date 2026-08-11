@@ -18,6 +18,7 @@
 use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
+use cairn_node::identity;
 use cairn_node::medication::{
     assert_medication, cease_medication, change_dose, code_medication, correct_medication_coding,
     reconcile_medications, AssertMedicationInput, AttestParams, CeaseMedicationInput,
@@ -78,10 +79,11 @@ const LISTEN_SEALED: &str = "127.0.0.1:25722";
 const LISTEN_GUARD: &str = "127.0.0.1:25723";
 const LISTEN_SEALSCOPE: &str = "127.0.0.1:25724";
 const LISTEN_FORWARD: &str = "127.0.0.1:25725";
+const LISTEN_UNPEERED: &str = "127.0.0.1:25726";
 
 /// Every fixed listen port in this file — a NEW test's port must be added here so
 /// the ephemeral-range guard below covers it.
-const ALL_LISTEN: [&str; 9] = [
+const ALL_LISTEN: [&str; 10] = [
     LISTEN_CONVERGE,
     LISTEN_FREEZE,
     LISTEN_LOWHLC,
@@ -91,6 +93,7 @@ const ALL_LISTEN: [&str; 9] = [
     LISTEN_GUARD,
     LISTEN_SEALSCOPE,
     LISTEN_FORWARD,
+    LISTEN_UNPEERED,
 ];
 
 /// Guard for issue #263: a fixed listen port must sit BELOW every kernel's
@@ -203,6 +206,14 @@ async fn reset(c: &Client) {
     c.batch_execute("UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0")
         .await
         .unwrap();
+    // The node plane too (#231): sealed-custody tests now provision `local_node` and
+    // author a `peer.added`, and `submit_node_event`'s genesis rule refuses a second
+    // enroll — so a prior run's node identity must not survive into this one. Harmless
+    // for the tests that never touch the node plane: they simply start with it empty,
+    // which is what an un-peered node genuinely looks like.
+    db::reset_node_federation_tables(c)
+        .await
+        .expect("reset the node-federation tables");
 }
 
 /// Enroll the same device + human keys on one node. B must know both actors before
@@ -245,6 +256,99 @@ fn write_key_file(dir: &Path, name: &str, sk: &SigningKey) -> String {
     let path = dir.join(name);
     std::fs::write(&path, hex::encode(sk.to_bytes())).expect("write hex-seed key file");
     path.to_str().expect("utf-8 key path").to_string()
+}
+
+/// Admit a puller to the serving node's node-plane trust set — the peering ceremony a
+/// real second site performs before it can obtain read-custody of sealed bodies (#231).
+///
+/// WHY every sealed-custody test now needs this: `cairn-sync serve` pins the puller's
+/// unwrap-cert `kid` to `trust_peer` before re-wrapping any DEK. Without the ceremony the
+/// events still replicate — they are sealed ciphertext — but their bodies stay unreadable
+/// on the puller, which is the whole point of the pin. That these tests had to gain a
+/// ceremony IS the finding: before #231, transport was the sole gate on read-custody.
+///
+/// Both node planes are genuinely provisioned rather than faking a `trust_peer` row: the
+/// serving node peers the puller's REAL node identity, so the test exercises the same
+/// `submit_node_event` → `trust_peer` path a `cairn-node pair` performs.
+async fn admit_puller_to_trust_set(
+    server: &Client,
+    server_sk: &SigningKey,
+    server_kid: &str,
+    puller: &Client,
+    puller_sk: &SigningKey,
+    puller_kid: &str,
+) {
+    ensure_node_plane(server, server_sk, server_kid, "node-a", "127.0.0.1:7900").await;
+    let id_puller = ensure_node_plane(puller, puller_sk, puller_kid, "node-b", "127.0.0.1:7901")
+        .await
+        .node_id_hex;
+    admit_peer_key(server, server_sk, server_kid, &id_puller, puller_kid).await;
+}
+
+/// A distinct 32-byte node-id fixture, DERIVED rather than written as a literal
+/// (house rule 6 keeps CodeQL's hard-coded-crypto query live for production code).
+/// A node id is a content address, so any 32 hex-encoded bytes are a well-formed one
+/// as far as `submit_node_event` is concerned — it decodes the hex and stores it.
+fn derived_node_id(tag: u8) -> [u8; 32] {
+    std::array::from_fn(|i| (i as u8).wrapping_mul(17).wrapping_add(tag))
+}
+
+/// Provision a node's node plane, idempotently. `submit_node_event`'s genesis rule
+/// refuses a second enroll, so a caller that has already provisioned (or a test that
+/// admits two peers) must not re-run it.
+async fn ensure_node_plane(
+    db: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    name: &str,
+    addr: &str,
+) -> cairn_node::identity::Identity {
+    if let Some(existing) = identity::load_local_opt(db).await.expect("read local_node") {
+        return existing;
+    }
+    identity::provision(db, sk, kid, name, addr)
+        .await
+        .expect("provision the node plane");
+    identity::load_local(db).await.expect("local node identity")
+}
+
+/// Author `peer.added` on `server` for one peer's node id + public key — the in-DB
+/// half of the `cairn-node pair` ceremony, and the only thing `trust_peer` (and hence
+/// the #231 custody pin) actually reads.
+///
+/// The peer needs no database of its own: A learns a peer's node id and pubkey from
+/// the pairing bundle carried out of band, never by querying it. That is what lets a
+/// test admit a third-party peer without provisioning a third node.
+async fn admit_peer_key(
+    server: &Client,
+    server_sk: &SigningKey,
+    server_kid: &str,
+    peer_node_id_hex: &str,
+    peer_pubkey_hex: &str,
+) {
+    let id_server = identity::load_local(server).await.expect("server identity");
+    let bundle = cairn_event::PairingBundle {
+        node_id_hex: peer_node_id_hex.into(),
+        pubkey_hex: peer_pubkey_hex.into(),
+        address: "127.0.0.1:7901".into(),
+        fingerprint: cairn_event::short_fingerprint(peer_pubkey_hex).unwrap(),
+        nonce: "n".into(),
+        hlc: cairn_event::Hlc {
+            wall: 0,
+            counter: 0,
+            node_origin: peer_node_id_hex.into(),
+        },
+    };
+    identity::author_peer(
+        server,
+        server_sk,
+        server_kid,
+        &id_server.node_id_hex,
+        &bundle,
+        Some("peer"),
+    )
+    .await
+    .expect("author peer.added");
 }
 
 /// Register a node's OWN DEK-unwrap public key so its apply door can take custody of
@@ -509,10 +613,13 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     // of every sealed body it pulls and can therefore project it (without this, B would
     // receive the events by set-union but render an empty chart).
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
+    // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
+    // the sealed bodies below reach B unreadable without this ceremony.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     // --- author a realistic little chart on A through the production orchestrators ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
@@ -888,10 +995,13 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
     // re-offered sealed event applies WITH custody and B projects it — the delayed, never
     // lost guarantee, now proven all the way through a sealed body.
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
+    // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
+    // the sealed bodies below reach B unreadable without this ceremony.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     let mut a = a;
     let patient = Uuid::now_v7();
@@ -1439,10 +1549,13 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     // to re-wrap it for B. B pulls under its OWN key and pre-registers the matching unwrap
     // key, so B's apply door takes custody of the sealed body and can project it.
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
+    // #231: A must ADMIT B before it re-wraps any DEK for B. Serve runs under sk_d, so
+    // that is A's node-plane identity here; B pulls under sk_b.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     // --- 1. A seal-submits a medication assert; it projects on A with custody ---
     let mut a = a; // the orchestrators take &mut Client (they open transactions)
@@ -1770,6 +1883,162 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     );
 }
 
+/// Issue #231 — the security case: an UNADMITTED puller replicates the events and gains
+/// NO custody, so the sealed bodies stay unreadable on it.
+///
+/// This is the assertion the pin exists for, and it is the exact inverse of the test
+/// above: same wire, same keys, same registered unwrap key on B — the ONLY difference is
+/// that A never peers B. Before #231, `cairn-sync serve` verified a puller's unwrap cert
+/// against its own signature and self-consistency only, so any self-signed cert reaching
+/// the port had A's DEKs re-wrapped for it and thereby obtained READ-custody of every
+/// non-shredded sealed body A serves; transport was the sole gate.
+///
+/// The two halves both matter:
+///   - custody is WITHHELD (no `event_dek` / `event_clear` row, no projection), and
+///   - the events still REPLICATE and the pull still SUCCEEDS.
+///
+/// The second half is not incidental. A refusal would fork the event set and wedge
+/// replication for no confidentiality gain — the bodies are sealed ciphertext, useless
+/// without a DEK — so the pin withholds the key, never the bytes (ADR-0052; the same
+/// degradation an absent or malformed cert already takes).
+#[tokio::test]
+async fn an_unadmitted_puller_replicates_events_but_gains_no_custody() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, _kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    // B is FULLY custody-capable — its unwrap key is registered, exactly as in the
+    // admitted test. So the only thing that can deny it custody below is A's pin, not
+    // some unrelated missing ceremony on B.
+    register_unwrap_key(&b, &sk_b).await;
+    // A is an ordinary, healthy, PEERED node that simply never admitted B. Both steps
+    // are load-bearing: `trust_peer` reads empty on an un-initialised node AND on a
+    // provisioned node with no peers, so without a real third-party peer this test
+    // would pass through a weaker arm than it claims. "You have peers, this is not one
+    // of them" is the arm a live deployment hits, and it is the one asserted here.
+    ensure_node_plane(&a, &sk_d, &kid_d, "node-a", "127.0.0.1:7900").await;
+    let (_sk_c, kid_c) = generate_key().unwrap();
+    admit_peer_key(
+        &a,
+        &sk_d,
+        &kid_d,
+        &hex::encode(derived_node_id(0xc0)),
+        &kid_c,
+    )
+    .await;
+
+    let mut a = a;
+    let patient = Uuid::now_v7();
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
+    let med = assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "metformin",
+            coding: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("500"),
+            dose_unit: Some("mg"),
+            sig: Some("one BD"),
+            info_source: "patient-reported",
+            started: Some("2023"),
+            started_precision: Some("year"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let content_eid = content_event_id_of(&a, med).await;
+    assert_eq!(
+        custody_count(&a, &content_eid).await,
+        (1, 1),
+        "A holds custody + shadow for its own sealed assert"
+    );
+
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_UNPEERED,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_UNPEERED);
+    let pull = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_UNPEERED,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run pull");
+
+    // Half 1: the pull SUCCEEDS and the event replicates. Withholding a key must never
+    // become withholding the record.
+    assert!(
+        pull.status.success(),
+        "an unadmitted puller must still receive events (custody is withheld, not the \
+         bytes)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pull.stdout),
+        String::from_utf8_lossy(&pull.stderr)
+    );
+    let b_sealed: bool = b
+        .query_one(
+            "SELECT sealed FROM event_log WHERE event_id = $1::text::uuid",
+            &[&content_eid],
+        )
+        .await
+        .expect("the sealed event replicated to the unadmitted puller")
+        .get(0);
+    assert!(b_sealed, "B stored the ciphertext, sealed");
+
+    // Half 2: NO custody, so no clear shadow and nothing to project. This is the hole
+    // #231 closed — before the pin, all three of these were (1, 1) and 1.
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (0, 0),
+        "an unadmitted puller gains NO custody: the DEK is what opens the sealed body, \
+         so re-wrapping it for an unadmitted key IS granting clinical-data read"
+    );
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        0,
+        "with no clear shadow there is nothing to project — the body stays unreadable"
+    );
+}
+
 /// Never-over-erase precision pin (Task 9 minor, reviews requested). `cairn_execute_shred`
 /// scrubs by `content_address`, so shredding ONE thread must leave a SIBLING thread on the
 /// SAME chart fully intact — custody, shadow, and projection. Single node (no sync needed):
@@ -1903,10 +2172,13 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     enroll_actors(&b, &kid_d, &kid_h).await;
 
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
+    // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
+    // the sealed bodies below reach B unreadable without this ceremony.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     // A authors one sealed medication assert → a LIVE event_dek row on A.
     let mut a = a;
@@ -2103,10 +2375,15 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     enroll_actors(&b, &kid_d, &kid_h).await;
 
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
+    // #231: custody follows admission, so B must be an admitted peer of A before any
+    // DEK is re-wrapped for it. This test is about the WATERMARK, not the pin — without
+    // the ceremony the sealed medication would arrive custody-less and the projection
+    // assertions below would fail for a reason that has nothing to do with the freeze.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     let patient = Uuid::now_v7();
     // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
@@ -2334,14 +2611,16 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     enroll_actors(&b, &kid_d, &kid_h).await;
 
     let keydir = TempDir::new().unwrap();
-    let (sk_b, _kid_b) = generate_key().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     // The medication events are BORN-SEALED (ADR-0052): without B's own unwrap key
     // registered, its apply door admits them but withholds custody, so NEITHER
     // medication projects on B (a different failure than the one under test) —
-    // exactly why the sealed test above registers it too.
+    // exactly why the sealed test above registers it too. #231 adds the other half:
+    // B must also be an ADMITTED peer of A, or A re-wraps no DEK for it at all.
     register_unwrap_key(&b, &sk_b).await;
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
 
     let patient = Uuid::now_v7();
     // §5.3/§5.8 (#345): the chart must be registered before anything may be recorded
