@@ -42,6 +42,7 @@ pub mod medication;
 pub mod registration;
 pub mod schema_generation;
 pub mod seal;
+pub mod sensitivity;
 
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
 pub const BLAKE3_MULTIHASH_PREFIX: [u8; 2] = [0x1e, 0x20]; // blake3, 32 bytes

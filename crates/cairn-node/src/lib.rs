@@ -19,6 +19,7 @@ pub mod patient;
 pub mod photo_evidence;
 pub mod restore;
 pub mod seal;
+pub mod sensitivity;
 pub mod shred;
 pub mod sync;
 pub mod transport;

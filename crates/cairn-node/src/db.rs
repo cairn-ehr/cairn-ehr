@@ -300,6 +300,10 @@ const SCHEMA: &[(&str, &str)] = &[
         "047_registration_precedence",
         include_str!("../../../db/047_registration_precedence.sql"),
     ),
+    (
+        "048_sensitivity_stream",
+        include_str!("../../../db/048_sensitivity_stream.sql"),
+    ),
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {

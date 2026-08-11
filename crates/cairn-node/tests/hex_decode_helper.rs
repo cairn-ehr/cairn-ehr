@@ -179,6 +179,13 @@ fn every_hex_door_still_calls_the_helper() {
         ("007_node_federation.sql", 4),
         // restore_node_event: both branches of the v_subject CASE
         ("009_node_supersede_and_restore.sql", 2),
+        // §5.9 sensitivity (ADR-0062): the withdrawal names the assertion it withdraws by
+        // hex content_address, and BOTH the structural floor and the projection apply fn
+        // decode it — cairn_check_sensitivity_withdrawal, then sensitivity_withdrawal_apply.
+        // The apply-side call is the one that matters most: it runs on the REMOTE door, so a
+        // bare decode() there would raise in the 22 class and freeze that peer's pull cursor
+        // rather than skipping past a malformed event.
+        ("048_sensitivity_stream.sql", 2),
     ]
     .iter()
     .map(|(f, n)| (f.to_string(), *n))
