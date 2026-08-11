@@ -318,7 +318,13 @@ async fn an_unknown_subject_kind_is_read_as_chart_wide_and_never_crosses_charts(
             schema_version: SENSITIVITY_SCHEMA_VERSION,
             payload: serde_json::json!({
                 "subject_kind": "episode", "subject_id": uuid::Uuid::now_v7().to_string(),
-                "grade": "restricted", "source": "human"
+                "grade": "restricted", "source": "human",
+                // An unrecognised kind reads CHART-WIDE, so the local door now demands the
+                // same rationale it demands of an explicit chart-wide raise — the ceremony is
+                // tied to blast radius, not to the spelling of one kind. `sensitivity_floor.rs`
+                // pins that rule; here it is merely satisfied so this test can get on with
+                // what it is actually about (the conservative READING of an unknown kind).
+                "rationale": "future peer's episode scope"
             }),
             plaintext_twin: Some("future kind".into()),
             wall: 11,
@@ -330,25 +336,36 @@ async fn an_unknown_subject_kind_is_read_as_chart_wide_and_never_crosses_charts(
     let g = |ev: uuid::Uuid| {
         let c = &c;
         async move {
-            c.query_one(
-                "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
-                &[&ev.to_string()],
-            )
-            .await
-            .unwrap()
-            .get::<_, String>(0)
+            let r = c
+                .query_one(
+                    "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
+                    &[&ev.to_string()],
+                )
+                .await
+                .unwrap();
+            (r.get::<_, String>(0), r.get::<_, String>(1))
         }
     };
+    let (grade, kind) = g(mine).await;
     assert_eq!(
-        g(mine).await,
-        "restricted",
+        grade, "restricted",
         "unknown kind is read conservatively, chart-wide"
     );
+    // THE REPORTED SUBJECT IS 'coarsened', NOT THE ROW'S RAW KIND. Echoing `episode` back
+    // would hand a reader a token that means nothing to this version; worse, the same arm
+    // also carries MIS-TARGETED known kinds, so echoing would print "this event" for
+    // something blurring the entire chart. 'coarsened' is the one honest answer for every
+    // shape this arm catches.
     assert_eq!(
-        g(theirs).await,
-        "routine",
+        kind, "coarsened",
+        "an unmatched assertion must report the coarsening subject, not its raw kind"
+    );
+    let (grade, kind) = g(theirs).await;
+    assert_eq!(
+        grade, "routine",
         "and the envelope bounds it to ITS OWN chart"
     );
+    assert_eq!(kind, "none", "nothing applies on the other chart");
 }
 
 #[tokio::test]
@@ -708,9 +725,12 @@ fn med_input(term: &'static str) -> AssertMedicationInput<'static> {
 /// event's id — its content_address is now superseded in `medication_coding` (an
 /// `ON CONFLICT (medication_id) DO UPDATE`, HLC-overlaid table — db/042), so
 /// `cairn_event_thread` can no longer resolve it even though the correction, and the
-/// thread's own assert event, remain fully resolvable. This is the real-door way to
-/// produce the "unresolved despite full custody" case F4/F5(b)/F5(c) need, matching
-/// exactly the mechanism db/048's F4 comment now documents.
+/// thread's own assert event, remain fully resolvable. A CODING event is used precisely
+/// because it is one of the kinds that genuinely stops resolving: a superseded
+/// `clinical.medication.asserted` would NOT work here, since db/032's per-event
+/// `medication_dose_event` row keeps it resolvable forever. This is the real-door way to
+/// produce the "unresolved despite full custody" case, matching exactly the mechanism
+/// db/048 section 10's "what this resolves, and what it does not" note documents.
 async fn supersede_a_coding_event(
     c: &mut tokio_postgres::Client,
     sk: &cairn_event::SigningKey,
@@ -1326,6 +1346,20 @@ async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subj
         .await
         .unwrap();
     assert_eq!(report.threads.len(), 2, "both threads are reported");
+    // THE CHART-WIDE READING MUST NOT PICK UP A THREAD'S GRADE. One thread is 'restricted'
+    // and there is no chart-wide assertion, so the chart itself reads 'routine'.
+    //
+    // This is the cheapest available guard on section 10b's `identity.%` prefix: the chart
+    // reading resolves off the registration event, whose thread cannot resolve, so if
+    // `identity.%` ever stopped counting as thread-free that event would take the
+    // unresolved-thread bound and report 'restricted' — making every chart with one graded
+    // thread look uniformly graded, which is precisely the "nobody can tell why the chart is
+    // blurred, so nobody can fix it" failure the named-subject requirement exists to prevent.
+    assert_eq!(
+        report.chart_grade, "routine",
+        "a thread-scoped grade must not leak into the CHART-WIDE reading"
+    );
+    assert_eq!(report.chart_source, "none");
     let a = report
         .threads
         .iter()
@@ -1370,5 +1404,450 @@ async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subj
     assert_eq!(
         a.source, "chart-wide",
         "and the report must say the CHART is what actually won, not the thread"
+    );
+}
+
+/// F2(iii) — THE `patient_id` HALF OF THE 'event' MIS-TARGET ARM.
+///
+/// db/048 section 11's catch-all fires for an 'event' assertion when
+/// `NOT EXISTS (… x.event_id = s.subject_id AND x.patient_id = ev.patient_id)`. F2(ii)
+/// covers that with a `Uuid::now_v7()` naming nothing anywhere, which exercises only the
+/// `event_id` half — delete `AND x.patient_id = ev.patient_id` and F2(ii) still passes.
+///
+/// This pins the other half: a subject_id naming a REAL event that lives on ANOTHER chart.
+/// Without the patient_id predicate the `EXISTS` succeeds, the arm stops firing, and the
+/// assertion evaporates silently — the under-protective direction F2 exists to close.
+#[tokio::test]
+async fn f2iii_an_event_assertion_naming_a_real_event_on_another_chart_coarsens() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    let chart_a = uuid::Uuid::now_v7();
+    let chart_b = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_a, 1).await;
+    submit_registration(&c, &sk, &kid, chart_b, 1).await;
+
+    // A real event, on chart B.
+    let note_b = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_b,
+        EventSpec {
+            patient: chart_b,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "b" }),
+            plaintext_twin: Some("b".into()),
+            wall: 2,
+        },
+    )
+    .await
+    .expect("note on chart B accepted");
+
+    // An assertion on chart A naming chart B's event. Through the REMOTE door: the local
+    // ceremony now refuses exactly this (the target is known here and demonstrably elsewhere),
+    // which is the authoring-side half of the same defect. The remote door stays lenient
+    // (ADR-0060), so this is how such a row still reaches a node.
+    let mis_targeted = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: chart_a.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
+            wall: 3,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({
+            "subject_kind": "event", "subject_id": note_b.to_string(),
+            "grade": "restricted", "source": "human"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("event assertion naming another chart".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the remote door admits it — the naming rule is a LOCAL ceremony");
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_assertion WHERE patient_id = $1::text::uuid",
+            &[&chart_a.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        landed, 1,
+        "the mis-targeted assertion must actually project"
+    );
+
+    let note_a = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_a,
+        EventSpec {
+            patient: chart_a,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "a" }),
+            plaintext_twin: Some("a".into()),
+            wall: 4,
+        },
+    )
+    .await
+    .expect("note on chart A accepted");
+
+    let row = c
+        .query_one(
+            "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note_a.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row.get::<_, String>(0),
+        "restricted",
+        "an 'event' assertion naming a real event on ANOTHER chart must coarsen its own \
+         chart, not evaporate — this is the patient_id predicate, not the event_id one"
+    );
+    assert_eq!(row.get::<_, String>(1), "coarsened");
+
+    // And it must NOT reach across to chart B, whose own note stays untouched.
+    let g_b: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note_b.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        g_b, "routine",
+        "the assertion carries chart A's patient_id, so chart B is never in its standing set"
+    );
+}
+
+/// F2(iv) — THE 'thread' MIS-TARGET ARM, which did not exist at all until this review.
+///
+/// A 'thread' assertion whose subject_id names a thread on ANOTHER chart used to match NO arm
+/// of `cairn_effective_sensitivity`: the resolved arm needs `s.subject_id = ev.thread`, the
+/// bound arm needs `ev.thread IS NULL` (false on a full-custody node, where every medication
+/// event resolves), and the catch-all excluded 'thread' entirely. So it protected nothing,
+/// anywhere — while a mis-targeted 'patient' or 'event' correctly coarsened. The safer path
+/// was reserved for two of the three kinds.
+#[tokio::test]
+async fn f2iv_a_thread_assertion_naming_a_thread_on_another_chart_coarsens() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+
+    let chart_a = uuid::Uuid::now_v7();
+    let chart_b = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_a, 0).await;
+    submit_registration(&c, &sk, &kid, chart_b, 0).await;
+
+    // A real medication thread, on chart B.
+    let thread_b = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        chart_b,
+        &med_input("B"),
+        None,
+        None,
+    )
+    .await
+    .expect("thread B asserted");
+
+    // An assertion on chart A naming chart B's thread — remote door, same reason as F2(iii).
+    let mis_targeted = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: chart_a.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
+            wall: 9,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({
+            "subject_kind": "thread", "subject_id": thread_b.to_string(),
+            "grade": "sequestered", "source": "human"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("thread assertion naming another chart".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the remote door admits it");
+
+    let note_a = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_a,
+        EventSpec {
+            patient: chart_a,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "a" }),
+            plaintext_twin: Some("a".into()),
+            wall: 10,
+        },
+    )
+    .await
+    .expect("note on chart A accepted");
+
+    let row = c
+        .query_one(
+            "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note_a.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        row.get::<_, String>(0),
+        "sequestered",
+        "a 'thread' assertion naming a thread demonstrably on ANOTHER chart must coarsen, \
+         exactly like the 'patient' and 'event' mis-targets it now joins"
+    );
+    assert_eq!(row.get::<_, String>(1), "coarsened");
+
+    // Chart B, which actually owns the thread, is untouched: the assertion carries chart A's
+    // patient_id, so it is not in chart B's standing set at all. (This is also the
+    // under-protecting half a read model can never fix, and is why the LOCAL door refuses
+    // the same body — see sensitivity_ceremony.rs.)
+    let g_b: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&thread_assert_event(&c, thread_b).await.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(g_b, "routine", "chart B never sees chart A's assertion");
+}
+
+/// A SEALED assertion must COARSEN, not silently vanish.
+///
+/// Only `clinical.%` is born-sealed and db/005 refuses a sealed sensitivity body — but db/020
+/// is lenient by design and never rejects a sealed event, so such a row does reach the apply
+/// fn. Every other non-clinical projection answers that by returning early, and for those the
+/// cost is losing a FACT. Here it would be losing a PROTECTION: no row, no standing assertion,
+/// and the chart reads 'routine' while the peer holds it at 'sequestered'. Silent, and the
+/// disclosure direction — the one place in db/048 that would have exposed on ignorance while
+/// every other path coarsens on it.
+#[tokio::test]
+async fn a_sealed_assertion_coarsens_rather_than_silently_vanishing() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = uuid::Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // The shape a non-conformant peer can mint: payload claims sealed, the real fields are
+    // inside the (absent here) ciphertext, and no DEK travels.
+    let sealed = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
+            wall: 5,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({ "sealed": true, "ct": "unreadable-here" }),
+        attachments: vec![],
+        plaintext_twin: Some("sealed sensitivity assertion".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&sealed, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the apply door is lenient about sealed bodies (db/020)");
+
+    // It PROJECTS — as a deliberately unrecognisable row, not as nothing.
+    let row = c
+        .query_one(
+            "SELECT subject_kind, grade FROM sensitivity_assertion
+              WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("a sealed assertion must still leave a row — silence is the disclosure");
+    assert_eq!(row.get::<_, String>(0), "unreadable");
+    assert_eq!(row.get::<_, String>(1), "unreadable");
+
+    // And the chart coarsens: 'unreadable' matches no recognised kind (so it takes the
+    // catch-all) and no rung of the ladder (so it ranks MAX).
+    let note = uuid::Uuid::now_v7();
+    submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note,
+        EventSpec {
+            patient: p,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: serde_json::json!({ "text": "n" }),
+            plaintext_twin: Some("n".into()),
+            wall: 6,
+        },
+    )
+    .await
+    .expect("note accepted");
+
+    let eff = c
+        .query_one(
+            "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&note.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        eff.get::<_, String>(1),
+        "coarsened",
+        "an unreadable assertion must coarsen the chart, never read as 'none'"
+    );
+    let rank: i32 = c
+        .query_one(
+            "SELECT cairn_sensitivity_rank($1)",
+            &[&eff.get::<_, String>(0)],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        rank,
+        i32::MAX,
+        "and it must rank MAXIMUM — coarsen on ignorance, never expose on it"
+    );
+}
+
+/// The assert event that currently represents `thread` in `medication_statement`.
+async fn thread_assert_event(c: &tokio_postgres::Client, thread: uuid::Uuid) -> uuid::Uuid {
+    let s: String = c
+        .query_one(
+            "SELECT e.event_id::text FROM medication_statement m
+               JOIN event_log e ON e.content_address = m.content_address
+              WHERE m.medication_id = $1::text::uuid",
+            &[&thread.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    uuid::Uuid::parse_str(&s).unwrap()
+}
+
+/// A CHART WITH NO REGISTRATION ON THIS NODE MUST NOT REPORT 'routine' WHILE IT HOLDS A GRADE.
+///
+/// `chart_sensitivity` resolves the chart-wide reading off the chart's registration event. An
+/// earlier version called the no-registration case "unreachable through the real doors" on the
+/// strength of #345 and fell back to 'routine'. That was wrong twice over.
+///
+/// Wrong on reachability: db/005 step 8b says in terms that the precedence rule is STRICT-DOOR
+/// ONLY and that `apply_remote_event` must never enforce it, because set-union sync has no
+/// ordering and a peer's event legitimately precedes the registration that licenses it.
+/// `apply_remote_event` IS a real door, so a chart pulled ahead of its registration lands here
+/// routinely.
+///
+/// Wrong on direction: sensitivity bodies are plaintext and replicate unconditionally, so the
+/// assertion arrives and projects while the registration is still in flight. Reporting
+/// 'routine' then is a precise untruth in the DISCLOSURE direction — the node is holding a
+/// standing chart-wide grade for this very patient and saying nothing applies.
+#[tokio::test]
+async fn a_chart_with_no_local_registration_reports_its_standing_grade_not_routine() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    // Deliberately NOT registered on this node: the assertion arrives first, exactly as it
+    // does on a partially-replicated chart.
+    let p = uuid::Uuid::now_v7();
+    let peer = cairn_event::EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: cairn_event::Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({
+            "subject_kind": "patient", "subject_id": p.to_string(),
+            "grade": "sequestered", "source": "human",
+            "rationale": "staff member treated here"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("chart-wide seal, ahead of the registration".into()),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+    };
+    let signed = cairn_event::sign(&peer, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("the apply door does not enforce registration precedence (db/005 step 8b)");
+
+    // The chart genuinely has no registration here...
+    let regs: i64 = c
+        .query_one(
+            "SELECT count(*) FROM patient_registration_current WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(regs, 0, "the fixture must actually exercise the fallback");
+
+    let report = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
+        .await
+        .expect("a read model must answer for a chart it cannot fully explain");
+    assert_eq!(
+        report.chart_grade, "sequestered",
+        "a standing chart-wide grade must be reported even with no registration on file — \
+         answering 'routine' here is the disclosure direction"
+    );
+    assert!(
+        report.chart_content_address.is_some(),
+        "and the winning assertion must still be nameable, so it can be withdrawn"
     );
 }

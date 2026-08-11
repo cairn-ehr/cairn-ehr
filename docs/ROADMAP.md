@@ -384,7 +384,7 @@ a replacement vehicle for the overlay/dispatcher tests they carry.
   SQLSTATE`. **Still open:** [#370](https://github.com/cairn-ehr/cairn-ehr/issues/370) (the same defect
   on the clinical plane), [#368](https://github.com/cairn-ehr/cairn-ehr/issues/368) (this prune).
 
-**Slice 65 — the §5.9 sensitivity stream, part A (2026-08-10; branch `feat/sensitivity-stream-232`;
+**Slice 65 — the §5.9 sensitivity stream, part A (2026-08-10; branch `feat/sensitivity-stream-slice-a-232`;
 owes [#232](https://github.com/cairn-ehr/cairn-ehr/issues/232) **part A only**;
 [ADR-0062](spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md), spec **v0.64**;
 `SCHEMA_GENERATION` 47→48 for `db/048`).** Graded, append-only confidentiality assertions over clinical
@@ -406,6 +406,11 @@ floor beneath it would be theatre a raw-SQL client walks past.
    (#342); worse, refusing a peer's *protective* assertion leaves this node computing a lower grade than
    the peer — **the refusal is itself a disclosure.** Deliberately asymmetric with ADR-0061 decision 4,
    which refused an authorship gate on registration: a withdrawal blocks nothing clinical.
+   **The ceremony is keyed on BLAST RADIUS, not on one kind's spelling** (errata E5/E6): a rationale is
+   owed unless `subject_kind` is `event` or `thread`, because the read model gives chart-wide effect to
+   every kind it does not recognise — while the rule read `= 'patient'`, `subject_kind: "chart"` bought
+   the full chart-wide radius with no rationale. The mis-target rule covers all three kinds, and a
+   `category` key is refused outright: a builder with no such field is not a floor.
 3. **The effective grade is node-relative** — thread membership needs custody, so less custody
    deliberately computes *higher*, and **gaining custody can lower a displayed grade** (the ADR-0052 §9
    pattern). Any cross-node equality test is valid only *given equal custody*, and its name says so.

@@ -46,16 +46,22 @@ use uuid::Uuid;
 /// "chart-wide" says that directly — "patient" could as easily be misread as "this is
 /// about the patient's identity", which it is not.
 ///
-/// An unrecognised value (a future peer's subject kind db/048 already admits
-/// structurally, per ADR-0056 — the floor gates effect, not presence) reads as coarsened
-/// to chart-wide, matching exactly what `cairn_effective_sensitivity`'s own fallback arm
-/// does with it: this function's job is only to put that behaviour into words, never to
-/// second-guess it.
+/// `"coarsened"` is db/048 section 11's catch-all: an assertion that applies to this chart
+/// but could not be matched to a specific subject — an unrecognised (future) subject kind,
+/// or a KNOWN kind that is mis-targeted. The read model deliberately reports it under its
+/// own name rather than echoing the row's raw kind, because echoing would say "this event"
+/// for something that is in fact blurring the whole chart, which is the one confusion this
+/// whole named-subject requirement exists to prevent.
+///
+/// An unrecognised value here (one a FUTURE db/048 returns and this build has never seen)
+/// reads as coarsened to chart-wide — the same safe direction, put into words rather than
+/// second-guessed.
 pub fn subject_kind_phrase(kind: &str) -> &'static str {
     match kind {
         "patient" => "chart-wide",
         "thread" => "this thread",
         "event" => "this event",
+        "coarsened" => "chart-wide (an assertion that names no subject on this chart)",
         "none" => "none",
         _ => "an unrecognised scope (read chart-wide)",
     }
@@ -64,15 +70,25 @@ pub fn subject_kind_phrase(kind: &str) -> &'static str {
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
 /// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
-/// off the chart's own registration event (its birth act — §345 guarantees every chart
-/// has exactly one, and `identity.%` event types can never carry a medication thread, so
-/// resolving it there can only ever pick up a chart-wide or a mis-targeted-coarsening
-/// assertion, never a thread's). `threads` is the per-thread breakdown: one entry per
-/// medication thread on the chart, each resolved through ITS OWN representative event —
-/// so a thread whose own grade is outranked by a chart-wide assertion reports the TRUE
+/// off the chart's own registration event (its birth act). Exactly one such event is read
+/// because `patient_registration_current` is a `SELECT DISTINCT ON (patient_id) ... ORDER BY
+/// ... ASC` view (db/045) — NOT because #345 forbids a second registration, which it does
+/// not: db/005 step 8b refuses only a chart whose FIRST event is not a registration, and
+/// db/045 deliberately retains later duplicates as the evidence that something went wrong.
+/// Reading the view rather than the raw table is therefore load-bearing, not stylistic.
+/// `identity.%` event types can never carry a medication thread, so resolving there can only
+/// ever pick up a chart-wide or a coarsening assertion, never a thread's.
+///
+/// `threads` is the per-thread breakdown: one entry per medication thread that has a
+/// LOCALLY-PROJECTED `medication_statement` row, each resolved through ITS OWN representative
+/// event — so a thread whose own grade is outranked by a chart-wide assertion reports the TRUE
 /// winning subject, not merely its own standing row (see
 /// `the_chart_report_lists_each_medication_thread_with_its_own_winning_subject` in
-/// `tests/sensitivity_ladder.rs`).
+/// `tests/sensitivity_ladder.rs`). It is NOT "every thread on the chart", and the difference
+/// is visible in ordinary operation: `medication_statement_apply` opens its payload through
+/// `cairn_clear_payload`, so a node holding no DEK custody projects no rows and reports NO
+/// threads at all, and an orphan thread carrying only a cessation or dose event (a state
+/// db/031 explicitly designs for) never appears either.
 ///
 /// A NAMED struct for `threads`, not a bare tuple: `sensitivity-withdraw --withdraws`
 /// documents its argument as "the hex content_address, as `patient-sensitivity` prints
@@ -247,7 +263,8 @@ pub async fn chart_sensitivity(
     let patient_s = patient.to_string();
 
     // The chart-wide reading, resolved off the chart's own registration event (its birth
-    // act — #345 guarantees exactly one). Reusing `cairn_effective_sensitivity` here,
+    // act; `patient_registration_current` is the DISTINCT ON view, so at most one row even
+    // if a duplicate registration exists). Reusing `cairn_effective_sensitivity` here,
     // rather than re-deriving "which standing row wins" in Rust, means this report can
     // never silently disagree with the read model every other caller of that function
     // uses (db/048 section 11's own "ONE definition" argument — the same reason
@@ -275,23 +292,60 @@ pub async fn chart_sensitivity(
                 row.get::<_, Option<String>>(2),
             )
         }
-        // No registration on file for this patient_id. #345 makes this unreachable
-        // through the real doors, but a read model must still answer honestly rather
-        // than panic on a chart it cannot fully explain (principle 4: the absence is
-        // reported, not guessed away).
-        None => (
-            "routine".to_string(),
-            subject_kind_phrase("none").to_string(),
-            None,
-        ),
+        // NO REGISTRATION ON FILE — REACHABLE IN ORDINARY FEDERATED OPERATION, and the
+        // fallback must not answer 'routine' here.
+        //
+        // An earlier draft called this unreachable "through the real doors" on the strength
+        // of #345. That is wrong: db/005 step 8b says in terms that the precedence rule is
+        // STRICT-DOOR ONLY and that apply_remote_event must never enforce it, because
+        // set-union sync has no ordering and a peer's event legitimately precedes the
+        // registration that licenses it. apply_remote_event IS a real door. So a chart whose
+        // events arrived by sync ahead of its registration lands here routinely.
+        //
+        // Answering 'routine' would then be a precise untruth in the disclosure direction:
+        // this node may be holding a standing chart-wide 'sequestered' assertion for exactly
+        // this patient while the report says nothing applies. The standing set needs no
+        // registration event to be readable, so read it directly and report the highest grade
+        // standing on the chart. `cairn_sensitivity_standing` is patient-scoped and the
+        // ordering mirrors section 11's own (rank first, content_address as the deterministic
+        // tie-break), so this can only ever agree with the read model or over-state it —
+        // never under-state it.
+        None => {
+            let standing = client
+                .query_opt(
+                    "SELECT s.grade, encode(s.content_address, 'hex')
+                       FROM cairn_sensitivity_standing($1::text::uuid) s
+                      ORDER BY cairn_sensitivity_rank(s.grade) DESC, s.content_address ASC
+                      LIMIT 1",
+                    &[&patient_s],
+                )
+                .await?;
+            match standing {
+                Some(row) => (
+                    row.get::<_, String>(0),
+                    // Not a specific subject: nothing anchors these assertions to a
+                    // registration event here, so the honest phrase is the coarsening one.
+                    subject_kind_phrase("coarsened").to_string(),
+                    row.get::<_, Option<String>>(1),
+                ),
+                // Genuinely nothing: no registration AND no standing assertion.
+                None => (
+                    "routine".to_string(),
+                    subject_kind_phrase("none").to_string(),
+                    None,
+                ),
+            }
+        }
     };
 
-    // The per-thread breakdown: every medication thread on this chart, each resolved
-    // through medication_statement's CURRENT winning content_address — an
-    // `ON CONFLICT (medication_id) DO UPDATE` table (db/031), so this always names a
-    // real, locally-resolvable event whose `cairn_event_thread` will find exactly this
-    // thread (db/048 section 10's F4 note explains why that resolution is precise only
-    // for the CURRENT assert, which is exactly the row this join reads).
+    // The per-thread breakdown: every medication thread with a locally-projected
+    // medication_statement row (see the struct doc — that is NOT every thread on the chart
+    // when this node holds no custody), each resolved through that table's CURRENT winning
+    // content_address — an `ON CONFLICT (medication_id) DO UPDATE` table (db/031), so this
+    // always names a real, locally-resolvable event whose `cairn_event_thread` will find
+    // exactly this thread (db/048 section 10's "what this resolves, and what it does not"
+    // note explains why that resolution is precise only for the CURRENT assert, which is
+    // exactly the row this join reads).
     let thread_rows = client
         .query(
             "SELECT ms.medication_id::text, ces.grade, ces.subject_kind,

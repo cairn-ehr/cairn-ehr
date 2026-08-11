@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems, and
-only PART A is built.** Slice 65 (2026-08-10, branch `feat/sensitivity-stream-232`,
+only PART A is built.** Slice 65 (2026-08-10, branch `feat/sensitivity-stream-slice-a-232`,
 [ADR-0062](spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md), spec v0.64,
 `SCHEMA_GENERATION` 48) shipped the **sensitivity stream**: graded, append-only confidentiality assertions
 over an event / a medication thread / a whole chart, whose effective grade is the **max** over standing
@@ -27,10 +27,37 @@ Three parts remain, and their order is forced:
   partition-honest. Blocked on C.
 
 Slice 65's own follow-ons: [#374](https://github.com/cairn-ehr/cairn-ehr/issues/374) (thread resolution
-resolves only a thread's *current head*), [#378](https://github.com/cairn-ehr/cairn-ehr/issues/378) (the
-withdrawal rationale is clear text forever and replicates — the UI must warn at entry today),
+resolves only a thread's *current head* — see **erratum E4**, the limitation is real but narrower than
+the ADR first stated), [#378](https://github.com/cairn-ehr/cairn-ehr/issues/378) (the withdrawal
+rationale is clear text forever and replicates — the UI must warn at entry today),
 [#379](https://github.com/cairn-ehr/cairn-ehr/issues/379) (the grade in the legibility twin), and the
-sensitivity gesture kinds added to #360's `ui_gesture_timing_kind_ck` widening.
+sensitivity gesture kinds added to #360's `ui_gesture_timing_kind_ck` widening. The comprehensive review
+added four more: [#385](https://github.com/cairn-ehr/cairn-ehr/issues/385) (index `content_address` on
+the five medication projections — `cairn_event_thread` is currently the #336 shape it cites),
+[#386](https://github.com/cairn-ehr/cairn-ehr/issues/386) (the cairn-sync subset test loads db/048 but
+never *drives* it, so the late-binding guard is untested at runtime),
+[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387) (type-design tightenings — a `Provenance` enum,
+ladder constants, a sum type for the report's correlated `Option` pair) and
+[#388](https://github.com/cairn-ehr/cairn-ehr/issues/388) (the operator surface is blind to withdrawals,
+deferred grades, and custody-less charts).
+
+> [!IMPORTANT]
+> **The review round changed the floor's behaviour in four ways — read ADR-0062's errata E4/E5/E6 before
+> building part B or C on top of it.**
+>
+> 1. **The chart-wide ceremony is no longer keyed on `subject_kind = 'patient'`.** It was, and because
+>    the read model grants chart-wide effect to *every* unrecognised kind, `subject_kind: "chart"` was a
+>    rationale-free chart-wide raise straight through the local door. A rationale is now owed unless the
+>    kind is `event` or `thread`.
+> 2. **The mis-target rule covers all three subject kinds**, using "known here and demonstrably on
+>    another chart" so arrival-order independence is preserved. A mis-targeted `thread` also coarsens at
+>    read now — it used to match no arm at all and protect nothing, anywhere.
+> 3. **A `category` key is refused at the local door.** It was previously prevented only by
+>    `cairn-event`'s builder having no such field, which principle 12 says is the wrong layer.
+> 4. **A sealed assertion coarsens instead of silently vanishing**, and the catch-all arm reports
+>    `subject_kind = 'coarsened'`. Consumers must test "did anything win" with
+>    `content_address IS NOT NULL`, never `subject_kind <> 'none'` — `none` is a legal open-vocabulary
+>    value and collided with the sentinel.
 
 **Three things the med-list slice still owes are HUMAN acts and cannot be done by an agent:**
 

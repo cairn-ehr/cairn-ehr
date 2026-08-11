@@ -203,6 +203,21 @@ the SQL mirror asserting exactly that. Cairn ships the lookup mechanism, never t
 sensitive is cultural, regional and personal, and a seeded row would be an un-reviewable policy choice
 smuggled in as infrastructure (principle 9).
 
+> [!NOTE]
+> **Erratum E5 (2026-08-11) — the decision is unchanged; its *enforcement* was missing.** As shipped in
+> the first review round, "never travels" was guaranteed only by `cairn-event`'s builder having no
+> `category` field. A builder is not a floor: ADR-0021 explicitly blesses bespoke UIs, and principle 12
+> puts the compatibility/safety boundary **in the database**, precisely because a client talking raw SQL
+> reaches `submit_event` directly. So the invariant this decision calls the disclosure the whole
+> mechanism exists to prevent was, in the layer that matters, unenforced.
+>
+> `cairn_sensitivity_ceremony_ok` now **refuses an assertion whose payload carries a `category` key**,
+> at the LOCAL authoring door. The door choice is not the usual ADR-0060 caution but a sharper point: a
+> peer that sent a category has *already* leaked it — the bytes are on the wire and in that peer's log —
+> so refusing at apply would un-disclose nothing and would only fork the event set. Stopping nodes from
+> **authoring** the disclosure is the only thing a door can actually accomplish here. Both halves are
+> pinned (`sensitivity_floor.rs`, `sensitivity_ceremony.rs`).
+
 ### 6. ADR-0043's "agent advisories are dismissable by anyone" does not reach a protective auto-tag
 
 [ADR-0043](0043-suppression-self-only-disagreement-is-additive.md) makes agent advisories dismissable by
@@ -332,6 +347,35 @@ Three controls, and deliberately **no cap**:
 
 **Capping chart-wide below `sequestered` was considered and rejected** — see the rejected alternatives.
 
+> [!WARNING]
+> **Erratum E6 (2026-08-11) — factual; control 1 as shipped did not cover what it claimed.** Control 1
+> was implemented as `subject_kind = 'patient'`, but decision 1's read model grants **chart-wide effect
+> to every subject kind it does not recognise** (the conservative reading of a future peer's vocabulary).
+> The gate and the effect were therefore keyed on different things, and only the gate was narrow: an
+> assertion with `subject_kind: "chart"` — or any other unrecognised string — bought the full chart-wide
+> blast radius with **no rationale and no ceremony, through the LOCAL door**. Every control in this
+> decision was bypassable by mis-spelling one field, and the branch's own test suite pinned that shape as
+> admitted.
+>
+> The rule is now stated in terms of blast radius rather than spelling: **a rationale is owed unless
+> `subject_kind` is one of the two we positively know is narrowly scoped** (`event`, `thread`). A future
+> kind inherits the requirement for free by not appearing in that list — the same
+> safe-default-by-omission discipline decision 10's type gate uses.
+>
+> The same round widened the **mis-target** rule (decision 7's "a chart-wide grade must name THIS
+> chart") to all three subject kinds, for the argument this ADR already made: `--patient` and
+> `--subject-id` are two hand-typed UUIDs in every case, and the read model can only ever repair the
+> over-protecting half. The predicate is *"known here and demonstrably on another chart"*, never *"not
+> known to be here"*, so arrival-order independence is preserved — a target that has not replicated yet
+> is never treated as a mis-target.
+>
+> Control 3 gained a related correction: the catch-all arm now reports the winning subject as
+> `coarsened` rather than echoing the row's raw `subject_kind`. Echoing printed *"this event"* for an
+> assertion that was in fact blurring the whole chart by mis-target — the precise confusion control 3
+> exists to prevent — and it also collided with the `none` sentinel, since `subject_kind` is an open
+> vocabulary and `{"subject_kind":"none"}` is a structurally valid assertion. The documented
+> "did anything win" test is now `content_address IS NOT NULL`.
+
 ### 9. The effective grade is node-relative, not a global fact
 
 `medication_id` lives **inside the sealed payload**, and `event_log` carries no thread column in the
@@ -449,6 +493,33 @@ grade). Fixing it means resolving from the event's own body rather than from a w
 which puts a body read on the safety-critical grade path and must behave identically on a custody-less
 node — a decision, not a patch. Recorded here rather than left in the code so that a reader of decision 9
 does not assume resolution is general.
+
+> [!WARNING]
+> **Erratum E4 (2026-08-11) — factual; the limitation is real but narrower than stated.** The bolded
+> sentence above — *"every superseded medication event resolves to NULL even on a node with full
+> custody"* — is **wrong**, and the same overstatement was carried in `db/048`'s section 10 comment.
+> Both have been corrected in the code; the sentence stands here because ADRs are immutable.
+>
+> `db/032` registers `medication_dose_seed_initial` for `clinical.medication.asserted`, seeding a
+> `medication_dose_event` row whose `dose_event_id` **is that assert's own `event_id`** and whose
+> `content_address` is that assert's own, under `ON CONFLICT (dose_event_id) DO NOTHING`. That row is
+> never overwritten. So a superseded `clinical.medication.asserted` — and likewise a superseded
+> `clinical.medication-dose-change.asserted` — **still resolves precisely, permanently, on a node with
+> custody.** The phrase *"only unsuperseded dose points"* was wrong on its own terms too: dose points
+> are not superseded in that table at all.
+>
+> The real limitation is narrower and differently shaped. Resolution is lost for:
+> - a superseded `ceased` or `coding` event (`medication_cessation` / `medication_coding` are keyed on
+>   `medication_id`, so a later event overlays the address), and
+> - a **re-corrected** `dose-correction` (`medication_dose_correction` is keyed on the dose point it
+>   corrects, so correcting the same point twice drops the earlier correction's address).
+>
+> Direction of the error: the ADR **overstated** how much falls into the bound, so the precision cost is
+> smaller than described and nothing about the safety argument changes — the bound over-protects either
+> way. `crates/cairn-node/tests/sensitivity_ladder.rs` uses a *coding* event to manufacture the
+> unresolved case for exactly this reason, and says so; that test was right while this section was not.
+> Issue [#374](https://github.com/cairn-ehr/cairn-ehr/issues/374) tracks the underlying design question
+> unchanged.
 
 ## Consequences
 

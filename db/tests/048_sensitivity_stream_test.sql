@@ -165,9 +165,70 @@ BEGIN
     ASSERT r.grade = 'restricted', 'a mapped category yields its grade';
     ASSERT r.category = 'sti-screen', 'and names what matched, for LOCAL audit only';
 
-    -- The function authors nothing: policy decides whether a candidate becomes an event.
-    SELECT count(*) INTO n FROM event_log WHERE event_type = 'sensitivity.grade.asserted';
-    ASSERT n = 0, 'the lookup must never author an assertion by itself';
+    -- THE SUBJECT IS NEVER THE PATIENT. The return shape has no patient/subject column at
+    -- all, so a coded hit on one drug cannot express a chart-wide candidate even by accident
+    -- — that is the whole point of section 13, and it is a property of the shape rather than
+    -- of any value, so assert it against the catalog rather than by inspecting a row.
+    SELECT count(*) INTO n
+      FROM information_schema.routines rt
+      JOIN information_schema.parameters pa
+        ON pa.specific_name = rt.specific_name
+     WHERE rt.routine_name = 'cairn_sensitivity_candidate'
+       AND pa.parameter_mode = 'OUT'
+       AND pa.parameter_name IN ('patient_id', 'subject_id', 'subject_kind');
+    ASSERT n = 0,
+        'cairn_sensitivity_candidate must have no patient/subject output column — a coded hit '
+        'must not be able to express a chart-wide candidate';
 
     DELETE FROM sensitivity_category_map WHERE category = 'sti-screen';
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- The section 10b TYPE GATE (`cairn_event_type_has_no_thread`), which decides whether an
+-- event whose thread cannot be resolved takes the conservative bound.
+--
+-- Only ONE of its six prefixes was behaviourally exercised anywhere, and the deliberate
+-- "an unrecognised type returns FALSE so it KEEPS the bound" ruling was not exercised at all.
+-- Two concrete defects that used to pass everything: dropping `identity.%` (which silently
+-- makes a chart's whole report read as its most-graded thread, because the chart-wide reading
+-- resolves off the registration event), and inverting the function into a whitelist of types
+-- that DO have threads (which keeps every current test green while removing the bound from
+-- every FUTURE clinical stream — the disclosure direction, found years later).
+DO $$
+DECLARE t text;
+BEGIN
+    -- TRUE: types this version has positively confirmed cannot be on a medication thread.
+    FOREACH t IN ARRAY ARRAY[
+        'demographic.name.asserted', 'identity.registration.asserted', 'note.added',
+        'patient.merged', 'sensitivity.grade.asserted', 'erasure.shred.asserted'
+    ] LOOP
+        ASSERT cairn_event_type_has_no_thread(t),
+            format('%s structurally cannot carry a medication thread, so it must NOT take '
+                   'the unresolved-thread bound', t);
+    END LOOP;
+
+    -- FALSE: medication's own namespace, and — the load-bearing half — a type this version
+    -- has never heard of. A future clinical stream inherits the bound for free by simply not
+    -- appearing in the list above; nobody has to remember to add it.
+    FOREACH t IN ARRAY ARRAY[
+        'clinical.medication.asserted', 'clinical.medication-dose-change.asserted',
+        'lab.result.asserted', 'imaging.study.asserted'
+    ] LOOP
+        ASSERT NOT cairn_event_type_has_no_thread(t),
+            format('%s must keep the conservative bound — unknown must coarsen, never expose', t);
+    END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- `cairn_thread_patient` degrades to NULL rather than raising when it cannot answer.
+-- On the cairn-sync subset the medication projections do not exist at all; here they DO, so
+-- this pins the other NULL cause — a thread this node has simply never seen. Callers depend
+-- on that NULL meaning "cannot tell" (never "wrong chart"), because treating it as a
+-- mis-target would fire on every not-yet-replicated thread and, on a custody-less node where
+-- medication_statement is empty for every thread, on all of them at once.
+DO $$
+DECLARE v uuid;
+BEGIN
+    SELECT cairn_thread_patient('00000000-0000-0000-0000-0000000000ff'::uuid) INTO v;
+    ASSERT v IS NULL, 'an unknown thread must read as "cannot tell", not raise';
 END $$;

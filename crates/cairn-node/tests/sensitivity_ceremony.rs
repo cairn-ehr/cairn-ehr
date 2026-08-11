@@ -373,3 +373,219 @@ async fn the_remote_door_admits_a_withdrawal_the_local_door_refuses() {
         .get(0);
     assert_eq!(n, 1, "the peer's withdrawal stands here too");
 }
+
+/// THE MIS-TARGET RULE COVERS ALL THREE SUBJECT KINDS, NOT JUST `patient`.
+///
+/// The chart-wide rule ("a 'patient' grade must name THIS chart") was argued from the fact
+/// that `--patient` and `--subject-id` are two hand-typed UUIDs and a mis-typed pair fails in
+/// BOTH directions at once. That argument transfers unchanged to `event` and `thread`, and
+/// for a long time only `patient` was covered. Section 11's catch-all can only ever fix the
+/// over-protecting half (this chart coarsens); the other half — the event or thread the
+/// author MEANT to grade silently staying 'routine', because the assertion carries THIS
+/// chart's patient_id and the standing set is patient-scoped — is undetectable afterwards.
+///
+/// The predicate is "known here AND demonstrably on another chart", never "not known to be
+/// here", so an honest out-of-order write against a not-yet-replicated target is never
+/// refused. That half is pinned by the second block below.
+#[tokio::test]
+async fn the_local_door_refuses_an_event_or_thread_grade_targeting_another_chart() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    let chart_a = Uuid::now_v7();
+    let chart_b = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_a, 1).await;
+    submit_registration(&c, &sk, &kid, chart_b, 1).await;
+
+    let note_b = Uuid::now_v7();
+    common::submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_b,
+        EventSpec {
+            patient: chart_b,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: json!({ "text": "b" }),
+            plaintext_twin: Some("b".into()),
+            wall: 2,
+        },
+    )
+    .await
+    .expect("note on chart B accepted");
+
+    // An 'event' grade authored on chart A naming chart B's event: refused, by name.
+    let err = submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: chart_a,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: json!({
+                "subject_kind": "event", "subject_id": note_b.to_string(),
+                "grade": "restricted", "source": "human"
+            }),
+            plaintext_twin: Some("mis-targeted event grade".into()),
+            wall: 3,
+        },
+    )
+    .await
+    .expect_err("the event named is demonstrably on another chart");
+    let err = db_msg(&err);
+    assert!(
+        err.contains("not this chart"),
+        "the refusal must say which chart the target is really on: {err}"
+    );
+
+    // ARRIVAL-ORDER INDEPENDENCE: the SAME shape against a target this node has never seen is
+    // ADMITTED. Set-union sync has no ordering, so an event-scoped grade legitimately precedes
+    // the event it names; a rule that fired on "not found" would refuse honest traffic and —
+    // on a custody-less node, where nothing resolves — refuse nearly all of it.
+    submit_signed(
+        &c,
+        &sk,
+        &kid,
+        EventSpec {
+            patient: chart_a,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: json!({
+                "subject_kind": "event", "subject_id": Uuid::now_v7().to_string(),
+                "grade": "restricted", "source": "human"
+            }),
+            plaintext_twin: Some("not yet replicated".into()),
+            wall: 4,
+        },
+    )
+    .await
+    .expect("a target that has not arrived yet must NOT be treated as a mis-target");
+}
+
+/// The remote half of the rule above: a peer's mis-targeted event grade is ADMITTED.
+///
+/// Same ADR-0060 reasoning as every other rule in this file — a door check at apply lets one
+/// peer's honest act be refused by another peer's stricter node, forking the event set. For a
+/// RAISE it is worse than a wedge: refusing a peer's protective assertion leaves THIS node
+/// computing a LOWER grade than the peer already holds, so the refusal is itself a disclosure.
+#[tokio::test]
+async fn the_remote_door_admits_an_event_grade_targeting_another_chart() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    let chart_a = Uuid::now_v7();
+    let chart_b = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, chart_a, 1).await;
+    submit_registration(&c, &sk, &kid, chart_b, 1).await;
+
+    let note_b = Uuid::now_v7();
+    common::submit_signed_with_id(
+        &c,
+        &sk,
+        &kid,
+        note_b,
+        EventSpec {
+            patient: chart_b,
+            event_type: "note.added",
+            schema_version: "note.added/1",
+            payload: json!({ "text": "b" }),
+            plaintext_twin: Some("b".into()),
+            wall: 2,
+        },
+    )
+    .await
+    .expect("note on chart B accepted");
+
+    let peer = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: chart_a.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall: 3,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: json!({
+            "subject_kind": "event", "subject_id": note_b.to_string(),
+            "grade": "restricted", "source": "human"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("peer's mis-targeted event grade".into()),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&peer, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("the remote door must admit what the local door refuses");
+
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_assertion WHERE patient_id = $1::text::uuid",
+            &[&chart_a.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        landed, 1,
+        "and it must actually project, or the leniency claim is vacuous"
+    );
+}
+
+/// The category refusal is a LOCAL rule too — a peer that already put the category on the
+/// wire has already leaked it, so refusing at apply would un-disclose nothing and would only
+/// fork the event set (ADR-0060). This pins that the asymmetry is deliberate rather than an
+/// oversight, alongside the local-door refusal in `sensitivity_floor.rs`.
+#[tokio::test]
+async fn the_remote_door_admits_an_assertion_carrying_a_category() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    let peer = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: p.to_string(),
+        event_type: SENSITIVITY_EVENT_TYPE.into(),
+        schema_version: SENSITIVITY_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall: 2,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: json!({
+            "subject_kind": "thread", "subject_id": Uuid::now_v7().to_string(),
+            "grade": "restricted", "source": "advisory", "category": "leaked-by-the-peer"
+        }),
+        attachments: vec![],
+        plaintext_twin: Some("peer's leaky assertion".into()),
+        clock_grade: ClockGrade::SelfAsserted,
+    };
+    let signed = sign(&peer, &sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .map_err(|e| db_msg(&e))
+        .expect("refusing here would fork the event set without un-disclosing anything");
+}

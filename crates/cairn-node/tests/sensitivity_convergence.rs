@@ -43,10 +43,19 @@ use uuid::Uuid;
 /// Deliberately NOT `common::setup`: that helper mints a FRESH, throwaway key on every
 /// call, but this test needs the identical key id enrolled on BOTH databases. Why: the
 /// three sensitivity events under test are signed ONCE and their exact bytes are applied
-/// to both nodes (that byte-identity is what "equal custody" means concretely), but
-/// `apply_remote_event` still refuses an event whose signer is not an enrolled,
-/// non-revoked LOCAL actor (db/020) — enrollment itself is node-local state that never
-/// travels with the event on the wire in this trimmed-down, no-federation fixture.
+/// to both nodes, but `apply_remote_event` still refuses an event whose signer is not an
+/// enrolled, non-revoked LOCAL actor (db/020) — enrollment itself is node-local state that
+/// never travels with the event on the wire in this trimmed-down, no-federation fixture.
+///
+/// NOTE ON WHAT "EQUAL CUSTODY" MEANS HERE, because it is easy to weaken by accident.
+/// Byte-identical event sets are NOT what makes custody equal — ADR-0062 §9 means DEK
+/// read-custody of sealed clinical bodies, the thing that decides whether the medication
+/// projections populate at all and therefore whether `cairn_event_thread` can resolve.
+/// Two nodes holding identical bytes but different DEKs have UNEQUAL custody and may
+/// legitimately compute different grades (the effective grade is non-monotone in custody —
+/// gaining custody can LOWER it as the conservative bound collapses to the true value).
+/// Custody is equal in this fixture because the graded target is a plaintext `note.added`
+/// with no thread at all, so neither node needs custody of anything to resolve it.
 async fn setup_with_shared_key(c: &Client, kid: &str) {
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, patient_identifier, \
