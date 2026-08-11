@@ -16,8 +16,10 @@ clinical-content stream `clinical.medication` (§3.3, five slices) under **born-
 (Tauri 2), and — 2026-08-05 — the **§5.3/§5.8 search-before-create funnel**: registration is an act
 carrying the search that preceded it, whose attestation *names* the displayed candidates rather than
 counting them ([ADR-0061](docs/spec/decisions/0061-registration-is-an-act-that-carries-its-search.md);
-its precedence rule is deliberately **not yet enforced** — issue #345 — so the funnel is complete but
-bypassable). So work is now a **mix of building the clinical product slice-by-slice** (graduating the proven
+its precedence rule **is enforced** — db/005 step 8b refuses any chart whose first event is not its
+registration, closing the bypass, #345 — at the STRICT door only, since a peer's clinical event
+legitimately precedes the registration that licenses it). So work is now a **mix of building the
+clinical product slice-by-slice** (graduating the proven
 event/floor/projection spine into real product code, brainstorm→spec→plan→TDD) **and continued design
 work** (clinical case-mining, stress-testing the data model, refining spec prose). There is a Rust/Cargo
 workspace (`/crates`, `/extensions`, `/db`) and an mkdocs docs build; the clinical application is **early

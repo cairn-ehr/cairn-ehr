@@ -56,9 +56,20 @@ allow = [
 # Fail on any crate with a known RUSTSEC vulnerability or a yanked release. `unmaintained` is
 # scoped to workspace-direct deps: a transitively-pulled unmaintained crate is noise we cannot
 # act on directly, but one WE chose to depend on is a signal worth surfacing.
+#
+# `unsound = "all"` closes a hole that made rule 2 above less true than it reads. cargo-deny's
+# config version 2 defaults `unsound` to "none", so an `informational = "unsound"` advisory —
+# which GitHub's advisory database can carry at MODERATE severity, and which Dependabot alerts
+# on — passed this gate silently. For the tree that holds the safety-critical surface (§9), a
+# green supply-chain check that cannot see undefined behaviour in a dependency is exactly the
+# kind of gate that reads as more assurance than it gives. "all", not "workspace", because these
+# advisories land on transitive crates far more often than on ones we picked ourselves.
+# This tree and the cairn_pgx tree are both clean under it (verified 2026-08-11); the reference
+# UI carries one documented, upstream-blocked exception — see cairn-gui/deny.toml.
 version = 2
 yanked = "deny"
 unmaintained = "workspace"
+unsound = "all"
 
 [bans]
 # Duplicate transitive versions are HYGIENE, not a safety failure — and the ones that remain
