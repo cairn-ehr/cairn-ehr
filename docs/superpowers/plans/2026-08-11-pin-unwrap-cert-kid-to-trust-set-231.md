@@ -23,10 +23,18 @@ body's custody to two named clinicians is defeated by asking the serve port for 
 
 ## The decision
 
-Gate the re-wrap on the same predicate the node plane already trusts elsewhere —
+Gate the re-wrap on the trust set the node plane already relies on —
 `trust_peer.peer_pubkey = <kid> AND status = 'active'` (`db/007`). The precedent is
-`cairn-node`'s mTLS cert-pin verifier (`transport.rs`) and `sync.rs::refresh_trust_set`, which use
-that exact clause; the unwrap cert simply becomes the third consumer of one trust set.
+`sync.rs::refresh_trust_set`, which snapshots every active `peer_pubkey` for `cairn-node`'s mTLS
+cert-pin verifier (`transport::pinned` tests membership of that snapshot rather than re-querying —
+one mechanism, not two). Custody admission therefore reads the same set under the same grading rather
+than becoming a second definition of who is admitted.
+
+> **Corrected during PR review.** Two claims in the paragraph above, as first written, were wrong:
+> that both named sites "use that exact clause" (the mTLS verifier runs no SQL — the `SELECT 1 …` at
+> `transport.rs:24` is a doc comment), and that the unwrap cert becomes "the third consumer" (it
+> counted one mechanism twice). Recorded rather than silently rewritten, since the plan is the
+> historical artifact.
 
 **Withhold custody, never refuse the pull.** An unadmitted peer still receives the events — they are
 sealed ciphertext, harmless to ship, and a refusal would wedge replication. This is the degradation
@@ -72,7 +80,9 @@ it names* — check the reader can actually run the remedy from what was printed
 
 - **Adding `db/007` to `cairn-sync`'s SCHEMA subset.** It would make the node plane appear in a
   cairn-sync-only DB, but `db/007` re-declares `hlc_state`, which `db/001` already creates for this
-  subset — a shape collision to be settled on its own, under #284, not smuggled in here.
+  subset. (Both declarations are `CREATE TABLE IF NOT EXISTS` with an identical shape today, and
+  `connect_and_load_schema` loads both — so this is a duplicate declaration to reconcile, NOT the
+  "shape collision" this plan first called it. Reconciling it is #284's decision, not this slice's.)
 - **#380** (a peer can strip a sensitivity grade un-attested) is a different door and stays open.
 - Custody for a node's **own** key (self-pull) is not granted: `trust_peer` lists peers, not self, and
   no code path pulls from itself. If one ever does, it needs its own decision, not a silent arm.

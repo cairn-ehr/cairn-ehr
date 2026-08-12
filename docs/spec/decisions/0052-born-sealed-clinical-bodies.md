@@ -13,6 +13,9 @@
   (the strict-submit / lenient-apply door precedent this ADR reuses); [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)
   (blob bytes inherit born-sealed via the per-blob DEK); [ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)
   (additive-only wire — the custody sidecar and the sealed `schema_version` are its application).
+- **Errata:** **E1**, appended 2026-08-11 (under decision 4) — §4's *"any **admitted** peer"* described
+  an intent the code did not implement until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231).
+  The decision is unchanged; only the record of what was built is corrected.
 - **Resolves:** [#189](https://github.com/cairn-ehr/cairn-ehr/issues/189) (2026-07-15 review finding C1,
   Critical/window-closing — the seal-by-default posture), [#92](https://github.com/cairn-ehr/cairn-ehr/issues/92)
   (2026-07-02 — the ADR-0005 erasure-ladder composition collisions).
@@ -173,11 +176,13 @@ slice's perf bench (§8).
 > [#376](https://github.com/cairn-ehr/cairn-ehr/issues/376)): narrowing a body's custody to two named
 > clinicians was defeated by asking the serve port for the DEK.
 >
-> `serve` now pins the `kid` to `trust_peer` (`db/007`) — the same set the mTLS cert-pin verifier and
-> the node-plane admission gate read — and **withholds custody, never the events**: the bodies still
-> replicate as sealed ciphertext, because refusing them would fork the event set and wedge replication
-> for no confidentiality gain. Fail-closed on every uncertainty, including an un-provisioned node plane;
-> the operator line names which of the five causes applies, since their remedies differ.
+> `serve` now pins the `kid` to `trust_peer` (`db/007`) — the same set `refresh_trust_set` snapshots for
+> the mTLS cert-pin verifier, under the same `status = 'active'` grading — and **withholds custody, never
+> the events**: the bodies still replicate as sealed ciphertext, because refusing them would fork the
+> event set and wedge replication for no confidentiality gain. Fail-closed on every uncertainty,
+> including an un-provisioned node plane; the operator line names which cause applies, since their
+> remedies differ, and travels to the puller (whose chart is the thing that goes blank) rather than
+> stopping at the serving node's log.
 
 ### 5. Two doors — the floor makes born-sealed unbypassable
 

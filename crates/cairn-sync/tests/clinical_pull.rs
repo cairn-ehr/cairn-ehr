@@ -80,10 +80,12 @@ const LISTEN_GUARD: &str = "127.0.0.1:25723";
 const LISTEN_SEALSCOPE: &str = "127.0.0.1:25724";
 const LISTEN_FORWARD: &str = "127.0.0.1:25725";
 const LISTEN_UNPEERED: &str = "127.0.0.1:25726";
+const LISTEN_REVOKED: &str = "127.0.0.1:25727";
+const LISTEN_REPAIR: &str = "127.0.0.1:25728";
 
 /// Every fixed listen port in this file — a NEW test's port must be added here so
 /// the ephemeral-range guard below covers it.
-const ALL_LISTEN: [&str; 10] = [
+const ALL_LISTEN: [&str; 12] = [
     LISTEN_CONVERGE,
     LISTEN_FREEZE,
     LISTEN_LOWHLC,
@@ -94,6 +96,8 @@ const ALL_LISTEN: [&str; 10] = [
     LISTEN_SEALSCOPE,
     LISTEN_FORWARD,
     LISTEN_UNPEERED,
+    LISTEN_REVOKED,
+    LISTEN_REPAIR,
 ];
 
 /// Guard for issue #263: a fixed listen port must sit BELOW every kernel's
@@ -349,6 +353,32 @@ async fn admit_peer_key(
     )
     .await
     .expect("author peer.added");
+}
+
+/// Author `peer.revoked` on `server` for one peer's NODE ID — the in-DB half of
+/// `cairn-node unpeer`, and the act whose consequence the #231 pin has to report
+/// correctly.
+///
+/// Note what the payload does NOT carry: a `peer_pubkey`. That is precisely why the
+/// custody lookup cannot read revocation off `trust_peer.peer_pubkey` (the revoke row
+/// stores NULL there and REPLACES the `peer` row in the `DISTINCT ON` view), and why
+/// `a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair` exists.
+async fn revoke_peer(
+    server: &Client,
+    server_sk: &SigningKey,
+    server_kid: &str,
+    peer_node_id_hex: &str,
+) {
+    let id_server = identity::load_local(server).await.expect("server identity");
+    identity::author_unpeer(
+        server,
+        server_sk,
+        server_kid,
+        &id_server.node_id_hex,
+        peer_node_id_hex,
+    )
+    .await
+    .expect("author peer.revoked");
 }
 
 /// Register a node's OWN DEK-unwrap public key so its apply door can take custody of
@@ -2036,6 +2066,296 @@ async fn an_unadmitted_puller_replicates_events_but_gains_no_custody() {
         statement_count_for_med(&b, med).await,
         0,
         "with no clear shadow there is nothing to project — the body stays unreadable"
+    );
+    // The puller must also be TOLD (issue #231 review). The refusal is printed on the
+    // SERVING node's stderr, at what is usually another site with another operator,
+    // while the symptom — a chart whose sealed bodies will not render — appears here.
+    // Before the reason travelled, B's cycle log was byte-identical to a healthy sync.
+    let pull_log = String::from_utf8_lossy(&pull.stderr);
+    assert!(
+        pull_log.contains("WITHHELD CUSTODY"),
+        "the puller must learn that custody was withheld, not just silently store \
+         unreadable bodies\nstderr: {pull_log}"
+    );
+}
+
+/// Issue #231 review — a REVOKED peer must be told it was revoked.
+///
+/// The arm existed and its message was unit-tested, but nothing could reach it: a
+/// `peer.revoked` event carries only `peer_node_id_hex`, so db/007 stores a NULL
+/// `peer_pubkey` on the revoke row and `trust_peer`'s `DISTINCT ON (subject_node_id)`
+/// lets that row REPLACE the `peer` row that held the key. The revoked kid vanished
+/// from the view, the lookup's `peer_pubkey = $1` probe answered "never seen it", and
+/// the operator response to a COMPROMISED peer was *"this key is not among this node's
+/// admitted peers. Admit it out of band"* — an instruction to re-admit the node they
+/// had just deliberately cut off, with the revocation act erased from the telling.
+/// Principle 2 in miniature: never erase, always overlay.
+///
+/// Custody was withheld either way, so this was never a leak — it was the compromise
+/// response path telling the operator to undo the compromise response.
+#[tokio::test]
+async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+
+    // B is admitted for real, THEN revoked — the only way to land on the revoked arm
+    // is to have genuinely been a peer first, which is exactly what makes it hard to
+    // reach and why it went untested.
+    admit_puller_to_trust_set(&a, &sk_d, &kid_d, &b, &sk_b, &kid_b).await;
+    let id_b = identity::load_local(&b)
+        .await
+        .expect("B identity")
+        .node_id_hex;
+    revoke_peer(&a, &sk_d, &kid_d, &id_b).await;
+
+    let mut a = a;
+    let patient = Uuid::now_v7();
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
+    let med = assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "warfarin",
+            coding: None,
+            formulation: Some("tablet"),
+            dose_amount: Some("5"),
+            dose_unit: Some("mg"),
+            sig: Some("daily"),
+            info_source: "patient-reported",
+            started: Some("2024"),
+            started_precision: Some("year"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let content_eid = content_event_id_of(&a, med).await;
+
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_REVOKED,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_REVOKED);
+    let pull = Command::new(bin)
+        .args([
+            "pull",
+            "--conn",
+            &base_b,
+            "--peer",
+            LISTEN_REVOKED,
+            "--peer-name",
+            "node-a",
+            "--key",
+            &key_b,
+        ])
+        .output()
+        .expect("run pull");
+    assert!(
+        pull.status.success(),
+        "a revoked peer still receives events"
+    );
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (0, 0),
+        "a revoked peer gains no custody"
+    );
+
+    let pull_log = String::from_utf8_lossy(&pull.stderr);
+    assert!(
+        pull_log.to_lowercase().contains("revoked"),
+        "a revoked peer must be told it was REVOKED — the revocation is an act someone \
+         performed, and erasing it from the report is what sent the operator to re-pair \
+         a node they had deliberately cut off\nstderr: {pull_log}"
+    );
+    assert!(
+        !pull_log.contains("not among this node's admitted peers"),
+        "this is the exact wrong message: it reads as 'never heard of you' for a peer \
+         this node deliberately revoked\nstderr: {pull_log}"
+    );
+}
+
+/// Issue #231 review — the withhold IS repairable, and it takes BOTH printed steps.
+///
+/// The operator line promises a remedy, so the remedy is a test. Measured during
+/// review, `pull --full` alone took custody from `(0,0)` to `(1,1)` and left the
+/// medication projection at ZERO: the re-apply fills `event_dek`/`event_clear` (its
+/// inserts are `ON CONFLICT DO NOTHING` and there is no early return for a known
+/// event), but the `event_log` insert IS a no-op, and the projection dispatcher is an
+/// `AFTER INSERT` trigger on that table — so it never fires. An operator who followed
+/// the line as first written re-swept, saw the chart still empty, and would reasonably
+/// conclude the record was lost.
+///
+/// The middle assertion is therefore the point of this test: it pins the fact the
+/// operator line has to disclose, so a future edit cannot quietly drop step 2.
+#[tokio::test]
+async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
+    let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
+        eprintln!("skipped: set CAIRN_TEST_PG and CAIRN_TEST_PG2");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base_a).await.unwrap();
+
+    let a = db::connect_and_load_schema(&base_a).await.unwrap();
+    reset(&a).await;
+    let b = db::connect_and_load_schema(&base_b).await.unwrap();
+    reset(&b).await;
+    let (sk_d, kid_d) = generate_key().unwrap();
+    let (_sk_h, kid_h) = generate_key().unwrap();
+    enroll_actors(&a, &kid_d, &kid_h).await;
+    enroll_actors(&b, &kid_d, &kid_h).await;
+
+    let keydir = TempDir::new().unwrap();
+    let (sk_b, kid_b) = generate_key().unwrap();
+    let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
+    register_unwrap_key(&b, &sk_b).await;
+    // A is provisioned and has peers — just not B (the arm a live deployment hits).
+    ensure_node_plane(&a, &sk_d, &kid_d, "node-a", "127.0.0.1:7900").await;
+    let (_sk_c, kid_c) = generate_key().unwrap();
+    admit_peer_key(
+        &a,
+        &sk_d,
+        &kid_d,
+        &hex::encode(derived_node_id(0xc1)),
+        &kid_c,
+    )
+    .await;
+
+    let mut a = a;
+    let patient = Uuid::now_v7();
+    register_chart(&a, &sk_d, &kid_d, patient, REG_WALL).await;
+    let med = assert_medication(
+        &mut a,
+        &sk_d,
+        &kid_d,
+        "node-a",
+        patient,
+        &AssertMedicationInput {
+            term: "amoxicillin",
+            coding: None,
+            formulation: Some("capsule"),
+            dose_amount: Some("500"),
+            dose_unit: Some("mg"),
+            sig: Some("TDS"),
+            info_source: "patient-reported",
+            started: Some("2025"),
+            started_precision: Some("year"),
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let content_eid = content_event_id_of(&a, med).await;
+
+    let bin = env!("CARGO_BIN_EXE_cairn-sync");
+    let _serve = ServeGuard(
+        Command::new(bin)
+            .args([
+                "serve",
+                "--conn",
+                &base_a,
+                "--listen",
+                LISTEN_REPAIR,
+                "--key",
+                &key_a,
+            ])
+            .spawn()
+            .expect("spawn serve"),
+    );
+    wait_listening(LISTEN_REPAIR);
+    let pull_args = [
+        "pull",
+        "--conn",
+        &base_b,
+        "--peer",
+        LISTEN_REPAIR,
+        "--peer-name",
+        "node-a",
+        "--key",
+        &key_b,
+    ];
+
+    // --- 1. unadmitted: the events arrive, the bodies do not open ---
+    let pull1 = Command::new(bin).args(pull_args).output().expect("pull 1");
+    assert!(pull1.status.success());
+    assert_eq!(custody_count(&b, &content_eid).await, (0, 0));
+    assert_eq!(statement_count_for_med(&b, med).await, 0);
+
+    // --- 2. the operator does what the line says: admit, then FULL sweep ---
+    // B provisions its own node plane as part of pairing (it had none: an unadmitted
+    // puller is typically a site that has not run the ceremony from either end).
+    let id_b = ensure_node_plane(&b, &sk_b, &kid_b, "node-b", "127.0.0.1:7901")
+        .await
+        .node_id_hex;
+    admit_peer_key(&a, &sk_d, &kid_d, &id_b, &kid_b).await;
+    let mut full_args = pull_args.to_vec();
+    full_args.push("--full");
+    let pull2 = Command::new(bin).args(&full_args).output().expect("pull 2");
+    assert!(
+        pull2.status.success(),
+        "the full sweep must succeed\nstderr: {}",
+        String::from_utf8_lossy(&pull2.stderr)
+    );
+    assert_eq!(
+        custody_count(&b, &content_eid).await,
+        (1, 1),
+        "the re-offer carries a DEK now, and the apply door's custody inserts are \
+         ON CONFLICT DO NOTHING with no early return for a known event — so the sweep \
+         DOES fill in the custody it missed"
+    );
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        0,
+        "…and the chart is STILL empty. The event_log insert is a no-op on re-apply, \
+         so the AFTER INSERT projection dispatcher never fires. This is why the \
+         operator line must name a second step — a remedy that restores the key and \
+         leaves the record unreadable reads as data loss"
+    );
+
+    // --- 3. …then the reproject the line also names ---
+    b.query("SELECT cairn_reproject()", &[])
+        .await
+        .expect("heal-mode reproject");
+    assert_eq!(
+        statement_count_for_med(&b, med).await,
+        1,
+        "heal mode replays the apply fns over the now-readable events, and the chart \
+         comes back — the withhold is fully repairable, which is what makes withholding \
+         the key (never the bytes) safe"
     );
 }
 

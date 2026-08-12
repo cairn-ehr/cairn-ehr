@@ -412,33 +412,43 @@ qualifier: `cairn-sync serve` verified a puller's unwrap cert against its own si
 self-consistency only, so **any self-signed cert reaching the serve port obtained read-custody of every
 non-shredded sealed body** — and a DEK is what populates `event_clear` and opens the plaintext, so that
 was clinical-data READ, not a future shred capability. Transport was the sole gate. The kid is now
-pinned to `trust_peer` (db/007), the third consumer of the one trust set after the mTLS cert-pin
-verifier and `refresh_trust_set`. **This unblocks #232 part C (sequester, #376)** and retires the
-standing "born-sealed is erasability, NOT confidentiality" caveat.
+pinned to `trust_peer` (db/007) — the same trust set `refresh_trust_set` snapshots for the mTLS
+cert-pin verifier, under the same `status = 'active'` grading. **This unblocks #232 part C (sequester,
+#376)** and retires the standing "born-sealed is erasability, NOT confidentiality" caveat.
 
-**Four things worth carrying:**
+**Five things worth carrying:**
 
 1. **Withhold the key, never the bytes.** An unadmitted puller still receives the events and its pull
    still SUCCEEDS — sealed ciphertext is harmless without a DEK, and a refusal would fork the event set
    and wedge replication for no confidentiality gain. The new test asserts both halves; the second is the
-   one a later "tighten this up" would break. **The repair is `pull --full`, not "pull again"**: custody
-   is repairable (no duplicate early-return at the apply door, custody insert is `ON CONFLICT DO
-   NOTHING`), but an incremental pull asks only for `seq > cursor`, already past the affected events. A
-   unit test now refuses any recoverable withhold line that fails to name the full sweep.
-2. **Six sites in `clinical_pull.rs` had to gain a peering ceremony — that IS the finding.** Every one
+   one a later "tighten this up" would break. **The repair is two steps**: `pull --full` (custody is
+   repairable — no duplicate early-return at the apply door, custody inserts are `ON CONFLICT DO
+   NOTHING` — but an *incremental* pull asks only for `seq > cursor`, already past the affected events)
+   **then `cairn_reproject()`**, because the sweep restores the key and NOT the chart: the `event_log`
+   insert is a no-op on re-apply and the projection dispatcher is an `AFTER INSERT` trigger. Measured in
+   review as custody `(0,0) → (1,1)` with the projection still `0`.
+2. **A `DISTINCT ON` view can erase the attribute you key on.** The revoked arm shipped unreachable —
+   `peer.revoked` carries no `peer_pubkey`, so the revoke row stores NULL there and REPLACES the `peer`
+   row in `trust_peer`, and a revoked kid simply vanishes from the view. A **compromised, deliberately
+   revoked** peer was told *"not among this node's admitted peers … admit it out of band"*. Fail-closed
+   held throughout (custody was withheld either way); what failed was the telling. Revocation now reads
+   back through the historical `peer` row.
+3. **Six sites in `clinical_pull.rs` had to gain a peering ceremony — that IS the finding.** Every one
    had been taking custody with no admission whatsoever. The tests that did NOT need it assert only
    event-plane replication, which the pin does not touch, so nothing passed vacuously.
-3. **An empty `trust_peer` has two causes needing different first commands.** The view filters on
+4. **An empty `trust_peer` has two causes needing different first commands.** The view filters on
    `author_node_id = (SELECT node_id FROM local_node WHERE id)`, so it reads empty both when the node
    plane was never initialised AND when it is provisioned but unpeered. The first draft told the second
    to run `cairn-node init` — a remedy that cannot work, which is worse than none. **Found by reading a
    PASSING test's serve log**: the wire test claimed to exercise "not an admitted peer" and was silently
    taking the weaker arm. The lookup now reads `local_node` too, and the wire test admits a real
    third-party peer so it lands on the arm it names.
-4. **A SOFT cross-subset dependency, resolved deliberately.** `cairn-sync`'s SCHEMA subset still excludes
+5. **A SOFT cross-subset dependency, resolved deliberately.** `cairn-sync`'s SCHEMA subset still excludes
    db/007, so serve reads a relation its own loader never creates — fine *because the absence is an
-   answer*: `42P01` → withhold + name the missing provisioning. Adding db/007 would collide with db/001's
-   `hlc_state`; that is #284's decision, and the comment at the subset says so.
+   answer*: `42P01` → withhold + name the missing provisioning (hedged: a `search_path` that cannot see
+   the view raises the same SQLSTATE). db/007 re-declares `hlc_state` idempotently, with a shape
+   identical to db/001's today; reconciling the two is #284's decision, and the comment at the subset
+   says so.
 
 - **Interlude — the supply-chain gate (2026-08-11, PR #390).** `unsound = "all"` in both `deny.toml`
   trees: cargo-deny's v2 default of `"none"` let an advisory flagged `informational = "unsound"` pass in

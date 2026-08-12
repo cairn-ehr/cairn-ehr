@@ -185,29 +185,49 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
 verified a puller's unwrap-key certificate against its own signature and self-consistency only, so the
 ADR's *"re-wraps for any **admitted** peer"* had its qualifier unenforced: **any self-signed cert
 reaching the serve port obtained read-custody of every non-shredded sealed body.** The kid is now pinned
-to `trust_peer` (db/007) — the third consumer of the one trust set, after the mTLS cert-pin verifier and
-`refresh_trust_set`. Four things to carry:
+to `trust_peer` (db/007) — the same trust set `refresh_trust_set` snapshots for the mTLS cert-pin
+verifier (`transport::pinned` tests membership of that snapshot rather than re-querying), under the same
+`status = 'active'` grading, so custody admission is not a second definition of who is admitted. Six
+things to carry:
 
 1. **Withhold the key, never the bytes.** An unadmitted puller still receives the events and its pull
    still succeeds: sealed ciphertext is harmless without a DEK, and refusing it would fork the event set
    and wedge replication for no confidentiality gain. Same degradation an absent cert already took.
-2. **The repair is `pull --full`, NOT "pull again"** — a durable operational fact, not a slice detail.
-   Withheld custody *is* repairable (`apply_remote_event` has no duplicate early-return and its custody
-   insert is `ON CONFLICT DO NOTHING`, so a re-offer carrying a DEK fills the gap), but an incremental
-   pull asks only for `seq > cursor`, which is already past the custody-less events. A shred is the one
-   irreparable case, deliberately. Caught by asking whether the remedy I had printed could actually be
-   run — the Slice 61 lesson turned on my own text.
-3. **Six sites in `clinical_pull.rs` had to gain a peering ceremony, and that IS the finding** — every
-   one had been obtaining custody with no admission at all. The new sibling test asserts the security
-   case directly: an unadmitted puller replicates the events and gains `(0, 0)` custody.
-4. **`trust_peer` reads empty on a provisioned-but-unpeered node AND on an uninitialised one**, because
+2. **The repair is TWO steps — `pull --full` THEN `cairn_reproject()`** — a durable operational fact,
+   not a slice detail. The sweep restores CUSTODY (`apply_remote_event` has no duplicate early-return
+   and its custody inserts are `ON CONFLICT DO NOTHING`, so a re-offer carrying a DEK fills the gap;
+   an *incremental* pull asks only for `seq > cursor`, already past those events) — and **leaves the
+   chart empty**: the `event_log` insert is a no-op on re-apply, and the projection dispatcher is an
+   `AFTER INSERT` trigger, so it never fires. Measured during the PR review: custody `(0,0) → (1,1)`,
+   `medication_statement` still `0`. Heal-mode `cairn_reproject()` (owner role) brings it back. Both
+   steps are named in the operator line and pinned by
+   `an_admitted_peer_recovers_the_bodies_it_pulled_without_custody`, whose middle assertion is the
+   "still empty" fact. A shred stays the one irreparable case, deliberately.
+3. **A `DISTINCT ON` view can erase the very attribute you key on.** The revoked-peer arm shipped
+   unreachable: `peer.revoked` carries only `peer_node_id_hex`, so db/007 stores a NULL `peer_pubkey`
+   on the revoke row and `trust_peer`'s `DISTINCT ON (subject_node_id) … ORDER BY hlc DESC` lets that
+   row REPLACE the `peer` row holding the key — a revoked kid vanishes from the view, so a
+   `peer_pubkey = $1` probe answers "never seen it". The operator response to a **compromised** peer was
+   therefore *"not among this node's admitted peers … admit it out of band"*. Custody was withheld
+   either way (never a leak), but the compromise-response path told the operator to undo the compromise
+   response. Reading revocation back needs the historical `peer` row joined to the subject's current
+   status. `refresh_trust_set`'s `AND peer_pubkey IS NOT NULL` guard is the same NULL seen from the
+   other side.
+4. **The party that experiences a degradation must be the party told about it.** The withhold prints on
+   the SERVING node's stderr, but the blank chart is at the PULLER, usually another site with another
+   operator, and the remedy names steps *they* run. `EventsResponse` now carries an additive
+   `custody_withheld` reason; the puller prints it and reports it as a metric. Deliberately NOT folded
+   into `cycle_is_loud` (a peering gap would then read as a broken link) — noted in that function's doc.
+5. **`trust_peer` reads empty on a provisioned-but-unpeered node AND on an uninitialised one**, because
    it filters on a `local_node` subquery that is NULL in the second. The first draft collapsed both into
    one line telling the operator to run `cairn-node init` **on an already-initialised node** — a remedy
    that cannot work. Found by reading the serve log of a *passing* test, not by an assertion; the lookup
    now reads `local_node` too, and a unit test pins the two apart.
-5. **`cairn-sync`'s SCHEMA subset deliberately still excludes db/007**, so this is a SOFT dependency:
-   `42P01` maps to its own arm, withholds, and names the missing provisioning. Adding db/007 to the
-   subset would collide with db/001's `hlc_state` — that is #284's decision, not this slice's.
+6. **`cairn-sync`'s SCHEMA subset deliberately still excludes db/007**, so this is a SOFT dependency:
+   `42P01` maps to its own arm, withholds, and names the missing provisioning (now with the underlying
+   error, and hedged — a `search_path` that cannot see the view raises the same SQLSTATE). db/007
+   re-declares `hlc_state` idempotently and with a shape identical to db/001's today; reconciling the
+   two declarations is #284's decision, not this slice's.
 
 **2026-08-11 — the supply-chain gate could not see unsound advisories** (PR #390). cargo-deny's advisories
 config v2 defaults `unsound = "none"`, so an advisory carrying `informational = "unsound"` passed the gate
