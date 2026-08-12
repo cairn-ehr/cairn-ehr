@@ -13,6 +13,9 @@
   (the strict-submit / lenient-apply door precedent this ADR reuses); [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)
   (blob bytes inherit born-sealed via the per-blob DEK); [ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)
   (additive-only wire — the custody sidecar and the sealed `schema_version` are its application).
+- **Errata:** **E1**, appended 2026-08-11 (under decision 4) — §4's *"any **admitted** peer"* described
+  an intent the code did not implement until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231).
+  The decision is unchanged; only the record of what was built is corrected.
 - **Resolves:** [#189](https://github.com/cairn-ehr/cairn-ehr/issues/189) (2026-07-15 review finding C1,
   Critical/window-closing — the seal-by-default posture), [#92](https://github.com/cairn-ehr/cairn-ehr/issues/92)
   (2026-07-02 — the ADR-0005 erasure-ladder composition collisions).
@@ -159,6 +162,27 @@ slice's perf bench (§8).
   it** — set-union losslessness holds; **confidentiality lives in key custody, never in withholding
   rows** ([ADR-0006](0006-visibility-scope-replication-and-the-safety-projection.md) confirmed, not
   amended).
+
+> **Erratum E1 (2026-08-11) — the deferred hardening landed; the decision is unchanged.**
+> *"The sender re-wraps the DEK for any admitted peer (custody follows admission trust)"* described the
+> **intent**; from the born-sealed slice until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231)
+> the code did not implement it. `cairn-sync serve` verified a puller's unwrap certificate against its
+> own signature and self-consistency only — never the cert's `kid` against the trust set — so **the
+> qualifier "admitted" was unenforced and transport (WireGuard / mTLS on the serve port) was the sole
+> gate on read-custody.** Any self-signed cert reaching the port obtained the DEKs, and a DEK is what
+> populates `event_clear` and opens the sealed plaintext, so this conferred clinical-data **read**, not
+> merely a later shred capability. Until it closed, born-sealed was an **erasability** substrate and not
+> confidentiality — which is also what blocked §5.9 part C (sequester,
+> [#376](https://github.com/cairn-ehr/cairn-ehr/issues/376)): narrowing a body's custody to two named
+> clinicians was defeated by asking the serve port for the DEK.
+>
+> `serve` now pins the `kid` to `trust_peer` (`db/007`) — the same set `refresh_trust_set` snapshots for
+> the mTLS cert-pin verifier, under the same `status = 'active'` grading — and **withholds custody, never
+> the events**: the bodies still replicate as sealed ciphertext, because refusing them would fork the
+> event set and wedge replication for no confidentiality gain. Fail-closed on every uncertainty,
+> including an un-provisioned node plane; the operator line names which cause applies, since their
+> remedies differ, and travels to the puller (whose chart is the thing that goes blank) rather than
+> stopping at the serving node's log.
 
 ### 5. Two doors — the floor makes born-sealed unbypassable
 

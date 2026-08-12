@@ -169,6 +169,25 @@ const SCHEMA: &[(&str, &str)] = &[
     ),
 ];
 
+// DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS
+// `trust_peer` + `local_node` from it to decide whether a pulling peer may obtain
+// read-custody — so this subset now has a SOFT dependency on a migration it does not
+// load. That is the Slice 64 lesson in its other direction, and it is resolved
+// deliberately rather than by adding db/007 here:
+//
+//   * The node plane is `cairn-node`'s to provision, and on any real node it has —
+//     both binaries share one database, and cairn-node's loader carries db/007.
+//   * db/007 re-declares `hlc_state`, which db/001 already creates for this subset. The
+//     shapes match today, but reconciling that is a decision of its own (issue #284,
+//     subset-vs-full consistency), not something to smuggle in behind a custody fix.
+//   * The dependency is SOFT because its absence is an ANSWER, not a fault:
+//     `look_up_peer_trust` maps SQLSTATE 42P01 to `TrustLookup::NodePlaneAbsent`, which
+//     withholds custody and says so. A door carrying a rule it cannot satisfy would be
+//     the defect; a door that fails closed and names the missing provisioning is not.
+//
+// If you ever make this subset load db/007, delete the NodePlaneAbsent arm with it —
+// leaving a dead arm behind is how a floor grows unreachable branches nobody tests.
+
 const SLICE_BYTES: usize = 256 * 1024; // window/slice granularity (tuned; amortizes bao tree overhead)
 
 /// Per-peer bounds on the quarantine pen (PR #110 review finding 2). Identical
@@ -389,6 +408,30 @@ struct EventsResponse {
     /// (sealed rows still admit structurally at the door).
     #[serde(default)]
     wrapped_deks: Vec<Option<String>>,
+    /// WHY no custody travelled, when the server deliberately withheld it (issue #231
+    /// review). `None` means either "custody was granted" or "there was nothing to
+    /// grant" — an empty `wrapped_deks` alone cannot tell those apart, which is exactly
+    /// how the puller went blind.
+    ///
+    /// The serving node prints this on its own stderr, but the node that experiences
+    /// the consequence is the PULLER: its sealed bodies will not render, and the
+    /// remedy names steps its operator must run, at what is usually another site. So
+    /// the reason travels with the refusal. It is operator prose, never a control
+    /// signal: the puller prints it and counts it, and applies exactly the events it
+    /// would have applied anyway (withhold the key, never the bytes).
+    ///
+    /// **It is sent to an UNADMITTED peer, deliberately.** The line does disclose a
+    /// little about this node — whether it has peers, whether its node plane is
+    /// provisioned — to a party the trust set just refused. Accepted, because that
+    /// party has already been served the entire event log, including every UNSEALED
+    /// event in plaintext (this pin protects sealed bodies; it is not an authorisation
+    /// layer over replication). Against that, "this node has admitted no peers yet" is
+    /// not the disclosure worth guarding, and an operator who cannot see why a chart is
+    /// blank is a real safety cost. Revisit if replication itself ever becomes gated.
+    ///
+    /// Additive (serde default): an older peer omits it and it decodes as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    custody_withheld: Option<String>,
 }
 
 /// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
@@ -597,6 +640,13 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 ///
 /// A human `ack` on a pen row is deliberately NOT counted by the caller: an
 /// acked exclusion is a recorded decision, not an unresolved refusal.
+///
+/// One state that fits the wording above is deliberately EXCLUDED: a peer that
+/// withheld custody (issue #231). This node then holds sealed bodies it cannot read —
+/// knowingly lacking something the peer holds — but every event it was offered did
+/// arrive, the degradation is the sanctioned ADR-0052 one, and failing every cycle
+/// would make an un-finished peering ceremony read as a broken link. It gets its own
+/// stderr line and its own `custody_withheld` metric instead (see `do_pull`).
 fn cycle_is_loud(unverifiable: usize, refused: usize, frozen: bool, pen_failed: bool) -> bool {
     unverifiable > 0 || refused > 0 || frozen || pen_failed
 }
@@ -1957,6 +2007,19 @@ fn do_pull(
     //     freezes exactly as for a transient apply failure — delayed, never lost.
     // Any unacked refusal — and any freeze (issue #270) — makes the whole pull FAIL
     // LOUDLY at the end.
+    // The peer deliberately withheld custody for this batch (issue #231 review). Print
+    // it BEFORE applying, so the reason is above the "N applied" line rather than
+    // buried under it. This node still applies every event it was offered — withhold
+    // the key, never the bytes — but it now KNOWS why the sealed bodies it is about to
+    // store will not render, instead of logging a cycle byte-identical to a healthy one
+    // while a clinician reads an empty medication list. The remedy travels in the line.
+    if let Some(reason) = resp.custody_withheld.as_deref() {
+        eprintln!(
+            "pull {peer_name}: the peer WITHHELD CUSTODY for this batch — its sealed \
+             bodies replicate here but stay UNREADABLE until this is fixed. The serving \
+             node reported: {reason}"
+        );
+    }
     let (mut applied, mut skipped_unverifiable, mut skipped_acked, mut event_bytes) =
         (0usize, 0usize, 0usize, 0usize);
     // Verifiable events the floor refused and we penned this cycle (issue #267).
@@ -2033,6 +2096,11 @@ fn do_pull(
                             None
                         }
                     },
+                    // No sidecar DEK for this slot. Silent HERE on purpose: it is the
+                    // normal case for every unsealed event, so a line per slot would be
+                    // pure noise. When the absence is a deliberate REFUSAL rather than
+                    // "nothing to send", the peer says so once per batch in
+                    // `resp.custody_withheld`, printed above (issue #231 review).
                     _ => None,
                 };
                 match apply_signed(
@@ -2228,6 +2296,15 @@ fn do_pull(
         "refused_verifiable": refused_verifiable,
         "skipped_acked": skipped_acked,
         "watermark_frozen": frozen,
+        // Deliberately NOT folded into `cycle_is_loud` (issue #231 review). It IS a
+        // state in which this node knowingly lacks something the peer holds, which is
+        // that predicate's stated test — but the events themselves all arrived, the
+        // degradation is the sanctioned ADR-0052 one, and failing every cycle would
+        // turn a peering gap into a link that reads as broken. Surfaced as its own
+        // metric + its own stderr line instead, so a monitor can alert on it without
+        // the pull having to fail. Revisit if a real deployment finds the line alone
+        // too quiet to notice.
+        "custody_withheld": resp.custody_withheld.is_some(),
         "floor_active": new_floor.is_some(),
         "event_bytes": event_bytes, "wire_bytes": wire_bytes,
         "bytes_per_event": if resp.events.is_empty() { 0.0 }
@@ -2906,6 +2983,315 @@ fn cmd_run(
     Ok(())
 }
 
+/// What this node's admitted-peer trust set says about a presented unwrap cert's
+/// `kid` (issue #231).
+///
+/// Deliberately a small closed vocabulary rather than a bare `bool`. Every non-grant
+/// arm ends at the same place — no custody — but they are DIFFERENT operator problems
+/// with different fixes, and collapsing them into one "custody withheld" line is
+/// exactly how a silent replication stall becomes unreadable. Keeping them distinct is
+/// what lets `decide_custody` print a remedy the reader can actually run.
+///
+/// (No count is stated here on purpose: the first review of this code found "five"
+/// written in four places when there were already six, and #376's sequester will add
+/// another. `decisions/README.md` names a miscounted count as the classic erratum.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrustLookup {
+    /// `trust_peer` holds this kid with `status = 'active'` — an admitted peer.
+    ActivePeer,
+    /// This node once peered this kid, and that subject's latest op is `revoke`.
+    ///
+    /// Deliberately NOT read off `trust_peer.peer_pubkey`: `peer.revoked` carries only
+    /// `peer_node_id_hex` in its payload (`identity::author_unpeer`), so db/007 stores
+    /// a NULL `peer_pubkey` on the revoke row, and the view's `DISTINCT ON
+    /// (subject_node_id)` lets that row REPLACE the `peer` row that held the key. A
+    /// revoked kid therefore vanishes from `trust_peer` entirely. Reading it back needs
+    /// the historical `peer` row — see `look_up_peer_trust`. (Review of PR #391: this
+    /// arm was unreachable, so revoking a compromised peer printed "not among this
+    /// node's admitted peers … admit it out of band" — an instruction to re-admit the
+    /// node the operator had just deliberately cut off.)
+    RevokedPeer,
+    /// The trust set has peers, but none carrying this kid.
+    NotAPeer,
+    /// The node plane IS provisioned, but nothing has been peered yet — a healthy
+    /// new node that simply has not run the pairing ceremony.
+    NoPeersAdmitted,
+    /// `local_node` is unset: `cairn-node init` was never run here. Kept distinct
+    /// from [`Self::NoPeersAdmitted`] because `trust_peer` filters on
+    /// `author_node_id = (SELECT node_id FROM local_node WHERE id)` — with
+    /// `local_node` empty that subquery is NULL and the view yields zero rows *no
+    /// matter how many peer events exist*, so the two states look identical from
+    /// `trust_peer` alone and their first command differs (`init`, then `pair`).
+    NodePlaneUninitialised,
+    /// `trust_peer` does not exist in this database at all (SQLSTATE `42P01`):
+    /// `db/007` was never loaded here. `cairn-sync`'s own SCHEMA subset
+    /// deliberately excludes it — the node plane is `cairn-node`'s to provision.
+    NodePlaneAbsent,
+    /// The lookup itself failed for any other reason (permissions, a dropped
+    /// session). Distinct from every "answer" above because the honest statement
+    /// is *we do not know*, and principle 4 says an acknowledged unknown must not
+    /// be dressed up as a finding.
+    LookupFailed,
+}
+
+impl TrustLookup {
+    /// Can the PULLER get back the bodies it already replicated without custody, once
+    /// this cause is fixed?
+    ///
+    /// This is the property the operator line's recovery clause is keyed on, expressed
+    /// as an exhaustive match so a NEW arm is a compile error here rather than silently
+    /// inheriting someone else's remedy. (Its first version was a substring test over
+    /// the message prose — `line.contains("cairn-node pair")` — which could quietly
+    /// classify LESS as the wording changed, and did already miss one arm.)
+    ///
+    /// False for the two arms the puller cannot act on: a node plane that was never
+    /// loaded, and a lookup that failed for an unknown reason. Telling a puller to
+    /// re-sweep before the SERVING node is fixed is a remedy that runs and does nothing.
+    fn puller_can_recover(self) -> bool {
+        match self {
+            // Nothing was withheld, so there is nothing to recover.
+            TrustLookup::ActivePeer => false,
+            TrustLookup::RevokedPeer
+            | TrustLookup::NotAPeer
+            | TrustLookup::NoPeersAdmitted
+            | TrustLookup::NodePlaneUninitialised => true,
+            TrustLookup::NodePlaneAbsent | TrustLookup::LookupFailed => false,
+        }
+    }
+}
+
+/// The serve side's custody decision for one pulling peer.
+///
+/// Both arms carry what acting on them requires, so a caller cannot take the decision
+/// without also taking its consequence: `Grant` carries the very key the DEKs may be
+/// re-wrapped for (so re-wrapping for a key the decision did not admit is a compile
+/// error, not a review question), and `Withhold` carries both its typed cause and the
+/// operator line that explains it — produced together, by one pure function, so there
+/// is no way to log the wrong reason for a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CustodyAdmission {
+    /// Re-wrap this node's DEKs for THIS key — the one carried in the verified cert
+    /// whose `kid` the trust set just admitted.
+    Grant { requester_pub: [u8; 32] },
+    /// Serve the events WITHOUT custody, and print this line.
+    Withhold {
+        cause: TrustLookup,
+        operator_line: String,
+    },
+}
+
+/// Decide whether a pulling peer may obtain read-custody of this node's sealed
+/// bodies, from one trust-set lookup (issue #231; the ADR-0052 hardening deferred
+/// as "custody is designed to follow admission").
+///
+/// **Fail closed.** Only `ActivePeer` grants. A DEK is what populates `event_clear`
+/// and opens the sealed plaintext, so handing one over confers clinical-data READ —
+/// not merely a later crypto-shred capability. Every uncertainty therefore withholds.
+///
+/// **Withhold, never refuse the pull.** The events still ship: they are sealed
+/// ciphertext, harmless without a DEK, and refusing them would wedge replication for
+/// an availability gain of nothing (principle: availability over consistency; a
+/// refusal here would fork the event set). This is the same degradation the arm
+/// already performs for an absent or malformed cert — an unadmitted kid simply joins
+/// that path.
+///
+/// The lines name a remedy the reader can run from what was printed (the Slice 61
+/// lesson), and the two provisioning arms name the NODE PLANE rather than the peer,
+/// because blaming the puller for this node's un-provisioned state sends the operator
+/// hunting the wrong problem.
+///
+/// **Why the recovery clause names TWO steps, not "pull again".** Withheld custody is
+/// repairable, but only by a remedy in two parts, and naming half of it is what makes
+/// a safety refusal worse than useless:
+///
+/// 1. `pull --full`. `apply_remote_event` has no early return for an event already in
+///    the log, and its custody insert is `ON CONFLICT (event_id) DO NOTHING`, so a
+///    re-offer that *does* carry a DEK fills in the missing `event_dek` / `event_clear`
+///    rows. But an incremental pull only asks for `seq > cursor`, and by the time the
+///    operator reads this line the cursor is already past the custody-less events. Only
+///    the full sweep (`after_seq = 0`) re-offers them. (The periodic `FULL_SWEEP_EVERY`
+///    sweep gets there eventually; `--full` is the same thing on demand.)
+/// 2. `cairn_reproject`. The sweep restores custody and NOT the chart: the projection
+///    dispatcher is an `AFTER INSERT` trigger on `event_log` (db/005), and the re-apply
+///    inserts no row (`ON CONFLICT DO NOTHING`, db/020), so it never fires. The
+///    projections were built when the events first applied — without a clear view — and
+///    a re-apply does not rebuild them. Heal mode (`p_rebuild` false, the default)
+///    replays the apply fns over the now-readable events without truncating anything.
+///
+/// Step 2 is the review finding that made this clause honest: measured, `pull --full`
+/// alone took custody from `(0,0)` to `(1,1)` and left `medication_statement` at zero —
+/// the clinician's chart still empty after following the printed instruction, which is
+/// the Slice 61 failure one layer down. `an_admitted_peer_recovers_the_bodies_it_pulled_without_custody`
+/// pins both steps, including the fact that step 1 alone is not enough.
+///
+/// The one arm with no repair path is a SHRED: `db/020` step 9 refuses custody for a
+/// target in `erasure_shred_log` however often it is re-delivered. That is deliberate
+/// anti-resurrection, not a gap.
+fn decide_custody(kid: &str, requester_pub: [u8; 32], lookup: TrustLookup) -> CustodyAdmission {
+    // The recovery clause is shared, and emitted ONLY for the causes the puller can
+    // actually act on (`puller_can_recover`) — a typed property, not a grep over this
+    // prose. Keeping it out of the per-cause text leaves each line about its CAUSE and
+    // stops six copies of the same two-step instruction drifting apart.
+    let recovery = if lookup.puller_can_recover() {
+        " Once that is done the puller recovers the bodies it already replicated in TWO \
+         steps: `cairn-sync pull --full` (an incremental pull cannot reach events below \
+         its cursor), THEN `SELECT cairn_reproject()` on the puller as its DB owner — \
+         the sweep restores custody but NOT the projections, which were built without a \
+         clear view and are not rebuilt by a re-apply."
+    } else {
+        ""
+    };
+    // One shared prefix, so every line reads the same way and an operator grepping
+    // logs for lost custody finds every cause with one pattern.
+    let withhold = |cause_text: &str| CustodyAdmission::Withhold {
+        cause: lookup,
+        operator_line: format!(
+            "cairn-sync serve: custody WITHHELD from puller {kid} — {cause_text} \
+             (the events still sync; their sealed bodies stay unreadable there).{recovery}"
+        ),
+    };
+    match lookup {
+        TrustLookup::ActivePeer => CustodyAdmission::Grant { requester_pub },
+        TrustLookup::RevokedPeer => withhold(
+            "this key belongs to a REVOKED peer. If the revocation was intended, \
+             nothing to do — this node is refusing custody exactly as asked. If not, \
+             re-pair it out of band (`cairn-node pair-offer` / `pair-accept`)",
+        ),
+        TrustLookup::NotAPeer => withhold(
+            "this key is not among this node's admitted peers. Admit it out of band \
+             (`cairn-node pair-offer` / `pair-accept`)",
+        ),
+        TrustLookup::NoPeersAdmitted => withhold(
+            "this node has admitted no peers at all yet. Pair this puller out of band \
+             (`cairn-node pair-offer` / `pair-accept`)",
+        ),
+        TrustLookup::NodePlaneUninitialised => withhold(
+            "this node's node plane was never initialised (`local_node` is unset, \
+             which empties `trust_peer` whatever peer events exist). Run `cairn-node \
+             init` here, then pair this puller (`cairn-node pair-offer` / `pair-accept`)",
+        ),
+        TrustLookup::NodePlaneAbsent => withhold(
+            "the lookup raised SQLSTATE 42P01 (undefined_table) — see the serve log \
+             line above for which relation. The usual cause is that the node plane \
+             (db/007) was never loaded against this database, so no peer can be \
+             admitted here; a `search_path` that cannot see it does the same. Provision \
+             it with `cairn-node` against this database, then pair this puller",
+        ),
+        TrustLookup::LookupFailed => withhold(
+            "the trust-set lookup itself failed, so admission is UNKNOWN and custody \
+             fails closed. Check this connection's SELECT grant on `trust_peer` and \
+             the serve log line above for the database error",
+        ),
+    }
+}
+
+/// Ask the node-plane trust set about one unwrap-cert `kid`.
+///
+/// The admission predicate is the node plane's own —
+/// `peer_pubkey = <kid> AND status = 'active'` — matching the set `refresh_trust_set`
+/// snapshots for `cairn-node`'s mTLS cert-pin verifier (`transport::pinned` tests
+/// membership of that snapshot rather than re-querying, so this is the same trust set
+/// under the same `status` grading, not a second definition of who is admitted).
+///
+/// Four booleans in one round trip, deliberately: one query means one SNAPSHOT, so the
+/// four facts cannot disagree with each other the way four round trips could (a peer
+/// revoked between the `active` probe and the `revoked` probe). `EXISTS` rather than a
+/// row fetch because `trust_peer` is `DISTINCT ON (subject_node_id)`, so one key
+/// re-registered under two node ids could yield two rows; any-active wins, matching
+/// `refresh_trust_set`, which collects every active `peer_pubkey` into one flat set.
+///
+/// **The `revoked` probe cannot read `trust_peer.peer_pubkey`** — that is the review
+/// defect this shape exists to fix. `peer.revoked` carries only `peer_node_id_hex`
+/// (`identity::author_unpeer`), so db/007 stores a NULL `peer_pubkey` on the revoke
+/// row, and `DISTINCT ON (subject_node_id) … ORDER BY hlc DESC` lets that row REPLACE
+/// the `peer` row that held the key: a revoked kid is simply absent from the view.
+/// Measured, `EXISTS (… WHERE peer_pubkey = $1)` returned false for a peer that had
+/// just been revoked, so the revoked arm was dead and a revoked peer was told it was
+/// "not among this node's admitted peers … admit it out of band". Recovering the fact
+/// therefore needs the HISTORICAL `peer` row: resolve the kid to the subject it was
+/// peered as, then read THAT subject's current status. (`refresh_trust_set`'s
+/// `AND peer_pubkey IS NOT NULL` guard is the same NULL, seen from the other side.)
+///
+/// The fourth boolean reads `local_node`, which is the ONLY thing that separates
+/// "provisioned but nothing peered" from "never initialised" — `trust_peer` is empty
+/// in both, because it filters on a `local_node` subquery that is NULL in the second.
+///
+/// Comparison is exact, not case-folded, deliberately: `peer_pubkey` is stored verbatim
+/// from the pairing bundle and every other consumer of the trust set compares it
+/// verbatim too, so folding HERE would make custody admit a peer the mTLS pin rejects.
+/// Normalising belongs at the pairing door, once, on write — filed as #392.
+///
+/// Errors never propagate: a failed lookup is an *answer* here (fail closed), not a
+/// reason to drop the connection and deny the peer its events.
+fn look_up_peer_trust(client: &mut postgres::Client, kid: &str) -> TrustLookup {
+    let row = client.query_one(
+        "SELECT EXISTS (SELECT 1 FROM trust_peer WHERE peer_pubkey = $1 AND status = 'active'),
+                EXISTS (SELECT 1 FROM trust_peer t
+                         WHERE t.status = 'revoked'
+                           AND t.peer_node_id IN (
+                               SELECT ne.subject_node_id FROM node_event ne
+                                WHERE ne.op = 'peer' AND ne.peer_pubkey = $1
+                                  AND ne.author_node_id = (SELECT node_id FROM local_node WHERE id))),
+                EXISTS (SELECT 1 FROM trust_peer),
+                EXISTS (SELECT 1 FROM local_node WHERE id)",
+        &[&kid],
+    );
+    match row {
+        Ok(r) => {
+            // try_get, not get: an EXISTS can never be NULL, so this is unreachable —
+            // but `get` PANICS, and a panic here unwinds the per-connection thread
+            // WITHOUT `serve_conn`'s error line, leaving the puller a bare EOF it
+            // misdiagnoses as an old-binary wire mismatch. Fail closed totally rather
+            // than incidentally.
+            let probes = (r.try_get(0), r.try_get(1), r.try_get(2), r.try_get(3));
+            let (Ok(active), Ok(revoked), Ok(any_peer), Ok(provisioned)): (
+                Result<bool, _>,
+                Result<bool, _>,
+                Result<bool, _>,
+                Result<bool, _>,
+            ) = probes
+            else {
+                eprintln!(
+                    "cairn-sync serve: trust-set lookup for puller {kid} returned an \
+                     unreadable row — treating admission as UNKNOWN"
+                );
+                return TrustLookup::LookupFailed;
+            };
+            // The probes form an implication chain (`active` and `revoked` are mutually
+            // exclusive, and either implies `any_peer` implies `provisioned`), so the
+            // wildcards below absorb combinations the SQL cannot produce rather than
+            // untested ones. Order is the precedence: a key that is active SOMEWHERE
+            // wins, matching refresh_trust_set's flat any-active set.
+            match (active, revoked, any_peer, provisioned) {
+                (true, _, _, _) => TrustLookup::ActivePeer,
+                (false, true, _, _) => TrustLookup::RevokedPeer,
+                (false, false, true, _) => TrustLookup::NotAPeer,
+                (false, false, false, true) => TrustLookup::NoPeersAdmitted,
+                (false, false, false, false) => TrustLookup::NodePlaneUninitialised,
+            }
+        }
+        Err(e) => {
+            // 42P01 = undefined_table. That is a provisioning fact about THIS
+            // database, not a fault, so it gets its own arm and its own line rather
+            // than being lumped in with a genuine failure.
+            //
+            // Both arms print the error, and BOTH name the kid: the operator lines
+            // point the reader at "the serve log line above", and a serve process runs
+            // one thread per connection, so an unattributed error line can be read
+            // against the wrong peer's refusal when two pullers overlap.
+            let undefined_table = e
+                .code()
+                .is_some_and(|c| c == &postgres::error::SqlState::UNDEFINED_TABLE);
+            eprintln!("cairn-sync serve: trust-set lookup for puller {kid} failed: {e}");
+            if undefined_table {
+                TrustLookup::NodePlaneAbsent
+            } else {
+                TrustLookup::LookupFailed
+            }
+        }
+    }
+}
+
 /// Re-wrap each served event's DEK for the pulling peer — the custody half of the
 /// clinical wire (ADR-0052). Pure so the wire contract is unit-testable.
 ///
@@ -2917,8 +3303,10 @@ fn cmd_run(
 /// Custody thus **follows admission** — it does not widen WHICH events a peer
 /// replicates — but the DEK is precisely what makes a sealed body READABLE, so handing
 /// it over confers clinical-data read access (it populates event_clear / opens the
-/// plaintext), not merely a later crypto-shred capability. What currently gates who may
-/// obtain it is the trust-note at the serve site (transport boundary only, for now).
+/// plaintext), not merely a later crypto-shred capability. Who may obtain it is gated by
+/// the caller: since issue #231 the serve arm pins the requester's unwrap-cert `kid` to
+/// the node-plane trust set (`decide_custody`) and passes `requester_pub = None` for
+/// anyone unadmitted, so this function only ever re-wraps for an admitted peer.
 ///
 /// `local_deks[i]` is None whenever no custody must travel: the event is unsealed,
 /// this node holds no DEK for it, OR it has been SHREDDED here (the serve SQL nulls a
@@ -3013,6 +3401,9 @@ fn serve_conn(
                 // Declare the context we mint under (issue #108) so a skewed
                 // puller can refuse the batch deterministically and legibly.
                 signing_context: Some(CTX_EVENT.as_str().to_string()),
+                // …and therefore nothing was WITHHELD either: this arm cannot receive
+                // a cert, so there was never an admission decision to report.
+                custody_withheld: None,
                 // Legacy HLC arm carries NO custody sidecar (ADR-0052): it cannot
                 // receive an unwrap cert, so it never re-wraps DEKs. Empty = no
                 // custody; sealed events still sync (admitted structurally).
@@ -3059,33 +3450,82 @@ fn serve_conn(
             let local_deks: Vec<Option<String>> =
                 rows.iter().map(|r| r.get::<_, Option<String>>(4)).collect();
 
-            // Verify the pulling peer's unwrap cert (ADR-0052): signature + kid
-            // self-binding only. `verify_unwrap_key_cert` confirms the cert's kid
-            // signed it, so `requester_pub` provably belongs to that identity.
+            // Admit the pulling peer to CUSTODY, in two steps (ADR-0052 + issue #231).
             //
-            // TODO(follow-up, filed in Task 14): pin this kid against the node-plane
-            // trust set. The skeleton confirms the cert is internally consistent (the
-            // kid signed it, so `requester_pub` provably belongs to that identity) but
-            // does NOT yet check the kid is a TRUSTED peer. Be honest about what that
-            // leaves standing: until cert-kid trust-set pinning lands, the transport
-            // boundary (WireGuard / mTLS on the serve port) is the SOLE access control
-            // on who obtains sealed-body custody. ANY self-signed unwrap cert that
-            // reaches this port has its DEKs re-wrapped and thereby obtains READ-custody
-            // of every non-shredded sealed body this node serves — the DEK is what
-            // populates event_clear and opens the sealed plaintext, so custody confers
-            // clinical-data READ, not merely a future shred capability. This is the
-            // sanctioned ADR-0052 erasability-by-default skeleton (custody is designed
-            // to follow admission), but its current floor honestly stated is "the link
-            // is the access control"; trust-set pinning is the named hardening that
-            // makes admission the boundary in the DB too, not just on the wire. An
-            // absent or invalid cert simply yields no custody (below), never a refused
-            // pull.
-            let requester_pub = unwrap_cert.as_deref().and_then(|hexed| {
-                hex::decode(hexed)
-                    .ok()
-                    .and_then(|c| cairn_event::verify_unwrap_key_cert(&c).ok())
-                    .map(|(_kid, pubk)| pubk)
-            });
+            // 1. `verify_unwrap_key_cert` proves the cert is internally consistent:
+            //    the kid signed it, and the payload does not lie about that kid, so
+            //    `requester_pub` provably belongs to that identity.
+            // 2. That identity is then PINNED to this node's admitted-peer trust set
+            //    (`trust_peer`, db/007) — the same set the mTLS cert-pin verifier and
+            //    the node-plane admission gate consult.
+            //
+            // Step 2 is what makes admission, not transport, the boundary on
+            // read-custody. Before it, ANY self-signed unwrap cert reaching this port
+            // had its DEKs re-wrapped and thereby obtained READ-custody of every
+            // non-shredded sealed body this node serves — the DEK is what populates
+            // event_clear and opens the sealed plaintext, so custody confers
+            // clinical-data READ, not merely a future shred capability, and the link
+            // (WireGuard / mTLS) was the sole access control.
+            //
+            // A withheld decision serves the events WITHOUT custody — never a refused
+            // pull. The bodies are sealed ciphertext, harmless without a DEK, and
+            // refusing them would wedge replication for no confidentiality gain. This
+            // is the same degradation an absent or malformed cert already takes.
+            //
+            // A REJECTED cert is logged, not silently dropped. The benign case (an
+            // honest, not-yet-paired peer) used to be the only loud one, which inverted
+            // the priority: `CertKidMismatch` is a cert whose payload claims a kid it
+            // did not sign — an attempted impersonation of an admitted peer, i.e. an
+            // attack on this very pin — and it left no trace at all.
+            let verified_cert = match unwrap_cert.as_deref() {
+                None => None,
+                Some(hexed) => {
+                    let parsed = hex::decode(hexed).map_err(|e| e.to_string()).and_then(|c| {
+                        cairn_event::verify_unwrap_key_cert(&c).map_err(|e| e.to_string())
+                    });
+                    match parsed {
+                        Ok(pair) => Some(pair),
+                        Err(reason) => {
+                            eprintln!(
+                                "cairn-sync serve: unwrap cert REJECTED — {reason}. No custody \
+                                 travels for this pull (the events still sync). A kid mismatch \
+                                 or bad signature here is an impersonation attempt, not a \
+                                 misconfiguration; a malformed key is usually a corrupt \
+                                 `--key` file on the puller."
+                            );
+                            None
+                        }
+                    }
+                }
+            };
+            // Only ask the trust set when custody could actually travel. Without this
+            // guard the lookup — and its multi-line refusal — fires on EVERY pull from
+            // an un-peered node, including batches with no sealed events at all, where
+            // nothing was going to be re-wrapped whatever the answer. In `run` mode
+            // that is one identical refusal per interval, forever, teaching the operator
+            // to filter out the exact `custody WITHHELD` prefix this design chose so
+            // every cause could be found with one grep. (Repeats across cycles are left
+            // alone deliberately: a standing refusal IS a standing problem, and
+            // de-duplicating across per-connection threads would buy quiet with shared
+            // mutable state.)
+            let custody_could_travel = local_deks.iter().any(Option::is_some);
+            let mut custody_withheld: Option<String> = None;
+            let requester_pub =
+                verified_cert
+                    .filter(|_| custody_could_travel)
+                    .and_then(|(kid, pubk)| {
+                        match decide_custody(&kid, pubk, look_up_peer_trust(&mut client, &kid)) {
+                            CustodyAdmission::Grant { requester_pub } => Some(requester_pub),
+                            CustodyAdmission::Withhold {
+                                operator_line,
+                                cause: _,
+                            } => {
+                                eprintln!("{operator_line}");
+                                custody_withheld = Some(operator_line);
+                                None
+                            }
+                        }
+                    });
             let wrapped_deks =
                 rewrap_custody_for_peer(&local_deks, requester_pub.as_ref(), own_secret.as_deref());
             serde_json::to_vec(&EventsResponse {
@@ -3095,6 +3535,12 @@ fn serve_conn(
                 seqs,
                 signing_context: Some(CTX_EVENT.as_str().to_string()),
                 wrapped_deks,
+                // Send the refusal to the party that experiences it (issue #231 review).
+                // The line above lands on THIS node's stderr, but the symptom — a chart
+                // whose sealed bodies will not render — appears at the puller, often at
+                // another site with another operator, and the remedy names steps THEY
+                // must run. Additive + serde-default, so an older peer simply ignores it.
+                custody_withheld,
             })?
         }
         Request::BlobSlice {
@@ -3770,10 +4216,39 @@ mod tests {
             seqs: vec![7],
             signing_context: None,
             wrapped_deks: vec![None],
+            custody_withheld: None,
         };
         let back: EventsResponse =
             serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
         assert_eq!(back.seqs, vec![7]);
+    }
+
+    #[test]
+    fn events_response_custody_withheld_field_is_additive() {
+        // An older serve omits the field entirely → None, which the puller reads as
+        // "nothing was deliberately withheld" and prints nothing (issue #231 review).
+        let old = r#"{"events":[],"attestations":[],"attester_keys":[],"seqs":[]}"#;
+        let r: EventsResponse = serde_json::from_str(old).unwrap();
+        assert!(
+            r.custody_withheld.is_none(),
+            "a response predating the field must decode as 'no refusal reported', never \
+             as an empty refusal"
+        );
+        // …and a reason round-trips verbatim: it is operator prose, so anything that
+        // mangled it would hand the reader a remedy they cannot follow.
+        let reason = "custody WITHHELD from puller abc — this key is not among …";
+        let with = EventsResponse {
+            events: vec![],
+            attestations: vec![],
+            attester_keys: vec![],
+            seqs: vec![],
+            signing_context: None,
+            wrapped_deks: vec![],
+            custody_withheld: Some(reason.into()),
+        };
+        let back: EventsResponse =
+            serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
+        assert_eq!(back.custody_withheld.as_deref(), Some(reason));
     }
 
     // -----------------------------------------------------------------------
@@ -3828,6 +4303,307 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
+    // decide_custody — the #231 trust-set pin. Pure: it turns ONE trust-set
+    // lookup outcome into a grant/withhold decision plus the operator line that
+    // explains it. The DB round trip lives in `look_up_peer_trust`; everything
+    // that decides anything is here, where it needs no database to test.
+    // ---------------------------------------------------------------------
+
+    /// A kid-shaped fixture (hex Ed25519 public key), derived rather than written
+    /// as a literal — house rule 6 keeps CodeQL's hard-coded-crypto query live for
+    /// production code by never presenting it a literal in a crypto context.
+    fn fixture_kid(tag: u8) -> String {
+        hex::encode(derived_bytes(tag))
+    }
+
+    /// EVERY non-grant arm, as one list with its expected verdict, driven by an
+    /// exhaustive `match` so a new `TrustLookup` variant is a COMPILE ERROR here.
+    ///
+    /// The first version of these tests hand-wrote the variant list in three places
+    /// and claimed that "a NEW arm has to come here and state its intent". It did not:
+    /// array literals inherit nothing, so an eighth variant — even one mapping to
+    /// `Grant` — would have left all six tests green. This closes that.
+    fn every_withhold_arm() -> Vec<TrustLookup> {
+        [
+            TrustLookup::ActivePeer,
+            TrustLookup::RevokedPeer,
+            TrustLookup::NotAPeer,
+            TrustLookup::NoPeersAdmitted,
+            TrustLookup::NodePlaneUninitialised,
+            TrustLookup::NodePlaneAbsent,
+            TrustLookup::LookupFailed,
+        ]
+        .into_iter()
+        .filter(|lookup| match lookup {
+            // The ONE arm that grants. Every other variant must appear below, and a
+            // new one cannot be added without deciding which side it falls on.
+            TrustLookup::ActivePeer => false,
+            TrustLookup::RevokedPeer
+            | TrustLookup::NotAPeer
+            | TrustLookup::NoPeersAdmitted
+            | TrustLookup::NodePlaneUninitialised
+            | TrustLookup::NodePlaneAbsent
+            | TrustLookup::LookupFailed => true,
+        })
+        .collect()
+    }
+
+    #[test]
+    fn an_active_peer_is_granted_custody_for_the_key_in_its_own_cert() {
+        // The ONLY grant arm: the presented kid is in this node's trust set and
+        // its latest op is not `revoke` (#231). The grant carries the key it admits,
+        // so the caller cannot re-wrap for a DIFFERENT key than the one decided on.
+        let requester_pub = derived_bytes(0x11);
+        assert_eq!(
+            decide_custody(&fixture_kid(0x01), requester_pub, TrustLookup::ActivePeer),
+            CustodyAdmission::Grant { requester_pub }
+        );
+    }
+
+    #[test]
+    fn every_other_lookup_outcome_withholds_custody() {
+        // Fail-closed is the whole point: custody confers clinical-data READ, so
+        // anything short of a positive `active` match must withhold.
+        let arms = every_withhold_arm();
+        assert!(!arms.is_empty(), "the arm list must not be empty");
+        for lookup in arms {
+            assert!(
+                matches!(
+                    decide_custody(&fixture_kid(0x02), derived_bytes(0x12), lookup),
+                    CustodyAdmission::Withhold { .. }
+                ),
+                "{lookup:?} must withhold custody"
+            );
+        }
+    }
+
+    #[test]
+    fn each_withhold_names_the_kid_its_cause_and_a_distinct_remedy() {
+        // The Slice 61 lesson made mechanical: a safety refusal is only as good as
+        // the escape hatch it names — check the reader can act on what was printed.
+        // Every withhold line must (a) carry the full kid, so the operator can paste
+        // it into the fix, and (b) name a DISTINCT remedy, because each arm is a
+        // different operator problem and one shared line would hide the rest.
+        let kid = fixture_kid(0x03);
+        let mut lines = Vec::new();
+        for lookup in every_withhold_arm() {
+            let CustodyAdmission::Withhold {
+                operator_line,
+                cause,
+            } = decide_custody(&kid, derived_bytes(0x13), lookup)
+            else {
+                panic!("{lookup:?} must withhold");
+            };
+            // The withhold carries the cause it was decided from — so a caller (and
+            // this test) can act on the DECISION rather than parse its prose.
+            assert_eq!(cause, lookup, "the withhold must carry its own cause");
+            assert!(
+                operator_line.contains(&kid),
+                "{lookup:?} line must name the full kid so it can be pasted into the fix: \
+                 {operator_line}"
+            );
+            assert!(
+                operator_line.contains("custody"),
+                "{lookup:?} line must say what was withheld: {operator_line}"
+            );
+            lines.push(operator_line);
+        }
+        let distinct: std::collections::HashSet<&String> = lines.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            lines.len(),
+            "each withhold cause needs its OWN line — a shared message hides the others: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn a_recoverable_withhold_names_both_repair_steps_and_the_others_name_neither() {
+        // The remedy is TWO steps, and naming only the first is what a review measured
+        // as a lie: `pull --full` alone took custody from (0,0) to (1,1) and left the
+        // medication projection at ZERO, because the re-apply inserts no event_log row
+        // and the projection dispatcher is an AFTER INSERT trigger. An operator who
+        // followed the printed line still saw an empty chart.
+        //
+        // Both directions are asserted, and the classifier is the TYPED property
+        // (`puller_can_recover`), never a substring of the message: the previous
+        // version grepped its own prose for "cairn-node pair", which silently checked
+        // LESS whenever the wording moved — and already missed one arm.
+        let kid = fixture_kid(0x07);
+        let (mut recoverable, mut terminal) = (0, 0);
+        for lookup in every_withhold_arm() {
+            let CustodyAdmission::Withhold { operator_line, .. } =
+                decide_custody(&kid, derived_bytes(0x17), lookup)
+            else {
+                panic!("{lookup:?} must withhold");
+            };
+            if lookup.puller_can_recover() {
+                recoverable += 1;
+                assert!(
+                    operator_line.contains("pull --full"),
+                    "{lookup:?}: a recoverable withhold must name the FULL sweep — an \
+                     incremental pull cannot reach events already below the cursor: \
+                     {operator_line}"
+                );
+                assert!(
+                    operator_line.contains("cairn_reproject"),
+                    "{lookup:?}: the sweep restores CUSTODY, not the chart. A line that \
+                     stops at `pull --full` sends the operator away believing the \
+                     record is lost: {operator_line}"
+                );
+            } else {
+                terminal += 1;
+                assert!(
+                    !operator_line.contains("pull --full")
+                        && !operator_line.contains("cairn_reproject"),
+                    "{lookup:?}: the puller cannot fix this, so a pull/reproject \
+                     instruction here would run and change nothing: {operator_line}"
+                );
+            }
+        }
+        // Non-vacuity in BOTH directions: a classifier that quietly stopped matching
+        // anything would otherwise turn this whole test into a no-op that passes.
+        assert!(recoverable > 0, "no arm was classified recoverable");
+        assert!(terminal > 0, "no arm was classified terminal");
+    }
+
+    #[test]
+    fn the_remedy_names_only_commands_that_exist() {
+        // A review found every withhold line naming `cairn-node pair` — which is not a
+        // subcommand (`pair-offer` / `pair-accept` are), so the printed remedy exited
+        // with a usage error. The test that was supposed to catch it asserted the
+        // substring "cairn-node pair", which is a PREFIX of `cairn-node pair-offer` and
+        // therefore could never have failed.
+        //
+        // Pinned against the real subcommand names. `cairn-node`'s clap definition is
+        // in another crate (and another binary), so this cannot introspect it; the list
+        // is the thing to update if a subcommand is ever renamed.
+        const REAL_SUBCOMMANDS: [&str; 4] = [
+            "init",
+            "pair-offer",
+            "pair-accept",
+            "provision-runtime-role",
+        ];
+        let kid = fixture_kid(0x08);
+        for lookup in every_withhold_arm() {
+            let CustodyAdmission::Withhold { operator_line, .. } =
+                decide_custody(&kid, derived_bytes(0x18), lookup)
+            else {
+                panic!("{lookup:?} must withhold");
+            };
+            // Every `cairn-node <word>` the line mentions must be a real subcommand.
+            for (i, _) in operator_line.match_indices("cairn-node ") {
+                let rest = &operator_line[i + "cairn-node ".len()..];
+                let word: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
+                // A bare `cairn-node` used as a noun ("provision it with `cairn-node`")
+                // names no subcommand and needs no check.
+                if word.is_empty() {
+                    continue;
+                }
+                assert!(
+                    REAL_SUBCOMMANDS.contains(&word.as_str()),
+                    "{lookup:?} names `cairn-node {word}`, which is not a subcommand — a \
+                     remedy that exits with a usage error is worse than none: {operator_line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_unprovisioned_arms_name_the_node_plane_not_the_peer() {
+        // These two are NOT security events and must not read like one. A node plane
+        // that was never initialised, and a database that never loaded db/007, are
+        // operator provisioning gaps; blaming the puller would send the reader
+        // hunting the wrong problem.
+        for lookup in [
+            TrustLookup::NodePlaneUninitialised,
+            TrustLookup::NodePlaneAbsent,
+        ] {
+            let CustodyAdmission::Withhold { operator_line, .. } =
+                decide_custody(&fixture_kid(0x04), derived_bytes(0x14), lookup)
+            else {
+                panic!("{lookup:?} must withhold");
+            };
+            assert!(
+                operator_line.contains("node plane"),
+                "{lookup:?} must name the node plane as the gap: {operator_line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unpeered_node_is_not_told_to_re_initialise_itself() {
+        // The defect this test pins, found by reading the serve log of the wire test
+        // rather than by any assertion: `trust_peer` is EMPTY both when the node
+        // plane was never initialised AND when it is provisioned but has peered
+        // nobody, because the view filters on a `local_node` subquery that is NULL in
+        // the first case. Reporting the second as the first tells an operator to run
+        // `init` on an already-initialised node — a remedy that cannot work, which is
+        // worse than no remedy at all (the Slice 61 lesson).
+        let kid = fixture_kid(0x06);
+        let CustodyAdmission::Withhold {
+            operator_line: no_peers,
+            ..
+        } = decide_custody(&kid, derived_bytes(0x16), TrustLookup::NoPeersAdmitted)
+        else {
+            panic!("NoPeersAdmitted must withhold");
+        };
+        assert!(
+            !no_peers.contains("cairn-node init"),
+            "a provisioned node with no peers must NOT be told to re-initialise: {no_peers}"
+        );
+        assert!(
+            no_peers.contains("pair"),
+            "its remedy is pairing, and the line must say so: {no_peers}"
+        );
+
+        let CustodyAdmission::Withhold {
+            operator_line: uninit,
+            ..
+        } = decide_custody(
+            &kid,
+            derived_bytes(0x16),
+            TrustLookup::NodePlaneUninitialised,
+        )
+        else {
+            panic!("NodePlaneUninitialised must withhold");
+        };
+        assert!(
+            uninit.contains("cairn-node init"),
+            "an uninitialised node plane must name `init` as the FIRST step: {uninit}"
+        );
+    }
+
+    #[test]
+    fn a_revoked_peer_reads_as_revoked_not_as_unknown() {
+        // Revocation is an ACT someone performed (ADR-0018's cascade); reporting it
+        // as "not a peer" would erase that and send the operator to re-pair a node
+        // they deliberately cut off. Principle 2 in miniature: never erase, overlay.
+        //
+        // This test pins the MESSAGE only. That it is ever REACHED from a real
+        // database is a separate fact, and one this test cannot see: as first shipped
+        // the arm was unreachable, so a revoked peer got the "not among this node's
+        // admitted peers" line while this test passed. `look_up_peer_trust`'s
+        // DB-gated tests and the `a_revoked_peer_is_told_it_was_revoked…` wire test
+        // are what hold the other half.
+        let kid = fixture_kid(0x05);
+        let CustodyAdmission::Withhold { operator_line, .. } =
+            decide_custody(&kid, derived_bytes(0x15), TrustLookup::RevokedPeer)
+        else {
+            panic!("a revoked peer must withhold");
+        };
+        // Case-insensitive on purpose: the line emphasises REVOKED in caps, and a test
+        // that pins the casing would fail on a purely cosmetic edit while still not
+        // proving the word is there.
+        assert!(
+            operator_line.to_lowercase().contains("revoked"),
+            "a revoked peer must be named as revoked: {operator_line}"
+        );
+    }
+
+    // ---------------------------------------------------------------------
     // rewrap_custody_for_peer — the load-bearing custody re-wrap on the serve
     // path (ADR-0052). Pure (no DB), so unit-testable directly. ALL key material
     // is DERIVED at runtime (house rule 6): a literal 32-byte array in a crypto
@@ -3836,7 +4612,9 @@ mod tests {
 
     /// Deterministic-but-computed 32-byte fixture. `tag` distinguishes each
     /// role/secret so no two fixtures collide, and nothing is a byte literal.
-    fn derived_bytes(tag: u8) -> [u8; 32] {
+    /// pub(super): shared with the sibling `trust_lookup_db_tests` module, which needs
+    /// the same house-rule-6 derivation for its node-id and key fixtures.
+    pub(super) fn derived_bytes(tag: u8) -> [u8; 32] {
         std::array::from_fn(|i| (i as u8).wrapping_mul(31).wrapping_add(tag))
     }
 
@@ -4003,8 +4781,10 @@ mod quarantine_tests {
             // puller has a per-event cursor to checkpoint/pen on (issue #196).
             seqs: (1..=events.len() as i64).collect(),
             signing_context: signing_context.map(str::to_string),
-            // These quarantine/cursor tests don't exercise custody; ship no DEKs.
+            // These quarantine/cursor tests don't exercise custody; ship no DEKs, and
+            // report no refusal — nothing was withheld, there was simply nothing to send.
             wrapped_deks: vec![None; events.len()],
+            custody_withheld: None,
         })
         .unwrap()
     }
@@ -5845,5 +6625,325 @@ mod schema_generation_tests {
             "load_schema read the recorded generation BEFORE taking the load-lock: \
              check-then-act TOCTOU — a concurrent old binary can still downgrade the floor"
         );
+    }
+}
+
+/// DB-gated: the OTHER half of the #231 custody pin — the half that reads a real
+/// database. Skips when `CAIRN_TEST_PG` is unset.
+///
+/// `decide_custody`'s tests are pure and cover the MESSAGE. These cover the mapping
+/// from actual node-plane state to a [`TrustLookup`], and that is where the first
+/// review of this code found the defect: the `RevokedPeer` arm was unreachable, so
+/// revoking a compromised peer printed "this key is not among this node's admitted
+/// peers … admit it out of band". Every pure test passed throughout, because a pure
+/// test hand-feeds the enum it is meant to be checking the derivation of.
+///
+/// The node plane is authored through the REAL door (`identity::author_peer` /
+/// `author_unpeer` → `submit_node_event`), never by hand-inserting `node_event` rows.
+/// That is the whole point: a hand-built fixture would encode this test's assumption
+/// about what the door writes, and the defect WAS a wrong assumption about what the
+/// door writes (`peer.revoked` carries no `peer_pubkey`, so the revoke row stores NULL
+/// there and replaces the `peer` row in the `DISTINCT ON` view).
+#[cfg(test)]
+mod trust_lookup_db_tests {
+    use super::tests::derived_bytes;
+    use super::*;
+    use quarantine_tests::{cs, locked_client};
+
+    /// A current-thread runtime, so these SYNC tests can drive `cairn-node`'s ASYNC
+    /// identity API. Two connections to one database — the async one authors, the sync
+    /// one is the very `postgres::Client` `serve_conn` hands to `look_up_peer_trust`.
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+    }
+
+    /// A distinct 32-byte node-id fixture, DERIVED not written (house rule 6). A node
+    /// id is a content address, so any 32 hex-encoded bytes are well-formed as far as
+    /// `submit_node_event` is concerned.
+    fn derived_node_id(tag: u8) -> String {
+        hex::encode(derived_bytes(tag))
+    }
+
+    /// The full node plane in one place: a locked SYNC client (the subject under test)
+    /// plus an async handle for authoring. `local_node` starts EMPTY — each test
+    /// provisions only as far as the state it is pinning.
+    struct Plane {
+        rt: tokio::runtime::Runtime,
+        node_db: tokio_postgres::Client,
+        sync_db: postgres::Client,
+        sk: SigningKey,
+        kid: String,
+    }
+
+    impl Plane {
+        fn open(base: &str) -> Plane {
+            // Take the cluster-wide advisory lock FIRST (locked_client does it), then
+            // open the async connection unguarded — cairn-node's `test_serial_guard`
+            // uses the same key, so guarding twice would deadlock against ourselves.
+            let sync_db = locked_client(base);
+            let rt = rt();
+            let node_db = rt
+                .block_on(cairn_node::db::connect_and_load_schema(base))
+                .expect("node-plane schema");
+            rt.block_on(cairn_node::db::reset_node_federation_tables(&node_db))
+                .expect("reset the node plane");
+            let (sk, kid) = cairn_event::generate_key().unwrap();
+            Plane {
+                rt,
+                node_db,
+                sync_db,
+                sk,
+                kid,
+            }
+        }
+
+        /// Run `cairn-node init`'s in-DB half: mint this node's own identity.
+        fn provision(&self) {
+            self.rt
+                .block_on(cairn_node::identity::provision(
+                    &self.node_db,
+                    &self.sk,
+                    &self.kid,
+                    "node-under-test",
+                    "127.0.0.1:7900",
+                ))
+                .expect("provision");
+        }
+
+        /// Run the in-DB half of `cairn-node pair-accept` for one peer key.
+        fn admit(&self, peer_node_id_hex: &str, peer_pubkey_hex: &str) {
+            let me = self
+                .rt
+                .block_on(cairn_node::identity::load_local(&self.node_db))
+                .expect("local identity");
+            let bundle = cairn_event::PairingBundle {
+                node_id_hex: peer_node_id_hex.into(),
+                pubkey_hex: peer_pubkey_hex.into(),
+                address: "127.0.0.1:7901".into(),
+                fingerprint: cairn_event::short_fingerprint(peer_pubkey_hex).unwrap(),
+                nonce: "n".into(),
+                hlc: Hlc {
+                    wall: 0,
+                    counter: 0,
+                    node_origin: peer_node_id_hex.into(),
+                },
+            };
+            self.rt
+                .block_on(cairn_node::identity::author_peer(
+                    &self.node_db,
+                    &self.sk,
+                    &self.kid,
+                    &me.node_id_hex,
+                    &bundle,
+                    Some("peer"),
+                ))
+                .expect("author peer.added");
+        }
+
+        /// Run the in-DB half of `cairn-node unpeer`.
+        fn revoke(&self, peer_node_id_hex: &str) {
+            let me = self
+                .rt
+                .block_on(cairn_node::identity::load_local(&self.node_db))
+                .expect("local identity");
+            self.rt
+                .block_on(cairn_node::identity::author_unpeer(
+                    &self.node_db,
+                    &self.sk,
+                    &self.kid,
+                    &me.node_id_hex,
+                    peer_node_id_hex,
+                ))
+                .expect("author peer.revoked");
+        }
+
+        fn look_up(&mut self, kid: &str) -> TrustLookup {
+            look_up_peer_trust(&mut self.sync_db, kid)
+        }
+    }
+
+    #[test]
+    fn an_admitted_peer_reads_as_an_active_peer() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, peer_kid) = cairn_event::generate_key().unwrap();
+        plane.admit(&derived_node_id(0x21), &peer_kid);
+        assert_eq!(plane.look_up(&peer_kid), TrustLookup::ActivePeer);
+    }
+
+    #[test]
+    fn a_revoked_peer_reads_as_revoked_not_as_a_stranger() {
+        // THE regression test for the review defect. `peer.revoked` carries only
+        // `peer_node_id_hex`, so db/007 stores a NULL `peer_pubkey` on the revoke row
+        // and `trust_peer`'s `DISTINCT ON (subject_node_id) … ORDER BY hlc DESC` lets
+        // that row REPLACE the `peer` row that held the key — the revoked kid is
+        // simply absent from the view. A probe of `peer_pubkey = $1` therefore
+        // answered "never seen it", and the operator response to a COMPROMISED peer
+        // was an instruction to re-admit it. Recovering the fact needs the historical
+        // `peer` row, which is what `look_up_peer_trust`'s second probe now joins to.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, peer_kid) = cairn_event::generate_key().unwrap();
+        let peer_node = derived_node_id(0x22);
+        plane.admit(&peer_node, &peer_kid);
+        assert_eq!(
+            plane.look_up(&peer_kid),
+            TrustLookup::ActivePeer,
+            "precondition: it must genuinely be an active peer BEFORE the revoke, or \
+             this test could pass without the revoke doing anything"
+        );
+
+        plane.revoke(&peer_node);
+        assert_eq!(
+            plane.look_up(&peer_kid),
+            TrustLookup::RevokedPeer,
+            "a revoked peer must read as REVOKED. Reading it as NotAPeer erases the \
+             act someone performed and tells the operator to re-pair the node they \
+             deliberately cut off (principle 2: never erase, always overlay)"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_reads_as_not_a_peer_when_other_peers_exist() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, admitted) = cairn_event::generate_key().unwrap();
+        plane.admit(&derived_node_id(0x23), &admitted);
+        let (_sk2, stranger) = cairn_event::generate_key().unwrap();
+        assert_eq!(plane.look_up(&stranger), TrustLookup::NotAPeer);
+    }
+
+    #[test]
+    fn a_provisioned_node_with_no_peers_reads_as_no_peers_admitted() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, kid) = cairn_event::generate_key().unwrap();
+        assert_eq!(plane.look_up(&kid), TrustLookup::NoPeersAdmitted);
+    }
+
+    #[test]
+    fn an_uninitialised_node_plane_is_distinguished_from_an_unpeered_one() {
+        // The pair `trust_peer` alone cannot tell apart: the view filters on
+        // `author_node_id = (SELECT node_id FROM local_node WHERE id)`, NULL when
+        // `local_node` is empty, so it yields zero rows in BOTH states. Their first
+        // operator command differs (`init` vs `pair-accept`), which is why the fourth
+        // probe reads `local_node` directly.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        let (_sk, kid) = cairn_event::generate_key().unwrap();
+        assert_eq!(
+            plane.look_up(&kid),
+            TrustLookup::NodePlaneUninitialised,
+            "an empty local_node is `init` was never run here"
+        );
+        plane.provision();
+        assert_eq!(
+            plane.look_up(&kid),
+            TrustLookup::NoPeersAdmitted,
+            "…and once provisioned the SAME empty trust set means something else"
+        );
+    }
+
+    #[test]
+    fn a_database_without_the_node_plane_reads_as_node_plane_absent() {
+        // The arm the `DELIBERATELY ABSENT: db/007` note at the top of this file rests
+        // its whole argument on — a soft dependency on an unloaded migration is only
+        // safe because its absence is an ANSWER. Untested, that argument was a claim.
+        //
+        // The shared test database HAS db/007 (cairn-node's loader put it there), so
+        // absence is staged by dropping the view inside a transaction that is rolled
+        // back. The failing SELECT aborts the transaction; ROLLBACK restores the view.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, kid) = cairn_event::generate_key().unwrap();
+
+        plane
+            .sync_db
+            .batch_execute("BEGIN; DROP VIEW trust_peer;")
+            .expect("stage a database with no node plane");
+        let verdict = plane.look_up(&kid);
+        plane
+            .sync_db
+            .batch_execute("ROLLBACK")
+            .expect("restore the view");
+
+        assert_eq!(
+            verdict,
+            TrustLookup::NodePlaneAbsent,
+            "a missing `trust_peer` must map to its OWN arm: it is a provisioning fact \
+             about this database, not a fault, and it names a different remedy than a \
+             lookup that genuinely failed"
+        );
+        // The view really is back — otherwise this test would poison every later one.
+        assert_eq!(plane.look_up(&kid), TrustLookup::NoPeersAdmitted);
+    }
+
+    #[test]
+    fn a_lookup_that_fails_for_any_other_reason_reads_as_unknown_and_withholds() {
+        // Fail-closed for the state where the honest answer is "we do not know"
+        // (principle 4). Staged with a syntactically-valid but type-broken relation:
+        // `trust_peer` replaced by one whose `peer_pubkey` cannot be compared to text.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut plane = Plane::open(&base);
+        plane.provision();
+        let (_sk, kid) = cairn_event::generate_key().unwrap();
+
+        plane
+            .sync_db
+            .batch_execute(
+                "BEGIN;
+                 DROP VIEW trust_peer;
+                 CREATE VIEW trust_peer AS
+                     SELECT NULL::bytea AS peer_node_id, NULL::int AS peer_pubkey,
+                            NULL::text AS status;",
+            )
+            .expect("stage a broken trust_peer");
+        let verdict = plane.look_up(&kid);
+        plane.sync_db.batch_execute("ROLLBACK").expect("restore");
+
+        assert_eq!(
+            verdict,
+            TrustLookup::LookupFailed,
+            "an error that is NOT 'relation does not exist' must not be reported as a \
+             missing node plane — the remedies differ"
+        );
+        assert!(
+            matches!(
+                decide_custody(&kid, derived_bytes(0x24), verdict),
+                CustodyAdmission::Withhold { .. }
+            ),
+            "and an unknown admission must WITHHOLD: uncertainty can only ever \
+             withhold custody, never confer it"
+        );
+        assert_eq!(plane.look_up(&kid), TrustLookup::NoPeersAdmitted);
     }
 }
