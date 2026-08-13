@@ -16,6 +16,7 @@
 //! then reports the suite as passing while running nothing — a green run that prints no
 //! test names is a SKIP, not a pass.
 mod common;
+use cairn_event::seal::{derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_public};
 use cairn_event::sensitivity::{SubjectKind, SENSITIVITY_EVENT_TYPE, SENSITIVITY_SCHEMA_VERSION};
 use common::{cs, setup};
 use uuid::Uuid;
@@ -136,11 +137,23 @@ async fn grade_chart(
     .await;
 }
 
-/// The sensitivity overlay tables this suite writes to. They are NOT reached by
-/// `setup`'s `TRUNCATE event_log ... CASCADE` (db/048 deliberately declares no foreign key
-/// to `event_log` — a withdrawal may arrive before the assertion it withdraws), so they
-/// are named explicitly or standing assertions leak between tests.
-const OVERLAY_TABLES: &[&str] = &["sensitivity_assertion", "sensitivity_withdrawal"];
+/// The overlay + custody tables this suite writes to. None is reached by `setup`'s
+/// `TRUNCATE event_log ... CASCADE`, so each is named explicitly.
+///
+/// * the two sensitivity tables, because db/048 deliberately declares no foreign key to
+///   `event_log` (a withdrawal may arrive before the assertion it withdraws) — without
+///   naming them, standing assertions leak between tests;
+/// * the three custody tables, because `the_signal_survives_a_crypto_shred` registers a
+///   node unwrap key, and `cairn_register_unwrap_key` RAISES rather than rotating if a
+///   DIFFERENT key is already registered (db/037 section 1) — a leftover row from another
+///   suite would fail the fixture, not the assertion.
+const OVERLAY_TABLES: &[&str] = &[
+    "sensitivity_assertion",
+    "sensitivity_withdrawal",
+    "node_unwrap_key",
+    "event_dek",
+    "event_clear",
+];
 
 #[tokio::test]
 async fn a_peers_finer_rung_is_coarsened_by_this_nodes_grade() {
@@ -376,15 +389,74 @@ async fn the_signal_survives_a_crypto_shred() {
     let (sk, kid) = setup(&c, OVERLAY_TABLES).await;
     let patient = Uuid::now_v7();
 
-    let id = note_with_safety(
-        &c,
-        &sk,
-        &kid,
-        patient,
-        16,
-        serde_json::json!({"rung": "precise", "class": "rh-sensitizing", "severity": "high"}),
+    // THE BODY IS GENUINELY SEALED, and that is the whole point of the fixture.
+    //
+    // The obvious cheap version of this test uses an unsealed `note.added` like every
+    // other test here. It is worthless: db/020 populates event_clear/event_dek ONLY on
+    // the sealed-with-custody arm, so on a plaintext note the rung-3 scrub has nothing
+    // to destroy and `cairn_execute_shred` could regress to an empty function body with
+    // this test still green. The assertions below therefore establish that custody
+    // EXISTED and then that the shred DESTROYED it — otherwise "survives a crypto-shred"
+    // is a claim about a shred that never happened.
+    //
+    // The seal is a payload-level container (`payload.sealed`, db/020 step 7), not a
+    // property of the event type, so `note.added` can carry one exactly as a medication
+    // verb does — which keeps this fixture free of the medication projections.
+    let event_id = Uuid::now_v7().to_string();
+    let id: Uuid = event_id.parse().expect("uuid");
+    let (container, dek) = seal_event_payload(
+        &serde_json::json!({"text": "termination of pregnancy"}),
+        "termination of pregnancy",
+        &event_id,
     )
-    .await;
+    .expect("seals");
+    // The node's unwrap key is what lets the apply door wrap this event's DEK into
+    // custody. Derived at runtime from the signing key — never a literal (house rule 6).
+    let secret = derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .expect("unwrap key registered");
+
+    let body = cairn_event::EventBody {
+        event_id,
+        patient_id: patient.to_string(),
+        event_type: "note.added".into(),
+        schema_version: "note/1".into(),
+        hlc: cairn_event::Hlc {
+            wall: 16,
+            counter: 0,
+            node_origin: "n1".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: container,
+        attachments: vec![],
+        plaintext_twin: Some(seal_stub_twin("note.added")),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        // The clear signal rides on the ENVELOPE, outside the seal — that is the entire
+        // §5.9 mechanism: a node with no custody still reads it.
+        safety: Some(
+            serde_json::json!({"rung": "precise", "class": "rh-sensitizing", "severity": "high"}),
+        ),
+    };
+    let signed = cairn_event::sign(&body, &sk).expect("signs");
+    c.execute(
+        "SELECT apply_remote_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await
+    .expect("the sealed body is admitted WITH custody");
+
+    // Custody exists BEFORE the shred. Without this the post-shred zero below would also
+    // be satisfied by custody that was never created — a test that passes for the wrong
+    // reason in precisely the direction this one is about.
+    let (clear_before, dek_before) = custody_counts(&c, id).await;
+    assert_eq!(clear_before, 1, "the sealed body has a derived clear view");
+    assert_eq!(dek_before, 1, "and a wrapped DEK");
 
     // The rung-3 shred: custody and derived plaintext die; event_log never does.
     c.execute(
@@ -393,6 +465,17 @@ async fn the_signal_survives_a_crypto_shred() {
     )
     .await
     .expect("shred");
+
+    let (clear_after, dek_after) = custody_counts(&c, id).await;
+    assert_eq!(
+        clear_after, 0,
+        "the shred destroyed the derived plaintext — if this is non-zero the test below \
+         is asserting that a signal survived an erasure that never occurred"
+    );
+    assert_eq!(
+        dek_after, 0,
+        "and the wrapped DEK: the body is unreadable now"
+    );
 
     let row = c
         .query_one(
@@ -409,6 +492,21 @@ async fn the_signal_survives_a_crypto_shred() {
         row.get::<_, Option<String>>(1).as_deref(),
         Some("rh-sensitizing")
     );
+}
+
+/// `(event_clear rows, event_dek rows)` for one event — the two things a rung-3 shred is
+/// required to destroy (db/037 section 7). Read as counts rather than existence flags so a
+/// failure message says how many rows were actually there.
+async fn custody_counts(c: &tokio_postgres::Client, event: Uuid) -> (i64, i64) {
+    let row = c
+        .query_one(
+            "SELECT (SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid), \
+                    (SELECT count(*) FROM event_dek   WHERE event_id = $1::text::uuid)",
+            &[&event.to_string()],
+        )
+        .await
+        .expect("custody counts");
+    (row.get(0), row.get(1))
 }
 
 #[tokio::test]
@@ -595,4 +693,198 @@ async fn the_chart_report_names_the_winning_subject() {
     // ADR-0062 decision 8 control 3: never just the grade — a grade with no named source
     // cannot be fixed.
     assert_eq!(rows[0].get::<_, String>(3), "patient");
+}
+
+#[tokio::test]
+async fn a_withheld_severity_sorts_above_a_known_critical() {
+    let Some(base) = cs() else { return };
+    // The guard is a Client holding a cluster-wide advisory lock: it must stay BOUND for
+    // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
+    // does this in execution order).
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, OVERLAY_TABLES).await;
+    let patient = Uuid::now_v7();
+
+    // THE `ELSE` IS THE DECISION, AND THIS IS ITS PIN (db/049 section 1's own discipline,
+    // applied to the one ELSE in this file that reaches an ORDER BY).
+    //
+    // cairn_safety_severity_rank ranks an unrecognised severity MAX, and a coarsened row's
+    // severity is SQL NULL — which lands on that same ELSE. So a signal whose severity this
+    // reader is not cleared to see sorts ABOVE a known 'critical'. Burying unknowns instead
+    // would hide exactly the warnings whose content is unknown BECAUSE they were protected,
+    // and it is a one-token change (`NULLS LAST`, a COALESCE to -1) that nothing else here
+    // would catch.
+    //
+    // The fixture is built so the assertion cannot be satisfied by accident:
+    //   * `visible` is authored FIRST, so its UUIDv7 sorts BEFORE `withheld` — a plain
+    //     `ORDER BY event_id` would put them the other way round;
+    //   * `visible` carries 'critical' and `withheld` carries the LOWEST severity, 'low',
+    //     so a rank comparison on the RAW stored severity would also invert the order.
+    // Only ranking the COARSENED severity, with unknown ranking MAX, produces this order.
+    let visible = note_with_safety(
+        &c,
+        &sk,
+        &kid,
+        patient,
+        40,
+        serde_json::json!({"rung": "precise", "class": "statin-interaction", "severity": "critical"}),
+    )
+    .await;
+    let withheld = note_with_safety(
+        &c,
+        &sk,
+        &kid,
+        patient,
+        41,
+        serde_json::json!({"rung": "precise", "class": "rh-sensitizing", "severity": "low"}),
+    )
+    .await;
+    assert!(
+        visible < withheld,
+        "fixture precondition: the visible signal must sort FIRST by event_id, so the \
+         assertion below cannot pass on the tiebreaker alone"
+    );
+
+    // EVENT-scoped, so it coarsens `withheld` ALONE and leaves `visible` readable. A
+    // chart-wide grade would coarsen both and the ordering would prove nothing.
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        patient,
+        42,
+        SubjectKind::Event,
+        withheld,
+        "sequestered",
+    )
+    .await;
+
+    let rows = c
+        .query(
+            // `event_id::text`, never a bound/read `Uuid`: this crate does not enable
+            // tokio-postgres's `with-uuid-1` feature, so `Uuid` implements neither ToSql
+            // nor FromSql here. Same reason every parameter above is `$1::text::uuid`.
+            "SELECT event_id::text, rung, severity FROM cairn_patient_safety($1::text::uuid)",
+            &[&patient.to_string()],
+        )
+        .await
+        .expect("chart report");
+    assert_eq!(rows.len(), 2, "two signals on this chart");
+
+    assert_eq!(
+        rows[0].get::<_, String>(0),
+        withheld.to_string(),
+        "the signal whose severity is WITHHELD sorts first — a reader must not have the \
+         one warning it cannot read pushed below the ones it can"
+    );
+    assert_eq!(rows[0].get::<_, String>(1), "existence");
+    assert!(
+        rows[0].get::<_, Option<String>>(2).is_none(),
+        "and it is withheld because the row is coarsened, not because it had no severity"
+    );
+
+    assert_eq!(rows[1].get::<_, String>(0), visible.to_string());
+    assert_eq!(rows[1].get::<_, String>(1), "precise");
+    assert_eq!(
+        rows[1].get::<_, Option<String>>(2).as_deref(),
+        Some("critical"),
+        "the known-critical signal is the one that got sorted BELOW it"
+    );
+}
+
+#[tokio::test]
+async fn the_prospective_thread_arms_match_coarsen_and_bound() {
+    let Some(base) = cs() else { return };
+    // The guard is a Client holding a cluster-wide advisory lock: it must stay BOUND for
+    // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
+    // does this in execution order).
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, OVERLAY_TABLES).await;
+    let patient = Uuid::now_v7();
+
+    // The other two arms of cairn_prospective_sensitivity. The anti-drift tests above
+    // exercise only the chart and dangling-event arms, because both of their fixtures are
+    // `note.added` — a type db/048 section 10b's gate declares thread-free, so the thread
+    // arms are switched off for them entirely and could be deleted with those tests green.
+    //
+    // WHAT THIS PINS AND WHAT IT DOES NOT. `p_thread` is a PARAMETER, so all three arms are
+    // reachable directly and are pinned here. This does NOT pin agreement with db/048
+    // section 11 for a thread-BEARING event, which would need a sealed medication verb with
+    // read-custody so `cairn_event_thread` resolves — see the report's Concerns.
+    let thread = Uuid::now_v7();
+    assert_grade(
+        &c,
+        &sk,
+        &kid,
+        patient,
+        50,
+        SubjectKind::Thread,
+        thread,
+        "restricted",
+    )
+    .await;
+
+    let prospective = |arg: Option<Uuid>| {
+        let c = &c;
+        async move {
+            let row = c
+                .query_one(
+                    "SELECT grade, subject_kind FROM cairn_prospective_sensitivity(\
+                     $1::text::uuid, $2::text::uuid)",
+                    &[&patient.to_string(), &arg.map(|t| t.to_string())],
+                )
+                .await
+                .expect("prospective");
+            (row.get::<_, String>(0), row.get::<_, String>(1))
+        }
+    };
+
+    // 1. THIS thread — the precisely-targeted arm. The grade applies and names its own kind.
+    assert_eq!(
+        prospective(Some(thread)).await,
+        ("restricted".into(), "thread".into()),
+        "an assertion on the thread we are about to write on applies precisely"
+    );
+
+    // 2. A DIFFERENT thread — the catch-all. db/048 section 11's rule that a mis-targeted
+    //    known kind coarsens rather than evaporating: it was still an attempt to protect
+    //    something, so it blurs chart-wide rather than contributing nothing.
+    assert_eq!(
+        prospective(Some(Uuid::now_v7())).await,
+        ("restricted".into(), "coarsened".into()),
+        "a thread assertion we cannot match here coarsens chart-wide, never evaporates"
+    );
+
+    // 3. NO thread — decision 9's conservative bound. At emission time an unresolved thread
+    //    is the honest reading of "this event MAY be on that thread", and the safe answer to
+    //    a maybe is the protected one. A caller passing NULL must not be handed 'routine'.
+    assert_eq!(
+        prospective(None).await,
+        ("restricted".into(), "coarsened".into()),
+        "an unknown thread takes the bound — the failure direction here must be \
+         over-coarsening, never disclosure"
+    );
+
+    // And the floor under all three: a chart with no assertion at all still reads 'routine',
+    // so the bound above is a real answer rather than this function coarsening everything.
+    let clean = Uuid::now_v7();
+    let row = c
+        .query_one(
+            "SELECT grade, subject_kind FROM cairn_prospective_sensitivity(\
+             $1::text::uuid, NULL)",
+            &[&clean.to_string()],
+        )
+        .await
+        .expect("prospective");
+    assert_eq!(
+        (row.get::<_, String>(0), row.get::<_, String>(1)),
+        ("routine".to_string(), "none".to_string()),
+        "absence is not unknown (principle 4) — no assertion reads routine, never a bound"
+    );
 }
