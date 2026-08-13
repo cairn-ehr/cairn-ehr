@@ -709,6 +709,7 @@ async fn a_lower_hlc_overlay_arriving_later_does_not_win() {
         },
         &kid,
         high,
+        None,
     );
     let loser = cairn_node::medication::build_coding_body(
         Uuid::now_v7(),
@@ -717,6 +718,7 @@ async fn a_lower_hlc_overlay_arriving_later_does_not_win() {
         &cairn_node::medication::CodeMedicationInput { coding: coding() },
         &kid,
         low,
+        None,
     );
     seal_and_submit(&c, &sk, winner).await.unwrap();
     seal_and_submit(&c, &sk, loser).await.unwrap();
@@ -1268,6 +1270,7 @@ async fn struck_is_arrival_order_independent_against_an_inline_recoding() {
             &coded_input("Lipitor", MOIETY_ATORVASTATIN),
             &kid,
             high,
+            None,
         );
         (strike, asserted)
     };
@@ -1354,6 +1357,7 @@ async fn no_row_ever_claims_both_a_live_anchor_and_a_strike() {
             &coded_input("Lipitor", MOIETY_ATORVASTATIN),
             &kid,
             high,
+            None,
         ),
     )
     .await;

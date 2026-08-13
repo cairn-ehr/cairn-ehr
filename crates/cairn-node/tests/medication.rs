@@ -221,8 +221,15 @@ async fn empty_term_is_rejected_by_the_floor() {
     // Use a real HLC tick so the ONLY rejection reason is the empty term (not an
     // HLC regression against node state).
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
-    let body: EventBody =
-        build_assert_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
+    let body: EventBody = build_assert_body(
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        patient,
+        &input,
+        &kid,
+        hlc,
+        None,
+    );
     // Seal it so it clears the born-sealed floor and reaches the term floor on the CLEAR
     // payload (the door unseals, then dispatches the structural check).
     let res = seal_and_submit(&c, &sk, body).await;
@@ -252,8 +259,15 @@ async fn empty_info_source_is_rejected_by_the_floor() {
     // Use a real HLC tick so the ONLY rejection reason is the empty info_source (not
     // an HLC regression against node state).
     let hlc = db::next_hlc(&c, "test-node").await.unwrap();
-    let body: EventBody =
-        build_assert_body(Uuid::now_v7(), Uuid::now_v7(), patient, &input, &kid, hlc);
+    let body: EventBody = build_assert_body(
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        patient,
+        &input,
+        &kid,
+        hlc,
+        None,
+    );
     // Sealed so it reaches the info_source floor on the CLEAR payload.
     let res = seal_and_submit(&c, &sk, body).await;
     let err = db_msg(&res.unwrap_err());
@@ -294,8 +308,15 @@ async fn inject_assert(
     input: &AssertMedicationInput<'_>,
 ) {
     let hlc = db::next_hlc(c, "test-node").await.unwrap();
-    let body: EventBody =
-        build_assert_body(Uuid::now_v7(), medication_id, patient, input, kid, hlc);
+    let body: EventBody = build_assert_body(
+        Uuid::now_v7(),
+        medication_id,
+        patient,
+        input,
+        kid,
+        hlc,
+        None,
+    );
     seal_and_submit(c, sk, body)
         .await
         .expect("sealed assert with a chosen thread id is admitted");

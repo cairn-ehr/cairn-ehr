@@ -64,6 +64,11 @@ pub fn coding_claim_from_parts<'a>(
 }
 
 /// Assemble the signed `clinical.medication-coding.asserted` EventBody. Pure.
+///
+/// `safety` is the §5.9 precise safety claim, already looked up by the caller (ADR-0063) —
+/// passed in for the same reason `build_assert_body` takes it: this function stays pure and
+/// unit-testable without a database.
+#[allow(clippy::too_many_arguments)] // one parameter per wire value, mirroring build_assert_body
 pub fn build_coding_body(
     event_id: Uuid,
     medication_id: Uuid,
@@ -71,11 +76,13 @@ pub fn build_coding_body(
     input: &CodeMedicationInput<'_>,
     node_kid: &str,
     hlc: Hlc,
+    safety: Option<cairn_event::safety::PreciseSafety<'_>>,
 ) -> EventBody {
     let mid = medication_id.to_string();
     let c = MedicationCoding {
         medication_id: &mid,
         coding: input.coding,
+        safety,
     };
     EventBody {
         event_id: event_id.to_string(),
@@ -147,7 +154,23 @@ pub async fn code_medication(
 ) -> anyhow::Result<Uuid> {
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
-    let body = build_coding_body(event_id, medication_id, patient, input, node_kid, hlc);
+    // §5.9 part B (ADR-0063), same seam and same reason as `assert_medication`: a coding
+    // OVERLAY is authored by whoever codes it — a pharmacist, a professional coder — and
+    // that node is again the one holding a coding authority. The class is captured here,
+    // pre-seal, and travels; no reader ever re-derives it.
+    let class = crate::safety::lookup_class(client, &input.coding).await?;
+    let safety = class
+        .as_ref()
+        .map(|(class, severity)| cairn_event::safety::PreciseSafety { class, severity });
+    let body = build_coding_body(
+        event_id,
+        medication_id,
+        patient,
+        input,
+        node_kid,
+        hlc,
+        safety,
+    );
     // ADR-0052 seal-at-write: seal + sign + submit through the ONE strict door.
     crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
         .await?;
@@ -156,6 +179,15 @@ pub async fn code_medication(
 
 /// Correct (replace or strike) a thread's coding. Returns the correction event's id.
 /// Offline-first: neither the thread nor the corrected event must exist locally.
+///
+/// §5.9 (ADR-0063): THIS VERB DELIBERATELY EMITS NO SAFETY SIGNAL, and the omission is a
+/// decision rather than an oversight. A `CodingClaim::Strike` carries no coding, so there
+/// is nothing to look up. A `CodingClaim::Replace` does carry one, but a correction's
+/// safety consequences ride the THREAD — the question "what does this chart's medication
+/// list now imply" is a thread-rollup, and rolling a signal up across a thread is a
+/// separate design question this slice does not open. Attaching a per-event signal here
+/// would answer it by accident, in the direction that is hardest to undo (a published
+/// class cannot be recalled).
 #[allow(clippy::too_many_arguments)] // as above
 pub async fn correct_medication_coding(
     client: &mut tokio_postgres::Client,
@@ -239,6 +271,7 @@ mod coding_build_tests {
             &CodeMedicationInput { coding: coding() },
             "kid",
             hlc(),
+            None,
         );
         assert_eq!(b.event_type, "clinical.medication-coding.asserted");
         assert_eq!(b.schema_version, "clinical.medication-coding/1");

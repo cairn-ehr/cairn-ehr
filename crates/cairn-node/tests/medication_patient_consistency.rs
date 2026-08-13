@@ -142,6 +142,7 @@ async fn reassert_at_door(
         &sample_assert("metoprolol"),
         kid,
         hlc,
+        None,
     );
     match door {
         // The STRICT door (submit_event) demands a born-sealed clinical body (ADR-0052):

@@ -87,6 +87,15 @@ pub async fn ensure_unwrap_key(
 ///
 /// Pure (no I/O): both `seal_sign_submit` and the two-thread reconciliation/separation
 /// verbs build on it so the seal-then-sign discipline lives in exactly one place.
+///
+/// §5.9 NOTE FOR A CALLER REACHING THIS DIRECTLY (ADR-0063). The clear disclosure rung is
+/// chosen by `apply_safety_rung`, which lives in `seal_sign_submit` — not here, because the
+/// choice needs a database and this function is pure. A caller that bypasses
+/// `seal_sign_submit` (today: only `reconciliation::submit_reconcile_like`'s ATTESTED arm)
+/// therefore emits no clear signal at all. That is correct for reconcile/separate, whose
+/// bodies carry no drug claim and so never write `payload.safety` — but a FUTURE two-thread
+/// verb that does carry a coding would need `apply_safety_rung` called on its body first,
+/// or it would seal a precise claim and publish nothing beside it.
 pub fn seal_and_sign(
     mut body: EventBody,
     sk: &SigningKey,
@@ -104,6 +113,67 @@ pub fn seal_and_sign(
     body.plaintext_twin = Some(seal_stub_twin(&body.event_type));
     let signed = sign(&body, sk)?;
     Ok((signed.signed_bytes, dek))
+}
+
+/// Choose the CLEAR §5.9 disclosure rung for a body that carries a precise safety claim,
+/// and attach it to the envelope (ADR-0063). A no-op for every body that carries none,
+/// which is the overwhelmingly common case.
+///
+/// For a junior reader, the shape of the decision:
+///
+/// 1. The verb builder has already put the PRECISE `{class, severity}` in the clear
+///    payload, where it will shortly be sealed. That tier is never coarsened.
+/// 2. This function asks the database what grade currently stands on the chart (and on the
+///    thread, when the body names one) and turns that into a disclosure RUNG.
+/// 3. `cairn_event::safety::coarsen` cuts the precise claim down to that rung, and the
+///    result goes on `body.safety` — in the clear, inside the signed bytes.
+///
+/// It must run BEFORE `seal_and_sign`, which consumes the clear payload.
+///
+/// Takes `&mut EventBody` rather than returning a new one so the ownership dance around
+/// `seal_and_sign` (which consumes the body) stays in the caller, where it is already
+/// written once.
+async fn apply_safety_rung(
+    client: &tokio_postgres::Client,
+    body: &mut cairn_event::EventBody,
+) -> anyhow::Result<()> {
+    // Cloned out first so the immutable borrow of `body.payload` ends before we write
+    // `body.safety`. The value is two short strings; a clone here is not worth a dance.
+    let Some(precise) = body.payload.get("safety").cloned() else {
+        return Ok(());
+    };
+    // A half-formed claim emits NOTHING in the clear rather than a signal the strict door
+    // would refuse — refusing here would cancel the clinical event this signal rides on
+    // (ADR-0060). See `crate::safety::usable_precise_claim` for the full argument.
+    let Some((class, severity)) = crate::safety::usable_precise_claim(&precise) else {
+        return Ok(());
+    };
+
+    let patient: uuid::Uuid = body.patient_id.parse().with_context(|| {
+        format!(
+            "seal_sign_submit: patient_id {:?} is not a uuid",
+            body.patient_id
+        )
+    })?;
+    // The thread when the body names one; medication verbs always do, and a future
+    // thread-free clinical verb honestly passes None (the chart-wide arms still apply).
+    // A malformed thread id degrades to None rather than failing the write: an unresolved
+    // thread is db/049 section 6's conservative bound, so it can only COARSEN.
+    let thread = body
+        .payload
+        .get("medication_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<uuid::Uuid>().ok());
+
+    let rung = crate::safety::prospective_rung(client, patient, thread).await?;
+    body.safety = Some(cairn_event::safety::coarsen(
+        &cairn_event::safety::PreciseSafety {
+            class: &class,
+            severity: &severity,
+        },
+        rung,
+    ));
+    Ok(())
 }
 
 /// The thread a single-thread attested verb vouches for lives in `payload.medication_id`
@@ -147,7 +217,21 @@ pub async fn seal_sign_submit(
 ) -> anyhow::Result<uuid::Uuid> {
     // ADR-0053: when a human authors, rewrite the device-shaped body so the human is
     // an `authored` contributor AND the signer; the node stays `recorded` + custodian.
-    let (body, signing_sk) = apply_author(body, author, node_sk);
+    let (mut body, signing_sk) = apply_author(body, author, node_sk);
+
+    // §5.9 part B (ADR-0063): choose the CLEAR disclosure rung from the grade standing on
+    // this chart RIGHT NOW, and attach it to the envelope.
+    //
+    // WHY HERE. This is the one path every clinical verb submits through, so no future verb
+    // can forget it — the same argument that already put seal-then-sign here. Doing it in
+    // each verb instead would make the safety floor a convention rather than a structural
+    // property, and a convention is exactly what a peer's raw-SQL client does not honour.
+    //
+    // WHY BEFORE THE SEAL. `body.payload` is still CLEAR at this point; three lines further
+    // down `seal_and_sign` consumes it and replaces it with ciphertext, after which the
+    // precise claim is unreadable from here. The pair (sealed precise claim, clear rung)
+    // must be decided together and frozen into the signed bytes.
+    apply_safety_rung(client, &mut body).await?;
 
     let event_id: uuid::Uuid = body.event_id.parse().with_context(|| {
         format!(
