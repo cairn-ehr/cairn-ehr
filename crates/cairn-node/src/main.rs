@@ -635,6 +635,15 @@ enum Cmd {
         patient: Uuid,
     },
 
+    /// Report a chart's §5.9 de-identified safety signals: one line per graded clinical
+    /// event, each already coarsened by the sensitivity grade standing on this node. It
+    /// NAMES NOTHING beyond what the rung licenses — no agent, no diagnosis, no scope key.
+    /// REPORTS ONLY: this slice withholds no content (enforcement is #232 part C).
+    PatientSafety {
+        #[arg(long)]
+        patient: Uuid,
+    },
+
     /// Enroll a clinician's signing key as a `kind='human'` actor so it may sign+attest an
     /// `identify-patient --link` (and any future human-attested surface). An OWNER ceremony —
     /// point `--conn` at a role that may run `enroll_actor`. The pinned determinant set carries
@@ -1899,6 +1908,27 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "(report only — nothing is withheld; enforcement needs custody narrowing, \
                  #232 part C)"
+            );
+        }
+        Cmd::PatientSafety { patient } => {
+            // A pure read — no signing key, no HLC tick, nothing authored.
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let lines = cairn_node::safety::chart_safety(&db, patient).await?;
+            if lines.is_empty() {
+                println!("chart {patient}: no safety signals on file");
+            }
+            for l in &lines {
+                println!(
+                    "{}  {}  (grade {}, winning subject: {})",
+                    cairn_node::safety::render_safety_line(l),
+                    l.event_type,
+                    l.grade,
+                    l.subject_kind
+                );
+            }
+            println!(
+                "(report only — nothing is withheld on the strength of these grades; \
+                 enforcement needs custody narrowing, #232 part C)"
             );
         }
         Cmd::EnrollHuman {

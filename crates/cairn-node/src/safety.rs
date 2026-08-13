@@ -21,6 +21,7 @@
 //! value as `text` and letting the database parse it is the repo-wide idiom (see
 //! `tests/observed_evidence.rs`), and it keeps the failure — if any — on the database's
 //! side where the error message is about the data rather than about the driver.
+use anyhow::Context;
 use cairn_event::medication::SubstanceCoding;
 use cairn_event::safety::SafetyRung;
 use uuid::Uuid;
@@ -125,6 +126,82 @@ pub fn usable_precise_claim(payload_safety: &serde_json::Value) -> Option<(Strin
             .map(str::to_string)
     };
     Some((nonblank("class")?, nonblank("severity")?))
+}
+
+/// One de-identified safety line, already coarsened by db/049's read model.
+///
+/// `class` and `severity` are `Option` because the RUNG decides whether they exist at all —
+/// they are not "missing data". A `None` class at rung `existence` is the mechanism working,
+/// not a gap.
+pub struct SafetyLine {
+    pub event_id: Uuid,
+    pub rung: String,
+    pub class: Option<String>,
+    pub severity: Option<String>,
+    pub event_type: String,
+    /// The §5.9 grade that produced this coarseness…
+    pub grade: String,
+    /// …and WHICH subject won it (ADR-0062 decision 8 control 3: a grade with no named
+    /// source cannot be fixed, because nobody can tell one thing to go and look at from
+    /// twenty).
+    pub subject_kind: String,
+}
+
+/// Every standing safety signal on a chart, coarsest-safe and already de-identified.
+///
+/// A pure read: no signing key, no HLC tick, nothing authored. One query, so a UI opening a
+/// chart pays a single round trip.
+pub async fn chart_safety(
+    client: &tokio_postgres::Client,
+    patient: Uuid,
+) -> anyhow::Result<Vec<SafetyLine>> {
+    // T3-A: this crate enables neither `with-uuid-1` nor `with-serde_json-1` on
+    // tokio-postgres, so `Uuid` has no `FromSql` impl and a bare `r.get::<_, Uuid>(0)`
+    // fails to COMPILE, before any statement reaches the database. `event_id` is cast to
+    // `text` in the query and parsed back on this side; every other column is already a
+    // plain text/varchar and reads through `FromSql<String>` unmodified.
+    let rows = client
+        .query(
+            "SELECT event_id::text, rung, class, severity, event_type, grade, subject_kind
+             FROM cairn_patient_safety($1::text::uuid)",
+            &[&patient.to_string()],
+        )
+        .await?;
+    rows.iter()
+        .map(|r| {
+            let event_id_text: String = r.get(0);
+            Ok(SafetyLine {
+                event_id: event_id_text
+                    .parse()
+                    .with_context(|| format!("event_id {event_id_text:?} is not a uuid"))?,
+                rung: r.get(1),
+                class: r.get(2),
+                severity: r.get(3),
+                event_type: r.get(4),
+                grade: r.get(5),
+                subject_kind: r.get(6),
+            })
+        })
+        .collect()
+}
+
+/// The human sentence for one line — §5.9's warning that NAMES NOTHING.
+///
+/// Pure and total, so the CLI and any future UI cannot phrase the same signal differently.
+/// The event TYPE is already plaintext on the row, so naming it discloses nothing new and
+/// is what makes the middle rung read as "confidential medication" rather than
+/// "confidential something".
+pub fn render_safety_line(line: &SafetyLine) -> String {
+    let noun = if line.event_type.starts_with("clinical.medication") {
+        "medication"
+    } else {
+        "content"
+    };
+    match (line.class.as_deref(), line.severity.as_deref()) {
+        (Some(class), Some(sev)) => format!("⚠ {sev} — {class}"),
+        (None, Some(sev)) => format!("⚠ {sev} — confidential {noun}, break glass to view"),
+        _ => format!("⚠ confidential {noun} — break glass to view"),
+    }
 }
 
 #[cfg(test)]

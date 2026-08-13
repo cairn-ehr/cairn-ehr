@@ -91,11 +91,13 @@ pub async fn ensure_unwrap_key(
 /// §5.9 NOTE FOR A CALLER REACHING THIS DIRECTLY (ADR-0063). The clear disclosure rung is
 /// chosen by `apply_safety_rung`, which lives in `seal_sign_submit` — not here, because the
 /// choice needs a database and this function is pure. A caller that bypasses
-/// `seal_sign_submit` (today: only `reconciliation::submit_reconcile_like`'s ATTESTED arm)
-/// therefore emits no clear signal at all. That is correct for reconcile/separate, whose
-/// bodies carry no drug claim and so never write `payload.safety` — but a FUTURE two-thread
-/// verb that does carry a coding would need `apply_safety_rung` called on its body first,
-/// or it would seal a precise claim and publish nothing beside it.
+/// `seal_sign_submit` (today: `reconciliation::submit_reconcile_like`'s ATTESTED arm, and
+/// `attestation::attest_thread_in_tx`, which calls this directly at
+/// `medication/attestation.rs:171` to seal the attestation event itself) therefore emits no
+/// clear signal at all. That is correct for both of today's callers, whose bodies carry no
+/// drug claim and so never write `payload.safety` — but a FUTURE two-thread verb that does
+/// carry a coding would need `apply_safety_rung` called on its body first, or it would seal
+/// a precise claim and publish nothing beside it.
 pub fn seal_and_sign(
     mut body: EventBody,
     sk: &SigningKey,
@@ -140,12 +142,21 @@ async fn apply_safety_rung(
     // Cloned out first so the immutable borrow of `body.payload` ends before we write
     // `body.safety`. The value is two short strings; a clone here is not worth a dance.
     let Some(precise) = body.payload.get("safety").cloned() else {
+        // Every in-repo builder initialises `body.safety` to `None`, so this is a no-op in
+        // practice today. It is written explicitly anyway: this function is the ONE seam
+        // that decides the clear `safety` field, and a caller that set it directly (rather
+        // than through a verb builder) must not have an uncoarsened precise claim smuggled
+        // past that seam just because this body carries no `payload.safety` to coarsen from.
+        body.safety = None;
         return Ok(());
     };
     // A half-formed claim emits NOTHING in the clear rather than a signal the strict door
     // would refuse — refusing here would cancel the clinical event this signal rides on
     // (ADR-0060). See `crate::safety::usable_precise_claim` for the full argument.
     let Some((class, severity)) = crate::safety::usable_precise_claim(&precise) else {
+        // Same guarantee as above: a half-formed precise claim must not leave a
+        // caller-supplied `body.safety` standing uncoarsened.
+        body.safety = None;
         return Ok(());
     };
 
@@ -281,4 +292,91 @@ pub async fn seal_sign_submit(
         }
     }
     Ok(event_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal, never-submitted `EventBody` — every field is a throwaway placeholder,
+    /// because `apply_safety_rung`'s two early-return branches never read past
+    /// `body.payload` before returning. Kept local to this test module rather than a
+    /// shared fixture, since nothing outside this file needs a bare body like this.
+    fn bare_body(payload: serde_json::Value) -> EventBody {
+        EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: uuid::Uuid::now_v7().to_string(),
+            event_type: "clinical.medication.assert".into(),
+            schema_version: "1".into(),
+            hlc: cairn_event::Hlc {
+                wall: 0,
+                counter: 0,
+                node_origin: "test".into(),
+            },
+            t_effective: None,
+            signer_key_id: "test".into(),
+            contributors: serde_json::json!([]),
+            payload,
+            attachments: vec![],
+            plaintext_twin: None,
+            clock_grade: Default::default(),
+            // Set directly, bypassing every verb builder in this repo (which always
+            // initialise this to `None`) — exactly the "future caller reaching in
+            // directly" scenario the add-on guards against.
+            safety: Some(serde_json::json!({"rung": "precise", "class": "should-not-survive"})),
+        }
+    }
+
+    /// Add-on 1 (task-6 review of #375 Task 5): the two early returns in
+    /// `apply_safety_rung` must clear a caller-supplied `body.safety` rather than leave it
+    /// standing, so "one seam decides the clear field" is a STRUCTURAL guarantee rather
+    /// than a convention every builder happens to follow today.
+    ///
+    /// Branch 1: no `payload.safety` at all — the ordinary case for every non-medication
+    /// clinical verb.
+    #[tokio::test]
+    async fn a_body_with_no_precise_claim_has_its_safety_field_cleared() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        // A bare connect, not `test_serial_guard` / `connect_and_load_schema`: this test
+        // never touches a table (both early-return branches return before any query), so
+        // it needs a live `Client` value only because `apply_safety_rung`'s signature
+        // requires one — there is nothing here to serialize against another suite.
+        let client = crate::db::connect(&base).await.unwrap();
+        let mut body = bare_body(serde_json::json!({}));
+        assert!(body.safety.is_some(), "fixture sets it up wrong otherwise");
+
+        apply_safety_rung(&client, &mut body).await.unwrap();
+
+        assert!(
+            body.safety.is_none(),
+            "no payload.safety in ⇒ the seam must clear a pre-set body.safety, not just \
+             leave it alone"
+        );
+    }
+
+    /// Branch 2: a `payload.safety` claim that IS present but half-formed (blank class) —
+    /// `usable_precise_claim` refuses it (ADR-0060: never cancel the clinical write over a
+    /// misconfigured class-map row), and that refusal must ALSO clear a pre-set
+    /// `body.safety`.
+    #[tokio::test]
+    async fn a_body_with_a_half_formed_claim_has_its_safety_field_cleared() {
+        let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let client = crate::db::connect(&base).await.unwrap();
+        let mut body = bare_body(serde_json::json!({"safety": {"class": "", "severity": "high"}}));
+        assert!(body.safety.is_some(), "fixture sets it up wrong otherwise");
+
+        apply_safety_rung(&client, &mut body).await.unwrap();
+
+        assert!(
+            body.safety.is_none(),
+            "a half-formed payload.safety claim ⇒ the seam must clear a pre-set \
+             body.safety, not just leave it alone"
+        );
+    }
 }
