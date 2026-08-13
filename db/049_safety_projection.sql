@@ -6,9 +6,12 @@
 -- floor check on its shape, and the deployment-populated (EMPTY-shipped) class lookup that
 -- the AUTHORING node consults pre-seal.
 --
--- WHAT IS NOT HERE: the read model (this file's sections 6-7 add it). Nothing in this file
--- withholds any content: §5.9 part B emits and coarsens a SIGNAL. Enforcement is part C
--- (#376).
+-- It also carries the READ model (sections 6-7): the grade for an event not yet written,
+-- and the total, re-coarsening read that makes the sync door's leniency safe.
+--
+-- WHAT IS NOT HERE: any withholding of content. §5.9 part B emits and coarsens a SIGNAL;
+-- coarsening the signal is not access control, and a caller that holds custody still reads
+-- the body exactly as before. Enforcement is part C (#376).
 
 BEGIN;
 
@@ -204,11 +207,211 @@ LANGUAGE sql STABLE AS $$
       AND m.code   = (p_coding ->> 'code');
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 6. The PROSPECTIVE grade — the grade for an event that does not exist yet.
+--
+--    cairn_effective_sensitivity takes an event_id, and at emission time the event has
+--    not been written. This is the same computation MINUS the precisely-targeted event
+--    arm: an event about to be authored can carry no assertion naming it.
+--
+--    !!! KEEP IN LOCKSTEP WITH db/048 SECTION 11 !!! The two functions duplicate the
+--    chart / thread / catch-all arms. crates/cairn-node/tests/safety_read.rs's
+--    prospective_matches_effective_given_the_same_chart_and_thread and
+--    a_dangling_event_scoped_assertion_coarsens_prospectively_too are the anti-drift pins;
+--    if you change one arm here or there and those tests stay green, the pins are too weak,
+--    not the change safe.
+--
+--    Both delegate to cairn_sensitivity_standing, which stays the SINGLE definition of
+--    "what still applies" (ADR-0062 decision 3).
+--
+--    WHY THE DUPLICATION IS NOT REFACTORED AWAY. The obvious "fix" is to make
+--    cairn_effective_sensitivity call this one. It cannot: section 11's thread branch is
+--    driven by the event's OWN type (the section 10b type gate) and by the thread the event
+--    resolves to, neither of which exists before the event does. Two functions with one
+--    warning comment and two tests is the honest shape; one function with a nullable
+--    event_id would hide the difference behind a branch.
+--
+--    THE ASYMMETRY THAT MATTERS: this function is allowed to be MORE conservative than
+--    section 11, never less. Over-coarsening at emission publishes a vaguer signal than
+--    strictly necessary — recoverable, and visible. Under-coarsening publishes a precise
+--    class in the clear on the wire that every subsequent read on this very node will then
+--    refuse to show: unrecoverable, because bytes already sent cannot be recalled.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION cairn_prospective_sensitivity(p_patient uuid, p_thread uuid)
+RETURNS TABLE (grade text, subject_kind text, content_address bytea)
+LANGUAGE sql STABLE AS $$
+    WITH standing AS (
+        SELECT s.* FROM cairn_sensitivity_standing(p_patient) s
+    ),
+    applicable AS (
+        -- chart-scoped, correctly targeted
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s
+        WHERE s.subject_kind = 'patient' AND s.subject_id = p_patient
+        UNION ALL
+        -- thread-scoped, this thread
+        SELECT s.grade, s.subject_kind, s.content_address
+        FROM standing s
+        WHERE s.subject_kind = 'thread' AND p_thread IS NOT NULL AND s.subject_id = p_thread
+        UNION ALL
+        -- The catch-all (ADR-0062 erratum E1): an assertion we cannot match to a subject
+        -- here still coarsens chart-wide, reported as 'coarsened' rather than echoing its
+        -- own kind. Four causes, matching section 11's arm for arm:
+        --
+        --   * an UNRECOGNISED kind — a future peer's vocabulary (section 11's first clause);
+        --   * a 'patient' assertion naming a DIFFERENT chart (mis-target);
+        --   * a thread-scoped assertion when we have NO thread to compare against — an
+        --     unresolved thread is decision 9's conservative bound, and at emission time it
+        --     is the honest reading of "this event may be on that thread";
+        --   * an 'event' assertion whose target is not on this chart. THIS ONE IS EASY TO
+        --     DROP BY MISTAKE while reading "minus the event arm" as "minus everything
+        --     event-shaped". It is not the precisely-targeted arm: it is the arm that fires
+        --     when an event-scoped assertion names an event we cannot find here — a wrong
+        --     chart, a dangling id, or (most often, and legitimately) an event that has
+        --     simply not replicated yet, since set-union sync has no ordering. Section 11
+        --     coarsens the WHOLE chart in that case, so every READ of the event we are
+        --     about to author will say 'existence'. If emission did not agree, it would
+        --     publish a precise class this node then declines to display. Fully computable
+        --     before the new event exists, so there is no excuse for the divergence.
+        SELECT s.grade, 'coarsened'::text, s.content_address
+        FROM standing s
+        WHERE s.subject_kind NOT IN ('patient', 'thread', 'event')
+           OR (s.subject_kind = 'patient' AND s.subject_id <> p_patient)
+           OR (s.subject_kind = 'thread'  AND (p_thread IS NULL OR s.subject_id <> p_thread))
+           OR (s.subject_kind = 'event' AND NOT EXISTS (
+                   SELECT 1 FROM event_log x
+                   WHERE x.event_id = s.subject_id AND x.patient_id = p_patient))
+    )
+    -- The LEFT JOIN LATERAL over a one-row constant is what makes this return EXACTLY ONE
+    -- row even when nothing applies, so callers can use query_one and read 'routine' rather
+    -- than distinguishing "no row" from "not sensitive" (db/048 section 11's own idiom,
+    -- copied verbatim so the two can be diffed arm by arm).
+    SELECT COALESCE(a.grade, 'routine'),
+           COALESCE(a.subject_kind, 'none'),
+           a.content_address
+    FROM (SELECT 1) AS one_row
+    LEFT JOIN LATERAL (
+        SELECT ap.grade, ap.subject_kind, ap.content_address
+        FROM applicable ap
+        -- Rank first; content_address breaks a tie between two equally-ranked grades
+        -- deterministically (BYTEA has no collation — ADR-0045/#115).
+        ORDER BY cairn_sensitivity_rank(ap.grade) DESC, ap.content_address ASC
+        LIMIT 1
+    ) a ON TRUE;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 7. The read model. TOTAL over any stored shape — this is what makes db/020's leniency
+--    (section 4) safe rather than merely lenient.
+--
+--    Three totality rules, each of which must hold whatever the row contains:
+--      * an unrecognised OR MISSING rung reads as 'existence' (both rank MAX through
+--        cairn_safety_rung_rank's ELSE — `safety ->> 'rung'` is SQL NULL when absent);
+--      * a class is surfaced ONLY at rung 'precise' — a class beside a coarser rung is
+--        ignored, always;
+--      * the rung is the COARSER of what was emitted and what this node's CURRENT grade
+--        licenses, because emission cannot control a peer's bytes and read cannot
+--        un-publish one. A peer legitimately emits 'precise' when the chart is routine on
+--        ITS node; the local grade is the local defence.
+--
+--    AT 'existence' NEITHER class NOR severity SURVIVES (maintainer ruling, 2026-08-13).
+--    'existence' is the claim "there is a safety-relevant signal here and you are not
+--    cleared to see what" — a severity beside it would narrow exactly that. severity
+--    survives at 'precise' and 'kind' only.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION cairn_event_safety(p_event_id uuid)
+RETURNS TABLE (rung text, class text, severity text, event_type text,
+               grade text, subject_kind text)
+LANGUAGE sql STABLE AS $$
+    WITH ev AS (
+        -- No signal ⇒ NO ROW, deliberately. An 'existence' marker synthesised for every
+        -- uncoded event would manufacture a warning from nothing, which is worse than
+        -- silence: it trains clinicians to ignore the marker (ADR-0059 decision 4's
+        -- honest floor). The same applies to a non-object `safety` — a peer that sent an
+        -- array or a bare string said nothing this node can act on.
+        --
+        -- `= 'object'` rather than db/005's `IS DISTINCT FROM` idiom because the polarity
+        -- is reversed here: this is a WHERE clause, so a NULL comparison EXCLUDES the row
+        -- (no row ⇒ disclose nothing), which is the safe direction. In section 4 the same
+        -- NULL would fall THROUGH a guard, which is the fail-open shape #346 catalogues.
+        SELECT e.event_id, e.event_type, e.safety
+        FROM event_log e
+        WHERE e.event_id = p_event_id AND e.safety IS NOT NULL
+          AND jsonb_typeof(e.safety) = 'object'
+    ),
+    graded AS (
+        SELECT ev.*, s.grade, s.subject_kind,
+               -- The coarser of the two, by rank (higher rank = coarser = less disclosed).
+               -- Named `eff_rung` so the CASE below reads as "what may be disclosed", not
+               -- "what was claimed".
+               CASE WHEN cairn_safety_rung_rank(ev.safety ->> 'rung')
+                       >= cairn_safety_rung_rank(cairn_safety_rung_for_rank(cairn_sensitivity_rank(s.grade)))
+                    -- The emitted rung wins — but only after NORMALISATION. An emitted
+                    -- rung this node cannot interpret (or an absent one) ranks MAX, i.e.
+                    -- strictly coarser than the coarsest NAMED rung, and echoing the raw
+                    -- string back would hand callers a value no reader knows how to
+                    -- render. The test is written against the ladder itself rather than
+                    -- against section 2's literal sentinel, so interposing a new rung or
+                    -- changing the ELSE value cannot silently break it.
+                    THEN CASE WHEN cairn_safety_rung_rank(ev.safety ->> 'rung')
+                                   > cairn_safety_rung_rank('existence')
+                              THEN 'existence'
+                              ELSE ev.safety ->> 'rung' END
+                    ELSE cairn_safety_rung_for_rank(cairn_sensitivity_rank(s.grade))
+               END AS eff_rung
+        -- cairn_effective_sensitivity always returns exactly one row (its own LEFT JOIN
+        -- LATERAL over a constant), so this LATERAL never drops or duplicates the event.
+        FROM ev, LATERAL cairn_effective_sensitivity(ev.event_id) s
+    )
+    SELECT g.eff_rung,
+           CASE WHEN g.eff_rung = 'precise' THEN g.safety ->> 'class' END,
+           CASE WHEN g.eff_rung IN ('precise', 'kind') THEN g.safety ->> 'severity' END,
+           g.event_type, g.grade, g.subject_kind
+    FROM graded g;
+$$;
+
+--    The chart-wide report: every standing signal, already coarsened. One query, so a UI
+--    opening a chart pays one round trip (the §1.2 budget in the slice plan).
+--
+--    A plain (INNER) LATERAL, so an event whose `safety` is present but unusable — a JSON
+--    array, a bare string, `'null'::jsonb` — contributes no row at all, exactly as
+--    cairn_event_safety reports it one event at a time. The two must not disagree: a UI
+--    that saw a row in the chart report and none on the detail read would show a warning it
+--    could not then explain.
+--
+--    ORDERING PUTS THE WITHHELD SEVERITIES FIRST, AND THAT IS THE DECISION.
+--    cairn_safety_severity_rank ranks an unrecognised severity MAX (section 1), and a
+--    coarsened row's severity is SQL NULL — which lands on the same ELSE. So every signal
+--    whose severity this reader is not cleared to see sorts ABOVE a known 'critical'.
+--    Sorting them last would bury the one class of warning whose content is unknown
+--    precisely because it was protected, which is the disclosure-adjacent failure this file
+--    exists to avoid. A UI is free to group differently; the default must not hide.
+CREATE OR REPLACE FUNCTION cairn_patient_safety(p_patient uuid)
+RETURNS TABLE (event_id uuid, rung text, class text, severity text, event_type text,
+               grade text, subject_kind text)
+LANGUAGE sql STABLE AS $$
+    SELECT e.event_id, s.rung, s.class, s.severity, s.event_type, s.grade, s.subject_kind
+    FROM event_log e, LATERAL cairn_event_safety(e.event_id) s
+    WHERE e.patient_id = p_patient AND e.safety IS NOT NULL
+    ORDER BY cairn_safety_severity_rank(s.severity) DESC, e.event_id;
+$$;
+
 -- Postgres grants EXECUTE to PUBLIC by default, and every role is a member of PUBLIC, so
 -- an un-REVOKEd function is directly callable by a below-the-floor adversary with raw SQL
 -- (the db/037 note, and issue #382's finding about the cairn_check_* family).
 REVOKE EXECUTE ON FUNCTION cairn_check_safety_signal(jsonb) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) TO cairn_agent;
+
+-- The read model. REVOKE before GRANT for each, same reason as above: these three are the
+-- ONLY sanctioned way to read the safety signal, and a reader that reaches event_log.safety
+-- directly gets the UNCOARSENED bytes — so the grant on them must be deliberate, not the
+-- PUBLIC default.
+REVOKE EXECUTE ON FUNCTION cairn_prospective_sensitivity(uuid, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_event_safety(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_patient_safety(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_prospective_sensitivity(uuid, uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_event_safety(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_patient_safety(uuid) TO cairn_agent;
 
 COMMIT;
