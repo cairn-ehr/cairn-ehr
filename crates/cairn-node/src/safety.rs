@@ -254,4 +254,136 @@ mod tests {
             "an unrecognised rung must disclose nothing, never everything"
         );
     }
+
+    /// A throwaway `SafetyLine` for `render_safety_line` tests. `grade` and `subject_kind`
+    /// are fixed to recognisable, un-mistakable strings and `event_id` is fresh-minted
+    /// (not cryptographic material — house rule 6 does not apply to a fixture UUID) so
+    /// every test below can assert render_safety_line's output never contains ANY of the
+    /// three: those fields exist on `SafetyLine` for the CLI to print SEPARATELY (see
+    /// `main.rs`'s `Cmd::PatientSafety` handler — "(grade {}, winning subject: {})"), and a
+    /// future edit that folded them into this function's own string would silently start
+    /// disclosing scope information this pure seam is not licensed to name.
+    fn line(class: Option<&str>, severity: Option<&str>, event_type: &str) -> SafetyLine {
+        SafetyLine {
+            event_id: Uuid::now_v7(),
+            rung: "irrelevant-to-rendering".to_string(),
+            class: class.map(str::to_string),
+            severity: severity.map(str::to_string),
+            event_type: event_type.to_string(),
+            grade: "sequestered".to_string(),
+            subject_kind: "patient".to_string(),
+        }
+    }
+
+    /// Every assertion below checks NEGATIVE space too (`assert!(!rendered.contains(...))`),
+    /// not just the happy string — a match arm that starts also printing `grade` or
+    /// `subject_kind`, or that leaks a class/severity the rung does not license, would slip
+    /// past a test that only pinned the expected substring.
+    fn assert_never_leaks_scope_fields(rendered: &str, l: &SafetyLine) {
+        assert!(
+            !rendered.contains(&l.grade),
+            "render_safety_line must not print the grade itself — the CLI prints it \
+             separately: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(&l.subject_kind),
+            "render_safety_line must not print the winning subject — the CLI prints it \
+             separately: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(&l.event_id.to_string()),
+            "render_safety_line must not print the event id: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn render_at_precise_names_both_class_and_severity() {
+        // db/049 only ever hands the rung "precise" a (Some, Some) pair, so this pins the
+        // ONE combination the read model actually produces at that rung.
+        let l = line(
+            Some("rh-sensitizing"),
+            Some("high"),
+            "clinical.medication.assert",
+        );
+        let rendered = render_safety_line(&l);
+        assert_eq!(rendered, "⚠ high — rh-sensitizing");
+        // Absence: this is the one rung licensed to disclose, but it must disclose
+        // EXACTLY the two named fields — never the confidential-content fallback text.
+        assert!(!rendered.contains("confidential"));
+        assert!(!rendered.contains("break glass"));
+        assert_never_leaks_scope_fields(&rendered, &l);
+    }
+
+    #[test]
+    fn render_at_kind_names_severity_but_withholds_class() {
+        // db/049 only ever hands the rung "kind" a (None, Some) pair.
+        let l = line(None, Some("critical"), "clinical.medication.assert");
+        let rendered = render_safety_line(&l);
+        assert_eq!(
+            rendered,
+            "⚠ critical — confidential medication, break glass to view"
+        );
+        // Absence: the precise class from the OTHER test must never appear here — this is
+        // what would catch a match-arm merge that accidentally carried a class value
+        // through at the middle rung.
+        assert!(!rendered.contains("rh-sensitizing"));
+        assert_never_leaks_scope_fields(&rendered, &l);
+    }
+
+    #[test]
+    fn render_at_existence_names_neither_class_nor_severity() {
+        // db/049 only ever hands the rung "existence" a (None, None) pair.
+        let l = line(None, None, "clinical.medication.assert");
+        let rendered = render_safety_line(&l);
+        assert_eq!(rendered, "⚠ confidential medication — break glass to view");
+        // Absence: neither the precise class NOR the precise severity from the other two
+        // tests may leak in at the coarsest rung.
+        assert!(!rendered.contains("rh-sensitizing"));
+        assert!(!rendered.contains("critical"));
+        assert!(!rendered.contains("high"));
+        assert_never_leaks_scope_fields(&rendered, &l);
+    }
+
+    #[test]
+    fn render_names_medication_only_for_a_clinical_medication_event_type() {
+        // This is what makes the middle/coarsest rung read as "confidential medication"
+        // rather than "confidential content" — the event TYPE is already plaintext on the
+        // row (never sealed), so naming it discloses nothing new (see the function's own
+        // doc). Table-driven over both rungs that use the noun, and over a handful of
+        // event types on each side of the `clinical.medication` prefix boundary.
+        for event_type in [
+            "clinical.medication.assert",
+            "clinical.medication.cessation",
+            "clinical.medication.dose-change",
+        ] {
+            let existence = render_safety_line(&line(None, None, event_type));
+            assert!(
+                existence.contains("medication") && !existence.contains("content"),
+                "{event_type:?} at existence must read as medication: {existence:?}"
+            );
+            let kind = render_safety_line(&line(None, Some("high"), event_type));
+            assert!(
+                kind.contains("medication") && !kind.contains("content"),
+                "{event_type:?} at kind must read as medication: {kind:?}"
+            );
+        }
+        for event_type in [
+            "clinical.note.add",
+            "identity.link",
+            "demographic.assert",
+            "",
+        ] {
+            let existence = render_safety_line(&line(None, None, event_type));
+            assert!(
+                existence.contains("content") && !existence.contains("medication"),
+                "{event_type:?} at existence must read as content, never medication: \
+                 {existence:?}"
+            );
+            let kind = render_safety_line(&line(None, Some("high"), event_type));
+            assert!(
+                kind.contains("content") && !kind.contains("medication"),
+                "{event_type:?} at kind must read as content, never medication: {kind:?}"
+            );
+        }
+    }
 }
