@@ -6,11 +6,32 @@
 -- floor check on its shape, and the deployment-populated (EMPTY-shipped) class lookup that
 -- the AUTHORING node consults pre-seal.
 --
--- WHAT IS NOT HERE: the event_log column and the door wiring (db/005, db/020), and the read
--- model (this file's sections 6-7 add it). Nothing in this file withholds any content:
--- §5.9 part B emits and coarsens a SIGNAL. Enforcement is part C (#376).
+-- WHAT IS NOT HERE: the read model (this file's sections 6-7 add it). Nothing in this file
+-- withholds any content: §5.9 part B emits and coarsens a SIGNAL. Enforcement is part C
+-- (#376).
 
 BEGIN;
+
+-- ---------------------------------------------------------------------------
+-- 0. The clear signal's home: an additive column on the append-only row.
+--
+--    WHY A COLUMN AND NOT A PROJECTION TABLE. §5.9 requires the safety projection to
+--    OUTLIVE the body it protects — to coarsen but survive a rung-3 crypto-shred. A
+--    projection table would have to be explicitly EXEMPTED from cairn_execute_shred's
+--    scrub (db/037), which is a standing invitation for a future reviewer to "fix" the
+--    inconsistency and silently delete the one signal the spec says must survive. On the
+--    append-only row it survives because event_log is never touched by a shred: the
+--    guarantee is structural rather than remembered. It also needs no apply function and
+--    no ADR-0057 registry entry, so no registry row-count pin moves.
+--
+--    It is a DERIVED VIEW of the signed bytes, exactly like `body` and `clock_grade` —
+--    stored verbatim, never sanitized on the way in. Section 4 explains why the
+--    interpretation, not the storage, is where a contradiction is refused.
+--
+--    ADD COLUMN IF NOT EXISTS does not fire the append-only trigger (that fires on
+--    UPDATE/DELETE) — the same additive move db/001 makes for attestation/attester_key.
+-- ---------------------------------------------------------------------------
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS safety JSONB;
 
 -- ---------------------------------------------------------------------------
 -- 1. The severity ladder.
@@ -113,7 +134,7 @@ BEGIN
     -- `NULL <> 'object'` evaluates to NULL — which `IF` treats as FALSE, so a NULL typeof
     -- would fall THROUGH this guard into the rung checks below instead of being refused.
     -- That is the fail-OPEN pattern issue #346 catalogues, and it is the repo idiom to
-    -- exclude it structurally rather than by argument (db/048 section 4, db/045 section 6).
+    -- exclude it structurally rather than by argument (db/048 section 3, db/045 section 2).
     --
     -- Today the RETURN above already eliminates every value that could make jsonb_typeof(s)
     -- return NULL, so the bare form would be non-exploitable — which is exactly why it is
