@@ -202,6 +202,7 @@ pub fn build_registration_body(
         attachments: vec![],
         plaintext_twin: Some(render_registration_twin(&assertion)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -239,6 +240,7 @@ pub fn build_name_body(
             REGISTRATION_DEMOGRAPHIC_PROVENANCE,
         )),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -275,6 +277,7 @@ pub fn build_dob_body(
             REGISTRATION_DEMOGRAPHIC_PROVENANCE,
         )),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -375,6 +378,7 @@ pub fn build_identifier_body(
         attachments: vec![],
         plaintext_twin: Some(render_identifier_twin(&assertion)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

@@ -75,6 +75,7 @@ fn synth_peer(sk: &SigningKey, name: &str, peer_node_id_hex: &str, peer_pubkey: 
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -100,6 +101,7 @@ fn synth_enroll(sk: &SigningKey, name: &str) -> Vec<u8> {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -405,6 +407,7 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed_b = sign(&body_b, &sk_b).unwrap();
     let peer_id = hex::encode(cairn_event::event_address(&signed_b.signed_bytes));
@@ -565,6 +568,7 @@ fn synth_enroll_at_wall(sk: &SigningKey, name: &str, wall: i64) -> Vec<u8> {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }

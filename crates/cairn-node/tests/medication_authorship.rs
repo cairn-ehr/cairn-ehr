@@ -263,6 +263,7 @@ fn craft_forged_authorship_event(
         attachments: vec![],
         plaintext_twin: Some(seal_stub_twin("clinical.medication.asserted")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, node_sk).unwrap();
     (signed.signed_bytes, dek)

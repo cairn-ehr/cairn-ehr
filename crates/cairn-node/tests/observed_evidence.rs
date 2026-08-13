@@ -98,6 +98,7 @@ async fn author_document_dob(
             "document-verified",
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&body, sk).unwrap();
     db.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

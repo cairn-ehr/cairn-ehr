@@ -87,6 +87,7 @@ async fn submit_generic(
         attachments: vec![],
         plaintext_twin: Some(twin.into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

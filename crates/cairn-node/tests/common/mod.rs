@@ -183,6 +183,7 @@ pub async fn submit_signed_with_id(
         attachments: vec![],
         plaintext_twin: spec.plaintext_twin,
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

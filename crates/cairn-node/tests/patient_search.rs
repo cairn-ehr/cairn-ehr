@@ -1154,6 +1154,7 @@ async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is
         attachments: vec![attachment],
         plaintext_twin: Some(twin),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -1249,6 +1250,7 @@ async fn two_tied_original_renditions_resolve_to_the_same_digest_every_time() {
         attachments: vec![attachment],
         plaintext_twin: Some(twin),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -1364,6 +1366,7 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
         attachments: vec![],
         plaintext_twin: Some(render_repudiate_twin(&rep)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     submit_attested(&c, &sk, repudiation_body, &sk_h, &kid_h)
         .await
@@ -1459,6 +1462,7 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
         attachments: vec![],
         plaintext_twin: Some(render_repudiate_twin(&rep)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     submit_attested(&c, &sk, repudiation_body, &sk_h, &kid_h)
         .await

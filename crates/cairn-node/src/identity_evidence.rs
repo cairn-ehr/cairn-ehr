@@ -124,6 +124,7 @@ pub fn build_text_evidence_body(
         attachments: vec![],
         plaintext_twin: Some(twin),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

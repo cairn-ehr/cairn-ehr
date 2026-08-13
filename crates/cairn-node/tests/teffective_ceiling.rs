@@ -116,6 +116,7 @@ fn offset_note(
         attachments: vec![],
         plaintext_twin: Some("Progress note: ceiling probe".into()),
         clock_grade: grade,
+        safety: None,
     }
 }
 

@@ -536,6 +536,7 @@ fn synth_peer(sk: &SigningKey, name: &str, peer_node_id_hex: &str) -> Vec<u8> {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -562,6 +563,7 @@ fn synth_supersede(sk: &SigningKey, name: &str, superseded_node_id_hex: &str) ->
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -588,6 +590,7 @@ fn synth_enroll(sk: &SigningKey, name: &str) -> Vec<u8> {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }

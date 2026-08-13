@@ -62,6 +62,7 @@ async fn assert_identifier(
         attachments: vec![],
         plaintext_twin: Some(render_identifier_twin(a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -255,6 +256,7 @@ async fn submit_raw_demographic(
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -411,6 +413,7 @@ async fn legacy_untwinned_type_still_uses_derived_twin() {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -543,6 +546,7 @@ async fn submit_with_t_effective(
         attachments: vec![],
         plaintext_twin: Some(render_identifier_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

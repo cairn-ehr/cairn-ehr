@@ -85,6 +85,7 @@ fn note_with(contributors: serde_json::Value, signer_kid: &str, patient: Uuid) -
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

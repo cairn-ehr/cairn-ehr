@@ -90,6 +90,7 @@ pub fn build_coding_body(
         attachments: vec![],
         plaintext_twin: Some(render_medication_coding_twin(&c)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -123,6 +124,7 @@ pub fn build_coding_correction_body(
         attachments: vec![],
         plaintext_twin: Some(render_medication_coding_correction_twin(&c)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

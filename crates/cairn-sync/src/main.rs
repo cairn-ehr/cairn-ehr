@@ -1115,6 +1115,7 @@ fn emit_event(
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
 
     // ADR-0039: globalise the authored twin — materialise it into the body BEFORE signing, so
@@ -4751,6 +4752,7 @@ mod quarantine_tests {
             attachments: vec![],
             plaintext_twin: Some("Progress note: replicated note".into()),
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }
@@ -6112,6 +6114,7 @@ mod schema_subset_tests {
             attachments: vec![],
             plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes.to_vec()
     }
@@ -6146,6 +6149,7 @@ mod schema_subset_tests {
             attachments,
             plaintext_twin: None,
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         // ADR-0039: author the twin into the signed body, as every production author does.
         let body = materialise_generic_twin(body);

@@ -126,6 +126,7 @@ async fn apply_pending_remotely(c: &Client, sk: &SigningKey, kid: &str, subject:
         attachments: vec![],
         plaintext_twin: Some(render_pending_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&body, sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])

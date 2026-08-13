@@ -61,6 +61,7 @@ async fn submit_field(
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -483,6 +484,7 @@ async fn regression_identifier_and_legacy_untwinned_type_still_work() {
         attachments: vec![],
         plaintext_twin: Some("nhs-number, document-verified: 943 476 5919".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -537,6 +539,7 @@ async fn regression_identifier_and_legacy_untwinned_type_still_work() {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed2 = sign(&body2, &sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed2.signed_bytes])

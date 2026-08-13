@@ -116,6 +116,7 @@ fn peer_assertion(
         attachments: vec![],
         plaintext_twin: Some(format!("test fixture: {subject_kind}/{grade}")),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

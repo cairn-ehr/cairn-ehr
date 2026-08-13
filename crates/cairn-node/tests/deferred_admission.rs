@@ -101,6 +101,7 @@ fn peer_event(kid: &str, patient: Uuid, ty: &str, wall: i64) -> EventBody {
         // rendering half of "coarseness varies; existence never disappears".
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

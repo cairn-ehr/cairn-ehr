@@ -740,6 +740,7 @@ async fn submit_plaintext_note(c: &Client, sk: &SigningKey, kid: &str, patient: 
         attachments: vec![],
         plaintext_twin: Some("a plaintext clinician note".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     let id: String = c

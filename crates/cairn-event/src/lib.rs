@@ -40,6 +40,7 @@ pub mod identity_evidence;
 pub mod john_doe;
 pub mod medication;
 pub mod registration;
+pub mod safety;
 pub mod schema_generation;
 pub mod seal;
 pub mod sensitivity;
@@ -281,6 +282,22 @@ pub struct EventBody {
     /// still verify (additive-only, principle 11 / ADR-0012).
     #[serde(default)]
     pub clock_grade: ClockGrade,
+    /// The §5.9 de-identified safety signal, in the CLEAR (ADR-0063). Carries a `rung`
+    /// chosen at authoring time from the effective sensitivity grade, plus whatever that
+    /// rung licenses — see [`safety::coarsen`]. The PRECISE claim lives inside the sealed
+    /// payload; this is the tier a node without custody, or one reading a crypto-shredded
+    /// event, still sees.
+    ///
+    /// `skip_serializing_if` ⇒ a None is omitted from the wire, so adding this field never
+    /// changes an existing event's bytes/content-address (additive-only, principle 11 /
+    /// ADR-0012). Appended TRAILING for the same reason (the ADR-0058 `clock_grade`
+    /// precedent).
+    ///
+    /// A `serde_json::Value` rather than a typed struct on purpose: the vocabulary is open
+    /// (principle 11), a future peer's rung must decode rather than fail, and the read model
+    /// that interprets it is the in-DB floor, not this crate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety: Option<serde_json::Value>,
 }
 
 /// A signed event ready to enter `event_log`: the verbatim signed bytes plus
@@ -810,6 +827,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         }
     }
 
@@ -1108,6 +1126,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         let mut legacy_bytes = Vec::new();
         ciborium::into_writer(&legacy, &mut legacy_bytes).unwrap();
@@ -1266,6 +1285,7 @@ mod tests {
             attachments: vec![att.clone()],
             plaintext_twin: Some("t".into()),
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         let bytes = canonical_cbor(&body).unwrap();
         let back: EventBody = ciborium::from_reader(&bytes[..]).unwrap();
@@ -1322,6 +1342,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         }
     }
 
@@ -1887,5 +1908,106 @@ mod tests {
             decoded.plaintext_twin.is_some(),
             "a materialised twin survives the wire"
         );
+    }
+
+    #[test]
+    fn an_absent_safety_field_changes_no_existing_content_address() {
+        // Principle 11 / ADR-0012: a field added later must not re-encode existing signed
+        // bytes. `skip_serializing_if` means a None emits NO CBOR key at all, so the encoding
+        // of every event that carries no safety signal is byte-identical to the pre-field one.
+        // Encoded from a GENUINE pre-field struct so the test cannot pass by accident — the
+        // same idiom the plaintext_twin additive test above uses.
+        #[derive(serde::Serialize)]
+        struct PreSafetyBody<'a> {
+            event_id: &'a str,
+            patient_id: &'a str,
+            event_type: &'a str,
+            schema_version: &'a str,
+            hlc: &'a Hlc,
+            t_effective: Option<&'a str>,
+            signer_key_id: &'a str,
+            contributors: &'a serde_json::Value,
+            payload: &'a serde_json::Value,
+            attachments: &'a Vec<Attachment>,
+            clock_grade: ClockGrade,
+        }
+
+        let body = EventBody {
+            event_id: "01930000-0000-7000-8000-000000000001".into(),
+            patient_id: "01930000-0000-7000-8000-000000000002".into(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc {
+                wall: 1,
+                counter: 0,
+                node_origin: "n1".into(),
+            },
+            t_effective: None,
+            signer_key_id: "kid".into(),
+            contributors: serde_json::json!([]),
+            payload: serde_json::json!({"text": "hello"}),
+            attachments: vec![],
+            plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let pre = PreSafetyBody {
+            event_id: &body.event_id,
+            patient_id: &body.patient_id,
+            event_type: &body.event_type,
+            schema_version: &body.schema_version,
+            hlc: &body.hlc,
+            t_effective: None,
+            signer_key_id: &body.signer_key_id,
+            contributors: &body.contributors,
+            payload: &body.payload,
+            attachments: &body.attachments,
+            clock_grade: body.clock_grade,
+        };
+        let mut pre_bytes = Vec::new();
+        ciborium::into_writer(&pre, &mut pre_bytes).expect("pre-field body encodes");
+        assert_eq!(
+            canonical_cbor(&body).expect("body encodes"),
+            pre_bytes,
+            "adding `safety` must not change the bytes of an event that carries none"
+        );
+    }
+
+    #[test]
+    fn a_safety_signal_survives_sign_and_verify_unchanged() {
+        let (sk, kid) = generate_key().expect("keypair");
+        let mut body = EventBody {
+            event_id: "01930000-0000-7000-8000-000000000003".into(),
+            patient_id: "01930000-0000-7000-8000-000000000004".into(),
+            event_type: "clinical.medication.asserted".into(),
+            schema_version: "clinical.medication/1".into(),
+            hlc: Hlc {
+                wall: 2,
+                counter: 0,
+                node_origin: "n1".into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.clone(),
+            contributors: serde_json::json!([]),
+            payload: serde_json::json!({"medication_id": "x"}),
+            attachments: vec![],
+            plaintext_twin: Some("t".into()),
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        body.safety = Some(crate::safety::coarsen(
+            &crate::safety::PreciseSafety {
+                class: "rh-sensitizing",
+                severity: "high",
+            },
+            crate::safety::SafetyRung::Kind,
+        ));
+        let signed = sign(&body, &sk).expect("signs");
+        let decoded = verify_with(&signed.signed_bytes, &sk.verifying_key()).expect("verifies");
+        assert_eq!(
+            decoded.safety, body.safety,
+            "the signal is inside the signature"
+        );
+        assert_eq!(decoded.safety.as_ref().unwrap()["rung"], "kind");
     }
 }

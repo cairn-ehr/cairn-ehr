@@ -126,6 +126,7 @@ async fn submit_raw_overlay(
         attachments: vec![],
         plaintext_twin: Some("coded as atorvastatin [drugref-moiety]".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     match door {
         // #345: this helper has always minted the chart it writes to, so it owns making that

@@ -66,6 +66,7 @@ pub fn build_attestation_body(
         attachments: vec![],
         plaintext_twin: Some(render_medication_attestation_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

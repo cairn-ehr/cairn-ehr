@@ -44,6 +44,7 @@ pub fn build_cease_body(
         attachments: vec![],
         plaintext_twin: Some(render_medication_cessation_twin(&csn)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

@@ -56,6 +56,7 @@ async fn submit_note(
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -209,6 +210,7 @@ async fn twinless_demographic_is_still_hard_rejected() {
         attachments: vec![],
         plaintext_twin: None, // <-- the floor must reject this for a demographic type
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c
@@ -274,6 +276,7 @@ async fn whitespace_twin_demographic_is_still_hard_rejected() {
         attachments: vec![],
         plaintext_twin: Some("   \n".into()), // <-- whitespace-only; must be treated as blank
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap();
     let err = c

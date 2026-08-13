@@ -1,0 +1,188 @@
+//! §5.9 safety projection — the wire shape of a de-identified safety signal (ADR-0006,
+//! ADR-0059 decision 4, ADR-0063).
+//!
+//! # The two tiers, and why the seal boundary separates them
+//!
+//! A coded drug's interaction class is a property of the CODE — a drug-knowledge lookup.
+//! So a reader cannot re-derive it without a drug database, and making the §5.9 safety
+//! floor depend on one would defeat the floor (ADR-0059 decision 4 / #294). The class is
+//! therefore computed PRE-SEAL on the coding node, which by construction had a coding
+//! authority in hand, and it travels.
+//!
+//! But the precise class IS the disclosure for exactly the cases §5.9 exists for:
+//! "Rh-sensitizing event" in the clear reads as "this patient had a termination".
+//! So it travels in TWO tiers:
+//!
+//!   * `payload.safety` — the precise `{class, severity}`, sealed under the body's own DEK.
+//!     A custody-holding node reads it without any drug database.
+//!   * `EventBody.safety` — a RUNG chosen by the effective sensitivity grade at authoring
+//!     time, in the clear. This is what a node without custody (sequestered, part C) or
+//!     after a crypto-shred still sees, and it is the only coarsening that binds a peer's
+//!     raw-SQL client.
+use serde_json::{json, Value};
+
+/// How much of a safety signal is published in the clear. Ordered coarsest-last, mirroring
+/// §5.9's ladder: *precise class → "confidential medication, severity X" → "confidential
+/// content, break glass"*.
+///
+/// The rung is chosen at AUTHORING time from the effective sensitivity grade (db/049's
+/// `cairn_safety_rung_for_rank`) and then frozen into the signed bytes. It cannot be
+/// revised later: bytes on the wire cannot be un-published, which is exactly why the
+/// choice has to bind here rather than at read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyRung {
+    /// The class itself. Safe only on a chart with no standing grade.
+    Precise,
+    /// Severity only. The event TYPE already says "medication" in the clear, so this rung
+    /// deliberately adds no `kind` field — it would restate what the row already publishes.
+    Kind,
+    /// The signal exists; nothing about it is disclosed. Break glass to learn more.
+    Existence,
+}
+
+impl SafetyRung {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SafetyRung::Precise => "precise",
+            SafetyRung::Kind => "kind",
+            SafetyRung::Existence => "existence",
+        }
+    }
+
+    /// Coarseness rank — higher is coarser. Gaps of 10 leave room to interpose a rung later
+    /// without renumbering, the same discipline `cairn_sensitivity_rank` uses.
+    pub fn rank(self) -> i32 {
+        match self {
+            SafetyRung::Precise => 0,
+            SafetyRung::Kind => 10,
+            SafetyRung::Existence => 20,
+        }
+    }
+}
+
+/// The full safety claim as the coding node established it. Borrowed `&str`s only, so it is
+/// `Copy` and costs nothing to pass around.
+#[derive(Debug, Clone, Copy)]
+pub struct PreciseSafety<'a> {
+    /// The coarse safety class — an interaction/allergy class, "rh-sensitizing", a
+    /// contraindication flag. Open vocabulary: this crate never enumerates drug knowledge.
+    pub class: &'a str,
+    /// Open vocabulary; db/049 ranks the named ladder and treats anything else as MAX,
+    /// because for a SAFETY signal "unknown" must mean "assume the worst".
+    pub severity: &'a str,
+}
+
+/// The object that goes INSIDE the sealed payload. Never coarsened — the seal is what
+/// protects it, and a custody-holder is entitled to the whole claim (#294: this is the
+/// carried class a drugref-less reader depends on).
+pub fn precise_safety_body(p: &PreciseSafety) -> Value {
+    json!({ "class": p.class, "severity": p.severity })
+}
+
+/// The object that goes in the CLEAR on the signed envelope, cut down to `rung`.
+///
+/// Total and exhaustive over the ladder: adding a rung to `SafetyRung` forces a decision
+/// here, which is the point — a rung with no explicit field policy would default to
+/// disclosing whatever the previous arm disclosed.
+pub fn coarsen(p: &PreciseSafety, rung: SafetyRung) -> Value {
+    match rung {
+        SafetyRung::Precise => {
+            json!({ "rung": rung.as_str(), "class": p.class, "severity": p.severity })
+        }
+        // Fields are OMITTED, never written as null: an explicit null is an author
+        // asserting something about the class, and absence is the honest "withheld".
+        SafetyRung::Kind => json!({ "rung": rung.as_str(), "severity": p.severity }),
+        SafetyRung::Existence => json!({ "rung": rung.as_str() }),
+    }
+}
+
+/// The §3.13 legibility twin fragment for the sealed side — a reader holding no drug
+/// database and no schema must still be able to read what was claimed (principle 11).
+pub fn render_safety_twin(p: &PreciseSafety) -> String {
+    format!("safety: {} (severity {})", p.class, p.severity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rung_ladder_is_ordered_coarsest_last() {
+        assert!(SafetyRung::Precise.rank() < SafetyRung::Kind.rank());
+        assert!(SafetyRung::Kind.rank() < SafetyRung::Existence.rank());
+        assert_eq!(SafetyRung::Precise.as_str(), "precise");
+        assert_eq!(SafetyRung::Kind.as_str(), "kind");
+        assert_eq!(SafetyRung::Existence.as_str(), "existence");
+    }
+
+    #[test]
+    fn precise_carries_class_and_severity() {
+        let p = PreciseSafety {
+            class: "rh-sensitizing",
+            severity: "high",
+        };
+        let v = coarsen(&p, SafetyRung::Precise);
+        assert_eq!(v["rung"], "precise");
+        assert_eq!(v["class"], "rh-sensitizing");
+        assert_eq!(v["severity"], "high");
+    }
+
+    #[test]
+    fn kind_drops_the_class_and_keeps_the_severity() {
+        // "confidential medication, severity X" — the middle rung of §5.9's ladder. The
+        // word "medication" is already in the clear on event_log.event_type, so the rung
+        // carries only what is genuinely additional.
+        let p = PreciseSafety {
+            class: "rh-sensitizing",
+            severity: "high",
+        };
+        let v = coarsen(&p, SafetyRung::Kind);
+        assert_eq!(v["rung"], "kind");
+        assert!(
+            v.get("class").is_none(),
+            "the class must not survive coarsening"
+        );
+        assert_eq!(v["severity"], "high");
+    }
+
+    #[test]
+    fn existence_carries_neither_but_still_exists() {
+        // Coarseness varies; EXISTENCE never disappears (§5.9's safety-floor invariant).
+        // This rung is the claim "there is a safety-relevant signal here and you are not
+        // cleared to see what" — which is what makes break-glass a rational act.
+        let p = PreciseSafety {
+            class: "rh-sensitizing",
+            severity: "high",
+        };
+        let v = coarsen(&p, SafetyRung::Existence);
+        assert_eq!(v["rung"], "existence");
+        assert!(v.get("class").is_none());
+        assert!(v.get("severity").is_none());
+        assert!(v.is_object(), "the signal still exists as an object");
+    }
+
+    #[test]
+    fn the_sealed_body_always_carries_the_full_precision() {
+        // payload.safety is under the DEK, so it is never coarsened: coarsening is what
+        // the CLEAR field is for.
+        let p = PreciseSafety {
+            class: "antiretroviral-interaction",
+            severity: "critical",
+        };
+        let v = precise_safety_body(&p);
+        assert_eq!(v["class"], "antiretroviral-interaction");
+        assert_eq!(v["severity"], "critical");
+        assert!(v.get("rung").is_none(), "the sealed side carries no rung");
+    }
+
+    #[test]
+    fn the_twin_reads_without_a_schema() {
+        let p = PreciseSafety {
+            class: "rh-sensitizing",
+            severity: "high",
+        };
+        let t = render_safety_twin(&p);
+        assert!(t.contains("rh-sensitizing"), "the class is the point: {t}");
+        assert!(t.contains("high"), "the severity is actionable: {t}");
+    }
+}

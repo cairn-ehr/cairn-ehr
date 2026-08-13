@@ -91,6 +91,7 @@ pub fn build_estimated_dob_event(
             CLINICIAN_OBSERVED_PROVENANCE,
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -119,6 +120,7 @@ pub fn build_observed_sex_event(
             CLINICIAN_OBSERVED_PROVENANCE,
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

@@ -188,6 +188,7 @@ pub fn build_self_attestation(
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     // A signing failure here is a programming error (bad key), not a runtime condition.
     sign(&body, sk)
@@ -467,6 +468,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }

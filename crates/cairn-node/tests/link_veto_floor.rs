@@ -94,6 +94,7 @@ async fn submit_dob(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wall:
         attachments: vec![],
         plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -179,6 +180,7 @@ fn link_body(
         attachments: vec![],
         plaintext_twin: Some(twin),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -235,6 +237,7 @@ async fn mark_pending(c: &Client, sk: &SigningKey, kid: &str, subject: Uuid, wal
         attachments: vec![],
         plaintext_twin: Some(render_pending_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

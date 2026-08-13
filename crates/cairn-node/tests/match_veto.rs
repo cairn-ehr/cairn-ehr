@@ -63,6 +63,7 @@ async fn submit(
         attachments: vec![],
         plaintext_twin: twin.map(|t| t.to_string()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])

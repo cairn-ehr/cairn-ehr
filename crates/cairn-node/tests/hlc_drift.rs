@@ -99,6 +99,7 @@ fn b_genesis(wall: i64) -> (Vec<u8>, String, String) {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk_b).unwrap().signed_bytes;
     let node_id = hex::encode(event_address(&signed));
@@ -278,6 +279,7 @@ fn note(kid: &str, patient: Uuid, wall: i64) -> EventBody {
         attachments: vec![],
         plaintext_twin: Some("Progress note: arrived by sync".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

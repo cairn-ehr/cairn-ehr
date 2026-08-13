@@ -176,6 +176,7 @@ pub async fn assert_sensitivity(
         attachments: vec![],
         plaintext_twin: Some(render_sensitivity_twin(&a)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk)?;
     // Sensitivity bodies are plaintext by necessity (cairn-event::sensitivity's own module
@@ -235,6 +236,7 @@ pub async fn withdraw_sensitivity(
         attachments: vec![],
         plaintext_twin: Some(render_withdrawal_twin(&w)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk)?;
     // The 3-arg door: signed envelope + a human attestation token binding this same key
