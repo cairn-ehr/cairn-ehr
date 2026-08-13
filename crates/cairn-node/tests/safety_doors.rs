@@ -23,7 +23,11 @@ fn body_with_safety(
         patient_id: patient.to_string(),
         event_type: "note.added".into(),
         schema_version: "note/1".into(),
-        hlc: cairn_event::Hlc { wall, counter: 0, node_origin: "n1".into() },
+        hlc: cairn_event::Hlc {
+            wall,
+            counter: 0,
+            node_origin: "n1".into(),
+        },
         t_effective: None,
         signer_key_id: kid.into(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
@@ -42,7 +46,9 @@ async fn the_local_door_refuses_a_class_the_rung_does_not_license() {
     // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
     // does this in execution order).
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &[]).await;
     let patient = Uuid::now_v7();
     // MY RULING P2 (issue #345, db/005 step 8b): the first event on a chart must be its
@@ -59,11 +65,17 @@ async fn the_local_door_refuses_a_class_the_rung_does_not_license() {
     );
     let signed = cairn_event::sign(&body, &sk).expect("signs");
     let e = c
-        .execute("SELECT submit_event($1, NULL, NULL, NULL)", &[&signed.signed_bytes])
+        .execute(
+            "SELECT submit_event($1, NULL, NULL, NULL)",
+            &[&signed.signed_bytes],
+        )
         .await
         .expect_err("the local door must refuse a self-contradictory signal");
     let msg = db_msg(&e);
-    assert!(msg.contains("class"), "the refusal names the offending key: {msg}");
+    assert!(
+        msg.contains("class"),
+        "the refusal names the offending key: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -73,7 +85,9 @@ async fn the_remote_door_admits_the_same_body_and_keeps_the_clinical_content() {
     // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
     // does this in execution order).
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &[]).await;
     let patient = Uuid::now_v7();
     // No registration needed here: apply_remote_event (the sync door) never runs db/005's
@@ -123,7 +137,10 @@ async fn the_remote_door_admits_the_same_body_and_keeps_the_clinical_content() {
     let stored: serde_json::Value =
         serde_json::from_str(&stored_text.expect("the signal is stored")).expect("valid json");
     assert_eq!(stored["rung"], "existence");
-    assert_eq!(stored["class"], "rh-sensitizing", "stored verbatim, not scrubbed");
+    assert_eq!(
+        stored["class"], "rh-sensitizing",
+        "stored verbatim, not scrubbed"
+    );
 }
 
 #[tokio::test]
@@ -133,7 +150,9 @@ async fn a_well_formed_signal_lands_in_the_column_through_the_local_door() {
     // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
     // does this in execution order).
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &[]).await;
     let patient = Uuid::now_v7();
     // MY RULING P2 (issue #345, db/005 step 8b): see the first test in this file.
@@ -147,9 +166,12 @@ async fn a_well_formed_signal_lands_in_the_column_through_the_local_door() {
     );
     let event_id: Uuid = body.event_id.parse().expect("uuid");
     let signed = cairn_event::sign(&body, &sk).expect("signs");
-    c.execute("SELECT submit_event($1, NULL, NULL, NULL)", &[&signed.signed_bytes])
-        .await
-        .expect("a well-formed signal is admitted");
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, NULL)",
+        &[&signed.signed_bytes],
+    )
+    .await
+    .expect("a well-formed signal is admitted");
 
     // Cast to ::text — see the remote-door test above for why.
     let stored_text: Option<String> = c
@@ -172,7 +194,9 @@ async fn an_event_with_no_signal_stores_null() {
     // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
     // does this in execution order).
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &[]).await;
     let patient = Uuid::now_v7();
     // MY RULING P2 (issue #345, db/005 step 8b): see the first test in this file.
@@ -181,9 +205,12 @@ async fn an_event_with_no_signal_stores_null() {
     let body = body_with_safety(patient, &kid, 4, None);
     let event_id: Uuid = body.event_id.parse().expect("uuid");
     let signed = cairn_event::sign(&body, &sk).expect("signs");
-    c.execute("SELECT submit_event($1, NULL, NULL, NULL)", &[&signed.signed_bytes])
-        .await
-        .expect("no signal is the common case");
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, NULL)",
+        &[&signed.signed_bytes],
+    )
+    .await
+    .expect("no signal is the common case");
 
     // Cast to ::text — see the remote-door test above for why.
     let stored_text: Option<String> = c
@@ -194,5 +221,8 @@ async fn an_event_with_no_signal_stores_null() {
         .await
         .expect("query")
         .get(0);
-    assert!(stored_text.is_none(), "absence stays absence, never an empty object");
+    assert!(
+        stored_text.is_none(),
+        "absence stays absence, never an empty object"
+    );
 }
