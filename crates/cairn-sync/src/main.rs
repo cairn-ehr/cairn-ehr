@@ -167,6 +167,10 @@ const SCHEMA: &[(&str, &str)] = &[
         "048_sensitivity_stream",
         include_str!("../../../db/048_sensitivity_stream.sql"),
     ),
+    (
+        "049_safety_projection",
+        include_str!("../../../db/049_safety_projection.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS
