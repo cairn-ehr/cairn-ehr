@@ -109,9 +109,17 @@ BEGIN
     IF s IS NULL OR jsonb_typeof(s) = 'null' THEN
         RETURN;   -- absent: the overwhelmingly common case, and always legal.
     END IF;
-    -- jsonb_typeof is checked POSITIVELY (= 'object'), never as a NOT-something: the
-    -- fail-OPEN pattern issue #346 catalogues comes from comparing a NULL typeof.
-    IF jsonb_typeof(s) <> 'object' THEN
+    -- IS DISTINCT FROM, never a bare `<> 'object'`. jsonb_typeof(NULL) is SQL NULL, and
+    -- `NULL <> 'object'` evaluates to NULL — which `IF` treats as FALSE, so a NULL typeof
+    -- would fall THROUGH this guard into the rung checks below instead of being refused.
+    -- That is the fail-OPEN pattern issue #346 catalogues, and it is the repo idiom to
+    -- exclude it structurally rather than by argument (db/048 section 4, db/045 section 6).
+    --
+    -- Today the RETURN above already eliminates every value that could make jsonb_typeof(s)
+    -- return NULL, so the bare form would be non-exploitable — which is exactly why it is
+    -- written the safe way anyway: the guarantee must not depend on two checks staying
+    -- adjacent across a future reordering.
+    IF jsonb_typeof(s) IS DISTINCT FROM 'object' THEN
         RAISE EXCEPTION 'safety: the signal must be a JSON object, got %', jsonb_typeof(s);
     END IF;
 

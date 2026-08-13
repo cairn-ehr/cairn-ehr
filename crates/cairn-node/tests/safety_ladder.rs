@@ -119,7 +119,15 @@ async fn the_floor_check_admits_absence_and_every_well_formed_rung() {
         return;
     };
     for body in [
+        // The two DISTINCT absence arms of the early RETURN, pinned separately because they
+        // are different SQL values that happen to share a meaning. `{}` makes `b -> 'safety'`
+        // yield SQL NULL (the key is absent); `{"safety": null}` makes it yield the jsonb
+        // scalar `null`, for which `jsonb_typeof` returns the STRING 'null'. Both are legal
+        // and both mean "this event carries no safety signal". Pinning only the first would
+        // let a future reordering of the guard drop the second silently — and an explicit
+        // JSON null is exactly what a serializer emits for an absent optional field.
         r#"{}"#,
+        r#"{"safety": null}"#,
         r#"{"safety": {"rung": "precise", "class": "rh-sensitizing", "severity": "high"}}"#,
         r#"{"safety": {"rung": "kind", "severity": "high"}}"#,
         r#"{"safety": {"rung": "existence"}}"#,
