@@ -308,6 +308,80 @@ async fn the_safety_functions_are_revoked_from_public_and_granted_deliberately()
 }
 
 #[tokio::test]
+async fn every_clinical_event_type_is_thread_bearing_so_the_missing_gate_cannot_bite() {
+    let Some((_g, c)) = connect().await else {
+        return;
+    };
+    // THE TRIPWIRE FOR #404's ONE REMAINING PIECE. Read this before adding a clinical verb.
+    //
+    // `cairn_prospective_sensitivity`'s `p_thread IS NULL` arm coarsens chart-wide — the
+    // conservative bound for "this event MAY be on that thread". db/048 section 11's
+    // equivalent arm additionally gates on `cairn_event_type_has_no_thread`, so an event
+    // type that CANNOT have a thread does not take the bound. The prospective form has no
+    // such gate, because it takes no event type.
+    //
+    // That is harmless only while every event type reaching the emission seam is
+    // thread-BEARING. The day a thread-free clinical verb writes `payload.safety`, a
+    // standing thread-scoped grade will coarsen it to `existence` at emission — permanently,
+    // in signed bytes — while `cairn_effective_sensitivity` computes `routine` for that same
+    // event. That is exactly the emission/read divergence #404 was, reopened through a door
+    // nobody was watching.
+    //
+    // The fix at that point is to give `cairn_prospective_sensitivity` an event-type
+    // parameter and gate the NULL arm. That is deliberately NOT done today: it would change
+    // nothing observable (see the assertion below), and a signature change on this function
+    // is its own hazard — Postgres OVERLOADS rather than replaces, migration replay never
+    // drops what a file stops creating, and a stale 2-arg definition would silently keep
+    // serving every un-updated caller, this suite's `has_function_privilege` pins and
+    // safety_emission.rs's staged-outage rig included. It needs db/005's
+    // `DROP FUNCTION IF EXISTS` idiom and all five call sites in one pass.
+    //
+    // WHAT THIS TEST DOES NOT COVER, said plainly: it keys on the `clinical.` prefix, which
+    // is a proxy for "reaches the emission seam", not the thing itself. A thread-free verb
+    // named OUTSIDE that prefix that writes `payload.safety` would slip past. There is no
+    // queryable "can carry safety" property to key on — if you are adding such a verb, this
+    // comment is the warning, not the assertion.
+    let types: Vec<String> = c
+        .query(
+            "SELECT event_type FROM cairn_event_twin_check
+             WHERE event_type LIKE 'clinical.%' ORDER BY event_type",
+            &[],
+        )
+        .await
+        .expect("the twin-check registry is the mechanical list of registered event types")
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+
+    // Non-vacuous: an empty or renamed registry must fail loudly rather than pass by
+    // asserting nothing at all.
+    assert!(
+        types.len() >= 9,
+        "expected the registered clinical event types (9 medication verbs at the time of \
+         writing); got {types:?}. If the registry moved, fix this query — do not delete \
+         the test"
+    );
+
+    for t in &types {
+        let thread_free: bool = c
+            .query_one("SELECT cairn_event_type_has_no_thread($1)", &[t])
+            .await
+            .unwrap_or_else(|e| panic!("thread-gate probe for {t}: {}", db_msg(&e)))
+            .get(0);
+        assert!(
+            !thread_free,
+            "event type {t:?} is declared THREAD-FREE by db/048, but it is clinical content \
+             and so may reach the §5.9 emission seam. `cairn_prospective_sensitivity` has no \
+             event-type gate on its `p_thread IS NULL` arm, so a standing thread-scoped \
+             grade will coarsen this event to `existence` at emission while every read of it \
+             computes `routine` — the #404 divergence, reopened. Give that function an \
+             event-type parameter (and read this test's comment first: the signature change \
+             has its own overload hazard)."
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_class_map_ships_empty() {
     let Some((_g, c)) = connect().await else {
         return;

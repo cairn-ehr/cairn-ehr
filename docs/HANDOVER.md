@@ -223,6 +223,18 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
    hardcoding `apply_safety_rung`'s thread lookup to `None` broke no test. The pin is
    `a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one`, in **safety_emission.rs** rather
    than safety_read.rs because it needs custody for `cairn_thread_patient` to resolve a thread at all.
+   **#404's one remaining piece is a TRIPWIRE, not a hope.** `cairn_prospective_sensitivity`'s
+   `p_thread IS NULL` bound is still not gated by `cairn_event_type_has_no_thread` (this function takes no
+   event type), which is harmless only while every type reaching the emission seam is thread-bearing —
+   `every_clinical_event_type_is_thread_bearing_so_the_missing_gate_cannot_bite` fails the moment that stops
+   holding, and its message says what to do. **Before adding the parameter, read the comment in db/049
+   section 6:** Postgres *overloads* on a changed argument list rather than replacing, and migration replay
+   never drops what a file stops creating, so the 2-arg definition survives in every existing database and
+   silently serves any caller you miss — including this suite's `has_function_privilege` pins (which would
+   resolve the STALE function and pass while the new one kept PUBLIC's default) and safety_emission.rs's
+   staged-outage rig (whose 2-arg raiser would become an overload *beside* a working function, so the outage
+   would stop staging anything). Verified empirically. Needs db/005's `DROP FUNCTION IF EXISTS` idiom and
+   all five call sites in one pass.
    **Still open, for later sessions:** [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) (raw-SQL bypasses),
    [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) (no supersession — a ceased drug warns
    forever), [#407](https://github.com/cairn-ehr/cairn-ehr/issues/407) (the sealed claim is written by

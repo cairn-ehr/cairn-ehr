@@ -330,11 +330,30 @@ LANGUAGE sql STABLE AS $$
            --
            -- `p_thread IS NULL` still coarsens: at emission an unresolved thread is decision
            -- 9's conservative bound, the honest reading of "this event MAY be on that
-           -- thread". It is deliberately NOT gated by `cairn_event_type_has_no_thread` the
-           -- way db/048's equivalent arm is — this function takes no event type, so a future
-           -- thread-FREE clinical verb would inherit the bound. Harmless today (only
-           -- thread-bearing medication verbs emit a signal at all) and it errs toward
-           -- coarsening; adding the gate means adding a parameter, tracked with #404.
+           -- thread".
+           --
+           -- IT IS DELIBERATELY NOT GATED by `cairn_event_type_has_no_thread` the way
+           -- db/048's equivalent arm is — this function takes no event type. A future
+           -- thread-FREE clinical verb would therefore inherit the bound and re-open the
+           -- #404 divergence through a different door: coarsened to `existence` at emission,
+           -- computed `routine` at every read. Harmless TODAY because every event type that
+           -- reaches the emission seam is thread-bearing, and that precondition is a
+           -- TRIPWIRE, not a hope — safety_ladder.rs's
+           -- `every_clinical_event_type_is_thread_bearing_so_the_missing_gate_cannot_bite`
+           -- fails the moment it stops holding, and its message says what to do.
+           --
+           -- WHEN YOU DO ADD THE PARAMETER, READ THIS FIRST. Postgres OVERLOADS on a changed
+           -- argument list rather than replacing, and migration replay never drops what a
+           -- file stops creating — so the 2-arg definition survives in every existing
+           -- database and silently keeps serving any caller you miss. Verified. Use db/005's
+           -- `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);` idiom, and update
+           -- all five call sites together: this file's REVOKE/GRANT pair (whose signature
+           -- string safety_ladder.rs pins via has_function_privilege — it would resolve the
+           -- STALE function and pass while the new one kept PUBLIC's default), crates/
+           -- cairn-node/src/safety.rs's `prospective_rung`, safety_read.rs's four direct
+           -- calls, and safety_emission.rs's BREAK_GRADE_LOOKUP outage rig (a 2-arg raiser
+           -- would become an overload BESIDE a working function, so the staged outage would
+           -- stop staging anything).
            OR (s.subject_kind = 'thread'
                AND (p_thread IS NULL
                     OR COALESCE(cairn_thread_patient(s.subject_id), p_patient) <> p_patient))
