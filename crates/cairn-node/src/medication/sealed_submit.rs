@@ -176,7 +176,18 @@ async fn apply_safety_rung(
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<uuid::Uuid>().ok());
 
-    let rung = crate::safety::prospective_rung(client, patient, thread).await?;
+    // A grade lookup that ERRORS falls back to the COARSEST rung rather than propagating.
+    // Propagating would cancel the clinical event this advisory signal merely decorates —
+    // the third route ADR-0060 forbids, beside the apply door (decision 6) and a body the
+    // local door would refuse (`usable_precise_claim`). Existence is the withholding
+    // direction: if we cannot learn what the chart's grade licenses, we disclose nothing,
+    // and a reader that needs more breaks glass. The sealed tier is untouched either way,
+    // so a custody-holder loses nothing.
+    let rung = crate::safety::advisory_or_withheld(
+        crate::safety::prospective_rung(client, patient, thread).await,
+        cairn_event::safety::SafetyRung::Existence,
+        "the prospective sensitivity grade",
+    );
     body.safety = Some(cairn_event::safety::coarsen(
         &cairn_event::safety::PreciseSafety {
             class: &class,

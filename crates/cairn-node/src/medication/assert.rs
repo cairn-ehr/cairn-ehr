@@ -162,8 +162,18 @@ pub async fn assert_medication(
     //
     // Held in a local `class` first because `PreciseSafety` BORROWS its two strings; the
     // owned pair must outlive the body construction below.
+    //
+    // A lookup that ERRORS is treated as "no class", never propagated: an advisory field
+    // must never be able to fail a clinical write (ADR-0060 — the system may fail to record
+    // an order, but it may never cancel one). Falling back is the WITHHOLDING direction, so
+    // the worst case is a missing decoration on a recorded medication, never a lost
+    // medication. See `crate::safety::advisory_or_withheld` for the full argument.
     let class = match input.coding.as_ref() {
-        Some(coding) => crate::safety::lookup_class(client, coding).await?,
+        Some(coding) => crate::safety::advisory_or_withheld(
+            crate::safety::lookup_class(client, coding).await,
+            None,
+            "the safety class lookup for a medication assert",
+        ),
         None => None,
     };
     let safety = class

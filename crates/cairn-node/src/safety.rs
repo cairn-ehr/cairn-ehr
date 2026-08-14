@@ -26,6 +26,50 @@ use cairn_event::medication::SubstanceCoding;
 use cairn_event::safety::SafetyRung;
 use uuid::Uuid;
 
+/// Take the result of an ADVISORY lookup, or — if it failed — the value that discloses
+/// least. **An error is not a finding.**
+///
+/// # Why this exists (ADR-0060, and it is the whole point of the seam)
+///
+/// Both lookups in this module are advisory: they decorate a clinical event with a
+/// de-identified signal. Neither is the clinical content. So neither may decide whether the
+/// clinical content is written at all — *the system may fail to record an order, but it may
+/// never cancel one* (ADR-0060, restated as ADR-0063 decision 8's general rule: an advisory
+/// field must never be able to fail a clinical write).
+///
+/// Propagating the error with `?` did exactly that: one missing grant, one statement
+/// timeout, one lock, and **the medication assertion was never written**, with an error
+/// message naming a safety class no clinician caused. That is the most expensive possible
+/// response to a decoration being unavailable.
+///
+/// # Why the fallback is always the WITHHOLDING direction
+///
+/// The caller supplies `withheld` — the value that says *less*, never more: `None` for a
+/// class (no class ⇒ no signal) and [`SafetyRung::Existence`] for a rung (if we cannot
+/// learn what the chart's grade licenses, we disclose nothing). Guessing in the disclosing
+/// direction is the one error that cannot be undone, because bytes already on the wire
+/// cannot be recalled — the same asymmetry [`rung_from_name`]'s `_` arm rests on.
+///
+/// The failure is written to stderr rather than swallowed: a lookup that is failing for
+/// every write is a real operational fault, and a silently degraded safety projection would
+/// look identical to a correctly empty one.
+pub fn advisory_or_withheld<T, E: std::fmt::Display>(
+    lookup: Result<T, E>,
+    withheld: T,
+    what: &str,
+) -> T {
+    match lookup {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!(
+                "safety: {what} failed ({e}); withholding the signal and continuing — an \
+                 advisory lookup never cancels a clinical write (ADR-0060)"
+            );
+            withheld
+        }
+    }
+}
+
 /// This deployment's class + severity for a coding, or `None`.
 ///
 /// `None` is the common case and is honest: `safety_class_map` ships empty, so a node with
@@ -200,6 +244,17 @@ pub fn render_safety_line(line: &SafetyLine) -> String {
     match (line.class.as_deref(), line.severity.as_deref()) {
         (Some(class), Some(sev)) => format!("⚠ {sev} — {class}"),
         (None, Some(sev)) => format!("⚠ {sev} — confidential {noun}, break glass to view"),
+        // THE `_` ARM IS REACHABLE WITH A CLASS IN HAND, and that is deliberate. db/049
+        // gates the two columns by RUNG (class only at `precise`, severity at `precise` or
+        // `kind`) but guarantees NEITHER is present: `cairn_check_safety_signal` makes
+        // `severity` optional, so `{"rung":"precise","class":"x"}` is legal at the local
+        // door and arrives unchecked from a peer at the apply door (ADR-0063 decision 6).
+        // That reads back as `(Some, None)` and lands here.
+        //
+        // Falling through to the coarsest sentence rather than printing a severity-less
+        // class is the withholding direction: a half-formed signal says less, never more.
+        // Splitting this arm to name the class would publish precisely what an incomplete
+        // signal has not earned the right to publish.
         _ => format!("⚠ confidential {noun} — break glass to view"),
     }
 }
@@ -255,6 +310,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_successful_advisory_lookup_is_passed_through_untouched() {
+        assert_eq!(
+            advisory_or_withheld(
+                Ok::<_, anyhow::Error>(SafetyRung::Precise),
+                SafetyRung::Existence,
+                "the grade"
+            ),
+            SafetyRung::Precise,
+            "the fallback must not fire on success — it would silently coarsen every event"
+        );
+        assert_eq!(
+            advisory_or_withheld(
+                Ok::<_, anyhow::Error>(Some(("rh-sensitizing".to_string(), "high".to_string()))),
+                None,
+                "the class"
+            ),
+            Some(("rh-sensitizing".to_string(), "high".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_failed_advisory_lookup_withholds_rather_than_propagating() {
+        // THE POINT OF THIS TEST: before this seam existed both lookups propagated with
+        // `?`, so a permission error or a transient failure on a DE-IDENTIFIED ADVISORY
+        // field cancelled the MEDICATION ASSERTION it was decorating. ADR-0060: the system
+        // may fail to record an order, but it may never cancel one.
+        let failed = || anyhow::anyhow!("permission denied for function");
+        assert_eq!(
+            advisory_or_withheld(Err(failed()), SafetyRung::Existence, "the grade"),
+            SafetyRung::Existence,
+            "a grade we could not read must fall to the COARSEST rung: if we cannot learn \
+             what the chart licenses, we disclose nothing"
+        );
+        // The turbofish is the class lookup's own return type — `lookup_class` yields
+        // `Option<(class, severity)>`, and `None` alone leaves T ambiguous here.
+        assert_eq!(
+            advisory_or_withheld(Err(failed()), None::<(String, String)>, "the class"),
+            None,
+            "an error is not a class — no class means no signal, never a guessed one"
+        );
+    }
+
     /// A throwaway `SafetyLine` for `render_safety_line` tests. `grade` and `subject_kind`
     /// are fixed to recognisable, un-mistakable strings and `event_id` is fresh-minted
     /// (not cryptographic material — house rule 6 does not apply to a fixture UUID) so
@@ -298,8 +396,10 @@ mod tests {
 
     #[test]
     fn render_at_precise_names_both_class_and_severity() {
-        // db/049 only ever hands the rung "precise" a (Some, Some) pair, so this pins the
-        // ONE combination the read model actually produces at that rung.
+        // The COMPLETE shape at rung "precise" — the only rung licensed to disclose a
+        // class. It is not the only shape that rung can produce (see
+        // `render_with_a_class_but_no_severity_withholds_both`): db/049 gates the class
+        // column to this rung but does not guarantee a severity beside it.
         let l = line(
             Some("rh-sensitizing"),
             Some("high"),
@@ -316,7 +416,11 @@ mod tests {
 
     #[test]
     fn render_at_kind_names_severity_but_withholds_class() {
-        // db/049 only ever hands the rung "kind" a (None, Some) pair.
+        // The complete shape at rung "kind": db/049 gates the class column OFF at every
+        // rung coarser than `precise`, so a class can never appear here. The severity is
+        // present in the ordinary case pinned below; when the stored signal carries none,
+        // the pair is (None, None) and falls to the coarsest sentence, which is the
+        // `render_at_existence_…` shape and equally safe.
         let l = line(None, Some("critical"), "clinical.medication.assert");
         let rendered = render_safety_line(&l);
         assert_eq!(
@@ -332,7 +436,8 @@ mod tests {
 
     #[test]
     fn render_at_existence_names_neither_class_nor_severity() {
-        // db/049 only ever hands the rung "existence" a (None, None) pair.
+        // (None, None) is the ONLY pair possible at rung "existence": db/049's read model
+        // gates both columns off there, whatever the stored row holds.
         let l = line(None, None, "clinical.medication.assert");
         let rendered = render_safety_line(&l);
         assert_eq!(rendered, "⚠ confidential medication — break glass to view");
@@ -341,6 +446,29 @@ mod tests {
         assert!(!rendered.contains("rh-sensitizing"));
         assert!(!rendered.contains("critical"));
         assert!(!rendered.contains("high"));
+        assert_never_leaks_scope_fields(&rendered, &l);
+    }
+
+    #[test]
+    fn render_with_a_class_but_no_severity_withholds_both() {
+        // THE POINT OF THIS TEST: this pair was long assumed impossible ("db/049 only ever
+        // hands `precise` a (Some, Some) pair") and it is not. `cairn_check_safety_signal`
+        // requires a non-empty class AT `precise` but leaves `severity` OPTIONAL, so
+        // `{"rung":"precise","class":"rh-sensitizing"}` passes the LOCAL door and arrives
+        // unchecked from a peer at the apply door (ADR-0063 decision 6). The read model
+        // then surfaces the class with a SQL NULL severity, which is this pair.
+        //
+        // The behaviour is safe — it over-withholds — but it was untested, so nothing
+        // stopped a future "tidy-up" from splitting the `_` arm and printing the bare
+        // class. Pinned here so that edit fails a test instead of publishing a class.
+        let l = line(Some("rh-sensitizing"), None, "clinical.medication.assert");
+        let rendered = render_safety_line(&l);
+        assert_eq!(rendered, "⚠ confidential medication — break glass to view");
+        assert!(
+            !rendered.contains("rh-sensitizing"),
+            "a class with no severity beside it is a half-formed signal: it must fall to \
+             the coarsest sentence, never publish the class it happens to carry: {rendered:?}"
+        );
         assert_never_leaks_scope_fields(&rendered, &l);
     }
 

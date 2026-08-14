@@ -93,7 +93,7 @@ each is the seal doing what the seal already does:
 
 | reader | gets | why |
 |---|---|---|
-| custody, no coding authority | the **precise class**, from the sealed payload | [ADR-0059](0059-medication-drug-coding-drugref-moiety-anchor.md) decision 4 / [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294): carried, never re-derived |
+| custody, no coding authority | the **precise class**, *available* under the seal — no shipped read surface serves it yet (`cairn_event_safety` / `chart_safety` read the clear tier), so today this is a property of where the bytes live rather than a query anyone runs | [ADR-0059](0059-medication-drug-coding-drugref-moiety-anchor.md) decision 4 / [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294): carried, never re-derived |
 | no custody (sequestered — part C) | the **clear rung** | the coarsening actually binds, because the class is under a key this reader does not hold |
 | after a rung-3 crypto-shred | the **clear rung**, permanently | `cairn_execute_shred` never touches `event_log` (decision 4) |
 | grade withdrawn later | custody-holders recover precision by re-reading the sealed body | the custody-less peer stays coarse, and was never entitled to more |
@@ -431,6 +431,26 @@ A `CodingClaim::Replace` does carry one, but a correction's safety consequences 
 does this chart's medication list now imply* is a thread-rollup question, and rolling a signal up across a
 thread is a separate design this slice does not open. Attaching a per-event signal here would answer that
 question by accident, in the direction that is hardest to undo — a published class cannot be recalled.
+
+**An advisory lookup that ERRORS falls back rather than propagating — the third route decision 8 does not name.**
+Decision 8 closes two ways an advisory field could fail a clinical write: at a door, and by constructing a
+body the door will refuse. There is a third, and the first implementation had it — both lookups propagated
+their error with `?`, so a missing grant (`db/049` REVOKEs both functions from PUBLIC), a statement timeout,
+or any transient failure aborted the *medication assertion* with an error naming a safety class no clinician
+caused. Both now fall back in the **withholding** direction and continue: a failed class lookup yields *no
+class* (hence no signal at all, decision 7's shape), and a failed grade lookup yields **`existence`**, the
+coarsest rung. Neither can guess in the disclosing direction, and the sealed tier is unaffected either way.
+Stated here so a future reader knows the error route was considered rather than overlooked, and because
+decision 8's rule is stated categorically: *an advisory field must never be able to fail a clinical write.*
+
+**The safety claim is NOT rendered in the §3.13 legibility twin.** A medication event's plaintext twin names
+the drug and its coding but says nothing about the class or severity, so a reader holding only the twin — the
+principle-11 case, a schema-less future reader — sees the medication without its safety claim. The wire crate
+briefly carried a `render_safety_twin` helper that nothing called; it was deleted rather than left standing,
+because an uncalled renderer reads as an obligation discharged when it is not. Wiring the claim into the twin
+changes the rendered twin of every coded medication, which is a behaviour change on its own merits; it is
+tracked with [#379](https://github.com/cairn-ehr/cairn-ehr/issues/379), which already owes the twin the
+sensitivity grade.
 
 **Three call sites reach `seal_and_sign` directly** rather than going through `seal_sign_submit`
 (`reconciliation::submit_reconcile_like`'s attested arm, and `medication/attestation.rs`), so the *one

@@ -96,12 +96,17 @@ pub fn coarsen(p: &PreciseSafety, rung: SafetyRung) -> Value {
     }
 }
 
-/// The §3.13 legibility twin fragment for the sealed side — a reader holding no drug
-/// database and no schema must still be able to read what was claimed (principle 11).
-pub fn render_safety_twin(p: &PreciseSafety) -> String {
-    format!("safety: {} (severity {})", p.class, p.severity)
-}
-
+// NO TWIN RENDERER LIVES HERE, AND ITS ABSENCE IS HONEST (2026-08-14 review finding M1).
+//
+// A `render_safety_twin` used to sit at this spot, rendering "safety: <class> (severity
+// <severity>)" for the §3.13 legibility twin. NOTHING CALLED IT: no medication twin renders
+// the safety claim, so the legibility obligation it appeared to discharge was not in fact
+// discharged. A `pub` function in the wire crate that only its own test calls is worse than
+// its absence, because a reviewer reads it as evidence the obligation is met.
+//
+// Wiring it in would change the rendered twin of every coded medication — a real behaviour
+// change, and one that belongs with #379 (rendering the sensitivity grade in the twin),
+// not slipped into a fix wave. The gap is recorded in ADR-0063's Known limitations.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,16 +178,5 @@ mod tests {
         assert_eq!(v["class"], "antiretroviral-interaction");
         assert_eq!(v["severity"], "critical");
         assert!(v.get("rung").is_none(), "the sealed side carries no rung");
-    }
-
-    #[test]
-    fn the_twin_reads_without_a_schema() {
-        let p = PreciseSafety {
-            class: "rh-sensitizing",
-            severity: "high",
-        };
-        let t = render_safety_twin(&p);
-        assert!(t.contains("rh-sensitizing"), "the class is the point: {t}");
-        assert!(t.contains("high"), "the severity is actionable: {t}");
     }
 }

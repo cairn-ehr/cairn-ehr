@@ -158,7 +158,16 @@ pub async fn code_medication(
     // OVERLAY is authored by whoever codes it — a pharmacist, a professional coder — and
     // that node is again the one holding a coding authority. The class is captured here,
     // pre-seal, and travels; no reader ever re-derives it.
-    let class = crate::safety::lookup_class(client, &input.coding).await?;
+    //
+    // As in `assert_medication`, a lookup that ERRORS yields "no class" rather than
+    // propagating: an advisory field must never be able to fail a clinical write (ADR-0060).
+    // Withholding is the only safe direction — a coding overlay that lands without its
+    // decoration is recoverable; one that never lands is a lost clinical act.
+    let class = crate::safety::advisory_or_withheld(
+        crate::safety::lookup_class(client, &input.coding).await,
+        None,
+        "the safety class lookup for a coding overlay",
+    );
     let safety = class
         .as_ref()
         .map(|(class, severity)| cairn_event::safety::PreciseSafety { class, severity });
