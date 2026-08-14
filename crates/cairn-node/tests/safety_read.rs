@@ -918,13 +918,31 @@ async fn the_prospective_thread_arms_match_coarsen_and_bound() {
         "an assertion on the thread we are about to write on applies precisely"
     );
 
-    // 2. A DIFFERENT thread — the catch-all. db/048 section 11's rule that a mis-targeted
-    //    known kind coarsens rather than evaporating: it was still an attempt to protect
-    //    something, so it blurs chart-wide rather than contributing nothing.
+    // 2. A DIFFERENT thread, whose subject this node CANNOT RESOLVE — stays silent (#404).
+    //
+    //    This arm asserted the opposite until #404: that any thread assertion not naming
+    //    our thread "coarsens chart-wide, never evaporates", attributed to db/048 section
+    //    11. That is NOT section 11's rule for threads, and the misattribution is what let
+    //    the bug through. db/048 asks the POSITIVE question — is the named thread known
+    //    here AND demonstrably on a DIFFERENT chart — precisely because
+    //    `medication_statement` is custody-gated and absent from the cairn-sync subset, so
+    //    "not found" is the NORMAL state and carries no information at all. Using the
+    //    'event' arm's ABSENCE shape here would coarsen every chart on every custody-less
+    //    node, which is what section 10b's type gate exists to prevent.
+    //
+    //    `thread` above is a bare UUID with no medication_statement row, so
+    //    `cairn_thread_patient` cannot resolve it and the arm correctly stays silent.
+    //
+    //    THE OTHER HALF — a thread that DOES resolve, on ANOTHER chart, which must coarsen
+    //    — cannot be built here: this suite has no custody, so no thread ever resolves. It
+    //    is pinned in safety_emission.rs's
+    //    `a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one`, which has
+    //    `medication_setup` and therefore real, resolvable threads.
     assert_eq!(
         prospective(Some(Uuid::now_v7())).await,
-        ("restricted".into(), "coarsened".into()),
-        "a thread assertion we cannot match here coarsens chart-wide, never evaporates"
+        ("routine".into(), "none".into()),
+        "a thread assertion this node cannot resolve carries no information — coarsening \
+         on it would blur every chart on every custody-less node (db/048's own argument)"
     );
 
     // 3. NO thread — decision 9's conservative bound. At emission time an unresolved thread

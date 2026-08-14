@@ -211,13 +211,19 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
    `clinical.medication.` would have made every *hyphenated* verb (`-cessation`, `-coding`, `-dose-change`)
    render as "confidential content" with the test still green; `code_medication` had **no** safety test at
    all, leaving #294's overlay half — the pharmacist path the issue was actually about — undischarged; the
-   REVOKE/GRANT posture was asserted nowhere. **Filed, needing a maintainer decision:**
+   REVOKE/GRANT posture was asserted nowhere. **Also fixed, on the maintainer's call:**
    [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404) — `cairn_prospective_sensitivity`'s thread arm
-   diverged from db/048, and because its two thread arms are *exhaustive* the `p_thread` parameter is
-   **inert**: a thread-scoped grade coarsens unconditionally (chart-wide behaviour, which db/048 §10b
-   exists to prevent), and dropping the thread lookup entirely breaks no test. Fixing it moves in the
-   *disclosing* direction, so it is yours to call — and #399's pin cannot be written until it is.
-   Also [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) (raw-SQL bypasses),
+   had diverged from db/048, and because its two thread arms were *exhaustive* the `p_thread` parameter was
+   **inert**: a thread-scoped grade coarsened unconditionally (chart-wide behaviour, which db/048 §10b
+   exists to prevent) and emission disagreed with read on the same node. The catch-all now asks db/048's
+   positive question — *is the named thread demonstrably on ANOTHER chart* — so an unresolvable thread stays
+   silent instead of blurring every chart on every custody-less node. **Note the correction moves in the
+   DISCLOSING direction** (a medication on an ungraded thread now emits its class, which db/048 says it is
+   entitled to), and it is what made the thread plumbing testable at all: with the arms exhaustive,
+   hardcoding `apply_safety_rung`'s thread lookup to `None` broke no test. The pin is
+   `a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one`, in **safety_emission.rs** rather
+   than safety_read.rs because it needs custody for `cairn_thread_patient` to resolve a thread at all.
+   **Still open, for later sessions:** [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) (raw-SQL bypasses),
    [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) (no supersession — a ceased drug warns
    forever), [#407](https://github.com/cairn-ehr/cairn-ehr/issues/407) (the sealed claim is written by
    every coded verb and **read by nothing**, so ADR-0063's "free" custody mitigation does not exist).

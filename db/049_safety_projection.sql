@@ -246,13 +246,14 @@ $$;
 --    prospective(patient, NULL) == effective(event) for a THREAD-LESS event, not the
 --    thread arms. Agreement for a thread-BEARING event is unpinned (#399).
 --
---    AND THE THREAD ARM HAS ALREADY DRIFTED (#404). db/048's catch-all fires only when the
---    named thread is demonstrably on ANOTHER chart; this one fires whenever the assertion
---    does not name THIS thread. Because that catch-all and the arm above it are exhaustive
---    over thread-scoped assertions, p_thread is currently INERT — a thread-scoped grade
---    coarsens unconditionally, which is the chart-wide behaviour section 10b's type gate
---    exists to prevent. The four causes listed below therefore describe db/048's arms, NOT
---    what this predicate actually does; see #404 before touching it.
+--    THE THREAD ARM DRIFTED ONCE AND WAS REPAIRED (#404) — do not re-introduce it. It read
+--    `p_thread IS NULL OR s.subject_id <> p_thread`, which with the matched arm above was
+--    EXHAUSTIVE over thread-scoped assertions, so p_thread was inert and a thread grade
+--    coarsened unconditionally. The catch-all now asks db/048's POSITIVE question. The pin
+--    is crates/cairn-node/tests/safety_emission.rs's
+--    a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one, which lives in
+--    that suite rather than safety_read.rs because it needs CUSTODY for
+--    cairn_thread_patient to resolve a thread at all.
 --
 --    Both delegate to cairn_sensitivity_standing, which stays the SINGLE definition of
 --    "what still applies" (ADR-0062 decision 3).
@@ -310,7 +311,33 @@ LANGUAGE sql STABLE AS $$
         FROM standing s
         WHERE s.subject_kind NOT IN ('patient', 'thread', 'event')
            OR (s.subject_kind = 'patient' AND s.subject_id <> p_patient)
-           OR (s.subject_kind = 'thread'  AND (p_thread IS NULL OR s.subject_id <> p_thread))
+           -- THE THREAD ARM ASKS THE POSITIVE QUESTION, LIKE db/048's (#404 fixed this).
+           --
+           -- It used to read `p_thread IS NULL OR s.subject_id <> p_thread`, which together
+           -- with the matched arm above was EXHAUSTIVE over thread-scoped assertions — so a
+           -- thread grade coarsened unconditionally and `p_thread` was inert. That made
+           -- thread-scoping behave as chart-scoping (what db/048 section 10b's type gate
+           -- exists to prevent) and made emission disagree with section 11 on the same node:
+           -- emission published `existence` for an event `cairn_effective_sensitivity` calls
+           -- `routine`, i.e. a break-glass prompt beside "grade routine".
+           --
+           -- Now, mirroring db/048's own arm: fire only when the named thread is
+           -- DEMONSTRABLY on another chart. `cairn_thread_patient` returning NULL means
+           -- "cannot tell" — the NORMAL state on a custody-less node, where
+           -- medication_statement is empty — so it coalesces to this chart and stays
+           -- silent rather than coarsening every chart everywhere. Asking the 'event' arm's
+           -- ABSENCE question here would do exactly that; db/048 spells out why at length.
+           --
+           -- `p_thread IS NULL` still coarsens: at emission an unresolved thread is decision
+           -- 9's conservative bound, the honest reading of "this event MAY be on that
+           -- thread". It is deliberately NOT gated by `cairn_event_type_has_no_thread` the
+           -- way db/048's equivalent arm is — this function takes no event type, so a future
+           -- thread-FREE clinical verb would inherit the bound. Harmless today (only
+           -- thread-bearing medication verbs emit a signal at all) and it errs toward
+           -- coarsening; adding the gate means adding a parameter, tracked with #404.
+           OR (s.subject_kind = 'thread'
+               AND (p_thread IS NULL
+                    OR COALESCE(cairn_thread_patient(s.subject_id), p_patient) <> p_patient))
            OR (s.subject_kind = 'event' AND NOT EXISTS (
                    SELECT 1 FROM event_log x
                    WHERE x.event_id = s.subject_id AND x.patient_id = p_patient))

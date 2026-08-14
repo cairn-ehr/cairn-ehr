@@ -427,17 +427,23 @@ single `cairn_sensitivity_standing` definition of *what still applies*, and a te
 `prospective(patient, NULL) == effective(event)` for a **thread-less** event with no event-scoped assertion
 standing.
 
-That third mitigation is **weaker than it first reads, and the drift it was meant to catch has already
+That third mitigation is **weaker than it first reads, and the drift it was meant to catch had already
 happened** (2026-08-14 review). The test uses a `note.added`, which db/048 section 10b classifies as
-thread-free, and passes `NULL` for the thread — so the thread arms are not compared at all; agreement for a
-thread-**bearing** event is unpinned ([#399](https://github.com/cairn-ehr/cairn-ehr/issues/399)). And the
-thread arm has diverged: db/048's catch-all fires only when the named thread is demonstrably on *another*
-chart, while the prospective form fires whenever the assertion does not name *this* thread. Since that
-catch-all and the matching arm above it are exhaustive over thread-scoped assertions, `p_thread` is
-currently **inert** — a thread-scoped grade coarsens unconditionally, which is exactly the chart-wide
-behaviour section 10b's type gate exists to prevent, and it makes emission disagree with read on the same
-node. Tracked in [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404); the fix moves in the disclosing
-direction, so it is a maintainer decision rather than a cleanup.
+thread-free, and passes `NULL` for the thread — so the thread arms are not compared against
+`cairn_effective_sensitivity` at all; agreement for a thread-**bearing** event remains unpinned
+([#399](https://github.com/cairn-ehr/cairn-ehr/issues/399)).
+
+**And the thread arm had diverged — [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404), fixed in the
+review wave.** db/048's catch-all fires only when the named thread is demonstrably on *another* chart, while
+the prospective form fired whenever the assertion did not name *this* thread. That catch-all and the
+matching arm above it were therefore **exhaustive** over thread-scoped assertions, which made `p_thread`
+**inert**: a thread-scoped grade coarsened unconditionally — precisely the chart-wide behaviour section 10b
+exists to prevent — and emission disagreed with read on the same node, publishing `existence` for an event
+`cairn_effective_sensitivity` calls `routine`. The catch-all now asks db/048's positive question. Two
+consequences worth recording: the correction moves in the **disclosing** direction (a medication on an
+ungraded thread now emits its class, which is what this system's own canonical rule says it is entitled to),
+and it is what made the thread plumbing **testable at all** — with the arms exhaustive, hardcoding
+`apply_safety_rung`'s thread lookup to `None` broke no test.
 
 **Note explicitly that the prospective form *keeps* the catch-all's dangling-event clause.** "Minus the
 event arm" is easy to read as "minus everything event-shaped", and that reading is a bug. The dropped arm

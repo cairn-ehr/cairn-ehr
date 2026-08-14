@@ -43,6 +43,7 @@ const MOIETY_ANTI_D_SEQ: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e13";
 const MOIETY_UNMAPPED: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e14";
 const MOIETY_STATIN: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e15";
 const MOIETY_OVERLAY: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e16";
+const MOIETY_OTHER_THREAD: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e1a";
 const MOIETY_BLANK_CLASS: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e17";
 const MOIETY_BLANK_SEVERITY: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e18";
 const MOIETY_BLANK_BOTH: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e19";
@@ -231,19 +232,15 @@ async fn the_coding_overlay_emits_a_signal_and_a_thread_grade_coarsens_it() {
     //    `code_medication` is the only verb that writes a precise claim onto an EXISTING
     //    thread, and so the only end-to-end path where a thread grade can bite.
     //
-    // WHAT THIS TEST DOES *NOT* PIN, STATED PLAINLY SO NOBODY READS MORE INTO IT (#404).
-    // It does not pin the thread PLUMBING — `sealed_submit.rs`'s read of
-    // `payload.medication_id` into `prospective_rung`. Replacing that with a hardcoded
-    // `None` leaves this test green, verified by mutation. The reason is finding #404
-    // itself: `cairn_prospective_sensitivity`'s two thread arms are EXHAUSTIVE — arm 2
-    // fires on a match, and the catch-all fires on `p_thread IS NULL OR subject_id <>
-    // p_thread` — so a thread-scoped assertion coarsens UNCONDITIONALLY and `p_thread` is
-    // inert. No test can distinguish the arms until that predicate is narrowed to db/048
-    // section 11's shape. When #404 is fixed, tighten the assertion below to a
-    // different-thread case, which will then be the pin that is missing today.
-    //
-    // What it DOES pin, verified by mutation: dropping the overlay's safety claim (gap 1)
-    // fails it.
+    // WHAT THIS TEST PINS, AND WHERE ITS OTHER HALF LIVES. Verified by mutation: dropping
+    // the overlay's safety claim fails it. It does NOT pin the thread PLUMBING —
+    // `sealed_submit.rs`'s read of `payload.medication_id` into `prospective_rung` — because
+    // a MATCHING thread and a NULL thread both coarsen, so hardcoding `None` leaves this arm
+    // green. Its sibling
+    // `a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one` is the one
+    // that catches that, and it only became writable once #404 stopped the two thread arms
+    // being exhaustive. The pair belongs together: this one proves a thread grade REACHES
+    // emission, that one proves it reaches only the RIGHT thread.
     let thread = assert_medication(
         &mut c,
         &sk,
@@ -330,6 +327,140 @@ async fn the_coding_overlay_emits_a_signal_and_a_thread_grade_coarsens_it() {
     let clear = clear_payload(&c, coding_ev).await;
     assert_eq!(clear["safety"]["class"], "rh-sensitizing");
     assert_eq!(clear["safety"]["severity"], "high");
+}
+
+#[tokio::test]
+async fn a_grade_on_another_thread_of_the_same_chart_does_not_coarsen_this_one() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = medication_setup(&c).await;
+    own_the_class_map(&c).await;
+    let patient = fresh_chart(&c, &sk, &kid).await;
+    map_class(&c, MOIETY_OTHER_THREAD, "rh-sensitizing", "high").await;
+
+    // THE #404 PIN, AND THE ONE THIS SUITE COULD NOT WRITE BEFORE.
+    //
+    // `cairn_prospective_sensitivity`'s thread arms used to be EXHAUSTIVE — the matched arm
+    // fired on `subject_id = p_thread`, the catch-all on `p_thread IS NULL OR subject_id <>
+    // p_thread` — so a thread-scoped grade coarsened UNCONDITIONALLY and `p_thread` was
+    // inert. Two things followed, both bad:
+    //
+    //   * thread-scoping behaved exactly like chart-scoping at emission, which is what
+    //     db/048 section 10b's type gate exists to prevent; and
+    //   * emission disagreed with read ON THE SAME NODE — `cairn_effective_sensitivity`
+    //     computes `routine` for this event, so the chart report would print
+    //     "break glass" beside "grade routine, winning subject: none".
+    //
+    // db/049 now mirrors db/048's actual predicate: the catch-all fires only when the named
+    // thread is DEMONSTRABLY on another chart. This suite is where the pin belongs because
+    // `medication_setup` gives it custody, so `cairn_thread_patient` genuinely RESOLVES a
+    // thread here — the reason safety_read.rs's version of this test could only reach the
+    // unresolvable case.
+    //
+    // It is also the test that finally catches the thread PLUMBING: with the arms no longer
+    // exhaustive, hardcoding `apply_safety_rung`'s thread lookup to `None` sends this down
+    // the `p_thread IS NULL` bound and reads `kind` instead of `precise`.
+    let graded_thread = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        &coded("the sensitive one", MOIETY_ANTI_D),
+        None,
+        None,
+    )
+    .await
+    .expect("thread A");
+
+    let other_thread = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        &AssertMedicationInput {
+            term: "an unrelated medication",
+            coding: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            info_source: "patient",
+            started: None,
+            started_precision: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("thread B");
+
+    // Grade thread A only. Thread B is a different medication on the same chart and is not
+    // sensitive — the whole point of offering a thread-scoped subject kind.
+    cairn_node::sensitivity::assert_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        SubjectKind::Thread,
+        graded_thread,
+        "sensitive",
+        Some("test fixture: grade thread A only"),
+    )
+    .await
+    .expect("grade thread A");
+
+    let coding_ev = cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        other_thread,
+        &cairn_node::medication::CodeMedicationInput {
+            coding: SubstanceCoding {
+                system: "drugref-moiety",
+                code: MOIETY_OTHER_THREAD,
+                display: "an unrelated medication",
+            },
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("code thread B");
+
+    let s = stored_signal(&c, coding_ev)
+        .await
+        .expect("thread B's coding still emits a signal");
+    assert_eq!(
+        s["rung"], "precise",
+        "a grade on ANOTHER thread must not coarsen this one — that is the difference \
+         between thread-scoping and chart-scoping, and #404 was it collapsing"
+    );
+    assert_eq!(s["class"], "rh-sensitizing");
+
+    // The control that stops this passing for the wrong reason: emission must AGREE with
+    // what every later read of this very event will compute. If these two ever diverge, the
+    // node publishes one answer and displays another.
+    let effective: String = c
+        .query_one(
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+            &[&coding_ev.to_string()],
+        )
+        .await
+        .expect("effective grade")
+        .get(0);
+    assert_eq!(
+        effective, "routine",
+        "db/048 computes `routine` for an event on an ungraded thread, so emission must \
+         too — the divergence #404 describes is exactly these two disagreeing"
+    );
 }
 
 #[tokio::test]
