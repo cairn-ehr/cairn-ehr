@@ -186,7 +186,12 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
    a scrub exemption someone would eventually "fix".
 2. **Two coarsenings, load-bearing for DIFFERENT reasons.** Emission is the only one that binds a peer's
    raw-SQL client; read is the only answer to a peer that legitimately emitted a finer rung (the grade is
-   node-relative). Deleting either reopens a different hole — the ADR says so explicitly.
+   node-relative). Deleting either reopens a different hole — the ADR says so explicitly. **But read
+   coarsening is a rendering choice, not a floor** ([#405](https://github.com/cairn-ehr/cairn-ehr/issues/405)):
+   db/005 grants `cairn_agent` table-wide `SELECT ON event_log`, and a table grant covers columns added
+   later, so that role reads `event_log.safety` raw and skips the re-coarsening. Bounded — the column holds
+   the already-coarsened *emitted* value, never the sealed claim — but do not read db/049's "the ONLY
+   sanctioned way to read" as a guarantee.
 3. **An advisory field must never be able to fail a clinical write** — not at a door, and not by
    constructing a body the door will refuse. The floor is therefore **local-door only** (refusing a
    malformed signal at apply would drop the *medication assertion* it rides on), and the emission code
@@ -197,6 +202,25 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
 5. **A grade raised later cannot claw back a published rung** (ADR-0005's *best-effort and declared*), and
    the prospective-grade read races the submit by one statement. Both are declared, not defended against;
    read-time re-coarsening bounds the second.
+6. **The 2026-08-14 multi-agent review of PR #403 landed a fix wave — read this before extending part B.**
+   Fixed in-branch: the read model's class gate at rung `kind` was pinned by *nothing* (widening it to
+   `IN ('precise','kind')` left all 26 safety tests and 21 SQL mirrors green — verified by mutation, now
+   caught on both sides); the local door **admitted** `{"rung":"existence","severity":...}` while the read
+   model gates severity off there, so a second disclosure guard now mirrors the class one; the
+   `render_safety_line` event-type table used six **invented** type names, so tightening the prefix to
+   `clinical.medication.` would have made every *hyphenated* verb (`-cessation`, `-coding`, `-dose-change`)
+   render as "confidential content" with the test still green; `code_medication` had **no** safety test at
+   all, leaving #294's overlay half — the pharmacist path the issue was actually about — undischarged; the
+   REVOKE/GRANT posture was asserted nowhere. **Filed, needing a maintainer decision:**
+   [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404) — `cairn_prospective_sensitivity`'s thread arm
+   diverged from db/048, and because its two thread arms are *exhaustive* the `p_thread` parameter is
+   **inert**: a thread-scoped grade coarsens unconditionally (chart-wide behaviour, which db/048 §10b
+   exists to prevent), and dropping the thread lookup entirely breaks no test. Fixing it moves in the
+   *disclosing* direction, so it is yours to call — and #399's pin cannot be written until it is.
+   Also [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) (raw-SQL bypasses),
+   [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) (no supersession — a ceased drug warns
+   forever), [#407](https://github.com/cairn-ehr/cairn-ehr/issues/407) (the sealed claim is written by
+   every coded verb and **read by nothing**, so ADR-0063's "free" custody mitigation does not exist).
 
 **2026-08-11 — Slice 66: custody follows admission** (closes
 [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231); no new ADR — implements **ADR-0052 §4

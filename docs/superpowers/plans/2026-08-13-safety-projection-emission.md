@@ -1,5 +1,9 @@
 # Safety-projection emission (§5.9 slice B) Implementation Plan
 
+> [!WARNING]
+> **Superseded on two points by [ADR-0063](../../spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md), and on more by the 2026-08-14 review.** This plan specifies a `render_safety_twin` deliverable and an `unwrap_or_default()` reading of the precise claim. **Both were removed deliberately** — the twin renderer because nothing called it (a `pub` function only its own test calls reads as evidence an obligation is met when it is not), and `unwrap_or_default()` because defaulting a blank class builds a `precise` rung the strict door refuses, which would cancel the clinical write it decorates (ADR-0063 decision 8, "the sharpest thing this slice learned"). Plans are dated artifacts: read the ADR for what shipped.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A sealed clinical event emits a de-identified safety signal — a coarse class and severity — whose granularity is set by the §5.9 sensitivity grade at authoring time, so decision-support can warn about a confidential episode without disclosing it.

@@ -93,7 +93,7 @@ pub async fn ensure_unwrap_key(
 /// choice needs a database and this function is pure. A caller that bypasses
 /// `seal_sign_submit` (today: `reconciliation::submit_reconcile_like`'s ATTESTED arm, and
 /// `attestation::attest_thread_in_tx`, which calls this directly at
-/// `medication/attestation.rs:171` to seal the attestation event itself) therefore emits no
+/// to seal the attestation event itself) therefore emits no
 /// clear signal at all. That is correct for both of today's callers, whose bodies carry no
 /// drug claim and so never write `payload.safety` — but a FUTURE two-thread verb that does
 /// carry a coding would need `apply_safety_rung` called on its body first, or it would seal
@@ -154,6 +154,24 @@ async fn apply_safety_rung(
     // would refuse — refusing here would cancel the clinical event this signal rides on
     // (ADR-0060). See `crate::safety::usable_precise_claim` for the full argument.
     let Some((class, severity)) = crate::safety::usable_precise_claim(&precise) else {
+        // REPORTED, NOT SWALLOWED (#395, 2026-08-14 review). This branch and
+        // `advisory_or_withheld` reach the same outcome — no clear signal — but only the
+        // other one said so, and THIS is the branch an operator misconfiguration triggers.
+        //
+        // The failure it announces: a deployment populates `safety_class_map` from a
+        // drugref export and one row lands with a blank class or severity (the columns are
+        // NOT NULL but not non-blank). Every later medication naming that drug then seals a
+        // precise claim, emits nothing in the clear, and drops off the chart's warning list
+        // — permanently, because the class is captured pre-seal and carried, never
+        // re-derived. Without this line there is no signal anywhere in the system that it
+        // happened, and a silently degraded safety projection looks exactly like a
+        // correctly empty one.
+        eprintln!(
+            "safety: event {} carries a half-formed payload.safety claim ({precise}); \
+             emitting no clear signal and continuing — check safety_class_map for a blank \
+             class or severity (ADR-0060, #395)",
+            body.event_id
+        );
         // Same guarantee as above: a half-formed precise claim must not leave a
         // caller-supplied `body.safety` standing uncoarsened.
         body.safety = None;
@@ -170,6 +188,12 @@ async fn apply_safety_rung(
     // thread-free clinical verb honestly passes None (the chart-wide arms still apply).
     // A malformed thread id degrades to None rather than failing the write: an unresolved
     // thread is db/049 section 6's conservative bound, so it can only COARSEN.
+    //
+    // DELIBERATELY NOT `thread_id_of` (below), THOUGH IT READS THE SAME KEY. That helper
+    // returns `anyhow::Error` on a malformed id; this one returns `None`. Deduping the two
+    // onto the erroring form would convert a safe coarsening degradation into a FAILED
+    // CLINICAL WRITE — the exact ADR-0060 violation this slice closed. The duplication is
+    // the point; `thread_id_of` carries the matching note.
     let thread = body
         .payload
         .get("medication_id")
@@ -201,6 +225,12 @@ async fn apply_safety_rung(
 /// The thread a single-thread attested verb vouches for lives in `payload.medication_id`
 /// (the immortal thread key, distinct from the event's own id). Read it out of the CLEAR
 /// body before it is consumed by the seal.
+///
+/// ERRORS on a missing/malformed id, and that is correct HERE: an attestation that cannot
+/// name the thread it vouches for is not a valid clinical act. `apply_safety_rung` reads
+/// the same key and deliberately returns `None` instead, because there the id only scopes
+/// an ADVISORY grade lookup and failing the write would violate ADR-0060. **Do not dedupe
+/// the two onto this function** — the differing failure behaviour is the whole point.
 fn thread_id_of(body: &EventBody) -> anyhow::Result<uuid::Uuid> {
     body.payload
         .get("medication_id")
@@ -249,8 +279,8 @@ pub async fn seal_sign_submit(
     // each verb instead would make the safety floor a convention rather than a structural
     // property, and a convention is exactly what a peer's raw-SQL client does not honour.
     //
-    // WHY BEFORE THE SEAL. `body.payload` is still CLEAR at this point; three lines further
-    // down `seal_and_sign` consumes it and replaces it with ciphertext, after which the
+    // WHY BEFORE THE SEAL. `body.payload` is still CLEAR at this point; further down
+    // `seal_and_sign` consumes it and replaces it with ciphertext, after which the
     // precise claim is unreadable from here. The pair (sealed precise claim, clear rung)
     // must be decided together and frozen into the signed bytes.
     apply_safety_rung(client, &mut body).await?;

@@ -6041,7 +6041,7 @@ mod fingerprint_db_tests {
 /// as `function ... does not exist` inside `submit_event`/`apply_remote_event` (a
 /// total write outage on a fresh `cairn-sync init` database, the documented
 /// walking-skeleton flow). Every other DB-gated suite in this workspace runs against
-/// a database that cairn-node's FULL 35-file loader has already visited, so the gap
+/// a database that cairn-node's FULL schema loader has already visited, so the gap
 /// is structurally invisible there: this test is the drift guard. It wipes the
 /// second test database (`$CAIRN_TEST_PG2`), loads ONLY `SCHEMA`, and drives every
 /// SQL entry point the subset ships — the two the 2026-07-15 review found dangling:
@@ -6378,7 +6378,7 @@ mod schema_subset_tests {
         // #386 gap restated for this migration. A subset node writes event_log.safety on
         // every clinical apply (submit_event stores `b -> 'safety'` verbatim, present or
         // not), so the read-model ladder that column feeds must resolve here too, not
-        // merely exist upstream where cairn-node's full 35-file loader has always run.
+        // merely exist upstream where cairn-node's full schema loader has always run.
         let rung: String = c
             .query_one(
                 "SELECT cairn_safety_rung_for_rank(cairn_sensitivity_rank('sequestered'))",

@@ -264,9 +264,15 @@ where it is **minted** and read permissively where it **arrives**:
 
 `cairn_check_safety_signal` is called from the envelope well-formedness step of `db/005_submit.sql` only.
 It admits absence (the overwhelmingly common case); requires a non-empty `rung` string when present;
-requires a non-empty `class` at `rung = 'precise'`; and **refuses a `class` at any coarser rung** — a body
-claiming `{"rung":"existence","class":"rh-sensitizing"}` publishes the class while asserting it is
-concealed. There is no `CHECK` domain: the vocabulary stays open (principle 11). Being an envelope-level
+requires a non-empty `class` at `rung = 'precise'`; **refuses a `class` at any rung that is not
+`precise`** — a body claiming `{"rung":"existence","class":"rh-sensitizing"}` publishes the class while
+asserting it is concealed, and an *unrecognised* rung is caught by the same arm, which is the safe reading;
+and **refuses a `severity` at `existence` or coarser**, keyed on the rung's rank so a coarser rung
+interposed later inherits the guard. That second disclosure guard was added in the 2026-08-14 review: the
+read model gates severity off at `existence` (section 7), so without it the door MINTED permanently-signed
+bytes that every honest reader then declined to surface — the door and the read model disagreeing about the
+same rung, with the door on the side that cannot be undone. Neither guard can fail a clinical write:
+`coarsen` is total over three fixed shapes and no in-repo builder can construct either refused shape. There is no `CHECK` domain: the vocabulary stays open (principle 11). Being an envelope-level
 field like `clock_grade` and `attachments`, it does **not** go through the
 [ADR-0048](0048-twin-check-registry-dispatch.md) twin-check registry.
 
@@ -391,9 +397,15 @@ already declared for a withdrawal's clear-text rationale. **It is why emission-t
 control rather than an optimisation:** the moment of authoring is the only moment at which a decision about
 what to publish can actually bind.
 
-The partial mitigation is worth naming because it is free: a node **with custody** recovers precision from
-the sealed payload, so the *loss* from coarsening at emission is bounded to nodes holding neither custody
-nor a coding authority — exactly the nodes not entitled to the class.
+The partial mitigation is worth naming, but it is **not built and therefore not free**
+([#407](https://github.com/cairn-ehr/cairn-ehr/issues/407), 2026-08-14 review): a node **with custody**
+*could* recover precision from the sealed payload, which would bound the *loss* from coarsening at emission
+to nodes holding neither custody nor a coding authority — exactly the nodes not entitled to the class. No
+shipped read surface does this. Outside its own test, nothing in the workspace reads `payload.safety` at
+all, so on a custody-holding node with a graded chart the clinician is told to break glass for a value that
+node can decrypt one call away. Stated here rather than left as an implied capability — a field written by
+every coded verb and read by nothing is the same defect as the uncalled twin renderer this slice deleted,
+one level down.
 
 **The read-then-sign race.** The prospective grade is read in one statement and the event is signed and
 submitted in another, so a grade raised in that window yields a rung one step too fine. The window
@@ -412,8 +424,20 @@ arm.** `cairn_effective_sensitivity` takes an `event_id`, and at emission the ev
 the prospective form takes `(patient_id, thread_id)`. The duplication is the one real drift risk in this
 slice, mitigated three ways: the two functions carry cross-referencing comments, both delegate to the
 single `cairn_sensitivity_standing` definition of *what still applies*, and a test pins
-`prospective(patient, thread) == effective(event)` for an event on that thread with no event-scoped
-assertion standing.
+`prospective(patient, NULL) == effective(event)` for a **thread-less** event with no event-scoped assertion
+standing.
+
+That third mitigation is **weaker than it first reads, and the drift it was meant to catch has already
+happened** (2026-08-14 review). The test uses a `note.added`, which db/048 section 10b classifies as
+thread-free, and passes `NULL` for the thread — so the thread arms are not compared at all; agreement for a
+thread-**bearing** event is unpinned ([#399](https://github.com/cairn-ehr/cairn-ehr/issues/399)). And the
+thread arm has diverged: db/048's catch-all fires only when the named thread is demonstrably on *another*
+chart, while the prospective form fires whenever the assertion does not name *this* thread. Since that
+catch-all and the matching arm above it are exhaustive over thread-scoped assertions, `p_thread` is
+currently **inert** — a thread-scoped grade coarsens unconditionally, which is exactly the chart-wide
+behaviour section 10b's type gate exists to prevent, and it makes emission disagree with read on the same
+node. Tracked in [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404); the fix moves in the disclosing
+direction, so it is a maintainer decision rather than a cleanup.
 
 **Note explicitly that the prospective form *keeps* the catch-all's dangling-event clause.** "Minus the
 event arm" is easy to read as "minus everything event-shaped", and that reading is a bug. The dropped arm
@@ -452,9 +476,9 @@ changes the rendered twin of every coded medication, which is a behaviour change
 tracked with [#379](https://github.com/cairn-ehr/cairn-ehr/issues/379), which already owes the twin the
 sensitivity grade.
 
-**Three call sites reach `seal_and_sign` directly** rather than going through `seal_sign_submit`
-(`reconciliation::submit_reconcile_like`'s attested arm, and `medication/attestation.rs`), so the *one
-seam* guarantee — the coarsening lives in `seal_sign_submit` so no future clinical verb can forget it — is
+**Two call sites reach `seal_and_sign` directly** rather than going through `seal_sign_submit`
+(`reconciliation::submit_reconcile_like`'s attested arm, and `attestation::attest_thread_in_tx`), so the
+*one seam* guarantee — the coarsening lives in `seal_sign_submit` so no future clinical verb can forget it — is
 **convention rather than structure on those paths**. This is latent only: none of those bodies carries a
 drug claim today, so none writes `payload.safety` and none has a class to leak. A future two-thread verb
 that *does* carry a coding would seal a precise claim and publish nothing beside it. The hazard is recorded
@@ -471,8 +495,12 @@ in a comment at `seal_and_sign` itself as well as here.
 - The ladder extends without editing it: a future grade value lands on a rung by rank, and an unrecognised
   one lands on `existence` with nobody remembering to add it.
 - [#294](https://github.com/cairn-ehr/cairn-ehr/issues/294) is discharged with a test the medication-coding
-  slice owed and could not write: a node with the event, its custody, and an **empty** `safety_class_map`
-  still reports the precise class — proving it was carried, never re-derived.
+  slice owed and could not write: a node whose `safety_class_map` is **emptied after authoring** still
+  reports the precise class from the clear rung it holds — proving the class was carried, never re-derived.
+  The test reads the CLEAR tier; the sealed tier's own custody read has no shipped surface yet (decision 1,
+  and [#407](https://github.com/cairn-ehr/cairn-ehr/issues/407)). Both emission verbs are covered —
+  `assert_medication` and, since the 2026-08-14 review, the `code_medication` overlay that #294 was actually
+  written about.
 
 **Harder.**
 - There are now **two** places a rung is decided (emission and read), and they must not be collapsed. The

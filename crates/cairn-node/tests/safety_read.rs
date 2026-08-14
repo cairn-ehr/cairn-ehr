@@ -204,6 +204,72 @@ async fn a_peers_finer_rung_is_coarsened_by_this_nodes_grade() {
 }
 
 #[tokio::test]
+async fn the_middle_rung_keeps_the_severity_and_still_drops_the_class() {
+    let Some(base) = cs() else { return };
+    // The guard is a Client holding a cluster-wide advisory lock: it must stay BOUND for
+    // the whole test, and it is taken BEFORE connect_and_load_schema (every existing suite
+    // does this in execution order).
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, OVERLAY_TABLES).await;
+    let patient = Uuid::now_v7();
+
+    // THE POINT OF THIS TEST (2026-08-14 review finding C1). Every OTHER read-model test
+    // that asserts "no class survives" does so at rung `existence`, where BOTH columns
+    // gate off together. That left db/049 section 7's class gate — the one place the two
+    // columns are gated DIFFERENTLY —
+    //
+    //     CASE WHEN g.eff_rung = 'precise'          THEN g.safety ->> 'class'    END
+    //     CASE WHEN g.eff_rung IN ('precise','kind') THEN g.safety ->> 'severity' END
+    //
+    // pinned by nothing at the only rung that can tell the two apart. Widening the first
+    // line to `IN ('precise','kind')` — the obvious "make it match the line below"
+    // tidy-up — published a withheld drug class with the ENTIRE suite still green
+    // (verified by mutation). This test is the one that fails.
+    //
+    // `sensitive` is the grade that lands on `kind` (db/049 section 3: rank <= 10), so it
+    // is the ONLY grade at which this distinction is observable at all.
+    let id = note_with_safety(
+        &c,
+        &sk,
+        &kid,
+        patient,
+        13,
+        serde_json::json!({"rung": "precise", "class": "rh-sensitizing", "severity": "high"}),
+    )
+    .await;
+    grade_chart(&c, &sk, &kid, patient, 14, "sensitive").await;
+
+    let row = c
+        .query_one(
+            "SELECT rung, class, severity FROM cairn_event_safety($1::text::uuid)",
+            &[&id.to_string()],
+        )
+        .await
+        .expect("read model");
+    assert_eq!(
+        row.get::<_, String>(0),
+        "kind",
+        "a `sensitive` chart licenses the middle rung"
+    );
+    assert!(
+        row.get::<_, Option<String>>(1).is_none(),
+        "THE ASSERTION THIS TEST EXISTS FOR: the class must NOT survive at rung `kind`. \
+         The severity below does. If this fails, db/049's class gate has been widened and \
+         a withheld drug class is being published in the clear."
+    );
+    assert_eq!(
+        row.get::<_, Option<String>>(2),
+        Some("high".to_string()),
+        "the severity DOES survive the middle rung — otherwise this test would pass for \
+         the wrong reason (both columns gated off, i.e. the `existence` shape already \
+         covered elsewhere)"
+    );
+}
+
+#[tokio::test]
 async fn a_self_contradictory_signal_never_surfaces_its_class() {
     let Some(base) = cs() else { return };
     // The guard is a Client holding a cluster-wide advisory lock: it must stay BOUND for

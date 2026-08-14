@@ -71,6 +71,18 @@ BEGIN
         ASSERT v_msg LIKE '%class%', 'the refusal names the offending key: ' || v_msg;
     END;
 
+    -- The SECOND disclosure guard: a severity at the coarsest rung (2026-08-14 review).
+    -- Section 7 gates severity off at 'existence', so admitting it here minted bytes no
+    -- reader would ever surface. Keyed on the RANK, so an unrecognised rung — which ranks
+    -- coarsest everywhere else — inherits the guard too.
+    BEGIN
+        PERFORM cairn_check_safety_signal('{"safety":{"rung":"existence","severity":"critical"}}'::jsonb);
+        ASSERT false, 'a severity at the coarsest rung must be refused';
+    EXCEPTION WHEN others THEN
+        GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+        ASSERT v_msg LIKE '%severity%', 'the refusal names the offending key: ' || v_msg;
+    END;
+
     BEGIN
         PERFORM cairn_check_safety_signal('{"safety":{"severity":"high"}}'::jsonb);
         ASSERT false, 'a signal with no rung must be refused';
@@ -139,7 +151,7 @@ DO $$
 DECLARE
     v_patient uuid := gen_random_uuid();
     v_a uuid; v_b uuid; v_c uuid;
-    v_rung text; v_class text;
+    v_rung text; v_class text; v_severity text;
 BEGIN
     -- A self-contradictory signal: stored verbatim, but its class must never surface.
     v_a := _safety_seed_event(v_patient, 'note.added',
@@ -149,6 +161,29 @@ BEGIN
     ASSERT v_class IS NULL,
         'a class is surfaced ONLY at rung precise, whatever the row holds — this totality '
         'is what makes the apply door''s leniency safe';
+
+    -- THE MIDDLE RUNG IS THE ONLY ONE THAT TELLS THE TWO GATES APART (2026-08-14 review
+    -- finding C1). Section 7 gates `class` to 'precise' but `severity` to
+    -- ('precise','kind'); at 'existence' both gate off together, so the arm above cannot
+    -- distinguish a correct class gate from one widened to IN ('precise','kind'). That
+    -- widening — the obvious "make it match the line below" edit — published a withheld
+    -- drug class with the whole suite green until this arm existed.
+    --
+    -- Seeded at rung 'kind' directly rather than via a `sensitive` grade, because this rig
+    -- has no signing key and so cannot author a sensitivity assertion (see this section's
+    -- header). With no grade standing, 'routine' licenses 'precise', and the coarser of
+    -- (kind, precise) is 'kind' — which is the branch under test.
+    v_b := _safety_seed_event(v_patient, 'note.added',
+        '{"rung":"kind","class":"rh-sensitizing","severity":"high"}'::jsonb, 103);
+    SELECT rung, class, severity INTO v_rung, v_class, v_severity
+        FROM cairn_event_safety(v_b);
+    ASSERT v_rung = 'kind', 'the emitted middle rung stands when no grade coarsens it further';
+    ASSERT v_class IS NULL,
+        'the class must NOT survive at rung kind — if this fails, db/049 section 7''s class '
+        'gate has been widened and a withheld drug class is being published';
+    ASSERT v_severity = 'high',
+        'the severity DOES survive at rung kind — otherwise this arm would pass for the '
+        'wrong reason (both columns gated off, i.e. the existence shape already covered above)';
 
     -- An unrecognised rung reads as the coarsest NAMED rung, not echoed back.
     v_b := _safety_seed_event(v_patient, 'note.added',

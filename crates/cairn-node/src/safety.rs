@@ -1,8 +1,14 @@
-//! §5.9 part B (ADR-0063) — the impure half of emission: two small queries.
+//! §5.9 part B (ADR-0063) — the node-side half of the safety projection.
 //!
-//! The PURE half (what each rung discloses) lives in `cairn_event::safety`. This module
-//! only fetches what the pure half needs: the deployment's class for a coding, and the
-//! disclosure rung the chart's current grade licenses.
+//! Three queries: the deployment's class for a coding ([`lookup_class`]), the disclosure
+//! rung the chart's current grade licenses ([`prospective_rung`]) — those two are EMISSION
+//! — and the chart-wide report ([`chart_safety`]), which is READ. Beside them sit the pure,
+//! database-free seams that are node-specific rather than wire-shaped:
+//! [`advisory_or_withheld`], [`rung_from_name`], [`usable_precise_claim`] and
+//! [`render_safety_line`].
+//!
+//! The WIRE shape — what each rung actually discloses — lives in `cairn_event::safety` and
+//! is the authority on that question.
 //!
 //! # Why the lookup runs HERE and never in a reader
 //!
@@ -183,7 +189,12 @@ pub struct SafetyLine {
     pub class: Option<String>,
     pub severity: Option<String>,
     pub event_type: String,
-    /// The §5.9 grade that produced this coarseness…
+    /// This node's currently-standing §5.9 grade.
+    ///
+    /// NOT necessarily "the grade that produced this coarseness": db/049 section 7 reports
+    /// the COARSER of what this grade licenses and what the author emitted, so a coarse
+    /// `rung` beside `grade == "routine"` means the EMITTING node's rung won, not this
+    /// one's. The CLI prints the two separately for exactly that reason.
     pub grade: String,
     /// …and WHICH subject won it (ADR-0062 decision 8 control 3: a grade with no named
     /// source cannot be fixed, because nobody can tell one thing to go and look at from
@@ -191,7 +202,15 @@ pub struct SafetyLine {
     pub subject_kind: String,
 }
 
-/// Every standing safety signal on a chart, coarsest-safe and already de-identified.
+/// Every event on this chart that CARRIES a safety signal, coarsest-safe and already
+/// de-identified.
+///
+/// NOT "every standing signal" — this applies NO supersession (#406). A ceased medication's
+/// original assert keeps its line forever, and because `correct_medication_coding` emits
+/// nothing by design (#401), a corrected coding leaves the RETRACTED coding's class standing
+/// and contributes none for the drug the patient is actually on. Rolling a signal up across
+/// a thread is a separate design this slice does not open (ADR-0063); a caller that needs
+/// currency must apply it itself.
 ///
 /// A pure read: no signing key, no HLC tick, nothing authored. One query, so a UI opening a
 /// chart pays a single round trip.
@@ -477,12 +496,25 @@ mod tests {
         // This is what makes the middle/coarsest rung read as "confidential medication"
         // rather than "confidential content" — the event TYPE is already plaintext on the
         // row (never sealed), so naming it discloses nothing new (see the function's own
-        // doc). Table-driven over both rungs that use the noun, and over a handful of
-        // event types on each side of the `clinical.medication` prefix boundary.
+        // doc). Table-driven over both rungs that use the noun.
+        //
+        // THESE ARE THE REAL REGISTERED EVENT TYPES, AND THAT MATTERS (2026-08-14 review
+        // finding). This table previously used invented names — `clinical.medication.assert`,
+        // `.cessation`, `.dose-change` — which are not types this system ever emits. Every
+        // real medication verb EXCEPT the bare assert is HYPHENATED
+        // (`clinical.medication-cessation.asserted`, `-coding-`, `-dose-change-`), so
+        // tightening the prefix below from `clinical.medication` to `clinical.medication.`
+        // — a plausible "be more precise" edit — would have made every cessation, coding
+        // and dose-change event render as "confidential CONTENT" instead of "confidential
+        // MEDICATION", degrading the very signal §5.9 exists to deliver, while this test
+        // stayed green on names that do not exist.
         for event_type in [
-            "clinical.medication.assert",
-            "clinical.medication.cessation",
-            "clinical.medication.dose-change",
+            "clinical.medication.asserted",
+            "clinical.medication-cessation.asserted",
+            "clinical.medication-coding.asserted",
+            "clinical.medication-dose-change.asserted",
+            "clinical.medication-reconciliation.asserted",
+            "clinical.medication-attestation.asserted",
         ] {
             let existence = render_safety_line(&line(None, None, event_type));
             assert!(
@@ -495,10 +527,12 @@ mod tests {
                 "{event_type:?} at kind must read as medication: {kind:?}"
             );
         }
+        // The other side of the boundary — again real registered types, plus the empty
+        // string as the degenerate case.
         for event_type in [
-            "clinical.note.add",
-            "identity.link",
-            "demographic.assert",
+            "note.added",
+            "demographic.field.asserted",
+            "identity.link.asserted",
             "",
         ] {
             let existence = render_safety_line(&line(None, None, event_type));

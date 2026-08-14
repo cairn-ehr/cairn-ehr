@@ -447,10 +447,14 @@ was rejected as a **leak**: for the cases §5.9 exists for the class *is* the di
 **Open follow-ons:** the deployment-configurable grade→rung map (§5.9 calls the ladder *policy-configured*;
 this slice ships a monotone default); rung-4 oblivion (the signal is permanent today); the UI warning
 surface and its §1.2 measurement; drugref populating `safety_class_map`; `correct_medication_coding` emits
-no signal (a thread-rollup question); three call sites reach `seal_and_sign` directly so the "one seam"
-guarantee is convention on those paths; `usable_precise_claim` drops a whole signal when only *severity* is
-blank, silently, because `cairn-node` has no logging; advisory-lookup errors propagate with `?` and cancel
-the write; and prospective-vs-effective agreement is unpinned for a thread-**bearing** event.
+no signal (a thread-rollup question, #401); TWO call sites reach `seal_and_sign` directly so the "one seam"
+guarantee is convention on those paths (#394); `usable_precise_claim` still drops a whole signal when only
+*severity* is blank (#395 — the drop is now REPORTED to stderr, but the signal is still lost); and
+prospective-vs-effective agreement is unpinned for a thread-**bearing** event (#399). The 2026-08-14 review
+added four more: the prospective thread arm has drifted from db/048 and `p_thread` is inert (#404); two
+raw-SQL paths bypass the coarsening the code claims is enforced (#405); the chart report applies no
+supersession, so a ceased drug warns forever (#406); and the sealed precise claim is written by every coded
+verb and read by nothing (#407).
 
 ## Phase 5 — Security & compliance core
 

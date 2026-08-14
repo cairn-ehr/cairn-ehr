@@ -42,6 +42,10 @@ const MOIETY_TENOFOVIR: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e12";
 const MOIETY_ANTI_D_SEQ: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e13";
 const MOIETY_UNMAPPED: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e14";
 const MOIETY_STATIN: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e15";
+const MOIETY_OVERLAY: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e16";
+const MOIETY_BLANK_CLASS: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e17";
+const MOIETY_BLANK_SEVERITY: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e18";
+const MOIETY_BLANK_BOTH: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e19";
 
 /// Take ownership of this suite's slice of deployment state.
 ///
@@ -200,6 +204,193 @@ async fn a_coded_assert_on_a_routine_chart_emits_the_precise_rung() {
         "the sealed tier carries no rung — the rung is a disclosure decision, and the \
          sealed side discloses everything to whoever holds the key"
     );
+}
+
+#[tokio::test]
+async fn the_coding_overlay_emits_a_signal_and_a_thread_grade_coarsens_it() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = medication_setup(&c).await;
+    own_the_class_map(&c).await;
+    let patient = fresh_chart(&c, &sk, &kid).await;
+    map_class(&c, MOIETY_OVERLAY, "rh-sensitizing", "high").await;
+
+    // THIS TEST COVERS TWO GAPS THE REST OF THE SUITE LEAVES OPEN (2026-08-14 review).
+    //
+    // 1. THE OVERLAY HALF OF #294. `code_medication` — the pharmacist/professional-coder
+    //    path that ADR-0059 names as the motivating case — is the OTHER emission seam, and
+    //    nothing drove it. #294's obligation is that the class be CARRIED rather than
+    //    re-derived; `safety_carried_class.rs` discharges that for `assert_medication`
+    //    only, so the verb the obligation was actually written about was untested.
+    //
+    // 2. A THREAD-SCOPED GRADE REACHING EMISSION AT ALL. `assert_medication` mints a fresh
+    //    `medication_id` per call, so no standing thread-scoped assertion can ever name it;
+    //    `code_medication` is the only verb that writes a precise claim onto an EXISTING
+    //    thread, and so the only end-to-end path where a thread grade can bite.
+    //
+    // WHAT THIS TEST DOES *NOT* PIN, STATED PLAINLY SO NOBODY READS MORE INTO IT (#404).
+    // It does not pin the thread PLUMBING — `sealed_submit.rs`'s read of
+    // `payload.medication_id` into `prospective_rung`. Replacing that with a hardcoded
+    // `None` leaves this test green, verified by mutation. The reason is finding #404
+    // itself: `cairn_prospective_sensitivity`'s two thread arms are EXHAUSTIVE — arm 2
+    // fires on a match, and the catch-all fires on `p_thread IS NULL OR subject_id <>
+    // p_thread` — so a thread-scoped assertion coarsens UNCONDITIONALLY and `p_thread` is
+    // inert. No test can distinguish the arms until that predicate is narrowed to db/048
+    // section 11's shape. When #404 is fixed, tighten the assertion below to a
+    // different-thread case, which will then be the pin that is missing today.
+    //
+    // What it DOES pin, verified by mutation: dropping the overlay's safety claim (gap 1)
+    // fails it.
+    let thread = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        &AssertMedicationInput {
+            term: "little white pill",
+            coding: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            info_source: "patient",
+            started: None,
+            started_precision: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("assert uncoded");
+
+    // The control: the uncoded assert emits nothing, so any signal below is the OVERLAY's.
+    let assert_ev = assert_event_of(&c, thread).await;
+    assert!(
+        stored_signal(&c, assert_ev).await.is_none(),
+        "the uncoded assert must emit nothing — otherwise this test cannot tell the \
+         overlay's signal from the assertion's"
+    );
+
+    // Grade the THREAD, not the chart. This is the granular subject kind ADR-0062 decision
+    // 8 wants deployments to reach for, and the arm no end-to-end test had exercised.
+    cairn_node::sensitivity::assert_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        SubjectKind::Thread,
+        thread,
+        "sensitive",
+        Some("test fixture: thread-scoped grade"),
+    )
+    .await
+    .expect("grade the thread");
+
+    let coding_ev = cairn_node::medication::code_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        thread,
+        &cairn_node::medication::CodeMedicationInput {
+            coding: SubstanceCoding {
+                system: "drugref-moiety",
+                code: MOIETY_OVERLAY,
+                display: "anti-D immunoglobulin",
+            },
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("code the thread");
+
+    let s = stored_signal(&c, coding_ev)
+        .await
+        .expect("a coding overlay emits a signal — this is the seam #294 is about");
+    assert_eq!(
+        s["rung"], "kind",
+        "a thread-scoped grade must reach the overlay's rung — if this reads `precise`, \
+         grading a thread is doing nothing at emission at all"
+    );
+    assert!(
+        s.get("class").is_none(),
+        "the class must not be published in the clear once the thread is graded"
+    );
+    assert_eq!(s["severity"], "high", "severity survives the middle rung");
+
+    // …and the full precision is under the seal, uncoarsened — the tier a custody-holder
+    // reads without any drug database (#294, now discharged for the overlay verb too).
+    let clear = clear_payload(&c, coding_ev).await;
+    assert_eq!(clear["safety"]["class"], "rh-sensitizing");
+    assert_eq!(clear["safety"]["severity"], "high");
+}
+
+#[tokio::test]
+async fn a_blank_class_map_row_emits_no_signal_and_still_records_the_medication() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = medication_setup(&c).await;
+    own_the_class_map(&c).await;
+    let patient = fresh_chart(&c, &sk, &kid).await;
+
+    // THE POINT OF THIS TEST (2026-08-14 review finding). `safety_class_map`'s columns are
+    // NOT NULL but NOT non-blank, so a deployment populating the map from a drugref export
+    // can land a row with a blank class or a blank severity. Both shapes are exactly what
+    // `cairn_check_safety_signal` REFUSES — at the STRICT door, the one every medication
+    // write goes through. If `usable_precise_claim` did not intercept them first, one bad
+    // configuration row would cancel every medication assert naming that drug, forever, on
+    // every node. That is ADR-0060's sharpest case: "the system may fail to record an
+    // order, but it may never cancel one."
+    //
+    // The existing coverage for this is unit-level only (`usable_precise_claim`'s own
+    // tests, and two `apply_safety_rung` tests that return before any query). Neither
+    // proves the STRICT DOOR admits the resulting event. This one drives the real door.
+    for (code, class, severity) in [
+        (MOIETY_BLANK_CLASS, "", "high"),
+        (MOIETY_BLANK_SEVERITY, "rh-sensitizing", ""),
+        (MOIETY_BLANK_BOTH, "   ", "   "),
+    ] {
+        map_class(&c, code, class, severity).await;
+
+        let thread = assert_medication(
+            &mut c,
+            &sk,
+            &kid,
+            "n1",
+            patient,
+            &coded("a drug with a misconfigured map row", code),
+            None,
+            None,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "a blank class map row (class={class:?}, severity={severity:?}) must NOT \
+                 cancel the clinical write — ADR-0060. Error was: {e:#}"
+            )
+        });
+
+        // The clinical content landed…
+        let ev = assert_event_of(&c, thread).await;
+        // …and the advisory decoration withheld itself rather than minting a body the
+        // door would refuse.
+        assert!(
+            stored_signal(&c, ev).await.is_none(),
+            "a half-formed class must emit NO clear signal (class={class:?}, \
+             severity={severity:?}) — a `precise` rung with a blank class is precisely \
+             what the strict door refuses"
+        );
+    }
 }
 
 #[tokio::test]

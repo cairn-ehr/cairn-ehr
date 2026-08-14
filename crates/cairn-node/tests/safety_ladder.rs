@@ -204,6 +204,110 @@ async fn the_floor_check_refuses_a_missing_rung_and_a_precise_without_a_class() 
 }
 
 #[tokio::test]
+async fn the_floor_check_refuses_a_severity_at_the_coarsest_rung() {
+    let Some((_g, c)) = connect().await else {
+        return;
+    };
+    // 2026-08-14 review finding: the door and the read model disagreed about this shape.
+    //
+    // db/049 section 7 is explicit — "AT 'existence' NEITHER class NOR severity SURVIVES.
+    // 'existence' is the claim 'there is a safety-relevant signal here and you are not
+    // cleared to see what' — a severity beside it would narrow exactly that." The read
+    // model therefore gates severity off at this rung. But the door admitted it, so the
+    // bytes could be MINTED and replicated permanently while every reader declined to
+    // show them. Decision 6's own logic says the door is where this must bind: emission
+    // is the only coarsening that binds a peer's raw-SQL client.
+    //
+    // ADR-0060 SAFETY ARGUMENT FOR ADDING A REFUSAL AT THE STRICT DOOR: this shape is
+    // unreachable from any in-repo builder — `cairn_event::safety::coarsen` is total over
+    // three fixed shapes and its `Existence` arm emits `{"rung":"existence"}` with no
+    // other key. So the guard cannot fail a clinical write, exactly like the sibling
+    // class guard it now mirrors.
+    let e = c
+        .execute(
+            "SELECT cairn_check_safety_signal($1::text::jsonb)",
+            &[&r#"{"safety": {"rung": "existence", "severity": "critical"}}"#],
+        )
+        .await
+        .expect_err("a severity at the coarsest rung must be refused");
+    let msg = db_msg(&e);
+    assert!(
+        msg.contains("severity"),
+        "the message names the offending key: {msg}"
+    );
+
+    // The CONTROL that stops this passing for the wrong reason: severity is legal at both
+    // finer rungs, so the guard must be keyed on the RUNG and not merely on the key.
+    for body in [
+        r#"{"safety": {"rung": "kind", "severity": "high"}}"#,
+        r#"{"safety": {"rung": "precise", "class": "rh-sensitizing", "severity": "high"}}"#,
+    ] {
+        c.execute(
+            "SELECT cairn_check_safety_signal($1::text::jsonb)",
+            &[&body],
+        )
+        .await
+        .unwrap_or_else(|e| panic!("must still admit {body}: {}", db_msg(&e)));
+    }
+}
+
+#[tokio::test]
+async fn the_safety_functions_are_revoked_from_public_and_granted_deliberately() {
+    let Some((_g, c)) = connect().await else {
+        return;
+    };
+    // 2026-08-14 review finding: db/049 section 8 REVOKEs EXECUTE from PUBLIC on five
+    // functions and re-GRANTs to cairn_agent, citing #382 — "an un-REVOKEd function is
+    // directly callable by a below-the-floor adversary with raw SQL". None of it was
+    // asserted anywhere. Postgres grants EXECUTE to PUBLIC by DEFAULT, so any future
+    // migration doing `CREATE OR REPLACE` on one of these silently restores the default
+    // and no test notices. The control was enforced only by the migration's own prose.
+    //
+    // `public` is a real role name here, so has_function_privilege resolves it.
+    for f in [
+        "cairn_check_safety_signal(jsonb)",
+        "cairn_safety_class_candidate(jsonb)",
+        "cairn_prospective_sensitivity(uuid, uuid)",
+        "cairn_event_safety(uuid)",
+        "cairn_patient_safety(uuid)",
+    ] {
+        let public_can: bool = c
+            .query_one(
+                "SELECT has_function_privilege('public', $1, 'EXECUTE')",
+                &[&f],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("privilege probe for {f}: {}", db_msg(&e)))
+            .get(0);
+        assert!(
+            !public_can,
+            "{f} must be REVOKEd from PUBLIC — every role is a member of PUBLIC, so an \
+             un-REVOKEd function is reachable by a below-the-floor adversary (#382)"
+        );
+    }
+
+    // …and the four the daemon actually calls are granted back. `cairn_check_safety_signal`
+    // is deliberately NOT in this list: it is called only from inside `submit_event`, which
+    // is SECURITY DEFINER, so cairn_agent needs no grant on it at all.
+    for f in [
+        "cairn_safety_class_candidate(jsonb)",
+        "cairn_prospective_sensitivity(uuid, uuid)",
+        "cairn_event_safety(uuid)",
+        "cairn_patient_safety(uuid)",
+    ] {
+        let agent_can: bool = c
+            .query_one(
+                "SELECT has_function_privilege('cairn_agent', $1, 'EXECUTE')",
+                &[&f],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("privilege probe for {f}: {}", db_msg(&e)))
+            .get(0);
+        assert!(agent_can, "{f} must be granted to cairn_agent");
+    }
+}
+
+#[tokio::test]
 async fn the_class_map_ships_empty() {
     let Some((_g, c)) = connect().await else {
         return;

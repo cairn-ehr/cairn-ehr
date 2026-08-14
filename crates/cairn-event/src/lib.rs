@@ -283,15 +283,20 @@ pub struct EventBody {
     #[serde(default)]
     pub clock_grade: ClockGrade,
     /// The §5.9 de-identified safety signal, in the CLEAR (ADR-0063). Carries a `rung`
-    /// chosen at authoring time from the effective sensitivity grade, plus whatever that
-    /// rung licenses — see [`safety::coarsen`]. The PRECISE claim lives inside the sealed
-    /// payload; this is the tier a node without custody, or one reading a crypto-shredded
-    /// event, still sees.
+    /// chosen at authoring time from the sensitivity grade STANDING on the chart then
+    /// (`cairn_prospective_sensitivity` — not `cairn_effective_sensitivity`, which needs an
+    /// event id that does not exist yet), plus whatever that rung licenses — see
+    /// [`safety::coarsen`]. At rung `precise`, which is what an ungraded chart gets, that
+    /// includes the class itself. The precise claim ALSO lives inside the sealed payload;
+    /// this is the tier a node without custody, or one reading a crypto-shredded event,
+    /// still sees.
     ///
-    /// `skip_serializing_if` ⇒ a None is omitted from the wire, so adding this field never
-    /// changes an existing event's bytes/content-address (additive-only, principle 11 /
-    /// ADR-0012). Appended TRAILING for the same reason (the ADR-0058 `clock_grade`
-    /// precedent).
+    /// `skip_serializing_if` ⇒ a None emits no CBOR key at all, and THAT is what keeps an
+    /// existing event's bytes/content-address unchanged (additive-only, principle 11 /
+    /// ADR-0012) — pinned by `an_absent_safety_field_changes_no_existing_content_address`.
+    /// Appended TRAILING for a different guarantee: key-order stability for bodies that DO
+    /// carry the field (the ADR-0058 `clock_grade` precedent). Two mechanisms, two
+    /// guarantees; do not collapse them when editing.
     ///
     /// A `serde_json::Value` rather than a typed struct on purpose: the vocabulary is open
     /// (principle 11), a future peer's rung must decode rather than fail, and the read model

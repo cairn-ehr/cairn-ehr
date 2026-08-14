@@ -15,23 +15,36 @@
 //!
 //!   * `payload.safety` — the precise `{class, severity}`, sealed under the body's own DEK.
 //!     A custody-holding node reads it without any drug database.
-//!   * `EventBody.safety` — a RUNG chosen by the effective sensitivity grade at authoring
-//!     time, in the clear. This is what a node without custody (sequestered, part C) or
-//!     after a crypto-shred still sees, and it is the only coarsening that binds a peer's
-//!     raw-SQL client.
+//!   * `EventBody.safety` — a RUNG, **plus whatever that rung licenses**, in the clear.
+//!     The rung is chosen from the sensitivity grade standing at authoring time
+//!     (`cairn_prospective_sensitivity`; NOT `cairn_effective_sensitivity`, which needs an
+//!     event id the event does not have yet — db/049 section 6). This is what a node
+//!     without custody (sequestered, part C) or after a crypto-shred still sees, and it is
+//!     the only coarsening that binds a peer's raw-SQL client.
+//!
+//! READ THAT SECOND BULLET LITERALLY: at rung `precise` — which is what an UNGRADED chart
+//! gets, i.e. the default state of every chart — the class and severity travel in the CLEAR
+//! on the signed envelope and replicate unconditionally. The seal is not what protects the
+//! class in the common case; the GRADE is. That is the whole reason the rung is decided at
+//! authoring time and frozen into the signed bytes.
 use serde_json::{json, Value};
 
 /// How much of a safety signal is published in the clear. Ordered coarsest-last, mirroring
 /// §5.9's ladder: *precise class → "confidential medication, severity X" → "confidential
 /// content, break glass"*.
 ///
-/// The rung is chosen at AUTHORING time from the effective sensitivity grade (db/049's
-/// `cairn_safety_rung_for_rank`) and then frozen into the signed bytes. It cannot be
-/// revised later: bytes on the wire cannot be un-published, which is exactly why the
+/// The rung is chosen at AUTHORING time from the sensitivity grade STANDING on the chart at
+/// that moment — db/049's `cairn_prospective_sensitivity` fed through
+/// `cairn_safety_rung_for_rank`, never `cairn_effective_sensitivity`, which takes an
+/// `event_id` the event about to be authored does not have (db/049 section 6 explains at
+/// length why the two must stay separate). It is then frozen into the signed bytes and
+/// cannot be revised: bytes on the wire cannot be un-published, which is exactly why the
 /// choice has to bind here rather than at read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyRung {
-    /// The class itself. Safe only on a chart with no standing grade.
+    /// The class itself. Reached when the chart's standing grade ranks <= 0 — i.e. an
+    /// explicit `routine` assertion as well as no standing assertion at all (db/049
+    /// section 3's `p_rank <= 0` arm).
     Precise,
     /// Severity only. The event TYPE already says "medication" in the clear, so this rung
     /// deliberately adds no `kind` field — it would restate what the row already publishes.

@@ -166,6 +166,27 @@ BEGIN
     IF s ? 'severity' AND COALESCE(btrim(s ->> 'severity'), '') = '' THEN
         RAISE EXCEPTION 'safety: severity, when present, must be a non-empty string';
     END IF;
+
+    -- The SECOND disclosure guard, mirroring the class guard above one rung down
+    -- (2026-08-14 review finding). Section 7 gates severity off at 'existence' — "there is
+    -- a safety-relevant signal here and you are not cleared to see what"; a severity beside
+    -- it narrows exactly that. Without this arm the door ADMITTED the shape the read model
+    -- refuses to show, so the bytes were minted and replicated permanently while every
+    -- honest reader declined to surface them — the door and the read model disagreeing
+    -- about the same rung, with the door on the side that cannot be undone.
+    --
+    -- Keyed on the rung reaching or passing 'existence' rather than on the literal string,
+    -- so a coarser rung interposed later inherits the guard without anyone remembering —
+    -- the same safe-default-by-omission discipline sections 1-3 use.
+    --
+    -- ADR-0060: this cannot fail a clinical write. `cairn_event::safety::coarsen` is total
+    -- over three fixed shapes and its Existence arm emits `{"rung":"existence"}` alone, so
+    -- no in-repo builder can construct the refused shape — the identical argument that
+    -- licenses the class guard above.
+    IF s ? 'severity'
+       AND cairn_safety_rung_rank(rung) >= cairn_safety_rung_rank('existence') THEN
+        RAISE EXCEPTION 'safety: rung "%" must not carry a severity — it narrows exactly what the rung says is withheld (ADR-0063)', rung;
+    END IF;
 END;
 $$;
 
@@ -217,9 +238,21 @@ $$;
 --    !!! KEEP IN LOCKSTEP WITH db/048 SECTION 11 !!! The two functions duplicate the
 --    chart / thread / catch-all arms. crates/cairn-node/tests/safety_read.rs's
 --    prospective_matches_effective_given_the_same_chart_and_thread and
---    a_dangling_event_scoped_assertion_coarsens_prospectively_too are the anti-drift pins;
---    if you change one arm here or there and those tests stay green, the pins are too weak,
---    not the change safe.
+--    a_dangling_event_scoped_assertion_coarsens_prospectively_too are the anti-drift pins.
+--
+--    WHAT THOSE PINS DO NOT COVER, STATED SO NOBODY TREATS A GREEN RUN AS PROOF
+--    (2026-08-14 review). The first passes p_thread = NULL and uses a `note.added`, which
+--    db/048 section 10b classifies as thread-free — so it pins
+--    prospective(patient, NULL) == effective(event) for a THREAD-LESS event, not the
+--    thread arms. Agreement for a thread-BEARING event is unpinned (#399).
+--
+--    AND THE THREAD ARM HAS ALREADY DRIFTED (#404). db/048's catch-all fires only when the
+--    named thread is demonstrably on ANOTHER chart; this one fires whenever the assertion
+--    does not name THIS thread. Because that catch-all and the arm above it are exhaustive
+--    over thread-scoped assertions, p_thread is currently INERT — a thread-scoped grade
+--    coarsens unconditionally, which is the chart-wide behaviour section 10b's type gate
+--    exists to prevent. The four causes listed below therefore describe db/048's arms, NOT
+--    what this predicate actually does; see #404 before touching it.
 --
 --    Both delegate to cairn_sensitivity_standing, which stays the SINGLE definition of
 --    "what still applies" (ADR-0062 decision 3).
@@ -370,8 +403,15 @@ LANGUAGE sql STABLE AS $$
     FROM graded g;
 $$;
 
---    The chart-wide report: every standing signal, already coarsened. One query, so a UI
---    opening a chart pays one round trip (the §1.2 budget in the slice plan).
+--    The chart-wide report: every event on the chart that CARRIES a signal, already
+--    coarsened. One query, so a UI opening a chart pays one round trip (the §1.2 budget in
+--    the slice plan).
+--
+--    NOT "every STANDING signal" — there is no supersession here (#406). A ceased
+--    medication's assert keeps its line, and a corrected coding leaves the RETRACTED
+--    class standing because `correct_medication_coding` emits nothing (#401). Thread
+--    rollup is the separate design ADR-0063 declines to open; until it exists, currency
+--    is the caller's problem and this function must not be described as solving it.
 --
 --    A plain (INNER) LATERAL, so an event whose `safety` is present but unusable — a JSON
 --    array, a bare string, `'null'::jsonb` — contributes no row at all, exactly as
@@ -403,10 +443,23 @@ REVOKE EXECUTE ON FUNCTION cairn_check_safety_signal(jsonb) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) TO cairn_agent;
 
--- The read model. REVOKE before GRANT for each, same reason as above: these three are the
--- ONLY sanctioned way to read the safety signal, and a reader that reaches event_log.safety
+-- The read model. REVOKE before GRANT for each, same reason as above: these are the
+-- SANCTIONED way to read the safety signal, and a reader that reaches event_log.safety
 -- directly gets the UNCOARSENED bytes — so the grant on them must be deliberate, not the
 -- PUBLIC default.
+--
+-- "SANCTIONED", NOT "ONLY" — AND THE DIFFERENCE IS NOT ENFORCED HERE (#405, 2026-08-14
+-- review). db/005 already does `GRANT SELECT ON event_log ... TO cairn_agent`, and a
+-- table-level grant covers columns added later, so cairn_agent can read this very column
+-- raw and skip section 7's re-coarsening entirely. The REVOKE/GRANT dance below does NOT
+-- close that; it only stops an un-enrolled PUBLIC caller. Closing it needs a column-level
+-- `REVOKE SELECT (safety)` plus SECURITY DEFINER on these functions — weighed in #405.
+-- Blast radius is bounded: this column holds the already-coarsened EMITTED value, never
+-- the precise sealed claim. But do not read the line above as a floor guarantee.
+--
+-- Note cairn_prospective_sensitivity reads the SENSITIVITY stream and never touches
+-- event_log.safety at all; it is grouped here because emission calls it, not because it
+-- is part of the safety read model.
 REVOKE EXECUTE ON FUNCTION cairn_prospective_sensitivity(uuid, uuid) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_event_safety(uuid) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_patient_safety(uuid) FROM PUBLIC;
