@@ -200,7 +200,10 @@ fn derivation_finds_the_expected_helpers() {
             // withdrawal through the remote door (its local-door twin, `submit_signed_raw`,
             // was withdrawn — no caller ever needed it: every withdrawal in that slice goes
             // through the remote door, and every raw assertion fits the generic
-            // `EventSpec`/`submit_signed_with_id` shape instead).
+            // `EventSpec`/`submit_signed_with_id` shape instead). `body_from_spec` went
+            // public in the same slice's Task 3 (arrival-order independence): a withdrawal
+            // that targets an event before that event has replicated needs to sign the
+            // target body once to learn its content address, then submit it separately later.
             "async fn apply_remote_attested(",
             "async fn apply_remote_raw(",
             "async fn attestation_count(",
@@ -214,6 +217,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
+            "fn body_from_spec(",
             "fn withdrawal_body_with_id(",
         ],
         "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"

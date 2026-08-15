@@ -27,8 +27,8 @@ mod common;
 use cairn_event::sensitivity::*;
 use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use common::{
-    apply_remote_attested, apply_remote_raw, content_address_of, cs, enroll_human, setup,
-    submit_attested, submit_registration, withdrawal_body_with_id, EventSpec,
+    apply_remote_attested, apply_remote_raw, body_from_spec, content_address_of, cs, enroll_human,
+    setup, submit_attested, submit_registration, withdrawal_body_with_id, EventSpec,
 };
 use uuid::Uuid;
 
@@ -551,3 +551,84 @@ async fn a_locally_authored_withdrawal_always_lowers() {
         .expect("the local ceremony accepted it, so authority must too");
     assert_eq!(effective(&c, a).await, "routine");
 }
+
+// ===========================================================================
+// Task 3 (#380): arrival-order independence. Computing authority at READ rather than
+// stamping it at apply is what makes these pass with NO new production code — Tasks 1/2
+// already compute at read, so a withdrawal inert today because a piece it needs has not
+// yet replicated self-heals the moment that piece lands, with no re-apply and no second
+// event.
+// ===========================================================================
+
+#[tokio::test]
+async fn a_withdrawal_inert_because_its_target_has_not_replicated_heals_when_it_lands() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+
+    // Set-union sync has no ordering: the withdrawal legitimately arrives FIRST
+    // (ADR-0062 decision 3). Its target's event_id is knowable — it is content-addressed —
+    // but the row is not here yet, so R2 cannot resolve. R1 must carry it alone.
+    let future_assert_id = Uuid::now_v7();
+    let a = SensitivityAssertion {
+        subject_kind: SubjectKind::Patient,
+        subject_id: p,
+        grade: "sequestered",
+        source: "human",
+        rationale: Some("protected witness"),
+    };
+    let assert_body = body_from_spec(
+        future_assert_id,
+        &kid,
+        EventSpec {
+            patient: p,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: sensitivity_assertion_body(&a),
+            plaintext_twin: Some(render_sensitivity_twin(&a)),
+            wall: 10,
+        },
+    );
+    let target_ca =
+        cairn_event::event_address(&cairn_event::sign(&assert_body, &sk).unwrap().signed_bytes);
+
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &hex::encode(&target_ca),
+        rationale: "consented",
+    };
+    let wid = Uuid::now_v7();
+    // The bearing shape (R1-eligible) through the remote door — the withdrawal is a peer's
+    // event here, exactly like Task 2's cross-node test.
+    let body = bearing_withdrawal_body(&kid, &kid_h, p, wid, &w, 20);
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .unwrap();
+
+    // R2 cannot resolve (no target row), but R1 stands on its own.
+    assert_eq!(authority(&c, wid, None).await, "attested");
+
+    // Now the target lands, as a peer's event arriving on a later sync cycle. The
+    // withdrawal must take effect — a delete-at-apply design would have dropped it on the
+    // floor the moment it was inert, instead of leaving it to be re-evaluated at read.
+    apply_remote_raw(&c, &sk, assert_body).await.unwrap();
+    assert_eq!(effective(&c, future_assert_id).await, "routine");
+}
+
+// THE OTHER ARRIVAL-ORDER AXIS — an attester unknown to THIS node — is NOT reachable via
+// apply_remote_event for a CLASSIFIED type, so no second test exists here. sensitivity.grade-
+// withdrawal.asserted IS classified (db/048 section 2), which forces db/020_apply_remote_event's
+// non-deferred branch: a bearing (R1-eligible) contributor's attester is checked against
+// actor_current, and an unenrolled attester is refused OUTRIGHT with "attester is not an
+// enrolled human actor" — the event never lands at all, so it can never sit "inert" waiting to
+// heal. (The deferred arm that stores an attestation token WITHOUT verifying it — the shape
+// `a_carried_but_unverified_token_on_a_deferred_event_is_unverified` above exercises — is reached
+// only by an UNclassified type, which a withdrawal never is.) Verified empirically, not inferred:
+// a throwaway test drove exactly this shape through apply_remote_attested and observed the
+// refusal. This finding belongs in ADR-0064's Known limitations (Task 9) once that ADR exists.

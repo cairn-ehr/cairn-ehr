@@ -147,7 +147,13 @@ pub struct EventSpec<'a> {
 /// the remote door, e.g. (`claim_authority.rs`) — can build one identically rather than
 /// hand-assembling the fields (contributors, `t_effective`, clock grade) that never vary
 /// across these fixtures.
-fn body_from_spec(event_id: Uuid, kid: &str, spec: EventSpec<'_>) -> EventBody {
+///
+/// PUBLIC since the #380 arrival-order tests (`claim_authority.rs`): a withdrawal must be
+/// able to name its target's content address BEFORE that target has been submitted at
+/// all (set-union sync has no ordering), which means signing the target body once to
+/// learn its address and only submitting it later. This is the same "build now, submit
+/// later" need [`withdrawal_body_with_id`] already has, just for the assertion side.
+pub fn body_from_spec(event_id: Uuid, kid: &str, spec: EventSpec<'_>) -> EventBody {
     EventBody {
         event_id: event_id.to_string(),
         patient_id: spec.patient.to_string(),
