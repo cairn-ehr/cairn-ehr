@@ -218,8 +218,9 @@ dropped the withdrawal on the floor).
 > `:712-717`), and `actor_current` **excludes a revoked actor** (`db/004_actors.sql:64-68`). So
 > revoking an attester — or the self-withdrawer — after their withdrawal has landed flips it from
 > `attested`/`self` to `unverified`, the withdrawal drops out of the set difference, the assertion
-> **re-stands**, and the grade goes back up. Verified empirically against `db/004` rather than
-> inferred: before a revoke both R1's actor-resolution conjunct and R2's join read true; after it both
+> **re-stands**, and the grade goes back up. Confirmed by a throwaway check against `db/004` in a
+> scratch database during the build — not by a committed test, so treat this the same as the deferred-arm
+> claim above: before a revoke both R1's actor-resolution conjunct and R2's join read true; after it both
 > read false, and the R1 conjunct is `false` rather than `NULL` on zero rows, so the arm is cleanly
 > false.
 >
@@ -233,8 +234,9 @@ dropped the withdrawal on the floor).
 > **ADR-0062's *given equal custody* qualifier still stands unchanged.** The design's proposed widening
 > to *"given equal custody **and equal actor knowledge**"* is **not** the right repair and must not be
 > reintroduced: the arrival-time knowledge gap it named is unreachable. The honest statement is a
-> different one — a cross-node equality comparison also assumes **equal actor-registry state**, which
-> is a property of what each node has *revoked*, not of what it has *learned*.
+> different one — a cross-node equality comparison also assumes **equal actor-registry state**, which is
+> a property of what each node has *revoked* — and, because `actor_event` replicates like any other
+> event, of what it has had the chance to *learn* too; the two are not independent axes.
 
 ### 5. One predicate, consulted at exactly one site per dial
 
