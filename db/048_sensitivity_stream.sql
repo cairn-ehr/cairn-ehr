@@ -337,17 +337,34 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 -- does not participate in this set difference. Nothing is refused at either door, so
 -- nothing forks (#342), and nothing PROTECTIVE is ever gated — only lowering is.
 --
--- `cairn_claim_authority` computes at READ, not at apply — so a withdrawal that names a
--- target which has not replicated yet is inert today (R2 cannot resolve, but R1 still
--- carries an attested claim alone) and self-heals the moment the target lands — no
--- re-apply, no second event, no stamped-at-apply verdict to go stale (claim_authority.rs's
--- Task 3 pins this). The SIBLING axis — a withdrawal whose attester is not yet enrolled
--- HERE — is a live property of the predicate in general (a later revoke/re-enrol of the
--- attester can move a verdict either way), but is NOT reachable for a withdrawal
--- specifically: `sensitivity.grade-withdrawal.asserted` is a CLASSIFIED type (section 2),
--- so apply_remote_event's non-deferred attestation gate refuses an unenrolled attester
--- outright — the withdrawal never lands at all, so it can never sit here "inert" waiting
--- to heal. Verified empirically (#380 Task 3); see claim_authority.rs's trailing comment.
+-- `cairn_claim_authority` computes at READ, not at apply. TWO axes follow, and they are NOT
+-- the same shape — one heals, one does not:
+--
+--   1. THE UNREPLICATED TARGET (heals). A withdrawal naming a target that has not arrived
+--      here is inert today (R2 cannot resolve, but R1 still carries an attested claim
+--      alone) and self-heals the moment the target lands — no re-apply, no second event, no
+--      stamped-at-apply verdict to go stale (claim_authority.rs's Task 3 pins this).
+--
+--   2. ACTOR-REGISTRY STATE CHANGING AFTER ADMISSION (does NOT heal). Both R1 and R2
+--      resolve their actor through `actor_current` (db/005), which EXCLUDES a revoked actor
+--      (db/004:64-68). So revoking an attester — or the self-withdrawer — AFTER their
+--      withdrawal landed flips it to 'unverified', the withdrawal drops out of the set
+--      difference below, the assertion RE-STANDS and the grade goes back UP. Verified
+--      empirically against db/004, not inferred. The direction is SAFE (protection is
+--      restored, never removed), so this is a declared consequence of read-time authority
+--      rather than a defect — but whether it is RIGHT is undecided and is issue #409
+--      (contamination cascade says authority follows revocation; a clinician merely leaving
+--      should probably not silently re-seal charts they lawfully opened). Do not "fix" it
+--      here without reading that issue: the healing in axis 1 and the re-raise in axis 2
+--      are the same property, and you cannot keep one without the other.
+--
+-- WHAT IS *NOT* REACHABLE, so do not add a third axis for it: a withdrawal whose attester is
+-- not yet enrolled HERE at ARRIVAL time. `sensitivity.grade-withdrawal.asserted` is a
+-- CLASSIFIED type (section 2), so apply_remote_event's non-deferred attestation gate refuses
+-- an unenrolled attester outright (db/020:251-254) — the withdrawal never lands at all, so
+-- it can never sit here "inert" waiting for its attester to enrol. Verified empirically
+-- (#380 Task 3); see claim_authority.rs's trailing comment. Note the asymmetry with axis 2:
+-- the door screens the registry at arrival, and nothing re-screens it afterwards.
 CREATE OR REPLACE FUNCTION cairn_sensitivity_standing(p_patient_id uuid)
 RETURNS TABLE (content_address bytea, subject_kind text, subject_id uuid, grade text)
 LANGUAGE sql STABLE AS $$

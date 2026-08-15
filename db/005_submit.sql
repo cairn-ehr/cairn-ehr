@@ -684,7 +684,12 @@ $$;
 -- FIXED ARITY. Never widen this argument list: Postgres OVERLOADS on a changed list rather
 -- than replacing, and migration replay never drops what a file stops creating, so a stale
 -- definition would survive in every existing database and silently serve any call site
--- missed (#404). A caller with no target passes an explicit NULL.
+-- missed — including a has_function_privilege pin, which would resolve the STALE signature
+-- and pass. A caller with no target passes an explicit NULL. (The hazard's provenance is
+-- this file's own `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea)` below, forced
+-- when ADR-0052 added p_dek, and db/020:55; db/049:345 states it as verified. It is NOT
+-- #404 — that issue is the prospective/effective mirrored-predicate divergence, a different
+-- hazard entirely; the attribution came in with this slice's design and is corrected here.)
 CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
 RETURNS text LANGUAGE sql STABLE
 SECURITY DEFINER SET search_path = public

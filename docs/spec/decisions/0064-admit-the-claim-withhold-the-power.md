@@ -75,7 +75,7 @@ nonetheless read a claim's shape and stopped.
 
 Not the relaying machine, not the actor's relationship to the chart, not the peer's membership of the
 trust set. Two sufficient routes, evaluated by one predicate
-(`cairn_claim_authority`, `db/005_submit.sql:688`):
+(`cairn_claim_authority`, `db/005_submit.sql:693`):
 
 ```
 authority(claim, target) =
@@ -86,7 +86,7 @@ authority(claim, target) =
 
 **R1 — vouched human attestation.** The claim's row carries a non-NULL `attester_key`,
 `cairn_attestation_vouched(event_id)` is true, and that key resolves in `actor_current` to **exactly
-one** actor, which is `kind = 'human'` (`db/005:694-702`).
+one** actor, which is `kind = 'human'` (`db/005:699-707`).
 
 Three conjuncts, each load-bearing for a different reason:
 
@@ -94,12 +94,16 @@ Three conjuncts, each load-bearing for a different reason:
   (`db/001_envelope.sql:502`) returns TRUE for an event carrying **no attestation at all**, because
   "vouched" means *no unvouched marker row exists*. Delete the NULL guard and every unattested event
   in the log grades `'attested'`.
-- **The vouch predicate is not optional politeness.** Both doors store `event_log.attestation` /
-  `attester_key` even when the token was **not** verified as a vouch, marking the row in
-  `event_attestation_unvouched`. db/001:490 names `cairn_attestation_vouched` as *"the ONE way to
-  ask"* and predicts *"a fifth will arrive with the next type that reads `event_log.attester_key`."*
-  This is that fifth. Reading the column directly would grade a carried-but-unverified token as
-  attested — the very defect this ADR exists to close, one layer down.
+- **The vouch predicate is not optional politeness.** The **apply** door stores
+  `event_log.attestation` / `attester_key` even when the token was **not** verified as a vouch — the
+  deferred arm (`db/020:239-242`) carries it so a later re-adjudication has something to verify — and
+  marks the row in `event_attestation_unvouched` (`db/020:482`, the only INSERT of that marker
+  anywhere). The **local** door never does: it verifies first and RAISEs
+  (`db/005:947-952`), so a stored `attester_key` there is always a vouch. db/001:490 names
+  `cairn_attestation_vouched` as *"the ONE way to ask"* and predicts *"a fifth will arrive with the
+  next type that reads `event_log.attester_key`."* This is that fifth. Reading the column directly
+  would grade a carried-but-unverified token as attested — the very defect this ADR exists to close,
+  one layer down, and it is reachable through exactly one door rather than none.
 - **Exactly one actor, deliberately stricter than db/020's sibling.** The apply door's
   forged-human-author gate asks `EXISTS (… AND kind = 'human')`
   (`db/020_apply_remote_event.sql:251-254`), which admits a key mapped to both a human and an agent.
@@ -108,7 +112,7 @@ Three conjuncts, each load-bearing for a different reason:
   it.** This is not a fix to db/020 — it is a different question asked at a different door.
 
 **R2 — human self-withdrawal.** The claim's `event_log.actor_id` equals the target's, **both are
-non-NULL**, and that actor is `kind = 'human'` (`db/005:704-712`).
+non-NULL**, and that actor is `kind = 'human'` (`db/005:709-717`).
 
 - `actor_id` rather than `signing_key_id`, so the identity survives key rotation within one actor
   (ADR-0011: `actor_id` content-addresses the pinned determinant set, and the key is deliberately not
@@ -126,10 +130,12 @@ non-NULL**, and that actor is `kind = 'human'` (`db/005:704-712`).
 Postgres **overloads** on a changed argument list rather than replacing, and migration replay never
 drops what a file stops creating — so a later 1-arg → 2-arg widening would leave a stale definition
 alive in every existing database, silently serving any call site missed, including
-`has_function_privilege` pins. That is [#404](https://github.com/cairn-ehr/cairn-ehr/issues/404)'s
-trap, avoided by never creating it.
+`has_function_privilege` pins, which would resolve the *stale* signature and pass. This project has
+paid for that lesson twice already (`db/005:776-779` had to `DROP FUNCTION` the 3-arg `submit_event`
+when ADR-0052 added `p_dek`; `db/020:55` records the same), and `db/049:345` states it as a verified
+hazard. Avoided here by never creating the second signature.
 
-**`SECURITY DEFINER` is load-bearing, not stylistic** (`db/005:690`). `cairn_attestation_vouched` is
+**`SECURITY DEFINER` is load-bearing, not stylistic** (`db/005:695`). `cairn_attestation_vouched` is
 `REVOKE EXECUTE … FROM PUBLIC` and `event_attestation_unvouched` carries no SELECT grant, because
 db/001:507-509 reasons that *every caller is a SECURITY DEFINER door or a migration-owned trigger*. This
 caller is neither: `cairn_sensitivity_standing` is a plain `LANGUAGE sql` function granted to
@@ -138,7 +144,7 @@ caller is neither: `cairn_sensitivity_standing` is a plain `LANGUAGE sql` functi
 denied — **the entire sensitivity read path, broken by a privilege, and only under the product's
 role**, invisible to a suite running as the owner. Pinned by
 `claim_authority.rs::the_read_path_works_as_cairn_agent`, which is a role-switched test on purpose.
-`REVOKE … FROM PUBLIC` + `GRANT … TO cairn_agent` follows immediately (`db/005:718-719`): a definer
+`REVOKE … FROM PUBLIC` + `GRANT … TO cairn_agent` follows immediately (`db/005:723-724`): a definer
 function with PUBLIC execute is a privilege-escalation surface.
 
 ### 2. Authority gates *effect*, never *admission*, and only in the withholding direction
@@ -161,12 +167,16 @@ local-door-only **not by becoming a refusal at apply, but by becoming a conditio
 **And it does not deadlock.** ADR-0062 rejected *self-only* withdrawal because it deadlocks — the
 asserting clinician retired, the patient left, the advisory actor was superseded. This is not
 self-only: R1 is the primary route and R2 an alternative. More importantly, **the local door already
-demands a bound human author for a withdrawal** (`db/048_sensitivity_stream.sql:1039-1041`, and
-db/005:1175 passes it the attester key the door itself verified), so **every locally-authored
-withdrawal clears the bar by construction**. The only claims that go inert are cross-node ones with no
-human behind them, and for those the remedy is not re-asserting the grade — it is *attesting the
-withdrawal*, which is what the local door demands of everyone anyway. Pinned by
-`claim_authority.rs::a_locally_authored_withdrawal_always_lowers`.
+demands a bound human author for a withdrawal** (`db/048_sensitivity_stream.sql:1056-1058`, and
+db/005:1180 passes it the attester key the door itself verified), so **every locally-authored
+withdrawal clears the bar by construction — modulo the dual-mapped-key registry state noted under
+*Known limitations***: the local door's gate asks `EXISTS (… AND kind = 'human')`
+(`db/005:950-952`), while R1 asks for **exactly one** such actor (`db/005:704-706`), so a key mapped
+to a human *and* an agent passes db/005 and still grades `unverified`. That is the same delta this ADR
+raises against db/020, and the local door is not exempt from it. The only *ordinary* claims that go
+inert are cross-node ones with no human behind them, and for those the remedy is not re-asserting the
+grade — it is *attesting the withdrawal*, which is what the local door demands of everyone anyway.
+Pinned by `claim_authority.rs::a_locally_authored_withdrawal_always_lowers`.
 
 ### 3. The bar is a fixed floor, not a deployment threshold
 
@@ -202,17 +212,29 @@ dropped the withdrawal on the floor).
 > **unclassified** types, which a withdrawal never is. Verified empirically during the build, with a
 > throwaway test driving exactly that shape through the apply door and observing the refusal.
 >
-> Two consequences follow, and both are corrections to what the design claimed:
+> **What is unreachable is the *arrival-time* gap only.** Do not generalise past that, because there
+> **is** a second live axis and it is the mirror image of this one: **actor-registry state that changes
+> *after* admission.** Both routes resolve their actor through `actor_current` (`db/005:704-706`,
+> `:712-717`), and `actor_current` **excludes a revoked actor** (`db/004_actors.sql:64-68`). So
+> revoking an attester — or the self-withdrawer — after their withdrawal has landed flips it from
+> `attested`/`self` to `unverified`, the withdrawal drops out of the set difference, the assertion
+> **re-stands**, and the grade goes back up. Verified empirically against `db/004` rather than
+> inferred: before a revoke both R1's actor-resolution conjunct and R2's join read true; after it both
+> read false, and the R1 conjunct is `false` rather than `NULL` on zero rows, so the arm is cleanly
+> false.
 >
-> - the only live divergence axis for a withdrawal is the **unreplicated target**; and
-> - ADR-0062's ***given equal custody*** qualifier on every cross-node equality test **stands
->   unchanged**. The proposed widening to *"given equal custody **and equal actor knowledge**"* is
->   unnecessary, and adding it would have put a qualifier in test names for a condition the doors make
->   unreachable.
+> So: **two live divergence axes, not one** — the unreplicated target (which heals) and post-admission
+> registry change (which does not). The second is a direct consequence of computing authority at read,
+> which is otherwise the property that makes everything here self-heal; you cannot have the healing
+> without it. Its **direction is safe** — protection is restored, never removed, and nothing becomes
+> readable that was not readable before — which is why it is a limitation and not a defect. See
+> *Known limitations* and [#409](https://github.com/cairn-ehr/cairn-ehr/issues/409).
 >
-> The predicate *in general* remains read-time for the enrolment reason too — a later revoke or
-> re-enrol of an attester can move a verdict either way for some future claim type — which is why the
-> decision is stated as a property of the predicate and not of withdrawals alone.
+> **ADR-0062's *given equal custody* qualifier still stands unchanged.** The design's proposed widening
+> to *"given equal custody **and equal actor knowledge**"* is **not** the right repair and must not be
+> reintroduced: the arrival-time knowledge gap it named is unreachable. The honest statement is a
+> different one — a cross-node equality comparison also assumes **equal actor-registry state**, which
+> is a property of what each node has *revoked*, not of what it has *learned*.
 
 ### 5. One predicate, consulted at exactly one site per dial
 
@@ -220,7 +242,7 @@ dropped the withdrawal on the floor).
 > per dial — never at each consumer.
 
 The whole of §5.9's protection-removing control is **one clause** in `cairn_sensitivity_standing`
-(`db/048:351-361`), the single definition of *what still applies*:
+(`db/048:368-378`), the single definition of *what still applies*:
 
 ```sql
     WHERE a.patient_id = p_patient_id
@@ -259,13 +281,17 @@ lesson applied on the first try.
 Both idioms now live in one subsystem, so the rule for choosing is stated rather than left for the next
 author to guess.
 
-**`sensitivity_withdrawal_worklist` is a VIEW** (`db/048:825-865`), because authority is computed at
+**`sensitivity_withdrawal_worklist` is a VIEW** (`db/048:842-882`), because authority is computed at
 read precisely **because the answer improves**. An apply-time ledger would fill with rows that were true
 for an afternoon, and a worklist that is mostly stale is
 [§5.12](../identity.md#512-the-notification-economy-salience-responsibility-routing-and-the-acknowledgment-floor)'s
 alert-fatigue disease, self-inflicted, in the one place we are building a control. A view is always
-accurate, self-clearing, has no table, no row-count pins and no interaction with `cairn_execute_shred`'s
-scrub; nothing is lost that is not reconstructible from the append-only log at any time.
+accurate, self-clearing, has no table, moves none of the four **registry** row-count pins, and has no
+interaction with `cairn_execute_shred`'s scrub; nothing is lost that is not reconstructible from the
+append-only log at any time. (It does carry a contract of its own: `db/tests/048:269-290` pins the
+view's seven columns, their order and their types against `information_schema`, because
+`CREATE OR REPLACE VIEW` happily *appends* a trailing column and `ALTER VIEW … RENAME COLUMN` bypasses
+its protections entirely.)
 
 **`safety_overclaim_flag` is a LEDGER** (`db/049:508-526`), because its condition is a **published
 byte**: permanent, unable to improve, and durable evidence. See decision 7.
@@ -275,7 +301,7 @@ Two rows, two reasons:
 | reason | condition | clears when |
 |---|---|---|
 | `inert` | authority is `unverified`, **and** the target assertion is still standing (or has not replicated yet) | the target replicates and R2 then resolves (a self-withdrawal), **or** any other authoritative withdrawal strips the same target. Otherwise it stays listed: an un-attested row's own verdict is fixed forever, and the remedy is a properly attested withdrawal |
-| `stranger-attested` | authority is `attested`/`self`, and the accountable human had **no prior presence on this chart at the moment of the strip** | never — it is a fact about a completed act |
+| `stranger-attested` | authority is `attested`/`self`, and the accountable human had **no prior presence on this chart at the moment of the strip** | **nothing the flagged actor does afterwards** can clear it — it is a fact about a completed act. An event they authored *before* the strip and that replicates *later* does clear it, correctly: it reveals prior presence this node could not yet see |
 
 The second row is the **detect** half of #380 that survives the gate: an attested strip by a human with
 no business on that chart clears the bar and would otherwise be invisible, because nothing else in the
@@ -310,7 +336,7 @@ each of them is one "simplification" away from making the row useless.
 >   column for an operator's own investigation, and never drives `reason`.
 
 **"No prior presence" is bounded in time — events at or before the withdrawal, compared on
-`(hlc_wall, hlc_counter)`** (`db/048:857-864`). Without the bound the flagged actor deletes their own
+`(hlc_wall, hlc_counter)`** (`db/048:874-881`). Without the bound the flagged actor deletes their own
 flag by writing anything else on the chart afterwards: a locum strips a grade, documents the consult ten
 minutes later, and the only record of the strip evaporates before anyone triages it. **In a design whose
 own position is that the record is the control, a record the flagged party can clear is not a control.**
@@ -323,7 +349,7 @@ have prior presence and this node simply could not see it yet. Pinned in both di
 `::a_strangers_earlier_presence_that_replicates_late_clears_the_row`.
 
 **`inert` gates on the target assertion still standing, not only on the row's own verdict**
-(`db/048:852-855`). A withdrawal's own verdict can never change once it has landed un-attested —
+(`db/048:869-872`). A withdrawal's own verdict can never change once it has landed un-attested —
 `attester_key` on an admitted row is fixed forever — so a naive per-row reading would list it `inert`
 **forever**, even after a second, authoritative withdrawal has stripped the same target. That is noise
 about a problem already solved: the exact alert fatigue the view exists to avoid. Asking *is the target
@@ -343,7 +369,7 @@ The door **cannot refuse it**: ADR-0060 forbids an advisory field cancelling a m
 the door cannot rewrite `event_log.safety` without making the column disagree with `signed_bytes` and
 quietly breaking the signature's meaning. So it takes the ADR-0058 idiom —
 `cairn_record_safety_overclaim_flag` recording `emitted_rung_rank < licensed_rung_rank`
-(`db/005:1097-1136`), making the bypass auditable at zero clinical cost.
+(`db/005:1102-1141`), making the bypass auditable at zero clinical cost.
 
 **At the LOCAL door only — and this deliberately breaks the ADR-0058 precedent it copies.**
 `cairn_record_ceiling_flag` is called at *both* doors, so a reviewer will read local-only as an
@@ -386,7 +412,7 @@ that shape and writing a false row — it passed only because nothing read the l
 The justification was also wrong on a plain fact: the comment claimed `payload.medication_id` was no
 longer readable at that point in the door. It is — `b_clear` is built by db/005 step 7 and steps 8/8a/8b
 already read it; the block was simply placed above the unseal. It now sits below it and resolves the
-same thread emission resolved (`db/005:1103-1116`), inside the same nested
+same thread emission resolved (`db/005:1108-1121`), inside the same nested
 `BEGIN … EXCEPTION WHEN OTHERS` wrapper (so ADR-0063 decision 8's categorical rule still holds — an
 advisory ledger entry may never fail a clinical write), and still before the `event_log` INSERT so a
 later refusal rolls the flag back with everything else.
@@ -413,7 +439,7 @@ forced-rationale escape.
 - **Paper *N* = 1** human act (strike + initial: one signed act by a named person).
 - **Architecture-forced *M* = 1.** The withdrawal carries the attestation the local door **already
   demanded** of every locally-authored withdrawal (ADR-0062 decision 7,
-  `db/048:1039-1041`). No new gesture is added for the clinician doing the work.
+  `db/048:1056-1058`). No new gesture is added for the clinician doing the work.
   **M = N — no architecture defect.**
 - **UI bundling target *K* = 1** — unchanged; the attestation rides the existing sign gesture.
 - **Time / cognitive load:** no change at the authoring surface, so no new budget is owed. The one
@@ -478,6 +504,24 @@ what paper provides is not a lock but an unmistakable record that it was opened 
 record is the control and the gate is only the forcing function.** Do not read a lock into a mechanism
 that is not one.
 
+**Revoking an actor silently re-raises every grade they lawfully declassified.** The unavoidable price
+of decision 4: both routes resolve their actor through `actor_current`, which excludes a revoked actor
+(`db/004_actors.sql:64-68`), so a revoke landing *after* a withdrawal flips it to `unverified`, the
+assertion re-stands, and the grade goes back up — with no event recording that anything changed, and
+with the worklist re-populating with `inert` rows that no longer heal (an admitted row's `attester_key`
+is fixed forever, and only a fresh authoritative withdrawal of the same target clears them). The
+direction is **safe** — protection restored, never removed — which is the only reason this is a
+limitation rather than a defect.
+
+**Whether it is *right* is genuinely undecided, and this ADR does not decide it**
+([#409](https://github.com/cairn-ehr/cairn-ehr/issues/409)). Two readings are defensible.
+Contamination-cascade logic (ADR-0011 / ADR-0029) says authority follows revocation: a recall exists
+because we no longer trust what that actor did, and a stolen key that strips grades is the #380 attack
+with a valid signature. Clinical reality says most revocations are mundane — a clinician leaves — and
+silently re-sealing charts they lawfully opened, months later, is a state change with no author, which
+sits badly beside principle 1 and beside this ADR's own position that the record is the control. Stated
+here rather than left to be discovered by an operator wondering why a chart resealed itself.
+
 **Neither new surface has a shipped reader.** `sensitivity_withdrawal_worklist` and
 `safety_overclaim_flag` both carry `GRANT SELECT … TO cairn_agent` and are exercised by tests; nothing
 in the workspace surfaces either to an operator. Stated rather than left as an implied capability —
@@ -495,7 +539,7 @@ so also falls out of the worklist's `inert` arm, which asks whether the target s
 withdrawal's own chart*, where it never did. Neither door refuses it: the ceremony's chart-mismatch
 checks are in the *assertion* branch only. Harmless clinically — the strip never took effect anywhere —
 but it is exactly the kind of silently-ineffective act a worklist would want to show, and no arm of the
-view names the actual condition. Recorded as a `KNOWN GAP` comment at `db/048:797-806` and here; not
+view names the actual condition. Recorded as a `KNOWN GAP` comment at `db/048:814-823` and here; not
 fixed, and not exercised by any test.
 
 **The Rust↔SQL authority mapping is already violated by door-admissible shapes, in both directions.**
@@ -504,7 +548,7 @@ lockstep, and `crates/cairn-node/tests/authority_lockstep.rs` pins agreement on 
 Two others disagree:
 
 - **Rust `Attested` / SQL `'unverified'`** — R1 demands the attester key resolve to exactly **one**
-  actor and be human (`db/005:699-701`), while db/020's gate demands only
+  actor and be human (`db/005:704-706`), while db/020's gate demands only
   `EXISTS (… AND kind = 'human')` (`db/020:251-254`) and `actor_current.signing_key_id` carries no
   unique index. Rust checks neither uniqueness nor kind. (The *registry* state takes an owner-level
   write to create — enrolment fails closed via `cairn_key_actor_id_conflict`, `db/004_actors.sql:121`,
@@ -601,11 +645,11 @@ this slice ships; the third is the one that actually falsifies the bet.
    control*. A record nobody reads is not one — which is why the missing operator surface (#388) is a
    limitation and not a nicety.
 
-**First instance.** `cairn_claim_authority` and its grants in `db/005_submit.sql:651-719`; the one
+**First instance.** `cairn_claim_authority` and its grants in `db/005_submit.sql:651-724`; the one
 authority clause in `cairn_sensitivity_standing` and the `sensitivity_withdrawal_worklist` view in
-`db/048_sensitivity_stream.sql:328-361` and `:704-865`; `safety_overclaim_flag` /
+`db/048_sensitivity_stream.sql:328-378` and `:721-882`; `safety_overclaim_flag` /
 `cairn_record_safety_overclaim_flag` in `db/049_safety_projection.sql:485-539` with the local-door call
-at `db/005_submit.sql:1039-1136`; the lockstep note in `crates/cairn-event/src/contributor.rs:108-143`;
+at `db/005_submit.sql:1044-1141`; the lockstep note in `crates/cairn-event/src/contributor.rs:108-143`;
 and the suites `crates/cairn-node/tests/claim_authority.rs`, `claim_authority_worklist.rs`,
 `safety_overclaim.rs`, `authority_lockstep.rs`, `crates/cairn-sync/src/main.rs`'s
 `db048_authority_gate_resolves_in_the_sync_subset`, with SQL mirrors in
