@@ -140,6 +140,35 @@ pub struct EventSpec<'a> {
     pub wall: i64,
 }
 
+/// Build the `EventBody` an [`EventSpec`] describes, with a caller-chosen event id and the
+/// single non-bearing "recorded" contributor every generic identity/medication fixture
+/// uses. Factored out of [`submit_signed_with_id`] so a caller that needs the SAME body
+/// WITHOUT immediately submitting it through `submit_event` — a withdrawal destined for
+/// the remote door, e.g. (`claim_authority.rs`) — can build one identically rather than
+/// hand-assembling the fields (contributors, `t_effective`, clock grade) that never vary
+/// across these fixtures.
+fn body_from_spec(event_id: Uuid, kid: &str, spec: EventSpec<'_>) -> EventBody {
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: spec.patient.to_string(),
+        event_type: spec.event_type.into(),
+        schema_version: spec.schema_version.into(),
+        hlc: Hlc {
+            wall: spec.wall,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: spec.payload,
+        attachments: vec![],
+        plaintext_twin: spec.plaintext_twin,
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
 /// Sign `spec` and submit it through the real `submit_event` door.
 ///
 /// Returns the raw submit result — NOT unwrapped — because about a third of these tests
@@ -166,28 +195,109 @@ pub async fn submit_signed_with_id(
     event_id: Uuid,
     spec: EventSpec<'_>,
 ) -> Result<u64, tokio_postgres::Error> {
-    let body = EventBody {
-        event_id: event_id.to_string(),
-        patient_id: spec.patient.to_string(),
-        event_type: spec.event_type.into(),
-        schema_version: spec.schema_version.into(),
-        hlc: Hlc {
-            wall: spec.wall,
-            counter: 0,
-            node_origin: "n".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: spec.payload,
-        attachments: vec![],
-        plaintext_twin: spec.plaintext_twin,
-        clock_grade: ClockGrade::SelfAsserted,
-        safety: None,
-    };
+    let body = body_from_spec(event_id, kid, spec);
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await
+}
+
+/// The content address of an already-submitted event. Sensitivity withdrawals name their
+/// target by content address, not by event id, so tests need the mapping.
+pub async fn content_address_of(c: &Client, event_id: Uuid) -> Vec<u8> {
+    c.query_one(
+        "SELECT content_address FROM event_log WHERE event_id = $1::text::uuid",
+        &[&event_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// A withdrawal `EventBody` with a caller-chosen event id and a plain non-bearing
+/// "recorded" contributor — what a genuinely UN-ATTESTED withdrawal looks like on the
+/// wire (the same shape `sensitivity_ceremony.rs`'s `peer_withdrawal` already uses), so the
+/// test can ask the predicate about it afterwards. Because this contributor claims no
+/// responsibility, neither door's attestation gate ever engages for it — an attestation
+/// token offered alongside it would be silently discarded, never stored — so this shape can
+/// only ever grade 'self' or 'unverified', never 'attested'. A caller that needs an
+/// attested withdrawal to land needs the OTHER contributor shape (see
+/// `claim_authority.rs`'s file-local `bearing_withdrawal_body`).
+pub fn withdrawal_body_with_id(
+    patient: Uuid,
+    event_id: Uuid,
+    kid: &str,
+    w: &cairn_event::sensitivity::SensitivityWithdrawal,
+    wall: i64,
+) -> EventBody {
+    body_from_spec(
+        event_id,
+        kid,
+        EventSpec {
+            patient,
+            event_type: cairn_event::sensitivity::WITHDRAWAL_EVENT_TYPE,
+            schema_version: cairn_event::sensitivity::WITHDRAWAL_SCHEMA_VERSION,
+            payload: cairn_event::sensitivity::sensitivity_withdrawal_body(w),
+            plaintext_twin: Some(cairn_event::sensitivity::render_withdrawal_twin(w)),
+            wall,
+        },
+    )
+}
+
+/// Sign and submit a pre-built body with NO attestation token, through the LOCAL door
+/// (`submit_event`). Needed only for a raw ASSERTION (raising a grade) — db/048's ceremony
+/// does not gate a raise on authorship, so a hand-built assertion body (one whose shape
+/// does not fit the generic [`EventSpec`], e.g. a mis-targeted or rationale-less fixture)
+/// can still submit locally. A raw WITHDRAWAL must NOT use this: the ceremony refuses every
+/// un-attested withdrawal at this door unconditionally (see [`apply_remote_raw`] instead).
+pub async fn submit_signed_raw(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+        .await
+}
+
+/// Sign and apply a pre-built body with NO attestation token, through the REMOTE door
+/// (`apply_remote_event`) — the shape a cross-node write actually arrives in when its
+/// author attested to nobody. Unlike [`submit_signed_raw`], this is the ONLY way to land a
+/// genuinely un-attested `sensitivity.grade-withdrawal.asserted` event at all: the local
+/// door's ceremony (db/048) refuses every un-attested withdrawal unconditionally, but
+/// `apply_remote_event` never calls that ceremony (ADR-0060 — a door check at apply would
+/// fork the event set).
+pub async fn apply_remote_raw(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+}
+
+/// As [`apply_remote_raw`], but WITH a human attestation token — the 3-argument
+/// `apply_remote_event` shape, mirroring [`submit_attested`] but through the remote door.
+/// The token is validated and STORED only when the body's own contributors claim
+/// responsibility for `kid_h` (`cairn_responsibility_bound`'s check, mirrored at both
+/// doors) — a body built by [`withdrawal_body_with_id`] never does, so a caller reaching
+/// for this needs the bearing contributor shape instead.
+pub async fn apply_remote_attested(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+    sk_h: &SigningKey,
+    kid_h: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, kid_h, "attested", sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT apply_remote_event($1,$2,$3)",
+        &[&signed.signed_bytes, &token, &vk_h],
+    )
+    .await
 }
 
 /// Enroll a SECOND signer as a HUMAN actor, distinct from the agent key `setup` already

@@ -648,6 +648,77 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- ADR-0064 — what makes a claim AUTHORITATIVE. The read-side twin of
+-- cairn_authorship_bound directly above: that one REFUSES at authoring, this one
+-- GRADES at read, and the two must stay in lockstep (the same note
+-- crates/cairn-event/src/contributor.rs:118 already carries).
+--
+-- Authority is a HUMAN ACTOR THIS NODE CAN HOLD RESPONSIBLE — never the relaying
+-- machine, never the actor's relationship to the chart. Two sufficient routes:
+--   R1 'attested' — a VOUCHED attestation whose attester is an enrolled human actor.
+--   R2 'self'     — the claim's actor IS the target's actor, both known, and human.
+-- Everything else is 'unverified'.
+--
+-- !! SECURITY DEFINER IS REQUIRED, NOT STYLISTIC !!
+-- cairn_attestation_vouched (db/001) is REVOKEd FROM PUBLIC and event_attestation_unvouched
+-- carries no SELECT grant, because db/001 reasons that every caller is a SECURITY DEFINER
+-- door or a migration-owned trigger. This caller is NEITHER: cairn_sensitivity_standing
+-- (db/048) is a plain LANGUAGE sql function granted to cairn_agent, and a non-definer body
+-- runs as the CALLING role whether or not it inlines. Without DEFINER the first
+-- cairn_effective_sensitivity call by cairn_agent fails with permission denied — the whole
+-- sensitivity read path, broken by a privilege, and ONLY under the product's role. Pinned by
+-- claim_authority::the_read_path_works_as_cairn_agent.
+--
+-- !! `attester_key IS NOT NULL` IS THE ACTUAL R1 TEST !!
+-- cairn_attestation_vouched returns TRUE for an event carrying NO attestation, because
+-- "vouched" means "no unvouched MARKER row exists". Delete the NULL guard and every
+-- unattested event in the log grades 'attested'. Pinned by
+-- an_event_with_no_attestation_at_all_is_unverified.
+--
+-- STRICTER THAN db/020's SIBLING, DELIBERATELY. db/020's forged-human-author check asks
+-- `EXISTS (... AND kind='human')`, which admits a key mapped to BOTH a human and an agent.
+-- Here that ambiguity would confer power to strip a protective grade, so the key must
+-- resolve to EXACTLY ONE actor and that actor must be human. Principle 4: uncertainty
+-- withholds power, it never confers it. Not a fix to db/020 — a different question.
+--
+-- FIXED ARITY. Never widen this argument list: Postgres OVERLOADS on a changed list rather
+-- than replacing, and migration replay never drops what a file stops creating, so a stale
+-- definition would survive in every existing database and silently serve any call site
+-- missed (#404). A caller with no target passes an explicit NULL.
+CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
+RETURNS text LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public
+AS $$
+    SELECT CASE
+        -- R1 — a vouched attestation by an enrolled human actor.
+        WHEN EXISTS (
+            SELECT 1 FROM event_log e
+             WHERE e.event_id = p_event_id
+               AND e.attester_key IS NOT NULL          -- load-bearing; see header
+               AND cairn_attestation_vouched(e.event_id)
+               AND (SELECT count(*) = 1 AND bool_and(a.kind = 'human')
+                      FROM actor_current a
+                     WHERE a.signing_key_id = encode(e.attester_key, 'hex')))
+        THEN 'attested'
+        -- R2 — the human who made the claim is withdrawing their own.
+        WHEN p_target_event_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM event_log c
+              JOIN event_log t ON t.event_id = p_target_event_id
+              JOIN actor_current a ON a.actor_id = c.actor_id
+             WHERE c.event_id = p_event_id
+               AND c.actor_id IS NOT NULL              -- NULL = a key on several actors,
+               AND t.actor_id IS NOT NULL              -- i.e. attribution honestly unknown
+               AND c.actor_id = t.actor_id
+               AND a.kind = 'human')                   -- ADR-0062 decision 6
+        THEN 'self'
+        ELSE 'unverified'
+    END;
+$$;
+-- A SECURITY DEFINER function with PUBLIC execute is a privilege-escalation surface.
+REVOKE EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
 -- ADR-0052 custody plane, part 1 — the CLEAR-view table and its read helper.
 --
 -- These two definitions live HERE, in db/005, rather than in db/037 (the rest of
