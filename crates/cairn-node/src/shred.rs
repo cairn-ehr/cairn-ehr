@@ -89,6 +89,7 @@ pub fn build_shred_body(
         attachments: vec![],
         plaintext_twin: Some(format!("shredded event {target} — basis: {basis}")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

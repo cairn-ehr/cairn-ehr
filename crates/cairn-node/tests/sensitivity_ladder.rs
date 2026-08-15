@@ -231,6 +231,7 @@ async fn a_withdrawal_lowers_the_effective_grade_and_the_assertion_survives() {
         attachments: vec![],
         plaintext_twin: Some("withdrawn".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     submit_attested(&c, &sk, withdrawal_body, &sk_h, &kid_h)
         .await
@@ -499,6 +500,7 @@ async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart
         attachments: vec![],
         plaintext_twin: Some("withdrawn".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&cross_chart_withdrawal, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -600,6 +602,7 @@ async fn f2_a_mis_targeted_known_subject_kind_coarsens_instead_of_evaporating() 
         attachments: vec![],
         plaintext_twin: Some("mis-targeted patient assertion".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -1474,6 +1477,7 @@ async fn f2iii_an_event_assertion_naming_a_real_event_on_another_chart_coarsens(
         attachments: vec![],
         plaintext_twin: Some("event assertion naming another chart".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -1597,6 +1601,7 @@ async fn f2iv_a_thread_assertion_naming_a_thread_on_another_chart_coarsens() {
         attachments: vec![],
         plaintext_twin: Some("thread assertion naming another chart".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&mis_targeted, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -1690,6 +1695,7 @@ async fn a_sealed_assertion_coarsens_rather_than_silently_vanishing() {
         attachments: vec![],
         plaintext_twin: Some("sealed sensitivity assertion".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&sealed, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -1820,6 +1826,7 @@ async fn a_chart_with_no_local_registration_reports_its_standing_grade_not_routi
         attachments: vec![],
         plaintext_twin: Some("chart-wide seal, ahead of the registration".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&peer, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])

@@ -18,6 +18,12 @@ pub struct MedicationCoding<'a> {
     pub medication_id: &'a str,
     /// The drug-identity claim.
     pub coding: SubstanceCoding<'a>,
+    /// The §5.9 precise safety claim, established PRE-SEAL by the node authoring the
+    /// overlay (ADR-0063). Same seam and same reason as `MedicationAssertion::safety`: a
+    /// coding OVERLAY is authored by whoever codes it — a pharmacist, a professional coder
+    /// — and that node is again the one holding a coding authority. `None` when this
+    /// deployment's class map has no row for the coding.
+    pub safety: Option<crate::safety::PreciseSafety<'a>>,
 }
 
 /// What a correction claims: a replacement drug identity, or a retraction of the one on
@@ -70,10 +76,20 @@ fn coding_object(c: &SubstanceCoding) -> Value {
 
 /// Build the `clinical.medication-coding.asserted` payload.
 pub fn medication_coding_body(c: &MedicationCoding) -> Value {
-    json!({
+    let mut p = json!({
         "medication_id": c.medication_id,
         "coding": coding_object(&c.coding),
-    })
+    });
+    // Under the seal, never coarsened — see `medication_assertion_body`'s twin of this
+    // block. Inserted only when present, so an overlay with no class is byte-identical to
+    // the pre-ADR-0063 shape (principle 11: an added-later field must not change an
+    // existing event's content address).
+    if let Some(s) = c.safety {
+        p.as_object_mut()
+            .expect("json! built an object")
+            .insert("safety".into(), crate::safety::precise_safety_body(&s));
+    }
+    p
 }
 
 /// Build the `clinical.medication-coding-correction.asserted` payload. Optional keys are
@@ -137,6 +153,7 @@ mod tests {
         let v = medication_coding_body(&MedicationCoding {
             medication_id: MED,
             coding: coding(),
+            safety: None,
         });
         assert_eq!(v["medication_id"], MED);
         assert_eq!(v["coding"]["system"], "drugref-moiety");
@@ -195,6 +212,7 @@ mod tests {
         let s = render_medication_coding_twin(&MedicationCoding {
             medication_id: MED,
             coding: coding(),
+            safety: None,
         });
         assert_eq!(s, "coded as atorvastatin [drugref-moiety]");
     }

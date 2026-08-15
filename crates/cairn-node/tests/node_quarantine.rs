@@ -432,6 +432,7 @@ async fn a_verifiable_but_refused_event_is_skipped_not_penned() {
         attachments: vec![],
         plaintext_twin: Some("a valid but non-node event".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap().signed_bytes;
     // Raw-insert as a served node_event row (op is just the table's column; the gate
@@ -514,6 +515,7 @@ async fn a_skipped_node_event_heals_on_the_full_sweep_but_not_the_incremental() 
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk_b).unwrap().signed_bytes;
     let stranger_node_id = hex::encode(cairn_event::event_address(&signed));

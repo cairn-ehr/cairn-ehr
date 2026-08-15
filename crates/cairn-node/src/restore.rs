@@ -326,6 +326,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }

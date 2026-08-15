@@ -91,6 +91,7 @@ async fn submit_name(
         attachments: vec![],
         plaintext_twin: Some(render_name_twin(value, Some(use_), prov)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -134,6 +135,7 @@ fn repudiation_body(
             None
         },
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -680,6 +682,7 @@ async fn bad_subject_is_rejected() {
         attachments: vec![],
         plaintext_twin: Some("name repudiated: x — \"X\" (r)".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk_a).unwrap();
     let ca = event_address(&signed.signed_bytes);

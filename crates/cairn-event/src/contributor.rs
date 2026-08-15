@@ -232,6 +232,7 @@ mod tests {
             attachments: vec![],
             plaintext_twin: Some("twin".into()),
             clock_grade: crate::ClockGrade::SelfAsserted,
+            safety: None,
         };
         let out = with_human_author(body, "HUMANKID");
         assert_eq!(out.signer_key_id, "HUMANKID");

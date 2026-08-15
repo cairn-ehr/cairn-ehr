@@ -403,6 +403,7 @@ async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arriva
         attachments: vec![],
         plaintext_twin: Some(render_sensitivity_twin(&a)),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed_assertion = cairn_event::sign(&assertion_body, &sk).unwrap();
     let target_hex = hex::encode(cairn_event::event_address(&signed_assertion.signed_bytes));
@@ -427,6 +428,7 @@ async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arriva
         attachments: vec![],
         plaintext_twin: Some("withdrawn".into()),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     submit_attested(&c, &sk, withdrawal_body, &sk_h, &kid_h)
         .await

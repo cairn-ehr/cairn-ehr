@@ -109,6 +109,7 @@ pub fn build_callsign_name_body(
             CALLSIGN_PROVENANCE,
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -168,6 +169,7 @@ pub fn build_pending_body(
         attachments: vec![],
         plaintext_twin: Some(render_pending_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

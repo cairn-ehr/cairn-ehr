@@ -134,6 +134,7 @@ fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Ze
         attachments: vec![],
         plaintext_twin: Some(seal_stub_twin("clinical.medication.asserted")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     (body, dek)
 }
@@ -164,6 +165,7 @@ fn unsealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventBody {
         attachments: vec![],
         plaintext_twin: Some(twin),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -193,6 +195,7 @@ fn shred_body(node_kid: &str, patient: Uuid, target: &str, hlc: Hlc) -> EventBod
             "shredded medication assertion {target} — basis: retention ceiling"
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -225,6 +228,7 @@ fn malformed_sealed_link_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventB
         attachments: vec![],
         plaintext_twin: Some(seal_stub_twin("identity.link.asserted")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -592,6 +596,7 @@ async fn partial_custody_thread_reads_stale_not_fresh() {
         attachments: vec![],
         plaintext_twin: Some(seal_stub_twin("clinical.medication-attestation.asserted")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let att_signed = sign(&att_body, &sk_h).unwrap();
     let ca = event_address(&att_signed.signed_bytes);
@@ -1022,6 +1027,7 @@ fn demographic_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventBody {
         attachments: vec![],
         plaintext_twin: Some(format!("dob 1980 — asserted for {patient}")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

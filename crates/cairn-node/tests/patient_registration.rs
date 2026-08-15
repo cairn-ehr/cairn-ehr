@@ -819,6 +819,7 @@ async fn a_registration_naming_a_registrar_who_did_not_sign_is_refused() {
         attachments: vec![],
         plaintext_twin: good_twin(),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, &sk).unwrap();
     let r = c

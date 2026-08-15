@@ -154,6 +154,7 @@ fn foreign_note(sk: &SigningKey, kid: &str, wall: i64, text: &str) -> (Vec<u8>, 
         attachments: vec![],
         plaintext_twin: Some(format!("Progress note: {text}")),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     (sign(&body, sk).unwrap().signed_bytes, event_id)
 }
@@ -448,6 +449,7 @@ async fn register_chart(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, w
         attachments: vec![],
         plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -2661,6 +2663,7 @@ fn sealed_demographic(sk: &SigningKey, kid: &str, patient: Uuid, wall: i64) -> V
             "demographic.field.asserted",
         )),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
 }
@@ -2885,6 +2888,7 @@ async fn author_forward_dated_note(
         attachments: vec![],
         plaintext_twin: Some("Progress note: forward-dated probe".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap().signed_bytes;
     c.execute("SELECT submit_event($1)", &[&signed])

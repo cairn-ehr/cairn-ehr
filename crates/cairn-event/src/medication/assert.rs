@@ -56,6 +56,15 @@ pub struct MedicationAssertion<'a> {
     pub started: Option<&'a str>,
     /// Precision token for `started` (year|month|day|year-range); only meaningful when `started` is Some.
     pub started_precision: Option<&'a str>,
+    /// The §5.9 precise safety claim, established PRE-SEAL by the coding node (ADR-0063).
+    ///
+    /// `None` when the medication is uncoded, or when this deployment's class map has no
+    /// row for the coding — both are honest absences, not withheld secrets, and both emit
+    /// no signal at all rather than a content-free existence marker (ADR-0059 decision 4).
+    ///
+    /// It is passed IN rather than looked up here because this crate is pure: the lookup
+    /// needs a database, and the node's `safety::lookup_class` is where that lives.
+    pub safety: Option<crate::safety::PreciseSafety<'a>>,
 }
 
 /// Build the `clinical.medication.asserted` payload. Mirrors the demographics
@@ -104,6 +113,13 @@ pub fn medication_assertion_body(a: &MedicationAssertion) -> Value {
                 .insert("precision".into(), json!(pr));
         }
         obj.insert("started".into(), started);
+    }
+    // Under the seal: never coarsened, because the seal is what protects it and a
+    // custody-holder is entitled to the whole claim (#294). The CLEAR rung is written by
+    // the node's emission seam (`seal_sign_submit`), not here — this crate stays pure and
+    // has no way to read the chart's standing sensitivity grade.
+    if let Some(s) = a.safety {
+        obj.insert("safety".into(), crate::safety::precise_safety_body(&s));
     }
     p
 }
@@ -161,6 +177,7 @@ mod tests {
             info_source: "patient-reported",
             started: Some("2024"),
             started_precision: Some("year"),
+            safety: None,
         }
     }
 
@@ -221,6 +238,7 @@ mod tests {
             info_source: "patient-reported",
             started: None,
             started_precision: None,
+            safety: None,
         };
         let v = medication_assertion_body(&a);
         let subst = v["substance"].as_object().unwrap();
@@ -304,6 +322,7 @@ mod tests {
             info_source: "patient-reported",
             started: None,
             started_precision: None,
+            safety: None,
         };
         let s = render_medication_twin(&a);
         assert!(s.starts_with("little white pill"));

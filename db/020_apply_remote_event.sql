@@ -413,11 +413,14 @@ BEGIN
     -- 'on' here — no second set_config needed. It stays 'on' through this INSERT's
     -- AFTER-ROW projection triggers (clamp-and-flag instead of vetoing, A5b; db/018/
     -- db/031/db/033 read it there) and is cleared immediately below.
+    --
+    -- The §5.9 safety signal is stored verbatim and NEVER checked here (ADR-0063): see
+    -- db/049 section 4 for why this door is deliberately lenient where db/005 is strict.
     INSERT INTO event_log
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
          signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed,
-         clock_grade)
+         clock_grade, safety)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
@@ -436,7 +439,7 @@ BEGIN
         CASE WHEN v_sealed THEN COALESCE(NULLIF(v_twin_stub, ''), cairn_twin_skeleton(v_type, b))
              ELSE v_twin END,
         COALESCE(b -> 'attachments','[]'::jsonb),
-        v_att, v_att_key, v_actor_id, v_sealed, v_grade)
+        v_att, v_att_key, v_actor_id, v_sealed, v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
     -- Capture the insert outcome BEFORE the set_config below: PERFORM overwrites
     -- FOUND, which would silently disable the substitution guard.

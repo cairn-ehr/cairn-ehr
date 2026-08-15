@@ -830,6 +830,12 @@ BEGIN
     --     a well-formed {held_by} object on a bearing role (see cairn_check_contributors).
     PERFORM cairn_check_contributors(b, 'submit_event', true);
 
+    -- 1d. §5.9 safety-signal shape (ADR-0063). LOCAL DOOR ONLY — db/020 deliberately does
+    --     NOT call this. The signal is a FIELD on a clinical event, so a refusal at the
+    --     apply door would drop the clinical event it rides on; a defect in a de-identified
+    --     advisory field must never cancel clinical content (ADR-0060). See db/049 section 4.
+    PERFORM cairn_check_safety_signal(b);
+
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
     --    and RECORD the resolution (issue #99): a unique key->actor mapping stamps the
     --    admitting actor_id on the row, so a later contamination-cascade recall selects
@@ -1075,7 +1081,7 @@ BEGIN
         (event_id, patient_id, event_type, schema_version, hlc_wall, hlc_counter,
          node_origin, t_effective, signed_bytes, content_address, body, contributors,
          signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed,
-         clock_grade)
+         clock_grade, safety)
     VALUES (
         v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
@@ -1089,7 +1095,7 @@ BEGIN
         CASE WHEN v_sealed THEN v_twin_stub ELSE v_twin END,
         COALESCE(b -> 'attachments','[]'::jsonb),
         v_att, v_att_key, v_actor_id, v_sealed,
-        v_grade)
+        v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).

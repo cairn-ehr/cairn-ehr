@@ -80,6 +80,7 @@ fn peer_dob(kid: &str, p: Uuid, wall: i64) -> EventBody {
         attachments: vec![],
         plaintext_twin: Some(render_dob_twin("1980-01-01", "day", "patient-stated")),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

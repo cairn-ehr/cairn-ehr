@@ -71,6 +71,7 @@ pub fn build_photo_evidence_body(
         attachments: vec![attachment],
         plaintext_twin: Some(twin),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

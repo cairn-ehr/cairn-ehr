@@ -80,6 +80,13 @@ pub fn coding_from_parts<'a>(
 
 /// Assemble the signed `clinical.medication.asserted` EventBody. Pure — the caller
 /// mints `event_id`/`medication_id`, supplies the HLC, and signs.
+///
+/// `safety` is the §5.9 precise safety claim, already looked up by the caller (ADR-0063).
+/// Passed IN rather than looked up here so this function stays PURE and unit-testable
+/// without a database (house rule 4 / the §9 blast-radius rule). `None` — an uncoded
+/// medication, or a coding this deployment's class map has no row for — writes no `safety`
+/// key at all, so the event's bytes are identical to the pre-ADR-0063 shape.
+#[allow(clippy::too_many_arguments)] // one parameter per wire value; nothing bundleable without inventing a throwaway struct
 pub fn build_assert_body(
     event_id: Uuid,
     medication_id: Uuid,
@@ -87,6 +94,7 @@ pub fn build_assert_body(
     input: &AssertMedicationInput<'_>,
     node_kid: &str,
     hlc: Hlc,
+    safety: Option<cairn_event::safety::PreciseSafety<'_>>,
 ) -> EventBody {
     let mid = medication_id.to_string();
     let a = MedicationAssertion {
@@ -102,6 +110,7 @@ pub fn build_assert_body(
         info_source: input.info_source,
         started: input.started,
         started_precision: input.started_precision,
+        safety,
     };
     EventBody {
         event_id: event_id.to_string(),
@@ -116,6 +125,7 @@ pub fn build_assert_body(
         attachments: vec![],
         plaintext_twin: Some(render_medication_twin(&a)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -143,7 +153,41 @@ pub async fn assert_medication(
     let verb_hlc = crate::db::next_hlc(client, node_origin).await?;
     let event_id = Uuid::now_v7();
     let medication_id = Uuid::now_v7();
-    let body = build_assert_body(event_id, medication_id, patient, input, node_kid, verb_hlc);
+    // §5.9 part B (ADR-0063): the class is looked up on the CODING node, PRE-SEAL, because
+    // it is a drug-knowledge lookup a reader cannot redo without a drug database — and
+    // making the safety floor depend on holding one would defeat the floor (#294 /
+    // ADR-0059 decision 4). An uncoded medication, or a coding this deployment's map has no
+    // row for, yields None: both are honest absences and emit no signal at all, rather than
+    // a content-free marker that would manufacture a warning from nothing.
+    //
+    // Held in a local `class` first because `PreciseSafety` BORROWS its two strings; the
+    // owned pair must outlive the body construction below.
+    //
+    // A lookup that ERRORS is treated as "no class", never propagated: an advisory field
+    // must never be able to fail a clinical write (ADR-0060 — the system may fail to record
+    // an order, but it may never cancel one). Falling back is the WITHHOLDING direction, so
+    // the worst case is a missing decoration on a recorded medication, never a lost
+    // medication. See `crate::safety::advisory_or_withheld` for the full argument.
+    let class = match input.coding.as_ref() {
+        Some(coding) => crate::safety::advisory_or_withheld(
+            crate::safety::lookup_class(client, coding).await,
+            None,
+            "the safety class lookup for a medication assert",
+        ),
+        None => None,
+    };
+    let safety = class
+        .as_ref()
+        .map(|(class, severity)| cairn_event::safety::PreciseSafety { class, severity });
+    let body = build_assert_body(
+        event_id,
+        medication_id,
+        patient,
+        input,
+        node_kid,
+        verb_hlc,
+        safety,
+    );
     // ADR-0052 seal-at-write: the clear body is sealed, signed, and submitted through the
     // ONE strict door by seal_sign_submit — which also runs the atomic author-time
     // attestation when `attest` is Some (it vouches for the thread named in the body's

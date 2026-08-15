@@ -59,6 +59,7 @@ async fn submit_with_attachments(
         attachments: atts,
         plaintext_twin: Some("note with attachment".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     db_.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
@@ -96,6 +97,7 @@ async fn apply_with_attachments(
         attachments: atts,
         plaintext_twin: Some("note with attachment".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])

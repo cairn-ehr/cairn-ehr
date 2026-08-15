@@ -44,6 +44,7 @@ fn peer_chart_wide_raise(kid: &str, p: Uuid, subject: Uuid, wall: i64) -> EventB
         attachments: vec![],
         plaintext_twin: Some("chart-wide".into()),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -68,6 +69,7 @@ fn peer_withdrawal(kid: &str, p: Uuid, withdraws_hex: &str, wall: i64) -> EventB
         attachments: vec![],
         plaintext_twin: Some("withdrawn".into()),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -526,6 +528,7 @@ async fn the_remote_door_admits_an_event_grade_targeting_another_chart() {
         attachments: vec![],
         plaintext_twin: Some("peer's mis-targeted event grade".into()),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&peer, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
@@ -582,6 +585,7 @@ async fn the_remote_door_admits_an_assertion_carrying_a_category() {
         attachments: vec![],
         plaintext_twin: Some("peer's leaky assertion".into()),
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = sign(&peer, &sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])

@@ -160,6 +160,7 @@ async fn apply_dispute_remotely(
         attachments: vec![],
         plaintext_twin: Some(render_dispute_twin(&d)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     };
     let signed = cairn_event::sign(&body, sk).unwrap();
     c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])

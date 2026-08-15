@@ -733,6 +733,7 @@ async fn orphan_correction_converges_when_target_arrives() {
         &sample_assert(),
         &kid,
         hlc,
+        None,
     );
     seal_and_submit(&c, &sk, body)
         .await

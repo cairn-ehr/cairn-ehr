@@ -218,6 +218,7 @@ async fn submit_raw_substance_for(
         &coded_input("Lipitor", MOIETY_ATORVASTATIN),
         kid,
         hlc,
+        None,
     );
     body.payload["substance"] = substance;
     match door {
@@ -1133,6 +1134,7 @@ async fn a_losing_cross_patient_reassert_cannot_misfile_the_coding_patient() {
         &coded_input("Lipitor", MOIETY_ATORVASTATIN),
         kid.as_str(),
         hlc,
+        None,
     );
     let signed = sign(&body, &sk).unwrap();
     c.execute(

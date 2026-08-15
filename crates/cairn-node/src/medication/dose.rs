@@ -55,6 +55,7 @@ pub fn build_dose_change_body(
         attachments: vec![],
         plaintext_twin: Some(render_dose_change_twin(&d)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 
@@ -139,6 +140,7 @@ pub fn build_dose_correction_body(
         attachments: vec![],
         plaintext_twin: Some(render_dose_correction_twin(&d)),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
     }
 }
 

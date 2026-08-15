@@ -167,6 +167,10 @@ const SCHEMA: &[(&str, &str)] = &[
         "048_sensitivity_stream",
         include_str!("../../../db/048_sensitivity_stream.sql"),
     ),
+    (
+        "049_safety_projection",
+        include_str!("../../../db/049_safety_projection.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS
@@ -1115,6 +1119,7 @@ fn emit_event(
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
     };
 
     // ADR-0039: globalise the authored twin — materialise it into the body BEFORE signing, so
@@ -4751,6 +4756,7 @@ mod quarantine_tests {
             attachments: vec![],
             plaintext_twin: Some("Progress note: replicated note".into()),
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes
     }
@@ -6035,7 +6041,7 @@ mod fingerprint_db_tests {
 /// as `function ... does not exist` inside `submit_event`/`apply_remote_event` (a
 /// total write outage on a fresh `cairn-sync init` database, the documented
 /// walking-skeleton flow). Every other DB-gated suite in this workspace runs against
-/// a database that cairn-node's FULL 35-file loader has already visited, so the gap
+/// a database that cairn-node's FULL schema loader has already visited, so the gap
 /// is structurally invisible there: this test is the drift guard. It wipes the
 /// second test database (`$CAIRN_TEST_PG2`), loads ONLY `SCHEMA`, and drives every
 /// SQL entry point the subset ships — the two the 2026-07-15 review found dangling:
@@ -6112,6 +6118,7 @@ mod schema_subset_tests {
             attachments: vec![],
             plaintext_twin: Some(cairn_event::registration::render_registration_twin(&a)),
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         sign(&body, sk).unwrap().signed_bytes.to_vec()
     }
@@ -6146,6 +6153,7 @@ mod schema_subset_tests {
             attachments,
             plaintext_twin: None,
             clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
         };
         // ADR-0039: author the twin into the signed body, as every production author does.
         let body = materialise_generic_twin(body);
@@ -6358,6 +6366,29 @@ mod schema_subset_tests {
         assert_eq!(
             cascade, 4,
             "the cascade must select every event this key/epoch authored"
+        );
+
+        // ── Door 4: db/049's safety read model — CALL it, don't just load it (#386) ───
+        // #386 records that db/048's subset coverage LOADED that migration into SCHEMA but
+        // never DROVE it, so the guarantee it appeared to give was untested at runtime.
+        // db/049 sits in the exact same trap: it is IN the SCHEMA list above, and Door 1's
+        // submit_event calls already exercise cairn_check_safety_signal in passing (db/005
+        // §1d PERFORMs it unconditionally on every LOCAL write) — but nothing so far has
+        // called a db/049 function and asserted on ITS OWN return value, which is the
+        // #386 gap restated for this migration. A subset node writes event_log.safety on
+        // every clinical apply (submit_event stores `b -> 'safety'` verbatim, present or
+        // not), so the read-model ladder that column feeds must resolve here too, not
+        // merely exist upstream where cairn-node's full schema loader has always run.
+        let rung: String = c
+            .query_one(
+                "SELECT cairn_safety_rung_for_rank(cairn_sensitivity_rank('sequestered'))",
+                &[],
+            )
+            .expect("db/049's read-model ladder must be callable against the subset alone")
+            .get(0);
+        assert_eq!(
+            rung, "existence",
+            "a sequestered grade must coarsen to the least-disclosing rung"
         );
 
         // Four admitted events total (registration + the three doors) — nothing quarantined,

@@ -110,6 +110,7 @@ async fn apply_assert(c: &Client, sk: &SigningKey, kid: &str, patient: Uuid, wal
         &sample_assert_input(),
         kid,
         peer_hlc(wall),
+        None,
     );
     apply(c, &sign(&body, sk).unwrap().signed_bytes)
         .await
@@ -261,6 +262,7 @@ async fn medication_assert_applies_projects_and_reapply_is_a_noop() {
         &sample_assert_input(),
         &kid,
         peer_hlc(WALL_2026),
+        None,
     );
     let signed = sign(&body, &sk).unwrap();
     apply(&c, &signed.signed_bytes)
@@ -327,6 +329,7 @@ async fn cessation_arriving_before_its_assert_converges_either_order() {
         &sample_assert_input(),
         &kid,
         peer_hlc(WALL_2026),
+        None,
     );
     apply(&c, &sign(&assert_body, &sk).unwrap().signed_bytes)
         .await

@@ -20,6 +20,7 @@ fn body(grade: ClockGrade) -> EventBody {
         attachments: vec![],
         plaintext_twin: None,
         clock_grade: grade,
+        safety: None,
     }
 }
 
