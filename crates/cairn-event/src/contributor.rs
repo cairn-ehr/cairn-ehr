@@ -122,15 +122,25 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 ///     deliberate).
 ///   * `cairn_claim_authority` (db/005, ADR-0064) asks a related-but-not-identical question
 ///     at a DIFFERENT read: whether a claim over an EXISTING event (e.g. a sensitivity
-///     withdrawal) is authoritative. It is not this function's mirror in full — its R2
-///     ('self': a human withdrawing their own claim) has no Rust counterpart here, and this
-///     function's `Device` (no responsibility-bearing contributor at all) has no SQL
-///     counterpart there — but on the cases where the two questions genuinely overlap they
-///     must agree: `Attested` <-> `'attested'`, and `Unverified`/`Device` both <->
-///     `'unverified'` (a device-only claim is no more an authority than an unverified
-///     human one). That overlap is pinned, not merely asserted, by
-///     `crates/cairn-node/tests/authority_lockstep.rs` — any change to either side that
-///     breaks the mapping fails there.
+///     withdrawal) is authoritative. The two read DISJOINT inputs — this function reads
+///     `contributors`/`signer_key_id`, `cairn_claim_authority`'s R1 branch reads only
+///     `attester_key`/`cairn_attestation_vouched`/`actor_current` and never looks at
+///     `contributors` at all — so "mirror" overstates it, and it is not a full mapping
+///     either: its R2 ('self': a human withdrawing their own claim) has no Rust counterpart
+///     here; this function's `Device` (no responsibility-bearing contributor at all) has no
+///     SQL counterpart there; and R1 additionally demands the attester resolve to EXACTLY
+///     ONE `kind = 'human'` actor, a check this function does not perform at all. Two
+///     door-admissible shapes are ALREADY KNOWN to diverge on that account — a key mapped to
+///     more than one actor can grade `Attested` here and `'unverified'` in SQL; a
+///     suppressing-mode event whose only contributor is `recorded` (no `responsibility`
+///     object, so `cairn_responsibility_bound` is vacuously true) can grade `Device` here and
+///     `'attested'` in SQL — filed as an issue for #245's display half to resolve, not fixed
+///     by anything below. Where the two DO overlap on the shapes
+///     `crates/cairn-node/tests/authority_lockstep.rs` actually exercises (a single vouched
+///     human attester; a claimed-but-unattested human author; a device-only contributor set)
+///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`.
+///     That is what the test pins — an obligation on those shapes, not a universal guarantee
+///     over every event this repo can admit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorshipConfidence {
     /// A responsibility-bearing human author, authenticated as the signer or a verified attester.

@@ -1,25 +1,45 @@
-//! ADR-0064: cairn_claim_authority (db/005) is the SQL side of the same question
-//! classify_authorship_confidence (crates/cairn-event/src/contributor.rs) answers in Rust.
-//! They are not identical — R2 ('self') has no Rust counterpart and `Device` has no SQL
-//! one — but where they overlap they must agree, or a display grade and an enforcement
-//! grade would disagree about the very same event.
+//! ADR-0064: cairn_claim_authority (db/005) asks an overlapping question, at a different
+//! read, from classify_authorship_confidence (Rust, crates/cairn-event/src/contributor.rs).
+//! The two functions read DISJOINT inputs — this Rust function reads `contributors` /
+//! `signer_key_id`, `cairn_claim_authority`'s R1 branch reads only `attester_key` /
+//! `cairn_attestation_vouched` / `actor_current` and never looks at `contributors` at all —
+//! so "mirror" overstates it. They are not a full mapping either: R2 ('self') has no Rust
+//! counterpart, `Device` has no SQL counterpart, and R1 additionally demands the attester
+//! resolve to EXACTLY ONE `kind = 'human'` actor, a check this Rust function does not
+//! perform. Two door-admissible shapes are ALREADY KNOWN to diverge — a key mapped to more
+//! than one actor can grade `Attested` here and `'unverified'` in SQL; a suppressing-mode
+//! event whose only contributor is `recorded` (no `responsibility` object) can grade
+//! `Device` here and `'attested'` in SQL — filed as an issue for #245's display half to
+//! resolve, not something this test papers over.
 //!
-//! THREE FIXTURES, ONE PER RUST VARIANT, each landed through the real door
-//! (`apply_remote_event` or `submit_event`) via the SAME `tests/common/mod.rs` helpers the
-//! other DB-gated suites use — never a hand-written JSON literal, which could let the Rust
-//! side pass on a contributor shape the door never actually produces. After each fixture
-//! lands, both `contributors` and `signer_key_id` are read back FROM `event_log` — the exact
-//! columns `cairn_claim_authority` itself reads — so the two sides are compared against the
-//! literal bytes Postgres stored, not the in-memory struct the test happened to build.
+//! What this test pins is narrower: on the THREE SHAPES below — a single vouched human
+//! attester, a claimed-but-unattested human author, a device-only contributor set (none of
+//! them a dual-mapped key or a no-responsibility suppressing event) — the two verdicts
+//! agree: `Attested` <-> `'attested'`, `Unverified`/`Device` <-> `'unverified'`. That is the
+//! obligation a future display grade and today's enforcement grade owe each other on THESE
+//! shapes; it is not a claim that every event this repo can admit agrees.
 //!
-//! WHY AGREEMENT IS OBSERVED, NOT STRUCTURAL: `classify_authorship_confidence` is a pure
-//! three-line equality check over a JSON array; `cairn_claim_authority` is a `SECURITY
-//! DEFINER` query joining `event_log`, `actor_current` and the attestation-vouch machinery.
-//! Nothing here computes one side FROM the other — each fixture is independently graded by
-//! both, and the only thing tying them together is the mapping this file asserts. A bug in
-//! either implementation (e.g. SQL forgetting `attester_key IS NOT NULL`, or Rust matching
-//! the signer instead of the attester) would desynchronise the pair on at least one of the
-//! three fixtures below.
+//! THREE FIXTURES, ONE PER RUST VARIANT, each DOOR-ADMITTED (`apply_remote_event` or
+//! `submit_event`, via the SAME `tests/common/mod.rs` helpers the other DB-gated suites use)
+//! and then READ BACK from `event_log` — the same two columns `cairn_claim_authority`'s R1
+//! branch reads — so the comparison is over what Postgres actually stored, not the in-memory
+//! struct the test happened to build. (Fixture 2 overrides `contributors` with a literal
+//! before signing, but that literal is READ BACK post-admission before either side sees it —
+//! door-admitted-and-read-back is the property that matters, not "never a literal".)
+//!
+//! WHY AGREEMENT IS OBSERVED, NOT STRUCTURAL: nothing here computes one side FROM the
+//! other — the test supplies the bridge (`verified_attester`) by hand, then checks that both
+//! INDEPENDENTLY-COMPUTED verdicts land where the mapping predicts. Two regressions this
+//! test WOULD catch: Rust's `authenticated` check matching the SIGNER instead of the
+//! verified ATTESTER (fixture 1 would then read `Unverified` while SQL still reads
+//! `'attested'`), or the bearing/contributory partition misclassifying `"recorded"` as
+//! bearing (fixture 3 would then read `Attested` while SQL stays `'unverified'`, since the
+//! signer and the lone contributor are the same device key). What it would NOT catch: any of
+//! R1's own internal conjuncts (`attester_key IS NOT NULL`, `cairn_attestation_vouched`,
+//! `kind = 'human'`, the single-actor count) — no fixture below isolates them (fixture 1 is
+//! a single vouched human; fixtures 2 and 3 carry no `attester_key` at all), so a regression
+//! in any of those conjuncts would not move this test. That coverage belongs to, and already
+//! exists in, `claim_authority.rs`.
 mod common;
 
 use cairn_event::contributor::{classify_authorship_confidence, AuthorshipConfidence};

@@ -4871,12 +4871,16 @@ mod quarantine_tests {
     /// CREATE time, so a subset that carried db/048 without db/005 would fail outright to
     /// create `cairn_sensitivity_standing`, taking clinical sync down entirely. `locked_client`
     /// merely loading both files without erroring already proves the CREATEs succeeded — it
-    /// does NOT prove the functions are actually CALLABLE from here (a missing GRANT, a stale
-    /// search_path, or a privilege gap on the connecting role would all still load cleanly and
-    /// only surface at CALL time). #386 records exactly this gap against db/048's OWN earlier
-    /// subset coverage — loaded into SCHEMA but never DRIVEN, so the guarantee it appeared to
-    /// give was untested at runtime. This test drives both functions with real arguments so
-    /// the same gap, reopened by this slice's db/005 addition, does not recur unnoticed.
+    /// does NOT prove the functions run correctly: a stale search_path or a migration-order
+    /// difference at CREATE time could still bind a `LANGUAGE sql` reference to the wrong
+    /// definition, or leave it silently unresolved, with the CREATE itself staying silent and
+    /// nothing surfacing until CALL time. (A missing GRANT is a SEPARATE axis this suite would
+    /// NOT catch — it connects as the owning role, and that axis is already pinned by
+    /// `claim_authority.rs`'s `the_read_path_works_as_cairn_agent`.) #386 records exactly the
+    /// load-without-drive gap against db/048's OWN earlier subset coverage — loaded into
+    /// SCHEMA but never DRIVEN, so the guarantee it appeared to give was untested at runtime.
+    /// This test drives both functions with real arguments so the same gap, reopened by this
+    /// slice's db/005 addition, does not recur unnoticed.
     #[test]
     fn db048_authority_gate_resolves_in_the_sync_subset() {
         let Some(base) = cs() else {
