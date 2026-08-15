@@ -158,10 +158,32 @@ everyone anyway.
 ```sql
 CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
 RETURNS text LANGUAGE sql STABLE
-SET search_path = public
+SECURITY DEFINER SET search_path = public
 AS $$ … $$;
-GRANT EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) TO cairn_agent;
+REVOKE EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) TO cairn_agent;
 ```
+
+**`SECURITY DEFINER` is required, not stylistic.** `cairn_attestation_vouched` is locked down —
+`REVOKE EXECUTE … FROM PUBLIC`, and `event_attestation_unvouched` carries no SELECT grant — because
+[`db/001:508`](../../../db/001_envelope.sql) reasons that *"every caller is a SECURITY DEFINER door or a
+migration-owned trigger, so no runtime role needs a grant."* This caller is neither:
+`cairn_sensitivity_standing` is a plain `LANGUAGE sql` function granted to `cairn_agent`, and a
+non-definer function body runs as the *calling* role whether or not it inlines. Without
+`SECURITY DEFINER`, the first `cairn_effective_sensitivity` call by `cairn_agent` fails with permission
+denied — **the entire sensitivity read path, broken by a privilege, and only under the product's role.**
+
+The two alternatives are worse. Granting `cairn_agent` both `EXECUTE` on the predicate *and* `SELECT` on
+the marker table widens a deliberate lockdown and exposes the marker; re-inlining the
+`NOT EXISTS (… event_attestation_unvouched …)` test by hand makes us the fifth hand-written copy of the
+predicate whose *existence* db/001's comment exists to prevent.
+
+**The cost is nil, contrary to the inlining worry that chose db/005.** A `SECURITY DEFINER` function is
+not inlined — but `cairn_claim_authority` is evaluated only for rows where a withdrawal actually matches
+an assertion (`w.withdraws = a.content_address`), which is zero on almost every chart and one or two on
+the rest. `cairn_sensitivity_standing` itself stays `LANGUAGE sql` and still inlines into
+`cairn_effective_sensitivity`, which is the property §4's home decision was protecting. `SET search_path`
+is mandatory on a definer function and is present above.
 
 **Home: `db/005_submit.sql`.** Three constraints select it and there is no second candidate.
 
@@ -454,6 +476,11 @@ is silent on the remote half.
    contributor set, signer and attester must grade identically on both sides.
 10. `has_function_privilege` pins for the new function, and the SQL mirror in `db/tests/`, run via
     `scripts/run-db-sql-tests.sh`.
+10a. **`SET ROLE cairn_agent` and read the grade end-to-end.** The privilege failure in §4 is invisible
+    to a suite running as the owner — every test passes and the product breaks. This is Slice 62's
+    lesson (*a unit-tested safety control defeated by the surface that calls it*; *test the path the
+    product actually calls*) in the privilege dimension, and it must be an explicit role-switched test
+    rather than an assumption that some other test covers it.
 
 **The three failed attacks (§8)**
 
