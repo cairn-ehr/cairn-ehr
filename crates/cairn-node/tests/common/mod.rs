@@ -243,29 +243,12 @@ pub fn withdrawal_body_with_id(
     )
 }
 
-/// Sign and submit a pre-built body with NO attestation token, through the LOCAL door
-/// (`submit_event`). Needed only for a raw ASSERTION (raising a grade) — db/048's ceremony
-/// does not gate a raise on authorship, so a hand-built assertion body (one whose shape
-/// does not fit the generic [`EventSpec`], e.g. a mis-targeted or rationale-less fixture)
-/// can still submit locally. A raw WITHDRAWAL must NOT use this: the ceremony refuses every
-/// un-attested withdrawal at this door unconditionally (see [`apply_remote_raw`] instead).
-pub async fn submit_signed_raw(
-    c: &Client,
-    sk: &SigningKey,
-    body: EventBody,
-) -> Result<u64, tokio_postgres::Error> {
-    let signed = sign(&body, sk).unwrap();
-    c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await
-}
-
 /// Sign and apply a pre-built body with NO attestation token, through the REMOTE door
 /// (`apply_remote_event`) — the shape a cross-node write actually arrives in when its
-/// author attested to nobody. Unlike [`submit_signed_raw`], this is the ONLY way to land a
-/// genuinely un-attested `sensitivity.grade-withdrawal.asserted` event at all: the local
-/// door's ceremony (db/048) refuses every un-attested withdrawal unconditionally, but
-/// `apply_remote_event` never calls that ceremony (ADR-0060 — a door check at apply would
-/// fork the event set).
+/// author attested to nobody. This is the ONLY way to land a genuinely un-attested
+/// `sensitivity.grade-withdrawal.asserted` event at all: the local door's ceremony (db/048)
+/// refuses every un-attested withdrawal unconditionally, but `apply_remote_event` never
+/// calls that ceremony (ADR-0060 — a door check at apply would fork the event set).
 pub async fn apply_remote_raw(
     c: &Client,
     sk: &SigningKey,

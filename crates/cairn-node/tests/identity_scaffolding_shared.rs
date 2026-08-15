@@ -194,11 +194,13 @@ fn derivation_finds_the_expected_helpers() {
             // not declare its own copy of them. See the module header's widened first
             // paragraph. `register_pair` joined them in #345's review: the matching suites
             // (`apply_proposal.rs`, `auto_apply.rs`) had written it identically.
-            // `content_address_of` / `withdrawal_body_with_id` / `submit_signed_raw` /
-            // `apply_remote_raw` / `apply_remote_attested` joined in the #380
-            // `cairn_claim_authority` slice (`claim_authority.rs`), which needs a way to
-            // build and land a sensitivity withdrawal through both the local and the
-            // remote door.
+            // `content_address_of` / `withdrawal_body_with_id` / `apply_remote_raw` /
+            // `apply_remote_attested` joined in the #380 `cairn_claim_authority` slice
+            // (`claim_authority.rs`), which needs a way to build and land a sensitivity
+            // withdrawal through the remote door (its local-door twin, `submit_signed_raw`,
+            // was withdrawn — no caller ever needed it: every withdrawal in that slice goes
+            // through the remote door, and every raw assertion fits the generic
+            // `EventSpec`/`submit_signed_with_id` shape instead).
             "async fn apply_remote_attested(",
             "async fn apply_remote_raw(",
             "async fn attestation_count(",
@@ -210,7 +212,6 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_attested(",
             "async fn submit_registration(",
             "async fn submit_signed(",
-            "async fn submit_signed_raw(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
             "fn withdrawal_body_with_id(",

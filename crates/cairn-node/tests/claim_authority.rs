@@ -6,13 +6,23 @@
 //! docs/superpowers/specs/2026-08-15-claim-authority-at-the-apply-door-design.md.
 //!
 //! CONTROLLER RULING (see the task-1 brief's ruling section, 2026-08-15): db/048's
-//! `cairn_sensitivity_ceremony_ok` refuses ANY withdrawal at the LOCAL door
-//! (`submit_event`) unless a contributor claims RESPONSIBILITY and a valid human
-//! attestation token verifies it — a "recorded"-role withdrawal (the shape a genuinely
-//! un-attested peer write carries) can never clear that gate, attested or not, because the
-//! attestation-storage branch itself is guarded by the SAME responsibility claim. So every
-//! withdrawal in this file is submitted through the REMOTE door (`apply_remote_event`),
-//! which is exactly the door #380's cross-node exposure travels through.
+//! `cairn_sensitivity_ceremony_ok` refuses a withdrawal at the LOCAL door (`submit_event`)
+//! unless a contributor claims RESPONSIBILITY and a valid human attestation token verifies
+//! it. A "recorded"-role withdrawal (the shape a genuinely un-attested write carries) never
+//! sets that state — the attestation-storage branch itself is guarded by the SAME
+//! responsibility claim — so it can never clear the ceremony, attested or not, at EITHER
+//! door (`apply_remote_event`'s own attestation gate reads the identical `v_bears` test).
+//! That is why the two UN-ATTESTED-withdrawal tests here (R2) go through the REMOTE door:
+//! it is the only door that will ever admit that shape.
+//!
+//! The R1 (attested) test's withdrawal is a DIFFERENT shape — the same
+//! responsibility-bearing contributor `crates/cairn-node/src/sensitivity.rs`'s
+//! `withdraw_sensitivity` builds, which the LOCAL door accepts too (it is the only shape
+//! the product ever writes locally). Test 3 still goes through the remote door, not
+//! because the local door would refuse it, but because `cairn_claim_authority` is
+//! door-agnostic — it reads only `event_log.attester_key` / `.actor_id`, columns both
+//! doors populate identically for an admitted event — and because #380's exposure is
+//! specifically the CROSS-NODE case, which the remote door is what actually exercises.
 mod common;
 use cairn_event::sensitivity::*;
 use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
@@ -164,6 +174,99 @@ async fn an_event_with_no_attestation_at_all_is_unverified() {
     assert_eq!(authority(&c, a, None).await, "unverified");
 }
 
+/// A signed `EventBody` of a TYPE this node has no `event_type_class` row for — the exact
+/// case ADR-0056 decision 1 exists for (a peer authors something this node's code predates).
+/// `apply_remote_event` admits it uninterpreted (the "deferred" arm, db/020:239-242) and —
+/// critically for the R1 conjunct this probes — stores whatever attestation token travelled
+/// with it WITHOUT EVER CALLING `cairn_attestation_ok`, which only runs in the SEPARATE,
+/// non-deferred branch just below it. Never classified by any migration, so it stays
+/// deferred for the life of the test database.
+fn deferred_probe_body(kid: &str, patient: Uuid, event_id: Uuid, wall: i64) -> EventBody {
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: "cairn_test.claim_authority_deferred_probe".into(),
+        schema_version: "cairn_test.claim_authority_deferred_probe/1".into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: serde_json::json!({"probe": "unclassified event for the R1 vouch conjunct"}),
+        attachments: vec![],
+        plaintext_twin: Some(
+            "an unclassified probe event for cairn_claim_authority's R1 test".into(),
+        ),
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
+#[tokio::test]
+async fn a_carried_but_unverified_token_on_a_deferred_event_is_unverified() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    // No submit_registration: apply_remote_event's precedence rule (db/005 step 8b) is
+    // LOCAL-DOOR-ONLY (#345), so a chart known only from a peer's event is the honest
+    // fixture here too — mirrors deferred_admission.rs's own module note on why that
+    // suite registers no charts either.
+    let p = Uuid::now_v7();
+    let eid = Uuid::now_v7();
+    let body = deferred_probe_body(&kid, p, eid, 30);
+    // The human's token is a REAL, correctly-bound attestation (apply_remote_attested
+    // signs it properly against this event's content address) — but the event's type is
+    // unclassified, so the door's deferred arm stores the token WITHOUT ever calling
+    // cairn_attestation_ok to verify it. A genuinely valid token, simply never checked.
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("an unclassified type must still be admitted, uninterpreted (ADR-0056)");
+
+    // Preconditions — the MIRROR IMAGE of an_event_with_no_attestation_at_all_is_unverified's
+    // precondition: THIS time a token did travel and get stored (attester_key is set), but
+    // it is marked UNVOUCHED (event_attestation_unvouched carries a row for it, db/020:472-486).
+    let attester_key_is_set: bool = c
+        .query_one(
+            "SELECT attester_key IS NOT NULL FROM event_log WHERE event_id = $1::text::uuid",
+            &[&eid.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        attester_key_is_set,
+        "precondition: a token travelled and was stored on this deferred row"
+    );
+    let vouched: bool = c
+        .query_one(
+            "SELECT cairn_attestation_vouched($1::text::uuid)",
+            &[&eid.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !vouched,
+        "precondition: a carried-but-never-verified token must NOT read as vouched"
+    );
+
+    // THE SECURITY-RELEVANT R1 CONJUNCT: `attester_key IS NOT NULL` alone is not enough —
+    // the token must actually be VOUCHED. Drop the cairn_attestation_vouched(...) call from
+    // R1 and this carried, never-verified peer token grades 'attested' — the precise
+    // cross-node forgery #380 exists to close (an enrolled-but-hostile peer ships a
+    // classification-predating type carrying a self-minted or borrowed token, betting the
+    // receiving node will trust "a token is present" over "a token was checked").
+    assert_eq!(authority(&c, eid, None).await, "unverified");
+}
+
 #[tokio::test]
 async fn a_vouched_human_attestation_is_attested() {
     let Some(base) = cs() else { return };
@@ -178,9 +281,11 @@ async fn a_vouched_human_attestation_is_attested() {
     submit_registration(&c, &sk, &kid, p, 1).await;
     let a = assert_grade(&c, &sk, &kid, p, 10).await;
 
-    // A peer's honestly-completed ceremony: the device relays, the human vouches. Landed
-    // through the REMOTE door — see the controller ruling in the module header for why the
-    // local door can never accept a withdrawal built this way (or any way).
+    // A peer's honestly-completed ceremony: the device relays, the human vouches. This
+    // bearing-contributor shape IS accepted by the LOCAL door too — it's the same shape
+    // `sensitivity::withdraw_sensitivity` writes there in production. It lands here via
+    // the REMOTE door instead because #380's exposure is the cross-node case and the
+    // predicate is door-agnostic (see the module header).
     let withdraws_hex = hex::encode(content_address_of(&c, a).await);
     let w = SensitivityWithdrawal {
         withdraws_hex: &withdraws_hex,
