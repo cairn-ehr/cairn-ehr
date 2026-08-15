@@ -41,8 +41,18 @@ BEGIN;
 -- never off anything submit_event alone would add). content_address satisfies db/001's CHECK
 -- ('\x1220' || sha256(signed_bytes)) with signed_bytes standing in for the real signed envelope
 -- — its actual bytes are never verified off this path, only its hash-derived address.
+--
+-- p_attester_key (#380, ADR-0064) is OPTIONAL and NULL by default: every pre-existing call
+-- below seeds a bare event with no attester, which is exactly what `cairn_claim_authority`
+-- must read as 'unverified' — R1 needs `attester_key IS NOT NULL` and R2 needs both rows'
+-- actor_id populated, neither of which this bare seed sets. A caller seeding a WITHDRAWAL
+-- that must actually lower the grade (block 2 below) passes an enrolled human's key here so
+-- the seeded row carries a real, vouched (no unvouched marker exists for it) attestation —
+-- the raw-SQL-rig equivalent of what `apply_remote_attested` verifies cryptographically in
+-- the Rust suite.
 CREATE OR REPLACE FUNCTION _sensitivity_seed_event(
-    p_patient uuid, p_type text, p_body jsonb, p_wall bigint
+    p_patient uuid, p_type text, p_body jsonb, p_wall bigint,
+    p_attester_key bytea DEFAULT NULL
 ) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE
     v_id    uuid := gen_random_uuid();
@@ -52,13 +62,13 @@ BEGIN
         event_id, patient_id, event_type, schema_version,
         hlc_wall, hlc_counter, node_origin,
         signed_bytes, content_address, body, contributors,
-        signer_key_id, plaintext_twin)
+        signer_key_id, plaintext_twin, attester_key)
     VALUES (
         v_id, p_patient, p_type, p_type || '/1',
         p_wall, 0, 'test-node',
         v_bytes, '\x1220'::bytea || digest(v_bytes, 'sha256'),
         p_body, '[]'::jsonb,
-        'k', 'twin');
+        'k', 'twin', p_attester_key);
     RETURN v_id;
 END;
 $$;
@@ -104,13 +114,24 @@ END $$;
 
 -- 2. Withdrawal: lowers the effective grade back to routine, and the withdrawn assertion is
 --    NOT erased — it stays on the record, still re-assertable (never merge, always overlay).
+--
+--    #380/ADR-0064: since cairn_sensitivity_standing now consults cairn_claim_authority, the
+--    withdrawal seeded here must be AUTHORITATIVE or it will not lower anything (that is the
+--    behaviour block 2b right below this one pins). This rig has no signing key (see the file
+--    header), so "attested" is simulated the same way the seed itself is: enroll a human actor
+--    directly via enroll_actor() with a runtime-random key (house rule 6 — no literal crypto
+--    material), then stamp that key as the withdrawal's attester_key. cairn_attestation_vouched
+--    reads as vacuously TRUE (no event_attestation_unvouched row exists for a seeded event), so
+--    R1 is satisfied exactly like a real vouched attestation would be.
 DO $$
 DECLARE
-    p      uuid := gen_random_uuid();
-    target uuid;
-    ca_hex text;
-    got_grade text;
-    still  int;
+    p           uuid := gen_random_uuid();
+    target      uuid;
+    ca_hex      text;
+    got_grade   text;
+    still       int;
+    human_key   text := encode(gen_random_bytes(32), 'hex');
+    human_key_b bytea := decode(human_key, 'hex');
 BEGIN
     target := _sensitivity_seed_event(p, 'note.added', jsonb_build_object('text', 'n'), 10);
     PERFORM _sensitivity_seed_event(p, 'sensitivity.grade.asserted',
@@ -120,8 +141,10 @@ BEGIN
     SELECT encode(content_address, 'hex') INTO ca_hex
         FROM sensitivity_assertion WHERE patient_id = p;
 
+    PERFORM enroll_actor('human', jsonb_build_object('role', 'test-witness'), human_key);
     PERFORM _sensitivity_seed_event(p, 'sensitivity.grade-withdrawal.asserted',
-        jsonb_build_object('withdraws', ca_hex, 'rationale', 'patient consent'), 12);
+        jsonb_build_object('withdraws', ca_hex, 'rationale', 'patient consent'), 12,
+        human_key_b);
 
     SELECT grade INTO got_grade FROM cairn_effective_sensitivity(target);
     IF got_grade <> 'routine' THEN
@@ -134,7 +157,44 @@ BEGIN
     END IF;
 END $$;
 
-DROP FUNCTION _sensitivity_seed_event(uuid, text, jsonb, bigint);
+-- 2b. #380/ADR-0064's OWN mirror: the same withdrawal, but with NO attester_key at all — the
+--     un-attested, un-vouched shape a peer write with no responsibility claim carries. It must
+--     still LAND (nothing is refused at either door for this rule) but must NOT lower the grade.
+--     Mirrors crates/cairn-node/tests/claim_authority.rs's
+--     an_unattested_withdrawal_lands_and_converges_but_does_not_lower.
+DO $$
+DECLARE
+    p         uuid := gen_random_uuid();
+    target    uuid;
+    ca_hex    text;
+    got_grade text;
+    landed    int;
+BEGIN
+    target := _sensitivity_seed_event(p, 'note.added', jsonb_build_object('text', 'n'), 10);
+    PERFORM _sensitivity_seed_event(p, 'sensitivity.grade.asserted',
+        jsonb_build_object('subject_kind', 'patient', 'subject_id', p::text,
+                            'grade', 'sequestered', 'source', 'human'), 11);
+
+    SELECT encode(content_address, 'hex') INTO ca_hex
+        FROM sensitivity_assertion WHERE patient_id = p;
+
+    -- No p_attester_key argument: this row's attester_key stays NULL, exactly the
+    -- 'unverified' shape cairn_claim_authority must never grade as authoritative.
+    PERFORM _sensitivity_seed_event(p, 'sensitivity.grade-withdrawal.asserted',
+        jsonb_build_object('withdraws', ca_hex, 'rationale', 'strip it'), 12);
+
+    SELECT count(*) INTO landed FROM sensitivity_withdrawal WHERE patient_id = p;
+    IF landed <> 1 THEN
+        RAISE EXCEPTION 'FAIL: an un-attested withdrawal must still land and converge, got % rows', landed;
+    END IF;
+
+    SELECT grade INTO got_grade FROM cairn_effective_sensitivity(target);
+    IF got_grade <> 'sequestered' THEN
+        RAISE EXCEPTION 'FAIL: an un-attested withdrawal must not lower the grade (#380), got %', got_grade;
+    END IF;
+END $$;
+
+DROP FUNCTION _sensitivity_seed_event(uuid, text, jsonb, bigint, bytea);
 
 ROLLBACK;
 

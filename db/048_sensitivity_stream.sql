@@ -325,6 +325,29 @@ WHERE (r.projection_tables, r.run_order, r.heal_safe)
 --    strip chart A's protection. That is the unrecoverable direction (a grade can only be
 --    lowered by mistake, never raised back silently), so the extra join column is
 --    load-bearing, not a tidiness nice-to-have.
+-- A withdrawal only counts if it is AUTHORITATIVE (#380, ADR-0064). This one clause is the
+-- whole of §5.9's protection-removing control, and it is HERE — the single definition of
+-- "what still applies" that cairn_effective_sensitivity (section 11), db/049's
+-- cairn_prospective_sensitivity and the CLI read path all delegate to — precisely so no
+-- consumer can be written that forgets it, and so part C's custody dial inherits it for
+-- free. Do NOT push this check up into the callers: that is the per-dial duplication that
+-- produced #404 and #399 one file over.
+--
+-- The withdrawal stays in the log, replicates, converges and is re-assertable; it simply
+-- does not participate in this set difference. Nothing is refused at either door, so
+-- nothing forks (#342), and nothing PROTECTIVE is ever gated — only lowering is.
+--
+-- `cairn_claim_authority` computes at READ, not at apply — so a withdrawal that names a
+-- target which has not replicated yet is inert today (R2 cannot resolve, but R1 still
+-- carries an attested claim alone) and self-heals the moment the target lands — no
+-- re-apply, no second event, no stamped-at-apply verdict to go stale (claim_authority.rs's
+-- Task 3 pins this). The SIBLING axis — a withdrawal whose attester is not yet enrolled
+-- HERE — is a live property of the predicate in general (a later revoke/re-enrol of the
+-- attester can move a verdict either way), but is NOT reachable for a withdrawal
+-- specifically: `sensitivity.grade-withdrawal.asserted` is a CLASSIFIED type (section 2),
+-- so apply_remote_event's non-deferred attestation gate refuses an unenrolled attester
+-- outright — the withdrawal never lands at all, so it can never sit here "inert" waiting
+-- to heal. Verified empirically (#380 Task 3); see claim_authority.rs's trailing comment.
 CREATE OR REPLACE FUNCTION cairn_sensitivity_standing(p_patient_id uuid)
 RETURNS TABLE (content_address bytea, subject_kind text, subject_id uuid, grade text)
 LANGUAGE sql STABLE AS $$
@@ -333,7 +356,8 @@ LANGUAGE sql STABLE AS $$
     WHERE a.patient_id = p_patient_id
       AND NOT EXISTS (SELECT 1 FROM sensitivity_withdrawal w
                        WHERE w.withdraws = a.content_address
-                         AND w.patient_id = p_patient_id);
+                         AND w.patient_id = p_patient_id
+                         AND cairn_claim_authority(w.event_id, a.event_id) <> 'unverified');
 $$;
 
 -- ---------------------------------------------------------------------------

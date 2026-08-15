@@ -28,7 +28,7 @@ use cairn_event::sensitivity::*;
 use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use common::{
     apply_remote_attested, apply_remote_raw, content_address_of, cs, enroll_human, setup,
-    submit_registration, withdrawal_body_with_id, EventSpec,
+    submit_attested, submit_registration, withdrawal_body_with_id, EventSpec,
 };
 use uuid::Uuid;
 
@@ -37,6 +37,22 @@ async fn authority(c: &tokio_postgres::Client, event: Uuid, target: Option<Uuid>
     c.query_one(
         "SELECT cairn_claim_authority($1::text::uuid, $2::text::uuid)",
         &[&event.to_string(), &target.map(|t| t.to_string())],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// The effective grade of the chart-wide assertion's own event — what
+/// `cairn_effective_sensitivity` (db/048 section 11) reports once `cairn_sensitivity_standing`
+/// (section 9) has factored authority into "what still applies". Task 2's tests below are the
+/// first in this file to care about the CONSEQUENCE of a withdrawal, not just the predicate's
+/// own verdict — [`authority`] answers "is this claim authoritative", `effective` answers "did
+/// it actually move the grade".
+async fn effective(c: &tokio_postgres::Client, event: Uuid) -> String {
+    c.query_one(
+        "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+        &[&event.to_string()],
     )
     .await
     .unwrap()
@@ -412,4 +428,126 @@ async fn the_read_path_works_as_cairn_agent() {
         .expect("cairn_agent must be able to call the predicate without a permission error")
         .get(0);
     assert_eq!(verdict, "unverified");
+}
+
+// ===========================================================================
+// Task 2 (#380): the seam. `cairn_claim_authority` alone judges nothing until
+// `cairn_sensitivity_standing` (db/048 section 9) actually consults it — these tests are
+// the first in this file to check the CONSEQUENCE (does the grade move), not just the
+// predicate's own verdict.
+// ===========================================================================
+
+#[tokio::test]
+async fn an_unattested_withdrawal_lands_and_converges_but_does_not_lower() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let target = content_address_of(&c, a).await;
+
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &hex::encode(&target),
+        rationale: "strip it",
+    };
+    let wid = Uuid::now_v7();
+    // Un-attested withdrawals can only ever land through the REMOTE door: db/048's
+    // ceremony refuses every un-attested withdrawal at the LOCAL door unconditionally
+    // (see this file's module header), and `withdrawal_body_with_id` builds exactly the
+    // "recorded"-role shape a genuinely un-attested peer write carries.
+    apply_remote_raw(&c, &sk, withdrawal_body_with_id(p, wid, &kid, &w, 20))
+        .await
+        .expect("ADMITTED — authority gates EFFECT, never admission; a refusal would fork");
+
+    // BOTH halves matter. Assert admission first: if the door started refusing, the
+    // "does not lower" assertion below would pass for entirely the wrong reason.
+    let landed: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_withdrawal WHERE withdraws = $1",
+            &[&target],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(landed, 1, "the withdrawal must land and converge");
+
+    assert_eq!(
+        effective(&c, a).await,
+        "sequestered",
+        "an un-attested withdrawal must not lower the grade (#380)"
+    );
+}
+
+#[tokio::test]
+async fn an_attested_cross_node_withdrawal_lowers() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+
+    // A peer's honestly-completed ceremony (the same bearing shape
+    // `a_vouched_human_attestation_is_attested` above already lands), reused here to also
+    // assert the CONSEQUENCE — the grade actually falls — not just the predicate's verdict.
+    // Cross-node, so the remote door, exactly like a real replicated write.
+    let withdraws_hex = hex::encode(content_address_of(&c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "patient consented",
+    };
+    let wid = Uuid::now_v7();
+    let body = bearing_withdrawal_body(&kid, &kid_h, p, wid, &w, 20);
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("a properly attested cross-node withdrawal must land");
+
+    assert_eq!(
+        effective(&c, a).await,
+        "routine",
+        "no deadlock: attesting is the remedy"
+    );
+}
+
+#[tokio::test]
+async fn a_locally_authored_withdrawal_always_lowers() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+
+    // The LOCAL door already demands a bound human author for a withdrawal (db/048's
+    // ceremony, ADR-0062 decision 7 / ADR-0053), so anything it accepts clears the bar BY
+    // CONSTRUCTION. This pins the no-deadlock claim instead of asserting it in prose. Uses
+    // the BEARING contributor shape (`bearing_withdrawal_body`) — the only shape the local
+    // door's ceremony ever admits for a withdrawal (see this file's module header); it is
+    // the same shape production's `sensitivity::withdraw_sensitivity` writes there.
+    let withdraws_hex = hex::encode(content_address_of(&c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "clinician lowered it",
+    };
+    let wid = Uuid::now_v7();
+    let body = bearing_withdrawal_body(&kid, &kid_h, p, wid, &w, 20);
+    submit_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("the local ceremony accepted it, so authority must too");
+    assert_eq!(effective(&c, a).await, "routine");
 }
