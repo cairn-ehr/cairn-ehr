@@ -199,6 +199,114 @@ DROP FUNCTION _sensitivity_seed_event(uuid, text, jsonb, bigint, bytea);
 ROLLBACK;
 
 -- ---------------------------------------------------------------------------
+-- SQL mirror of crates/cairn-node/tests/claim_authority.rs and
+-- claim_authority_worklist.rs (#380, ADR-0064). Block 2b just above already exercises the
+-- REAL event_log/projection path for an unattested withdrawal (an unattested withdrawal
+-- lands but does not lower cairn_effective_sensitivity's answer) — this block is narrower
+-- and complementary, not a restatement: it drives cairn_claim_authority and
+-- cairn_sensitivity_standing directly, and it is the ONLY place in db/tests that touches
+-- sensitivity_withdrawal_worklist at all.
+--
+-- Seeds sensitivity_assertion/sensitivity_withdrawal DIRECTLY rather than through
+-- _sensitivity_seed_event: cairn_claim_authority only ever reads event_log, and no
+-- event_log row exists for either v_assert or v_withdraw here, so both R1 (needs
+-- attester_key IS NOT NULL) and R2 (needs both rows' actor_id populated) fail on an empty
+-- EXISTS — the deliberately unresolvable shape the first assertion below names. Runs
+-- autocommitting, outside a transaction, so cleanup at the end is explicit — same
+-- discipline as the category-blacklist block below.
+DO $$
+DECLARE
+    v_patient  uuid := gen_random_uuid();
+    v_assert   uuid := gen_random_uuid();
+    v_withdraw uuid := gen_random_uuid();
+    v_ca_a     bytea := '\x1220'::bytea || digest('authority-mirror-assert', 'sha256');
+    v_ca_w     bytea := '\x1220'::bytea || digest('authority-mirror-withdraw', 'sha256');
+    n          int;
+BEGIN
+    INSERT INTO sensitivity_assertion
+        (content_address, event_id, patient_id, subject_kind, subject_id, grade, source,
+         hlc_wall, hlc_counter, node_origin)
+    VALUES (v_ca_a, v_assert, v_patient, 'patient', v_patient, 'sequestered', 'human',
+            10, 0, 'mirror');
+    INSERT INTO sensitivity_withdrawal
+        (content_address, event_id, withdraws, patient_id, rationale,
+         hlc_wall, hlc_counter, node_origin)
+    VALUES (v_ca_w, v_withdraw, v_ca_a, v_patient, 'strip', 20, 0, 'mirror');
+
+    -- No event_log rows exist for either id, so neither R1 nor R2 can be satisfied.
+    ASSERT cairn_claim_authority(v_withdraw, v_assert) = 'unverified',
+        'a withdrawal with no resolvable human behind it is unverified';
+
+    SELECT count(*) INTO n FROM cairn_sensitivity_standing(v_patient);
+    ASSERT n = 1,
+        'the assertion still STANDS: an unverified withdrawal does not lower (ADR-0064/#380)';
+
+    -- And it is on the worklist, as `inert`.
+    SELECT count(*) INTO n FROM sensitivity_withdrawal_worklist
+     WHERE patient_id = v_patient AND reason = 'inert';
+    ASSERT n = 1, 'an inert withdrawal is listed';
+
+    DELETE FROM sensitivity_withdrawal WHERE content_address = v_ca_w;
+    DELETE FROM sensitivity_assertion  WHERE content_address = v_ca_a;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Task 4 review gap (not itself in the task-6 brief): nothing pins
+-- sensitivity_withdrawal_worklist's column set, order or types.
+--
+-- Postgres itself already refuses a CREATE OR REPLACE VIEW that drops, retypes or
+-- reorders an EXISTING output column (verified empirically against this exact view while
+-- writing this test: each attempt errors "cannot change data type/name of view column").
+-- What it does NOT catch: silently APPENDING a new trailing column (still legal under
+-- CREATE OR REPLACE, and still a contract change nobody would notice); ALTER VIEW ...
+-- RENAME COLUMN, a completely separate statement with none of CREATE OR REPLACE's
+-- protections (also verified — it renamed a live column here with no error); and any
+-- future full rewrite (DROP VIEW + CREATE VIEW), which faces none of the above
+-- restrictions at all. Migration replay on a long-lived developer database would carry
+-- any of those forward with nothing catching it. Pinned structurally against
+-- information_schema, rather than against any one row's shape, which a projection
+-- default could satisfy by accident regardless of whether the contract actually held.
+DO $$
+DECLARE
+    expected_cols  text[] := ARRAY['content_address', 'event_id', 'patient_id', 'withdraws',
+                                    'reason', 'node_origin', 'rationale'];
+    expected_types text[] := ARRAY['bytea', 'uuid', 'uuid', 'bytea', 'text', 'text', 'text'];
+    got_cols  text[];
+    got_types text[];
+BEGIN
+    SELECT array_agg(column_name ORDER BY ordinal_position),
+           array_agg(data_type ORDER BY ordinal_position)
+      INTO got_cols, got_types
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'sensitivity_withdrawal_worklist';
+
+    ASSERT got_cols = expected_cols,
+        format('sensitivity_withdrawal_worklist column set/order drifted from the pinned '
+               '7-column contract (content_address, event_id, patient_id, withdraws, '
+               'reason, node_origin, rationale): got %s', got_cols);
+    ASSERT got_types = expected_types,
+        format('sensitivity_withdrawal_worklist column types drifted from the pinned '
+               'contract: got %s', got_types);
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- ADR-0064's privilege posture for cairn_claim_authority. No db/tests/005_* mirror has a
+-- function-inventory section to extend (checked: db/tests/005_submit_test.sql covers only
+-- C5.1/C5.4), so per the brief's own fallback this lives here, beside the function's own
+-- read-path tests above. crates/cairn-node/tests/safety_ladder.rs already pins the SIBLING
+-- posture for cairn_record_safety_overclaim_flag; this is the complement — the OTHER
+-- SECURITY DEFINER function this slice added, which that Rust suite never touches.
+DO $$
+BEGIN
+    ASSERT NOT has_function_privilege('public', 'cairn_claim_authority(uuid,uuid)', 'EXECUTE'),
+        'cairn_claim_authority is SECURITY DEFINER — PUBLIC must not hold EXECUTE';
+    ASSERT has_function_privilege('cairn_agent', 'cairn_claim_authority(uuid,uuid)', 'EXECUTE'),
+        'cairn_agent reads the effective grade and therefore needs EXECUTE';
+    ASSERT (SELECT prosecdef FROM pg_proc WHERE proname = 'cairn_claim_authority'),
+        'SECURITY DEFINER is load-bearing: cairn_attestation_vouched is REVOKEd from PUBLIC';
+END $$;
+
+-- ---------------------------------------------------------------------------
 -- The category blacklist (Task 7, issue #232 part A continued): the AUTOMATIC tagging
 -- source. Runs as its own top-level, autocommitting block, deliberately OUTSIDE the
 -- BEGIN/ROLLBACK transaction above — that transaction's own seeded 'sensitivity.grade.asserted'
