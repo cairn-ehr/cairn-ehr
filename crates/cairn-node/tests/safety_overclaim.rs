@@ -4,6 +4,9 @@
 //! rewrite event_log.safety without making the column disagree with signed_bytes. So the
 //! door records instead: the bypass becomes auditable at zero clinical cost.
 mod common;
+use cairn_event::sensitivity::SubjectKind;
+use cairn_node::medication::{assert_medication, AssertMedicationInput, SubstanceCoding};
+use cairn_node::sensitivity::assert_sensitivity;
 use common::{cs, medication_setup};
 use uuid::Uuid;
 
@@ -109,6 +112,168 @@ async fn a_licensed_rung_is_not_flagged() {
     assert_eq!(n, 0, "the ordinary path must produce no noise");
 }
 
+// A moiety code fixed and uuid-shaped for the same reason safety_emission.rs's constants
+// are: db/041 registers `drugref-moiety` with code_shape 'uuid', and the strict door
+// refuses a non-uuid code. Not one of safety_emission.rs's own MOIETY_* constants — a
+// distinct value so a row this test seeds can never collide with one another suite left
+// behind in the shared `safety_class_map` table (deliberately not truncated between
+// suites; see safety_emission.rs's `own_the_class_map` doc for why).
+const MOIETY_UNGRADED_THREAD: &str = "0f8c4b1e-1b7a-5c2d-9a3e-2b6f7c8d9e30";
+
+#[tokio::test]
+async fn a_thread_scoped_grade_elsewhere_on_the_chart_does_not_false_flag_this_threads_precise_emission(
+) {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, _sk_h, _kid_h) = medication_setup(&c).await;
+
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+    c.execute(
+        "INSERT INTO safety_class_map (system, code, class, severity)
+         VALUES ('drugref-moiety', $1, 'rh-sensitizing', 'high') ON CONFLICT DO NOTHING",
+        &[&MOIETY_UNGRADED_THREAD],
+    )
+    .await
+    .expect("seed the deployment class map");
+
+    // THIS IS THE REAL EMISSION PATH (assert_medication -> seal_sign_submit ->
+    // apply_safety_rung), not the raw-safety bypass every other test in this file uses.
+    // It is what let Critical #1 through review: all three prior tests drove the door
+    // with a hand-built body, so nothing here ever called cairn_prospective_sensitivity
+    // with the thread the daemon itself would have resolved.
+
+    // Thread A: an unrelated medication on the same chart, later graded `sensitive` —
+    // thread-scoped, the granularity ADR-0062 decision 8 tells deployments to reach for.
+    let thread_a = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        &AssertMedicationInput {
+            term: "an unrelated medication",
+            coding: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            info_source: "patient",
+            started: None,
+            started_precision: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("assert thread A");
+    assert_sensitivity(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        SubjectKind::Thread,
+        thread_a,
+        "sensitive",
+        Some("test fixture: grade thread A only"),
+    )
+    .await
+    .expect("grade thread A");
+
+    // Thread B: UNGRADED, coded at assert time — #404's own guarantee is that this emits
+    // `precise` (nothing on thread B licenses anything coarser). If the door's overclaim
+    // check reads the wrong thread — or no thread at all — it will find thread A's
+    // `sensitive` grade instead, license only `kind`, and flag this correct `precise`
+    // emission as an overclaim it never made.
+    let thread_b = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "n1",
+        patient,
+        &AssertMedicationInput {
+            term: "the sensitive one",
+            coding: Some(SubstanceCoding {
+                system: "drugref-moiety",
+                code: MOIETY_UNGRADED_THREAD,
+                display: "the sensitive one",
+            }),
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            info_source: "patient",
+            started: None,
+            started_precision: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("assert thread B, coded");
+
+    // assert_medication returns the THREAD id it mints, not the event id — recover the
+    // event through the projection row (safety_emission.rs's own `assert_event_of` idiom).
+    let assert_ev: Uuid = {
+        let r = c
+            .query_one(
+                "SELECT e.event_id::text FROM event_log e
+                 JOIN medication_statement m ON m.content_address = e.content_address
+                 WHERE m.medication_id = $1::text::uuid",
+                &[&thread_b.to_string()],
+            )
+            .await
+            .expect("thread B's assert event");
+        r.get::<_, String>(0).parse().expect("event_id is a uuid")
+    };
+
+    // Positive control: emission genuinely produced `precise` — #404's own guarantee. If
+    // this is not `precise`, the ledger assertion below proves nothing about the
+    // overclaim check; it would just mean the fixture broke somewhere upstream.
+    let stored_rung: String = c
+        .query_one(
+            "SELECT safety ->> 'rung' FROM event_log WHERE event_id = $1::text::uuid",
+            &[&assert_ev.to_string()],
+        )
+        .await
+        .expect("the event must exist and carry a safety field")
+        .get(0);
+    assert_eq!(
+        stored_rung, "precise",
+        "thread B is ungraded, so a working daemon emits precise (#404) — if this is not \
+         precise, the ledger assertion below cannot mean anything"
+    );
+
+    // THE POINT OF THIS TEST (2026-08-15 review, Important #2 — the test that would have
+    // caught Critical #1). An earlier version of the door-side check passed
+    // p_thread = NULL unconditionally, which made cairn_prospective_sensitivity coarsen
+    // using thread A's `sensitive` grade — ANY thread-scoped grade anywhere on the chart,
+    // not only a grade on the thread this event is actually on — computing a licensed
+    // rung of `kind` for an event that has nothing to do with thread A, and flagging the
+    // daemon's own correct, #404-guaranteed `precise` emission as an overclaim it never
+    // made. The door must resolve the SAME thread emission did (payload.medication_id,
+    // read from b_clear after the unseal) to avoid false-flagging ordinary,
+    // correctly-licensed traffic.
+    let ca = common::content_address_of(&c, assert_ev).await;
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM safety_overclaim_flag WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "an ordinary, correctly-licensed emission on an UNGRADED thread must not be \
+         flagged just because SOME OTHER thread on the same chart carries a grade"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ADR-0063 decision 8, stated categorically: the overclaim block must never be able to
 // fail a clinical write. The ADR records a real incident that this repeats otherwise — an
@@ -194,8 +359,14 @@ async fn a_failing_grade_lookup_still_admits_the_medication_and_records_no_flag(
         .get(0);
     assert_eq!(stored_rung, "precise");
 
-    // And the outage genuinely prevented the flag from being recorded — the exception
-    // handler discarded the whole nested block, including the INSERT, not just the raise.
+    // No flag was recorded either. NOTE what this does and does not prove (2026-08-15
+    // review, Minor #4): BREAK_GRADE_LOOKUP raises unconditionally as its very FIRST
+    // statement, before `cairn_prospective_sensitivity` would ever reach a RETURN — so
+    // this assertion cannot distinguish "the nested block ran partway and was rolled
+    // back" from "the block never got past the grade lookup at all". What it DOES prove,
+    // and the only thing that matters here: after an outage, the ledger stays SILENT
+    // rather than lying — no flag row exists for an event this check never finished
+    // judging.
     let n: i64 = c
         .query_one(
             "SELECT count(*) FROM safety_overclaim_flag WHERE content_address = $1",
@@ -206,7 +377,7 @@ async fn a_failing_grade_lookup_still_admits_the_medication_and_records_no_flag(
         .get(0);
     assert_eq!(
         n, 0,
-        "a lookup that could not run must not have recorded a flag either — the whole \
-         block is swallowed, not just the part that failed"
+        "a lookup that could not run must not have recorded a flag either — the ledger \
+         must stay silent on an outage, never guess"
     );
 }

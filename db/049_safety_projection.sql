@@ -531,6 +531,12 @@ $$;
 REVOKE EXECUTE ON FUNCTION cairn_check_safety_signal(jsonb) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) TO cairn_agent;
+-- Same posture as cairn_check_safety_signal just above, and for the identical reason: a
+-- writer called ONLY from inside submit_event's SECURITY DEFINER context (2026-08-15
+-- review, Minor #5 — cairn_record_ceiling_flag, the precedent this function otherwise
+-- copies, leaves this open; closing it here rather than re-deriving the gap every read).
+-- cairn_agent needs no grant on it at all — submit_event calls it as its owner.
+REVOKE EXECUTE ON FUNCTION cairn_record_safety_overclaim_flag(bytea, uuid, text, text) FROM PUBLIC;
 
 -- The read model. REVOKE before GRANT for each, same reason as above: these are the
 -- SANCTIONED way to read the safety signal, and a reader that reaches event_log.safety

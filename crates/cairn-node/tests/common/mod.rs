@@ -642,12 +642,22 @@ pub async fn submit_medication_with_raw_safety(
     // `ensure_unwrap_key(client, node_sk)` does in the real pipeline — custody is always
     // the NODE's regardless of who signs (born-sealed erasability, ADR-0052). Idempotent:
     // a second registration of the same key is a no-op.
+    //
+    // `.expect()`, deliberately NOT `?` (2026-08-15 review, Important #3): this function's
+    // `Result` is the caller's proxy for "did the DOOR admit or refuse this write" —
+    // `safety_overclaim.rs` reads an `Err` here as ADR-0060/ADR-0063 evidence about
+    // `submit_event`'s own behaviour. A `?` on this SETUP statement would let an
+    // unrelated infrastructure failure (this call has never been observed to fail; it
+    // exists only for parity with the real pipeline) surface as an indistinguishable
+    // `Err`, misreporting an environment problem as a clinical-write cancellation in the
+    // one suite whose entire purpose is attributing a failure to the right cause.
     let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
         &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
     )
-    .await?;
+    .await
+    .expect("submit_medication_with_raw_safety: registering the node's unwrap key failed — an environment/setup problem, not the door behaviour this helper exists to exercise");
 
     let event_id = Uuid::now_v7();
     let medication_id = Uuid::now_v7();
