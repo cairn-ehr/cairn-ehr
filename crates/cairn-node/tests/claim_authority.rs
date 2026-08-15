@@ -105,9 +105,9 @@ async fn assert_grade(
 /// instead — what a genuinely un-attested peer write looks like, and a shape whose token
 /// (if any were even offered) is silently discarded by both doors because the
 /// attestation-storage branch itself is gated on the SAME responsibility claim. That shape
-/// can never be graded 'attested', so this file needs a second body builder — used by
-/// exactly one test, so it stays local rather than joining common/mod.rs's shared surface
-/// (that module's own header: "if two suites would write it identically, it goes here").
+/// can never be graded 'attested', so this file needs a second body builder — used only
+/// within this suite, so it stays local rather than joining common/mod.rs's shared surface
+/// (that module's own header: "if two SUITES would write it identically, it goes here").
 fn bearing_withdrawal_body(
     kid: &str,
     attester_kid: &str,
@@ -413,21 +413,24 @@ async fn the_read_path_works_as_cairn_agent() {
     let a = assert_grade(&c, &sk, &kid, p, 10).await;
 
     // SECURITY DEFINER is load-bearing, not stylistic (see the SQL header): without it,
-    // cairn_agent — the role the product's actual read path (cairn_sensitivity_standing,
-    // db/048) runs as — gets "permission denied" the instant it calls this predicate,
-    // because cairn_attestation_vouched is REVOKEd FROM PUBLIC. A suite that only ever
-    // runs as the connection owner would never see that failure (Slice 62's lesson: test
-    // the path the product actually calls, not a stand-in with more privilege than it has).
+    // cairn_agent — the role the product's actual read path runs as — gets "permission
+    // denied" the instant `cairn_claim_authority` calls `cairn_attestation_vouched`, which
+    // is REVOKEd FROM PUBLIC. Reading through `cairn_effective_sensitivity` (not the
+    // predicate directly) is what makes this the COMPOSED path Task 2 actually created:
+    // effective -> standing -> claim_authority, so this pins the real dependency chain, not
+    // a stand-in that happens to hinge on the same GRANT (Slice 62's lesson: test the path
+    // the product actually calls, not a stand-in with more privilege than it has).
     c.batch_execute("SET ROLE cairn_agent").await.unwrap();
-    let verdict: String = c
+    let grade: String = c
         .query_one(
-            "SELECT cairn_claim_authority($1::text::uuid, NULL)",
+            "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
             &[&a.to_string()],
         )
         .await
-        .expect("cairn_agent must be able to call the predicate without a permission error")
+        .expect("cairn_agent must be able to read the effective grade without a permission error")
         .get(0);
-    assert_eq!(verdict, "unverified");
+    c.batch_execute("RESET ROLE").await.unwrap();
+    assert_eq!(grade, "sequestered");
 }
 
 // ===========================================================================
@@ -552,6 +555,52 @@ async fn a_locally_authored_withdrawal_always_lowers() {
     assert_eq!(effective(&c, a).await, "routine");
 }
 
+#[tokio::test]
+async fn a_self_withdrawal_lowers_through_the_seam() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    // The HUMAN signs the assertion, so actor_id on both rows is that human's actor — R2's
+    // precondition. Mirrors a_human_withdrawing_their_own_assertion_is_self, which pins the
+    // PREDICATE's 'self' verdict in isolation; this test pins that the SEAM actually acts on
+    // it — the mutation check below is what makes that a real distinction, not a restatement
+    // (review finding, Important #2).
+    let a = assert_grade(&c, &sk_h, &kid_h, p, 10).await;
+
+    let withdraws_hex = hex::encode(content_address_of(&c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "mine to lower",
+    };
+    let wid = Uuid::now_v7();
+    let body = withdrawal_body_with_id(p, wid, &kid_h, &w, 20);
+    // R2 exists precisely because a remote withdrawal's attestation may not verify HERE —
+    // so an un-attested self-withdrawal must be able to land at all. The local door refuses
+    // every un-attested withdrawal unconditionally, so this goes through the remote door.
+    apply_remote_raw(&c, &sk_h, body)
+        .await
+        .expect("an un-attested withdrawal must still land at the remote door");
+
+    // THE COMMITMENT THIS PINS: ADR-0062 examined and rejected self-only withdrawal as
+    // deadlocking (the asserting clinician retired, the patient left the practice) — R2 is
+    // half of the remedy (R1 attestation is the other half), and it must not require an
+    // attester for the ordinary case of a clinician lowering their OWN un-attested claim.
+    // If the seam's `<> 'unverified'` ever silently narrowed to `= 'attested'`, this grade
+    // would stay 'sequestered' forever — the exact deadlock the design rejected.
+    assert_eq!(
+        effective(&c, a).await,
+        "routine",
+        "a human withdrawing their OWN un-attested claim must still lower the grade (R2, ADR-0062)"
+    );
+}
+
 // ===========================================================================
 // Task 3 (#380): arrival-order independence. Computing authority at READ rather than
 // stamping it at apply is what makes these pass with NO new production code — Tasks 1/2
@@ -611,14 +660,57 @@ async fn a_withdrawal_inert_because_its_target_has_not_replicated_heals_when_it_
         .await
         .unwrap();
 
-    // R2 cannot resolve (no target row), but R1 stands on its own.
-    assert_eq!(authority(&c, wid, None).await, "attested");
+    // R2 cannot resolve (no target row), but R1 stands on its own. A non-NULL target that
+    // names an event genuinely absent from event_log — not `None` — is the shape
+    // `cairn_sensitivity_standing` actually calls the predicate with (its own w.event_id,
+    // a.event_id pair); passing `None` here would prove R1 alone suffices in a situation
+    // the seam never presents (review finding, Minor #4).
+    assert_eq!(authority(&c, wid, Some(future_assert_id)).await, "attested");
 
     // Now the target lands, as a peer's event arriving on a later sync cycle. The
     // withdrawal must take effect — a delete-at-apply design would have dropped it on the
     // floor the moment it was inert, instead of leaving it to be re-evaluated at read.
     apply_remote_raw(&c, &sk, assert_body).await.unwrap();
+
+    // Close the round-trip: prove the target actually projected UNDER THE ADDRESS THE
+    // WITHDRAWAL NAMED. Without this, "routine" below is indistinguishable from three
+    // different worlds — the withdrawal correctly took effect, the assertion never
+    // projected at all, or `target_ca` (recomputed above) never matched the address the
+    // landed event actually got — because `cairn_effective_sensitivity`'s COALESCE default
+    // is ALSO 'routine' when no assertion applies. Same discipline this file's own
+    // `an_unattested_withdrawal_lands_and_converges_but_does_not_lower` already applies to
+    // admission (review finding, Important #1).
+    let projected: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sensitivity_assertion \
+             WHERE patient_id = $1::text::uuid AND content_address = $2",
+            &[&p.to_string(), &target_ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        projected, 1,
+        "the target must actually project under the address the withdrawal named"
+    );
     assert_eq!(effective(&c, future_assert_id).await, "routine");
+
+    // A CONTROL: the arrival order this test is FOR (withdrawal before its target) makes it
+    // impossible to observe "sequestered" on future_assert_id BEFORE it lands —
+    // cairn_effective_sensitivity requires the event to already be in event_log to resolve
+    // its patient/thread, so querying it earlier would just find no row, not a grade. That
+    // in-order assert-then-withdraw transition is already pinned by sensitivity_ladder.rs's
+    // a_withdrawal_lowers_the_effective_grade_and_the_assertion_survives. What CAN be pinned
+    // here, in this exact test context: a second, un-withdrawn assertion on the SAME
+    // patient with the SAME grade still reads as 'sequestered' — ruling out a harness bug
+    // where cairn_effective_sensitivity silently always answers 'routine' regardless of
+    // what stands.
+    let control = assert_grade(&c, &sk, &kid, p, 30).await;
+    assert_eq!(
+        effective(&c, control).await,
+        "sequestered",
+        "control: an un-withdrawn assertion on the same patient must still read as sequestered"
+    );
 }
 
 // THE OTHER ARRIVAL-ORDER AXIS — an attester unknown to THIS node — is NOT reachable via
