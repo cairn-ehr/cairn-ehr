@@ -701,6 +701,113 @@ GRANT EXECUTE ON FUNCTION cairn_event_type_has_no_thread(text) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_thread_patient(uuid) TO cairn_agent;
 
 -- ---------------------------------------------------------------------------
+-- 11b. The §5.9 withdrawal worklist (ADR-0064). A VIEW, deliberately, and not a flag ledger.
+--
+-- WHY NOT THE ADR-0058 t_effective_ceiling_flag IDIOM ONE FILE OVER: that records a
+-- judgement AT THE DOOR, and authority is computed at READ precisely because the answer
+-- IMPROVES — a withdrawal is inert today because its target has not replicated or its
+-- attester is not enrolled here, and clears tomorrow. An apply-time ledger would fill with
+-- rows that were true for an afternoon, and a worklist that is mostly stale is §5.12's
+-- alert-fatigue disease, self-inflicted, in the one place we are building a control.
+-- The rule for choosing: FLAG WHAT CANNOT SELF-HEAL; VIEW WHAT CAN. db/049's
+-- safety-overclaim flag is a published byte and takes the other branch.
+--
+-- Two reasons, and the second is the one nothing else in the system would show:
+--   'inert'             — the gate stopped it. Transient; disappears when it heals.
+--   'stranger-attested' — the gate LET IT THROUGH. An accountable human lowered a grade on
+--                         a chart they have authored nothing else on. Permanent, because
+--                         it is a fact about a completed act.
+--
+-- 'stranger-attested' reuses the chart-standing question that ADR-0064 REJECTED as an
+-- authority input. That is not an inconsistency: as authority it fails the locum, the
+-- night-cover registrar and the receiving ED, who must not be second-class; as SALIENCE it
+-- blocks nothing and delays nothing — the withdrawal has already taken effect. §5.13's
+-- duplicate-sweep posture: surface, never block.
+--
+-- WHY NOT A `node_origin` COMPARISON, DESPITE THE COLUMN BEING CALLED THAT (task-4
+-- ruling 2 finding). The only per-node identity this schema tracks is `local_node`
+-- (db/007), and db/007 — the WHOLE file, `trust_peer` included — is DELIBERATELY ABSENT
+-- from the cairn-sync subset (crates/cairn-sync/src/main.rs's own header comment): a
+-- reference to it here would fail db/048's load on a sync node and take clinical sync
+-- down. There is also no OTHER canonical "this node" signal: `node_origin` on every row
+-- (this table, `sensitivity_assertion`, `event_log` itself) is copied VERBATIM from the
+-- event body's own self-asserted `hlc.node_origin` field, identically at both doors
+-- (db/005:~1159, db/020:~427) — a client-chosen string, not a verified one, and there is
+-- no reference value to compare it against without `local_node`. So this view answers a
+-- DIFFERENT, and better, question: not "which network node relayed this" (topology,
+-- unverifiable here) but "has the accountable human ever authored anything else on THIS
+-- CHART" (an actual fact `event_log`/`actor_current` can answer in the cairn-sync subset
+-- too) — which is what "stranger to the chart" means in the design's own prose. `w.
+-- node_origin` is carried through as a plain OUTPUT column for an operator's own
+-- investigation, but never drives `reason`.
+--
+-- WHO IS "THE ACCOUNTABLE ACTOR": for R1 ('attested'), the VOUCHED attester — resolved
+-- from `attester_key` through `actor_current`, exactly like `cairn_claim_authority`'s own
+-- R1 arm, and with the SAME exactly-one-human discipline (ambiguous key => NULL, never a
+-- guess: principle 4, uncertainty withholds). For R2 ('self'), there is no attester to
+-- resolve (attester_key is typically NULL), so this falls back to the withdrawal's own
+-- `actor_id` — which R2 already requires to equal the TARGET assertion's own actor. That
+-- fallback is why R2 never needs a special case: the actor withdrawing their OWN claim
+-- necessarily HAS other content on the chart (the claim itself), so the "no other
+-- presence" test below always excludes it from 'stranger-attested' — precisely production's
+-- `sensitivity::withdraw_sensitivity` self-signed, self-attested shape (task 4's third test).
+--
+-- WHY 'inert' ALSO ASKS `cairn_sensitivity_standing`, NOT JUST THIS ROW'S OWN VERDICT.
+-- A withdrawal's OWN `cairn_claim_authority(w.event_id, a.event_id)` verdict can never
+-- change once stamped un-attested — `attester_key` on an already-admitted row is fixed
+-- forever. So if a SECOND, authoritative withdrawal later strips the SAME target, the
+-- first (still-unverified) withdrawal's row would stay listed 'inert' FOREVER under a
+-- naive per-row reading — noise about a problem that is already solved, the exact alert
+-- fatigue this view exists to avoid. Gating on "is the target STILL standing"
+-- (`cairn_sensitivity_standing`, section 9's own set-difference) makes an inert row
+-- self-clear the moment ANY accountable route achieves the same effect, not only when
+-- THIS SPECIFIC withdrawal's own attestation improves — which is what "the view asks the
+-- CURRENT question rather than replaying a stamped verdict" (section 6a) actually means
+-- for a chart carrying more than one withdrawal of the same target. A target that has
+-- simply not REPLICATED here yet (arrival-order independence, section 9's own note) is
+-- NOT yet in `sensitivity_assertion` at all — `target_content_address IS NULL` — and must
+-- still be listed 'inert': there is nothing to check standing OF yet, so the OR below
+-- treats "not landed" and "landed and still standing" as the same "still worth watching"
+-- case, and only "landed and ALREADY stripped elsewhere" as moot.
+CREATE OR REPLACE VIEW sensitivity_withdrawal_worklist AS
+WITH judged AS (
+    SELECT w.content_address, w.event_id, w.patient_id, w.withdraws, w.node_origin,
+           w.rationale,
+           a.content_address AS target_content_address,
+           cairn_claim_authority(w.event_id, a.event_id) AS verdict,
+           -- The accountable actor: the vouched R1 attester if there is one (exactly one
+           -- human, or NULL if ambiguous/absent — the `count(*) = 1` guard is what keeps
+           -- a key mapped to several actors from silently picking one), else the
+           -- withdrawal's own actor (the R2 self case, which is always already excluded
+           -- below because that actor authored the target itself).
+           COALESCE(
+               (SELECT CASE WHEN count(*) = 1 THEN max(act.actor_id) END
+                  FROM event_log le, actor_current act
+                 WHERE le.event_id = w.event_id
+                   AND le.attester_key IS NOT NULL
+                   AND act.signing_key_id = encode(le.attester_key, 'hex')
+                   AND act.kind = 'human'),
+               (SELECT le2.actor_id FROM event_log le2 WHERE le2.event_id = w.event_id)
+           ) AS responsible_actor_id
+      FROM sensitivity_withdrawal w
+      LEFT JOIN sensitivity_assertion a ON a.content_address = w.withdraws
+)
+SELECT content_address, event_id, patient_id, withdraws,
+       CASE WHEN verdict = 'unverified' THEN 'inert' ELSE 'stranger-attested' END AS reason,
+       node_origin, rationale
+  FROM judged
+ WHERE (verdict = 'unverified'
+        AND (target_content_address IS NULL
+             OR EXISTS (SELECT 1 FROM cairn_sensitivity_standing(judged.patient_id) st
+                         WHERE st.content_address = judged.target_content_address)))
+    OR (verdict <> 'unverified'
+        AND NOT EXISTS (SELECT 1 FROM event_log other
+                          WHERE other.patient_id = judged.patient_id
+                            AND other.actor_id = judged.responsible_actor_id
+                            AND other.event_id <> judged.event_id));
+GRANT SELECT ON sensitivity_withdrawal_worklist TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
 -- 12. The ceremony. Called from db/005 (LOCAL authoring) and from NOWHERE ELSE.
 --
 --     Raising is frictionless — err toward confidential — with these exceptions:

@@ -204,8 +204,13 @@ fn derivation_finds_the_expected_helpers() {
             // public in the same slice's Task 3 (arrival-order independence): a withdrawal
             // that targets an event before that event has replicated needs to sign the
             // target body once to learn its content address, then submit it separately later.
+            // `assert_chart_grade` / `bearing_withdrawal_body` joined in Task 4 (the
+            // withdrawal worklist, `claim_authority_worklist.rs`): both were file-local to
+            // `claim_authority.rs` until that new suite needed the identical shapes —
+            // "if two suites would write it identically, it goes here".
             "async fn apply_remote_attested(",
             "async fn apply_remote_raw(",
+            "async fn assert_chart_grade(",
             "async fn attestation_count(",
             "async fn content_address_of(",
             "async fn enroll_human(",
@@ -217,6 +222,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
+            "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
             "fn withdrawal_body_with_id(",
         ],

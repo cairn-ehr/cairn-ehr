@@ -25,10 +25,11 @@
 //! specifically the CROSS-NODE case, which the remote door is what actually exercises.
 mod common;
 use cairn_event::sensitivity::*;
-use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
+use cairn_event::{ClockGrade, EventBody, Hlc};
 use common::{
-    apply_remote_attested, apply_remote_raw, body_from_spec, content_address_of, cs, enroll_human,
-    setup, submit_attested, submit_registration, withdrawal_body_with_id, EventSpec,
+    apply_remote_attested, apply_remote_raw, assert_chart_grade, bearing_withdrawal_body,
+    body_from_spec, content_address_of, cs, enroll_human, setup, submit_attested,
+    submit_registration, withdrawal_body_with_id, EventSpec,
 };
 use uuid::Uuid;
 
@@ -59,90 +60,6 @@ async fn effective(c: &tokio_postgres::Client, event: Uuid) -> String {
     .get(0)
 }
 
-/// A standing assertion, submitted by `sk`/`kid`, returning its event id.
-async fn assert_grade(
-    c: &tokio_postgres::Client,
-    sk: &SigningKey,
-    kid: &str,
-    patient: Uuid,
-    wall: i64,
-) -> Uuid {
-    let a = SensitivityAssertion {
-        subject_kind: SubjectKind::Patient,
-        subject_id: patient,
-        grade: "sequestered",
-        source: "human",
-        rationale: Some("protected witness"),
-    };
-    let id = Uuid::now_v7();
-    common::submit_signed_with_id(
-        c,
-        sk,
-        kid,
-        id,
-        EventSpec {
-            patient,
-            event_type: SENSITIVITY_EVENT_TYPE,
-            schema_version: SENSITIVITY_SCHEMA_VERSION,
-            payload: sensitivity_assertion_body(&a),
-            plaintext_twin: Some(render_sensitivity_twin(&a)),
-            wall,
-        },
-    )
-    .await
-    .unwrap();
-    id
-}
-
-/// A withdrawal `EventBody` whose contributor claims RESPONSIBILITY for `attester_kid`
-/// rather than for the signer — the ONLY shape either door's attestation gate will
-/// validate and STORE. `cairn_responsibility_bound` (db/005, mirrored at db/020) requires
-/// the bearing contributor's `actor_id` (and `cairn_check_contributors`'s
-/// `responsibility.held_by`) to equal the verified attester's own key, so a device may
-/// sign while a human attests, and the token still lands on `event_log.attester_key`.
-///
-/// `withdrawal_body_with_id` (common/mod.rs) builds the plain "recorded" contributor
-/// instead — what a genuinely un-attested peer write looks like, and a shape whose token
-/// (if any were even offered) is silently discarded by both doors because the
-/// attestation-storage branch itself is gated on the SAME responsibility claim. That shape
-/// can never be graded 'attested', so this file needs a second body builder — used only
-/// within this suite, so it stays local rather than joining common/mod.rs's shared surface
-/// (that module's own header: "if two SUITES would write it identically, it goes here").
-fn bearing_withdrawal_body(
-    kid: &str,
-    attester_kid: &str,
-    patient: Uuid,
-    event_id: Uuid,
-    w: &SensitivityWithdrawal,
-    wall: i64,
-) -> EventBody {
-    EventBody {
-        event_id: event_id.to_string(),
-        patient_id: patient.to_string(),
-        event_type: WITHDRAWAL_EVENT_TYPE.into(),
-        schema_version: WITHDRAWAL_SCHEMA_VERSION.into(),
-        hlc: Hlc {
-            wall,
-            counter: 0,
-            node_origin: "peer".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        // "attested" + a responsibility marker naming the ATTESTER (not the signer): the
-        // ADR-0051 wire shape both doors' attestation gate demands before it will verify
-        // and STORE the token as this event's `attester_key` (mirrors
-        // `cairn-node::sensitivity::withdraw_sensitivity`, generalised to a
-        // different-signer/different-attester pair).
-        contributors: serde_json::json!([{"actor_id": attester_kid, "role": "attested",
-                                          "responsibility": {"held_by": attester_kid}}]),
-        payload: sensitivity_withdrawal_body(w),
-        attachments: vec![],
-        plaintext_twin: Some(render_withdrawal_twin(w)),
-        clock_grade: ClockGrade::SelfAsserted,
-        safety: None,
-    }
-}
-
 #[tokio::test]
 async fn an_unattested_claim_is_unverified() {
     let Some(base) = cs() else { return };
@@ -154,7 +71,7 @@ async fn an_unattested_claim_is_unverified() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // The device key signed it; no attestation rides it, and the signer is not human.
     assert_eq!(authority(&c, a, None).await, "unverified");
@@ -171,7 +88,7 @@ async fn an_event_with_no_attestation_at_all_is_unverified() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // THE GUARD THIS TEST EXISTS FOR: cairn_attestation_vouched returns TRUE for an event
     // carrying NO attestation, because "vouched" is the ABSENCE of an unvouched marker row.
@@ -295,7 +212,7 @@ async fn a_vouched_human_attestation_is_attested() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // A peer's honestly-completed ceremony: the device relays, the human vouches. This
     // bearing-contributor shape IS accepted by the LOCAL door too — it's the same shape
@@ -329,7 +246,7 @@ async fn a_human_withdrawing_their_own_assertion_is_self() {
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
     // The HUMAN signs the assertion, so actor_id on both rows is that human's actor.
-    let a = assert_grade(&c, &sk_h, &kid_h, p, 10).await;
+    let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
 
     let withdraws_hex = hex::encode(content_address_of(&c, a).await);
     let w = SensitivityWithdrawal {
@@ -361,7 +278,7 @@ async fn an_advisory_actor_cannot_self_withdraw_its_own_protective_tag() {
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
     // `setup` enrols a DEVICE/agent actor. It auto-tags, then tries to strip its own tag.
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     let withdraws_hex = hex::encode(content_address_of(&c, a).await);
     let w = SensitivityWithdrawal {
@@ -393,7 +310,7 @@ async fn no_target_means_r2_cannot_apply() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk_h, &kid_h, p, 10).await;
+    let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
 
     // Same event, NULL target: R2 is unavailable, and this assertion carries no attestation.
     assert_eq!(authority(&c, a, None).await, "unverified");
@@ -410,7 +327,7 @@ async fn the_read_path_works_as_cairn_agent() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // SECURITY DEFINER is load-bearing, not stylistic (see the SQL header): without it,
     // cairn_agent — the role the product's actual read path runs as — gets "permission
@@ -451,7 +368,7 @@ async fn an_unattested_withdrawal_lands_and_converges_but_does_not_lower() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
     let target = content_address_of(&c, a).await;
 
     let w = SensitivityWithdrawal {
@@ -498,7 +415,7 @@ async fn an_attested_cross_node_withdrawal_lowers() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // A peer's honestly-completed ceremony (the same bearing shape
     // `a_vouched_human_attestation_is_attested` above already lands), reused here to also
@@ -534,7 +451,7 @@ async fn a_locally_authored_withdrawal_always_lowers() {
 
     let p = Uuid::now_v7();
     submit_registration(&c, &sk, &kid, p, 1).await;
-    let a = assert_grade(&c, &sk, &kid, p, 10).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // The LOCAL door already demands a bound human author for a withdrawal (db/048's
     // ceremony, ADR-0062 decision 7 / ADR-0053), so anything it accepts clears the bar BY
@@ -572,7 +489,7 @@ async fn a_self_withdrawal_lowers_through_the_seam() {
     // PREDICATE's 'self' verdict in isolation; this test pins that the SEAM actually acts on
     // it — the mutation check below is what makes that a real distinction, not a restatement
     // (review finding, Important #2).
-    let a = assert_grade(&c, &sk_h, &kid_h, p, 10).await;
+    let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
 
     let withdraws_hex = hex::encode(content_address_of(&c, a).await);
     let w = SensitivityWithdrawal {
@@ -705,7 +622,7 @@ async fn a_withdrawal_inert_because_its_target_has_not_replicated_heals_when_it_
     // patient with the SAME grade still reads as 'sequestered' — ruling out a harness bug
     // where cairn_effective_sensitivity silently always answers 'routine' regardless of
     // what stands.
-    let control = assert_grade(&c, &sk, &kid, p, 30).await;
+    let control = assert_chart_grade(&c, &sk, &kid, p, 30, "sequestered").await;
     assert_eq!(
         effective(&c, control).await,
         "sequestered",

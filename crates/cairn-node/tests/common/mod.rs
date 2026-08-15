@@ -219,6 +219,50 @@ pub async fn content_address_of(c: &Client, event_id: Uuid) -> Vec<u8> {
     .get(0)
 }
 
+/// A standing `sensitivity.grade.asserted` event, chart-wide (`SubjectKind::Patient`),
+/// submitted by `sk`/`kid` at HLC wall `wall`, naming `grade`. Returns the assertion's
+/// own event id.
+///
+/// PROMOTED from `claim_authority.rs`'s file-local `assert_grade` (#380 Task 4):
+/// `claim_authority_worklist.rs` needs to mint a chart-wide grade in the identical
+/// shape — the module header's own rule, "if two suites would write it identically, it
+/// goes here". `grade` is now a parameter rather than a hardcoded `"sequestered"`
+/// literal, since a shared helper should not bake in one caller's specific choice.
+pub async fn assert_chart_grade(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    patient: Uuid,
+    wall: i64,
+    grade: &str,
+) -> Uuid {
+    let a = cairn_event::sensitivity::SensitivityAssertion {
+        subject_kind: cairn_event::sensitivity::SubjectKind::Patient,
+        subject_id: patient,
+        grade,
+        source: "human",
+        rationale: Some("protected witness"),
+    };
+    let id = Uuid::now_v7();
+    submit_signed_with_id(
+        c,
+        sk,
+        kid,
+        id,
+        EventSpec {
+            patient,
+            event_type: cairn_event::sensitivity::SENSITIVITY_EVENT_TYPE,
+            schema_version: cairn_event::sensitivity::SENSITIVITY_SCHEMA_VERSION,
+            payload: cairn_event::sensitivity::sensitivity_assertion_body(&a),
+            plaintext_twin: Some(cairn_event::sensitivity::render_sensitivity_twin(&a)),
+            wall,
+        },
+    )
+    .await
+    .unwrap();
+    id
+}
+
 /// A withdrawal `EventBody` with a caller-chosen event id and a plain non-bearing
 /// "recorded" contributor — what a genuinely UN-ATTESTED withdrawal looks like on the
 /// wire (the same shape `sensitivity_ceremony.rs`'s `peer_withdrawal` already uses), so the
@@ -227,7 +271,7 @@ pub async fn content_address_of(c: &Client, event_id: Uuid) -> Vec<u8> {
 /// token offered alongside it would be silently discarded, never stored — so this shape can
 /// only ever grade 'self' or 'unverified', never 'attested'. A caller that needs an
 /// attested withdrawal to land needs the OTHER contributor shape (see
-/// `claim_authority.rs`'s file-local `bearing_withdrawal_body`).
+/// [`bearing_withdrawal_body`], below).
 pub fn withdrawal_body_with_id(
     patient: Uuid,
     event_id: Uuid,
@@ -247,6 +291,55 @@ pub fn withdrawal_body_with_id(
             wall,
         },
     )
+}
+
+/// A withdrawal `EventBody` whose contributor claims RESPONSIBILITY for `attester_kid`
+/// rather than for the signer — the ONLY shape either door's attestation gate will
+/// validate and STORE. `cairn_responsibility_bound` (db/005, mirrored at db/020) requires
+/// the bearing contributor's `actor_id` (and `cairn_check_contributors`'s
+/// `responsibility.held_by`) to equal the verified attester's own key, so a device may
+/// sign while a human attests, and the token still lands on `event_log.attester_key`.
+/// Mirrors production's `sensitivity::withdraw_sensitivity` (`crates/cairn-node/src/
+/// sensitivity.rs`), generalised to a different-signer/different-attester pair — passing
+/// the SAME `kid` for both arguments reproduces production's own self-signed,
+/// self-attested local shape exactly.
+///
+/// PROMOTED from `claim_authority.rs`'s file-local copy (#380 Task 4):
+/// `claim_authority_worklist.rs` needs the identical bearing shape to build an ATTESTED
+/// withdrawal (`withdrawal_body_with_id` above can never grade 'attested' — its token is
+/// silently discarded by both doors) — two suites writing it identically is exactly the
+/// module header's promotion rule.
+pub fn bearing_withdrawal_body(
+    kid: &str,
+    attester_kid: &str,
+    patient: Uuid,
+    event_id: Uuid,
+    w: &cairn_event::sensitivity::SensitivityWithdrawal,
+    wall: i64,
+) -> EventBody {
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: cairn_event::sensitivity::WITHDRAWAL_EVENT_TYPE.into(),
+        schema_version: cairn_event::sensitivity::WITHDRAWAL_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        // "attested" + a responsibility marker naming the ATTESTER (not the signer): the
+        // ADR-0051 wire shape both doors' attestation gate demands before it will verify
+        // and STORE the token as this event's `attester_key`.
+        contributors: serde_json::json!([{"actor_id": attester_kid, "role": "attested",
+                                          "responsibility": {"held_by": attester_kid}}]),
+        payload: cairn_event::sensitivity::sensitivity_withdrawal_body(w),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::sensitivity::render_withdrawal_twin(w)),
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    }
 }
 
 /// Sign and apply a pre-built body with NO attestation token, through the REMOTE door
