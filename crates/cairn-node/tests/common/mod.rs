@@ -604,6 +604,111 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     (sk_d, kid_d, sk_h, kid_h)
 }
 
+/// Build, seal, sign and submit a `clinical.medication.asserted` event whose CLEAR
+/// `safety` field is set to `safety` VERBATIM — bypassing `apply_safety_rung`'s
+/// grade-driven coarsening entirely. That bypass IS the scenario: a hostile client with
+/// direct DB access (or an ordinary older client that never ran the daemon's coarsening
+/// step) can sign and submit any shape it likes; #405 part 2 is the door-side record of
+/// that fact, never a refusal (ADR-0060, ADR-0064).
+///
+/// Modelled on `crates/cairn-node/src/medication/sealed_submit.rs`'s `seal_sign_submit`
+/// path, minus the ONE call (`apply_safety_rung`) that chooses the rung from the chart's
+/// standing grade — everything else (seal, register the unwrap key, sign, submit through
+/// the strict door with the DEK as the 4th argument) is the same pipeline production uses.
+///
+/// Signs with the HUMAN key and takes ADR-0053 authorship (`with_human_author`) — the
+/// shape every real medication assert in this slice carries — while `sk`/`kid` (the
+/// device/node key) re-registers the node's unwrap key, exactly as `ensure_unwrap_key`
+/// does on every real submit. Re-registering is a no-op when `medication_setup` already
+/// registered the same key (idempotent — see `cairn_register_unwrap_key`'s own doc), so
+/// this helper does not depend on being called only after that fixture.
+///
+/// Returns the submitted event's content address (`event_log.content_address`), or the
+/// door's rejection — NOT unwrapped, so a caller asserting ADMISSION can still say why a
+/// rejection is a test failure, and a caller proving the shape floor still refuses
+/// something malformed can match on it.
+#[allow(clippy::too_many_arguments)] // one parameter per wire value, mirroring assert_medication's own allow
+pub async fn submit_medication_with_raw_safety(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> Result<Vec<u8>, tokio_postgres::Error> {
+    // Re-register the node's unwrap key from the DEVICE key, exactly as
+    // `ensure_unwrap_key(client, node_sk)` does in the real pipeline — custody is always
+    // the NODE's regardless of who signs (born-sealed erasability, ADR-0052). Idempotent:
+    // a second registration of the same key is a no-op.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await?;
+
+    let event_id = Uuid::now_v7();
+    let medication_id = Uuid::now_v7();
+    let hlc = Hlc {
+        wall,
+        counter: 0,
+        node_origin: "hostile-probe".into(),
+    };
+    let input = cairn_node::medication::AssertMedicationInput {
+        term: "raw-safety-probe",
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "clinician-observed",
+        started: None,
+        started_precision: None,
+    };
+    // `safety: None` — no PRECISE claim under the seal. Irrelevant to this scenario:
+    // `cairn_check_safety_signal` and the new overclaim check both read only the CLEAR
+    // top-level `safety` field this helper sets directly, below.
+    let body = cairn_node::medication::build_assert_body(
+        event_id,
+        medication_id,
+        patient,
+        &input,
+        kid,
+        hlc,
+        None,
+    );
+    // ADR-0053: the human takes authorship and becomes the signer.
+    let mut body = cairn_event::contributor::with_human_author(body, kid_h);
+
+    // THE BYPASS. Production's `seal_sign_submit` would call `apply_safety_rung` here,
+    // which looks up the chart's standing grade and coarsens `payload.safety` (absent
+    // above) down to a licensed rung. This helper skips that call entirely and writes the
+    // caller's value straight onto the envelope — exactly what a peer signing raw bytes,
+    // honest or hostile, would produce.
+    body.safety = Some(safety);
+
+    let clear_twin = body
+        .plaintext_twin
+        .take()
+        .expect("build_assert_body always sets a plaintext twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &clear_twin, &body.event_id)
+            .expect("seal a well-formed medication payload");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+
+    let signed = sign(&body, sk_h).expect("sign the sealed medication body");
+    let ca = signed.content_address.clone();
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await?;
+    Ok(ca)
+}
+
 /// How many attestation rows a medication thread carries.
 ///
 /// Shared by the two #288 medication suites (`medication_read.rs`, `medication_signoff.rs`),

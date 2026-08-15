@@ -907,6 +907,59 @@ BEGIN
     --     advisory field must never cancel clinical content (ADR-0060). See db/049 section 4.
     PERFORM cairn_check_safety_signal(b);
 
+    -- 1d'. #405 part 2 / ADR-0064: an emitted rung FINER than this chart's grade licenses
+    --      is RECORDED, never refused (db/049's `safety_overclaim_flag`/
+    --      `cairn_record_safety_overclaim_flag` — see that file for why the block is
+    --      LOCAL-DOOR-ONLY, deliberately breaking the `cairn_record_ceiling_flag`
+    --      precedent it otherwise copies).
+    --
+    --      MUST NOT FAIL A CLINICAL WRITE (ADR-0063 decision 8, stated categorically — and
+    --      the ADR records the real incident this repeats otherwise: an earlier safety
+    --      lookup propagated its error with a bare call, so a missing grant or a statement
+    --      timeout aborted the MEDICATION ASSERTION over a safety class no clinician
+    --      caused). Everything inside — the grade lookup, both rank lookups, the flag
+    --      insert — runs inside its OWN block with a blanket exception handler, so any
+    --      raise here (a missing grant, a timeout, a NULL where a row was expected, a cast
+    --      on a shape this node cannot parse) is swallowed and the write proceeds. An
+    --      unrecorded overclaim is a bounded loss; a refused medication assert is not.
+    IF b -> 'safety' ->> 'rung' IS NOT NULL THEN
+        BEGIN
+            DECLARE
+                -- The rung THIS chart's grade licenses right now, computed the same way
+                -- emission does (crate::safety::prospective_rung / db/049 section 6):
+                -- cairn_safety_rung_for_rank(cairn_sensitivity_rank(grade)). p_thread is
+                -- NULL because by this point in submit_event the body is already SEALED
+                -- (step 0's cairn_body(p_signed) parse ran on the wire form) — the clear
+                -- payload.medication_id apply_safety_rung reads pre-seal is no longer
+                -- readable here. NULL is db/049 section 6's own conservative bound for an
+                -- unresolved thread: it can only COARSEN the licensed rung, never widen it,
+                -- so this check is never MORE permissive than emission was.
+                v_licensed text;
+            BEGIN
+                SELECT cairn_safety_rung_for_rank(cairn_sensitivity_rank(g.grade))
+                  INTO v_licensed
+                  FROM cairn_prospective_sensitivity((b ->> 'patient_id')::uuid, NULL) g;
+
+                -- Lower rank = FINER = discloses MORE (db/049 section 2: precise=0 <
+                -- kind=10 < existence=20). An emitted rung ranked below what the chart
+                -- licenses discloses more than the grade allows — the overclaim direction.
+                IF cairn_safety_rung_rank(b -> 'safety' ->> 'rung')
+                 < cairn_safety_rung_rank(v_licensed) THEN
+                    PERFORM cairn_record_safety_overclaim_flag(
+                        v_ca, (b ->> 'patient_id')::uuid,
+                        b -> 'safety' ->> 'rung', v_licensed);
+                END IF;
+            END;
+        EXCEPTION WHEN OTHERS THEN
+            -- Advisory ledger entry only — never allowed to fail a clinical write
+            -- (ADR-0063 decision 8). Logged so a lookup failing on every write is visible
+            -- operationally (mirrors crate::safety::advisory_or_withheld's eprintln), but
+            -- the write itself proceeds regardless.
+            RAISE WARNING 'submit_event: safety-overclaim check failed for %, continuing without recording it (advisory, never fails a clinical write — ADR-0063 decision 8): %',
+                v_ca, SQLERRM;
+        END;
+    END IF;
+
     -- 2. Resolve the signer against the actor registry (must be enrolled, non-revoked)
     --    and RECORD the resolution (issue #99): a unique key->actor mapping stamps the
     --    admitting actor_id on the row, so a later contamination-cascade recall selects

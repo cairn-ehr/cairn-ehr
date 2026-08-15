@@ -208,6 +208,10 @@ fn derivation_finds_the_expected_helpers() {
             // withdrawal worklist, `claim_authority_worklist.rs`): both were file-local to
             // `claim_authority.rs` until that new suite needed the identical shapes —
             // "if two suites would write it identically, it goes here".
+            // `submit_medication_with_raw_safety` joined in #405 part 2
+            // (`safety_overclaim.rs`): it builds a medication assert whose CLEAR `safety`
+            // field is set VERBATIM, bypassing `apply_safety_rung`'s coarsening — the
+            // hostile-client shape the door-side overclaim ledger exists to catch.
             "async fn apply_remote_attested(",
             "async fn apply_remote_raw(",
             "async fn assert_chart_grade(",
@@ -218,6 +222,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn person_chart_trust(",
             "async fn register_pair(",
             "async fn submit_attested(",
+            "async fn submit_medication_with_raw_safety(",
             "async fn submit_registration(",
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
