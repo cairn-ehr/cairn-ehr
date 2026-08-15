@@ -24,6 +24,16 @@
 - **Run cargo with a scratch target dir** to avoid the rust-analyzer `target/` lock: `CARGO_TARGET_DIR=/tmp/cairn-authority cargo test …`.
 - **Test env:** `CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=hherb dbname=cairn_test"`. Without it DB-gated tests **self-skip and cargo counts them as passed** — a green run proves nothing unless the variable is set.
 
+## Paper-parity benchmark (§1.2)
+
+This changes a clinical workflow at the in-DB floor — the act of lowering a confidentiality grade — so it carries a benchmark rather than the forced-rationale escape. The full argument is the spec's §10.
+
+- **Paper counterpart:** lowering a confidentiality marking on a paper chart — striking the restriction and initialling it. One signed act by a named person.
+- **Steps:** paper *N* = 1 (strike + initial). Architecture-forced *M* = 1 — the withdrawal carries the attestation the local door already demands of every locally-authored withdrawal (ADR-0062 decision 7), so no new gesture is added for the clinician doing the work. **M = N — no architecture defect.** UI bundling target *K* = 1, unchanged: the attestation rides the existing sign gesture.
+- **Time + cognitive load:** no change at the authoring surface, so no new budget is owed there. The one changed experience is a *reading* one on a peer node — a grade that does not drop when expected — and Task 4's worklist exists to explain it. Budget: an operator must be able to answer *"why did this withdrawal not take effect?"* in **one query with no raw SQL**, satisfied by the `inert` row naming the reason.
+
+The cross-node case has **no paper counterpart at all** — paper does not replicate — so paper-parity constrains the local half of this design and is silent on the remote half. Stated rather than elided.
+
 ## File Structure
 
 | file | responsibility | change |
