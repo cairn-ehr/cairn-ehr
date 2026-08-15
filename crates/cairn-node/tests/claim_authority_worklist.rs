@@ -5,12 +5,20 @@
 //! Both `assert_chart_grade` and `bearing_withdrawal_body` are `common/mod.rs` helpers
 //! promoted out of `claim_authority.rs`'s file-local copies for this suite (Task 4) — see
 //! that module's own doc comments for the full shape rationale.
+//!
+//! `a_stranger_who_later_writes_on_the_chart_stays_listed` and
+//! `a_strangers_earlier_presence_that_replicates_late_clears_the_row` pin the review fix
+//! for task-4 Important #1: "no prior presence" in db/048's view is bounded to events AT OR
+//! BEFORE the withdrawal's own HLC, so a flagged actor cannot clear their own row simply by
+//! continuing to work on the chart afterwards, while an event that genuinely predates the
+//! strip still clears the row on arriving late (arrival-order independence, same as
+//! everywhere else in this slice).
 mod common;
 use cairn_event::sensitivity::*;
 use common::{
     apply_remote_attested, apply_remote_raw, assert_chart_grade, bearing_withdrawal_body,
-    content_address_of, cs, enroll_human, setup, submit_attested, submit_registration,
-    withdrawal_body_with_id,
+    body_from_spec, content_address_of, cs, enroll_human, setup, submit_attested,
+    submit_registration, withdrawal_body_with_id, EventSpec,
 };
 use uuid::Uuid;
 
@@ -162,10 +170,23 @@ async fn a_local_clinicians_own_withdrawal_is_not_on_the_worklist() {
     // along, lowering their own grade with a properly completed ceremony.
     let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
     let target = content_address_of(&c, a).await;
+    // Precondition: the grade really was standing before the withdrawal, so the "routine"
+    // read after it below is a genuine BEFORE/AFTER comparison rather than a precondition
+    // that could never have failed either way.
+    assert_eq!(
+        effective_grade(&c, a).await,
+        "sequestered",
+        "precondition: the grade must actually be standing before the withdrawal"
+    );
     let w = SensitivityWithdrawal {
         withdraws_hex: &hex::encode(&target),
         rationale: "consented",
     };
+    // `bearing_withdrawal_body` hardcodes the wire body's `hlc.node_origin` to "peer"
+    // regardless of which door it is submitted through — harmless here, since the view
+    // never reads `node_origin` to decide `reason` (see db/048's "WHY NOT A `node_origin`
+    // COMPARISON" comment); this withdrawal is genuinely LOCAL because it goes through
+    // `submit_attested` (`submit_event`), not because of the label the body itself carries.
     let body = bearing_withdrawal_body(&kid_h, &kid_h, p, Uuid::now_v7(), &w, 20);
     submit_attested(&c, &sk_h, body, &sk_h, &kid_h)
         .await
@@ -197,4 +218,144 @@ async fn a_local_clinicians_own_withdrawal_is_not_on_the_worklist() {
     // The routine case must produce NO noise, or the worklist is unusable on day one
     // (§5.12 alert fatigue — the disease this project names as the enemy).
     assert!(reasons(&c, p).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_worklist_is_readable_as_cairn_agent() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
+    let target = content_address_of(&c, a).await;
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &hex::encode(&target),
+        rationale: "strip",
+    };
+    apply_remote_raw(
+        &c,
+        &sk,
+        withdrawal_body_with_id(p, Uuid::now_v7(), &kid, &w, 20),
+    )
+    .await
+    .expect("ADMITTED — authority gates effect, never admission");
+
+    // `GRANT SELECT ON sensitivity_withdrawal_worklist TO cairn_agent` was a hard
+    // requirement of the brief ("matching db/048's explicit-grant discipline"), and a
+    // missing or wrong grant is INVISIBLE under the test superuser every other test in
+    // this file runs as — exactly the trap `claim_authority.rs`'s own
+    // `the_read_path_works_as_cairn_agent` exists to catch (see that test's module
+    // comment on why SECURITY DEFINER / explicit grants are load-bearing, not stylistic).
+    // A view executes its functions as the INVOKER, so this pins the actual product role
+    // reading the actual view, not a stand-in with more privilege than it has.
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    let rows = reasons(&c, p).await;
+    c.batch_execute("RESET ROLE").await.unwrap();
+    assert_eq!(
+        rows,
+        vec!["inert"],
+        "cairn_agent must be able to read the worklist without a permission error"
+    );
+}
+
+#[tokio::test]
+async fn a_stranger_who_later_writes_on_the_chart_stays_listed() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
+    let target = content_address_of(&c, a).await;
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &hex::encode(&target),
+        rationale: "consented",
+    };
+    let body = bearing_withdrawal_body(&kid, &kid_h, p, Uuid::now_v7(), &w, 20);
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("a properly attested cross-node withdrawal must land");
+    assert_eq!(reasons(&c, p).await, vec!["stranger-attested"]);
+
+    // Review finding, task-4 Important #1: the locum documents the consultation TEN
+    // MINUTES LATER — a HIGHER HLC wall (30) than the withdrawal's (20). The row must NOT
+    // clear here. "No prior presence" is a fact about the MOMENT of the strip; later
+    // activity does not retroactively make it accountable. If it cleared, the one act
+    // this view exists to make visible would erase itself the instant the flagged party
+    // did anything else on the chart at all — the exact defect the review caught.
+    assert_chart_grade(&c, &sk_h, &kid_h, p, 30, "restricted").await;
+    assert_eq!(
+        reasons(&c, p).await,
+        vec!["stranger-attested"],
+        "later activity must not retroactively clear the row"
+    );
+}
+
+#[tokio::test]
+async fn a_strangers_earlier_presence_that_replicates_late_clears_the_row() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
+    let target = content_address_of(&c, a).await;
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &hex::encode(&target),
+        rationale: "consented",
+    };
+    let body = bearing_withdrawal_body(&kid, &kid_h, p, Uuid::now_v7(), &w, 20);
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("a properly attested cross-node withdrawal must land");
+    assert_eq!(reasons(&c, p).await, vec!["stranger-attested"]);
+
+    // The OTHER direction of the same Important #1 fix: the human's OWN event — HLC wall
+    // 5, BEFORE the withdrawal's wall 20 — now replicates to this node. Set-union sync has
+    // no ordering (the same arrival-order independence claim_authority.rs's Task 3 tests
+    // pin elsewhere in this slice): the event genuinely predates the strip, it has simply
+    // not LANDED here until now. This is NOT the defect the review caught — the actor
+    // really did have prior presence at the moment of the strip, this node just could not
+    // see it yet — so the row must clear once the evidence arrives.
+    let earlier_id = Uuid::now_v7();
+    let earlier = SensitivityAssertion {
+        subject_kind: SubjectKind::Patient,
+        subject_id: p,
+        grade: "restricted",
+        source: "human",
+        rationale: Some("earlier presence, arriving late"),
+    };
+    let earlier_body = body_from_spec(
+        earlier_id,
+        &kid_h,
+        EventSpec {
+            patient: p,
+            event_type: SENSITIVITY_EVENT_TYPE,
+            schema_version: SENSITIVITY_SCHEMA_VERSION,
+            payload: sensitivity_assertion_body(&earlier),
+            plaintext_twin: Some(render_sensitivity_twin(&earlier)),
+            wall: 5,
+        },
+    );
+    apply_remote_raw(&c, &sk_h, earlier_body).await.unwrap();
+
+    assert!(
+        !reasons(&c, p).await.contains(&"stranger-attested".to_string()),
+        "an actor who genuinely had prior presence must clear the row once that presence replicates"
+    );
 }
