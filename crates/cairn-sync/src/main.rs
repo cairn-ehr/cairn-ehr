@@ -4866,6 +4866,55 @@ mod quarantine_tests {
         );
     }
 
+    /// ADR-0064: db/048 references `cairn_claim_authority`, which lives in db/005. Both
+    /// files are in this subset — but `LANGUAGE sql` resolves the reference EAGERLY at
+    /// CREATE time, so a subset that carried db/048 without db/005 would fail outright to
+    /// create `cairn_sensitivity_standing`, taking clinical sync down entirely. `locked_client`
+    /// merely loading both files without erroring already proves the CREATEs succeeded — it
+    /// does NOT prove the functions run correctly: a stale search_path or a migration-order
+    /// difference at CREATE time could still bind a `LANGUAGE sql` reference to the wrong
+    /// definition, or leave it silently unresolved, with the CREATE itself staying silent and
+    /// nothing surfacing until CALL time. (A missing GRANT is a SEPARATE axis this suite would
+    /// NOT catch — it connects as the owning role, and that axis is already pinned by
+    /// `claim_authority.rs`'s `the_read_path_works_as_cairn_agent`.) #386 records exactly the
+    /// load-without-drive gap against db/048's OWN earlier subset coverage — loaded into
+    /// SCHEMA but never DRIVEN, so the guarantee it appeared to give was untested at runtime.
+    /// This test drives both functions with real arguments so the same gap, reopened by this
+    /// slice's db/005 addition, does not recur unnoticed.
+    #[test]
+    fn db048_authority_gate_resolves_in_the_sync_subset() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base); // loads the whole SCHEMA subset
+        let verdict: String = c
+            .query_one(
+                "SELECT cairn_claim_authority(gen_random_uuid(), gen_random_uuid())",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            verdict, "unverified",
+            "the predicate must RUN on the sync subset — two fresh random uuids name no \
+             real event, so R1/R2 both fail closed"
+        );
+        // And the seam that calls it (db/048 section 9) must be callable here too, not just
+        // creatable — the actual regression shape #386 caught.
+        let n: i64 = c
+            .query_one(
+                "SELECT count(*) FROM cairn_sensitivity_standing(gen_random_uuid())",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            n, 0,
+            "a patient with no sensitivity events must have an empty standing set"
+        );
+    }
+
     /// Unwrap a pull that must fail as a PullIntegrityError; returns (message, metrics).
     fn pull_integrity_err(
         c: &mut postgres::Client,

@@ -109,15 +109,38 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 /// ADR-0053). The single, shared reading every consumer must use so an unverifiable
 /// claim is never displayed as authenticated.
 ///
-/// NOT YET WIRED TO A READ PATH. This grade has no production consumer today — the SQL
-/// mirror and the §5.10 authorship-confidence projection are issue #245. No read path in
-/// this repo surfaces the contributor set to a clinician yet, so nothing is currently
-/// rendering an unverified claim as authenticated; but do not read this type's existence
-/// as evidence that grading is in force. It is the reference definition #245 will mirror
-/// into SQL, and its "authenticated" test must stay in lockstep with
-/// `cairn_authorship_bound` (db/005): the two ask the same question at opposite doors —
-/// that one REFUSES at authoring, this one GRADES at read (see the "STRICT DOOR ONLY"
-/// note there for why the asymmetry is deliberate).
+/// STILL NOT WIRED TO A DISPLAY READ PATH. No code in this repo surfaces the contributor
+/// set to a clinician yet, so #245's DISPLAY half — the §5.10 authorship-confidence
+/// projection — is still open; do not read this type's existence as evidence that grading
+/// is in force at any UI. #245 is NOT closed by anything below.
+///
+/// It now DOES have two SQL counterparts, at opposite doors, and both owe it lockstep:
+///
+///   * `cairn_authorship_bound` (db/005) asks the same question at authoring — that one
+///     REFUSES an unbound claim at the STRICT door, this one GRADES an admitted claim at
+///     read (see the "STRICT DOOR ONLY" note on that function for why the asymmetry is
+///     deliberate).
+///   * `cairn_claim_authority` (db/005, ADR-0064) asks a related-but-not-identical question
+///     at a DIFFERENT read: whether a claim over an EXISTING event (e.g. a sensitivity
+///     withdrawal) is authoritative. The two read DISJOINT inputs — this function reads
+///     `contributors`/`signer_key_id`, `cairn_claim_authority`'s R1 branch reads only
+///     `attester_key`/`cairn_attestation_vouched`/`actor_current` and never looks at
+///     `contributors` at all — so "mirror" overstates it, and it is not a full mapping
+///     either: its R2 ('self': a human withdrawing their own claim) has no Rust counterpart
+///     here; this function's `Device` (no responsibility-bearing contributor at all) has no
+///     SQL counterpart there; and R1 additionally demands the attester resolve to EXACTLY
+///     ONE `kind = 'human'` actor, a check this function does not perform at all. Two
+///     door-admissible shapes are ALREADY KNOWN to diverge on that account — a key mapped to
+///     more than one actor can grade `Attested` here and `'unverified'` in SQL; a
+///     suppressing-mode event whose only contributor is `recorded` (no `responsibility`
+///     object, so `cairn_responsibility_bound` is vacuously true) can grade `Device` here and
+///     `'attested'` in SQL — filed as an issue for #245's display half to resolve, not fixed
+///     by anything below. Where the two DO overlap on the shapes
+///     `crates/cairn-node/tests/authority_lockstep.rs` actually exercises (a single vouched
+///     human attester; a claimed-but-unattested human author; a device-only contributor set)
+///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`.
+///     That is what the test pins — an obligation on those shapes, not a universal guarantee
+///     over every event this repo can admit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorshipConfidence {
     /// A responsibility-bearing human author, authenticated as the signer or a verified attester.

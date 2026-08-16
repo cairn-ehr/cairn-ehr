@@ -264,8 +264,13 @@ async fn the_safety_functions_are_revoked_from_public_and_granted_deliberately()
     // and no test notices. The control was enforced only by the migration's own prose.
     //
     // `public` is a real role name here, so has_function_privilege resolves it.
+    //
+    // `cairn_record_safety_overclaim_flag(bytea, uuid, text, text)` joined in #405 part 2
+    // (2026-08-15 review, Minor #5): same posture as `cairn_check_safety_signal` just
+    // below — a writer called only from inside `submit_event`'s SECURITY DEFINER context.
     for f in [
         "cairn_check_safety_signal(jsonb)",
+        "cairn_record_safety_overclaim_flag(bytea, uuid, text, text)",
         "cairn_safety_class_candidate(jsonb)",
         "cairn_prospective_sensitivity(uuid, uuid)",
         "cairn_event_safety(uuid)",
@@ -286,9 +291,11 @@ async fn the_safety_functions_are_revoked_from_public_and_granted_deliberately()
         );
     }
 
-    // …and the four the daemon actually calls are granted back. `cairn_check_safety_signal`
-    // is deliberately NOT in this list: it is called only from inside `submit_event`, which
-    // is SECURITY DEFINER, so cairn_agent needs no grant on it at all.
+    // …and the four the daemon actually calls are granted back. TWO of the REVOKEd set are
+    // deliberately NOT in this list, both for the same reason — they are called only from
+    // inside `submit_event`, which is SECURITY DEFINER, so cairn_agent needs no grant on
+    // either: `cairn_check_safety_signal`, and (since #405 part 2)
+    // `cairn_record_safety_overclaim_flag`. The count was stale at one (#410 review).
     for f in [
         "cairn_safety_class_candidate(jsonb)",
         "cairn_prospective_sensitivity(uuid, uuid)",

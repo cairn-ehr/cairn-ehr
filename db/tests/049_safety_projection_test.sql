@@ -200,3 +200,25 @@ END $$;
 
 DROP FUNCTION _safety_seed_event(uuid, text, jsonb, bigint);
 ROLLBACK;
+
+-- ---------------------------------------------------------------------------
+-- 5. ADR-0064 / #405 part 2: the overclaim ledger exists, is keyed on content address, and
+--    is idempotent on replay. Not itself pinned by crates/cairn-node/tests/safety_overclaim.rs
+--    — that suite drives the ledger through the daemon's submit/apply path; this checks the
+--    SQL function's own ON CONFLICT DO NOTHING directly, which is a genuine gap: nothing
+--    else calls it twice with the SAME content address and checks for a single surviving
+--    row. Runs autocommitting (no seeded event_log row is needed — the function only
+--    writes safety_overclaim_flag), so cleanup below is explicit.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+    v_ca bytea := '\x1220'::bytea || digest('overclaim-mirror', 'sha256');
+    v_p  uuid  := gen_random_uuid();
+    n    int;
+BEGIN
+    PERFORM cairn_record_safety_overclaim_flag(v_ca, v_p, 'precise', 'existence');
+    PERFORM cairn_record_safety_overclaim_flag(v_ca, v_p, 'precise', 'existence');
+    SELECT count(*) INTO n FROM safety_overclaim_flag WHERE content_address = v_ca;
+    ASSERT n = 1, 'the overclaim ledger is idempotent on replay (PK = content address)';
+    DELETE FROM safety_overclaim_flag WHERE content_address = v_ca;
+END $$;

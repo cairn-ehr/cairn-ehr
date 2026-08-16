@@ -140,6 +140,41 @@ pub struct EventSpec<'a> {
     pub wall: i64,
 }
 
+/// Build the `EventBody` an [`EventSpec`] describes, with a caller-chosen event id and the
+/// single non-bearing "recorded" contributor every generic identity/medication fixture
+/// uses. Factored out of [`submit_signed_with_id`] so a caller that needs the SAME body
+/// WITHOUT immediately submitting it through `submit_event` — a withdrawal destined for
+/// the remote door, e.g. (`claim_authority.rs`) — can build one identically rather than
+/// hand-assembling the fields (contributors, `t_effective`, clock grade) that never vary
+/// across these fixtures.
+///
+/// PUBLIC since the #380 arrival-order tests (`claim_authority.rs`): a withdrawal must be
+/// able to name its target's content address BEFORE that target has been submitted at
+/// all (set-union sync has no ordering), which means signing the target body once to
+/// learn its address and only submitting it later. This is the same "build now, submit
+/// later" need [`withdrawal_body_with_id`] already has, just for the assertion side.
+pub fn body_from_spec(event_id: Uuid, kid: &str, spec: EventSpec<'_>) -> EventBody {
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: spec.patient.to_string(),
+        event_type: spec.event_type.into(),
+        schema_version: spec.schema_version.into(),
+        hlc: Hlc {
+            wall: spec.wall,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: spec.payload,
+        attachments: vec![],
+        plaintext_twin: spec.plaintext_twin,
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
 /// Sign `spec` and submit it through the real `submit_event` door.
 ///
 /// Returns the raw submit result — NOT unwrapped — because about a third of these tests
@@ -166,28 +201,185 @@ pub async fn submit_signed_with_id(
     event_id: Uuid,
     spec: EventSpec<'_>,
 ) -> Result<u64, tokio_postgres::Error> {
-    let body = EventBody {
-        event_id: event_id.to_string(),
-        patient_id: spec.patient.to_string(),
-        event_type: spec.event_type.into(),
-        schema_version: spec.schema_version.into(),
-        hlc: Hlc {
-            wall: spec.wall,
-            counter: 0,
-            node_origin: "n".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: spec.payload,
-        attachments: vec![],
-        plaintext_twin: spec.plaintext_twin,
-        clock_grade: ClockGrade::SelfAsserted,
-        safety: None,
-    };
+    let body = body_from_spec(event_id, kid, spec);
     let signed = sign(&body, sk).unwrap();
     c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await
+}
+
+/// The content address of an already-submitted event. Sensitivity withdrawals name their
+/// target by content address, not by event id, so tests need the mapping.
+pub async fn content_address_of(c: &Client, event_id: Uuid) -> Vec<u8> {
+    c.query_one(
+        "SELECT content_address FROM event_log WHERE event_id = $1::text::uuid",
+        &[&event_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// A standing `sensitivity.grade.asserted` event, chart-wide (`SubjectKind::Patient`),
+/// submitted by `sk`/`kid` at HLC wall `wall`, naming `grade`. Returns the assertion's
+/// own event id.
+///
+/// PROMOTED from `claim_authority.rs`'s file-local `assert_grade` (#380 Task 4):
+/// `claim_authority_worklist.rs` needs to mint a chart-wide grade in the identical
+/// shape — the module header's own rule, "if two suites would write it identically, it
+/// goes here". `grade` is now a parameter rather than a hardcoded `"sequestered"`
+/// literal, since a shared helper should not bake in one caller's specific choice.
+pub async fn assert_chart_grade(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    patient: Uuid,
+    wall: i64,
+    grade: &str,
+) -> Uuid {
+    let a = cairn_event::sensitivity::SensitivityAssertion {
+        subject_kind: cairn_event::sensitivity::SubjectKind::Patient,
+        subject_id: patient,
+        grade,
+        source: "human",
+        rationale: Some("protected witness"),
+    };
+    let id = Uuid::now_v7();
+    submit_signed_with_id(
+        c,
+        sk,
+        kid,
+        id,
+        EventSpec {
+            patient,
+            event_type: cairn_event::sensitivity::SENSITIVITY_EVENT_TYPE,
+            schema_version: cairn_event::sensitivity::SENSITIVITY_SCHEMA_VERSION,
+            payload: cairn_event::sensitivity::sensitivity_assertion_body(&a),
+            plaintext_twin: Some(cairn_event::sensitivity::render_sensitivity_twin(&a)),
+            wall,
+        },
+    )
+    .await
+    .unwrap();
+    id
+}
+
+/// A withdrawal `EventBody` with a caller-chosen event id and a plain non-bearing
+/// "recorded" contributor — what a genuinely UN-ATTESTED withdrawal looks like on the
+/// wire (the same shape `sensitivity_ceremony.rs`'s `peer_withdrawal` already uses), so the
+/// test can ask the predicate about it afterwards. Because this contributor claims no
+/// responsibility, neither door's attestation gate ever engages for it — an attestation
+/// token offered alongside it would be silently discarded, never stored — so this shape can
+/// only ever grade 'self' or 'unverified', never 'attested'. A caller that needs an
+/// attested withdrawal to land needs the OTHER contributor shape (see
+/// [`bearing_withdrawal_body`], below).
+pub fn withdrawal_body_with_id(
+    patient: Uuid,
+    event_id: Uuid,
+    kid: &str,
+    w: &cairn_event::sensitivity::SensitivityWithdrawal,
+    wall: i64,
+) -> EventBody {
+    body_from_spec(
+        event_id,
+        kid,
+        EventSpec {
+            patient,
+            event_type: cairn_event::sensitivity::WITHDRAWAL_EVENT_TYPE,
+            schema_version: cairn_event::sensitivity::WITHDRAWAL_SCHEMA_VERSION,
+            payload: cairn_event::sensitivity::sensitivity_withdrawal_body(w),
+            plaintext_twin: Some(cairn_event::sensitivity::render_withdrawal_twin(w)),
+            wall,
+        },
+    )
+}
+
+/// A withdrawal `EventBody` whose contributor claims RESPONSIBILITY for `attester_kid`
+/// rather than for the signer — the ONLY shape either door's attestation gate will
+/// validate and STORE. `cairn_responsibility_bound` (db/005, mirrored at db/020) requires
+/// the bearing contributor's `actor_id` (and `cairn_check_contributors`'s
+/// `responsibility.held_by`) to equal the verified attester's own key, so a device may
+/// sign while a human attests, and the token still lands on `event_log.attester_key`.
+/// Mirrors production's `sensitivity::withdraw_sensitivity` (`crates/cairn-node/src/
+/// sensitivity.rs`), generalised to a different-signer/different-attester pair — passing
+/// the SAME `kid` for both arguments reproduces production's own self-signed,
+/// self-attested local shape exactly.
+///
+/// PROMOTED from `claim_authority.rs`'s file-local copy (#380 Task 4):
+/// `claim_authority_worklist.rs` needs the identical bearing shape to build an ATTESTED
+/// withdrawal (`withdrawal_body_with_id` above can never grade 'attested' — its token is
+/// silently discarded by both doors) — two suites writing it identically is exactly the
+/// module header's promotion rule.
+pub fn bearing_withdrawal_body(
+    kid: &str,
+    attester_kid: &str,
+    patient: Uuid,
+    event_id: Uuid,
+    w: &cairn_event::sensitivity::SensitivityWithdrawal,
+    wall: i64,
+) -> EventBody {
+    EventBody {
+        event_id: event_id.to_string(),
+        patient_id: patient.to_string(),
+        event_type: cairn_event::sensitivity::WITHDRAWAL_EVENT_TYPE.into(),
+        schema_version: cairn_event::sensitivity::WITHDRAWAL_SCHEMA_VERSION.into(),
+        hlc: Hlc {
+            wall,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        // "attested" + a responsibility marker naming the ATTESTER (not the signer): the
+        // ADR-0051 wire shape both doors' attestation gate demands before it will verify
+        // and STORE the token as this event's `attester_key`.
+        contributors: serde_json::json!([{"actor_id": attester_kid, "role": "attested",
+                                          "responsibility": {"held_by": attester_kid}}]),
+        payload: cairn_event::sensitivity::sensitivity_withdrawal_body(w),
+        attachments: vec![],
+        plaintext_twin: Some(cairn_event::sensitivity::render_withdrawal_twin(w)),
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
+/// Sign and apply a pre-built body with NO attestation token, through the REMOTE door
+/// (`apply_remote_event`) — the shape a cross-node write actually arrives in when its
+/// author attested to nobody. This is the ONLY way to land a genuinely un-attested
+/// `sensitivity.grade-withdrawal.asserted` event at all: the local door's ceremony (db/048)
+/// refuses every un-attested withdrawal unconditionally, but `apply_remote_event` never
+/// calls that ceremony (ADR-0062 decision 7 — a door check at apply would fork the event set).
+pub async fn apply_remote_raw(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+}
+
+/// As [`apply_remote_raw`], but WITH a human attestation token — the 3-argument
+/// `apply_remote_event` shape, mirroring [`submit_attested`] but through the remote door.
+/// The token is validated and STORED only when the body's own contributors claim
+/// responsibility for `kid_h` (`cairn_responsibility_bound`'s check, mirrored at both
+/// doors) — a body built by [`withdrawal_body_with_id`] never does, so a caller reaching
+/// for this needs the bearing contributor shape instead.
+pub async fn apply_remote_attested(
+    c: &Client,
+    sk: &SigningKey,
+    body: EventBody,
+    sk_h: &SigningKey,
+    kid_h: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    let signed = sign(&body, sk).unwrap();
+    let ca = event_address(&signed.signed_bytes);
+    let token = sign_attestation(&ca, kid_h, "attested", sk_h).unwrap();
+    let vk_h = sk_h.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT apply_remote_event($1,$2,$3)",
+        &[&signed.signed_bytes, &token, &vk_h],
+    )
+    .await
 }
 
 /// Enroll a SECOND signer as a HUMAN actor, distinct from the agent key `setup` already
@@ -196,10 +388,27 @@ pub async fn submit_signed_with_id(
 /// always demands a responsibility-bearing human, §5.7 "Human" — can reach for it instead of
 /// re-copying the enrollment. Returns `(human sk, human kid)`.
 pub async fn enroll_human(c: &Client) -> (SigningKey, String) {
+    enroll_human_with_role(c, "records-officer").await
+}
+
+/// Enroll a human actor whose PINNED SET carries `role` — the way a suite gets TWO (or more)
+/// genuinely DISTINCT human actors.
+///
+/// Why a caller cannot simply call [`enroll_human`] twice: an actor's `actor_id` is
+/// content-addressed from its pinned set (db/004), so two different signing keys pinned to
+/// the SAME set resolve to the SAME actor, and `enroll_actor` refuses the second with
+/// `cairn_key_actor_id_conflict` — the silent-identity-merge guard from principle 2
+/// ("never merge — always link"), pinned by `actor_enroll_collision.rs`. Varying the role
+/// varies the pinned set, so each call yields a separate human with its own `actor_id`.
+///
+/// That distinctness is the whole point for `cairn_claim_authority`'s R2 branch, which asks
+/// whether the withdrawer's actor IS the actor that made the claim being withdrawn: testing
+/// "a DIFFERENT human may not self-withdraw" is impossible without two of them.
+pub async fn enroll_human_with_role(c: &Client, role: &str) -> (SigningKey, String) {
     let (sk_h, kid_h) = generate_key().unwrap();
     c.execute(
-        "SELECT enroll_actor('human', '{\"role\":\"records-officer\"}', $1)",
-        &[&kid_h],
+        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text), $1)",
+        &[&kid_h, &role],
     )
     .await
     .unwrap();
@@ -410,6 +619,230 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     .await
     .unwrap();
     (sk_d, kid_d, sk_h, kid_h)
+}
+
+/// Build, seal, sign and submit a `clinical.medication.asserted` event whose CLEAR
+/// `safety` field is set to `safety` VERBATIM — bypassing `apply_safety_rung`'s
+/// grade-driven coarsening entirely. That bypass IS the scenario: a hostile client with
+/// direct DB access (or an ordinary older client that never ran the daemon's coarsening
+/// step) can sign and submit any shape it likes; #405 part 2 is the door-side record of
+/// that fact, never a refusal (ADR-0060, ADR-0064).
+///
+/// Modelled on `crates/cairn-node/src/medication/sealed_submit.rs`'s `seal_sign_submit`
+/// path, minus the ONE call (`apply_safety_rung`) that chooses the rung from the chart's
+/// standing grade — everything else (seal, register the unwrap key, sign, submit through
+/// the strict door with the DEK as the 4th argument) is the same pipeline production uses.
+///
+/// Signs with the HUMAN key and takes ADR-0053 authorship (`with_human_author`) — the
+/// shape every real medication assert in this slice carries — while `sk`/`kid` (the
+/// device/node key) re-registers the node's unwrap key, exactly as `ensure_unwrap_key`
+/// does on every real submit. Re-registering is a no-op when `medication_setup` already
+/// registered the same key (idempotent — see `cairn_register_unwrap_key`'s own doc), so
+/// this helper does not depend on being called only after that fixture.
+///
+/// Returns the submitted event's content address (`event_log.content_address`), or the
+/// door's rejection — NOT unwrapped, so a caller asserting ADMISSION can still say why a
+/// rejection is a test failure, and a caller proving the shape floor still refuses
+/// something malformed can match on it.
+#[allow(clippy::too_many_arguments)] // one parameter per wire value, mirroring assert_medication's own allow
+pub async fn submit_medication_with_raw_safety(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> Result<Vec<u8>, tokio_postgres::Error> {
+    // Re-register the node's unwrap key from the DEVICE key, exactly as
+    // `ensure_unwrap_key(client, node_sk)` does in the real pipeline — custody is always
+    // the NODE's regardless of who signs (born-sealed erasability, ADR-0052). Idempotent:
+    // a second registration of the same key is a no-op.
+    //
+    // `.expect()`, deliberately NOT `?` (2026-08-15 review, Important #3): this function's
+    // `Result` is the caller's proxy for "did the DOOR admit or refuse this write" —
+    // `safety_overclaim.rs` reads an `Err` here as ADR-0060/ADR-0063 evidence about
+    // `submit_event`'s own behaviour. A `?` on this SETUP statement would let an
+    // unrelated infrastructure failure (this call has never been observed to fail; it
+    // exists only for parity with the real pipeline) surface as an indistinguishable
+    // `Err`, misreporting an environment problem as a clinical-write cancellation in the
+    // one suite whose entire purpose is attributing a failure to the right cause.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .expect("submit_medication_with_raw_safety: registering the node's unwrap key failed — an environment/setup problem, not the door behaviour this helper exists to exercise");
+
+    let event_id = Uuid::now_v7();
+    let medication_id = Uuid::now_v7();
+    let hlc = Hlc {
+        wall,
+        counter: 0,
+        node_origin: "hostile-probe".into(),
+    };
+    let input = cairn_node::medication::AssertMedicationInput {
+        term: "raw-safety-probe",
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "clinician-observed",
+        started: None,
+        started_precision: None,
+    };
+    // `safety: None` — no PRECISE claim under the seal. Irrelevant to this scenario:
+    // `cairn_check_safety_signal` and the new overclaim check both read only the CLEAR
+    // top-level `safety` field this helper sets directly, below.
+    let body = cairn_node::medication::build_assert_body(
+        event_id,
+        medication_id,
+        patient,
+        &input,
+        kid,
+        hlc,
+        None,
+    );
+    // ADR-0053: the human takes authorship and becomes the signer.
+    let mut body = cairn_event::contributor::with_human_author(body, kid_h);
+
+    // THE BYPASS. Production's `seal_sign_submit` would call `apply_safety_rung` here,
+    // which looks up the chart's standing grade and coarsens `payload.safety` (absent
+    // above) down to a licensed rung. This helper skips that call entirely and writes the
+    // caller's value straight onto the envelope — exactly what a peer signing raw bytes,
+    // honest or hostile, would produce.
+    body.safety = Some(safety);
+
+    let clear_twin = body
+        .plaintext_twin
+        .take()
+        .expect("build_assert_body always sets a plaintext twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &clear_twin, &body.event_id)
+            .expect("seal a well-formed medication payload");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+
+    let signed = sign(&body, sk_h).expect("sign the sealed medication body");
+    let ca = signed.content_address.clone();
+    c.execute(
+        "SELECT submit_event($1, NULL, NULL, $2)",
+        &[&signed.signed_bytes, &dek.as_slice()],
+    )
+    .await?;
+    Ok(ca)
+}
+
+/// The same overclaiming, raw-safety medication event as
+/// [`submit_medication_with_raw_safety`] — landed through the REMOTE door
+/// (`apply_remote_event`) instead of the local one (`submit_event`).
+///
+/// Exists to pin ADR-0064 decision 7's LOCAL-DOOR-ONLY asymmetry: the safety-overclaim
+/// ledger is written at the local door and NOWHERE ELSE, deliberately. db/049 and the ADR
+/// both warn in capitals that the asymmetry reads as an oversight and that a reviewer WILL
+/// tidy it into symmetry — and nothing anywhere paired the ledger with the remote door, so
+/// that tidy-up would have kept every test green (#410 review finding I3).
+///
+/// The two helpers are deliberately near-identical in construction and differ ONLY in the
+/// door they call, because that is precisely the variable under test: same bytes, same
+/// chart, same overclaim, different door, different outcome.
+#[allow(clippy::too_many_arguments)] // mirrors its local-door twin
+pub async fn apply_remote_medication_with_raw_safety(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> Result<Vec<u8>, tokio_postgres::Error> {
+    let (signed_bytes, ca, dek) =
+        build_raw_safety_medication(c, sk, kid, sk_h, kid_h, patient, wall, safety).await;
+    c.execute(
+        "SELECT apply_remote_event($1, NULL, NULL, $2)",
+        &[&signed_bytes, &dek.as_slice()],
+    )
+    .await?;
+    Ok(ca)
+}
+
+/// Build (and seal, and sign) the raw-safety medication event both door helpers submit.
+///
+/// Private on purpose: it returns unsubmitted wire bytes, which is only ever useful to the
+/// two helpers above. Factored out so the two doors provably receive the SAME event — if
+/// this were copy-pasted, a drift between the copies would silently turn the local-vs-remote
+/// comparison into a comparison of two different events.
+#[allow(clippy::too_many_arguments)]
+async fn build_raw_safety_medication(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    // Same unwrap-key parity as the local-door helper, and `.expect` for the same reason:
+    // a setup failure must never be mistaken for door behaviour.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .expect("build_raw_safety_medication: registering the node's unwrap key failed — an environment/setup problem, not door behaviour");
+
+    let event_id = Uuid::now_v7();
+    let medication_id = Uuid::now_v7();
+    let hlc = Hlc {
+        wall,
+        counter: 0,
+        node_origin: "hostile-probe".into(),
+    };
+    let input = cairn_node::medication::AssertMedicationInput {
+        term: "raw-safety-probe",
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "clinician-observed",
+        started: None,
+        started_precision: None,
+    };
+    let body = cairn_node::medication::build_assert_body(
+        event_id,
+        medication_id,
+        patient,
+        &input,
+        kid,
+        hlc,
+        None,
+    );
+    let mut body = cairn_event::contributor::with_human_author(body, kid_h);
+    // THE BYPASS — see the local-door helper's own note.
+    body.safety = Some(safety);
+
+    let clear_twin = body
+        .plaintext_twin
+        .take()
+        .expect("build_assert_body always sets a plaintext twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &clear_twin, &body.event_id)
+            .expect("seal a well-formed medication payload");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+
+    let signed = sign(&body, sk_h).expect("sign the sealed medication body");
+    // `dek` is a `Zeroizing<[u8; 32]>`; copied out here because the caller binds it as a
+    // query parameter, which outlives the guard. Test-only — production never widens a DEK's
+    // lifetime this way.
+    (signed.signed_bytes, signed.content_address, dek.to_vec())
 }
 
 /// How many attestation rows a medication thread carries.

@@ -648,6 +648,93 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- ADR-0064 — what makes a claim AUTHORITATIVE. The read-side twin of
+-- cairn_authorship_bound directly above: that one REFUSES at authoring, this one
+-- GRADES at read, and the two must stay in lockstep (the same note
+-- crates/cairn-event/src/contributor.rs:118 already carries).
+--
+-- Authority is a HUMAN ACTOR THIS NODE CAN HOLD RESPONSIBLE — never the relaying
+-- machine, never the actor's relationship to the chart. Two sufficient routes:
+--   R1 'attested' — a VOUCHED attestation whose attester is an enrolled human actor.
+--   R2 'self'     — the claim's actor IS the target's actor, both known, and human.
+-- Everything else is 'unverified'.
+--
+-- !! SECURITY DEFINER IS REQUIRED, NOT STYLISTIC !!
+-- cairn_attestation_vouched (db/001) is REVOKEd FROM PUBLIC and event_attestation_unvouched
+-- carries no SELECT grant, because db/001 reasons that every caller is a SECURITY DEFINER
+-- door or a migration-owned trigger. This caller is NEITHER: cairn_sensitivity_standing
+-- (db/048) is a plain LANGUAGE sql function granted to cairn_agent, and a non-definer body
+-- runs as the CALLING role whether or not it inlines. Without DEFINER the first
+-- cairn_effective_sensitivity call by cairn_agent fails with permission denied — the whole
+-- sensitivity read path, broken by a privilege, and ONLY under the product's role.
+--
+-- Pinned by TWO role-switched tests, and the order matters if either is ever simplified:
+--   * claim_authority_worklist::the_worklist_is_readable_as_cairn_agent — the STRONGER pin.
+--     Its fixture carries a real inert withdrawal, so the predicate's body actually RUNS
+--     under cairn_agent against live data.
+--   * claim_authority::the_read_path_works_as_cairn_agent — the WEAKER pin. Its chart
+--     carries no withdrawal, so the seam's NOT EXISTS matches nothing and the body never
+--     executes; what it pins is Postgres's executor-start ACL check alone. Still a real
+--     guard, but it would stay green if only SECURITY DEFINER were removed (the `SET
+--     search_path` clause independently blocks inlining).
+-- This header used to name only the weaker one (#410 review finding A3). Re-anchor to
+-- whichever still lands real data through the role switch, never silently drop.
+--
+-- !! `attester_key IS NOT NULL` IS THE ACTUAL R1 TEST !!
+-- cairn_attestation_vouched returns TRUE for an event carrying NO attestation, because
+-- "vouched" means "no unvouched MARKER row exists". Delete the NULL guard and every
+-- unattested event in the log grades 'attested'. Pinned by
+-- an_event_with_no_attestation_at_all_is_unverified.
+--
+-- STRICTER THAN db/020's SIBLING, DELIBERATELY. db/020's forged-human-author check asks
+-- `EXISTS (... AND kind='human')`, which admits a key mapped to BOTH a human and an agent.
+-- Here that ambiguity would confer power to strip a protective grade, so the key must
+-- resolve to EXACTLY ONE actor and that actor must be human. Principle 4: uncertainty
+-- withholds power, it never confers it. Not a fix to db/020 — a different question.
+--
+-- FIXED ARITY. Never widen this argument list: Postgres OVERLOADS on a changed list rather
+-- than replacing, and migration replay never drops what a file stops creating, so a stale
+-- definition would survive in every existing database and silently serve any call site
+-- missed — including a has_function_privilege pin, which would resolve the STALE signature
+-- and pass. A caller with no target passes an explicit NULL. (The hazard's provenance is
+-- this file's own `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea)` below, forced
+-- when ADR-0052 added p_dek, and db/020:55; db/049:345 states it as verified. It is NOT
+-- #404 — that issue is the prospective/effective mirrored-predicate divergence, a different
+-- hazard entirely; the attribution came in with this slice's design and is corrected here.)
+CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
+RETURNS text LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public
+AS $$
+    SELECT CASE
+        -- R1 — a vouched attestation by an enrolled human actor.
+        WHEN EXISTS (
+            SELECT 1 FROM event_log e
+             WHERE e.event_id = p_event_id
+               AND e.attester_key IS NOT NULL          -- load-bearing; see header
+               AND cairn_attestation_vouched(e.event_id)
+               AND (SELECT count(*) = 1 AND bool_and(a.kind = 'human')
+                      FROM actor_current a
+                     WHERE a.signing_key_id = encode(e.attester_key, 'hex')))
+        THEN 'attested'
+        -- R2 — the human who made the claim is withdrawing their own.
+        WHEN p_target_event_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM event_log c
+              JOIN event_log t ON t.event_id = p_target_event_id
+              JOIN actor_current a ON a.actor_id = c.actor_id
+             WHERE c.event_id = p_event_id
+               AND c.actor_id IS NOT NULL              -- NULL = a key on several actors,
+               AND t.actor_id IS NOT NULL              -- i.e. attribution honestly unknown
+               AND c.actor_id = t.actor_id
+               AND a.kind = 'human')                   -- ADR-0062 decision 6
+        THEN 'self'
+        ELSE 'unverified'
+    END;
+$$;
+-- A SECURITY DEFINER function with PUBLIC execute is a privilege-escalation surface.
+REVOKE EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION cairn_claim_authority(uuid, uuid) TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
 -- ADR-0052 custody plane, part 1 — the CLEAR-view table and its read helper.
 --
 -- These two definitions live HERE, in db/005, rather than in db/037 (the rest of
@@ -963,6 +1050,130 @@ BEGIN
                              '{plaintext_twin}', v_inner -> 'plaintext_twin');
     ELSIF v_type LIKE 'clinical.%' THEN
         RAISE EXCEPTION 'submit_event: % is a clinical body and must be born-sealed — plaintext clinical submissions are refused at the strict door (ADR-0052; wipe pre-ADR-0052 dev rigs, never sync them through)', v_type;
+    END IF;
+
+    -- 7a. #405 part 2 / ADR-0064: an emitted rung FINER than this chart's grade licenses
+    --     is RECORDED, never refused (db/049's `safety_overclaim_flag`/
+    --     `cairn_record_safety_overclaim_flag` — see that file for why the block is
+    --     LOCAL-DOOR-ONLY, deliberately breaking the `cairn_record_ceiling_flag`
+    --     precedent it otherwise copies).
+    --
+    --     PLACEMENT, AND WHY NOT BESIDE STEP 1d (2026-08-15 review, Critical #1). This
+    --     check must reproduce emission's OWN grade lookup exactly —
+    --     `crate::safety::prospective_rung`, called from `apply_safety_rung`
+    --     (sealed_submit.rs) with the thread read out of `payload.medication_id` BEFORE
+    --     the body is sealed. A first version of this block sat beside step 1d and passed
+    --     `p_thread = NULL` unconditionally, on the mistaken belief that the clear
+    --     payload was unreadable that early. It is not: b_clear, built by step 7 just
+    --     above, is exactly that clear view — the block simply ran before step 7 did.
+    --     Passing NULL coarsens the LICENSED rung using ANY thread-scoped grade standing
+    --     ANYWHERE on the chart (db/049 section 6's catch-all arm), not only a grade on
+    --     the thread this event is actually on — so an ordinary, correctly-licensed
+    --     `precise` emission on an UNGRADED thread of a chart carrying some OTHER
+    --     thread's grade was recorded as an overclaim it never made
+    --     (crates/cairn-node/tests/safety_overclaim.rs's
+    --     `a_thread_scoped_grade_elsewhere_on_the_chart_does_not_false_flag_this_threads_precise_emission`
+    --     pins this — it exercises the real `assert_medication` emission path, not the
+    --     raw-safety bypass the rest of that file uses). Coarsening the licensed rung is
+    --     the SAFE direction for EMISSION's own rung (over-disclosure is the one
+    --     unrecoverable error, db/049 section 6's own "asymmetry that matters"); on a
+    --     DETECTOR the identical move is a false positive, and a ledger whose rows are
+    --     mostly false accusations against the daemon's own correct output is worse than
+    --     no ledger — eventually nobody reads it. So this block runs AFTER step 7,
+    --     reading the SAME field from b_clear that apply_safety_rung read pre-seal —
+    --     exact parity, not a one-sided "conservative" bound.
+    --
+    --     pg_input_is_valid, not a bare `::uuid` cast, mirrors sealed_submit.rs's own
+    --     `.and_then(|s| s.parse::<uuid::Uuid>().ok())`: an absent OR malformed
+    --     medication_id degrades to NULL on both sides, rather than raising here and
+    --     having the WHOLE check swallowed by the handler below for a reason unrelated to
+    --     the lookup it exists to protect.
+    --
+    --     MUST NOT FAIL A CLINICAL WRITE (ADR-0063 decision 8, stated categorically — and
+    --     the ADR records the real incident this repeats otherwise: an earlier safety
+    --     lookup propagated its error with a bare call, so a missing grant or a statement
+    --     timeout aborted the MEDICATION ASSERTION over a safety class no clinician
+    --     caused). Everything inside — the thread lookup, the grade lookup, both rank
+    --     lookups, the flag insert — runs inside its OWN nested DECLARE/BEGIN/END block
+    --     with NO exception clause of its own, wrapped by the OUTER block's
+    --     `EXCEPTION WHEN query_canceled OR OTHERS`: a raise DURING a DECLARE initializer
+    --     is caught only by an ENCLOSING block's handler, never its own (verified — this
+    --     is what makes the inner/outer split load-bearing rather than decorative), so any
+    --     raise anywhere in here — a missing grant, a NULL where a row was expected — is
+    --     swallowed and the write proceeds. An unrecorded overclaim is a bounded loss; a
+    --     refused medication assert is not.
+    --
+    --     A TIMEOUT NEEDS ITS OWN CONDITION NAME and does not ride `OTHERS` — see the
+    --     handler's own comment below for why, and do not simplify it back. This sentence
+    --     used to claim a bare `WHEN OTHERS` swallowed "a timeout"; it did not, and the
+    --     block reproduced the very incident it cites (#410 review finding C2).
+    --
+    --     Still sits before the event_log INSERT below (unlabeled, between steps 9 and
+    --     10): a LATER refusal anywhere else in this function — steps 8/8a/8b/9 before
+    --     the INSERT, step 10 after it — rolls this block's flag insert back with
+    --     everything else in the transaction (the whole call is one implicit transaction;
+    --     an uncaught RAISE aborts all of it, not merely what follows the raise), so a
+    --     flag is never recorded for an event that was ultimately refused for an
+    --     unrelated reason.
+    IF b -> 'safety' ->> 'rung' IS NOT NULL THEN
+        BEGIN
+            DECLARE
+                -- The thread apply_safety_rung read pre-seal, recovered the same way:
+                -- payload.medication_id off the CLEAR view, degrading to NULL when absent
+                -- or malformed (never raising — see the placement note above).
+                v_thread_raw text := b_clear -> 'payload' ->> 'medication_id';
+                v_thread     uuid;
+                -- The rung THIS chart's grade licenses right now, computed the same
+                -- composition emission does (crate::safety::prospective_rung / db/049
+                -- section 6): cairn_safety_rung_for_rank(cairn_sensitivity_rank(grade)).
+                v_licensed   text;
+            BEGIN
+                IF v_thread_raw IS NOT NULL AND pg_input_is_valid(v_thread_raw, 'uuid') THEN
+                    v_thread := v_thread_raw::uuid;
+                END IF;
+
+                SELECT cairn_safety_rung_for_rank(cairn_sensitivity_rank(g.grade))
+                  INTO v_licensed
+                  FROM cairn_prospective_sensitivity((b ->> 'patient_id')::uuid, v_thread) g;
+
+                -- Lower rank = FINER = discloses MORE (db/049 section 2: precise=0 <
+                -- kind=10 < existence=20). An emitted rung ranked below what the chart
+                -- licenses discloses more than the grade allows — the overclaim direction.
+                IF cairn_safety_rung_rank(b -> 'safety' ->> 'rung')
+                 < cairn_safety_rung_rank(v_licensed) THEN
+                    PERFORM cairn_record_safety_overclaim_flag(
+                        v_ca, (b ->> 'patient_id')::uuid,
+                        b -> 'safety' ->> 'rung', v_licensed);
+                END IF;
+            END;
+        EXCEPTION WHEN query_canceled OR OTHERS THEN
+            -- Advisory ledger entry only — never allowed to fail a clinical write
+            -- (ADR-0063 decision 8). Logged so a lookup failing on every write is visible
+            -- operationally (mirrors crate::safety::advisory_or_withheld's eprintln), but
+            -- the write itself proceeds regardless.
+            --
+            -- `query_canceled` IS NAMED EXPLICITLY, and dropping it back to a bare
+            -- `WHEN OTHERS` reopens #410 finding C2. PostgreSQL matches `OTHERS` against
+            -- every error type EXCEPT `query_canceled` (57014) and `assert_failure`, so a
+            -- blanket handler does NOT absorb a `statement_timeout` — the propagating
+            -- cancel aborts submit_event and REFUSES the medication assert. That is
+            -- ADR-0063 decision 8's originating incident exactly ("a missing grant or a
+            -- statement timeout aborted the MEDICATION ASSERTION"), and it needs only two
+            -- ordinary conditions to co-occur: a deployment that sets statement_timeout,
+            -- and a populated safety_class_map. Pinned by safety_overclaim.rs's
+            -- `a_stalled_grade_lookup_under_a_statement_timeout_still_admits_the_medication`.
+            --
+            -- THE TRADE THIS MAKES, stated rather than left implicit: catching 57014 also
+            -- absorbs an operator's deliberate cancel for the remainder of this call, and
+            -- statement_timeout's timer does not re-arm once it has fired, so the rest of
+            -- submit_event (the event_log INSERT and step 10) then runs untimed. That
+            -- residue is bounded and accepted: availability over consistency (§1), and a
+            -- refused medication assert is the failure this floor exists to prevent.
+            -- `assert_failure` is deliberately NOT named — a failed ASSERT is a floor
+            -- invariant violation, which must abort, never be swallowed as advisory noise.
+            RAISE WARNING 'submit_event: safety-overclaim check failed for %, continuing without recording it (advisory, never fails a clinical write — ADR-0063 decision 8): %',
+                v_ca, SQLERRM;
+        END;
     END IF;
 
     -- 8. Plaintext twin (§3.13/§4.5) + any per-type structural floor, via the

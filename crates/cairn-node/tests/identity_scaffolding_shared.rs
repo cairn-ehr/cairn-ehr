@@ -194,16 +194,48 @@ fn derivation_finds_the_expected_helpers() {
             // not declare its own copy of them. See the module header's widened first
             // paragraph. `register_pair` joined them in #345's review: the matching suites
             // (`apply_proposal.rs`, `auto_apply.rs`) had written it identically.
+            // `content_address_of` / `withdrawal_body_with_id` / `apply_remote_raw` /
+            // `apply_remote_attested` joined in the #380 `cairn_claim_authority` slice
+            // (`claim_authority.rs`), which needs a way to build and land a sensitivity
+            // withdrawal through the remote door (its local-door twin, `submit_signed_raw`,
+            // was withdrawn — no caller ever needed it: every withdrawal in that slice goes
+            // through the remote door, and every raw assertion fits the generic
+            // `EventSpec`/`submit_signed_with_id` shape instead). `body_from_spec` went
+            // public in the same slice's Task 3 (arrival-order independence): a withdrawal
+            // that targets an event before that event has replicated needs to sign the
+            // target body once to learn its content address, then submit it separately later.
+            // `assert_chart_grade` / `bearing_withdrawal_body` joined in Task 4 (the
+            // withdrawal worklist, `claim_authority_worklist.rs`): both were file-local to
+            // `claim_authority.rs` until that new suite needed the identical shapes —
+            // "if two suites would write it identically, it goes here".
+            // `enroll_human_with_role` joined in #410's review (finding C1): pinning R2's
+            // self-identity equality needs TWO distinct human actors, which `enroll_human`
+            // alone cannot produce — same pinned set, same actor_id, refused enrollment.
+            // `enroll_human` now delegates to it, so its own signature is unchanged.
+            // `submit_medication_with_raw_safety` joined in #405 part 2
+            // (`safety_overclaim.rs`): it builds a medication assert whose CLEAR `safety`
+            // field is set VERBATIM, bypassing `apply_safety_rung`'s coarsening — the
+            // hostile-client shape the door-side overclaim ledger exists to catch.
+            "async fn apply_remote_attested(",
+            "async fn apply_remote_medication_with_raw_safety(",
+            "async fn apply_remote_raw(",
+            "async fn assert_chart_grade(",
             "async fn attestation_count(",
+            "async fn content_address_of(",
             "async fn enroll_human(",
+            "async fn enroll_human_with_role(",
             "async fn medication_setup(",
             "async fn person_chart_trust(",
             "async fn register_pair(",
             "async fn submit_attested(",
+            "async fn submit_medication_with_raw_safety(",
             "async fn submit_registration(",
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
+            "fn bearing_withdrawal_body(",
+            "fn body_from_spec(",
+            "fn withdrawal_body_with_id(",
         ],
         "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"
     );

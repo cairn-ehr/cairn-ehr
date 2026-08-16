@@ -11,8 +11,8 @@ use cairn_node::medication::{
     CodeMedicationInput, CorrectCodingInput, SubstanceCoding,
 };
 use common::{
-    cs, db_msg, enroll_human, medication_setup, setup, submit_attested, submit_registration,
-    submit_signed, submit_signed_with_id, EventSpec,
+    apply_remote_attested, bearing_withdrawal_body, cs, db_msg, enroll_human, medication_setup,
+    setup, submit_attested, submit_registration, submit_signed, submit_signed_with_id, EventSpec,
 };
 
 #[tokio::test]
@@ -476,36 +476,54 @@ async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart
         .get(0);
 
     // A withdrawal authored on a DIFFERENT chart, naming the victim's content_address,
-    // arriving as a PEER's event (`node_origin: "peer"`, applied through `apply_remote_event`
+    // arriving as a PEER's event (`node_origin: "peer"`, applied through `apply_remote_attested`
     // rather than `submit_signed`). Task 6's local-door-only human-author ceremony (db/048's
     // header) now refuses a rationale-only, unattested withdrawal at the LOCAL door — so this
     // shape can only be exercised through the remote door, exactly the one ADR-0060 keeps
     // lenient (a peer's honestly-authored-but-locally-non-conformant act must not fork the
     // event set). Same content_address (globally unique, so unambiguous about WHICH assertion
     // it names), but authored under a different envelope's patient_id.
-    let cross_chart_withdrawal = cairn_event::EventBody {
-        event_id: uuid::Uuid::now_v7().to_string(),
-        patient_id: attacker.to_string(),
-        event_type: WITHDRAWAL_EVENT_TYPE.into(),
-        schema_version: WITHDRAWAL_SCHEMA_VERSION.into(),
-        hlc: cairn_event::Hlc {
-            wall: 3,
-            counter: 0,
-            node_origin: "peer".into(),
-        },
-        t_effective: None,
-        signer_key_id: kid.clone(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: serde_json::json!({ "withdraws": ca_hex, "rationale": "cross-chart" }),
-        attachments: vec![],
-        plaintext_twin: Some("withdrawn".into()),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-        safety: None,
+    //
+    // AUTHORITATIVE, deliberately (final-review finding I1). Before this fix the withdrawal
+    // here was un-attested, so `cairn_claim_authority` graded it 'unverified' regardless of
+    // which chart it named — the `w.patient_id = p_patient_id` pin this test exists to guard
+    // (db/048's section-9 header) was never actually exercised: deleting it left the whole
+    // 1299-test gate green. A genuinely enrolled human (`enroll_human`, distinct from the
+    // agent `setup` enrols) now vouches for it via the bearing-contributor shape
+    // (`bearing_withdrawal_body`), landed with a real, verified attestation token
+    // (`apply_remote_attested`) — so `cairn_claim_authority` reads R1 'attested', exactly as
+    // it would for a legitimate withdrawal, and the patient_id pin becomes the ONLY thing
+    // standing between the attacker's chart and the victim's.
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &ca_hex,
+        rationale: "cross-chart",
     };
-    let signed = cairn_event::sign(&cross_chart_withdrawal, &sk).unwrap();
-    c.execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+    let wid = uuid::Uuid::now_v7();
+    let body = bearing_withdrawal_body(&kid, &kid_h, attacker, wid, &w, 3);
+    apply_remote_attested(&c, &sk, body, &sk_h, &kid_h)
         .await
-        .expect("the remote door admits this leniently — the ceremony is local-only");
+        .expect(
+            "a properly attested withdrawal must land, even cross-chart \
+             — the ceremony is local-only",
+        );
+
+    // Precondition: the withdrawal must actually be AUTHORITATIVE, or "sequestered" below
+    // would hold for the wrong reason — an unverified withdrawal, exactly the shape this
+    // test used to carry before the final review caught that it never discriminated.
+    let claim_authority: String = c
+        .query_one(
+            "SELECT cairn_claim_authority($1::text::uuid, NULL)",
+            &[&wid.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        claim_authority, "attested",
+        "precondition: the cross-chart withdrawal must be AUTHORITATIVE, so the patient_id \
+         pin is the only thing left protecting the victim's chart"
+    );
 
     // Review finding F2: `apply_remote_event` is lenient enough to have a deferred/
     // unclassified path that admits an event while writing NO projection rows and raising
@@ -555,7 +573,8 @@ async fn f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_this_chart
         .get(0);
     assert_eq!(
         g, "sequestered",
-        "a withdrawal from a DIFFERENT chart must never strip this chart's protection (F1)"
+        "an AUTHORITATIVE withdrawal from a DIFFERENT chart must never strip this chart's \
+         protection — the patient_id pin is the only thing stopping it here (F1)"
     );
 }
 

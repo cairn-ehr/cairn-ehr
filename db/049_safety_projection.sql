@@ -482,12 +482,70 @@ LANGUAGE sql STABLE AS $$
     ORDER BY cairn_safety_severity_rank(s.severity) DESC, e.event_id;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- #405 part 2 — a rung finer than the chart's grade licenses. RECORDED, never refused.
+--
+-- The door CANNOT refuse it: ADR-0060 forbids an advisory field cancelling a medication
+-- assert, and rewriting event_log.safety would make the column disagree with signed_bytes
+-- and quietly break the signature's meaning. So it takes ADR-0058's record-a-flag idiom.
+--
+-- !! LOCAL DOOR ONLY — AND THIS DELIBERATELY BREAKS THE PRECEDENT IT COPIES !!
+-- cairn_record_ceiling_flag is called at BOTH doors (db/005:912 and db/020:145), so
+-- local-only here reads as an oversight and WILL be tidied into symmetry. It is not:
+--   * LOCALLY the node's own grade is authoritative for its own authoring, so a rung finer
+--     than it licenses is unambiguously anomalous — apply_safety_rung was bypassed. THAT IS
+--     NOT THE ONLY SOURCE, THOUGH: apply_safety_rung's own read (crate::safety::
+--     prospective_rung) and this door's read at step 7a — which lives in db/005, NOT in
+--     this file — are separate statements over
+--     the SAME chart, and crates/cairn-node/src/safety.rs:105-115 declares the resulting
+--     race — a chart-wide grade raised in the window between the two makes the daemon emit
+--     a correctly-derived rung one step finer than the grade standing by the time this door
+--     reads it, and this block records that as an overclaim against the daemon's own
+--     correct output. Rare, advisory-only, and still genuine evidence of over-disclosure —
+--     but "bypassed" would misname it; nothing was bypassed, the grade just moved.
+--   * REMOTELY ADR-0063 decision 2 says this arrives ROUTINELY AND HONESTLY: an older peer
+--     predating the slice, a differently-custodial peer computing a lower grade, and a
+--     hostile peer all deliver identical bytes and cannot be told apart. Flagging there
+--     would fire on ordinary traffic and accuse honest peers — §5.12 alert fatigue, in a
+--     ledger nobody could then trust.
+-- A clock grade is a claim about the authoring node's own clock and stays meaningful at
+-- both doors; a safety rung is a claim about THIS chart's grade, which is node-relative.
+-- Same idiom, different question.
+--
+-- A LEDGER and not a view (ADR-0064's rule): a published byte is permanent and can never
+-- improve, so there is nothing to self-heal.
+CREATE TABLE IF NOT EXISTS safety_overclaim_flag (
+    content_address BYTEA PRIMARY KEY,
+    patient_id      UUID        NOT NULL,
+    emitted_rung    TEXT        NOT NULL,
+    licensed_rung   TEXT        NOT NULL,
+    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+GRANT SELECT ON safety_overclaim_flag TO cairn_agent;
+
+-- Idempotent on replay: the PK is the content address, so a re-offered event re-records
+-- the same row (the db/048 apply precedent, NOT the #254 bug — a conflict here means the
+-- SAME event twice).
+CREATE OR REPLACE FUNCTION cairn_record_safety_overclaim_flag(
+    p_ca bytea, p_patient uuid, p_emitted text, p_licensed text)
+RETURNS void LANGUAGE sql AS $$
+    INSERT INTO safety_overclaim_flag (content_address, patient_id, emitted_rung, licensed_rung)
+    VALUES (p_ca, p_patient, p_emitted, p_licensed)
+    ON CONFLICT (content_address) DO NOTHING;
+$$;
+
 -- Postgres grants EXECUTE to PUBLIC by default, and every role is a member of PUBLIC, so
 -- an un-REVOKEd function is directly callable by a below-the-floor adversary with raw SQL
 -- (the db/037 note, and issue #382's finding about the cairn_check_* family).
 REVOKE EXECUTE ON FUNCTION cairn_check_safety_signal(jsonb) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) TO cairn_agent;
+-- Same posture as cairn_check_safety_signal just above, and for the identical reason: a
+-- writer called ONLY from inside submit_event's SECURITY DEFINER context (2026-08-15
+-- review, Minor #5 — cairn_record_ceiling_flag, the precedent this function otherwise
+-- copies, leaves this open; closing it here rather than re-deriving the gap every read).
+-- cairn_agent needs no grant on it at all — submit_event calls it as its owner.
+REVOKE EXECUTE ON FUNCTION cairn_record_safety_overclaim_flag(bytea, uuid, text, text) FROM PUBLIC;
 
 -- The read model. REVOKE before GRANT for each, same reason as above: these are the
 -- SANCTIONED way to read the safety signal, and a reader that reaches event_log.safety
