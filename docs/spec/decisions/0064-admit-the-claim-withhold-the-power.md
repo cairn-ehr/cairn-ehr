@@ -547,14 +547,14 @@ assertion that lives on a **different** chart, finds nothing in `cairn_sensitivi
 on any read, ever — and so also falls out of the worklist's `inert` arm, which asks whether the target
 still stands *on the withdrawal's own chart*, where it never did. **This holds only for
 `verdict = 'unverified'`.** An AUTHORITATIVE (`'attested'`/`'self'`) mis-chart withdrawal is different:
-the worklist's second arm (`db/048:873-881`) checks the responsible actor's prior presence on the
+the worklist's second arm (`db/048:887-895`) checks the responsible actor's prior presence on the
 WITHDRAWAL'S OWN chart, not the target's, so an actor with no such presence there DOES surface — as
 `stranger-attested`. Neither door refuses either shape: the ceremony's chart-mismatch checks are in the
 *assertion* branch only. Harmless clinically in both cases — the strip never took effect anywhere — but
 for the unverified case it is exactly the kind of silently-ineffective act a worklist would want to
 show, and no arm of the view names the actual condition — even the visible `stranger-attested` row for
 the authoritative case reads as an ordinary stranger attestation, not as "wrong chart". Recorded as a
-`KNOWN GAP` comment at `db/048:814-823` and here; not fixed, and not exercised by any test.
+`KNOWN GAP` comment at `db/048:826-838` and here; not fixed, and not exercised by any test.
 
 **The Rust↔SQL authority mapping is already violated by door-admissible shapes, in both directions.**
 `classify_authorship_confidence` and `cairn_claim_authority` are documented as owing each other
