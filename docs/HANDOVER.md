@@ -41,12 +41,19 @@ the cross-cutting authority floor are now built.** Read [ADR-0062](spec/decision
 displays either — [#388](https://github.com/cairn-ehr/cairn-ehr/issues/388) territory. ADR-0064's §1.2
 budget (*"why didn't this withdrawal take effect?" in one query, no raw SQL*) is **owed, not met**.
 
-**2026-08-16 closed the two live §5.9 leaks** ([#405](https://github.com/cairn-ehr/cairn-ehr/issues/405)
-part 1 and [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412)) — see the session entry below. The
-one thing to carry before touching either plane: **`REVOKE SELECT (column)` is inert while a table-level
-grant stands**, so `cairn_agent` now holds an explicit 23-column grant on `event_log` that omits `safety`.
-**Adding a column to `event_log` now requires granting it in db/049 section 8** — the fail-closed
-direction, and `safety_read_grants.rs` fails by column name to tell you so.
+**2026-08-16 closed one live §5.9 leak and narrowed the other**
+([#412](https://github.com/cairn-ehr/cairn-ehr/issues/412) closed;
+[#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 1's *convenient path* only) — see the
+session entry below. Two things to carry before touching either plane:
+**`REVOKE SELECT (column)` is inert while a table-level grant stands**, so `cairn_agent` now holds an
+explicit 23-column grant on `event_log` that omits `safety`, and **adding a column to `event_log` now
+requires granting it in db/049 section 8** (fail-closed; `safety_read_grants.rs` fails by column name to
+tell you so). And — the correction that matters most — **that grant is cost-raising, not a floor**: the
+column is a copy of a clear field of the signed body, so `cairn_body(signed_bytes) -> 'safety'` still
+returns it uncoarsened to the same role ([#424](https://github.com/cairn-ehr/cairn-ehr/issues/424)), and
+the runtime login role is a member of `cairn_node`, which keeps the table-level grant
+([#425](https://github.com/cairn-ehr/cairn-ehr/issues/425)). Do not cite db/049 section 8 as a
+confidentiality boundary; ADR-0063 decision 2 (emission-time coarsening) is the one that binds.
 
 Slice 65's own follow-ons: **#374** (thread resolution resolves only a thread's *current head* — erratum
 E4 narrows it), **#378** (the withdrawal rationale is clear text forever and replicates — the UI must warn
@@ -186,10 +193,12 @@ surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
 
 **2026-08-16 — two live §5.9 leaks, one per plane** (closes
-[#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) — part 2 was Slice 68 — and
-[#412](https://github.com/cairn-ehr/cairn-ehr/issues/412); no ADR and no migration, `SCHEMA_GENERATION`
-stays 49; **ADR-0063 gains erratum E1**). Both defects were the same shape: **a guarantee asserted in a
-comment that the code did not provide.** Three things to carry:
+[#412](https://github.com/cairn-ehr/cairn-ehr/issues/412); narrows
+[#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 1 — part 2 was Slice 68; no ADR and no
+migration, `SCHEMA_GENERATION` stays 49; **ADR-0063 gains erratum E1**). Both defects were the same shape:
+**a guarantee asserted in a comment that the code did not provide** — and the review of this branch found
+the SQL fix had reproduced that exact shape in its own prose, which is the fourth item below. Four things
+to carry:
 
 1. **A column-level `REVOKE` cannot narrow a table-level `GRANT`.** Postgres tracks the two separately, so
    `REVOKE SELECT (safety) ON event_log FROM cairn_agent` is **inert** while db/005's
@@ -204,9 +213,28 @@ comment that the code did not provide.** Three things to carry:
 3. **A parameter name is not a security property.** `classify_authorship_confidence(&body.contributors,
    &body.signer_key_id, None)` compiled, read naturally, and graded a forgery `Attested`. Both key
    arguments are now a `VerifiedKid` newtype whose only mints are a completed verification
-   (`VerifiedEvent::signer`) or a proof-carrying `event_log` column — the same reasoning SQL's R1 already
-   used. The old call is a **`compile_fail` doctest**. `authority_lockstep.rs` no longer hand-supplies the
-   attester (its own stated weakness): it reads `event_log.attester_key`.
+   (`VerifiedEvent::signer`, via a crate-private constructor) or a proof-carrying `event_log` column.
+   **Careful with that second one:** `attester_key` alone is NOT proof — db/020's deferred arm stores a
+   peer's token unverified, which is why SQL's R1 pairs the column with `cairn_attestation_vouched`. The
+   old call is a **`compile_fail` doctest** (plus a positive companion, since rustdoc on stable accepts
+   any compile error). `authority_lockstep.rs` no longer hand-supplies the attester (its own stated
+   weakness): it reads `event_log.attester_key`, on the vouched path.
+4. **The review of this branch found the SQL fix over-claiming in exactly the way it was correcting**, and
+   four things came out of it. (a) The claim is now *sanctioned, not only*: the column is a copy of a
+   clear body field, `signed_bytes` must stay granted, so `cairn_body(signed_bytes) -> 'safety'` returns
+   the uncoarsened value to the same role (**#424**) — and the runtime role is a `cairn_node` member, a
+   role db/049 never narrows (**#425**). db/049, ADR-0063's erratum, `safety_read_grants.rs` and ROADMAP
+   all say so now. (b) **`SET search_path = public` does not exclude `pg_temp`** — Postgres searches the
+   temp schema FIRST for relation names — so the two functions this slice made `SECURITY DEFINER` could be
+   blinded by any caller creating a temp `event_log`, returning **zero rows** for a chart carrying a real
+   warning, straight into `main.rs`'s "no safety signals on file" reassurance. Fixed here (`, pg_temp`
+   last, pinned by test and by `proconfig` assertions); **every other definer in the repo still has it**
+   (**#426**). (c) The column grant broke **whole-row** `event_log` readers (a `f(el)` composite needs
+   SELECT on every column) — db/034's two medication-thread functions, reached from a `cairn_agent`-granted
+   view; both became definers. (d) The narrowing is not continuous: db/005 re-grants the table on every
+   replay and db/049 re-narrows ~44 files later, each file its own transaction (**#427**).
+   Also: `VerifiedKid`'s mint-site allowlist is unpinned (**#428**), and rustdoc on stable ignores
+   `compile_fail` error codes, so the negative doctest now has a positive companion.
 
 **2026-08-15 — Slice 68: claim authority at the apply door** (closes
 [#380](https://github.com/cairn-ehr/cairn-ehr/issues/380), discharges
@@ -248,7 +276,9 @@ one statistic. Four defects were real and fixed there. What still generalises:
   block written to prevent it. **The one protection-stripping comparison was also fail-OPEN**
   (`<> 'unverified'` → `IN ('attested','self')`).
 - **Comments asserting guarantees the code does not provide were the largest single class** — and #405
-  part 1 / #412, closed 2026-08-16, were two more of exactly that. ADR-0064's six wrong line citations are
+  part 1 / #412 (2026-08-16) were two more of exactly that. The pattern is stubborn enough that the #405
+  *fix* re-committed it ("ONLY IS NOW ENFORCED"), and its own review caught that; treat a comment claiming
+  a floor as unverified until someone has tried the bypass. ADR-0064's six wrong line citations are
   [#417](https://github.com/cairn-ehr/cairn-ehr/issues/417) (ADRs are immutable, and a resolve-in-range
   check does not catch the shift class that actually bites).
 
@@ -271,9 +301,10 @@ decision) · **#419** (coverage gaps: R1's conjuncts, the worklist's two unteste
    crypto-shred is structural — the signal rides the append-only `event_log` row a shred never touches.
 2. **Two coarsenings, load-bearing for DIFFERENT reasons.** Emission binds a peer's raw-SQL client; read
    answers a peer that legitimately emitted a finer rung (the grade is node-relative). **Read coarsening
-   was a rendering choice, not a floor** until 2026-08-16: db/005's table-wide `GRANT SELECT ON event_log`
-   let `cairn_agent` read `event_log.safety` raw (#405 part 1 — **now closed by a column grant**; part 2,
-   the emission-side rung-vs-grade check, was Slice 68/ADR-0064).
+   is a rendering choice, not a floor** — db/049 section 8 (2026-08-16) made the raw `SELECT safety` a
+   privilege refusal for `cairn_agent`, but the value is still recoverable from `signed_bytes` and
+   `cairn_node` keeps the table grant (#405 part 1 — narrowed, not closed; #424/#425; part 2, the
+   emission-side rung-vs-grade check, was Slice 68/ADR-0064).
 3. **`safety_class_map` ships EMPTY** — Cairn ships the lookup, never the drug knowledge; the seam drugref
    plugs into.
 

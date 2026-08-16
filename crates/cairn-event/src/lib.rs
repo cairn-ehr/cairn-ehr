@@ -29,7 +29,8 @@ use serde::{Deserialize, Serialize};
 // directly — the keypair type travels with this crate's signing API.
 pub use attachment::{Attachment, Rendition, SealRef};
 // Re-exported at the crate root because it is part of the verification API's shape, not a
-// contributor-vocabulary detail: `verify_self_described_event` returns one (#412).
+// contributor-vocabulary detail: `verify_self_described_event` yields one through
+// `VerifiedEvent::signer` (#412).
 pub use contributor::VerifiedKid;
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
@@ -465,10 +466,14 @@ pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventErro
 /// A body whose signature this node has verified, carrying the key the signature actually
 /// used (#412).
 ///
-/// The point of the wrapper is that a [`VerifiedKid`] can be obtained from it and from
-/// nowhere else in this crate's verification path: a plain [`EventBody`] — the thing a
-/// deserialiser hands you — cannot produce one. Grading authorship therefore cannot be
-/// reached from an unverified blob by accident.
+/// The point of the wrapper is that a plain [`EventBody`] — the thing a deserialiser hands
+/// you — cannot produce a [`VerifiedKid`], so grading authorship cannot be reached from an
+/// unverified blob **by accident**. Be precise about the strength of that claim: it is not
+/// that a `VerifiedKid` is obtainable from nowhere else, because
+/// [`VerifiedKid::from_event_log_column`] is public and its premise is one the compiler
+/// cannot check. What this type removes is the *path of least resistance* — the forgeable
+/// line that used to be the natural one to write. The remaining route requires naming a
+/// constructor whose name contradicts what a wrong caller would be doing.
 #[derive(Debug)]
 pub struct VerifiedEvent {
     body: EventBody,
@@ -489,8 +494,13 @@ impl VerifiedEvent {
     }
 
     /// The signer, as a value that carries its provenance in its type.
+    ///
+    /// Mints through the crate-private `from_verified_signature`, NOT through
+    /// `from_event_log_column`: this value never came from a column, and using the DB
+    /// constructor here would plant a permanent false positive in the one audit
+    /// [`VerifiedKid`] actually relies on — a grep for call sites asserting DB provenance.
     pub fn signer(&self) -> VerifiedKid<'_> {
-        VerifiedKid::from_event_log_column(&self.signer_kid_hex)
+        VerifiedKid::from_verified_signature(&self.signer_kid_hex)
     }
 }
 

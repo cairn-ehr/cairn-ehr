@@ -15,20 +15,24 @@
 //! signature was ever checked. The word "verified" in `verified_attester` was the entire
 //! security property, carried by a parameter name.
 //!
-//! The SQL side never had this problem for a structural reason worth copying:
-//! `cairn_claim_authority` reads `event_log.attester_key`, a column that **cannot be
-//! written** until `cairn_verify` and `cairn_attestation_ok` have both passed. *Reading
-//! that column is the proof.* In Rust the verified read and the forged read had the
-//! identical type.
+//! The SQL side never had this problem for a structural reason worth copying — as long as
+//! the structure is copied WHOLE. `cairn_claim_authority`'s R1 arm is `attester_key IS NOT
+//! NULL **AND** cairn_attestation_vouched(event_id)`, two conjuncts, and the second is not
+//! decoration: db/020's deferred arm stores a peer-supplied `attester_key` before anything
+//! verifies it (*"CARRIED, NOT VOUCHED"*, in that file's own words). So it is not true that
+//! reading the column is the proof; reading it and clearing the vouch marker is. In Rust the
+//! verified read and the forged read had the identical type, which is the gap this newtype
+//! closes — for the ACCIDENTAL spelling. It cannot check a minter's premise.
 //!
 //! # What these tests pin
 //!
-//! [`VerifiedKid`] can be minted two ways, and this file pins the honest one end to end:
-//! a kid minted from [`verify_self_described_event`] is the key the signature **actually**
-//! verified against, and bytes that do not verify mint nothing at all. The compile-time
-//! half — that `&body.signer_key_id` no longer type-checks as a signer — is a
-//! `compile_fail` doctest on the classifier itself, because a runtime test cannot express
-//! "this line does not build".
+//! [`VerifiedKid`] has two mints and this file covers both: the verification mint end to end
+//! (a kid from [`verify_self_described_event`] is the key the signature **actually**
+//! verified against, and bytes that do not verify mint nothing at all), and the DB-column
+//! mint's pass-through. The compile-time half — that `&body.signer_key_id` no longer
+//! type-checks as a signer — is a `compile_fail` doctest on the classifier itself, because a
+//! runtime test cannot express "this line does not build"; a positive companion doctest
+//! sits beside it so that negative test cannot go vacuous unnoticed.
 use cairn_event::contributor::{classify_authorship_confidence, AuthorshipConfidence, VerifiedKid};
 use cairn_event::{verify_self_described_event, EventBody, EventError};
 
@@ -125,16 +129,24 @@ fn tampered_bytes_mint_nothing() {
 
 /// The DB-provenance mint, and the reason it is a separate named constructor.
 ///
-/// `event_log.signer_key_id` and `event_log.attester_key` are proof-carrying columns: the
-/// in-DB floor (db/005 step 1) runs `cairn_verify`, which IS `verify_self_described`, so a
-/// row exists only if the signature verified against the key the row names. A caller
-/// reading those columns holds the same proof this crate's verifier produces, arrived at
-/// by a different route — and there is no `&[u8]` around to re-verify.
+/// `event_log.signer_key_id` is proof-carrying unconditionally: the in-DB floor (db/005
+/// step 1) runs `cairn_verify`, which IS `verify_self_described`, so a row exists only if
+/// the signature verified against the key the row names. A caller reading that column holds
+/// the same proof this crate's verifier produces, arrived at by a different route — and
+/// there is no `&[u8]` around to re-verify.
+///
+/// `event_log.attester_key` is proof-carrying only WITH `cairn_attestation_vouched`, which
+/// is why the constructor's doc spells the two columns out separately rather than treating
+/// them as interchangeable. The distinction is currently latent — the classifier's
+/// authenticated-check is symmetric in its two kid arguments, so nothing yet depends on the
+/// attester slot carrying stronger evidence — but a future reader of R1 that treats it as
+/// stronger must split the type before relying on it.
 ///
 /// The constructor is deliberately named after that provenance rather than something
 /// neutral like `new`: the guarantee cannot be checked by the compiler at THIS boundary,
 /// so what is left is making a wrong call site conspicuous in review and greppable in the
-/// tree.
+/// tree — which is also why the crate's own verifier mints through a different, private
+/// constructor instead of laundering itself through this name.
 #[test]
 fn the_db_column_mint_carries_the_value_through_unchanged() {
     let kid = "a".repeat(64);

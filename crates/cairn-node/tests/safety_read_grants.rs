@@ -2,11 +2,12 @@
 //!
 //! # What this file is for
 //!
-//! `db/049` says the three read functions are the sanctioned way to read the safety
-//! signal, "and a reader that reaches `event_log.safety` directly gets the UNCOARSENED
-//! bytes". Until this slice that sentence was aspirational: `db/005` does
-//! `GRANT SELECT ON event_log … TO cairn_agent`, **a table-level grant covers every column
-//! added later**, so the runtime role could simply
+//! `db/049` names two functions — `cairn_event_safety` and `cairn_patient_safety` — as the
+//! sanctioned read of the safety signal. (The third function revoked alongside them,
+//! `cairn_prospective_sensitivity`, reads the SENSITIVITY stream and never touches
+//! `event_log.safety`; db/049 says so explicitly.) Until this slice "sanctioned" carried no
+//! privilege at all: `db/005` does `GRANT SELECT ON event_log … TO cairn_agent`, **a
+//! table-level grant covers every column added later**, so `cairn_agent` could simply
 //!
 //! ```sql
 //! SELECT safety FROM event_log WHERE event_id = …
@@ -17,21 +18,35 @@
 //! `precise` because the chart was routine on ITS node, while this node holds a
 //! `restricted` grade (the grade is node-relative, ADR-0062 decision 9).
 //!
-//! Principle 12 says the floor must be unbypassable **in the database**, so the fix is a
-//! privilege, not a convention: `event_log`'s table-level SELECT grant to `cairn_agent` is
-//! replaced by an explicit column list that omits `safety`, and the two read functions that
-//! must still reach the column became `SECURITY DEFINER`.
+//! Section 8 makes that specific read a privilege refusal: the table-level grant becomes an
+//! explicit column list omitting `safety`, and the two read functions became
+//! `SECURITY DEFINER` so the sanctioned path still works.
 //!
-//! # Why a whole file rather than three more tests in `safety_read.rs`
+//! # What these tests do NOT establish, and why the distinction matters here
 //!
-//! That file is already 890 lines and #402 asks for it to be split along the three
-//! properties its header names. These tests are about PRIVILEGE, not about the read
-//! model's semantics, and they are the only tests in the repo that must keep working when
-//! `event_log` gains a column — so they are easier to find here.
+//! **This is not an unbypassable floor, and the tests below must not be read as claiming
+//! one** (2026-08-16 review). `event_log.safety` is a verbatim copy of a CLEAR field of the
+//! signed body, and `signed_bytes` stays granted because sync must serve it — so the same
+//! role recovers the uncoarsened value via `cairn_body(signed_bytes) -> 'safety'`.
+//! Separately, `cairn_node` keeps a table-level grant and the runtime login role is
+//! provisioned as its member, so the role the product connects as is not even the role
+//! bound here. Both are tracked as follow-ups (#424, #425). What is pinned below is narrower and still
+//! worth pinning: the convenient path is closed, the sanctioned path works, the definers
+//! cannot be blinded, and nothing decides a new column's disclosure by inheritance.
 //!
-//! Every test self-skips without `$CAIRN_TEST_PG` (`cs()` returns `None`), and cargo then
-//! reports the suite as passing while running nothing — a green run that prints no test
-//! names is a SKIP, not a pass.
+//! # Why a whole file rather than more tests in `safety_read.rs`
+//!
+//! That file is already close to a thousand lines and #402 asks for it to be split along
+//! the three properties its header names. These tests are about PRIVILEGE, not about the
+//! read model's semantics, and they are the only tests in the repo that must keep working
+//! when `event_log` gains a column — so they are easier to find here.
+//!
+//! Every test self-skips without `$CAIRN_TEST_PG` (`cs()` returns `None`). Be clear about
+//! what that looks like: the tests RUN and return early, so cargo prints `… ok` for each and
+//! a skipped run is **indistinguishable from a real pass** in the default output. There is
+//! no green-run-prints-nothing tell. CI sets the variable (`.github/workflows/rust.yml`) and
+//! `scripts/run-db-gated-tests.sh` bakes it in locally, so the floor is genuinely exercised
+//! on every PR — but a local `cargo test` without it proves nothing here.
 mod common;
 use common::{cs, setup};
 use uuid::Uuid;
@@ -70,8 +85,11 @@ const GRANTED_COLUMNS: [&str; 23] = [
     "attestation",
     "attester_key",
     "actor_id",
-    "clock_grade",
+    // `seq` (db/036) precedes `clock_grade` (db/040): ADD COLUMN appends, so migration
+    // order IS attnum order on a freshly-built database. A long-lived dev DB with dropped
+    // columns can show different NUMBERS, but never a different sequence.
     "seq",
+    "clock_grade",
 ];
 
 /// Every `event_log` column deliberately WITHHELD from `cairn_agent`.
@@ -261,6 +279,137 @@ async fn the_sanctioned_read_still_works_as_cairn_agent_and_coarsens() {
     assert_eq!(chart.len(), 1, "the note is the chart's only signal");
     assert_eq!(chart[0].get::<_, String>(0), "existence");
     assert_eq!(chart[0].get::<_, Option<String>>(1), None);
+}
+
+/// The definer clause's other half: a caller cannot BLIND the sanctioned read by shadowing
+/// `event_log` in its own temporary schema.
+///
+/// `SET search_path = public` does **not** exclude `pg_temp` — Postgres searches the
+/// session's temp schema FIRST for relation names unless the path places it explicitly.
+/// While `cairn_event_safety` was invoker-rights this bought an attacker nothing (it ran as
+/// the caller anyway); making it `SECURITY DEFINER` in this same slice is exactly what turns
+/// the shadow into a trust-boundary crossing, because these two functions are now the ONLY
+/// read of the signal and therefore the thing a warning surface trusts.
+///
+/// The dangerous direction is suppression, not fabrication: an EMPTY shadow table makes a
+/// chart carrying an rh-sensitizing signal report zero rows, which lands in `main.rs`'s
+/// "no safety signals on file" branch — the one written to reassure. `pg_temp` listed LAST
+/// in `db/049` is what keeps `public` winning. Without it this test reads 0 rows.
+#[tokio::test]
+async fn a_caller_shadowed_temp_table_cannot_blind_the_sanctioned_read() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let p = Uuid::now_v7();
+    let ev = chart_with_an_overclaiming_note(&c, &sk, &kid, p).await;
+
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    // An EMPTY decoy carrying the column names the two function bodies reference. The role
+    // is allowed to do this — PUBLIC holds TEMPORARY on the database — which is the point:
+    // no extra privilege is needed to attempt the blinding.
+    c.batch_execute(
+        "CREATE TEMP TABLE event_log (event_id uuid, patient_id uuid, safety jsonb, \
+         sealed boolean, event_type text, schema_version text)",
+    )
+    .await
+    .expect("the runtime role may create temp tables; that is what makes this reachable");
+
+    let rows = c
+        .query(
+            "SELECT rung FROM cairn_event_safety($1::text::uuid)",
+            &[&ev.to_string()],
+        )
+        .await
+        .expect("the sanctioned read must survive a shadowed event_log");
+    let chart = c
+        .query(
+            "SELECT rung FROM cairn_patient_safety($1::text::uuid)",
+            &[&p.to_string()],
+        )
+        .await
+        .expect("the chart-wide report must survive a shadowed event_log");
+    c.batch_execute("DROP TABLE pg_temp.event_log")
+        .await
+        .unwrap();
+    c.batch_execute("RESET ROLE").await.unwrap();
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "a shadowed event_log must not suppress the signal — zero rows here is the silent \
+         'no safety signals on file' failure, not a clean bill of health"
+    );
+    assert_eq!(rows[0].get::<_, String>(0), "existence");
+    assert_eq!(
+        chart.len(),
+        1,
+        "the chart-wide report must not be blinded either — it names event_log in its own \
+         FROM clause, so it needs the pg_temp-safe path independently"
+    );
+}
+
+/// Section 8's blast radius, in the direction that BREAKS rather than leaks: a whole-row
+/// `event_log` reference needs SELECT on EVERY column, so dropping to a column grant makes
+/// `f(el)` fail with 42501 for `cairn_agent` even though every column it touches is granted.
+///
+/// This is not hypothetical. `cairn_medication_thread_commitment` and
+/// `cairn_medication_thread_readable_count` (db/034) both pass `cairn_clear_payload(el)` —
+/// a `(ev event_log)` composite — and both are reached from `medication_thread_attestation`,
+/// a view granted to `cairn_agent` and read by the medication chart path
+/// (`medication/read.rs`). Under a table grant they worked; under section 8 they 42501.
+///
+/// The failure is also badly diagnosable: Postgres reports `permission denied for table
+/// event_log`, naming neither the column nor the whole-row reference, and the natural
+/// remedy — re-issuing `GRANT SELECT ON event_log` — would silently undo #405 part 1
+/// entirely. Hence a test rather than a comment: the fix (db/034's two readers became
+/// definers, the same move db/049 section 7 made for its own readers) has to stay made.
+#[tokio::test]
+async fn the_column_grant_does_not_break_whole_row_event_log_readers() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    // An absent medication is fine — the privilege check happens at executor start, before
+    // any row is examined, so an empty result still proves the whole-row read is permitted.
+    let direct = c
+        .query(
+            "SELECT cairn_medication_thread_readable_count($1::text::uuid)",
+            &[&Uuid::now_v7().to_string()],
+        )
+        .await;
+    let via_view = c
+        .query(
+            "SELECT medication_id FROM medication_thread_attestation LIMIT 1",
+            &[],
+        )
+        .await;
+    c.batch_execute("RESET ROLE").await.unwrap();
+
+    if let Err(e) = &direct {
+        assert_ne!(
+            e.as_db_error().map(|d| d.code().code()),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "cairn_agent must be able to call a whole-row event_log reader; section 8's \
+             column grant broke this and db/034's SECURITY DEFINER clause is the fix: {e}"
+        );
+    }
+    if let Err(e) = &via_view {
+        assert_ne!(
+            e.as_db_error().map(|d| d.code().code()),
+            Some(INSUFFICIENT_PRIVILEGE),
+            "medication_thread_attestation is GRANTed to cairn_agent, but its target list \
+             calls invoker-rights whole-row readers — the medication chart path breaks \
+             here the moment anything actually connects as cairn_agent: {e}"
+        );
+    }
+    direct.expect("the direct whole-row reader must work as cairn_agent");
+    via_view.expect("the granted view must work as cairn_agent");
 }
 
 /// The ledger: every column of `event_log` is either deliberately granted to `cairn_agent`

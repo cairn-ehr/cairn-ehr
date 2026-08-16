@@ -32,9 +32,15 @@
 //! mapping predicts. The bridge used to be worse than that: `verified_attester` was handed
 //! over from the test's own `kid_h`, so the value whose provenance IS the invariant was
 //! supplied by assertion (#412). It now comes from `event_log.attester_key` — the same
-//! proof-carrying column R1 reads, written only after the door verified the token — so both
-//! sides start from a fact Postgres established, and a `VerifiedKid` is the only shape the
-//! Rust grader will accept for it. Two regressions this
+//! column R1 reads — so both sides start from a fact Postgres established, and a
+//! `VerifiedKid` is the only shape the Rust grader will accept for it.
+//!
+//! CAVEAT ON THAT COLUMN, because the mint below relies on it: `attester_key` alone is NOT
+//! proof. db/020's deferred arm stores a peer's token unverified ("CARRIED, NOT VOUCHED"),
+//! which is why R1 pairs the column with `cairn_attestation_vouched`. This test is sound
+//! because its fixtures use CLASSIFIED event types that take the door's verifying arm — not
+//! because reading the column is self-certifying. A fixture that went through the deferred
+//! path would need the vouch check before minting. Two regressions this
 //! test WOULD catch: Rust's `authenticated` check matching the SIGNER instead of the
 //! verified ATTESTER (fixture 1 would then read `Unverified` while SQL still reads
 //! `'attested'`), or the bearing/contributory partition misclassifying `"recorded"` as

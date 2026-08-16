@@ -464,26 +464,43 @@ wrong, and broke a second time inside the same session), #414, #415, #416, #418,
 and **neither new surface has a reader** ([#388](https://github.com/cairn-ehr/cairn-ehr/issues/388) —
 ADR-0064's own §1.2 budget is owed).
 
-- **Interlude — two live §5.9 leaks closed (2026-08-16; branch `fix/safety-column-grant-and-verified-kid`;
-  closes [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) and
-  [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412); no ADR, no schema change —
-  `SCHEMA_GENERATION` stays 49; **ADR-0063 gains erratum E1**).** Both were **a guarantee stated in a
-  comment that the code did not provide**, one per plane, and both were found by the PR #410 review wave
-  rather than by a test.
-  **(1) #405 part 1, in SQL.** db/049 claimed its three functions were the only way to read the safety
-  signal; db/005's `GRANT SELECT ON event_log … TO cairn_agent` meant the runtime role could
+- **Interlude — one §5.9 leak closed, one narrowed (2026-08-16; branch
+  `fix/safety-column-grant-and-verified-kid`; closes
+  [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412) and
+  [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) **part 1's convenient path only**; no ADR, no
+  schema change — `SCHEMA_GENERATION` stays 49; **ADR-0063 gains erratum E1**).** Both defects were **a
+  guarantee stated in a comment that the code did not provide**, one per plane, found by the PR #410
+  review wave rather than by a test — and the review of *this* branch found the first fix had reproduced
+  the same failure in its own prose, which is why the scope line above is narrower than the branch name.
+  **(1) #405 part 1, in SQL.** db/049 claimed its read functions were the only way to read the safety
+  signal; db/005's `GRANT SELECT ON event_log … TO cairn_agent` meant that role could
   `SELECT safety FROM event_log` and skip the re-coarsening. **The obvious fix is inert:**
   `REVOKE SELECT (safety)` removes only a COLUMN-level grant while the table grant keeps conferring the
   column. So db/049 section 8 drops cairn_agent to an explicit 23-column grant omitting `safety`, and
   both read functions became `SECURITY DEFINER` — a pair where either half alone is broken
   (mutation-checked). The list is **fail-closed on purpose**: a future column is unreadable until someone
   decides, and a test fails by column name when `event_log` grows.
+  **This is cost-raising, not a floor, and the docs now say so.** `event_log.safety` is a verbatim copy
+  of a *clear* field of the signed body, and `signed_bytes` must stay granted, so
+  `cairn_body(signed_bytes) -> 'safety'` returns the uncoarsened signal to the same role
+  ([#424](https://github.com/cairn-ehr/cairn-ehr/issues/424)); and the runtime login role is provisioned
+  as a member of `cairn_node`, which keeps a table-level grant db/049 never narrows
+  ([#425](https://github.com/cairn-ehr/cairn-ehr/issues/425)). ADR-0063 decision 2 stands: **emission-time
+  coarsening is the control that binds.** The branch also fixed two defects the fix itself introduced —
+  the new definers pinned `search_path = public` **without `pg_temp`**, so any caller could shadow
+  `event_log` with a temp table and silently suppress a real warning to zero rows
+  (repo-wide audit: [#426](https://github.com/cairn-ehr/cairn-ehr/issues/426)); and the column grant broke
+  whole-row `event_log` readers, so db/034's two medication-thread functions became definers too.
+  Residual replay window: [#427](https://github.com/cairn-ehr/cairn-ehr/issues/427).
   **(2) #412, in Rust.** `classify_authorship_confidence` took the signer as `&str`, and `EventBody`
   carries the body's *self-asserted* `signer_key_id` next to `contributors` — so the natural line graded a
   forgery `Attested` with no signature checked, at exactly the point #245's display half will run. Now
   both key arguments are a `VerifiedKid` newtype with two named mints (`VerifiedEvent::signer` after
   verification; `from_event_log_column` for the proof-carrying columns the SQL side already relies on),
-  and the forgeable call is a **`compile_fail` doctest**. The lockstep test stopped hand-supplying the
+  and the forgeable call is a **`compile_fail` doctest** (with a positive companion beside it, since
+  rustdoc on stable accepts *any* compile error and ignores error-code annotations — the negative test
+  would otherwise go vacuous unnoticed; the unpinned mint-site allowlist is
+  [#428](https://github.com/cairn-ehr/cairn-ehr/issues/428)). The lockstep test stopped hand-supplying the
   attester — it reads `event_log.attester_key`, so both planes now start from the same verified fact,
   which was that test's own stated weakness. `#[non_exhaustive]` was weighed and declined (it would break
   cross-crate `assert_eq!` for no security gain — the defect was the computation, not the value).
