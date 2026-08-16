@@ -397,11 +397,27 @@ $$;
 --    'existence' is the claim "there is a safety-relevant signal here and you are not
 --    cleared to see what" — a severity beside it would narrow exactly that. severity
 --    survives at 'precise' and 'kind' only.
+--
+--    !! SECURITY DEFINER IS REQUIRED, NOT STYLISTIC (#405 part 1) !!
+--    Section 8 withholds `SELECT (safety)` from cairn_agent — that is what makes "the
+--    sanctioned way to read the signal" a privilege rather than a convention. A
+--    non-definer body runs as the CALLING role whether or not it inlines, so without
+--    DEFINER this function fails with 42501 for the very role the product runs as, and
+--    the coarsened read would be available to nobody. The pair is load-bearing in BOTH
+--    directions: revoking the column without this clause breaks the read path, and this
+--    clause without the revoke closes nothing.
+--    Pinned by safety_read_grants.rs::the_sanctioned_read_still_works_as_cairn_agent_and_coarsens,
+--    whose fixture lands a real signal and a real standing grade through the role switch
+--    so the body actually executes (the weak/strong pin distinction ADR-0064 draws).
+--    `SET search_path = public` for the reason every definer in this repo carries it: the
+--    unqualified names below must never resolve into a caller-shadowed schema.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_event_safety(p_event_id uuid)
 RETURNS TABLE (rung text, class text, severity text, event_type text,
                grade text, subject_kind text)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public
+AS $$
     WITH ev AS (
         -- No signal ⇒ NO ROW, deliberately. An 'existence' marker synthesised for every
         -- uncoded event would manufacture a warning from nothing, which is worse than
@@ -472,10 +488,17 @@ $$;
 --    Sorting them last would bury the one class of warning whose content is unknown
 --    precisely because it was protected, which is the disclosure-adjacent failure this file
 --    exists to avoid. A UI is free to group differently; the default must not hide.
+--
+--    SECURITY DEFINER for the same reason as cairn_event_safety, and INDEPENDENTLY of it:
+--    this function's OWN `WHERE e.safety IS NOT NULL` touches the withheld column, so a
+--    fix that made only the per-event reader a definer would leave the chart report broken
+--    for cairn_agent. The same test pins both halves.
 CREATE OR REPLACE FUNCTION cairn_patient_safety(p_patient uuid)
 RETURNS TABLE (event_id uuid, rung text, class text, severity text, event_type text,
                grade text, subject_kind text)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public
+AS $$
     SELECT e.event_id, s.rung, s.class, s.severity, s.event_type, s.grade, s.subject_kind
     FROM event_log e, LATERAL cairn_event_safety(e.event_id) s
     WHERE e.patient_id = p_patient AND e.safety IS NOT NULL
@@ -548,18 +571,17 @@ GRANT EXECUTE ON FUNCTION cairn_safety_class_candidate(jsonb) TO cairn_agent;
 REVOKE EXECUTE ON FUNCTION cairn_record_safety_overclaim_flag(bytea, uuid, text, text) FROM PUBLIC;
 
 -- The read model. REVOKE before GRANT for each, same reason as above: these are the
--- SANCTIONED way to read the safety signal, and a reader that reaches event_log.safety
--- directly gets the UNCOARSENED bytes — so the grant on them must be deliberate, not the
--- PUBLIC default.
+-- ONLY way cairn_agent can read the safety signal, and a reader that reached
+-- event_log.safety directly would get the UNCOARSENED bytes — so the grant on them must
+-- be deliberate, not the PUBLIC default.
 --
--- "SANCTIONED", NOT "ONLY" — AND THE DIFFERENCE IS NOT ENFORCED HERE (#405, 2026-08-14
--- review). db/005 already does `GRANT SELECT ON event_log ... TO cairn_agent`, and a
--- table-level grant covers columns added later, so cairn_agent can read this very column
--- raw and skip section 7's re-coarsening entirely. The REVOKE/GRANT dance below does NOT
--- close that; it only stops an un-enrolled PUBLIC caller. Closing it needs a column-level
--- `REVOKE SELECT (safety)` plus SECURITY DEFINER on these functions — weighed in #405.
--- Blast radius is bounded: this column holds the already-coarsened EMITTED value, never
--- the precise sealed claim. But do not read the line above as a floor guarantee.
+-- "ONLY" IS NOW ENFORCED, AND SECTION 8 BELOW IS WHAT ENFORCES IT (#405 part 1, closed
+-- 2026-08-16). It used to say "SANCTIONED, not ONLY": db/005 does `GRANT SELECT ON
+-- event_log ... TO cairn_agent`, a table-level grant covers columns added later, so
+-- cairn_agent could read this very column raw and skip section 7's re-coarsening
+-- entirely. Section 8 replaces that table-level grant with an explicit column list that
+-- omits `safety`, and the two read functions above became SECURITY DEFINER so the
+-- sanctioned path still works. Read the two together — either alone is broken.
 --
 -- Note cairn_prospective_sensitivity reads the SENSITIVITY stream and never touches
 -- event_log.safety at all; it is grouped here because emission calls it, not because it
@@ -570,5 +592,46 @@ REVOKE EXECUTE ON FUNCTION cairn_patient_safety(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_prospective_sensitivity(uuid, uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_event_safety(uuid) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_patient_safety(uuid) TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
+-- 8. The column floor under all of the above (#405 part 1).
+--
+--    !! A COLUMN-LEVEL REVOKE DOES NOT WORK; THE TABLE GRANT MUST GO FIRST !!
+--    `REVOKE SELECT (safety) ON event_log FROM cairn_agent` looks like the fix and is
+--    INERT: Postgres tracks table-level and column-level privileges separately, and a
+--    column REVOKE removes only a column-level grant. While db/005's table-level
+--    `GRANT SELECT ON event_log` stands, it keeps conferring every column, this one
+--    included. The only way to withhold one column is to drop to column grants entirely.
+--
+--    WHY HERE AND NOT IN db/005. The column does not exist yet when db/005 runs (section
+--    0 above adds it), and migration replay re-runs every file in order on each connect —
+--    so db/005 re-grants the table and this block re-narrows it, every time, idempotently.
+--    Keeping the narrowing next to the column's rationale is also the point: a reader who
+--    finds the grant must find the reason in the same file.
+--
+--    THE LIST IS FAIL-CLOSED BY CONSTRUCTION, AND THAT IS THE DESIGN. A column added to
+--    event_log by a FUTURE migration is NOT covered by a column grant, so cairn_agent
+--    cannot read it until someone adds it here deliberately. That failure is loud
+--    (42501 at the first read) and it forces the disclosure question to be answered at the
+--    moment the column is added rather than inherited by default — which is exactly how
+--    `safety` became readable in the first place. Generating the list dynamically
+--    ("every column except safety") would restore the inheritance this block exists to
+--    end. Pinned by safety_read_grants.rs::every_event_log_column_is_a_deliberate_grant_decision,
+--    which fails by NAME when event_log gains a column no one has decided about.
+--
+--    WHAT THIS DOES NOT DO. It binds cairn_agent — the role the runtime connects as and
+--    the role the C1-C5 threat model treats as hostile-capable. An owner/superuser
+--    connection still reads everything, as it must to run migrations at all; that residual
+--    is inherent to "the DB owner can read the DB", not a gap in this floor.
+REVOKE SELECT ON event_log FROM cairn_agent;
+GRANT SELECT (
+    event_id, patient_id, event_type, schema_version,
+    hlc_wall, hlc_counter, node_origin, t_effective,
+    signed_bytes, content_address, body, contributors,
+    signer_key_id, plaintext_twin, sealed, dek_wrapped,
+    attachments, recorded_at, attestation, attester_key,
+    actor_id, clock_grade, seq
+    -- `safety` is deliberately ABSENT. Section 7's functions are the only read.
+) ON event_log TO cairn_agent;
 
 COMMIT;

@@ -10,7 +10,7 @@
 
 use cairn_event::contributor::{
     classify_authorship_confidence, classify_role, is_ratified, AuthorshipConfidence,
-    RolePartition, BEARING_PREFIX, CONTRIB_PREFIX,
+    RolePartition, VerifiedKid, BEARING_PREFIX, CONTRIB_PREFIX,
 };
 use proptest::prelude::*;
 
@@ -71,7 +71,10 @@ proptest! {
     /// bearing-role entry grades Device (the honest device-additive default).
     #[test]
     fn authorship_grader_is_total_on_junk(v in arb_json(), signer in ".{0,16}") {
-        let _ = classify_authorship_confidence(&v, &signer, None);
+        // The grader's contract is totality over any VERIFIED kid — a signer string is
+        // fuzzed here because verification constrains where the value comes from, never
+        // what it looks like (#412: the newtype pins provenance, not shape).
+        let _ = classify_authorship_confidence(&v, VerifiedKid::from_event_log_column(&signer), None);
     }
 
     /// The three-way grading law over structured contributor sets:
@@ -131,7 +134,11 @@ proptest! {
         };
 
         prop_assert_eq!(
-            classify_authorship_confidence(&contributors, "signer-kid", Some("attester-kid")),
+            classify_authorship_confidence(
+                &contributors,
+                VerifiedKid::from_event_log_column("signer-kid"),
+                Some(VerifiedKid::from_event_log_column("attester-kid")),
+            ),
             expected
         );
     }

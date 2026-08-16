@@ -222,3 +222,38 @@ BEGIN
     ASSERT n = 1, 'the overclaim ledger is idempotent on replay (PK = content address)';
     DELETE FROM safety_overclaim_flag WHERE content_address = v_ca;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- 6. #405 part 1: the column floor under the read model. Mirrors
+--    crates/cairn-node/tests/safety_read_grants.rs.
+--
+--    This is the half the Rust suite CANNOT test, and the reason the mirror exists at all
+--    (#386's lesson): privileges are migration state, so a test that never re-runs the
+--    migration is testing whatever the developer's database happens to hold. Here the
+--    database was just built from db/*.sql, so what is asserted is what the migration
+--    actually grants.
+--
+--    Read as a pair — either assertion alone passes for the wrong reason. Withholding the
+--    column while the read functions stay invoker-rights would break the read path for the
+--    product's own role; making them definers without withholding the column would close
+--    nothing.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    ASSERT NOT has_column_privilege('cairn_agent', 'event_log', 'safety', 'SELECT'),
+        'cairn_agent must NOT hold SELECT on event_log.safety — db/049 section 8 replaces '
+        'db/005''s table-level grant with a column list precisely because a table grant '
+        'keeps conferring columns added later (#405 part 1)';
+
+    -- A representative granted column, so the section-8 block cannot pass by having
+    -- revoked everything.
+    ASSERT has_column_privilege('cairn_agent', 'event_log', 'plaintext_twin', 'SELECT'),
+        'the column-level GRANT must still confer the rest of event_log';
+
+    ASSERT (SELECT prosecdef FROM pg_proc WHERE proname = 'cairn_event_safety'),
+        'cairn_event_safety must be SECURITY DEFINER, or the coarsened read is unreadable '
+        'by the only role allowed to call it';
+    ASSERT (SELECT prosecdef FROM pg_proc WHERE proname = 'cairn_patient_safety'),
+        'cairn_patient_safety touches event_log.safety in its OWN where-clause, so it '
+        'needs the definer rights independently of cairn_event_safety';
+END $$;
