@@ -251,6 +251,66 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
+-- #410 review finding C3: the SQL mirror of "an unrecognised verdict withholds".
+--
+-- The seam tests `cairn_claim_authority(...) IN ('attested','self')`, POSITIVELY. Written
+-- the other way — `<> 'unverified'` — every verdict that is not byte-for-byte that string
+-- gains the power to strip a grade, including a FOURTH verdict some future ADR adds. That
+-- is not a hostile scenario: ADR-0064 says "every future dial" will delegate here.
+--
+-- The real definition is captured with pg_get_functiondef and replayed to restore, rather
+-- than hand-copied, so this test cannot drift away from the thing it restores (the same
+-- reason the Rust twin replays db/005 from the migration file itself). The Rust twin is
+-- claim_authority.rs's `an_unrecognised_verdict_withholds_the_power_to_strip`.
+DO $$
+DECLARE
+    v_patient  uuid := gen_random_uuid();
+    v_assert   uuid := gen_random_uuid();
+    v_withdraw uuid := gen_random_uuid();
+    v_ca_a     bytea := '\x1220'::bytea || digest('c3-mirror-assert', 'sha256');
+    v_ca_w     bytea := '\x1220'::bytea || digest('c3-mirror-withdraw', 'sha256');
+    v_real_def text;
+    n          int;
+BEGIN
+    v_real_def := pg_get_functiondef('cairn_claim_authority(uuid,uuid)'::regprocedure);
+
+    INSERT INTO sensitivity_assertion
+        (content_address, event_id, patient_id, subject_kind, subject_id, grade, source,
+         hlc_wall, hlc_counter, node_origin)
+    VALUES (v_ca_a, v_assert, v_patient, 'patient', v_patient, 'sequestered', 'human',
+            10, 0, 'mirror');
+    INSERT INTO sensitivity_withdrawal
+        (content_address, event_id, withdraws, patient_id, rationale,
+         hlc_wall, hlc_counter, node_origin)
+    VALUES (v_ca_w, v_withdraw, v_ca_a, v_patient, 'strip', 20, 0, 'mirror');
+
+    -- Stage a verdict that exists in no ladder today.
+    EXECUTE $future$
+        CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
+        RETURNS text LANGUAGE sql STABLE
+        SECURITY DEFINER SET search_path = public
+        AS 'SELECT ''delegated-registry''::text';
+    $future$;
+
+    SELECT count(*) INTO n FROM cairn_sensitivity_standing(v_patient);
+
+    -- Restore BEFORE asserting, so a failure cannot leave a stub predicate behind that
+    -- would silently disarm every later block in this file.
+    EXECUTE v_real_def;
+
+    ASSERT n = 1,
+        'an UNRECOGNISED verdict must withhold the power to strip: the assertion must '
+        'still stand (#410 finding C3 — a negative <> test would strip it instead)';
+
+    -- And the restore genuinely put the real predicate back.
+    ASSERT cairn_claim_authority(v_withdraw, v_assert) = 'unverified',
+        'the real predicate must be restored after the staged fourth verdict';
+
+    DELETE FROM sensitivity_withdrawal WHERE content_address = v_ca_w;
+    DELETE FROM sensitivity_assertion  WHERE content_address = v_ca_a;
+END $$;
+
+-- ---------------------------------------------------------------------------
 -- Task 4 review gap (not itself in the task-6 brief): nothing pins
 -- sensitivity_withdrawal_worklist's column set, order or types.
 --
@@ -294,8 +354,16 @@ END $$;
 -- function-inventory section to extend (checked: db/tests/005_submit_test.sql covers only
 -- C5.1/C5.4), so per the brief's own fallback this lives here, beside the function's own
 -- read-path tests above. crates/cairn-node/tests/safety_ladder.rs already pins the SIBLING
--- posture for cairn_record_safety_overclaim_flag; this is the complement — the OTHER
--- SECURITY DEFINER function this slice added, which that Rust suite never touches.
+-- posture for cairn_record_safety_overclaim_flag; this is the complement, covering the one
+-- function that Rust suite never touches.
+--
+-- The two postures are NOT the same shape, and this comment used to conflate them (#410
+-- review finding A4). `cairn_record_safety_overclaim_flag` is a plain `LANGUAGE sql` writer
+-- — NOT security definer — REVOKEd from PUBLIC and given no cairn_agent grant at all,
+-- because submit_event calls it as its owner. `cairn_claim_authority` is the only
+-- SECURITY DEFINER function this slice added, and it IS granted to cairn_agent because the
+-- product's read path calls it directly. Same file, opposite grant posture, for opposite
+-- reasons — which is exactly why both are pinned rather than assumed.
 DO $$
 BEGIN
     ASSERT NOT has_function_privilege('public', 'cairn_claim_authority(uuid,uuid)', 'EXECUTE'),

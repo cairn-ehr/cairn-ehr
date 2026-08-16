@@ -490,12 +490,13 @@ $$;
 -- and quietly break the signature's meaning. So it takes ADR-0058's record-a-flag idiom.
 --
 -- !! LOCAL DOOR ONLY — AND THIS DELIBERATELY BREAKS THE PRECEDENT IT COPIES !!
--- cairn_record_ceiling_flag is called at BOTH doors (db/005:825 and db/020:145), so
+-- cairn_record_ceiling_flag is called at BOTH doors (db/005:912 and db/020:145), so
 -- local-only here reads as an oversight and WILL be tidied into symmetry. It is not:
 --   * LOCALLY the node's own grade is authoritative for its own authoring, so a rung finer
 --     than it licenses is unambiguously anomalous — apply_safety_rung was bypassed. THAT IS
 --     NOT THE ONLY SOURCE, THOUGH: apply_safety_rung's own read (crate::safety::
---     prospective_rung) and this door's read at step 7a above are separate statements over
+--     prospective_rung) and this door's read at step 7a — which lives in db/005, NOT in
+--     this file — are separate statements over
 --     the SAME chart, and crates/cairn-node/src/safety.rs:105-115 declares the resulting
 --     race — a chart-wide grade raised in the window between the two makes the daemon emit
 --     a correctly-derived rung one step finer than the grade standing by the time this door

@@ -12,13 +12,17 @@
 //! sets that state — the attestation-storage branch itself is guarded by the SAME
 //! responsibility claim — so it can never clear the ceremony, attested or not, at EITHER
 //! door (`apply_remote_event`'s own attestation gate reads the identical `v_bears` test).
-//! That is why the two UN-ATTESTED-withdrawal tests here (R2) go through the REMOTE door:
-//! it is the only door that will ever admit that shape.
+//! That is why EVERY un-attested-withdrawal test here (R2, and the R2-adjacent negatives)
+//! goes through the REMOTE door: it is the only door that will ever admit that shape. Do
+//! not count them in this comment — an earlier version said "the two", and the file has
+//! grown past that twice since (#410 review).
 //!
 //! The R1 (attested) test's withdrawal is a DIFFERENT shape — the same
 //! responsibility-bearing contributor `crates/cairn-node/src/sensitivity.rs`'s
 //! `withdraw_sensitivity` builds, which the LOCAL door accepts too (it is the only shape
-//! the product ever writes locally). Test 3 still goes through the remote door, not
+//! the product ever writes locally). `a_vouched_human_attestation_is_attested` still goes
+//! through the remote door — named rather than numbered, because the ordinal drifts every
+//! time a test is inserted above it (#410 review) — not
 //! because the local door would refuse it, but because `cairn_claim_authority` is
 //! door-agnostic — it reads only `event_log.attester_key` / `.actor_id`, columns both
 //! doors populate identically for an admitted event — and because #380's exposure is
@@ -28,8 +32,8 @@ use cairn_event::sensitivity::*;
 use cairn_event::{ClockGrade, EventBody, Hlc};
 use common::{
     apply_remote_attested, apply_remote_raw, assert_chart_grade, bearing_withdrawal_body,
-    body_from_spec, content_address_of, cs, enroll_human, setup, submit_attested,
-    submit_registration, withdrawal_body_with_id, EventSpec,
+    body_from_spec, content_address_of, cs, enroll_human, enroll_human_with_role, setup,
+    submit_attested, submit_registration, withdrawal_body_with_id, EventSpec,
 };
 use uuid::Uuid;
 
@@ -266,6 +270,87 @@ async fn a_human_withdrawing_their_own_assertion_is_self() {
     assert_eq!(authority(&c, wid, Some(a)).await, "self");
 }
 
+/// R2 is SELF-withdrawal, and "self" is an EQUALITY — not merely "some human".
+///
+/// This is the negative twin of `a_human_withdrawing_their_own_assertion_is_self` above, and
+/// it exists because that test alone leaves R2's `c.actor_id = t.actor_id` conjunct
+/// (db/005) completely unexercised: every OTHER un-attested-withdrawal fixture in this file
+/// uses the DEVICE as both asserter and withdrawer, so R2 already dies on `kind = 'human'`
+/// and never reaches the equality. Deleting that equality therefore left the whole suite
+/// green (#410 review finding C1, found by mutation testing).
+///
+/// What the missing coverage was hiding is the entire #380 attack, restored: with the
+/// equality gone, ANY enrolled human on ANY peer reads 'self' against ANY assertion, so an
+/// un-attested cross-node withdrawal strips protection from a chart the withdrawer has no
+/// relationship to. That is precisely what ADR-0064 exists to close, and it is why the
+/// assertion below checks BOTH the verdict AND the consequence: a verdict test alone would
+/// still pass if the seam stopped consulting the predicate.
+#[tokio::test]
+async fn a_different_human_cannot_self_withdraw_another_humans_assertion() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    // A SECOND human, distinct in the only way that matters to R2: a different `actor_id`.
+    // `enroll_human` twice would collide (same pinned set -> same actor), so the role varies.
+    let (sk_h2, kid_h2) = enroll_human_with_role(&c, "locum-clinician").await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    // Human ONE raises the protection, so the target's actor_id is human one's.
+    let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
+
+    let withdraws_hex = hex::encode(content_address_of(&c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "not mine to lower",
+    };
+    let wid = Uuid::now_v7();
+    // Human TWO signs the withdrawal un-attested — the same remote-door route the sibling
+    // self-withdrawal test uses, so the ONLY difference between the two fixtures is whose
+    // actor authored the target. That isolation is what makes this a pin on the equality
+    // rather than on any of R2's other conjuncts.
+    let body = withdrawal_body_with_id(p, wid, &kid_h2, &w, 20);
+    apply_remote_raw(&c, &sk_h2, body)
+        .await
+        .expect("ADMITTED — authority gates effect, never admission (ADR-0064)");
+
+    // R2 must not fire: human two is a human, and their claim is well-formed, but the
+    // assertion they target is not theirs.
+    assert_eq!(authority(&c, wid, Some(a)).await, "unverified");
+
+    // Positive control on the CONSEQUENCE, not just the verdict: the grade must still stand.
+    // Without this, a regression that stopped consulting `cairn_claim_authority` at the seam
+    // entirely would leave the verdict assertion above passing while protection was stripped.
+    assert_eq!(effective(&c, a).await, "sequestered");
+
+    // Tripwire against the fixture silently degenerating: if a future edit made both
+    // withdrawals resolve to the SAME actor, this test would still pass for the wrong
+    // reason (R2 failing on something other than the equality). Pin the premise.
+    let (actor_target, actor_withdrawal): (Option<Vec<u8>>, Option<Vec<u8>>) = {
+        let row = c
+            .query_one(
+                "SELECT (SELECT actor_id FROM event_log WHERE event_id = $1::text::uuid),
+                        (SELECT actor_id FROM event_log WHERE event_id = $2::text::uuid)",
+                &[&a.to_string(), &wid.to_string()],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert!(
+        actor_target.is_some() && actor_withdrawal.is_some(),
+        "both events must resolve an actor, or R2 fails on the NULL guards instead"
+    );
+    assert_ne!(
+        actor_target, actor_withdrawal,
+        "the two humans must be genuinely distinct actors, or this test pins nothing"
+    );
+}
+
 #[tokio::test]
 async fn an_advisory_actor_cannot_self_withdraw_its_own_protective_tag() {
     let Some(base) = cs() else { return };
@@ -330,13 +415,27 @@ async fn the_read_path_works_as_cairn_agent() {
     let a = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
 
     // SECURITY DEFINER is load-bearing, not stylistic (see the SQL header): without it,
-    // cairn_agent — the role the product's actual read path runs as — gets "permission
-    // denied" the instant `cairn_claim_authority` calls `cairn_attestation_vouched`, which
-    // is REVOKEd FROM PUBLIC. Reading through `cairn_effective_sensitivity` (not the
-    // predicate directly) is what makes this the COMPOSED path Task 2 actually created:
-    // effective -> standing -> claim_authority, so this pins the real dependency chain, not
-    // a stand-in that happens to hinge on the same GRANT (Slice 62's lesson: test the path
-    // the product actually calls, not a stand-in with more privilege than it has).
+    // cairn_agent — the role the product's actual read path runs as — would get "permission
+    // denied" when `cairn_claim_authority` calls `cairn_attestation_vouched`, which is
+    // REVOKEd FROM PUBLIC. Reading through `cairn_effective_sensitivity` (not the predicate
+    // directly) exercises the COMPOSED path Task 2 created: effective -> standing ->
+    // claim_authority.
+    //
+    // WHAT THIS TEST ACTUALLY PINS, precisely — it is the WEAKER of the two role-switched
+    // pins, and the comment here used to overstate it (#410 review finding A3). This
+    // fixture builds NO withdrawal, so `sensitivity_withdrawal` is empty, the seam's
+    // `NOT EXISTS` subquery matches nothing, and the predicate's BODY never executes:
+    // `cairn_attestation_vouched` is never reached here. What survives is Postgres's
+    // executor-start ACL check — cairn_agent must hold EXECUTE on every function named in
+    // the plan, `cairn_claim_authority` included — which is a real regression guard (a
+    // dropped GRANT fails before the predicate would ever run) but NOT the dependency
+    // chain. Note also that `cairn_claim_authority` carries `SET search_path`, which alone
+    // blocks SQL inlining, so removing only SECURITY DEFINER would leave this test green.
+    //
+    // The STRONGER pin — the one that actually runs the predicate under the role against
+    // live data — is `claim_authority_worklist.rs::the_worklist_is_readable_as_cairn_agent`,
+    // whose fixture carries a real inert withdrawal. If either is ever simplified, re-anchor
+    // to whichever still lands real data through the role switch (ADR-0064's own warning).
     c.batch_execute("SET ROLE cairn_agent").await.unwrap();
     let grade: String = c
         .query_one(
@@ -641,3 +740,88 @@ async fn a_withdrawal_inert_because_its_target_has_not_replicated_heals_when_it_
 // only by an UNclassified type, which a withdrawal never is.) Verified empirically, not inferred:
 // a throwaway test drove exactly this shape through apply_remote_attested and observed the
 // refusal. This finding belongs in ADR-0064's Known limitations (Task 9) once that ADR exists.
+
+// ---------------------------------------------------------------------------
+// #410 review finding C3 — the polarity of the ONE protection-stripping test.
+// ---------------------------------------------------------------------------
+
+/// db/005 exactly as this build embeds it, replayed to PUT BACK the predicate the test
+/// below deliberately replaces. Restoring from the migration file itself (rather than a
+/// hand-copied definition) keeps the restore from drifting away from the thing it restores
+/// — the same discipline `safety_overclaim.rs`'s `DB049` keeps.
+const DB005: &str = include_str!("../../../db/005_submit.sql");
+
+/// `cairn_claim_authority` replaced by one returning a verdict that does not exist today.
+/// Argument NAMES must match db/005's or `CREATE OR REPLACE` refuses.
+///
+/// This stages the FUTURE, not a hostile act: ADR-0064 says outright that "every future
+/// dial" will delegate to this predicate, so a fourth verdict is a routine expected
+/// evolution, not an attack. The question this test asks is what the seam does the day one
+/// arrives — and the answer must be "withholds", by construction, without anyone having to
+/// remember to revisit db/048.
+const FOURTH_VERDICT: &str = r#"
+CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
+RETURNS text LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public
+AS $future$
+    SELECT 'delegated-registry'::text;
+$future$;
+"#;
+
+#[tokio::test]
+async fn an_unrecognised_verdict_withholds_the_power_to_strip() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk_h, &kid_h, p, 10, "sequestered").await;
+
+    // A withdrawal that genuinely IS authoritative today, so the fixture proves the seam
+    // is live: before the swap it strips, after the swap it must not. Anything less and
+    // "still sequestered" could just mean the withdrawal never worked in the first place.
+    let withdraws_hex = hex::encode(content_address_of(&c, a).await);
+    let w = SensitivityWithdrawal {
+        withdraws_hex: &withdraws_hex,
+        rationale: "mine to lower",
+    };
+    let wid = Uuid::now_v7();
+    apply_remote_raw(&c, &sk_h, withdrawal_body_with_id(p, wid, &kid_h, &w, 20))
+        .await
+        .expect("an un-attested self-withdrawal must land at the remote door");
+
+    // Precondition: with the REAL predicate this withdrawal is authoritative and the grade
+    // has already fallen. This is what makes the post-swap assertion meaningful.
+    assert_eq!(authority(&c, wid, Some(a)).await, "self");
+    assert_eq!(
+        effective(&c, a).await,
+        "routine",
+        "fixture precondition: the withdrawal must genuinely strip before the swap, or \
+         the assertion after it proves nothing"
+    );
+
+    c.batch_execute(FOURTH_VERDICT)
+        .await
+        .expect("stage a future fourth verdict");
+    let observed = effective(&c, a).await;
+    // Restored BEFORE asserting, so a failure still leaves the database usable.
+    c.batch_execute(DB005)
+        .await
+        .expect("restore db/005 after the staged verdict");
+
+    assert_eq!(
+        observed, "sequestered",
+        "an unrecognised verdict must WITHHOLD the power to strip, never confer it — a \
+         negative `<> 'unverified'` test would hand every future verdict the power to \
+         lower a grade, silently and with the suite green (#410 finding C3)"
+    );
+
+    // And the restore genuinely put the real predicate back, so this test cannot leave a
+    // stub behind that would quietly disarm every sibling test in the file.
+    assert_eq!(authority(&c, wid, Some(a)).await, "self");
+}

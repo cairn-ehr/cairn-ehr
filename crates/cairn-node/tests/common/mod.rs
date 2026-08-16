@@ -347,7 +347,7 @@ pub fn bearing_withdrawal_body(
 /// author attested to nobody. This is the ONLY way to land a genuinely un-attested
 /// `sensitivity.grade-withdrawal.asserted` event at all: the local door's ceremony (db/048)
 /// refuses every un-attested withdrawal unconditionally, but `apply_remote_event` never
-/// calls that ceremony (ADR-0060 — a door check at apply would fork the event set).
+/// calls that ceremony (ADR-0062 decision 7 — a door check at apply would fork the event set).
 pub async fn apply_remote_raw(
     c: &Client,
     sk: &SigningKey,
@@ -388,10 +388,27 @@ pub async fn apply_remote_attested(
 /// always demands a responsibility-bearing human, §5.7 "Human" — can reach for it instead of
 /// re-copying the enrollment. Returns `(human sk, human kid)`.
 pub async fn enroll_human(c: &Client) -> (SigningKey, String) {
+    enroll_human_with_role(c, "records-officer").await
+}
+
+/// Enroll a human actor whose PINNED SET carries `role` — the way a suite gets TWO (or more)
+/// genuinely DISTINCT human actors.
+///
+/// Why a caller cannot simply call [`enroll_human`] twice: an actor's `actor_id` is
+/// content-addressed from its pinned set (db/004), so two different signing keys pinned to
+/// the SAME set resolve to the SAME actor, and `enroll_actor` refuses the second with
+/// `cairn_key_actor_id_conflict` — the silent-identity-merge guard from principle 2
+/// ("never merge — always link"), pinned by `actor_enroll_collision.rs`. Varying the role
+/// varies the pinned set, so each call yields a separate human with its own `actor_id`.
+///
+/// That distinctness is the whole point for `cairn_claim_authority`'s R2 branch, which asks
+/// whether the withdrawer's actor IS the actor that made the claim being withdrawn: testing
+/// "a DIFFERENT human may not self-withdraw" is impossible without two of them.
+pub async fn enroll_human_with_role(c: &Client, role: &str) -> (SigningKey, String) {
     let (sk_h, kid_h) = generate_key().unwrap();
     c.execute(
-        "SELECT enroll_actor('human', '{\"role\":\"records-officer\"}', $1)",
-        &[&kid_h],
+        "SELECT enroll_actor('human', jsonb_build_object('role', $2::text), $1)",
+        &[&kid_h, &role],
     )
     .await
     .unwrap();
@@ -717,6 +734,115 @@ pub async fn submit_medication_with_raw_safety(
     )
     .await?;
     Ok(ca)
+}
+
+/// The same overclaiming, raw-safety medication event as
+/// [`submit_medication_with_raw_safety`] — landed through the REMOTE door
+/// (`apply_remote_event`) instead of the local one (`submit_event`).
+///
+/// Exists to pin ADR-0064 decision 7's LOCAL-DOOR-ONLY asymmetry: the safety-overclaim
+/// ledger is written at the local door and NOWHERE ELSE, deliberately. db/049 and the ADR
+/// both warn in capitals that the asymmetry reads as an oversight and that a reviewer WILL
+/// tidy it into symmetry — and nothing anywhere paired the ledger with the remote door, so
+/// that tidy-up would have kept every test green (#410 review finding I3).
+///
+/// The two helpers are deliberately near-identical in construction and differ ONLY in the
+/// door they call, because that is precisely the variable under test: same bytes, same
+/// chart, same overclaim, different door, different outcome.
+#[allow(clippy::too_many_arguments)] // mirrors its local-door twin
+pub async fn apply_remote_medication_with_raw_safety(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> Result<Vec<u8>, tokio_postgres::Error> {
+    let (signed_bytes, ca, dek) =
+        build_raw_safety_medication(c, sk, kid, sk_h, kid_h, patient, wall, safety).await;
+    c.execute(
+        "SELECT apply_remote_event($1, NULL, NULL, $2)",
+        &[&signed_bytes, &dek.as_slice()],
+    )
+    .await?;
+    Ok(ca)
+}
+
+/// Build (and seal, and sign) the raw-safety medication event both door helpers submit.
+///
+/// Private on purpose: it returns unsubmitted wire bytes, which is only ever useful to the
+/// two helpers above. Factored out so the two doors provably receive the SAME event — if
+/// this were copy-pasted, a drift between the copies would silently turn the local-vs-remote
+/// comparison into a comparison of two different events.
+#[allow(clippy::too_many_arguments)]
+async fn build_raw_safety_medication(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    sk_h: &SigningKey,
+    kid_h: &str,
+    patient: Uuid,
+    wall: i64,
+    safety: serde_json::Value,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    // Same unwrap-key parity as the local-door helper, and `.expect` for the same reason:
+    // a setup failure must never be mistaken for door behaviour.
+    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+    )
+    .await
+    .expect("build_raw_safety_medication: registering the node's unwrap key failed — an environment/setup problem, not door behaviour");
+
+    let event_id = Uuid::now_v7();
+    let medication_id = Uuid::now_v7();
+    let hlc = Hlc {
+        wall,
+        counter: 0,
+        node_origin: "hostile-probe".into(),
+    };
+    let input = cairn_node::medication::AssertMedicationInput {
+        term: "raw-safety-probe",
+        coding: None,
+        formulation: None,
+        dose_amount: None,
+        dose_unit: None,
+        sig: None,
+        info_source: "clinician-observed",
+        started: None,
+        started_precision: None,
+    };
+    let body = cairn_node::medication::build_assert_body(
+        event_id,
+        medication_id,
+        patient,
+        &input,
+        kid,
+        hlc,
+        None,
+    );
+    let mut body = cairn_event::contributor::with_human_author(body, kid_h);
+    // THE BYPASS — see the local-door helper's own note.
+    body.safety = Some(safety);
+
+    let clear_twin = body
+        .plaintext_twin
+        .take()
+        .expect("build_assert_body always sets a plaintext twin");
+    let (container, dek) =
+        cairn_event::seal::seal_event_payload(&body.payload, &clear_twin, &body.event_id)
+            .expect("seal a well-formed medication payload");
+    body.payload = container;
+    body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
+
+    let signed = sign(&body, sk_h).expect("sign the sealed medication body");
+    // `dek` is a `Zeroizing<[u8; 32]>`; copied out here because the caller binds it as a
+    // query parameter, which outlives the guard. Test-only — production never widens a DEK's
+    // lifetime this way.
+    (signed.signed_bytes, signed.content_address, dek.to_vec())
 }
 
 /// How many attestation rows a medication thread carries.

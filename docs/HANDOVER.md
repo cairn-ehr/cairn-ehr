@@ -16,12 +16,14 @@ the cross-cutting authority floor are now built.** Read [ADR-0062](spec/decision
 - **The authority floor — admit the claim, withhold the power** (Slice 68, **ADR-0064**, spec v0.66,
   closes [#380](https://github.com/cairn-ehr/cairn-ehr/issues/380), discharges
   [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 2, gives
-  [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its SQL mirror): a protection-removing claim
+  [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its first SQL counterpart — NOT its
+  "mirror", a word both `contributor.rs` and ADR-0064 explicitly retract, and NOT its display half,
+  which stays open): a protection-removing claim
   (a grade withdrawal, an emitted safety rung) now takes effect only when a human this node can hold
   responsible stands behind it — one predicate (`cairn_claim_authority`, db/005) consulted at exactly one
   site (the `NOT EXISTS` in `cairn_sensitivity_standing`, db/048), so display coarsening, safety-rung
   emission and part C's dial below all inherit it structurally. **This is the floor part C now keys on** —
-  read it before touching sequester, not #380 (closed).
+  read it before touching sequester, rather than #380 itself (which closes when this PR merges).
 - **⇒ Part C — sequester / custody narrowing** ([#376](https://github.com/cairn-ehr/cairn-ehr/issues/376)):
   Slice 66 (#231) pinned custody to admission and Slice 68 (ADR-0064) closed the un-attested-strip hole a
   grade-keyed dial would otherwise have inherited. **What remains is the dial question, sharpened by
@@ -172,7 +174,7 @@ model, the emission seam in `seal_sign_submit`, an **empty** `safety_class_map`,
 the **cross-cutting authority floor** (ADR-0064 — `cairn_claim_authority`, one predicate consulted at
 exactly one site so a protection-removing claim needs a human this node can hold responsible; discharges
 [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 2, gives
-[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its SQL mirror; **still enforces nothing beyond
+[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its first SQL counterpart; **still enforces nothing beyond
 display/emission** — sequester, part C, is next) ·
 the **L3 reference UI** — `cairn-gui/`, a standalone workspace, dependency direction one-way GUI → crates.
 The iced shell (PR #174) FAILED the accessibility bar (spike 0004) and was **retired 2026-08-03**; what
@@ -194,7 +196,7 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
 **2026-08-15 — Slice 68: claim authority at the apply door** (closes
 [#380](https://github.com/cairn-ehr/cairn-ehr/issues/380), discharges
 [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 2, gives
-[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its SQL mirror; **ADR-0064**, spec v0.66,
+[#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its first SQL counterpart; **ADR-0064**, spec v0.66,
 `SCHEMA_GENERATION` unchanged at 49 — no new migration). Full reasoning is ADR-0064's nine decisions. Four
 things to carry:
 
@@ -215,6 +217,55 @@ things to carry:
    ([#409](https://github.com/cairn-ehr/cairn-ehr/issues/409)). The Rust↔SQL authority mapping is
    separately known to diverge on two shapes, tracked as
    [#408](https://github.com/cairn-ehr/cairn-ehr/issues/408).
+
+**The PR #410 review landed a second fix wave (2026-08-16).** Six review agents plus mutation testing
+against a live PG18; **7 of 11 production-code mutations survived a green suite**, which is the review in
+one statistic. Four defects were real and are fixed here; the rest are filed. What a next session must
+know:
+
+- **R2's self-identity equality was completely unpinned.** Replacing `c.actor_id = t.actor_id` with `TRUE`
+  left the whole suite green — and reopened #380 in full: any enrolled human on any peer could read
+  `'self'` against any assertion and strip protection un-attested. Every un-attested fixture used the
+  *device* as both asserter and withdrawer, so R2 died on `kind = 'human'` and never reached the equality.
+  Now pinned by `a_different_human_cannot_self_withdraw_another_humans_assertion`, which needs two
+  DISTINCT human actors — hence the new `enroll_human_with_role` helper (`enroll_human` twice collides:
+  same pinned set, same `actor_id`, refused enrollment).
+- **`EXCEPTION WHEN OTHERS` does not catch a statement timeout.** PostgreSQL's `OTHERS` matches every
+  error EXCEPT `query_canceled` (57014) and `assert_failure`, so step 7a's blanket handler let a timeout
+  abort `submit_event` and REFUSE the medication assert — ADR-0063 decision 8's originating incident,
+  reproduced by the block written to prevent it, for the one trigger its own comment named first. The
+  handler now names `query_canceled`; the trade it makes (an operator's cancel is absorbed for the
+  remainder of the call, and the timer does not re-arm) is stated in the code rather than left implicit.
+- **The one protection-stripping comparison was fail-OPEN.** `<> 'unverified'` handed every future
+  verdict the power to strip a grade, silently. It is now `IN ('attested', 'self')`, matching the same
+  file's own `cairn_sensitivity_rank` ELSE-MAX doctrine and the predicate's own "uncertainty withholds
+  power" header. Pinned in BOTH planes by staging a fourth verdict.
+- **ADR-0064 carried six wrong line citations**, four shifted by this PR's own insertions, and they broke
+  a SECOND time during the fix session when db/048 gained comments. ADRs are immutable once merged, so
+  this is now [#417](https://github.com/cairn-ehr/cairn-ehr/issues/417) — anchored citations or a gate,
+  because a resolve-in-range check does not catch the shift class that actually bites.
+- **Comments asserting guarantees the code does not provide** were the largest single class: the lockstep
+  test claimed db/020 checks "exactly one human" (it checks `EXISTS`, and db/005 says so explicitly);
+  claimed fixture 2 was `with_human_author`'s shape (that sets the HUMAN as signer and would grade
+  `Attested`, the opposite of what the fixture pins); the `SECURITY DEFINER` pin claimed to exercise a
+  dependency chain its fixture never reaches. All corrected in place.
+
+Filed, not fixed: [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412) (Rust's grader inputs are not
+proof-carrying — a forged body grades `Attested`; cheapest to fix before #245 wires a display path) ·
+[#413](https://github.com/cairn-ehr/cairn-ehr/issues/413) (KeyId/ActorId conflation, the root cause of
+#408) · [#414](https://github.com/cairn-ehr/cairn-ehr/issues/414) (the overclaim ledger's completeness
+rests on a `RAISE WARNING` nothing consumes — an empty ledger is indistinguishable from a broken one) ·
+[#415](https://github.com/cairn-ehr/cairn-ehr/issues/415) (`stranger-attested` measures the SIGNER, so it
+will fire on routine care — every shipped clinical verb is node-signed) ·
+[#416](https://github.com/cairn-ehr/cairn-ehr/issues/416) (a sealed withdrawal is inert and invisible) ·
+[#418](https://github.com/cairn-ehr/cairn-ehr/issues/418) (constraining the verdict domain needs a
+DROP CASCADE decision) · [#419](https://github.com/cairn-ehr/cairn-ehr/issues/419) (remaining coverage
+gaps: R1's conjuncts, the worklist's two untested arms) ·
+[#420](https://github.com/cairn-ehr/cairn-ehr/issues/420) (`search_path` / PUBLIC revocation, weighed
+against the SQL-inlining cost this slice introduced) ·
+[#421](https://github.com/cairn-ehr/cairn-ehr/issues/421) (the worklist omits the accountable actor) ·
+[#422](https://github.com/cairn-ehr/cairn-ehr/issues/422) (no CHECK on the overclaim ledger's defining
+relation).
 
 **2026-08-14 — Slice 67: the §5.9 safety projection, part B** (closes
 [#375](https://github.com/cairn-ehr/cairn-ehr/issues/375), discharges

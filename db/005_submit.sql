@@ -666,8 +666,19 @@ $$;
 -- (db/048) is a plain LANGUAGE sql function granted to cairn_agent, and a non-definer body
 -- runs as the CALLING role whether or not it inlines. Without DEFINER the first
 -- cairn_effective_sensitivity call by cairn_agent fails with permission denied — the whole
--- sensitivity read path, broken by a privilege, and ONLY under the product's role. Pinned by
--- claim_authority::the_read_path_works_as_cairn_agent.
+-- sensitivity read path, broken by a privilege, and ONLY under the product's role.
+--
+-- Pinned by TWO role-switched tests, and the order matters if either is ever simplified:
+--   * claim_authority_worklist::the_worklist_is_readable_as_cairn_agent — the STRONGER pin.
+--     Its fixture carries a real inert withdrawal, so the predicate's body actually RUNS
+--     under cairn_agent against live data.
+--   * claim_authority::the_read_path_works_as_cairn_agent — the WEAKER pin. Its chart
+--     carries no withdrawal, so the seam's NOT EXISTS matches nothing and the body never
+--     executes; what it pins is Postgres's executor-start ACL check alone. Still a real
+--     guard, but it would stay green if only SECURITY DEFINER were removed (the `SET
+--     search_path` clause independently blocks inlining).
+-- This header used to name only the weaker one (#410 review finding A3). Re-anchor to
+-- whichever still lands real data through the role switch, never silently drop.
 --
 -- !! `attester_key IS NOT NULL` IS THE ACTUAL R1 TEST !!
 -- cairn_attestation_vouched returns TRUE for an event carrying NO attestation, because
@@ -1084,13 +1095,18 @@ BEGIN
     --     timeout aborted the MEDICATION ASSERTION over a safety class no clinician
     --     caused). Everything inside — the thread lookup, the grade lookup, both rank
     --     lookups, the flag insert — runs inside its OWN nested DECLARE/BEGIN/END block
-    --     with NO exception clause of its own, wrapped by the OUTER block's blanket
-    --     `EXCEPTION WHEN OTHERS`: a raise DURING a DECLARE initializer is caught only by
-    --     an ENCLOSING block's handler, never its own (verified — this is what makes the
-    --     inner/outer split load-bearing rather than decorative), so any raise anywhere in
-    --     here — a missing grant, a timeout, a NULL where a row was expected — is
+    --     with NO exception clause of its own, wrapped by the OUTER block's
+    --     `EXCEPTION WHEN query_canceled OR OTHERS`: a raise DURING a DECLARE initializer
+    --     is caught only by an ENCLOSING block's handler, never its own (verified — this
+    --     is what makes the inner/outer split load-bearing rather than decorative), so any
+    --     raise anywhere in here — a missing grant, a NULL where a row was expected — is
     --     swallowed and the write proceeds. An unrecorded overclaim is a bounded loss; a
     --     refused medication assert is not.
+    --
+    --     A TIMEOUT NEEDS ITS OWN CONDITION NAME and does not ride `OTHERS` — see the
+    --     handler's own comment below for why, and do not simplify it back. This sentence
+    --     used to claim a bare `WHEN OTHERS` swallowed "a timeout"; it did not, and the
+    --     block reproduced the very incident it cites (#410 review finding C2).
     --
     --     Still sits before the event_log INSERT below (unlabeled, between steps 9 and
     --     10): a LATER refusal anywhere else in this function — steps 8/8a/8b/9 before
@@ -1130,11 +1146,31 @@ BEGIN
                         b -> 'safety' ->> 'rung', v_licensed);
                 END IF;
             END;
-        EXCEPTION WHEN OTHERS THEN
+        EXCEPTION WHEN query_canceled OR OTHERS THEN
             -- Advisory ledger entry only — never allowed to fail a clinical write
             -- (ADR-0063 decision 8). Logged so a lookup failing on every write is visible
             -- operationally (mirrors crate::safety::advisory_or_withheld's eprintln), but
             -- the write itself proceeds regardless.
+            --
+            -- `query_canceled` IS NAMED EXPLICITLY, and dropping it back to a bare
+            -- `WHEN OTHERS` reopens #410 finding C2. PostgreSQL matches `OTHERS` against
+            -- every error type EXCEPT `query_canceled` (57014) and `assert_failure`, so a
+            -- blanket handler does NOT absorb a `statement_timeout` — the propagating
+            -- cancel aborts submit_event and REFUSES the medication assert. That is
+            -- ADR-0063 decision 8's originating incident exactly ("a missing grant or a
+            -- statement timeout aborted the MEDICATION ASSERTION"), and it needs only two
+            -- ordinary conditions to co-occur: a deployment that sets statement_timeout,
+            -- and a populated safety_class_map. Pinned by safety_overclaim.rs's
+            -- `a_stalled_grade_lookup_under_a_statement_timeout_still_admits_the_medication`.
+            --
+            -- THE TRADE THIS MAKES, stated rather than left implicit: catching 57014 also
+            -- absorbs an operator's deliberate cancel for the remainder of this call, and
+            -- statement_timeout's timer does not re-arm once it has fired, so the rest of
+            -- submit_event (the event_log INSERT and step 10) then runs untimed. That
+            -- residue is bounded and accepted: availability over consistency (§1), and a
+            -- refused medication assert is the failure this floor exists to prevent.
+            -- `assert_failure` is deliberately NOT named — a failed ASSERT is a floor
+            -- invariant violation, which must abort, never be swallowed as advisory noise.
             RAISE WARNING 'submit_event: safety-overclaim check failed for %, continuing without recording it (advisory, never fails a clinical write — ADR-0063 decision 8): %',
                 v_ca, SQLERRM;
         END;

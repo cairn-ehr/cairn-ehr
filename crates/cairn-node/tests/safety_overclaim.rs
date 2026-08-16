@@ -142,7 +142,8 @@ async fn a_thread_scoped_grade_elsewhere_on_the_chart_does_not_false_flag_this_t
 
     // THIS IS THE REAL EMISSION PATH (assert_medication -> seal_sign_submit ->
     // apply_safety_rung), not the raw-safety bypass every other test in this file uses.
-    // It is what let Critical #1 through review: all three prior tests drove the door
+    // It is what let Critical #1 through review: the three PRE-EXISTING raw-safety tests
+    // (two above, one below — file order, not execution order) all drove the door
     // with a hand-built body, so nothing here ever called cairn_prospective_sensitivity
     // with the thread the daemon itself would have resolved.
 
@@ -295,6 +296,25 @@ async fn a_thread_scoped_grade_elsewhere_on_the_chart_does_not_false_flag_this_t
 /// the thing it restores.
 const DB049: &str = include_str!("../../../db/049_safety_projection.sql");
 
+/// The prospective-grade lookup, replaced by one that STALLS rather than raising.
+///
+/// A stall is a materially different failure from `BREAK_GRADE_LOOKUP`'s raise, and the
+/// difference is the whole point of the test below: under a `statement_timeout` a stall
+/// surfaces as SQLSTATE `57014` `query_canceled`, and PostgreSQL's `WHEN OTHERS` matches
+/// every error type EXCEPT `query_canceled` and `assert_failure`. So the blanket handler
+/// that absorbs a raise does NOT absorb a timeout — the one failure mode ADR-0063
+/// decision 8's originating incident actually named.
+const STALL_GRADE_LOOKUP: &str = r#"
+CREATE OR REPLACE FUNCTION cairn_prospective_sensitivity(p_patient uuid, p_thread uuid)
+RETURNS TABLE (grade text, subject_kind text, content_address bytea)
+LANGUAGE plpgsql STABLE AS $stall$
+BEGIN
+    PERFORM pg_sleep(3);
+    RETURN;
+END;
+$stall$;
+"#;
+
 /// The prospective-grade lookup, replaced by one that raises. Argument NAMES must match
 /// db/049's or `CREATE OR REPLACE` refuses ("cannot change name of input parameter").
 const BREAK_GRADE_LOOKUP: &str = r#"
@@ -379,5 +399,269 @@ async fn a_failing_grade_lookup_still_admits_the_medication_and_records_no_flag(
         n, 0,
         "a lookup that could not run must not have recorded a flag either — the ledger \
          must stay silent on an outage, never guess"
+    );
+}
+
+/// A STATEMENT TIMEOUT inside the advisory block must not cancel the clinical write either.
+///
+/// The sibling test above stages a *raise* and proves `EXCEPTION WHEN OTHERS` absorbs it.
+/// This one stages a *stall* under a `statement_timeout`, which is a different SQLSTATE with
+/// different handler semantics: PostgreSQL matches `OTHERS` against every error type EXCEPT
+/// `query_canceled` (57014) and `assert_failure`, so a blanket `WHEN OTHERS` lets a timeout
+/// propagate and abort `submit_event` — refusing the medication assert.
+///
+/// That is not a hypothetical (#410 review finding C2). It needs only two ordinary
+/// conditions to co-occur: a deployment that sets `statement_timeout` (routine hardening)
+/// and a populated `safety_class_map` (the whole point of ADR-0063 — it ships empty, so the
+/// block is dormant until then). ADR-0063 decision 8's originating incident is *literally*
+/// this: "a missing grant or a statement timeout aborted the MEDICATION ASSERTION over a
+/// safety class no clinician caused". The block written to prevent that incident reproduced
+/// it, for the one trigger its own comment named first.
+///
+/// The system may fail to RECORD an order; it may never CANCEL one.
+#[tokio::test]
+async fn a_stalled_grade_lookup_under_a_statement_timeout_still_admits_the_medication() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, sk_h, kid_h) = medication_setup(&c).await;
+
+    let p = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, p, 1).await;
+    // Same licensing setup as the sibling outage test: a graded chart, so the block is
+    // genuinely reached rather than skipped for an unrelated reason.
+    common::assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
+
+    c.batch_execute(STALL_GRADE_LOOKUP)
+        .await
+        .expect("stage the advisory stall");
+    // Short enough to fire well inside the staged 3s stall, long enough that the steps
+    // BEFORE 7a (signature verify, ceremony, projections) comfortably complete first — so
+    // the cancel lands where this test intends it to, inside the advisory block.
+    c.batch_execute("SET statement_timeout = '400ms'")
+        .await
+        .expect("arm the statement timeout");
+
+    let result = common::submit_medication_with_raw_safety(
+        &c, &sk, &kid, &sk_h, &kid_h, p, 20,
+        serde_json::json!({"rung":"precise","class":"antiretroviral-interaction","severity":"high"}),
+    )
+    .await;
+
+    // Disarmed and restored BEFORE the assertions, so a failure still leaves the database
+    // and the session usable for whatever runs next.
+    c.batch_execute("RESET statement_timeout")
+        .await
+        .expect("disarm the statement timeout");
+    c.batch_execute(DB049)
+        .await
+        .expect("restore db/049 after the staged stall");
+
+    let ca = result.expect(
+        "a safety-overclaim lookup that TIMED OUT must not cancel the clinical write — \
+         WHEN OTHERS does not match query_canceled, so the handler must name it (ADR-0063 \
+         decision 8)",
+    );
+
+    // Positive control, same reasoning as the sibling test: prove the event genuinely
+    // landed carrying the rung this test believes it does, so the zero-flag assertion
+    // below cannot pass because nothing was ever submitted.
+    let stored_rung: String = c
+        .query_one(
+            "SELECT safety ->> 'rung' FROM event_log WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .expect("the event must exist and carry a safety field")
+        .get(0);
+    assert_eq!(stored_rung, "precise");
+
+    // And the ledger stays silent rather than guessing — a timed-out judgement is not a
+    // finding.
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM safety_overclaim_flag WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "a lookup that timed out must not have recorded a flag — the ledger must stay \
+         silent on a cancelled judgement, never guess"
+    );
+}
+
+/// The comparison is `<`, and an OVER-COARSENED emission is not an overclaim.
+///
+/// `cairn_safety_rung_rank` orders finer -> coarser as precise(0) < kind(10) < existence(20),
+/// and the flag fires on `rank(emitted) < rank(licensed)` — emitted FINER than licensed.
+/// Swapping that `<` for `<>` leaves the whole suite green (#410 review finding I2), because
+/// every existing fixture emits either exactly the licensed rung or a finer one. Nothing
+/// covered the third direction.
+///
+/// It matters because over-coarsening is the SAFE default everywhere else on the emission
+/// path — db/049's own ELSE arms both round toward "disclose less" on an unrecognised value.
+/// Under `<>` every one of those conservative emissions is recorded as an overclaim, and the
+/// ledger fills with accusations against nodes behaving exactly as designed. ADR-0063
+/// decision 8 names that outcome directly: a ledger whose rows are mostly false accusations
+/// is worse than no ledger.
+#[tokio::test]
+async fn an_over_coarsened_rung_is_not_an_overclaim() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, sk_h, kid_h) = medication_setup(&c).await;
+
+    let p = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, p, 1).await;
+    // No grade at all, so rank 0 licenses `precise` — the FINEST rung. Anything the event
+    // emits can therefore only be equal or COARSER, which is the direction under test.
+    let ca = common::submit_medication_with_raw_safety(
+        &c,
+        &sk,
+        &kid,
+        &sk_h,
+        &kid_h,
+        p,
+        20,
+        serde_json::json!({"rung":"existence"}),
+    )
+    .await
+    .expect("an over-coarsened rung is ordinary traffic and must be admitted");
+
+    // Positive control: the event landed carrying the coarse rung this test believes it
+    // does, so `n == 0` below cannot pass because the fixture silently failed.
+    let stored_rung: String = c
+        .query_one(
+            "SELECT safety ->> 'rung' FROM event_log WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .expect("the event must exist and carry a safety field")
+        .get(0);
+    assert_eq!(stored_rung, "existence");
+
+    // Premise, pinned rather than assumed: the two rungs really are DIFFERENT, so a `<>`
+    // comparison would genuinely fire here. Without this the test would still pass if
+    // `existence` and the licensed rung happened to coincide.
+    let (r_emitted, r_licensed): (i32, i32) = {
+        let row = c
+            .query_one(
+                "SELECT cairn_safety_rung_rank('existence'), cairn_safety_rung_rank('precise')",
+                &[],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert!(
+        r_emitted > r_licensed,
+        "premise: the emitted rung must be strictly COARSER than the licensed one, or this \
+         test does not exercise the `<` vs `<>` difference at all"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM safety_overclaim_flag WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "emitting COARSER than licensed is conservative, not an overclaim — a `<>` \
+         comparison would flag every safe over-coarsening as an accusation (#410 finding I2)"
+    );
+}
+
+/// The overclaim ledger is written at the LOCAL door and NOWHERE ELSE — pinned, not assumed.
+///
+/// ADR-0064 decision 7 makes this asymmetry deliberate: an overclaim is a statement about
+/// what THIS node's clinician-facing door let through, so recording a peer's event would
+/// accuse every honest node that is simply older, or graded differently, or holds custody
+/// this node does not. db/049 and the ADR both warn — in capitals — that a reviewer will
+/// read local-only as an oversight and tidy it into symmetry.
+///
+/// Nothing anywhere paired `safety_overclaim_flag` with `apply_remote_event` (#410 review
+/// finding I3), so that tidy-up would have passed the entire suite while the ledger began
+/// filling with false accusations on ordinary sync traffic — ADR-0063 decision 8's own
+/// stated failure mode ("a ledger whose rows are mostly false accusations is worse than no
+/// ledger"), arriving through the one door the ADR left undefended.
+///
+/// The sibling `a_precise_rung_on_a_sequestered_chart_is_admitted_and_flagged` lands the
+/// SAME overclaim through the LOCAL door and asserts a row IS written. Read the two
+/// together: identical bytes, identical chart, different door, opposite expectation.
+#[tokio::test]
+async fn the_remote_door_admits_an_overclaim_and_records_no_flag() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
+    let (sk, kid, sk_h, kid_h) = medication_setup(&c).await;
+
+    let p = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, p, 1).await;
+    // The same `sequestered` chart the local-door twin uses, so the emitted `precise` rung
+    // is a genuine overclaim by this node's own reckoning — the flag's ABSENCE below is
+    // therefore about the DOOR, not about the event being innocuous.
+    common::assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
+
+    let ca = common::apply_remote_medication_with_raw_safety(
+        &c, &sk, &kid, &sk_h, &kid_h, p, 20,
+        serde_json::json!({"rung":"precise","class":"antiretroviral-interaction","severity":"high"}),
+    )
+    .await
+    .expect("ADMITTED — apply never refuses on an advisory field (ADR-0060/ADR-0064)");
+
+    // Positive control: the peer's event genuinely landed carrying the overclaiming rung.
+    // Without this, `n == 0` would also hold if apply_remote_event had quietly refused it.
+    let stored_rung: String = c
+        .query_one(
+            "SELECT safety ->> 'rung' FROM event_log WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .expect("the peer's event must exist and carry a safety field")
+        .get(0);
+    assert_eq!(stored_rung, "precise");
+
+    // Premise, pinned rather than assumed: this node really would call it an overclaim.
+    // If the chart's grade ever stopped licensing only `existence`, the assertion below
+    // would pass for the wrong reason — because there was no overclaim to record at all.
+    let licensed: String = c
+        .query_one(
+            "SELECT cairn_safety_rung_for_rank(cairn_sensitivity_rank(g.grade))
+               FROM cairn_prospective_sensitivity($1::text::uuid, NULL) g",
+            &[&p.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        licensed, "existence",
+        "premise: the chart must license only `existence`, so `precise` IS an overclaim \
+         this node would record had it come through the local door"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM safety_overclaim_flag WHERE content_address = $1",
+            &[&ca],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "LOCAL DOOR ONLY (ADR-0064 decision 7): a peer's event must never be flagged — \
+         symmetry here turns the ledger into an accusation machine against honest nodes"
     );
 }

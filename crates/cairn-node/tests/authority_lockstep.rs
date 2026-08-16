@@ -109,9 +109,21 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
     // A device-signed withdrawal vouched by a real human attestation — the same shape
     // `claim_authority.rs`'s `a_vouched_human_attestation_is_attested` pins. `apply_remote_
     // attested`'s door gate (db/020 step 4) verifies the token AND that the attester
-    // resolves to exactly one HUMAN actor before it ever stores `attester_key` — so by the
-    // time admission succeeds, "kid_h is a verified human attester of this event" is a fact
-    // the door itself already established, not something this test re-derives.
+    // resolves to AT LEAST ONE `kind = 'human'` actor (`IF NOT EXISTS (... AND kind =
+    // 'human')`) before it ever stores `attester_key` — so by the time admission succeeds,
+    // "kid_h is a verified human attester of this event" is a fact the door itself already
+    // established, not something this test re-derives.
+    //
+    // NOT "exactly one" — this comment used to say that, and it was wrong (#410 review
+    // finding A1). "Exactly one" is `cairn_claim_authority`'s R1 alone
+    // (`count(*) = 1 AND bool_and(a.kind = 'human')`, db/005), which db/005's own header
+    // calls out as deliberately STRICTER than db/020's sibling: the door admits a key
+    // mapped to BOTH a human and an agent, R1 does not. That gap is the first divergence
+    // axis this file's header names as NOT covered by any fixture here (#408), so a comment
+    // asserting the door already closed it contradicted both the header and the PR's own
+    // central finding. The fixture is unaffected — `enroll_human` enrols exactly one actor
+    // — but a reader trusting the old wording would conclude #408's first case is
+    // impossible.
     // ------------------------------------------------------------------------------------
     let target = assert_chart_grade(&c, &sk, &kid, p, 10, "sequestered").await;
     let withdraws_hex = hex::encode(content_address_of(&c, target).await);
@@ -142,13 +154,21 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
     // ------------------------------------------------------------------------------------
     // Fixture 2 — Unverified / 'unverified'.
     //
-    // A claimed human author with NO attestation offered at all — exactly the shape
-    // `with_human_author` (contributor.rs) produces before anyone vouches for it: the
-    // device signs, a bearing "authored" entry names a human, and nothing on the wire ties
-    // that claim to a verified key. The contributor entry carries no "responsibility"
+    // A claimed human author with NO attestation offered at all: the device signs, an
+    // "authored" entry names a human, and nothing on the wire ties that claim to a verified
+    // key. The contributor entry carries no "responsibility"
     // object, so db/020's attestation gate (`v_bears`, keyed on `e ? 'responsibility'`)
     // never engages — the event is ADMITTED with `attester_key` left NULL, which is the
     // point: apply grades, it never refuses (ADR-0064).
+    //
+    // DELIBERATELY *NOT* `with_human_author`'s output, though this comment used to claim it
+    // was (#410 review finding A2). `with_human_author` also sets
+    // `body.signer_key_id = human_kid`, making the HUMAN the signer — and on that shape
+    // `classify_authorship_confidence` returns `Attested` (the bearing actor IS the signer),
+    // the exact OPPOSITE of the `Unverified` this fixture exists to pin. Keeping the DEVICE
+    // as signer is what makes the claim unverifiable, so the deviation is load-bearing. The
+    // narrower statement below — that the contributor ARRAY mirrors `with_human_author`'s
+    // ordering — is accurate and is all that was ever meant.
     // ------------------------------------------------------------------------------------
     let unverified_id = Uuid::now_v7();
     let assertion = SensitivityAssertion {

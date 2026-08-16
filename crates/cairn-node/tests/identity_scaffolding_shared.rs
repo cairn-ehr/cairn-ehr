@@ -208,16 +208,22 @@ fn derivation_finds_the_expected_helpers() {
             // withdrawal worklist, `claim_authority_worklist.rs`): both were file-local to
             // `claim_authority.rs` until that new suite needed the identical shapes —
             // "if two suites would write it identically, it goes here".
+            // `enroll_human_with_role` joined in #410's review (finding C1): pinning R2's
+            // self-identity equality needs TWO distinct human actors, which `enroll_human`
+            // alone cannot produce — same pinned set, same actor_id, refused enrollment.
+            // `enroll_human` now delegates to it, so its own signature is unchanged.
             // `submit_medication_with_raw_safety` joined in #405 part 2
             // (`safety_overclaim.rs`): it builds a medication assert whose CLEAR `safety`
             // field is set VERBATIM, bypassing `apply_safety_rung`'s coarsening — the
             // hostile-client shape the door-side overclaim ledger exists to catch.
             "async fn apply_remote_attested(",
+            "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
             "async fn assert_chart_grade(",
             "async fn attestation_count(",
             "async fn content_address_of(",
             "async fn enroll_human(",
+            "async fn enroll_human_with_role(",
             "async fn medication_setup(",
             "async fn person_chart_trust(",
             "async fn register_pair(",
