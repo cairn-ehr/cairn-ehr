@@ -68,7 +68,7 @@ CREATE OR REPLACE FUNCTION apply_remote_event(
 ) RETURNS UUID
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     b               JSONB;

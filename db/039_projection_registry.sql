@@ -70,7 +70,7 @@ CREATE OR REPLACE FUNCTION cairn_reproject(
 LANGUAGE plpgsql
 -- Pinned like cairn_event_twin's dynamic dispatch (Task-1 review): the %I EXECUTE
 -- below must never resolve into an attacker-shadowed schema, regardless of caller.
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_started timestamptz := clock_timestamp();

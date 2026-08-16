@@ -70,7 +70,7 @@ RETURNS TABLE(promoted_type text, promoted_count bigint)
 LANGUAGE plpgsql
 -- Pinned like every dispatching function in this schema: the helper calls below must never
 -- resolve into an attacker-shadowed schema, regardless of caller.
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     r          record;

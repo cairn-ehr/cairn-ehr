@@ -425,8 +425,9 @@ $$;
 --    warning into main.rs's "no safety signals on file" reassurance path. Listing pg_temp
 --    LAST makes public win for every unqualified name here. Pinned by
 --    safety_read_grants.rs::a_caller_shadowed_temp_table_cannot_blind_the_sanctioned_read
---    and by the proconfig assertions in db/tests/049. Every OTHER definer in this repo still
---    carries the bare `public` form — audited in #426, not here.
+--    and by the proconfig assertions in db/tests/049. The defect was never specific to these
+--    two functions — it was the house spelling of the clause, and #426 fixed the whole tree;
+--    the rule and its full reasoning now live once at the top of db/001's cairn_node_hlc_merge.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_event_safety(p_event_id uuid)
 RETURNS TABLE (rung text, class text, severity text, event_type text,

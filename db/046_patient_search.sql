@@ -42,7 +42,7 @@ CREATE OR REPLACE FUNCTION cairn_search_candidates(
     p_identifiers jsonb          -- [{"system": "...", "value": "..."}]
 ) RETURNS TABLE (patient_id uuid, matched_pass text)
 LANGUAGE sql STABLE
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
     -- Pass 1: shared identifier. Highest precision — the same system and the same
     -- match_key is near-conclusive, which is why it is also a db/016 hard-veto axis.

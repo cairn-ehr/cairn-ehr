@@ -38,7 +38,7 @@ GRANT SELECT ON node_lineage TO cairn_node;
 -- what permanently fences this door closed at the end of a restore.
 CREATE OR REPLACE FUNCTION restore_node_event(p_signed BYTEA)
 RETURNS UUID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID; v_signer TEXT;

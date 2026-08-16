@@ -252,10 +252,74 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- grant is needed, and invoker rights leave a SECOND barrier standing if a future edit
 -- ever GRANTs EXECUTE by mistake — cairn_node holds no UPDATE on hlc_state. Same pattern
 -- as cairn_patient_has_events above.
+-- ---------------------------------------------------------------------------
+-- HOUSE RULE FOR EVERY `SET search_path` IN db/*.sql (#426, 2026-08-16).
+-- Stated once, here, because this is the first pinned function in load order; every
+-- other site carries the clause and a pointer back to this note rather than the
+-- argument.
+--
+--   THE CLAUSE IS ALWAYS `SET search_path = public, pg_temp` — pg_temp LAST, never
+--   the bare `public` form, and never pg_temp anywhere but last.
+--
+-- WHY. `SET search_path = public` reads like a lockdown and is not one. PostgreSQL
+-- searches the session's TEMPORARY schema FIRST for relation names whenever the path
+-- does not place pg_temp explicitly; the setting only controls where pg_temp sits when
+-- you DO name it. PUBLIC holds TEMPORARY on every database by default (nothing in this
+-- tree revokes it), so any role that can reach a function could `CREATE TEMP TABLE
+-- event_log (…)` and have every unqualified relation name inside that function resolve
+-- to its own decoy. PostgreSQL's own "Writing SECURITY DEFINER Functions Safely" calls
+-- the temp schema out by name and prescribes writing pg_temp last.
+--
+-- WHAT IT COST BEFORE THE FIX — this was live, not theoretical. Both owner-rights write
+-- doors (submit_event db/005, apply_remote_event db/020) carried the bare form. With a
+-- decoy in place they RETURNED SUCCESS while the owner-privileged INSERT landed in the
+-- caller's temp table: the client was told the write succeeded, the append-only log
+-- never saw the event, no projection trigger fired, and the row vanished at session
+-- end. Silent clinical data loss from a role holding nothing but EXECUTE on the door.
+-- The same shadowing blinded db/049's safety readers into "no safety signals on file"
+-- for a chart that carried one (the finding that opened #426).
+--
+-- WHY IT IS UNIFORM RATHER THAN PER-FUNCTION. Only bodies naming a relation unqualified
+-- are exposed, but "does this body name a relation?" is a judgement that has to be
+-- re-made on every edit and is silent when got wrong. A uniform clause is instead
+-- mechanically checkable, and is checked: crates/cairn-node/tests/search_path_pg_temp.rs
+-- asserts over pg_proc that EVERY pinned path in this schema ends in pg_temp (and that
+-- every SECURITY DEFINER pins one at all), so a new migration is covered the moment it
+-- loads. Adding pg_temp costs nothing where no relation is named.
+--
+-- WHAT `pg_temp` LAST DOES *NOT* MAKE AIRTIGHT — state the residual rather than let a
+-- reader infer a guarantee. Schema order decides RELATION lookup outright, so the
+-- demonstrated attack above is fully closed. FUNCTION and OPERATOR lookup is different:
+-- Postgres ranks all visible candidates by how well the argument types match FIRST and
+-- only breaks ties by search_path order — and naming pg_temp explicitly is what makes
+-- temp functions visible to that ranking at all (they are invisible when it is unnamed).
+-- So a body whose call site does not match its callee EXACTLY — one relying on an
+-- implicit coercion — could in principle be beaten by an exact-match temp function.
+-- Writing pg_temp last is nonetheless PostgreSQL's own prescribed arrangement, and it
+-- trades a hypothetical needing an inexact call site for a demonstrated owner-privileged
+-- write diversion. The airtight form is `SET search_path = ''` with every name
+-- schema-qualified; that is a far larger and more error-prone edit across these bodies
+-- (dynamic %I dispatch included) and is deliberately not attempted here.
+--
+-- WHY NOT `REVOKE TEMPORARY ON DATABASE … FROM PUBLIC` INSTEAD (#426 want 2, considered
+-- and declined). It would close the same vector by taking the capability away, but at the
+-- wrong layer and with the wrong blast radius: TEMPORARY is a general database facility a
+-- FHIR façade or UI backend may legitimately want for staging work, and withdrawing it
+-- fleet-wide to compensate for a clause we now assert repo-wide is policy dressed as
+-- mechanism (principle 9 — Cairn ships mechanism; a deployment may still revoke it locally
+-- if its own threat model wants belt and braces). It would also disarm the tests that PROVE
+-- this fix: they create the decoy as cairn_agent precisely to show no extra privilege is
+-- needed, and cannot run in a database where nobody may.
+--
+-- WHAT THIS DOES NOT COVER. A function with NO `SET search_path` resolves under the
+-- caller's path entirely, temp schema included — see #420 on cairn_sensitivity_standing,
+-- where adding the clause would block SQL inlining on a hot read path and the trade is
+-- still open.
+-- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_node_hlc_merge(p_wall BIGINT, p_counter INTEGER)
 RETURNS void
 LANGUAGE plpgsql
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 BEGIN
     -- Fail closed on NULL. Left unguarded, a NULL degrades the whole statement into a
@@ -355,7 +419,7 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
 RETURNS BYTEA
 LANGUAGE plpgsql
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_prefix TEXT;
