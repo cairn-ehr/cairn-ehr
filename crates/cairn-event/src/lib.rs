@@ -28,6 +28,10 @@ use serde::{Deserialize, Serialize};
 // Re-exported so downstream crates (cairn-sync) need not depend on ed25519-dalek
 // directly — the keypair type travels with this crate's signing API.
 pub use attachment::{Attachment, Rendition, SealRef};
+// Re-exported at the crate root because it is part of the verification API's shape, not a
+// contributor-vocabulary detail: `verify_self_described_event` yields one through
+// `VerifiedEvent::signer` (#412).
+pub use contributor::VerifiedKid;
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
 
 pub mod attachment;
@@ -457,6 +461,66 @@ pub fn verify_self_described(signed_bytes: &[u8]) -> Result<EventBody, EventErro
         return Err(EventError::SignerKeyMismatch);
     }
     Ok(body)
+}
+
+/// A body whose signature this node has verified, carrying the key the signature actually
+/// used (#412).
+///
+/// The point of the wrapper is that a plain [`EventBody`] — the thing a deserialiser hands
+/// you — cannot produce a [`VerifiedKid`], so grading authorship cannot be reached from an
+/// unverified blob **by accident**. Be precise about the strength of that claim: it is not
+/// that a `VerifiedKid` is obtainable from nowhere else, because
+/// [`VerifiedKid::from_event_log_column`] is public and its premise is one the compiler
+/// cannot check. What this type removes is the *path of least resistance* — the forgeable
+/// line that used to be the natural one to write. The remaining route requires naming a
+/// constructor whose name contradicts what a wrong caller would be doing.
+#[derive(Debug)]
+pub struct VerifiedEvent {
+    body: EventBody,
+    /// Hex of the key the COSE signature verified against. Equal to `body.signer_key_id`
+    /// by construction: [`verify_self_described`] refuses the pair when they disagree.
+    signer_kid_hex: String,
+}
+
+impl VerifiedEvent {
+    /// The verified body.
+    pub fn body(&self) -> &EventBody {
+        &self.body
+    }
+
+    /// Take the body out, once the caller is done with the proof.
+    pub fn into_body(self) -> EventBody {
+        self.body
+    }
+
+    /// The signer, as a value that carries its provenance in its type.
+    ///
+    /// Mints through the crate-private `from_verified_signature`, NOT through
+    /// `from_event_log_column`: this value never came from a column, and using the DB
+    /// constructor here would plant a permanent false positive in the one audit
+    /// [`VerifiedKid`] actually relies on — a grep for call sites asserting DB provenance.
+    pub fn signer(&self) -> VerifiedKid<'_> {
+        VerifiedKid::from_verified_signature(&self.signer_kid_hex)
+    }
+}
+
+/// Verify self-described bytes and return the body TOGETHER WITH its verified signer.
+///
+/// The same check as [`verify_self_described`] — this adds no leniency and no strictness —
+/// but the result cannot be confused with a deserialised body, which is the whole of #412.
+/// Prefer it wherever the signer is about to be used for a trust decision (authorship
+/// grading, display of "authenticated by"); [`verify_self_described`] stays for callers
+/// that only need the content.
+pub fn verify_self_described_event(signed_bytes: &[u8]) -> Result<VerifiedEvent, EventError> {
+    let body = verify_self_described(signed_bytes)?;
+    // Taken from the body only AFTER the bind above proved it equals the key the
+    // signature used; the two are the same string by then, and this is the one place
+    // allowed to rely on that.
+    let signer_kid_hex = body.signer_key_id.clone();
+    Ok(VerifiedEvent {
+        body,
+        signer_kid_hex,
+    })
 }
 
 /// Mechanically derive the §3.13 plaintext legibility twin from a body. This is BOTH the

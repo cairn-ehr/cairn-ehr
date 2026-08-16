@@ -28,8 +28,19 @@
 //! door-admitted-and-read-back is the property that matters, not "never a literal".)
 //!
 //! WHY AGREEMENT IS OBSERVED, NOT STRUCTURAL: nothing here computes one side FROM the
-//! other — the test supplies the bridge (`verified_attester`) by hand, then checks that both
-//! INDEPENDENTLY-COMPUTED verdicts land where the mapping predicts. Two regressions this
+//! other — both verdicts are computed INDEPENDENTLY and then checked to land where the
+//! mapping predicts. The bridge used to be worse than that: `verified_attester` was handed
+//! over from the test's own `kid_h`, so the value whose provenance IS the invariant was
+//! supplied by assertion (#412). It now comes from `event_log.attester_key` — the same
+//! column R1 reads — so both sides start from a fact Postgres established, and a
+//! `VerifiedKid` is the only shape the Rust grader will accept for it.
+//!
+//! CAVEAT ON THAT COLUMN, because the mint below relies on it: `attester_key` alone is NOT
+//! proof. db/020's deferred arm stores a peer's token unverified ("CARRIED, NOT VOUCHED"),
+//! which is why R1 pairs the column with `cairn_attestation_vouched`. This test is sound
+//! because its fixtures use CLASSIFIED event types that take the door's verifying arm — not
+//! because reading the column is self-certifying. A fixture that went through the deferred
+//! path would need the vouch check before minting. Two regressions this
 //! test WOULD catch: Rust's `authenticated` check matching the SIGNER instead of the
 //! verified ATTESTER (fixture 1 would then read `Unverified` while SQL still reads
 //! `'attested'`), or the bearing/contributory partition misclassifying `"recorded"` as
@@ -42,7 +53,7 @@
 //! exists in, `claim_authority.rs`.
 mod common;
 
-use cairn_event::contributor::{classify_authorship_confidence, AuthorshipConfidence};
+use cairn_event::contributor::{classify_authorship_confidence, AuthorshipConfidence, VerifiedKid};
 use cairn_event::sensitivity::{
     render_sensitivity_twin, sensitivity_assertion_body, SensitivityAssertion, SubjectKind,
     SENSITIVITY_EVENT_TYPE, SENSITIVITY_SCHEMA_VERSION,
@@ -74,11 +85,22 @@ async fn authority_null_target(c: &Client, event: Uuid) -> String {
 /// tripping through the real door and back (rather than reusing the `EventBody` the test
 /// built in memory) is what makes "byte-identical contributor set" a checked fact about this
 /// run instead of an assumption about what the door does with what it was handed.
-async fn stored_contributors_and_signer(c: &Client, event: Uuid) -> (serde_json::Value, String) {
+struct Stored {
+    contributors: serde_json::Value,
+    /// `event_log.signer_key_id` — proof-carrying: db/005 step 1 runs `cairn_verify`, and
+    /// that refuses bytes whose body claims a signer other than the key the signature used.
+    signer: String,
+    /// `event_log.attester_key`, hex — proof-carrying for the same kind of reason: the door
+    /// verifies the attestation token before it stores this. NULL when the event carried no
+    /// attestation, which fixtures 2 and 3 assert rather than assume.
+    attester: Option<String>,
+}
+
+async fn stored_claim(c: &Client, event: Uuid) -> Stored {
     let row = c
         .query_one(
-            "SELECT contributors::text, signer_key_id FROM event_log \
-             WHERE event_id = $1::text::uuid",
+            "SELECT contributors::text, signer_key_id, encode(attester_key, 'hex') \
+               FROM event_log WHERE event_id = $1::text::uuid",
             &[&event.to_string()],
         )
         .await
@@ -87,7 +109,11 @@ async fn stored_contributors_and_signer(c: &Client, event: Uuid) -> (serde_json:
     // postgres-types "with-serde_json-1" feature enabled); cast to text and parse, the
     // same idiom `medication_authorship.rs` already uses for this exact column.
     let contributors: serde_json::Value = serde_json::from_str(&row.get::<_, String>(0)).unwrap();
-    (contributors, row.get(1))
+    Stored {
+        contributors,
+        signer: row.get(1),
+        attester: row.get(2),
+    }
 }
 
 #[tokio::test]
@@ -137,8 +163,24 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
         .await
         .expect("a properly attested cross-node withdrawal must land");
 
-    let (contributors, signer) = stored_contributors_and_signer(&c, attested_id).await;
-    let rust_verdict = classify_authorship_confidence(&contributors, &signer, Some(kid_h.as_str()));
+    let stored = stored_claim(&c, attested_id).await;
+    // The attester is read from `event_log.attester_key`, NOT handed over from `kid_h`
+    // (#412). The door stores that column only after verifying the token, so reading it is
+    // the same proof `cairn_claim_authority`'s R1 relies on — which is what lets both sides
+    // start from the same verified fact instead of from a value this test asserts is true.
+    let attester = stored
+        .attester
+        .as_deref()
+        .expect("the door must have stored the verified attester for a vouched withdrawal");
+    assert_eq!(
+        attester, kid_h,
+        "the stored attester must be the human who signed the token"
+    );
+    let rust_verdict = classify_authorship_confidence(
+        &stored.contributors,
+        VerifiedKid::from_event_log_column(&stored.signer),
+        Some(VerifiedKid::from_event_log_column(attester)),
+    );
     let sql_verdict = authority_null_target(&c, attested_id).await;
     assert_eq!(
         rust_verdict,
@@ -202,10 +244,20 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
         .await
         .expect("an unattested bearing claim must still be ADMITTED, never refused, at apply");
 
-    let (contributors, signer) = stored_contributors_and_signer(&c, unverified_id).await;
+    let stored = stored_claim(&c, unverified_id).await;
     // No token ever travelled with this event, so no caller could honestly have verified
     // kid_h as its attester — the honest input here is None, not a re-derivation of R1.
-    let rust_verdict = classify_authorship_confidence(&contributors, &signer, None);
+    // Asserted from the STORED column rather than assumed, so a door that started writing
+    // an attester here would fail this fixture instead of quietly changing what it pins.
+    assert_eq!(
+        stored.attester, None,
+        "an unattested claim must land with attester_key NULL"
+    );
+    let rust_verdict = classify_authorship_confidence(
+        &stored.contributors,
+        VerifiedKid::from_event_log_column(&stored.signer),
+        None,
+    );
     let sql_verdict = authority_null_target(&c, unverified_id).await;
     assert_eq!(
         rust_verdict,
@@ -231,8 +283,16 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
     // pins that deliberate asymmetry, not an accidental one.
     // ------------------------------------------------------------------------------------
     let device_id = assert_chart_grade(&c, &sk, &kid, p, 40, "sequestered").await;
-    let (contributors, signer) = stored_contributors_and_signer(&c, device_id).await;
-    let rust_verdict = classify_authorship_confidence(&contributors, &signer, None);
+    let stored = stored_claim(&c, device_id).await;
+    assert_eq!(
+        stored.attester, None,
+        "a device-only assertion carries no attestation"
+    );
+    let rust_verdict = classify_authorship_confidence(
+        &stored.contributors,
+        VerifiedKid::from_event_log_column(&stored.signer),
+        None,
+    );
     let sql_verdict = authority_null_target(&c, device_id).await;
     assert_eq!(
         rust_verdict,

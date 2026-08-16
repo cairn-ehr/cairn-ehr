@@ -397,6 +397,48 @@ already declared for a withdrawal's clear-text rationale. **It is why emission-t
 control rather than an optimisation:** the moment of authoring is the only moment at which a decision about
 what to publish can actually bind.
 
+> [!NOTE]
+> **Erratum E1 (2026-08-16) — factual; the decision is unchanged.** *"…blurs it for every **honest**
+> consumer, and that is all any mechanism can do"* was **wrong about the local node**, and
+> [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 1 was right to say so: Postgres has
+> column-level privileges, and the sentence conceded as inevitable something a grant could bind. It was
+> also, as written, a guarantee a reader could inherit — decision 2's *"emission is the only coarsening
+> that binds a peer's raw-SQL client"* reads the same way about a case it does not cover.
+>
+> What was actually true when this ADR was written: `db/005` does `GRANT SELECT ON event_log … TO
+> cairn_agent`, **a table-level grant covers every column added later**, so the runtime role could
+> `SELECT safety FROM event_log` and read the emitted rung and class raw — skipping the read model
+> entirely, on the very node whose higher grade was supposed to coarsen them.
+>
+> **Narrowed 2026-08-16, NOT closed** (`db/049` section 8): the table-level SELECT grant to
+> `cairn_agent` is replaced by an explicit column list that omits `safety`, and `cairn_event_safety` /
+> `cairn_patient_safety` became `SECURITY DEFINER` so the sanctioned read still works. A column-level
+> `REVOKE SELECT (safety)` alone is **inert** while the table grant stands — the two privilege levels are
+> tracked separately — which is why the fix drops to column grants entirely and accepts their fail-closed
+> consequence: a column a future migration adds is unreadable by that role until someone grants it
+> deliberately.
+>
+> **This erratum said "Closed" when first written, and that was itself an over-claim** — the same defect
+> it was correcting, one layer up. Review of the fix (2026-08-16) demonstrated two live residuals
+> ([#424](https://github.com/cairn-ehr/cairn-ehr/issues/424), [#425](https://github.com/cairn-ehr/cairn-ehr/issues/425)):
+>
+> - `event_log.safety` is a **verbatim copy of a clear top-level field of the signed body**, not an
+>   independent secret. `signed_bytes` must stay granted (sync serves it) and `cairn_body` carries
+>   PUBLIC's default EXECUTE, so `SELECT cairn_body(signed_bytes) -> 'safety' FROM event_log` returns the
+>   uncoarsened rung, class and severity to the same role, in one statement. Withholding a projection
+>   while granting its source is not a floor.
+> - The grant narrows `cairn_agent`, but `db/020` gives `cairn_node` a table-level SELECT that section 8
+>   does not touch — and the runtime login role is provisioned as a **member of `cairn_node`**. So "the
+>   role the runtime connects as" was the wrong role.
+>
+> **What remains true — and is what this paragraph should have said all along:** an already-replicated
+> rung on ANOTHER node is beyond recall (that is the paragraph's real subject, and it is unaffected); an
+> **owner-privileged** connection reads every column, as it must to run migrations; and on the local node
+> the emitted signal is recoverable by any role that can read the envelope. Section 8 raises the cost of
+> the casual read and forces a deliberate decision whenever `event_log` grows a column. It is not the
+> confidentiality boundary. **Decision 2 stands unamended: emission-time coarsening is the control that
+> binds, because it is the only moment at which what to publish can actually be decided.**
+
 The partial mitigation is worth naming, but it is **not built and therefore not free**
 ([#407](https://github.com/cairn-ehr/cairn-ehr/issues/407), 2026-08-14 review): a node **with custody**
 *could* recover precision from the sealed payload, which would bound the *loss* from coarsening at emission

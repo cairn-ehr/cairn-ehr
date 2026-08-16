@@ -222,3 +222,62 @@ BEGIN
     ASSERT n = 1, 'the overclaim ledger is idempotent on replay (PK = content address)';
     DELETE FROM safety_overclaim_flag WHERE content_address = v_ca;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- 6. #405 part 1: the column floor under the read model. Mirrors
+--    crates/cairn-node/tests/safety_read_grants.rs.
+--
+--    WHY THE MIRROR EARNS ITS PLACE (corrected 2026-08-16). It used to say this was "the
+--    half the Rust suite CANNOT test", which is false: every test in safety_read_grants.rs
+--    calls connect_and_load_schema, and that replays every db/*.sql on each connect, so the
+--    Rust side does observe fresh migration state and asserts the same column privilege.
+--    What the mirror actually adds is (a) the definer/search_path CATALOGUE facts, which the
+--    Rust file can only reach behaviourally, and (b) coverage in the psql-only CI lane, on a
+--    database built from db/*.sql in order rather than one healed by a running node. Stating
+--    the real reason matters — a maintainer told the Rust suite "cannot" test this will not
+--    think to keep the two halves in step.
+--
+--    Read as a pair — either assertion alone passes for the wrong reason. Withholding the
+--    column while the read functions stay invoker-rights would break the read path for the
+--    product's own role; making them definers without withholding the column would close
+--    nothing.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+    ASSERT NOT has_column_privilege('cairn_agent', 'event_log', 'safety', 'SELECT'),
+        'cairn_agent must NOT hold SELECT on event_log.safety — db/049 section 8 replaces '
+        'db/005''s table-level grant with a column list precisely because a table grant '
+        'keeps conferring columns added later (#405 part 1)';
+
+    -- A representative granted column, so the section-8 block cannot pass by having
+    -- revoked everything.
+    ASSERT has_column_privilege('cairn_agent', 'event_log', 'plaintext_twin', 'SELECT'),
+        'the column-level GRANT must still confer the rest of event_log';
+
+    -- Addressed by regprocedure, not by bare proname: db/*.sql OVERLOADS rather than
+    -- replaces when an argument list changes (the safety_ladder.rs warning), and a bare
+    -- `WHERE proname = …` subquery would then raise "more than one row" instead of
+    -- asserting anything. A missing function yields NULL, and ASSERT NULL already fails.
+    ASSERT (SELECT prosecdef FROM pg_proc WHERE oid = 'cairn_event_safety(uuid)'::regprocedure),
+        'cairn_event_safety must be SECURITY DEFINER, or the coarsened read is unreadable '
+        'by the only role allowed to call it';
+    ASSERT (SELECT prosecdef FROM pg_proc WHERE oid = 'cairn_patient_safety(uuid)'::regprocedure),
+        'cairn_patient_safety touches event_log.safety in its OWN where-clause, so it '
+        'needs the definer rights independently of cairn_event_safety';
+
+    -- The search_path half of the definer contract, and the reason it is asserted rather
+    -- than trusted: `SET search_path = public` does NOT exclude pg_temp, so a definer
+    -- carrying only that can be blinded by a caller-created temp `event_log` (2026-08-16
+    -- review — it returned ZERO rows for a chart carrying a real signal). A future
+    -- CREATE OR REPLACE that keeps SECURITY DEFINER and drops the pg_temp term would pass
+    -- both asserts above and re-open it silently, so pin the exact setting.
+    ASSERT (SELECT 'search_path=public, pg_temp' = ANY(proconfig)
+              FROM pg_proc WHERE oid = 'cairn_event_safety(uuid)'::regprocedure),
+        'cairn_event_safety must pin search_path to "public, pg_temp" — pg_temp is searched '
+        'FIRST for relation names when the path omits it, so omitting it lets any caller '
+        'shadow event_log and suppress the signal';
+    ASSERT (SELECT 'search_path=public, pg_temp' = ANY(proconfig)
+              FROM pg_proc WHERE oid = 'cairn_patient_safety(uuid)'::regprocedure),
+        'cairn_patient_safety names event_log in its own FROM clause, so it needs the '
+        'pg_temp-safe path independently of cairn_event_safety';
+END $$;

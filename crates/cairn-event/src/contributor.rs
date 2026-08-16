@@ -141,6 +141,26 @@ pub fn with_human_author(mut body: EventBody, human_kid: &str) -> EventBody {
 ///     they agree: `Attested` <-> `'attested'`, `Unverified`/`Device` both <-> `'unverified'`.
 ///     That is what the test pins — an obligation on those shapes, not a universal guarantee
 ///     over every event this repo can admit.
+///
+/// **This enum stays exhaustive, deliberately** (#412 weighed `#[non_exhaustive]` and
+/// declined it; rationale corrected 2026-08-16 after the first version rebutted the wrong
+/// form). Two forms exist and they are not the same argument:
+///
+///   * **Variant-level** — would stop a downstream crate MINTING an `Attested`. Pointless
+///     here: a minted value is harmless on its own, since the defect #412 closed was a
+///     forgeable *computation*, now closed at the classifier's inputs by [`VerifiedKid`].
+///     It also costs real ergonomics — cross-crate `AuthorshipConfidence::Attested` stops
+///     being usable as an *expression*, so every `assert_eq!` (the shape the lockstep test
+///     uses to hold Rust and SQL together) would have to become a `matches!`.
+///   * **Enum-level** — the form anyone would actually propose, and it costs those
+///     `assert_eq!`s nothing. It is declined for a SAFETY reason, not an ergonomic one:
+///     it would force every downstream consumer to add a `_ =>` arm, i.e. a silent handler
+///     for a grade that does not exist yet. For a display grade whose named hazard is
+///     exactly *"silently downgrade authorship-claimed to device-generated"* (see the
+///     anonymous-claim note on [`classify_authorship_confidence`]), breaking every
+///     consumer's build when a fourth grade lands is the FEATURE. An exhaustive enum forces
+///     a conscious rendering decision at each site; a wildcard arm guarantees the collapse
+///     this type exists to prevent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorshipConfidence {
     /// A responsibility-bearing human author, authenticated as the signer or a verified attester.
@@ -153,11 +173,127 @@ pub enum AuthorshipConfidence {
     Device,
 }
 
+/// A key id whose provenance is a COMPLETED VERIFICATION — never a claim read out of a
+/// body (#412).
+///
+/// # Why a newtype rather than a `&str` and a careful reviewer
+///
+/// [`EventBody`] carries `signer_key_id` — what the body *claims* — immediately beside
+/// `contributors`. When both arguments to [`classify_authorship_confidence`] were bare
+/// `&str`, the natural line to write was
+///
+/// ```ignore
+/// classify_authorship_confidence(&body.contributors, &body.signer_key_id, None)
+/// ```
+///
+/// which graded `Attested` for any forgery that set `contributors[0].actor_id` equal to
+/// `signer_key_id`, with no signature checked anywhere. The place a display path runs is
+/// exactly where an `EventBody` has just been deserialised from an untrusted peer, so that
+/// line is not a hypothetical mistake.
+///
+/// SQL never had the bug, for a structural reason this type copies — but the structure is
+/// **two conjuncts, not one**, and getting that wrong is how a caller re-opens #412 through
+/// this very type (2026-08-16 review). `cairn_claim_authority` (db/005) does not merely read
+/// `event_log.attester_key`; its R1 arm is `attester_key IS NOT NULL AND
+/// cairn_attestation_vouched(event_id)`. The second conjunct is load-bearing because the
+/// column can hold an UNVERIFIED token: db/020's deferred arm stores `p_attester_key`
+/// verbatim before any `cairn_attestation_ok` runs, and says so — *"an attestation on a row
+/// that carries an `event_deferred` marker is CARRIED, NOT VOUCHED — nothing has verified
+/// it."* So *reading the column* is **not** the proof; reading it **and** clearing the vouch
+/// marker is. Here the type carries the proof only as far as its minter's premise holds.
+///
+/// # The two routes to a mint, and the one constructor each takes
+///
+///   * [`crate::VerifiedEvent::signer`] — this crate verified the bytes just now. It mints
+///     through a crate-private constructor, so the compiler underwrites this route whole.
+///   * [`VerifiedKid::from_event_log_column`] — the caller read a proof-carrying column.
+///     Same proof, different route, and no bytes left to re-verify; the compiler cannot
+///     check the premise, so what remains is making a wrong call site conspicuous in review
+///     and greppable in the tree — a deliberate act instead of the path of least resistance.
+///
+/// Keeping the two constructors distinct is what keeps that grep honest: every
+/// `from_event_log_column` hit is a real DB-provenance assertion a reviewer must weigh, and
+/// none of them is this crate's own verifier laundering itself through a name that would be
+/// false at that call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedKid<'a>(&'a str);
+
+impl<'a> VerifiedKid<'a> {
+    /// Mint from an `event_log` column whose existence IS a completed verification.
+    ///
+    /// **The two columns do not carry equal proof, and the caller owes the difference:**
+    ///
+    ///   * `signer_key_id` — unconditionally sound. db/005 step 1 runs `cairn_verify`, which
+    ///     is [`crate::verify_self_described`], and that refuses bytes whose body claims a
+    ///     signer other than the key the signature used
+    ///     ([`crate::EventError::SignerKeyMismatch`]). No row exists otherwise.
+    ///   * `attester_key` — sound **only for a row that clears `cairn_attestation_vouched`**
+    ///     (db/001), which is the predicate `cairn_claim_authority`'s R1 pairs it with.
+    ///     db/020's deferred arm writes this column from an unverified, peer-supplied token;
+    ///     minting from such a row hands the grader a key nothing checked, which is #412
+    ///     again with extra steps. Read the marker, or do not mint.
+    ///
+    /// **Never call this on a value taken from a deserialised [`EventBody`].** That value
+    /// is the claim, not the proof, and passing it here re-opens #412 in full.
+    pub fn from_event_log_column(kid_hex: &'a str) -> Self {
+        VerifiedKid(kid_hex)
+    }
+
+    /// Mint from a signature THIS CRATE just verified.
+    ///
+    /// Crate-private on purpose: its only caller is [`crate::VerifiedEvent::signer`], whose
+    /// `signer_kid_hex` is the key the COSE signature actually verified against. Keeping it
+    /// separate from [`Self::from_event_log_column`] is not cosmetic — it is what stops the
+    /// honest in-crate route from showing up in a grep for DB-provenance assertions, which
+    /// is the only enforcement the second constructor has.
+    pub(crate) fn from_verified_signature(kid_hex: &'a str) -> Self {
+        VerifiedKid(kid_hex)
+    }
+
+    /// The key id itself, for callers that must render or compare it.
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
 /// Grade an event's authorship from its contributor set, the verified signer, and the
 /// verified attester (if any). Pure; total. A bearing contributor is "authenticated"
 /// iff its actor is the signer or the verified attester; every bearing author must be
 /// authenticated for `Attested`, else `Unverified`; no bearing contributor at all is
 /// `Device`.
+///
+/// Both key arguments are [`VerifiedKid`], so the *natural* forgeable call — reading the
+/// signer straight off the untrusted body — no longer compiles (#412). Note the scope: this
+/// closes the accidental spelling, not every spelling. Wrapping the same field in
+/// [`VerifiedKid::from_event_log_column`] still compiles and still reproduces #412; that
+/// route stays a review obligation, which is why the constructor is named after the premise
+/// it asserts rather than something neutral like `new`.
+///
+/// ```compile_fail
+/// use cairn_event::contributor::classify_authorship_confidence;
+/// # fn demo(body: &cairn_event::EventBody) {
+/// // `&body.signer_key_id` is the body's own CLAIM. It is a `&str`, not a VerifiedKid,
+/// // and this line must never compile again.
+/// let _ = classify_authorship_confidence(&body.contributors, &body.signer_key_id, None);
+/// # }
+/// ```
+///
+/// The companion below is what keeps that negative test HONEST, and it is not decoration.
+/// `compile_fail` asserts only that a snippet fails to build, never why — and rustdoc on
+/// stable ignores an `E0308`-style error-code annotation entirely (verified: a deliberately
+/// wrong code still reports `ok`), so pinning the code is not available as a fix. Rename
+/// `EventBody::signer_key_id` or `::contributors` and the block above would start failing
+/// for that unrelated reason while still reporting success — silently pinning nothing. This
+/// one names the same fields on the honest path, so the vacuity shows up as a failure here.
+///
+/// ```
+/// use cairn_event::contributor::classify_authorship_confidence;
+/// # fn demo(bytes: &[u8]) -> Result<(), cairn_event::EventError> {
+/// let v = cairn_event::verify_self_described_event(bytes)?;
+/// let _claim: &str = &v.body().signer_key_id;   // the field the forgery above reads
+/// let _ = classify_authorship_confidence(&v.body().contributors, v.signer(), None);
+/// # Ok(()) }
+/// ```
 ///
 /// A bearing entry with a missing or non-string `actor_id` is an ANONYMOUS claim: it
 /// still counts as a bearing contributor (→ never `Device`) and can never authenticate
@@ -166,9 +302,11 @@ pub enum AuthorshipConfidence {
 /// exists to prevent (caught by the #212 property suite before any read path shipped).
 pub fn classify_authorship_confidence(
     contributors: &serde_json::Value,
-    signer_key_id: &str,
-    verified_attester: Option<&str>,
+    signer: VerifiedKid<'_>,
+    verified_attester: Option<VerifiedKid<'_>>,
 ) -> AuthorshipConfidence {
+    let signer_key_id = signer.as_str();
+    let verified_attester = verified_attester.map(|v| v.as_str());
     // Every bearing-role entry's actor claim, kept as Option so an anonymous claim
     // stays visible to the grading instead of vanishing from the set.
     let bearing: Vec<Option<&str>> = contributors
@@ -200,6 +338,18 @@ pub fn classify_authorship_confidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A verified key id for grading tests.
+    ///
+    /// These tests are about the classification LAW, not about provenance, so they mint
+    /// through the DB-column constructor: in the shapes they describe the value would
+    /// indeed have come from `event_log.signer_key_id` or `event_log.attester_key`. The
+    /// provenance guarantee itself is pinned in `tests/verified_kid.rs` (the honest mint)
+    /// and by the `compile_fail` doctest on `classify_authorship_confidence` (the forgery
+    /// that must no longer build).
+    fn kid(s: &str) -> VerifiedKid<'_> {
+        VerifiedKid::from_event_log_column(s)
+    }
 
     #[test]
     fn ratified_members_classify_from_the_table() {
@@ -273,7 +423,7 @@ mod tests {
             {"actor_id": "H", "role": "authored"},
             {"actor_id": "N", "role": "recorded"}]);
         assert_eq!(
-            classify_authorship_confidence(&c, "H", None),
+            classify_authorship_confidence(&c, kid("H"), None),
             AuthorshipConfidence::Attested
         );
     }
@@ -284,7 +434,7 @@ mod tests {
                                     "responsibility": {"held_by": "H"}}]);
         // signer is the node, but the bearing human is the verified attester.
         assert_eq!(
-            classify_authorship_confidence(&c, "N", Some("H")),
+            classify_authorship_confidence(&c, kid("N"), Some(kid("H"))),
             AuthorshipConfidence::Attested
         );
     }
@@ -296,7 +446,7 @@ mod tests {
             {"actor_id": "N", "role": "recorded"}]);
         // signed by the node, no token for H — a forgery OR a future credential; either way unverified.
         assert_eq!(
-            classify_authorship_confidence(&c, "N", None),
+            classify_authorship_confidence(&c, kid("N"), None),
             AuthorshipConfidence::Unverified
         );
     }
@@ -305,7 +455,7 @@ mod tests {
     fn authorship_grade_device_when_no_bearing_contributor() {
         let c = serde_json::json!([{"actor_id": "N", "role": "recorded"}]);
         assert_eq!(
-            classify_authorship_confidence(&c, "N", None),
+            classify_authorship_confidence(&c, kid("N"), None),
             AuthorshipConfidence::Device
         );
     }

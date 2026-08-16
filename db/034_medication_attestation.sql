@@ -120,8 +120,27 @@ WHERE (cairn_event_twin_check.check_fn, cairn_event_twin_check.twin_required_msg
 --    guaranteed, no Rust<->SQL drift. NULL when the thread has no local content events
 --    (orphan): the orchestrator bails, the projection reads NULL -> stale. Content
 --    events EXCLUDE reconciliation/separation/attestation (not thread content).
+--
+--    SECURITY DEFINER SINCE 2026-08-16 (#405 part 1 fallout, NOT a widening of intent).
+--    `cairn_clear_payload(el)` takes a WHOLE-ROW `event_log` composite, and a whole-row
+--    reference requires SELECT on EVERY column. db/049 section 8 dropped cairn_agent from a
+--    table-level grant to an explicit column list (to withhold `safety`), which silently
+--    made this invoker-rights body fail with 42501 for that role — reached from the
+--    cairn_agent-granted `medication_thread_attestation` view and the medication chart read
+--    (medication/read.rs). Definer rights are the same remedy db/049 section 7 applied to
+--    its own readers for the identical cause. `pg_temp` is listed LAST so a caller cannot
+--    shadow `event_log` in its temporary schema and feed this a decoy set — a definer that
+--    pins only `public` is still searched through pg_temp first for relation names.
+--    Pinned by safety_read_grants.rs::the_column_grant_does_not_break_whole_row_event_log_readers.
+--
+--    NO INLINING COST HERE, unlike the trade #420 is weighing for db/048. Postgres refuses
+--    to inline a SQL function whose body carries an aggregate, and both bodies below are
+--    aggregate queries (`string_agg`/`count(*)`) — so they were never inlinable and the
+--    definer clause takes nothing away. Do not generalise this to the other definers.
 CREATE OR REPLACE FUNCTION cairn_medication_thread_commitment(p_medication_id uuid)
-RETURNS bytea LANGUAGE sql STABLE AS $$
+RETURNS bytea LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
     -- ADR-0052: a sealed content event carries CIPHERTEXT in event_log.body, so its
     -- medication_id lives in the event_clear shadow — the thread lookup must read the
     -- CLEAR payload via cairn_clear_payload (unsealed rows resolve to body unchanged,
@@ -165,8 +184,15 @@ $$;
 --     LIVE here: a node that cannot reproduce the reviewed set must never read a grown
 --     thread as "fresh". The staleness view (part 2) forces stale whenever this count is
 --     LESS than the attestation's reviewed_count.
+--
+--     SECURITY DEFINER for exactly the reason spelled out on cairn_medication_thread_commitment
+--     above, and independently of it: this body carries its own whole-row
+--     `cairn_clear_payload(el)`, so a fix that converted only the commitment fn would leave
+--     the staleness view broken for cairn_agent at its second call.
 CREATE OR REPLACE FUNCTION cairn_medication_thread_readable_count(p_medication_id uuid)
-RETURNS bigint LANGUAGE sql STABLE AS $$
+RETURNS bigint LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
     SELECT count(*)
     FROM event_log el
     WHERE el.event_type IN (
@@ -176,6 +202,18 @@ RETURNS bigint LANGUAGE sql STABLE AS $$
             'clinical.medication-dose-correction.asserted')
       AND (cairn_clear_payload(el) ->> 'medication_id')::uuid = p_medication_id;
 $$;
+
+-- The grant floor for the two readers above, mandatory NOW THAT THEY ARE DEFINERS (#382):
+-- Postgres grants EXECUTE to PUBLIC by default and every role is a member of PUBLIC, so a
+-- definer left un-REVOKEd runs OWNER-rights code for a below-the-floor adversary with raw
+-- SQL. While they were invoker-rights the default was harmless — they could reach nothing
+-- the caller could not already reach — so this block arrives with the definer clause, not
+-- before it. cairn_agent is granted back because the medication chart path calls both,
+-- directly (medication/read.rs) and through medication_thread_attestation below.
+REVOKE EXECUTE ON FUNCTION cairn_medication_thread_commitment(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_medication_thread_readable_count(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_medication_thread_commitment(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_medication_thread_readable_count(uuid) TO cairn_agent;
 
 -- 4b. Read-time support for the set-commitment fn. Unlike the other medication read
 --     views (which read trigger-maintained projection TABLES), the commitment is
