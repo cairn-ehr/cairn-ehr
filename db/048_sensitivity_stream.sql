@@ -781,15 +781,27 @@ GRANT EXECUTE ON FUNCTION cairn_thread_patient(uuid) TO cairn_agent;
 -- `responsible_actor_id` is only ever CONSULTED when `verdict <> 'unverified'`, and a row
 -- with `verdict = 'attested'` already passed `cairn_claim_authority`'s own stricter R1 test
 -- to get that verdict — meaning the key resolved to exactly one actor, period, before this
--- query ever ran. So on the only path where this resolution is used for R1, it agrees with
--- R1 exactly; it is not a second, looser copy of the same rule. For R2 ('self'), there is
--- no attester to resolve (`attester_key` is typically NULL), so this falls back to the
--- withdrawal's own `actor_id` — which R2 already requires to equal the TARGET assertion's
--- own actor. That fallback is why R2 never needs a special case: the actor withdrawing
--- their OWN claim necessarily HAS other content on the chart (the claim itself), so the
--- "no prior presence" test below always excludes it from 'stranger-attested' — precisely
+-- query ever ran. So on the only path where this resolution is used for a `verdict = 'attested'`
+-- row, it agrees with R1 exactly; THAT is not a second, looser copy of the same rule — the claim
+-- is defended for R1 ONLY, not for the COALESCE as a whole (see the caveat below). For R2
+-- ('self'), there is USUALLY no attester to resolve (`attester_key` is typically NULL), so this
+-- falls back to the withdrawal's own `actor_id` — which R2 already requires to equal the TARGET
+-- assertion's own actor. That fallback is why R2 ordinarily never needs a special case: the actor
+-- withdrawing their OWN claim necessarily HAS other content on the chart (the claim itself), so
+-- the "no prior presence" test below always excludes it from 'stranger-attested' — precisely
 -- production's `sensitivity::withdraw_sensitivity` self-signed, self-attested shape
 -- (task 4's third test).
+--
+-- THE EDGE CASE THAT NARROWS THE CLAIM (salience-only, essentially unreachable): the COALESCE
+-- below branches on `attester_key IS NOT NULL`, not on the row's actual `verdict`. #408 tracks a
+-- key mapped to MORE THAN ONE actor (e.g. one human, one agent) — cairn_claim_authority's R1
+-- rejects that as ambiguous ('unverified'), but a withdrawal whose SIGNER separately satisfies R2
+-- can still verdict 'self' while carrying that same non-NULL, R1-failing `attester_key`. This
+-- query's human-filtered sub-select is looser than R1 and can still resolve one such key to a
+-- single human — so on a 'self'-verdict row carrying an incidental attester_key, the first
+-- COALESCE branch wins and returns the ATTESTER's actor rather than the actor R2's verdict is
+-- actually grounded on. That attester may have no prior presence on the chart even though the
+-- true self-withdrawer does, producing a spurious 'stranger-attested' row.
 --
 -- "NO PRIOR PRESENCE" IS BOUNDED TO EVENTS AT OR BEFORE THE WITHDRAWAL, BY HLC
 -- (`hlc_wall`, `hlc_counter` — both columns already on `event_log`, both in the cairn-sync
@@ -814,10 +826,12 @@ GRANT EXECUTE ON FUNCTION cairn_thread_patient(uuid) TO cairn_agent;
 -- KNOWN GAP, NOT FIXED HERE (task-4 Minor #3). `cairn_sensitivity_standing` is
 -- patient-scoped on BOTH sides (section 9), so a withdrawal mis-stamped with the WRONG
 -- chart's `patient_id` — naming a real assertion that in fact lives on a DIFFERENT chart —
--- finds nothing in `cairn_sensitivity_standing(w.patient_id)` on ANY read, ever, and is
--- therefore PERMANENTLY 'inert' rather than surfacing as the silently-ineffective strip
--- attempt it actually is. Neither door refuses this on admission: the ceremony's
--- chart-mismatch checks (section 12) are in the ASSERTION branch only. Harmless
+-- finds nothing in `cairn_sensitivity_standing(w.patient_id)` on ANY read, ever, and therefore
+-- NEVER MATCHES EITHER ARM'S WHERE CLAUSE BELOW — it does not appear in this view AT ALL, under
+-- ANY reason, rather than surfacing (say, tagged `'inert'`, the literal string the first arm DOES
+-- emit for a different, legitimate case — a target that has simply not replicated here yet) as
+-- the silently-ineffective strip attempt it actually is. Neither door refuses this on admission:
+-- the ceremony's chart-mismatch checks (section 12) are in the ASSERTION branch only. Harmless
 -- clinically — the strip never took effect anywhere — but it is precisely the kind of
 -- silently-ineffective act a worklist would otherwise want to show. Left as a documented
 -- gap rather than a third arm; not exercised by this task's tests.

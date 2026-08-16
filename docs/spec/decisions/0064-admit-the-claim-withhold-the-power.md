@@ -142,8 +142,15 @@ caller is neither: `cairn_sensitivity_standing` is a plain `LANGUAGE sql` functi
 `cairn_agent`, and a non-definer body runs as the **calling** role whether or not it inlines. Without
 `SECURITY DEFINER` the first `cairn_effective_sensitivity` call by `cairn_agent` fails with permission
 denied — **the entire sensitivity read path, broken by a privilege, and only under the product's
-role**, invisible to a suite running as the owner. Pinned by
-`claim_authority.rs::the_read_path_works_as_cairn_agent`, which is a role-switched test on purpose.
+role**, invisible to a suite running as the owner. Pinned by two role-switched tests, on purpose:
+`claim_authority_worklist.rs::the_worklist_is_readable_as_cairn_agent` lands a real withdrawal and
+reads `sensitivity_withdrawal_worklist` as `cairn_agent`, so `cairn_claim_authority` actually runs
+under that role against live data — the stronger pin. `claim_authority.rs::the_read_path_works_as_
+cairn_agent` reads a chart carrying no withdrawal, so the predicate is never *called* there and its
+non-vacuity rests on Postgres's executor-start ACL check alone; still a real pin (a missing grant
+fails before the predicate would ever run), but the weaker of the two. If the named test in either
+codebase ever gets simplified, the `SECURITY DEFINER` pin should be re-anchored to whichever of the
+two still lands real data through the role switch, not silently dropped.
 `REVOKE … FROM PUBLIC` + `GRANT … TO cairn_agent` follows immediately (`db/005:723-724`): a definer
 function with PUBLIC execute is a privilege-escalation surface.
 
@@ -532,17 +539,22 @@ nothing), and the §1.2 budget above is therefore **owed, not met**. The operato
 [#388](https://github.com/cairn-ehr/cairn-ehr/issues/388)'s (*§5.9 operator surface is blind to
 withdrawals, deferred grades, and custody-less charts*).
 
-**A cross-chart mis-targeted withdrawal is permanently inert AND permanently invisible.**
-`cairn_sensitivity_standing` is patient-scoped on both sides — which is load-bearing, because without
-it a withdrawal authored on chart B could strip chart A's protection. The consequence is that a
-withdrawal mis-stamped with the **wrong** chart's `patient_id`, naming a real assertion that lives on a
-**different** chart, finds nothing in `cairn_sensitivity_standing(w.patient_id)` on any read, ever — and
-so also falls out of the worklist's `inert` arm, which asks whether the target still stands *on the
-withdrawal's own chart*, where it never did. Neither door refuses it: the ceremony's chart-mismatch
-checks are in the *assertion* branch only. Harmless clinically — the strip never took effect anywhere —
-but it is exactly the kind of silently-ineffective act a worklist would want to show, and no arm of the
-view names the actual condition. Recorded as a `KNOWN GAP` comment at `db/048:814-823` and here; not
-fixed, and not exercised by any test.
+**A cross-chart mis-targeted withdrawal that stays UNVERIFIED is permanently inert AND permanently
+invisible.** `cairn_sensitivity_standing` is patient-scoped on both sides — which is load-bearing,
+because without it a withdrawal authored on chart B could strip chart A's protection. The consequence
+is that such a withdrawal, mis-stamped with the **wrong** chart's `patient_id` and naming a real
+assertion that lives on a **different** chart, finds nothing in `cairn_sensitivity_standing(w.patient_id)`
+on any read, ever — and so also falls out of the worklist's `inert` arm, which asks whether the target
+still stands *on the withdrawal's own chart*, where it never did. **This holds only for
+`verdict = 'unverified'`.** An AUTHORITATIVE (`'attested'`/`'self'`) mis-chart withdrawal is different:
+the worklist's second arm (`db/048:873-881`) checks the responsible actor's prior presence on the
+WITHDRAWAL'S OWN chart, not the target's, so an actor with no such presence there DOES surface — as
+`stranger-attested`. Neither door refuses either shape: the ceremony's chart-mismatch checks are in the
+*assertion* branch only. Harmless clinically in both cases — the strip never took effect anywhere — but
+for the unverified case it is exactly the kind of silently-ineffective act a worklist would want to
+show, and no arm of the view names the actual condition — even the visible `stranger-attested` row for
+the authoritative case reads as an ordinary stranger attestation, not as "wrong chart". Recorded as a
+`KNOWN GAP` comment at `db/048:814-823` and here; not fixed, and not exercised by any test.
 
 **The Rust↔SQL authority mapping is already violated by door-admissible shapes, in both directions.**
 `classify_authorship_confidence` and `cairn_claim_authority` are documented as owing each other

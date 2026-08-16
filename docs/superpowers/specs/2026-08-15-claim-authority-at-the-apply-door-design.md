@@ -408,6 +408,13 @@ record that it was opened — which is
 is the control and the gate is the forcing function**, and the ADR must say that in those words so no
 reader infers a lock from a mechanism that is not one.
 
+> **Superseded on this point by [ADR-0064](../../spec/decisions/0064-admit-the-claim-withhold-the-power.md)
+> decision 4:** the "second axis" and the `given equal custody and equal actor knowledge` widening below
+> were the design's prediction, not the build's outcome. The arrival-time knowledge gap this section
+> describes is **not reachable** — the ADR's decision-4 `IMPORTANT` callout explains why and says the
+> widening **must not be reintroduced**. Left below unedited as a record of what was designed; do not
+> read it as still true.
+
 **A second axis of node-relativity.** ADR-0062 decision 9 established that the effective grade is
 custody-relative. It is now custody-**and-actor-knowledge**-relative: a peer's honest attested withdrawal
 reads `unverified` here until that attester is enrolled here, so the grade stays high — honest,
