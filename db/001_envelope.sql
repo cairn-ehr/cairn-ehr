@@ -254,28 +254,39 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- as cairn_patient_has_events above.
 -- ---------------------------------------------------------------------------
 -- HOUSE RULE FOR EVERY `SET search_path` IN db/*.sql (#426, 2026-08-16).
--- Stated once, here, because this is the first pinned function in load order; every
--- other site carries the clause and a pointer back to this note rather than the
--- argument.
+-- Stated once, here, because this is the first pinned function in load order. Every other
+-- site carries the clause; the sites where the reasoning is load-bearing (the dynamic-%I
+-- dispatchers, the two write doors) point back here rather than restate the argument.
 --
 --   THE CLAUSE IS ALWAYS `SET search_path = public, pg_temp` — pg_temp LAST, never
 --   the bare `public` form, and never pg_temp anywhere but last.
 --
 -- WHY. `SET search_path = public` reads like a lockdown and is not one. PostgreSQL
--- searches the session's TEMPORARY schema FIRST for relation names whenever the path
--- does not place pg_temp explicitly; the setting only controls where pg_temp sits when
--- you DO name it. PUBLIC holds TEMPORARY on every database by default (nothing in this
+-- searches the session's TEMPORARY schema FIRST for relation and data-type names whenever
+-- the path does not place pg_temp explicitly; the setting only controls where pg_temp sits
+-- when you DO name it. PUBLIC holds TEMPORARY on every database by default (nothing in this
 -- tree revokes it), so any role that can reach a function could `CREATE TEMP TABLE
 -- event_log (…)` and have every unqualified relation name inside that function resolve
 -- to its own decoy. PostgreSQL's own "Writing SECURITY DEFINER Functions Safely" calls
 -- the temp schema out by name and prescribes writing pg_temp last.
 --
--- WHAT IT COST BEFORE THE FIX — this was live, not theoretical. Both owner-rights write
--- doors (submit_event db/005, apply_remote_event db/020) carried the bare form. With a
--- decoy in place they RETURNED SUCCESS while the owner-privileged INSERT landed in the
--- caller's temp table: the client was told the write succeeded, the append-only log
--- never saw the event, no projection trigger fired, and the row vanished at session
--- end. Silent clinical data loss from a role holding nothing but EXECUTE on the door.
+-- WHAT IT COST BEFORE THE FIX — this was live, not theoretical, and it is reproduced as a
+-- test rather than asserted here. Both owner-rights write doors (submit_event db/005,
+-- apply_remote_event db/020) carried the bare form. With a decoy in place they RETURNED
+-- SUCCESS while the owner-privileged INSERT landed in the caller's temp table: the client
+-- was told the write succeeded, the append-only log never saw the event, no projection
+-- trigger fired, and the row vanished at session end. Silent clinical data loss from a role
+-- holding NO write privilege on event_log at all — only EXECUTE on the door plus the
+-- TEMPORARY every role has by default.
+--
+-- Be exact about the local door's reach, because a bare decoy does not buy the whole attack:
+-- submit_event step 8b (#345 precedence) reads event_log unqualified via
+-- cairn_patient_has_events, so an EMPTY decoy blinds that check and makes any NON-registration
+-- type fail LOUDLY ("no chart exists"). Registration diverts silently because 8b short-circuits
+-- for it. Seeding the decoy with one row bearing the patient_id restores 8b and every type then
+-- diverts silently. apply_remote_event has no 8b, so it diverts unconditionally. All three
+-- cases are pinned in crates/cairn-node/tests/search_path_pg_temp.rs.
+--
 -- The same shadowing blinded db/049's safety readers into "no safety signals on file"
 -- for a chart that carried one (the finding that opened #426).
 --
@@ -283,23 +294,41 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- are exposed, but "does this body name a relation?" is a judgement that has to be
 -- re-made on every edit and is silent when got wrong. A uniform clause is instead
 -- mechanically checkable, and is checked: crates/cairn-node/tests/search_path_pg_temp.rs
--- asserts over pg_proc that EVERY pinned path in this schema ends in pg_temp (and that
--- every SECURITY DEFINER pins one at all), so a new migration is covered the moment it
--- loads. Adding pg_temp costs nothing where no relation is named.
+-- asserts over pg_proc that EVERY pinned path denies the temp schema the first look (and
+-- that every SECURITY DEFINER pins one at all), so a new migration is covered the moment it
+-- loads. "Denies the first look" rather than "ends in pg_temp", because the naive form of
+-- that rule waves through `SET search_path = pg_temp` — last element pg_temp, and the worst
+-- possible path — and condemns `SET search_path = ''`, which is strictly better than this
+-- house rule. Adding pg_temp costs nothing where no relation is named.
 --
 -- WHAT `pg_temp` LAST DOES *NOT* MAKE AIRTIGHT — state the residual rather than let a
--- reader infer a guarantee. Schema order decides RELATION lookup outright, so the
--- demonstrated attack above is fully closed. FUNCTION and OPERATOR lookup is different:
--- Postgres ranks all visible candidates by how well the argument types match FIRST and
--- only breaks ties by search_path order — and naming pg_temp explicitly is what makes
--- temp functions visible to that ranking at all (they are invisible when it is unnamed).
--- So a body whose call site does not match its callee EXACTLY — one relying on an
--- implicit coercion — could in principle be beaten by an exact-match temp function.
--- Writing pg_temp last is nonetheless PostgreSQL's own prescribed arrangement, and it
--- trades a hypothetical needing an inexact call site for a demonstrated owner-privileged
--- write diversion. The airtight form is `SET search_path = ''` with every name
--- schema-qualified; that is a far larger and more error-prone edit across these bodies
--- (dynamic %I dispatch included) and is deliberately not attempted here.
+-- reader infer a guarantee, and state the RIGHT one.
+--
+-- Closed outright: schema order decides RELATION and DATA TYPE lookup, which is the whole
+-- of the implicit temp search (docs, "search_path": the temporary schema "is only searched
+-- for relation … and data type names"). The demonstrated attack above is fully closed, and
+-- so is the type-name variant nobody exercised.
+--
+-- NOT at issue, despite the intuition: FUNCTION and OPERATOR lookup. Postgres NEVER searches
+-- the temporary schema for a function or operator name — not when pg_temp is unnamed, and
+-- not when it is named, in any position. Verified on PG 18.1: a function existing only in
+-- pg_temp raises `function f(integer) does not exist` under `public, pg_temp` AND under
+-- `pg_temp, public`, while pg_temp.f(1) resolves fine and an unqualified temp RELATION
+-- resolves fine in the same session. So naming pg_temp here exposes no call site, and no
+-- body needs auditing for inexact-match calls on this account.
+--
+-- The residual that IS real: pg_temp last only wins a name that `public` actually HAS. An
+-- unqualified relation absent from public still falls through to the caller's temp schema —
+-- `to_regclass('not_in_public')` under `public, pg_temp` returns the temp relation. That
+-- reaches the to_regclass(v_tbl) in cairn_check_projection_registry_fn (db/005), whose own
+-- comment names the stake: a typo would silently exempt the real table from rebuild's
+-- refusal check. Low severity today (that input path is owner-only and cairn_projection_apply
+-- is REVOKEd from PUBLIC), but it is the residual, not a hypothetical about overloads.
+--
+-- The airtight form is `SET search_path = ''` with every name schema-qualified — it removes
+-- any dependence on public itself being the schema that answers. That is a far larger and
+-- more error-prone edit across these bodies (dynamic %I dispatch included) and is deliberately
+-- not attempted here; the repo-wide guard accepts it wherever someone does attempt it.
 --
 -- WHY NOT `REVOKE TEMPORARY ON DATABASE … FROM PUBLIC` INSTEAD (#426 want 2, considered
 -- and declined). It would close the same vector by taking the capability away, but at the
@@ -308,13 +337,27 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- fleet-wide to compensate for a clause we now assert repo-wide is policy dressed as
 -- mechanism (principle 9 — Cairn ships mechanism; a deployment may still revoke it locally
 -- if its own threat model wants belt and braces). It would also disarm the tests that PROVE
--- this fix: they create the decoy as cairn_agent precisely to show no extra privilege is
--- needed, and cannot run in a database where nobody may.
+-- this fix: they create the decoy as the runtime roles themselves (cairn_agent at the local
+-- door, cairn_node at the sync door) precisely to show no extra privilege is needed, and
+-- cannot run in a database where nobody may.
 --
--- WHAT THIS DOES NOT COVER. A function with NO `SET search_path` resolves under the
--- caller's path entirely, temp schema included — see #420 on cairn_sensitivity_standing,
--- where adding the clause would block SQL inlining on a hot read path and the trade is
--- still open.
+-- WHAT THIS DOES NOT COVER, stated with the real size rather than one example. A function
+-- with NO `SET search_path` resolves under the caller's path entirely, temp schema included.
+-- That is not a one-function remainder: ~100 invoker-rights functions in this schema pin no
+-- path, ~68 of them EXECUTE-able by cairn_agent. The reason it is a different problem, not
+-- simply the rest of this one: an invoker-rights function runs with the CALLER's own
+-- privilege, so shadowing it hands the caller nothing they did not already have — it is
+-- self-deception, not escalation — and pinning a clause blocks SQL inlining on hot read
+-- paths, which is the measured trade #420 still owes.
+--
+-- Two sharp edges inside that class, so nobody re-derives them:
+--   * A function reached ONLY from inside a pinned definer inherits its caller's path and is
+--     safe for that reason alone — cairn_patient_has_events, load-bearing for the #345
+--     precedence check, is exactly this. Nothing guards that invariant; a future direct
+--     GRANT would silently end it.
+--   * Escalation would need such a function to be consulted by something trusted. Audited
+--     2026-08-16: no RLS policy and no CHECK constraint in this schema calls one, so there
+--     is no live path today. Tracked in #430.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_node_hlc_merge(p_wall BIGINT, p_counter INTEGER)
 RETURNS void

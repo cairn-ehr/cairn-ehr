@@ -489,7 +489,10 @@ ADR-0064's own §1.2 budget is owed).
   coarsening is the control that binds.** The branch also fixed two defects the fix itself introduced —
   the new definers pinned `search_path = public` **without `pg_temp`**, so any caller could shadow
   `event_log` with a temp table and silently suppress a real warning to zero rows
-  (repo-wide audit: [#426](https://github.com/cairn-ehr/cairn-ehr/issues/426)); and the column grant broke
+  (repo-wide audit: [#426](https://github.com/cairn-ehr/cairn-ehr/issues/426) — **closed 2026-08-16**;
+  all 25 pinned sites now end in `pg_temp`, guarded over `pg_proc` rather than a name list, with the
+  unpinned invoker-rights remainder split out as [#430](https://github.com/cairn-ehr/cairn-ehr/issues/430));
+  and the column grant broke
   whole-row `event_log` readers, so db/034's two medication-thread functions became definers too.
   Residual replay window: [#427](https://github.com/cairn-ehr/cairn-ehr/issues/427).
   **(2) #412, in Rust.** `classify_authorship_confidence` took the signer as `&str`, and `EventBody`

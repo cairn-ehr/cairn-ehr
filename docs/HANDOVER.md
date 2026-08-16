@@ -201,22 +201,40 @@ to carry:
    does not exclude the session temp schema, so with a decoy `event_log` in place **`submit_event` and
    `apply_remote_event` each RETURNED SUCCESS while the owner-privileged `INSERT` landed in the caller's
    temp table** — append-only log untouched, no projection trigger fired, row gone at session end,
-   client told the write succeeded. Demonstrated as `cairn_agent`, a role holding nothing but `EXECUTE`
-   on the door plus the `TEMPORARY` PUBLIC has by default. Both directions are now tested behaviourally
-   in `crates/cairn-node/tests/search_path_pg_temp.rs`.
-2. **The guard is over `pg_proc`, not a list of names.** Two catalogue assertions in that file: every
-   pinned path in `public` ends in `pg_temp`, and every `SECURITY DEFINER` pins one at all. Both were
-   mutation-checked against planted violations (including the subtle `pg_temp, public` ordering), so a
-   twenty-second site is caught the moment it loads. The full reasoning — including what `pg_temp` last
-   does **not** make airtight (function *overload* resolution ranks by type match before schema order)
-   — lives once as a house-rule note above `cairn_node_hlc_merge` in `db/001`; every other site points
-   at it.
-3. **What was deliberately NOT done.** `REVOKE TEMPORARY … FROM PUBLIC` (#426 want 2) — declined, with
-   reasons in that note; it is policy at the wrong layer and would disarm the tests that prove the fix.
-   `SET search_path = ''` with every name schema-qualified is the airtight form and is a much larger
-   edit. **#420 part 1 is still open and now cleanly isolated**: it is about functions carrying *no*
-   clause (`cairn_sensitivity_standing`), where adding one blocks SQL inlining on a hot read path and
-   still owes a measurement.
+   client told the write succeeded. Demonstrated as `cairn_agent`, a role holding **no write privilege
+   on `event_log` at all** — only `EXECUTE` on the door plus the `TEMPORARY` PUBLIC has by default.
+   *Be exact about the local door's reach*: step 8b (#345 precedence) reads `event_log` unqualified, so
+   an **empty** decoy blinds it and any non-registration type fails **loudly**; registration diverts
+   silently because 8b short-circuits for it, and **seeding** the decoy with one row bearing the
+   `patient_id` restores 8b so every type diverts silently. `apply_remote_event` has no 8b and diverts
+   unconditionally. All three are tested in `crates/cairn-node/tests/search_path_pg_temp.rs`.
+2. **The guard is over `pg_proc`, not a list of names.** That file now carries three catalogue
+   assertions plus a DB-free unit test of the rule itself: every pinned path **denies the temp schema
+   the first look**, every `SECURITY DEFINER` pins one at all, and the attack decoy still mirrors every
+   column the doors `INSERT`. All were mutation-checked against planted violations, so a
+   **twenty-sixth** site is caught the moment it loads (25 pinned functions exist today; 21 of them are
+   what this PR changed). "Denies the first look" rather than "ends in `pg_temp`" on purpose: the naive
+   rule waves through `SET search_path = pg_temp` (last element *is* `pg_temp`, and it is the worst
+   possible path) and condemns `SET search_path = ''`, which is strictly better than the house rule.
+   The catalogue queries are also no longer scoped to `public`, so a migration that creates its own
+   schema cannot be silently uncovered.
+3. **What `pg_temp` last does and does not close** — the note was wrong here on first write and is
+   corrected. It closes RELATION **and data-type** lookup outright. It has nothing to do with function
+   or operator lookup: PostgreSQL **never** searches the temp schema for those, named or not (verified
+   on PG 18.1). The real residual is that `pg_temp` last only wins a name `public` actually HAS — an
+   unqualified relation *absent* from `public` still falls through to the caller's temp schema, which
+   reaches `to_regclass(v_tbl)` in `cairn_check_projection_registry_fn`. Low severity (owner-only input
+   path), but it is the residual.
+4. **What was deliberately NOT done, and what it left open.** `REVOKE TEMPORARY … FROM PUBLIC`
+   (#426 want 2) — declined, with reasons in the note; policy at the wrong layer, and it would disarm
+   the tests that prove the fix. #426 want 3 asked that #420 be resolved *together* with this; it was
+   **narrowed instead of resolved**, deliberately. The unpinned invoker-rights surface turned out to be
+   ~100 functions (~68 reachable by `cairn_agent`), not the one the note first named — that is now
+   **[#430](https://github.com/cairn-ehr/cairn-ehr/issues/430)**, which also records the audit finding
+   that no RLS policy or `CHECK` constraint consults one (so there is no escalation path today) and the
+   one genuinely sharp edge: `cairn_patient_has_events` is safe purely by *inheriting* `submit_event`'s
+   path. Behavioural coverage for `cairn_execute_shred` — where a diverted shred would report an
+   erasure that never happened — is **[#431](https://github.com/cairn-ehr/cairn-ehr/issues/431)**.
 
 **2026-08-16 — two live §5.9 leaks, one per plane** (closes
 [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412); narrows
@@ -316,7 +334,10 @@ withdrawal is inert and invisible) · **#418** (constraining the verdict domain 
 decision) · **#419** (coverage gaps: R1's conjuncts, the worklist's two untested arms) · **#420**
 (`search_path` / PUBLIC revocation — narrowed by #426 to the functions carrying NO clause; the remaining
 question is the inlining measurement on `cairn_sensitivity_standing`) · **#421**
-(the worklist omits the accountable actor) · **#422** (no CHECK on the overclaim ledger's relation).
+(the worklist omits the accountable actor) · **#422** (no CHECK on the overclaim ledger's relation) ·
+**#430** (the unpinned invoker-rights surface, ~100 functions — sized and audited during the #429
+review; `cairn_patient_has_events` is safe only by path *inheritance*) · **#431** (`cairn_execute_shred`
+has catalogue-only coverage; a diverted shred would report an erasure that never happened).
 
 **2026-08-14 — Slice 67: the §5.9 safety projection, part B** (closes
 [#375](https://github.com/cairn-ehr/cairn-ehr/issues/375), discharges

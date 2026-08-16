@@ -228,6 +228,8 @@ REVOKE EXECUTE ON FUNCTION cairn_replay_eligible(event_log) FROM PUBLIC;
 -- trigger that invokes this function — the dynamic-dispatch safety argument stays
 -- self-contained here, not dependent on the firing role's search_path. On why pg_temp
 -- is named and named last, see the house-rule note on cairn_node_hlc_merge (db/001).
+-- (ADR-0048 quotes this clause in its pre-#426 spelling, `= public`; ADRs are immutable,
+-- so treat the spelling there as history and this note as the rule.)
 CREATE OR REPLACE FUNCTION cairn_projection_dispatch()
 RETURNS trigger LANGUAGE plpgsql
 SET search_path = public, pg_temp
@@ -794,6 +796,12 @@ GRANT SELECT ON event_clear TO cairn_agent;  -- the clear READ surface (chart/FT
 -- signature first. Idempotent across replays.
 DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
 
+-- `SET search_path = public, pg_temp` — pg_temp LAST, and this is one of the two functions
+-- where that is load-bearing rather than hygiene. This body runs as the migration OWNER and
+-- INSERTs into an unqualified `event_log`; under the bare `public` form a caller holding only
+-- EXECUTE here could shadow that name and take the owner-privileged write into their own temp
+-- table while this door still returned an event id. See the house-rule note on
+-- cairn_node_hlc_merge (db/001, #426) for the mechanism and the demonstration.
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
