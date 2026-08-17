@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS sync_cursor (
 -- sweep), never admit an unauthorized one (the admission gate is untouched).
 CREATE OR REPLACE FUNCTION checkpoint_sync_cursor(p_peer_addr TEXT, p_observed_seq BIGINT)
 RETURNS BIGINT
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 DECLARE v_last BIGINT;
 BEGIN
@@ -136,7 +136,7 @@ INSERT INTO hlc_state (id) VALUES (TRUE) ON CONFLICT DO NOTHING;
 -- door without direct write to hlc_state.
 CREATE OR REPLACE FUNCTION node_hlc_tick()
 RETURNS TABLE(wall BIGINT, counter INTEGER)
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_now  BIGINT := (extract(epoch FROM clock_timestamp()) * 1000)::bigint;
@@ -159,7 +159,7 @@ $$;
 -- authored only by THIS node's current key. Every rejection is legible.
 CREATE OR REPLACE FUNCTION submit_node_event(p_signed BYTEA)
 RETURNS UUID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID;
@@ -307,7 +307,7 @@ GRANT SELECT ON trust_peer TO cairn_node;
 -- author is an out-of-band-confirmed, currently-active peer. Reject is legible.
 CREATE OR REPLACE FUNCTION apply_remote_node_event(p_signed BYTEA)
 RETURNS UUID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID; v_signer TEXT;

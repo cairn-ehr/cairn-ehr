@@ -102,12 +102,13 @@ CREATE TABLE IF NOT EXISTS cairn_projection_apply (
 -- the apply fn must exist with the unified (event_log) signature, and every
 -- projection_tables entry must be a real relation (it is rebuild-scope metadata
 -- — a typo would silently exempt the real table from rebuild's refusal check).
--- `SET search_path = public` pinned (same discipline as cairn_event_twin below):
+-- `SET search_path = public, pg_temp` pinned (same discipline as cairn_event_twin below):
 -- the to_regprocedure/to_regclass resolution must never be shadowed by a caller's
--- search_path, regardless of who fires this validation trigger.
+-- search_path, regardless of who fires this validation trigger. pg_temp is listed LAST
+-- deliberately — see the house-rule note on cairn_node_hlc_merge (db/001, #426).
 CREATE OR REPLACE FUNCTION cairn_check_projection_registry_fn()
 RETURNS trigger LANGUAGE plpgsql
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE v_tbl text;
 BEGIN
@@ -221,14 +222,17 @@ REVOKE EXECUTE ON FUNCTION cairn_replay_eligible(event_log) FROM PUBLIC;
 -- (e.g. carried-not-projected federation types, ADR-0012) dispatch nothing —
 -- the same behavior the old WHEN-filtered triggers gave them.
 --
--- `SET search_path = public` pinned here exactly like cairn_event_twin's dynamic
+-- `SET search_path = public, pg_temp` pinned here exactly like cairn_event_twin's dynamic
 -- dispatch further down this file: the %I-quoted apply_fn EXECUTE must never resolve
 -- into an attacker-shadowed schema regardless of who/what fired the AFTER INSERT
 -- trigger that invokes this function — the dynamic-dispatch safety argument stays
--- self-contained here, not dependent on the firing role's search_path.
+-- self-contained here, not dependent on the firing role's search_path. On why pg_temp
+-- is named and named last, see the house-rule note on cairn_node_hlc_merge (db/001).
+-- (ADR-0048 quotes this clause in its pre-#426 spelling, `= public`; ADRs are immutable,
+-- so treat the spelling there as history and this note as the rule.)
 CREATE OR REPLACE FUNCTION cairn_projection_dispatch()
 RETURNS trigger LANGUAGE plpgsql
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE r record;
 BEGIN
@@ -268,11 +272,12 @@ $$;
 -- EXECUTE 'SELECT fn($1,$2)' form is the dynamic equivalent of PERFORM fn(...) (every
 -- check fn RETURNS void and works by RAISE-on-violation).
 --
--- `SET search_path = public` is pinned on THIS function (not only on the SECURITY DEFINER
--- doors that call it), so the %I identifier can never be resolved into an attacker-shadowed
--- schema regardless of who invokes the hook — the dynamic-dispatch safety argument is
--- self-contained here, not dependent on the caller's search_path (defense in depth: today
--- the only callers are submit_event/apply_remote_event, which already pin it).
+-- `SET search_path = public, pg_temp` is pinned on THIS function (not only on the SECURITY
+-- DEFINER doors that call it), so the %I identifier can never be resolved into an
+-- attacker-shadowed schema regardless of who invokes the hook — the dynamic-dispatch safety
+-- argument is self-contained here, not dependent on the caller's search_path (defense in
+-- depth: today the only callers are submit_event/apply_remote_event, which already pin it).
+-- On why pg_temp is named and named last, see the house-rule note in db/001 (#426).
 --
 -- Twin policy (ADR-0039): an authored twin is carried verbatim for EVERY type; if absent,
 -- a type with twin_required_msg RAISES (demographics + identity + medication hard-require
@@ -319,7 +324,7 @@ $$;
 
 CREATE OR REPLACE FUNCTION cairn_event_twin(p_type text, b jsonb)
 RETURNS text LANGUAGE plpgsql
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_twin     text    := b ->> 'plaintext_twin';
@@ -550,12 +555,14 @@ REVOKE INSERT, UPDATE, DELETE ON contributor_role FROM PUBLIC;
 -- held_by = actor_id = verified attester), and responsibility claimed on a
 -- non-bearing role (partitions are additive-only and never flip, so this
 -- incoherence can never become valid).
--- `SET search_path = public` is pinned HERE, not only on the SECURITY DEFINER doors
--- that call it (the cairn_event_twin discipline): the contributor_role lookup must
--- never resolve into a caller-shadowed schema, regardless of who invokes the check.
+-- `SET search_path = public, pg_temp` is pinned HERE, not only on the SECURITY DEFINER
+-- doors that call it (the cairn_event_twin discipline): the contributor_role lookup must
+-- never resolve into a caller-shadowed schema, regardless of who invokes the check. That
+-- includes the caller's TEMP schema, which the bare `public` form leaves searched FIRST —
+-- see the house-rule note on cairn_node_hlc_merge (db/001, #426).
 CREATE OR REPLACE FUNCTION cairn_check_contributors(b jsonb, p_door text, p_strict boolean)
 RETURNS void LANGUAGE plpgsql STABLE
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     e       jsonb;
@@ -636,7 +643,7 @@ $$;
 -- never refuses. Do not "simplify" this into a both-doors symmetry.
 CREATE OR REPLACE FUNCTION cairn_authorship_bound(b jsonb, p_signer text, p_attester_key bytea)
 RETURNS boolean LANGUAGE sql STABLE
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
     SELECT NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(b -> 'contributors') AS e
@@ -703,7 +710,7 @@ $$;
 -- hazard entirely; the attribution came in with this slice's design and is corrected here.)
 CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
 RETURNS text LANGUAGE sql STABLE
-SECURITY DEFINER SET search_path = public
+SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
     SELECT CASE
         -- R1 — a vouched attestation by an enrolled human actor.
@@ -789,6 +796,12 @@ GRANT SELECT ON event_clear TO cairn_agent;  -- the clear READ surface (chart/FT
 -- signature first. Idempotent across replays.
 DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
 
+-- `SET search_path = public, pg_temp` — pg_temp LAST, and this is one of the two functions
+-- where that is load-bearing rather than hygiene. This body runs as the migration OWNER and
+-- INSERTs into an unqualified `event_log`; under the bare `public` form a caller holding only
+-- EXECUTE here could shadow that name and take the owner-privileged write into their own temp
+-- table while this door still returned an event id. See the house-rule note on
+-- cairn_node_hlc_merge (db/001, #426) for the mechanism and the demonstration.
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -797,7 +810,7 @@ CREATE OR REPLACE FUNCTION submit_event(
 ) RETURNS UUID
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     b              JSONB;

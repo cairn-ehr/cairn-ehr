@@ -288,7 +288,7 @@ BEGIN
     EXECUTE $future$
         CREATE OR REPLACE FUNCTION cairn_claim_authority(p_event_id uuid, p_target_event_id uuid)
         RETURNS text LANGUAGE sql STABLE
-        SECURITY DEFINER SET search_path = public
+        SECURITY DEFINER SET search_path = public, pg_temp
         AS 'SELECT ''delegated-registry''::text';
     $future$;
 

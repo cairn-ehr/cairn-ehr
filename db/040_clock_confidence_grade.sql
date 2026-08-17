@@ -106,7 +106,9 @@ $$;
 -- SELECT grant on hlc_state, which would be the first crack in that door-only posture.
 -- search_path is pinned for the same reason every SECURITY DEFINER function pins it (see
 -- cairn_projection_dispatch): an unpinned search_path lets a caller-controlled schema shadow
--- an unqualified identifier and hijack the definer's elevated privilege.
+-- an unqualified identifier and hijack the definer's elevated privilege. `pg_temp` is named
+-- LAST because `public` alone does not exclude the caller's temp schema — house-rule note on
+-- cairn_node_hlc_merge (db/001, #426).
 --
 -- clock_timestamp() is sampled ONCE via the `t` CTE — it is volatile and re-evaluated on
 -- every bare reference, so referencing it four times in one SELECT could report a rtc_now
@@ -119,7 +121,7 @@ $$;
 CREATE OR REPLACE FUNCTION cairn_clock_health()
 RETURNS TABLE(rtc_now timestamptz, hlc_floor timestamptz, behind_by_ms bigint,
               is_behind boolean, effective_lower_bound timestamptz, default_grade text)
-LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     WITH t AS (SELECT clock_timestamp() AS now)
     SELECT
         t.now,

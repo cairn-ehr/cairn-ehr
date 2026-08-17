@@ -70,7 +70,9 @@ CREATE OR REPLACE FUNCTION cairn_reproject(
 LANGUAGE plpgsql
 -- Pinned like cairn_event_twin's dynamic dispatch (Task-1 review): the %I EXECUTE
 -- below must never resolve into an attacker-shadowed schema, regardless of caller.
-SET search_path = public
+-- (ADR-0057 quotes this clause in its pre-#426 spelling, `= public`; ADRs are immutable,
+-- so the spelling there is history — the rule is the house-rule note in db/001.)
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_started timestamptz := clock_timestamp();

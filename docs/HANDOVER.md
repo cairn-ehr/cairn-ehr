@@ -192,6 +192,50 @@ surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
 
+**2026-08-16 (later) — the pinned `search_path` that pinned nothing** (closes
+[#426](https://github.com/cairn-ehr/cairn-ehr/issues/426); no ADR, no new migration file,
+`SCHEMA_GENERATION` stays 49 — 21 function headers gained `, pg_temp`, no body changed). Three things
+to carry:
+
+1. **It was live data loss at both owner-rights write doors, not hygiene.** `SET search_path = public`
+   does not exclude the session temp schema, so with a decoy `event_log` in place **`submit_event` and
+   `apply_remote_event` each RETURNED SUCCESS while the owner-privileged `INSERT` landed in the caller's
+   temp table** — append-only log untouched, no projection trigger fired, row gone at session end,
+   client told the write succeeded. Demonstrated as `cairn_agent`, a role holding **no write privilege
+   on `event_log` at all** — only `EXECUTE` on the door plus the `TEMPORARY` PUBLIC has by default.
+   *Be exact about the local door's reach*: step 8b (#345 precedence) reads `event_log` unqualified, so
+   an **empty** decoy blinds it and any non-registration type fails **loudly**; registration diverts
+   silently because 8b short-circuits for it, and **seeding** the decoy with one row bearing the
+   `patient_id` restores 8b so every type diverts silently. `apply_remote_event` has no 8b and diverts
+   unconditionally. All three are tested in `crates/cairn-node/tests/search_path_pg_temp.rs`.
+2. **The guard is over `pg_proc`, not a list of names.** That file now carries three catalogue
+   assertions plus a DB-free unit test of the rule itself: every pinned path **denies the temp schema
+   the first look**, every `SECURITY DEFINER` pins one at all, and the attack decoy still mirrors every
+   column the doors `INSERT`. All were mutation-checked against planted violations, so a
+   **twenty-sixth** site is caught the moment it loads (25 pinned functions exist today; 21 of them are
+   what this PR changed). "Denies the first look" rather than "ends in `pg_temp`" on purpose: the naive
+   rule waves through `SET search_path = pg_temp` (last element *is* `pg_temp`, and it is the worst
+   possible path) and condemns `SET search_path = ''`, which is strictly better than the house rule.
+   The catalogue queries are also no longer scoped to `public`, so a migration that creates its own
+   schema cannot be silently uncovered.
+3. **What `pg_temp` last does and does not close** — the note was wrong here on first write and is
+   corrected. It closes RELATION **and data-type** lookup outright. It has nothing to do with function
+   or operator lookup: PostgreSQL **never** searches the temp schema for those, named or not (verified
+   on PG 18.1). The real residual is that `pg_temp` last only wins a name `public` actually HAS — an
+   unqualified relation *absent* from `public` still falls through to the caller's temp schema, which
+   reaches `to_regclass(v_tbl)` in `cairn_check_projection_registry_fn`. Low severity (owner-only input
+   path), but it is the residual.
+4. **What was deliberately NOT done, and what it left open.** `REVOKE TEMPORARY … FROM PUBLIC`
+   (#426 want 2) — declined, with reasons in the note; policy at the wrong layer, and it would disarm
+   the tests that prove the fix. #426 want 3 asked that #420 be resolved *together* with this; it was
+   **narrowed instead of resolved**, deliberately. The unpinned invoker-rights surface turned out to be
+   ~100 functions (~68 reachable by `cairn_agent`), not the one the note first named — that is now
+   **[#430](https://github.com/cairn-ehr/cairn-ehr/issues/430)**, which also records the audit finding
+   that no RLS policy or `CHECK` constraint consults one (so there is no escalation path today) and the
+   one genuinely sharp edge: `cairn_patient_has_events` is safe purely by *inheriting* `submit_event`'s
+   path. Behavioural coverage for `cairn_execute_shred` — where a diverted shred would report an
+   erasure that never happened — is **[#431](https://github.com/cairn-ehr/cairn-ehr/issues/431)**.
+
 **2026-08-16 — two live §5.9 leaks, one per plane** (closes
 [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412); narrows
 [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405) part 1 — part 2 was Slice 68; no ADR and no
@@ -228,8 +272,8 @@ to carry:
    temp schema FIRST for relation names — so the two functions this slice made `SECURITY DEFINER` could be
    blinded by any caller creating a temp `event_log`, returning **zero rows** for a chart carrying a real
    warning, straight into `main.rs`'s "no safety signals on file" reassurance. Fixed here (`, pg_temp`
-   last, pinned by test and by `proconfig` assertions); **every other definer in the repo still has it**
-   (**#426**). (c) The column grant broke **whole-row** `event_log` readers (a `f(el)` composite needs
+   last, pinned by test and by `proconfig` assertions); every other definer in the repo still had it,
+   which **#426** then closed repo-wide later the same day (entry above). (c) The column grant broke **whole-row** `event_log` readers (a `f(el)` composite needs
    SELECT on every column) — db/034's two medication-thread functions, reached from a `cairn_agent`-granted
    view; both became definers. (d) The narrowing is not continuous: db/005 re-grants the table on every
    replay and db/049 re-narrows ~44 files later, each file its own transaction (**#427**).
@@ -288,8 +332,12 @@ empty ledger is indistinguishable from a broken one) · **#415** (`stranger-atte
 so it will fire on routine care — every shipped clinical verb is node-signed) · **#416** (a sealed
 withdrawal is inert and invisible) · **#418** (constraining the verdict domain needs a DROP CASCADE
 decision) · **#419** (coverage gaps: R1's conjuncts, the worklist's two untested arms) · **#420**
-(`search_path` / PUBLIC revocation — note the new `SECURITY DEFINER` read functions widen it) · **#421**
-(the worklist omits the accountable actor) · **#422** (no CHECK on the overclaim ledger's relation).
+(`search_path` / PUBLIC revocation — narrowed by #426 to the functions carrying NO clause; the remaining
+question is the inlining measurement on `cairn_sensitivity_standing`) · **#421**
+(the worklist omits the accountable actor) · **#422** (no CHECK on the overclaim ledger's relation) ·
+**#430** (the unpinned invoker-rights surface, ~100 functions — sized and audited during the #429
+review; `cairn_patient_has_events` is safe only by path *inheritance*) · **#431** (`cairn_execute_shred`
+has catalogue-only coverage; a diverted shred would report an erasure that never happened).
 
 **2026-08-14 — Slice 67: the §5.9 safety projection, part B** (closes
 [#375](https://github.com/cairn-ehr/cairn-ehr/issues/375), discharges

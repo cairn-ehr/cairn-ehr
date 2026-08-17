@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS node_unwrap_key (
 );
 
 CREATE OR REPLACE FUNCTION cairn_register_unwrap_key(p_pub BYTEA) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_existing BYTEA;
 BEGIN
     SELECT unwrap_pub INTO v_existing FROM node_unwrap_key;
@@ -119,7 +119,7 @@ ON CONFLICT (event_type) DO NOTHING;
 --    Overlay winners from OTHER, unshredded events survive (never over-erase).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cairn_execute_shred(p_target uuid, p_shred_event uuid, p_basis text)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     v_ca BYTEA;
     v_lo uuid;
