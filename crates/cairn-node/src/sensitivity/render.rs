@@ -105,30 +105,62 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
 /// The per-thread breakdown. Task 5 replaces the empty branch — today it reproduces
 /// `main.rs`'s current wording exactly, so that replacement is visible as a test edit.
 fn render_threads(r: &ChartReport) -> Vec<String> {
-    if r.threads.is_empty() {
-        return vec!["  no medication threads on this chart".to_string()];
+    if !r.threads.is_empty() {
+        return r.threads.iter().map(render_thread_line).collect();
     }
-    r.threads
-        .iter()
-        .map(|t| {
-            format!(
-                "  thread {}: {} (winning subject: {}{})",
-                t.thread_id,
-                t.grade,
-                t.source,
-                match &t.content_address {
-                    Some(ca) => format!(", withdraws={ca}"),
-                    None => String::new(),
-                }
-            )
-        })
-        .collect()
+    // NOTHING PROJECTED. Two very different states, and the old wording collapsed them
+    // into one precise untruth: "no medication threads on this chart" (#383).
+    if r.standing.is_empty() {
+        return vec![
+            "  no medication threads and no standing sensitivity assertions on this chart"
+                .to_string(),
+        ];
+    }
+    // NAMED, NEVER COUNTED. A bare count cannot separate "this node is custody-blind" from
+    // "the chart is genuinely empty", which is the one question this branch exists to
+    // answer — ADR-0061 settled the same shape for the registration funnel. Each row also
+    // carries the content_address `sensitivity-withdraw --withdraws` consumes.
+    let mut out = vec![format!(
+        "⚠ this node projects no medication threads, but {} sensitivity assertion(s) stand \
+         on this chart:",
+        r.standing.len()
+    )];
+    for s in &r.standing {
+        out.push(format!(
+            "    {} ({}, subject {})  withdraws={}",
+            s.grade,
+            super::subject_kind_phrase(&s.subject_kind),
+            s.subject_id,
+            s.content_address
+        ));
+    }
+    out.push(
+        "  → this node may hold no DEK custody, so the threads these assertions grade may \
+         exist and be invisible here (#383)"
+            .to_string(),
+    );
+    out
+}
+
+/// One projected thread's line. Extracted so both branches of `render_threads` read the
+/// same way and neither can drift from the other's wording.
+fn render_thread_line(t: &super::ThreadGrade) -> String {
+    format!(
+        "  thread {}: {} (winning subject: {}{})",
+        t.thread_id,
+        t.grade,
+        t.source,
+        match &t.content_address {
+            Some(ca) => format!(", withdraws={ca}"),
+            None => String::new(),
+        }
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sensitivity::report::ThreadGrade;
+    use crate::sensitivity::report::{StandingAssertion, ThreadGrade};
 
     /// A chart with nothing wrong: one grade line, one thread line, the standing footer.
     fn healthy() -> ChartReport {
@@ -143,6 +175,7 @@ mod tests {
                 content_address: None,
             }],
             ineffective_withdrawals: vec![],
+            standing: vec![],
         }
     }
 
@@ -247,5 +280,38 @@ mod tests {
         let text = render_chart_report("C", &healthy()).join("\n");
         assert!(text.contains("not complete"), "{text}");
         assert!(text.contains("ADR-0064"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_chart_says_both_things_are_empty() {
+        let mut r = healthy();
+        r.threads = vec![];
+        let text = render_chart_report("C", &r).join("\n");
+        assert!(text.contains("no medication threads and no standing"), "{text}");
+    }
+
+    #[test]
+    fn a_custody_blind_chart_names_each_standing_assertion_and_never_merely_counts() {
+        // #383 / #388 part 3. Both issues proposed a COUNT. This diverges from both:
+        // ADR-0061 settled the shape — "2 standing assertions, 0 threads" cannot tell an
+        // operator whether this node is custody-blind or the chart is genuinely empty,
+        // which is the one question the line exists to answer. A named row also carries the
+        // content_address that `sensitivity-withdraw --withdraws` consumes.
+        let mut r = healthy();
+        r.threads = vec![];
+        r.standing = vec![StandingAssertion {
+            content_address: "c0ffee".into(),
+            subject_kind: "thread".into(),
+            subject_id: uuid::Uuid::nil(),
+            grade: "restricted".into(),
+        }];
+        let text = render_chart_report("C", &r).join("\n");
+        assert!(text.contains("c0ffee"), "the address must be named: {text}");
+        assert!(text.contains("restricted"), "the grade must be named: {text}");
+        assert!(text.contains("no DEK custody"), "the custody explanation: {text}");
+        assert!(
+            !text.contains("no medication threads on this chart"),
+            "the old precise untruth must be gone: {text}"
+        );
     }
 }

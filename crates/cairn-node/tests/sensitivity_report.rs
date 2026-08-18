@@ -105,3 +105,32 @@ async fn an_attested_stranger_s_withdrawal_is_reported_with_its_own_reason_and_a
     // The positive control: this one DID take effect, unlike the inert case above.
     assert_eq!(report.chart_grade, "routine");
 }
+
+#[tokio::test]
+async fn a_chart_with_standing_assertions_and_no_projected_threads_still_names_them() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
+
+    // Authoring no medication events at all is the CHEAP stand-in for a custody-thin node:
+    // both produce zero medication_statement rows, which is the condition the report
+    // branches on. It does NOT reproduce the custody path itself — a node holding sealed
+    // medication events without a DEK — so this pins the BRANCH, not the cause. Stated
+    // rather than left for a reader to assume the harder case is covered.
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 1).await;
+    let a = assert_chart_grade(&c, &sk, &kid, p, 10, "restricted").await;
+    let ca = hex::encode(content_address_of(&c, a).await);
+
+    let report = chart_sensitivity(&mut c, p).await.unwrap();
+    assert!(
+        report.threads.is_empty(),
+        "no medication events were authored, so nothing projects"
+    );
+    assert!(
+        report.standing.iter().any(|s| s.content_address == ca),
+        "the standing assertion must be NAMED, not merely counted (#383): {:?}",
+        report.standing.iter().map(|s| &s.content_address).collect::<Vec<_>>()
+    );
+}

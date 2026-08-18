@@ -36,6 +36,22 @@ pub struct IneffectiveWithdrawal {
     pub responsible_actor_id: Option<String>,
 }
 
+/// One assertion standing on this chart, read from `cairn_sensitivity_standing` — which
+/// needs NO custody, because sensitivity bodies are plaintext by necessity (ADR-0062
+/// decision 4: a node must READ a grade in order to coarsen by it).
+///
+/// That is the whole point of carrying these separately from `threads`: the per-thread
+/// breakdown comes from `medication_statement`, whose rows are opened through
+/// `cairn_clear_payload`, so a node with no DEK custody projects none of them and the
+/// report used to print "no medication threads on this chart" while honouring standing
+/// thread-scoped grades on those very threads (#383).
+pub struct StandingAssertion {
+    pub content_address: String,
+    pub subject_kind: String,
+    pub subject_id: Uuid,
+    pub grade: String,
+}
+
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
 /// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
@@ -79,6 +95,10 @@ pub struct ChartReport {
     /// Withdrawals this node holds that changed no grade — the §1.2 budget's subject.
     /// Empty on a healthy chart, so the renderer stays silent there.
     pub ineffective_withdrawals: Vec<IneffectiveWithdrawal>,
+    /// Every assertion standing on this chart, readable WITHOUT custody. Carried
+    /// unconditionally — the custody-blind case has a perfectly good registration and still
+    /// projects no threads, so gating this on the no-registration fallback would miss it.
+    pub standing: Vec<StandingAssertion>,
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
@@ -237,11 +257,34 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    // Read UNCONDITIONALLY, not only in the no-registration fallback: the custody-blind
+    // case has a perfectly good registration and still projects no threads.
+    let standing_rows = client
+        .query(
+            "SELECT encode(s.content_address, 'hex'), s.subject_kind, s.subject_id::text,
+                    s.grade
+               FROM cairn_sensitivity_standing($1::text::uuid) s
+              ORDER BY cairn_sensitivity_rank(s.grade) DESC, s.content_address ASC",
+            &[&patient_s],
+        )
+        .await?;
+    let standing = standing_rows
+        .into_iter()
+        .map(|row| StandingAssertion {
+            content_address: row.get(0),
+            subject_kind: row.get(1),
+            subject_id: Uuid::parse_str(&row.get::<_, String>(2))
+                .expect("subject_id column is a valid UUID"),
+            grade: row.get(3),
+        })
+        .collect();
+
     Ok(ChartReport {
         chart_grade,
         chart_content_address,
         chart_source,
         threads,
         ineffective_withdrawals,
+        standing,
     })
 }
