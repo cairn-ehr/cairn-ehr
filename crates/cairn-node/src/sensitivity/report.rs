@@ -69,6 +69,18 @@ pub struct DeferredSensitivityEvent {
     pub adjudication_error: Option<String>,
 }
 
+/// One event on this chart whose emitted safety rung was FINER than the standing grade
+/// licensed (#405 part 2, recorded by db/049 at the LOCAL door only).
+///
+/// A LEDGER, not a view — ADR-0064 decision 3: flag what cannot self-heal, view what can.
+/// A published byte can never improve, so unlike the withdrawal worklist this row will
+/// never stop being true.
+pub struct SafetyOverclaim {
+    pub content_address: String,
+    pub emitted_rung: String,
+    pub licensed_rung: String,
+}
+
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
 /// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
@@ -119,6 +131,9 @@ pub struct ChartReport {
     /// Sensitivity events admitted but not interpreted here — grades this node is failing
     /// to apply, invisible to `cairn_effective_sensitivity` by construction.
     pub deferred: Vec<DeferredSensitivityEvent>,
+    /// Safety rungs published finer than the grade licensed. An EMPTY vec is not a clean
+    /// bill — see `render`'s footer and #414.
+    pub overclaims: Vec<SafetyOverclaim>,
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
@@ -319,6 +334,24 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    let overclaim_rows = client
+        .query(
+            "SELECT encode(content_address, 'hex'), emitted_rung, licensed_rung
+               FROM safety_overclaim_flag
+              WHERE patient_id = $1::text::uuid
+              ORDER BY recorded_at",
+            &[&patient_s],
+        )
+        .await?;
+    let overclaims = overclaim_rows
+        .into_iter()
+        .map(|row| SafetyOverclaim {
+            content_address: row.get(0),
+            emitted_rung: row.get(1),
+            licensed_rung: row.get(2),
+        })
+        .collect();
+
     Ok(ChartReport {
         chart_grade,
         chart_content_address,
@@ -327,5 +360,6 @@ pub async fn chart_sensitivity(
         ineffective_withdrawals,
         standing,
         deferred,
+        overclaims,
     })
 }

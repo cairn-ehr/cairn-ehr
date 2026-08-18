@@ -7,7 +7,9 @@
 //! which is why nobody ever did. Keeping the wording here makes each claim a unit test.
 //!
 //! Precedent: `crate::safety::render_safety_line`, which is pure for the same reason.
-use super::report::{ChartReport, DeferredSensitivityEvent, IneffectiveWithdrawal};
+use super::report::{
+    ChartReport, DeferredSensitivityEvent, IneffectiveWithdrawal, SafetyOverclaim,
+};
 
 /// Why a worklist row is on the worklist, in words. Pure and TOTAL — every input has an
 /// output, including one this build has never seen.
@@ -81,6 +83,25 @@ fn render_deferred(ds: &[DeferredSensitivityEvent]) -> Vec<String> {
     out
 }
 
+/// The warning block for recorded safety overclaims.
+fn render_overclaims(os: &[SafetyOverclaim]) -> Vec<String> {
+    if os.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "⚠ {} safety overclaim(s) recorded on this chart — a rung finer than the grade \
+         licensed was published, and a published byte cannot be clawed back",
+        os.len()
+    )];
+    for o in os {
+        out.push(format!(
+            "    event={}  emitted={}  licensed={}",
+            o.content_address, o.emitted_rung, o.licensed_rung
+        ));
+    }
+    out
+}
+
 /// Render one chart's §5.9 report as the lines an operator reads, in order.
 ///
 /// The chart grade comes FIRST and keeps its exact wire shape — see the contract test. The
@@ -107,6 +128,7 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
     ));
     out.extend(render_ineffective_withdrawals(&r.ineffective_withdrawals));
     out.extend(render_deferred(&r.deferred));
+    out.extend(render_overclaims(&r.overclaims));
     out.extend(render_threads(r));
     // DECLARED, NOT IMPLIED. ADR-0064's Known limitations: a withdrawal mis-stamped with
     // another chart's patient_id and left unverified finds nothing in
@@ -117,6 +139,13 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
         "(this list is not complete: a withdrawal mis-stamped with another chart's \
          patient_id and left unverified is permanently inert AND invisible here — \
          ADR-0064, Known limitations)"
+            .to_string(),
+    );
+    // Same posture main.rs already takes for an empty safety_class_map: an empty result
+    // must never read as "checked, nothing found" (principle 4).
+    out.push(
+        "(an empty overclaim list is NOT a clean bill: the ledger's completeness rests on \
+         a RAISE WARNING nothing consumes — #414)"
             .to_string(),
     );
     out.push(
@@ -202,6 +231,7 @@ mod tests {
             ineffective_withdrawals: vec![],
             standing: vec![],
             deferred: vec![],
+            overclaims: vec![],
         }
     }
 
@@ -361,6 +391,36 @@ mod tests {
         assert!(
             text.contains("not yet re-adjudicated"),
             "the null-error wording: {text}"
+        );
+    }
+
+    #[test]
+    fn an_overclaim_names_both_rungs() {
+        let mut r = healthy();
+        r.overclaims = vec![SafetyOverclaim {
+            content_address: "dead".into(),
+            emitted_rung: "precise".into(),
+            licensed_rung: "existence".into(),
+        }];
+        let text = render_chart_report("C", &r).join("\n");
+        assert!(text.contains("overclaim"), "{text}");
+        assert!(text.contains("precise"), "{text}");
+        assert!(text.contains("existence"), "{text}");
+        assert!(text.contains("dead"), "the event must be nameable: {text}");
+    }
+
+    #[test]
+    fn an_empty_overclaim_ledger_is_never_a_clean_bill() {
+        // #414: the ledger's completeness rests on a RAISE WARNING nothing consumes, so an
+        // empty ledger is indistinguishable from a broken one. Same shape as
+        // safety_class_map shipping empty, where main.rs already refuses to say "no safety
+        // signals" — an empty result must never read as "checked, nothing found"
+        // (principle 4: an imprecise near-truth beats a precise untruth).
+        let text = render_chart_report("C", &healthy()).join("\n");
+        assert!(text.contains("#414"), "the disclaimer must cite its issue: {text}");
+        assert!(
+            !text.contains("no overclaims"),
+            "an empty ledger must not read as a clean bill: {text}"
         );
     }
 }
