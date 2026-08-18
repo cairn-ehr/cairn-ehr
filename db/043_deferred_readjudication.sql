@@ -290,4 +290,50 @@ $$;
 -- runtime role must not be able to promote anything.
 REVOKE EXECUTE ON FUNCTION cairn_readjudicate_deferred() FROM PUBLIC;
 
+-- ---------------------------------------------------------------------------
+-- #388 part 2 — this chart's deferred sensitivity events, for the operator surface.
+--
+-- WHY A DEFINER RATHER THAN A GRANT. event_deferred is GRANTed to cairn_node, not to
+-- cairn_agent. Reading it from the runtime role works TODAY only because that login role
+-- happens to be a cairn_node member — which is exactly #425's finding, and building a new
+-- read path on it would bake a known-unreliable membership into the surface. The
+-- alternative, granting cairn_agent the whole table, widens the role node-wide to answer a
+-- question that is about one chart. So: a definer scoped to one patient, the precedent
+-- db/049 set when cairn_event_safety became one for the same reason.
+--
+-- pg_temp LAST (#426): this reads event_log and event_deferred UNQUALIFIED, which is
+-- precisely the shape a caller could blind with a temp table of the same name — and a
+-- blinded read here returns ZERO ROWS, which the surface would render as "nothing is
+-- deferred". A silent zero is the failure this whole slice exists to end.
+CREATE OR REPLACE FUNCTION cairn_patient_deferred_sensitivity(p_patient uuid)
+RETURNS TABLE (event_id uuid, event_type text, admitted_at timestamptz,
+               adjudication_error text)
+LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+    SELECT d.event_id, d.event_type, d.admitted_at, d.adjudication_error
+    FROM event_deferred d
+    JOIN event_log e ON e.event_id = d.event_id
+    WHERE e.patient_id = p_patient
+      AND d.event_type LIKE 'sensitivity.%'
+    ORDER BY d.admitted_at;
+$$;
+
+-- PUBLIC's default EXECUTE would make this callable by a below-the-floor adversary, so it
+-- is revoked on the way in rather than retrofitted (#382's posture).
+--
+-- GRANTED TO BOTH GROUP ROLES, DELIBERATELY. cairn_agent is NOT "the runtime role" — an
+-- earlier draft of this comment said so and was wrong, contradicting this file's own note
+-- 30 lines above. The only role-membership grant anywhere in the tree is
+-- `GRANT cairn_node TO <login role>` (crates/cairn-node/src/db.rs), so a runtime
+-- provisioned exactly as documented is a cairn_node member and NOT a cairn_agent member.
+-- Granting cairn_agent alone would have made this definer unreachable by the very role it
+-- was written for — and unreachable is worse than the direct read it replaced, since
+-- event_deferred IS granted to cairn_node. Both, until #425 settles which role the runtime
+-- should actually be. (The surrounding reads are cairn_agent-only, so this does not by
+-- itself make the report reachable; it merely stops this function being the new blocker.)
+REVOKE EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) TO cairn_node;
+
 COMMIT;

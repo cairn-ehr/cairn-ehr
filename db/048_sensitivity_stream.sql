@@ -942,7 +942,14 @@ WITH judged AS (
 )
 SELECT content_address, event_id, patient_id, withdraws,
        CASE WHEN verdict = 'unverified' THEN 'inert' ELSE 'stranger-attested' END AS reason,
-       node_origin, rationale
+       node_origin, rationale,
+       -- #421: the accountable actor — the fact the row exists to report. The CTE has
+       -- always computed it (the vouched R1 attester, or the withdrawal's own actor for
+       -- the R2 self case); dropping it here meant a consumer could say a withdrawal was
+       -- ineffective but never who authored it. APPENDED, never inserted mid-list:
+       -- CREATE OR REPLACE VIEW permits adding a trailing column and refuses a reorder,
+       -- so appending is the only shape that survives migration replay on a live database.
+       responsible_actor_id
   FROM judged
  WHERE (verdict = 'unverified'
         AND (target_content_address IS NULL
@@ -958,6 +965,48 @@ SELECT content_address, event_id, patient_id, withdraws,
                             AND (other.hlc_wall, other.hlc_counter)
                                 <= (judged.hlc_wall, judged.hlc_counter)));
 GRANT SELECT ON sensitivity_withdrawal_worklist TO cairn_agent;
+
+-- ---------------------------------------------------------------------------
+-- 11b. HOW MANY MEDICATION EVENTS ON THIS CHART THIS NODE CANNOT OPEN.
+--
+-- The §5.9 operator report lists one line per medication thread it can project. That list
+-- is silently incomplete on any node holding sealed bodies without the DEK:
+-- `medication_statement_apply` opens its payload through `cairn_clear_payload` and RETURNs
+-- early on NULL (db/031), so an unopenable event projects no row and the thread simply is
+-- not there.
+--
+-- The report used to INFER that state from "no threads projected AND some assertion
+-- stands". That proxy is wrong in both directions — grading is opt-in, so most
+-- custody-blind charts carry no standing assertion at all and read as genuinely empty
+-- (#383 surviving inside its own fix) — and it says nothing at all about PARTIAL custody,
+-- where a plausible truncated list is the most dangerous output of the three.
+--
+-- It does not need inferring. `event_log` keeps the sealed row whether or not this node
+-- can read it; `event_clear` is exactly the set it can. The difference IS the fact.
+--
+-- A DEFINER, because `event_clear` is `REVOKE ALL ... FROM cairn_agent` at db/005 — the
+-- clear shadow is deliberately not readable by the runtime role, and this must not widen
+-- that. It returns a COUNT, never a body, so it discloses only how much this node cannot
+-- see, which is precisely the fact the operator is owed.
+--
+-- pg_temp LAST (#426): reads event_log and event_clear UNQUALIFIED, and a blinded read
+-- here would return zero — rendering as "custody is complete", the reassuring answer.
+CREATE OR REPLACE FUNCTION cairn_patient_sealed_medication_without_custody(p_patient uuid)
+RETURNS bigint
+LANGUAGE sql STABLE
+SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+    SELECT count(*)
+      FROM event_log e
+     WHERE e.patient_id = p_patient
+       AND e.event_type LIKE 'clinical.medication%'
+       AND e.sealed
+       AND NOT EXISTS (SELECT 1 FROM event_clear c WHERE c.event_id = e.event_id);
+$$;
+
+REVOKE EXECUTE ON FUNCTION cairn_patient_sealed_medication_without_custody(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_patient_sealed_medication_without_custody(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_patient_sealed_medication_without_custody(uuid) TO cairn_node;
 
 -- ---------------------------------------------------------------------------
 -- 12. The ceremony. Called from db/005 (LOCAL authoring) and from NOWHERE ELSE.

@@ -34,6 +34,15 @@ use cairn_event::sensitivity::{
 use cairn_event::{event_address, sign, sign_attestation, ClockGrade, EventBody, SigningKey};
 use uuid::Uuid;
 
+pub mod render;
+pub mod report;
+
+// Re-exported so `cairn_node::sensitivity::chart_sensitivity` and
+// `cairn_node::sensitivity::ChartReport` keep working unchanged at every call site. The
+// module split is an internal organisation decision; it is not an API change, and making
+// callers move would turn a mechanical refactor into a reviewable one for no gain.
+pub use report::{chart_sensitivity, ChartReport, ThreadGrade};
+
 /// Map the `subject_kind` `cairn_effective_sensitivity` returns to the phrase a human
 /// reads in a report. Pure and total (every input has an output, including one this
 /// version has never seen) — the ONE place this mapping is allowed to exist, so a
@@ -65,59 +74,6 @@ pub fn subject_kind_phrase(kind: &str) -> &'static str {
         "none" => "none",
         _ => "an unrecognised scope (read chart-wide)",
     }
-}
-
-/// One chart's grades, as `patient-sensitivity` renders them.
-///
-/// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
-/// off the chart's own registration event (its birth act). Exactly one such event is read
-/// because `patient_registration_current` is a `SELECT DISTINCT ON (patient_id) ... ORDER BY
-/// ... ASC` view (db/045) — NOT because #345 forbids a second registration, which it does
-/// not: db/005 step 8b refuses only a chart whose FIRST event is not a registration, and
-/// db/045 deliberately retains later duplicates as the evidence that something went wrong.
-/// Reading the view rather than the raw table is therefore load-bearing, not stylistic.
-/// `identity.%` event types can never carry a medication thread, so resolving there can only
-/// ever pick up a chart-wide or a coarsening assertion, never a thread's.
-///
-/// `threads` is the per-thread breakdown: one entry per medication thread that has a
-/// LOCALLY-PROJECTED `medication_statement` row, each resolved through ITS OWN representative
-/// event — so a thread whose own grade is outranked by a chart-wide assertion reports the TRUE
-/// winning subject, not merely its own standing row (see
-/// `the_chart_report_lists_each_medication_thread_with_its_own_winning_subject` in
-/// `tests/sensitivity_ladder.rs`). It is NOT "every thread on the chart", and the difference
-/// is visible in ordinary operation: `medication_statement_apply` opens its payload through
-/// `cairn_clear_payload`, so a node holding no DEK custody projects no rows and reports NO
-/// threads at all, and an orphan thread carrying only a cessation or dose event (a state
-/// db/031 explicitly designs for) never appears either.
-///
-/// A NAMED struct for `threads`, not a bare tuple: `sensitivity-withdraw --withdraws`
-/// documents its argument as "the hex content_address, as `patient-sensitivity` prints
-/// it" — a promise that only holds if the report actually CARRIES that address, which a
-/// hand exercise of the CLI (running `patient-sensitivity` then trying to copy a value
-/// into `sensitivity-withdraw`) caught was missing from an earlier draft of this struct.
-/// Without it, withdrawing anything through the CLI alone would be impossible — an
-/// operator would have to fall back to raw SQL, defeating the point of this surface.
-pub struct ChartReport {
-    pub chart_grade: String,
-    /// Which subject won: "chart-wide" | "this thread" | "this event" | "none" (or the
-    /// unrecognised-scope phrase — see `subject_kind_phrase`).
-    pub chart_source: String,
-    /// Hex `content_address` of the assertion that produced `chart_grade`/`chart_source`
-    /// — feed this straight into `sensitivity-withdraw --withdraws`. `None` exactly when
-    /// `chart_source == "none"`: there is no assertion to name because nothing applies.
-    pub chart_content_address: Option<String>,
-    pub threads: Vec<ThreadGrade>,
-}
-
-/// One medication thread's effective grade, as `chart_sensitivity` reports it.
-pub struct ThreadGrade {
-    pub thread_id: Uuid,
-    pub grade: String,
-    /// Which subject won — see `ChartReport::chart_source`.
-    pub source: String,
-    /// Hex `content_address` of the winning assertion, or `None` when nothing applies
-    /// (the thread reads "routine" / "none" — there is nothing to withdraw).
-    pub content_address: Option<String>,
 }
 
 /// Author a `sensitivity.grade.asserted` event: raise (or re-state) a confidentiality
@@ -253,134 +209,6 @@ pub async fn withdraw_sensitivity(
         )
         .await?;
     Ok(event_id)
-}
-
-/// Read `patient`'s current §5.9 sensitivity report: the chart-wide grade plus a
-/// per-medication-thread breakdown, each naming the subject that actually won. No key,
-/// no HLC tick — this is a pure read over the existing db/048 projections.
-pub async fn chart_sensitivity(
-    client: &mut tokio_postgres::Client,
-    patient: Uuid,
-) -> anyhow::Result<ChartReport> {
-    let patient_s = patient.to_string();
-
-    // The chart-wide reading, resolved off the chart's own registration event (its birth
-    // act; `patient_registration_current` is the DISTINCT ON view, so at most one row even
-    // if a duplicate registration exists). Reusing `cairn_effective_sensitivity` here,
-    // rather than re-deriving "which standing row wins" in Rust, means this report can
-    // never silently disagree with the read model every other caller of that function
-    // uses (db/048 section 11's own "ONE definition" argument — the same reason
-    // `register.rs` never hand-rolls the search-attestation shape it borrows instead).
-    // `encode(ces.content_address, 'hex')` on a SQL NULL yields NULL, which
-    // tokio-postgres reads straight into `Option<String>` — exactly the "nothing to
-    // withdraw" signal db/048 section 11 documents (content_address is left NULL, never
-    // coalesced to a sentinel, precisely when no assertion won).
-    let chart_row = client
-        .query_opt(
-            "SELECT ces.grade, ces.subject_kind, encode(ces.content_address, 'hex')
-               FROM patient_registration_current r
-               JOIN event_log e ON e.content_address = r.content_address,
-                    LATERAL cairn_effective_sensitivity(e.event_id) ces
-              WHERE r.patient_id = $1::text::uuid",
-            &[&patient_s],
-        )
-        .await?;
-    let (chart_grade, chart_source, chart_content_address) = match chart_row {
-        Some(row) => {
-            let kind: String = row.get(1);
-            (
-                row.get::<_, String>(0),
-                subject_kind_phrase(&kind).to_string(),
-                row.get::<_, Option<String>>(2),
-            )
-        }
-        // NO REGISTRATION ON FILE — REACHABLE IN ORDINARY FEDERATED OPERATION, and the
-        // fallback must not answer 'routine' here.
-        //
-        // An earlier draft called this unreachable "through the real doors" on the strength
-        // of #345. That is wrong: db/005 step 8b says in terms that the precedence rule is
-        // STRICT-DOOR ONLY and that apply_remote_event must never enforce it, because
-        // set-union sync has no ordering and a peer's event legitimately precedes the
-        // registration that licenses it. apply_remote_event IS a real door. So a chart whose
-        // events arrived by sync ahead of its registration lands here routinely.
-        //
-        // Answering 'routine' would then be a precise untruth in the disclosure direction:
-        // this node may be holding a standing chart-wide 'sequestered' assertion for exactly
-        // this patient while the report says nothing applies. The standing set needs no
-        // registration event to be readable, so read it directly and report the highest grade
-        // standing on the chart. `cairn_sensitivity_standing` is patient-scoped and the
-        // ordering mirrors section 11's own (rank first, content_address as the deterministic
-        // tie-break), so this can only ever agree with the read model or over-state it —
-        // never under-state it.
-        None => {
-            let standing = client
-                .query_opt(
-                    "SELECT s.grade, encode(s.content_address, 'hex')
-                       FROM cairn_sensitivity_standing($1::text::uuid) s
-                      ORDER BY cairn_sensitivity_rank(s.grade) DESC, s.content_address ASC
-                      LIMIT 1",
-                    &[&patient_s],
-                )
-                .await?;
-            match standing {
-                Some(row) => (
-                    row.get::<_, String>(0),
-                    // Not a specific subject: nothing anchors these assertions to a
-                    // registration event here, so the honest phrase is the coarsening one.
-                    subject_kind_phrase("coarsened").to_string(),
-                    row.get::<_, Option<String>>(1),
-                ),
-                // Genuinely nothing: no registration AND no standing assertion.
-                None => (
-                    "routine".to_string(),
-                    subject_kind_phrase("none").to_string(),
-                    None,
-                ),
-            }
-        }
-    };
-
-    // The per-thread breakdown: every medication thread with a locally-projected
-    // medication_statement row (see the struct doc — that is NOT every thread on the chart
-    // when this node holds no custody), each resolved through that table's CURRENT winning
-    // content_address — an `ON CONFLICT (medication_id) DO UPDATE` table (db/031), so this
-    // always names a real, locally-resolvable event whose `cairn_event_thread` will find
-    // exactly this thread (db/048 section 10's "what this resolves, and what it does not"
-    // note explains why that resolution is precise only for the CURRENT assert, which is
-    // exactly the row this join reads).
-    let thread_rows = client
-        .query(
-            "SELECT ms.medication_id::text, ces.grade, ces.subject_kind,
-                    encode(ces.content_address, 'hex')
-               FROM medication_statement ms
-               JOIN event_log e ON e.content_address = ms.content_address,
-                    LATERAL cairn_effective_sensitivity(e.event_id) ces
-              WHERE ms.patient_id = $1::text::uuid",
-            &[&patient_s],
-        )
-        .await?;
-    let threads = thread_rows
-        .into_iter()
-        .map(|row| {
-            let thread_id: String = row.get(0);
-            let grade: String = row.get(1);
-            let kind: String = row.get(2);
-            ThreadGrade {
-                thread_id: Uuid::parse_str(&thread_id)
-                    .expect("medication_id column is a valid UUID"),
-                grade,
-                source: subject_kind_phrase(&kind).to_string(),
-                content_address: row.get(3),
-            }
-        })
-        .collect();
-
-    Ok(ChartReport {
-        chart_grade,
-        chart_content_address,
-        chart_source,
-        threads,
-    })
 }
 
 #[cfg(test)]
