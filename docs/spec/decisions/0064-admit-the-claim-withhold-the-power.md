@@ -669,3 +669,22 @@ and the suites `crates/cairn-node/tests/claim_authority.rs`, `claim_authority_wo
 `db048_authority_gate_resolves_in_the_sync_subset`, with SQL mirrors in
 `db/tests/048_sensitivity_stream_test.sql` and `db/tests/049_safety_projection_test.sql`. No new
 migration file; `SCHEMA_GENERATION` unchanged.
+
+---
+
+> **Erratum E1 (2026-08-18) — factual; the decision is unchanged.** The §1.2 budget above —
+> *"why did this withdrawal not take effect?"* answerable in **one query with no raw SQL** — was
+> recorded as **owed, not met**, on the honest ground that no shipped surface read
+> `sensitivity_withdrawal_worklist`. **It is now met.** `cairn-node patient-sensitivity <chart>`
+> reports every ineffective withdrawal with its `reason`, its rationale and its accountable actor,
+> and the budget is pinned by a test
+> (`crates/cairn-node/tests/sensitivity_report.rs::an_un_attested_withdrawal_is_reported_as_inert_with_its_reason_and_rationale`)
+> rather than by a hand exercise, so it is met *and* kept met. `safety_overclaim_flag` gained its
+> first reader in the same slice, closing the other half of *"neither new surface has a shipped
+> reader"* under **Known limitations** (#388).
+>
+> Two things in that section are **unchanged and still true**. The permanently-invisible
+> cross-chart mis-targeted withdrawal is still invisible — it cannot be surfaced from the worklist,
+> so the report *declares* it in its own footer rather than implying a completeness it does not
+> have. And `responsible_actor_id`, which the worklist's `judged` CTE always computed but did not
+> project, is now projected (#421), which is what lets the report name who is accountable.
