@@ -319,10 +319,21 @@ AS $$
     ORDER BY d.admitted_at;
 $$;
 
--- PUBLIC's default EXECUTE would make this callable by a below-the-floor adversary; the
--- grant to the runtime role is deliberate, not inherited (#382's posture, applied on the
--- way in rather than retrofitted).
+-- PUBLIC's default EXECUTE would make this callable by a below-the-floor adversary, so it
+-- is revoked on the way in rather than retrofitted (#382's posture).
+--
+-- GRANTED TO BOTH GROUP ROLES, DELIBERATELY. cairn_agent is NOT "the runtime role" — an
+-- earlier draft of this comment said so and was wrong, contradicting this file's own note
+-- 30 lines above. The only role-membership grant anywhere in the tree is
+-- `GRANT cairn_node TO <login role>` (crates/cairn-node/src/db.rs), so a runtime
+-- provisioned exactly as documented is a cairn_node member and NOT a cairn_agent member.
+-- Granting cairn_agent alone would have made this definer unreachable by the very role it
+-- was written for — and unreachable is worse than the direct read it replaced, since
+-- event_deferred IS granted to cairn_node. Both, until #425 settles which role the runtime
+-- should actually be. (The surrounding reads are cairn_agent-only, so this does not by
+-- itself make the report reachable; it merely stops this function being the new blocker.)
 REVOKE EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_patient_deferred_sensitivity(uuid) TO cairn_node;
 
 COMMIT;

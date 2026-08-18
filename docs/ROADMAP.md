@@ -310,7 +310,7 @@ test, never `subject_kind <> 'none'` — the catch-all arm reports `'coarsened'`
 open-vocabulary value that collided with the sentinel. **Parts:** B #375 (**Slice 67**), C
 [#376](https://github.com/cairn-ehr/cairn-ehr/issues/376) (sequester — **unblocked by Slice 66**), D
 [#377](https://github.com/cairn-ehr/cairn-ehr/issues/377). **Follow-ons:** #374, #378, #379, #381, #382,
-#385, #386, #387 — #383 and #388 closed in Slice 69.
+#385, #386, #387, #434, #435 — #383 and #388 closed in Slice 69.
 
 **Slice 66 — custody follows admission (2026-08-11; closes
 [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231); ADR-0052 §4 deferred, erratum E1).** The
@@ -395,13 +395,14 @@ comparison, and comments asserting guarantees the fixtures never deliver. **Stil
 **Slice 69 — the §5.9 operator surface (2026-08-18; branch `feat/388-sensitivity-operator-surface`;
 closes [#388](https://github.com/cairn-ehr/cairn-ehr/issues/388),
 [#383](https://github.com/cairn-ehr/cairn-ehr/issues/383),
-[#421](https://github.com/cairn-ehr/cairn-ehr/issues/421); **ADR-0064 gains erratum E1**; no new ADR, no
-new migration, `SCHEMA_GENERATION` stays 49).** Three slices had shipped a §5.9 mechanism and no way to
+[#421](https://github.com/cairn-ehr/cairn-ehr/issues/421); **ADR-0064 gains errata E1/E2**; no new ADR,
+no new migration, `SCHEMA_GENERATION` stays 49).** Three slices had shipped a §5.9 mechanism and no way to
 look at it, so ADR-0064's §1.2 budget — *"why did this withdrawal not take effect?"* in one query with no
-raw SQL — stood **owed, not met**. `patient-sensitivity <chart>` now reports ineffective withdrawals
+raw SQL — stood **owed, not met**. `patient-sensitivity <chart>` now reports the withdrawal worklist
 (reason + rationale + accountable actor), deferred `sensitivity.%` events, the standing assertions a
-custody-thin node cannot anchor, and safety overclaims; `sensitivity-assert` reads back what actually
-took effect. **NAME, NEVER COUNT:** #388 part 3 and #383 both asked for a *count* of standing
+custody-thin node cannot anchor, safety overclaims, and the measured count of sealed medication events it
+holds without custody; `sensitivity-assert` reads back what actually took effect, resolved against the
+subject actually asserted. **NAME, NEVER COUNT:** #388 part 3 and #383 both asked for a *count* of standing
 assertions, and this deliberately diverges from both — ADR-0061 settled the shape, since a count cannot
 separate *custody-blind* from *genuinely empty*, the one question the line exists to answer. **A
 chart-scoped definer, not a table grant:** `event_deferred` is granted to `cairn_node`, not
@@ -412,8 +413,24 @@ dropped (#421); db/tests/048's column pin moved 7→8 deliberately. **The report
 contain** — ADR-0064's permanently-invisible cross-chart withdrawal and #414's unconsumed `RAISE
 WARNING` are both printed in the footer, asserted by tests over *empty* lists. `sensitivity.rs` split
 into `sensitivity/{mod,report,render}.rs` with all wording in pure, DB-free functions. **Expect #415 to
-fire on routine care now that it is visible.** Still open on this surface: **#387** (type design over
-these exact structs, deliberately deferred), **#414**, **#416**.
+fire on routine care now that it is visible.**
+
+**The PR #433 review landed a fix wave (2026-08-18).** Five review agents, every finding verified against
+the code before acting on it. Three findings generalise beyond this slice. **(a) A union view whose arms
+mean opposite things must never get one summary sentence:** the worklist's `stranger-attested` arm *did*
+take effect, and calling both arms *"did NOT take effect"* told the operator that a completed,
+unaccountable removal of protection had not happened — while the grade line above already showed it. One
+header per reason now; the type is `WithdrawalWorklistRow`, not `IneffectiveWithdrawal`. **(b) A proxy is
+not a fact:** custody-blindness was inferred from `standing.is_empty()` and is *exactly determinable*
+(`event_log` keeps the sealed row, `event_clear` does not), so db/048 §11b measures it — and the
+partial-custody case, which no proxy can see, now warns. **(c) Peer text is not display text:** every
+field copied verbatim from a peer's body is Debug-escaped, since a newline in `node_origin`/`event_type`/
+`grade` forged a line in a line-oriented report. Also fixed: the read-back no longer fails a landed write
+with `?`, resolves per subject kind, and both definers are granted to `cairn_node` as well as
+`cairn_agent` (granting only the latter had made the db/043 definer unreachable by the role the runtime
+actually connects as). Still open on this surface: **#387** (type design over these exact structs,
+deliberately deferred), **#414**, **#416**, **#434** (the deferred block's inclusion whitelist —
+declared in the footer, not fixed), **#435** (`sensitivity-withdraw` has no read-back).
 
 ## Phase 5 — Security & compliance core
 

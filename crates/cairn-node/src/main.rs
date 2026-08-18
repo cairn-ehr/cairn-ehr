@@ -626,10 +626,19 @@ enum Cmd {
     /// Report a chart's current §5.9 sensitivity grades: the chart-wide reading plus one
     /// line per medication thread, each naming WHICH subject actually won (chart-wide /
     /// this thread / this event / none) — never just the grade, because a grade with no
-    /// named source cannot be fixed. REPORTS ONLY: this slice withholds no content.
-    /// Enforcement needs custody narrowing (#232 part C), a later, separate slice — a
-    /// projection-layer filter with no floor beneath it is theatre a raw-SQL reader walks
-    /// straight past.
+    /// named source cannot be fixed.
+    ///
+    /// Also reports what would otherwise be invisible: withdrawals on the worklist (with
+    /// the reason, the rationale and the accountable actor, and stating for each group
+    /// whether it took effect), sensitivity events this node admitted but cannot apply,
+    /// recorded safety overclaims, standing assertions on a chart whose threads this node
+    /// cannot project, and how many sealed medication events it holds without the custody
+    /// to open them. It closes by DECLARING what it cannot contain — an empty list here is
+    /// never a clean bill of health.
+    ///
+    /// REPORTS ONLY: this slice withholds no content. Enforcement needs custody narrowing
+    /// (#232 part C), a later, separate slice — a projection-layer filter with no floor
+    /// beneath it is theatre a raw-SQL reader walks straight past.
     PatientSensitivity {
         #[arg(long)]
         patient: Uuid,
@@ -1085,6 +1094,83 @@ enum Cmd {
     /// (a missing overlay target arriving, for instance). A healthy node whose code
     /// covers everything it has received lists nothing.
     Deferred,
+}
+
+/// Read back what now stands over the subject an operator just asserted a grade over.
+///
+/// Returns `(standing grade, winning subject phrase, scope label)`. The scope label is what
+/// makes the readback honest: the three subject kinds resolve against three DIFFERENT
+/// things, and saying "now stands on this chart" after a thread-scoped assert would be a
+/// precise untruth about an assertion that did exactly what was asked of it.
+///
+/// * `Patient` — the chart-wide reading, off the chart's registration event.
+/// * `Event` — `cairn_effective_sensitivity` over the asserted event itself.
+/// * `Thread` — over the thread's currently projected head. A node holding no DEK custody
+///   has no such row, and this says so rather than reporting a grade for something it
+///   cannot see (principle 4: an imprecise near-truth beats a precise untruth).
+async fn sensitivity_assert_readback(
+    db: &mut tokio_postgres::Client,
+    patient: uuid::Uuid,
+    kind: cairn_event::sensitivity::SubjectKind,
+    subject_id: uuid::Uuid,
+) -> anyhow::Result<(String, String, &'static str)> {
+    use cairn_event::sensitivity::SubjectKind;
+    match kind {
+        SubjectKind::Patient => {
+            let after = cairn_node::sensitivity::chart_sensitivity(db, patient).await?;
+            Ok((after.chart_grade, after.chart_source, "this chart"))
+        }
+        SubjectKind::Event => {
+            let row = db
+                .query_one(
+                    "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
+                    &[&subject_id.to_string()],
+                )
+                .await?;
+            let kind_s: String = row.get(1);
+            Ok((
+                row.get::<_, String>(0),
+                cairn_node::sensitivity::subject_kind_phrase(&kind_s).to_string(),
+                "that event",
+            ))
+        }
+        SubjectKind::Thread => {
+            // The thread's current head is the row medication_statement holds for it — an
+            // ON CONFLICT DO UPDATE table (db/031), so this names a real, locally-resolvable
+            // event when this node can open the thread at all.
+            let head = db
+                .query_opt(
+                    "SELECT ces.grade, ces.subject_kind
+                       FROM medication_statement ms
+                       JOIN event_log e ON e.content_address = ms.content_address,
+                            LATERAL cairn_effective_sensitivity(e.event_id) ces
+                      WHERE ms.medication_id = $1::text::uuid",
+                    &[&subject_id.to_string()],
+                )
+                .await?;
+            match head {
+                Some(row) => {
+                    let kind_s: String = row.get(1);
+                    Ok((
+                        row.get::<_, String>(0),
+                        cairn_node::sensitivity::subject_kind_phrase(&kind_s).to_string(),
+                        "that thread",
+                    ))
+                }
+                // Not an error: the assertion landed and is perfectly valid. This node just
+                // cannot project the thread it grades, which is ordinary on a node without
+                // DEK custody. Say that, rather than reporting a grade for a thread this
+                // node cannot see or claiming the assertion did nothing.
+                None => Ok((
+                    "(not readable here)".to_string(),
+                    "no locally projected row for that thread — this node may hold no DEK \
+                     custody (#383)"
+                        .to_string(),
+                    "that thread",
+                )),
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -1841,15 +1927,34 @@ async fn main() -> anyhow::Result<()> {
             // so an assertion outranked by a standing chart-wide grade looked identical to
             // one that took effect. Re-read and report BOTH facts — the assertion may be
             // correctly outranked, which the operator needs to see rather than infer.
-            let after = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
-            println!(
-                "{}",
-                cairn_node::sensitivity::render::render_assert_readback(
-                    &grade,
-                    &after.chart_grade,
-                    &after.chart_source,
-                )
-            );
+            //
+            // RESOLVED AGAINST THE SUBJECT ACTUALLY ASSERTED. `chart_sensitivity` resolves
+            // the chart-wide reading off the chart's REGISTRATION event, and neither a
+            // thread-scoped nor an event-scoped assertion can ever apply to that event. An
+            // earlier draft reported the chart-wide grade for all three subject kinds, so a
+            // thread-scoped `restricted` on a routine chart read back as "routine now
+            // stands" — indistinguishable from "your assertion did nothing" for an
+            // assertion that fully took effect, and the natural remedy (re-assert
+            // chart-wide) is the blunt instrument db/048 warns against.
+            //
+            // NOT `?`. The event is already committed and its success line already printed.
+            // A read-back is decoration on a completed write; letting it set the exit code
+            // means a landed, signed, replicated assertion reports as a failure, and a
+            // retry appends a permanent duplicate. Same reasoning as `safety.rs`'s
+            // `advisory_or_least`: an advisory read may never fail a clinical write.
+            match sensitivity_assert_readback(&mut db, patient, kind, subject_id).await {
+                Ok((standing, subject, scope)) => println!(
+                    "{}",
+                    cairn_node::sensitivity::render::render_assert_readback(
+                        &grade, &standing, &subject, scope,
+                    )
+                ),
+                Err(e) => eprintln!(
+                    "WARNING: the assertion LANDED (event {event_id}) but reading back what \
+                     now stands failed, so the effective grade is unknown from here — run \
+                     `cairn-node patient-sensitivity {patient}`: {e:#}"
+                ),
+            }
         }
         Cmd::SensitivityWithdraw {
             patient,
@@ -1888,7 +1993,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::PatientSensitivity { patient } => {
             // A pure read — no signing key, no HLC tick, nothing authored.
-            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            //
+            // connect_and_load_schema, not connect: it re-adjudicates deferred events
+            // before returning, so the DEFERRED block below reports what this node can
+            // still not apply RIGHT NOW rather than what it could not apply before the last
+            // code-plane update. `Cmd::Deferred` already takes this door for the same
+            // reason; a confidentiality surface has less excuse than a listing to be stale.
+            let mut db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
             let report = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
             // Every line, including all wording, comes from the pure renderer — see
             // sensitivity/render.rs for why the sentences live there and not here. The

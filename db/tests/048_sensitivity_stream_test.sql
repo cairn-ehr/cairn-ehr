@@ -470,3 +470,48 @@ BEGIN
     SELECT cairn_thread_patient('00000000-0000-0000-0000-0000000000ff'::uuid) INTO v;
     ASSERT v IS NULL, 'an unknown thread must read as "cannot tell", not raise';
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- Section 11b: the custody discriminator is a load-bearing DEFINER.
+--
+-- The Rust side (crates/cairn-node/tests/sensitivity_report.rs) pins the COUNT it returns.
+-- This pins the shape that makes it safe to call at all: event_clear is REVOKE ALL ... FROM
+-- cairn_agent (db/005), so an invoker-rights function here would fail for the runtime role
+-- and a missing pg_temp term would let any caller blind it to zero — which this surface
+-- renders as "custody is complete", the reassuring answer.
+DO $$
+DECLARE
+    v_secdef bool;
+    v_cfg    text;
+BEGIN
+    SELECT p.prosecdef, COALESCE(array_to_string(p.proconfig, ','), '')
+      INTO v_secdef, v_cfg
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname = 'cairn_patient_sealed_medication_without_custody';
+
+    IF v_secdef IS NULL THEN
+        RAISE EXCEPTION 'cairn_patient_sealed_medication_without_custody is missing — the operator surface would infer custody from a proxy again (#383)';
+    END IF;
+    IF NOT v_secdef THEN
+        RAISE EXCEPTION 'cairn_patient_sealed_medication_without_custody is not SECURITY DEFINER — it reads event_clear, which cairn_agent may not read';
+    END IF;
+    IF v_cfg <> 'search_path=public, pg_temp' THEN
+        RAISE EXCEPTION 'cairn_patient_sealed_medication_without_custody must pin exactly `public, pg_temp` (#426); got %', v_cfg;
+    END IF;
+
+    -- Both group roles: the runtime is provisioned as a cairn_node member, never a
+    -- cairn_agent member (#425), so granting only one of them makes it unreachable.
+    IF NOT has_function_privilege('cairn_agent',
+            'cairn_patient_sealed_medication_without_custody(uuid)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'cairn_agent cannot execute cairn_patient_sealed_medication_without_custody';
+    END IF;
+    IF NOT has_function_privilege('cairn_node',
+            'cairn_patient_sealed_medication_without_custody(uuid)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'cairn_node cannot execute cairn_patient_sealed_medication_without_custody — this is the #425 shape that made the db/043 definer unreachable';
+    END IF;
+    IF has_function_privilege('public',
+            'cairn_patient_sealed_medication_without_custody(uuid)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'PUBLIC can execute cairn_patient_sealed_medication_without_custody — a below-the-floor adversary could count a chart''s sealed events';
+    END IF;
+END $$;

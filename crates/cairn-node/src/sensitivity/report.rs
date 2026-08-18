@@ -1,8 +1,9 @@
 //! §5.9 — the chart sensitivity READ model.
 //!
 //! Split out of `sensitivity/mod.rs` (which keeps the authoring verbs) when the operator
-//! surface grew four more reads. This is the ONLY file in the module that talks to a
-//! database: the wording an operator actually reads lives in `render.rs` and is pure, so
+//! surface grew more reads. This is the ONLY file in the module that READS from a database
+//! (`mod.rs` keeps the authoring verbs and writes through `submit_event`): the wording an
+//! operator actually reads lives in `render.rs` and is pure, so
 //! the honesty claims this surface makes are unit-testable without a cluster. That split
 //! is the point of the file boundary, not merely a line-count fix.
 //!
@@ -13,13 +14,22 @@
 use super::subject_kind_phrase;
 use uuid::Uuid;
 
-/// One withdrawal this node admitted that did NOT lower any grade, as
-/// `sensitivity_withdrawal_worklist` reports it (db/048 section 11).
+/// One row of `sensitivity_withdrawal_worklist` (db/048 section 11) — a withdrawal this
+/// node admitted that a human should look at.
 ///
-/// A withdrawal lands, converges and stays re-assertable even when it has no effect —
-/// ADR-0064 gates EFFECT, never admission, so nothing here is a refusal. That is exactly
-/// why it needs a surface: the record contains an act whose author believes it worked.
-pub struct IneffectiveWithdrawal {
+/// NOT "a withdrawal that failed". The view has TWO DISJOINT ARMS and only one of them is
+/// ineffective, which an earlier name (`IneffectiveWithdrawal`) and header got wrong:
+///   * `inert` — `verdict = 'unverified'`. Nobody this node can hold responsible stands
+///     behind it, so the grade did NOT move.
+///   * `stranger-attested` — `verdict <> 'unverified'`. It cleared the bar and the grade
+///     DID move; db/048 says so in terms ("as SALIENCE it blocks nothing and delays
+///     nothing — the withdrawal has already taken effect"). It is on the worklist because
+///     protection was removed by someone with no prior presence on this chart, which is a
+///     thing to see, not a failure to fix.
+///
+/// A withdrawal lands, converges and stays re-assertable either way — ADR-0064 gates
+/// EFFECT, never admission, so nothing here is a refusal.
+pub struct WithdrawalWorklistRow {
     /// Hex `content_address` of the assertion this withdrawal targeted.
     pub withdraws: String,
     /// `inert` (no accountable human stands behind the claim) or `stranger-attested`
@@ -121,9 +131,10 @@ pub struct ChartReport {
     /// `chart_source == "none"`: there is no assertion to name because nothing applies.
     pub chart_content_address: Option<String>,
     pub threads: Vec<ThreadGrade>,
-    /// Withdrawals this node holds that changed no grade — the §1.2 budget's subject.
-    /// Empty on a healthy chart, so the renderer stays silent there.
-    pub ineffective_withdrawals: Vec<IneffectiveWithdrawal>,
+    /// Withdrawals this node holds that a human should look at — the §1.2 budget's
+    /// subject. Empty on a healthy chart, so the renderer stays silent there. See
+    /// `WithdrawalWorklistRow`: only the `inert` arm actually failed to take effect.
+    pub withdrawals_needing_review: Vec<WithdrawalWorklistRow>,
     /// Every assertion standing on this chart, readable WITHOUT custody. Carried
     /// unconditionally — the custody-blind case has a perfectly good registration and still
     /// projects no threads, so gating this on the no-registration fallback would miss it.
@@ -134,6 +145,20 @@ pub struct ChartReport {
     /// Safety rungs published finer than the grade licensed. An EMPTY vec is not a clean
     /// bill — see `render`'s footer and #414.
     pub overclaims: Vec<SafetyOverclaim>,
+    /// How many sealed medication events on this chart this node holds but cannot OPEN.
+    ///
+    /// The custody fact, MEASURED rather than inferred. `threads` being empty was
+    /// previously read as "custody-blind" via the proxy `standing.is_empty()`, which is
+    /// wrong in both directions: grading is opt-in, so most custody-blind charts carry no
+    /// standing assertion at all and were reported as genuinely empty (#383 surviving in
+    /// its own fix), and a chart with no medications but one standing assertion drew a
+    /// custody warning it had not earned. Worse, a node holding SOME custody projected a
+    /// plausible truncated list and warned about nothing.
+    ///
+    /// `event_log` keeps the sealed row regardless of custody while `event_clear` does
+    /// not, so this is exactly determinable. `> 0` means the thread list above is
+    /// incomplete, whatever its length.
+    pub sealed_medication_events_without_custody: usize,
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
@@ -147,9 +172,13 @@ pub struct ThreadGrade {
     pub content_address: Option<String>,
 }
 
-/// Read `patient`'s current §5.9 sensitivity report: the chart-wide grade plus a
-/// per-medication-thread breakdown, each naming the subject that actually won. No key,
-/// no HLC tick — this is a pure read over the existing db/048 projections.
+/// Read `patient`'s current §5.9 sensitivity report. No key, no HLC tick, nothing authored
+/// — every query below is a read.
+///
+/// SIX READS, THREE MIGRATIONS. The chart-wide grade, the per-thread breakdown, the
+/// withdrawal worklist and the standing set come from db/048's projections; the deferred
+/// list comes from db/043's chart-scoped definer; the overclaim ledger comes from db/049.
+/// Anyone reasoning about grants or migration ordering from this doc needs all three.
 pub async fn chart_sensitivity(
     client: &mut tokio_postgres::Client,
     patient: Uuid,
@@ -281,9 +310,9 @@ pub async fn chart_sensitivity(
             &[&patient_s],
         )
         .await?;
-    let ineffective_withdrawals = withdrawal_rows
+    let withdrawals_needing_review = withdrawal_rows
         .into_iter()
-        .map(|row| IneffectiveWithdrawal {
+        .map(|row| WithdrawalWorklistRow {
             withdraws: row.get(0),
             reason: row.get(1),
             node_origin: row.get(2),
@@ -334,12 +363,18 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    // The one PERMANENT list on this report. Every other block describes a state that can
+    // still improve — a withdrawal can be re-asserted, a deferred event re-adjudicated, a
+    // DEK granted. A published byte cannot be clawed back, so an overclaim row never stops
+    // being true (ADR-0064 decision 3: flag what cannot self-heal, view what can). Ordered
+    // with content_address as the tie-break because recorded_at defaults from
+    // clock_timestamp() and two rows written in one transaction can share it.
     let overclaim_rows = client
         .query(
             "SELECT encode(content_address, 'hex'), emitted_rung, licensed_rung
                FROM safety_overclaim_flag
               WHERE patient_id = $1::text::uuid
-              ORDER BY recorded_at",
+              ORDER BY recorded_at, content_address",
             &[&patient_s],
         )
         .await?;
@@ -352,14 +387,27 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    // The custody fact, measured not inferred (db/048 section 11b). A definer, because
+    // event_clear is deliberately unreadable by the runtime role; it returns a count, never
+    // a body. `> 0` means the thread list above is incomplete WHATEVER its length — the
+    // partial-custody case, which no proxy over `threads`/`standing` can detect at all.
+    let unopenable: i64 = client
+        .query_one(
+            "SELECT cairn_patient_sealed_medication_without_custody($1::text::uuid)",
+            &[&patient_s],
+        )
+        .await?
+        .get(0);
+
     Ok(ChartReport {
         chart_grade,
         chart_content_address,
         chart_source,
         threads,
-        ineffective_withdrawals,
+        withdrawals_needing_review,
         standing,
         deferred,
         overclaims,
+        sealed_medication_events_without_custody: unopenable as usize,
     })
 }
