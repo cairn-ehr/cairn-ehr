@@ -1876,39 +1876,16 @@ async fn main() -> anyhow::Result<()> {
             // A pure read — no signing key, no HLC tick, nothing authored.
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let report = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
-            // The printed hex content_address is what `sensitivity-withdraw --withdraws`
-            // takes — this line is the one place an operator can get that value without
-            // dropping to raw SQL, so `chart_content_address`/`ThreadGrade::content_address`
-            // are surfaced here, not just the grade and its source.
-            println!(
-                "chart {patient}: {} (winning subject: {}{})",
-                report.chart_grade,
-                report.chart_source,
-                match &report.chart_content_address {
-                    Some(ca) => format!(", withdraws={ca}"),
-                    None => String::new(),
-                }
-            );
-            if report.threads.is_empty() {
-                println!("  no medication threads on this chart");
-            } else {
-                for t in &report.threads {
-                    println!(
-                        "  thread {}: {} (winning subject: {}{})",
-                        t.thread_id,
-                        t.grade,
-                        t.source,
-                        match &t.content_address {
-                            Some(ca) => format!(", withdraws={ca}"),
-                            None => String::new(),
-                        }
-                    );
-                }
+            // Every line, including all wording, comes from the pure renderer — see
+            // sensitivity/render.rs for why the sentences live there and not here. The
+            // printed hex content_address is what `sensitivity-withdraw --withdraws` takes,
+            // and this is still the one place an operator gets it without raw SQL.
+            for line in cairn_node::sensitivity::render::render_chart_report(
+                &patient.to_string(),
+                &report,
+            ) {
+                println!("{line}");
             }
-            println!(
-                "(report only — nothing is withheld; enforcement needs custody narrowing, \
-                 #232 part C)"
-            );
         }
         Cmd::PatientSafety { patient } => {
             // A pure read — no signing key, no HLC tick, nothing authored.
