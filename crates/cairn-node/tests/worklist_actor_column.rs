@@ -15,7 +15,9 @@ async fn the_worklist_projects_the_accountable_actor() {
         return; // self-skips when CAIRN_TEST_PG is unset, like every suite here
     };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
 
     // Ask the catalogue, not a row: a row-shaped assertion could be satisfied by accident
     // by a projection default, and this is a CONTRACT about the view's shape.

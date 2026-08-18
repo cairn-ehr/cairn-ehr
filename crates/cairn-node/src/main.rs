@@ -1894,10 +1894,9 @@ async fn main() -> anyhow::Result<()> {
             // sensitivity/render.rs for why the sentences live there and not here. The
             // printed hex content_address is what `sensitivity-withdraw --withdraws` takes,
             // and this is still the one place an operator gets it without raw SQL.
-            for line in cairn_node::sensitivity::render::render_chart_report(
-                &patient.to_string(),
-                &report,
-            ) {
+            for line in
+                cairn_node::sensitivity::render::render_chart_report(&patient.to_string(), &report)
+            {
                 println!("{line}");
             }
         }

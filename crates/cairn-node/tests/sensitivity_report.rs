@@ -21,7 +21,9 @@ use uuid::Uuid;
 async fn an_un_attested_withdrawal_is_reported_as_inert_with_its_reason_and_rationale() {
     let Some(base) = cs() else { return };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let mut c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
 
     let p = Uuid::now_v7();
@@ -67,7 +69,9 @@ async fn an_un_attested_withdrawal_is_reported_as_inert_with_its_reason_and_rati
 async fn an_attested_stranger_s_withdrawal_is_reported_with_its_own_reason_and_actor() {
     let Some(base) = cs() else { return };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let mut c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
     let (sk_h, kid_h) = enroll_human(&c).await;
 
@@ -110,7 +114,9 @@ async fn an_attested_stranger_s_withdrawal_is_reported_with_its_own_reason_and_a
 async fn a_chart_with_standing_assertions_and_no_projected_threads_still_names_them() {
     let Some(base) = cs() else { return };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let mut c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let mut c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
     let (sk, kid) = setup(&c, &["sensitivity_assertion", "sensitivity_withdrawal"]).await;
 
     // Authoring no medication events at all is the CHEAP stand-in for a custody-thin node:
@@ -131,7 +137,11 @@ async fn a_chart_with_standing_assertions_and_no_projected_threads_still_names_t
     assert!(
         report.standing.iter().any(|s| s.content_address == ca),
         "the standing assertion must be NAMED, not merely counted (#383): {:?}",
-        report.standing.iter().map(|s| &s.content_address).collect::<Vec<_>>()
+        report
+            .standing
+            .iter()
+            .map(|s| &s.content_address)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -142,7 +152,9 @@ async fn a_chart_with_standing_assertions_and_no_projected_threads_still_names_t
 async fn the_deferred_reader_is_a_load_bearing_definer_not_decoration() {
     let Some(base) = cs() else { return };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
-    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base)
+        .await
+        .unwrap();
 
     // 1. cairn_agent genuinely cannot read the table. This is the fact that makes the
     //    definer necessary — and it is #425's territory: the runtime login role reaches it
@@ -191,5 +203,8 @@ async fn the_deferred_reader_is_a_load_bearing_definer_not_decoration() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(n, 0, "a chart with no deferred sensitivity events must report none");
+    assert_eq!(
+        n, 0,
+        "a chart with no deferred sensitivity events must report none"
+    );
 }

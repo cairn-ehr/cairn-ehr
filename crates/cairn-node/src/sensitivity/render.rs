@@ -54,7 +54,10 @@ fn render_ineffective_withdrawals(ws: &[IneffectiveWithdrawal]) -> Vec<String> {
             w.node_origin
         ));
         out.push(format!("      rationale: {:?}", w.rationale));
-        out.push(format!("      → {}", withdrawal_reason_explanation(&w.reason)));
+        out.push(format!(
+            "      → {}",
+            withdrawal_reason_explanation(&w.reason)
+        ));
     }
     out
 }
@@ -304,8 +307,14 @@ mod tests {
         let text = render_chart_report("C", &r).join("\n");
         assert!(text.contains("did NOT take effect"), "{text}");
         assert!(text.contains("inert"), "{text}");
-        assert!(text.contains("consent withdrawn by patient"), "the rationale: {text}");
-        assert!(text.contains("beef"), "the accountable actor (#421): {text}");
+        assert!(
+            text.contains("consent withdrawn by patient"),
+            "the rationale: {text}"
+        );
+        assert!(
+            text.contains("beef"),
+            "the accountable actor (#421): {text}"
+        );
         assert!(text.contains("withdraws=a3f"), "the target address: {text}");
     }
 
@@ -358,7 +367,10 @@ mod tests {
         let mut r = healthy();
         r.threads = vec![];
         let text = render_chart_report("C", &r).join("\n");
-        assert!(text.contains("no medication threads and no standing"), "{text}");
+        assert!(
+            text.contains("no medication threads and no standing"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -378,8 +390,14 @@ mod tests {
         }];
         let text = render_chart_report("C", &r).join("\n");
         assert!(text.contains("c0ffee"), "the address must be named: {text}");
-        assert!(text.contains("restricted"), "the grade must be named: {text}");
-        assert!(text.contains("no DEK custody"), "the custody explanation: {text}");
+        assert!(
+            text.contains("restricted"),
+            "the grade must be named: {text}"
+        );
+        assert!(
+            text.contains("no DEK custody"),
+            "the custody explanation: {text}"
+        );
         assert!(
             !text.contains("no medication threads on this chart"),
             "the old precise untruth must be gone: {text}"
@@ -432,7 +450,10 @@ mod tests {
         // signals" — an empty result must never read as "checked, nothing found"
         // (principle 4: an imprecise near-truth beats a precise untruth).
         let text = render_chart_report("C", &healthy()).join("\n");
-        assert!(text.contains("#414"), "the disclaimer must cite its issue: {text}");
+        assert!(
+            text.contains("#414"),
+            "the disclaimer must cite its issue: {text}"
+        );
         assert!(
             !text.contains("no overclaims"),
             "an empty ledger must not read as a clean bill: {text}"
