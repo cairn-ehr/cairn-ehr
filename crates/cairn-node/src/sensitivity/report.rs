@@ -13,6 +13,29 @@
 use super::subject_kind_phrase;
 use uuid::Uuid;
 
+/// One withdrawal this node admitted that did NOT lower any grade, as
+/// `sensitivity_withdrawal_worklist` reports it (db/048 section 11).
+///
+/// A withdrawal lands, converges and stays re-assertable even when it has no effect —
+/// ADR-0064 gates EFFECT, never admission, so nothing here is a refusal. That is exactly
+/// why it needs a surface: the record contains an act whose author believes it worked.
+pub struct IneffectiveWithdrawal {
+    /// Hex `content_address` of the assertion this withdrawal targeted.
+    pub withdraws: String,
+    /// `inert` (no accountable human stands behind the claim) or `stranger-attested`
+    /// (attested, but by an actor with no prior presence on this chart). Open vocabulary —
+    /// see `render::withdrawal_reason_explanation`.
+    pub reason: String,
+    pub node_origin: String,
+    /// NOT `Option`: `sensitivity_withdrawal.rationale` is `TEXT NOT NULL` (db/048),
+    /// because db/048's ceremony refuses a withdrawal that does not state why.
+    pub rationale: String,
+    /// Hex `actor_id` of whoever is accountable (#421). `None` when the attester key maps
+    /// to no single human — the view's `count(*) = 1` guard deliberately yields NULL rather
+    /// than picking one arbitrarily.
+    pub responsible_actor_id: Option<String>,
+}
+
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
 /// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
@@ -53,6 +76,9 @@ pub struct ChartReport {
     /// `chart_source == "none"`: there is no assertion to name because nothing applies.
     pub chart_content_address: Option<String>,
     pub threads: Vec<ThreadGrade>,
+    /// Withdrawals this node holds that changed no grade — the §1.2 budget's subject.
+    /// Empty on a healthy chart, so the renderer stays silent there.
+    pub ineffective_withdrawals: Vec<IneffectiveWithdrawal>,
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
@@ -186,10 +212,36 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    // The worklist already knows WHY a withdrawal was ineffective — reading it here rather
+    // than re-deriving the verdict in Rust is the same "ONE definition" discipline the
+    // chart-wide read follows: a second implementation of authority in this file could
+    // disagree with db/048 and would do so silently.
+    let withdrawal_rows = client
+        .query(
+            "SELECT encode(withdraws, 'hex'), reason, node_origin, rationale,
+                    encode(responsible_actor_id, 'hex')
+               FROM sensitivity_withdrawal_worklist
+              WHERE patient_id = $1::text::uuid
+              ORDER BY reason, withdraws",
+            &[&patient_s],
+        )
+        .await?;
+    let ineffective_withdrawals = withdrawal_rows
+        .into_iter()
+        .map(|row| IneffectiveWithdrawal {
+            withdraws: row.get(0),
+            reason: row.get(1),
+            node_origin: row.get(2),
+            rationale: row.get(3),
+            responsible_actor_id: row.get(4),
+        })
+        .collect();
+
     Ok(ChartReport {
         chart_grade,
         chart_content_address,
         chart_source,
         threads,
+        ineffective_withdrawals,
     })
 }

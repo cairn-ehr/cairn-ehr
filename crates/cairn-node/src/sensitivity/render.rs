@@ -7,7 +7,55 @@
 //! which is why nobody ever did. Keeping the wording here makes each claim a unit test.
 //!
 //! Precedent: `crate::safety::render_safety_line`, which is pure for the same reason.
-use super::report::ChartReport;
+use super::report::{ChartReport, IneffectiveWithdrawal};
+
+/// Why a worklist row is on the worklist, in words. Pure and TOTAL — every input has an
+/// output, including one this build has never seen.
+///
+/// The two reasons have DIFFERENT fixes, which is why they get different sentences rather
+/// than a shared "did not take effect": `inert` means nobody this node can hold responsible
+/// stands behind the claim (the fix is an accountable human re-asserting it), while
+/// `stranger-attested` means someone did stand behind it but has no prior presence on this
+/// chart (the fix is a look at who is asserting on this chart at all).
+///
+/// The catch-all points the reader AT the row rather than rendering an unknown reason as
+/// though it were understood — the same discipline as `super::subject_kind_phrase`.
+pub fn withdrawal_reason_explanation(reason: &str) -> &'static str {
+    match reason {
+        "inert" => {
+            "no accountable human this node can hold responsible stands behind it (ADR-0064)"
+        }
+        "stranger-attested" => "attested, but by an actor with no prior presence on this chart",
+        _ => "an unrecognised reason from a newer node — read the row itself",
+    }
+}
+
+/// The warning block for withdrawals that landed and changed nothing. Empty when there are
+/// none, so a healthy chart stays silent.
+fn render_ineffective_withdrawals(ws: &[IneffectiveWithdrawal]) -> Vec<String> {
+    if ws.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "⚠ {} withdrawal(s) on this chart did NOT take effect — the grade above may not be \
+         what someone intended",
+        ws.len()
+    )];
+    for w in ws {
+        out.push(format!(
+            "    {:<18} withdraws={}  by actor={}  origin={}",
+            w.reason,
+            w.withdraws,
+            w.responsible_actor_id
+                .as_deref()
+                .unwrap_or("(none this node can name)"),
+            w.node_origin
+        ));
+        out.push(format!("      rationale: {:?}", w.rationale));
+        out.push(format!("      → {}", withdrawal_reason_explanation(&w.reason)));
+    }
+    out
+}
 
 /// Render one chart's §5.9 report as the lines an operator reads, in order.
 ///
@@ -33,7 +81,19 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
             None => String::new(),
         }
     ));
+    out.extend(render_ineffective_withdrawals(&r.ineffective_withdrawals));
     out.extend(render_threads(r));
+    // DECLARED, NOT IMPLIED. ADR-0064's Known limitations: a withdrawal mis-stamped with
+    // another chart's patient_id and left unverified finds nothing in
+    // cairn_sensitivity_standing on any read, ever, so it falls out of the worklist's own
+    // inert arm. Printed even when the list is EMPTY — that is the case where silence is
+    // most convincing and most wrong.
+    out.push(
+        "(this list is not complete: a withdrawal mis-stamped with another chart's \
+         patient_id and left unverified is permanently inert AND invisible here — \
+         ADR-0064, Known limitations)"
+            .to_string(),
+    );
     out.push(
         "(report only — nothing is withheld; enforcement needs custody narrowing, \
          #232 part C)"
@@ -82,6 +142,7 @@ mod tests {
                 source: "none".into(),
                 content_address: None,
             }],
+            ineffective_withdrawals: vec![],
         }
     }
 
@@ -118,5 +179,73 @@ mod tests {
             !lines.iter().any(|l| l.contains('⚠')),
             "a healthy chart must print no warning: {lines:?}"
         );
+    }
+
+    fn inert_withdrawal() -> IneffectiveWithdrawal {
+        IneffectiveWithdrawal {
+            withdraws: "a3f".into(),
+            reason: "inert".into(),
+            node_origin: "peer-b".into(),
+            rationale: "consent withdrawn by patient 2026-08-12".into(),
+            responsible_actor_id: Some("beef".into()),
+        }
+    }
+
+    #[test]
+    fn an_inert_withdrawal_names_its_reason_rationale_and_actor() {
+        // THE §1.2 BUDGET, as a unit test: "why did this withdrawal not take effect?"
+        // answered without raw SQL. Everything the operator needs must be in these lines.
+        let mut r = healthy();
+        r.ineffective_withdrawals = vec![inert_withdrawal()];
+        let text = render_chart_report("C", &r).join("\n");
+        assert!(text.contains("did NOT take effect"), "{text}");
+        assert!(text.contains("inert"), "{text}");
+        assert!(text.contains("consent withdrawn by patient"), "the rationale: {text}");
+        assert!(text.contains("beef"), "the accountable actor (#421): {text}");
+        assert!(text.contains("withdraws=a3f"), "the target address: {text}");
+    }
+
+    #[test]
+    fn the_two_reasons_read_differently() {
+        // 'inert' and 'stranger-attested' have DIFFERENT fixes — one needs an accountable
+        // human, the other needs a look at who is asserting on this chart. A shared
+        // sentence would hide that, which is the whole failure this surface exists to end.
+        let mut a = healthy();
+        a.ineffective_withdrawals = vec![inert_withdrawal()];
+        let mut b = healthy();
+        b.ineffective_withdrawals = vec![IneffectiveWithdrawal {
+            reason: "stranger-attested".into(),
+            ..inert_withdrawal()
+        }];
+        assert_ne!(
+            render_chart_report("C", &a).join("\n"),
+            render_chart_report("C", &b).join("\n")
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_reason_is_shown_not_swallowed() {
+        // Open vocabulary: a future db/048 may add a reason this build has never seen.
+        // Mirrors subject_kind_phrase's total mapping — the catch-all must point the
+        // reader AT the row, never silently render it as if it were understood.
+        let phrase = withdrawal_reason_explanation("some-future-reason");
+        assert!(
+            phrase.contains("unrecognised"),
+            "an unknown reason must say so: {phrase}"
+        );
+    }
+
+    #[test]
+    fn the_footer_declares_the_invisible_withdrawal_even_with_none_listed() {
+        // ADR-0064 Known limitations: a cross-chart mis-targeted withdrawal that stays
+        // unverified is permanently inert AND permanently invisible — it falls out of the
+        // worklist's inert arm. A surface listing "the withdrawals that did not take
+        // effect" while silent about that is a comment asserting a guarantee the code does
+        // not provide, which is the defect class this whole slice is about. Asserted on a
+        // report with an EMPTY list, because that is the case where silence is most
+        // convincing and most wrong.
+        let text = render_chart_report("C", &healthy()).join("\n");
+        assert!(text.contains("not complete"), "{text}");
+        assert!(text.contains("ADR-0064"), "{text}");
     }
 }
