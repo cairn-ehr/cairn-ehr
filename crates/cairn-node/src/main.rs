@@ -1836,6 +1836,20 @@ async fn main() -> anyhow::Result<()> {
                 "asserted sensitivity grade {grade:?} over {subject_kind} {subject_id} on \
                  chart {patient} (event {event_id})"
             );
+            // #388 part 4: never echo the typed grade as though it were the outcome. Both
+            // orchestrators mint a local Uuid and return it without reading anything back,
+            // so an assertion outranked by a standing chart-wide grade looked identical to
+            // one that took effect. Re-read and report BOTH facts — the assertion may be
+            // correctly outranked, which the operator needs to see rather than infer.
+            let after = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
+            println!(
+                "{}",
+                cairn_node::sensitivity::render::render_assert_readback(
+                    &grade,
+                    &after.chart_grade,
+                    &after.chart_source,
+                )
+            );
         }
         Cmd::SensitivityWithdraw {
             patient,

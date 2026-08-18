@@ -102,6 +102,21 @@ fn render_overclaims(os: &[SafetyOverclaim]) -> Vec<String> {
     out
 }
 
+/// What an operator sees after asserting a grade: what they asked for, and what now stands.
+///
+/// TWO FACTS, ALWAYS. Printing only the standing grade would render a thread-scoped
+/// `restricted` under a chart-wide `sequestered` as bare "sequestered", which reads as a
+/// silent upgrade of the operator's own act. Printing only the asserted grade would claim
+/// an effect that may not have occurred. There is deliberately no shortened form for the
+/// agreeing case: a reader who learns that one grade means agreement can no longer read a
+/// one-grade line as anything.
+pub fn render_assert_readback(asserted: &str, standing: &str, winning_subject: &str) -> String {
+    format!(
+        "asserted {asserted}; {standing} now stands on this chart (winning subject: \
+         {winning_subject})"
+    )
+}
+
 /// Render one chart's §5.9 report as the lines an operator reads, in order.
 ///
 /// The chart grade comes FIRST and keeps its exact wire shape — see the contract test. The
@@ -422,5 +437,25 @@ mod tests {
             !text.contains("no overclaims"),
             "an empty ledger must not read as a clean bill: {text}"
         );
+    }
+
+    #[test]
+    fn the_read_back_reports_the_asserted_and_the_standing_grade_as_two_facts() {
+        // A thread-scoped 'restricted' asserted while a chart-wide 'sequestered' stands
+        // reads back as 'sequestered' — correct, and indistinguishable from "your assertion
+        // was silently upgraded" if only one grade is printed. Both, always, with the
+        // winning subject, so the operator can see WHY they differ.
+        let line = render_assert_readback("restricted", "sequestered", "chart-wide");
+        assert!(line.contains("restricted"), "{line}");
+        assert!(line.contains("sequestered"), "{line}");
+        assert!(line.contains("chart-wide"), "{line}");
+    }
+
+    #[test]
+    fn the_read_back_is_still_two_facts_when_they_agree() {
+        // No special case for agreement: a reader who learns the surface prints one grade
+        // when they agree cannot then trust a single-grade line to mean agreement.
+        let line = render_assert_readback("restricted", "restricted", "this thread");
+        assert!(line.matches("restricted").count() >= 2, "{line}");
     }
 }
