@@ -329,8 +329,10 @@ END $$;
 DO $$
 DECLARE
     expected_cols  text[] := ARRAY['content_address', 'event_id', 'patient_id', 'withdraws',
-                                    'reason', 'node_origin', 'rationale'];
-    expected_types text[] := ARRAY['bytea', 'uuid', 'uuid', 'bytea', 'text', 'text', 'text'];
+                                    'reason', 'node_origin', 'rationale',
+                                    'responsible_actor_id'];
+    expected_types text[] := ARRAY['bytea', 'uuid', 'uuid', 'bytea', 'text', 'text', 'text',
+                                    'bytea'];
     got_cols  text[];
     got_types text[];
 BEGIN
@@ -342,8 +344,8 @@ BEGIN
 
     ASSERT got_cols = expected_cols,
         format('sensitivity_withdrawal_worklist column set/order drifted from the pinned '
-               '7-column contract (content_address, event_id, patient_id, withdraws, '
-               'reason, node_origin, rationale): got %s', got_cols);
+               '8-column contract (content_address, event_id, patient_id, withdraws, '
+               'reason, node_origin, rationale, responsible_actor_id): got %s', got_cols);
     ASSERT got_types = expected_types,
         format('sensitivity_withdrawal_worklist column types drifted from the pinned '
                'contract: got %s', got_types);

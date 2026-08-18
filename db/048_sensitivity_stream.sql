@@ -942,7 +942,14 @@ WITH judged AS (
 )
 SELECT content_address, event_id, patient_id, withdraws,
        CASE WHEN verdict = 'unverified' THEN 'inert' ELSE 'stranger-attested' END AS reason,
-       node_origin, rationale
+       node_origin, rationale,
+       -- #421: the accountable actor — the fact the row exists to report. The CTE has
+       -- always computed it (the vouched R1 attester, or the withdrawal's own actor for
+       -- the R2 self case); dropping it here meant a consumer could say a withdrawal was
+       -- ineffective but never who authored it. APPENDED, never inserted mid-list:
+       -- CREATE OR REPLACE VIEW permits adding a trailing column and refuses a reorder,
+       -- so appending is the only shape that survives migration replay on a live database.
+       responsible_actor_id
   FROM judged
  WHERE (verdict = 'unverified'
         AND (target_content_address IS NULL
