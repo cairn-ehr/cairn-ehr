@@ -52,6 +52,23 @@ pub struct StandingAssertion {
     pub grade: String,
 }
 
+/// One `sensitivity.%` event this node admitted but cannot interpret — ADR-0056's
+/// admit-and-defer, a DESIGNED state given that there is no lockstep fleet upgrade.
+///
+/// It is a grade this node is FAILING TO APPLY. It projects nothing, so the chart reads
+/// 'routine', and the only trace is a row in `event_deferred` that nothing in the §5.9 read
+/// path consulted before this slice.
+pub struct DeferredSensitivityEvent {
+    pub event_id: Uuid,
+    pub event_type: String,
+    /// Rendered in SQL (`::text`) rather than formatted in Rust: TIMESTAMPTZ::text gives
+    /// ISO-8601 with the session offset and costs no new dependency — the same idiom the
+    /// `deferred` CLI verb already uses.
+    pub admitted_at: String,
+    /// `None` until a re-adjudication attempt has run and FAILED; then the verbatim refusal.
+    pub adjudication_error: Option<String>,
+}
+
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
 /// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
@@ -99,6 +116,9 @@ pub struct ChartReport {
     /// unconditionally — the custody-blind case has a perfectly good registration and still
     /// projects no threads, so gating this on the no-registration fallback would miss it.
     pub standing: Vec<StandingAssertion>,
+    /// Sensitivity events admitted but not interpreted here — grades this node is failing
+    /// to apply, invisible to `cairn_effective_sensitivity` by construction.
+    pub deferred: Vec<DeferredSensitivityEvent>,
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
@@ -279,6 +299,26 @@ pub async fn chart_sensitivity(
         })
         .collect();
 
+    // Through the chart-scoped definer, never a direct event_deferred read: that table is
+    // granted to cairn_node, not cairn_agent (see db/043's own note and #425).
+    let deferred_rows = client
+        .query(
+            "SELECT event_id::text, event_type, admitted_at::text, adjudication_error
+               FROM cairn_patient_deferred_sensitivity($1::text::uuid)",
+            &[&patient_s],
+        )
+        .await?;
+    let deferred = deferred_rows
+        .into_iter()
+        .map(|row| DeferredSensitivityEvent {
+            event_id: Uuid::parse_str(&row.get::<_, String>(0))
+                .expect("event_id column is a valid UUID"),
+            event_type: row.get(1),
+            admitted_at: row.get(2),
+            adjudication_error: row.get(3),
+        })
+        .collect();
+
     Ok(ChartReport {
         chart_grade,
         chart_content_address,
@@ -286,5 +326,6 @@ pub async fn chart_sensitivity(
         threads,
         ineffective_withdrawals,
         standing,
+        deferred,
     })
 }

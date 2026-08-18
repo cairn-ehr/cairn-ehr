@@ -7,7 +7,7 @@
 //! which is why nobody ever did. Keeping the wording here makes each claim a unit test.
 //!
 //! Precedent: `crate::safety::render_safety_line`, which is pure for the same reason.
-use super::report::{ChartReport, IneffectiveWithdrawal};
+use super::report::{ChartReport, DeferredSensitivityEvent, IneffectiveWithdrawal};
 
 /// Why a worklist row is on the worklist, in words. Pure and TOTAL — every input has an
 /// output, including one this build has never seen.
@@ -57,6 +57,30 @@ fn render_ineffective_withdrawals(ws: &[IneffectiveWithdrawal]) -> Vec<String> {
     out
 }
 
+/// The warning block for sensitivity events this node holds but cannot apply.
+fn render_deferred(ds: &[DeferredSensitivityEvent]) -> Vec<String> {
+    if ds.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "⚠ {} sensitivity event(s) on this chart are DEFERRED — admitted, powerless, not \
+         applied to any grade above",
+        ds.len()
+    )];
+    for d in ds {
+        out.push(format!(
+            "    {}  {}  {}  {}",
+            d.event_id,
+            d.event_type,
+            d.admitted_at,
+            d.adjudication_error
+                .as_deref()
+                .unwrap_or("(not yet re-adjudicated)")
+        ));
+    }
+    out
+}
+
 /// Render one chart's §5.9 report as the lines an operator reads, in order.
 ///
 /// The chart grade comes FIRST and keeps its exact wire shape — see the contract test. The
@@ -82,6 +106,7 @@ pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
         }
     ));
     out.extend(render_ineffective_withdrawals(&r.ineffective_withdrawals));
+    out.extend(render_deferred(&r.deferred));
     out.extend(render_threads(r));
     // DECLARED, NOT IMPLIED. ADR-0064's Known limitations: a withdrawal mis-stamped with
     // another chart's patient_id and left unverified finds nothing in
@@ -176,6 +201,7 @@ mod tests {
             }],
             ineffective_withdrawals: vec![],
             standing: vec![],
+            deferred: vec![],
         }
     }
 
@@ -312,6 +338,29 @@ mod tests {
         assert!(
             !text.contains("no medication threads on this chart"),
             "the old precise untruth must be gone: {text}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_sensitivity_event_is_reported_as_powerless() {
+        // db/043 records adjudication_error and leaves the event deferred. A sensitivity
+        // assertion admitted by a pre-db/048 node (ADR-0056 admit-and-defer — a DESIGNED
+        // state, given "no lockstep fleet upgrade") projects nothing and therefore reads
+        // 'routine'. Nothing in the §5.9 read path consulted event_deferred, so a grade
+        // this node is FAILING TO APPLY was invisible.
+        let mut r = healthy();
+        r.deferred = vec![DeferredSensitivityEvent {
+            event_id: uuid::Uuid::nil(),
+            event_type: "sensitivity.grade.asserted".into(),
+            admitted_at: "2026-08-18 09:00:00+00".into(),
+            adjudication_error: None,
+        }];
+        let text = render_chart_report("C", &r).join("\n");
+        assert!(text.contains("DEFERRED"), "{text}");
+        assert!(text.contains("powerless"), "{text}");
+        assert!(
+            text.contains("not yet re-adjudicated"),
+            "the null-error wording: {text}"
         );
     }
 }

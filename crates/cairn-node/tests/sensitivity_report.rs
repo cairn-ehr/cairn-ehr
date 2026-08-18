@@ -134,3 +134,62 @@ async fn a_chart_with_standing_assertions_and_no_projected_threads_still_names_t
         report.standing.iter().map(|s| &s.content_address).collect::<Vec<_>>()
     );
 }
+
+/// The deferred reader is a `SECURITY DEFINER` on purpose, and this pins WHY rather than
+/// merely that it works: if `cairn_agent` could read `event_deferred` directly, the definer
+/// would be decorative and the next reader would delete it as ceremony.
+#[tokio::test]
+async fn the_deferred_reader_is_a_load_bearing_definer_not_decoration() {
+    let Some(base) = cs() else { return };
+    let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
+    let c = cairn_node::db::connect_and_load_schema(&base).await.unwrap();
+
+    // 1. cairn_agent genuinely cannot read the table. This is the fact that makes the
+    //    definer necessary — and it is #425's territory: the runtime login role reaches it
+    //    today only by cairn_node membership, which is exactly what must not be relied on.
+    let direct: bool = c
+        .query_one(
+            "SELECT has_table_privilege('cairn_agent', 'event_deferred', 'SELECT')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !direct,
+        "event_deferred is readable by cairn_agent — the definer in db/043 is then \
+         decoration, and this test should be replaced by a plain grant"
+    );
+
+    // 2. The function is a definer AND pins pg_temp last (#426). A definer reading
+    //    event_log unqualified without that clause can be blinded to ZERO ROWS by any
+    //    caller, which this surface would render as "nothing is deferred".
+    let row = c
+        .query_one(
+            "SELECT p.prosecdef, COALESCE(array_to_string(p.proconfig, ','), '')
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE p.proname = 'cairn_patient_deferred_sensitivity'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let is_definer: bool = row.get(0);
+    let cfg: String = row.get(1);
+    assert!(is_definer, "must be SECURITY DEFINER");
+    assert!(
+        cfg.contains("pg_temp"),
+        "search_path must pin pg_temp (#426): {cfg}"
+    );
+
+    // 3. And it is scoped: a chart with nothing deferred reports nothing.
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*)::bigint FROM cairn_patient_deferred_sensitivity(
+                 '00000000-0000-0000-0000-0000000000ff'::uuid)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "a chart with no deferred sensitivity events must report none");
+}
