@@ -43,6 +43,12 @@ fn peer(s: &str) -> String {
 /// The address is printed UNQUOTED: `withdraws=<hex>` is a copy-paste CONTRACT into
 /// `sensitivity-withdraw --withdraws`, and hex from `encode(…, 'hex')` carries no
 /// line-forging risk to escape (unlike the peer-authored grade beside it).
+///
+/// That "it is hex" is not a hope: [`WinningSubject`]'s payload fields are private, so the
+/// only producers are its two constructors, and every caller of those feeds them
+/// `encode(…, 'hex')`. A new producer would have to be added inside `winner.rs`, next to
+/// this reasoning. Likewise the phrase is `&'static str`, so neither half of this line can
+/// become peer text without a type change.
 fn winner_clause(w: &WinningSubject) -> String {
     match w.content_address() {
         Some(ca) => format!("(winning subject: {}, withdraws={ca})", w.phrase()),
@@ -209,10 +215,16 @@ fn render_overclaims(os: &[SafetyOverclaim]) -> Vec<String> {
 /// chart-wide assert and a thread-scoped assert against different subjects. Without it, a
 /// thread-scoped `restricted` on a routine chart read back as "routine now stands", which
 /// looks exactly like "your assertion did nothing" for an assertion that fully took effect.
+///
+/// `winning_subject` is `&'static str` because it is the one value here printed
+/// UNESCAPED — `asserted` and `standing` both go through `peer`. Peer text arrives as
+/// `String`, so the narrower type is what makes routing it into that slot impossible
+/// rather than merely unlikely (#387; the same reasoning as `SubjectReading`'s field and
+/// `WinningSubject::phrase`).
 pub fn render_assert_readback(
     asserted: &str,
     standing: &str,
-    winning_subject: &str,
+    winning_subject: &'static str,
     scope: &str,
 ) -> String {
     format!(
@@ -462,6 +474,46 @@ mod tests {
             overclaims: vec![],
             sealed_medication_events_without_custody: 0,
         }
+    }
+
+    #[test]
+    fn the_thread_line_keeps_the_same_shape_as_the_chart_line() {
+        // THE THREAD LINE WAS RENDERED BY NO TEST AT ALL until this one. Every fixture used
+        // `WinningSubject::None`, so `(winning subject: …, withdraws=<hex>)` could be
+        // deleted from `render_thread_line` outright — or lose its leading space — with the
+        // whole suite green. That hex is the operator's ONLY route to withdrawing a
+        // thread-scoped grade without raw SQL, i.e. exactly the contract
+        // `the_grade_line_keeps_its_documented_shape` was written to protect one function
+        // away on the chart line.
+        let mut r = healthy();
+        r.threads[0].grade = "restricted".into();
+        r.threads[0].subject = WinningSubject::from_row("thread", Some("a3f".into()));
+        let line = render_thread_line(&r.threads[0]);
+        assert_eq!(
+            line,
+            format!(
+                "  thread {}: \"restricted\" (winning subject: this thread, withdraws=a3f)",
+                uuid::Uuid::nil()
+            ),
+            "byte-for-byte, including the two-space indent and the space before `(`"
+        );
+    }
+
+    #[test]
+    fn a_thread_with_no_winner_offers_no_withdraws_clause() {
+        // The other arm, equally unpinned before: `healthy()`'s thread has no winner, so
+        // the line must carry the phrase and NO `withdraws=`, or an operator would be
+        // handed an address for an assertion that does not exist.
+        let r = healthy();
+        let line = render_thread_line(&r.threads[0]);
+        assert_eq!(
+            line,
+            format!(
+                "  thread {}: \"routine\" (winning subject: none)",
+                uuid::Uuid::nil()
+            )
+        );
+        assert!(!line.contains("withdraws="));
     }
 
     #[test]

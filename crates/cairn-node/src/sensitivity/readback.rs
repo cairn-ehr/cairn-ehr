@@ -30,15 +30,17 @@ use uuid::Uuid;
 /// Replaces the bare `(String, String, &'static str)` the assert read-back used to return.
 /// Two of those three fields are interchangeable by type, and a call site that prints all
 /// three in one sentence is exactly where a transposition survives review unnoticed.
-#[derive(Debug)]
 pub struct SubjectReading {
     /// The effective grade now standing over the subject. PEER TEXT — unconstrained `TEXT`
     /// copied from a body, so the renderer escapes it (`render::peer`).
     pub grade: String,
-    /// Which subject produced that grade: [`subject_kind_phrase`]'s output.
+    /// Which subject produced that grade: [`subject_kind_phrase`]'s output — or, on the
+    /// thread branch only, a sentence saying this node cannot project the thread at all.
     ///
-    /// `&'static str` (#387): every producer already returns one, and the old code
-    /// `.to_string()`d it at each call site for nothing.
+    /// `&'static str` (#387). The allocation saved is incidental; the reason that matters
+    /// is that `render::render_assert_readback` prints this field UNESCAPED, unlike the
+    /// grades beside it. Peer text off `tokio-postgres` is always `String`, so making this
+    /// `&'static str` is what stops peer text reaching an unescaped print position at all.
     pub winning_subject: &'static str,
     /// What the grade was read OVER — "this chart" | "that event" | "that thread". The
     /// three subject kinds resolve against three DIFFERENT things, and saying "on this
@@ -52,7 +54,6 @@ pub struct SubjectReading {
 /// A sum type rather than an `Option<SubjectReading>` beside a loose `subject_kind: String`:
 /// these are two different sentences an operator reads, and an unrecognised kind must NAME
 /// itself rather than degrade into an absent value that reads like "nothing applies".
-#[derive(Debug)]
 pub enum SubjectResolution {
     /// The subject kind is one this build understands, and this is what now stands over it.
     Resolved(SubjectReading),
@@ -63,7 +64,6 @@ pub enum SubjectResolution {
 }
 
 /// What this node can say about the assertion a withdrawal targeted.
-#[derive(Debug)]
 pub enum TargetState {
     /// Not in `sensitivity_assertion` here at all. Set-union sync has no ordering, so a
     /// withdrawal legitimately precedes its target — db/048 keeps NO foreign key for
@@ -121,7 +121,6 @@ pub enum TargetState {
 /// The two can honestly disagree in direction: `stranger-attested` means the withdrawal
 /// TOOK EFFECT and is still worth a look. Collapsing them into one verdict would reproduce,
 /// one verb over, the union-view defect the Slice 69 review found on the chart report.
-#[derive(Debug)]
 pub struct WithdrawOutcome {
     /// The worklist arm, verbatim. OPEN VOCABULARY — a build that has never seen a value
     /// must still surface it rather than drop the row (see
@@ -134,18 +133,19 @@ pub struct WithdrawOutcome {
 ///
 /// Pure and total. `None` is NOT an error: db/048 admits an unrecognised subject kind from
 /// a future peer and interprets it conservatively (ADR-0062/ADR-0056), so this build must
-/// be able to hold "a kind I do not know" as an ordinary value.
+/// be able to hold "a kind I do not know" as an ordinary value. That is why this returns
+/// `Option` and discards the error text `TryFrom` builds — the message names what a local
+/// operator may type, which is the wrong sentence entirely for a value that arrived by
+/// replication and was correctly admitted.
 ///
-/// TODO(#387) — collapses into `SubjectKind: TryFrom<&str>` along with the clap value
-/// parser and the CLI's hand-rolled match, which are the same closed set written three
-/// times.
+/// #387: the body is now `SubjectKind::try_from`, not a fourth hand-written copy of the
+/// closed set. The copy it replaced carried a `_ => None` wildcard, so — unlike every other
+/// copy — a new variant produced NO compile error here at all. It would simply have started
+/// reporting the new kind as one "this build does not recognise" (a false claim about the
+/// build's own capability) and, worse, skipped the read-back entirely, so an operator who
+/// had just withdrawn a grade would never learn what now stands over it.
 fn parse_subject_kind(kind: &str) -> Option<SubjectKind> {
-    match kind {
-        "event" => Some(SubjectKind::Event),
-        "thread" => Some(SubjectKind::Thread),
-        "patient" => Some(SubjectKind::Patient),
-        _ => None,
-    }
+    SubjectKind::try_from(kind).ok()
 }
 
 /// Read what now stands over ONE subject.

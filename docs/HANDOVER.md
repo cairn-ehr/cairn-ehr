@@ -179,25 +179,50 @@ surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
 
 **2026-08-19 (later) — §5.9 type design** (closes
-[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); no ADR, no migration, SCHEMA stays 49). Four
-closed sets get one definition each. Two things worth carrying:
+[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); opens
+[#439](https://github.com/cairn-ehr/cairn-ehr/issues/439); no ADR, no migration, SCHEMA stays 49). Four
+closed sets get one definition each. Three things worth carrying:
 
 1. **`WinningSubject` makes ADR-0062 erratum E6 structurally unrepeatable** — the trap the ⇒ NEXT block
    below still warns about. `chart_source` + `chart_content_address` are fused into one sum type whose
-   single constructor (`from_row`, in its own `sensitivity/winner.rs`) keys on the ADDRESS. There is no
-   longer a place to key on the phrase, which is what E6 is about.
+   constructors (in its own `sensitivity/winner.rs`) key on the ADDRESS. Its payload fields are
+   **private**, so those constructors really are the only producers — the first draft left them public
+   while the doc claimed `from_row` was "the ONE place", which was simply not true of construction.
 2. **`GRADE_*` are consts and `Provenance` is an enum, and the asymmetry is the point.** ADR-0062
    decision 2 argues at length for `grade` being OPEN (an enum would close it and make the
-   inverted-unknown path unreachable); decision 5 names `source`'s two values with no evolution argument
-   at all, db/048 never reads it, and nothing branches on it — so an untyped `source` bought nothing and
-   would have let `"Human"` into a plaintext, unconditionally-replicating body unnoticed forever.
+   inverted-unknown path unreachable). `source` closes because of what **db/048 does** — it stores the
+   value and reads it from no query, no projection, no rank function — not because an ADR says so;
+   decision 5 is titled *"The matched blacklist category never travels on the wire"* and names the two
+   values only in passing. Builder-side only, and note db/048 mints a THIRD value itself
+   (`source = 'unreadable'` on the born-sealed branch), so a read model must keep `source` open text.
+3. **`SubjectKind` is generated, not hand-listed.** A small `macro_rules!` expands the enum, its wire
+   words and `ALL` from one table. This is not stylistic — see the review lesson below.
+
+**⇒ THE REVIEW LESSON, and it generalises past this slice: a guard defined over the list it guards is
+not a guard.** Every finding in this slice's review was that shape, and none of them was a behaviour bug
+— the code was right; three of the four headline claims were true only in the comments.
+- `assert_eq!(SubjectKind::ALL.len(), 3)` over an `[SubjectKind; 3]` compared a compile-time constant to
+  its own literal. It could not fail. Adding a fourth variant and fixing the one compile error left the
+  whole suite green while `--help` and `try_from` silently refused a kind `as_str` was emitting.
+- `from_row` was "the ONE place" over **public** fields.
+- "the address is hex, so it needs no escaping" was a doc claim over a public `String`.
+- Four tests asserted a const against its own literal.
+When reviewing a guard, ask what independent source it checks against. If the answer is "itself", it is
+documentation wearing a test's clothes.
 
 Finding worth recording: **#387's premise for the ladder constants does not survive contact with the
 code.** It cites ~69 grade literals across 7 files; a survey found **exactly one in production code**
 workspace-wide (`report.rs`'s routine fallback) — the rest are `#[cfg(test)]` or doc comments. The consts
 are documentary (the ladder had no Rust definition at all), not the de-duplication the issue assumed.
-Test literals were deliberately left alone: a test asserting `grade == GRADE_ROUTINE` while production
-also uses `GRADE_ROUTINE` agrees by construction rather than by assertion.
+They ARE pinned, but only where pinning is possible: `sensitivity_ladder.rs` feeds all four to
+`cairn_sensitivity_rank` over a live connection, because `cairn-event` has no database and a Rust-only
+assertion there can only compare a const to itself.
+
+**Trap for the next session:** `cargo doc` is **red on main** (issue #439, two pre-existing rustdoc
+errors), so the docs build only completes under `-A rustdoc::invalid_html_tags -A
+rustdoc::private_intra_doc_links` — which means a newly-introduced rustdoc error is invisible. This slice
+introduced one (an intra-doc link to the private `peer`) and it was caught only by running the build
+explicitly. Run `cargo doc --no-deps -p <crate>` when you add doc links.
 
 **2026-08-19 — the withdraw read-back** (closes
 [#435](https://github.com/cairn-ehr/cairn-ehr/issues/435); opens

@@ -40,7 +40,16 @@ pub const WITHDRAWAL_SCHEMA_VERSION: &str = "sensitivity.grade-withdrawal.assert
 /// no Rust definition anywhere (#387).
 ///
 /// The RANKING lives in db/048's `cairn_sensitivity_rank`, not here, and must stay there:
-/// a second ordering in Rust is the mirror-pair drift ADR-0064 decision 1 exists to avoid.
+/// a second ordering in Rust is the drift shape ADR-0064's rejected "per-dial authority
+/// check" describes — `cairn_prospective_sensitivity`/`cairn_effective_sensitivity` are a
+/// hand-maintained mirror pair that has ALREADY diverged once (#404) — and decision 5
+/// ("one predicate, consulted at exactly one site per dial") exists to avoid.
+///
+/// These four words ARE checked against db/048, but from the one place that can do it
+/// honestly: `the_ladder_orders_the_named_grades_and_ranks_the_unknown_maximum` in
+/// `crates/cairn-node/tests/sensitivity_ladder.rs` feeds each const to
+/// `cairn_sensitivity_rank` over a live connection. Asserting them against their own
+/// literals here would pin nothing.
 pub const GRADE_ROUTINE: &str = "routine";
 /// See [`GRADE_ROUTINE`].
 pub const GRADE_SENSITIVE: &str = "sensitive";
@@ -52,16 +61,30 @@ pub const GRADE_SEQUESTERED: &str = "sequestered";
 /// Where a grade came from — the provenance of the tag, never an authority claim.
 ///
 /// A CLOSED enum, unlike [`GRADE_ROUTINE`] and friends, and the asymmetry is deliberate.
-/// ADR-0062 decision 5 names exactly two values and offers **no** evolution argument, in
-/// sharp contrast to decision 2's extended case for `grade`; db/048 never reads `source`
-/// (it is checked non-empty, stored, and referenced by no query, no projection and no rank
-/// function); and nothing anywhere branches on it. So an untyped `&str` here bought no
-/// forward-compatibility and cost real safety: `"Human"`, `"operator"` or `"advisory "`
-/// would pass the builder AND the floor into a plaintext, unconditionally-replicating
-/// body, be read by nothing, and — append-only — be correctable only by overlay (#387).
+/// The warrant is what db/048 does, not what an ADR says: `source` is checked non-empty,
+/// stored, and then referenced by **no query, no projection and no rank function** — the
+/// whole file writes it and never reads it back, and nothing in `crates/` branches on it
+/// either. (ADR-0062 decision 5 names the two values, but only in passing: that decision
+/// is titled "The matched blacklist category never travels on the wire" and is about the
+/// category, so read it as where the two values are *recorded*, not as an argument that
+/// the set is closed. Decision 2 makes the contrasting case for `grade` being open at
+/// length.)
 ///
-/// Builder-side only. db/048's non-empty check is untouched, so a peer's future value is
-/// still admitted at the apply door (ADR-0056 governs the door, not the builder).
+/// So an untyped `&str` here bought no forward-compatibility and cost real safety:
+/// `"Human"`, `"operator"` or `"advisory "` would pass the builder AND the floor into a
+/// plaintext, unconditionally-replicating body; be read by nothing except
+/// [`render_sensitivity_twin`], which prints it into the mandatory signed §3.13 legibility
+/// twin a human reads FOREVER; and — append-only — be correctable only by overlay (#387).
+/// The twin is the reason a typo here matters at all.
+///
+/// Builder-side only, and that scoping is load-bearing in both directions:
+///   * db/048's non-empty check is untouched, so a peer's future value is still admitted
+///     at the apply door (ADR-0056 governs the door, not the builder); and
+///   * db/048 itself mints a THIRD value — `sensitivity_assertion_apply` writes
+///     `source = 'unreadable'` on the born-sealed branch — which is the projection
+///     speaking, not an author. A read model must therefore keep `source` as open text
+///     (copy `WithdrawalWorklistRow::arm`'s treatment) and must never parse back INTO
+///     this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
     /// A human typed it — the manual, operator-driven path.
@@ -80,41 +103,62 @@ impl Provenance {
     }
 }
 
-/// What an assertion names. Adding a member here means adding it to db/048's
-/// `cairn_check_sensitivity_grade` in the same commit — and note that db/048 does NOT
-/// refuse an unknown kind: an unrecognised subject kind from a future peer is admitted and
-/// interpreted CONSERVATIVELY as chart-wide (ADR-0062; the floor gates effect, not
-/// presence — ADR-0056).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubjectKind {
-    /// One event.
-    Event,
-    /// A medication thread (`medication_id`). Later events on the thread inherit the grade
-    /// automatically, because the effective grade is computed at READ.
-    Thread,
-    /// The whole chart. Deliberately the most effortful path: db/005 requires a rationale,
-    /// and the blacklist can never author one (ADR-0062).
-    Patient,
+/// Define the closed `SubjectKind` set ONCE — the enum, its wire words, and the
+/// enumerable list all expand from the single table in the invocation below.
+///
+/// # Why a macro, in a crate that otherwise prefers plain functions (house rule 4)
+///
+/// Because a hand-written `ALL` **cannot be guarded by any test.** Every check you could
+/// write has to name the variants itself, so the check drifts alongside the list it is
+/// meant to be checking. That is not hypothetical — it is what the first version of this
+/// code shipped as, and the review caught it: `assert_eq!(ALL.len(), 3)` compared
+/// `[SubjectKind; 3]::len()`, a compile-time constant, against its own literal. It could
+/// not fail. Adding a fourth variant and fixing only the resulting compile error left the
+/// whole suite green while `ALL` still listed three, at which point `as_str` emits a wire
+/// word that `try_from` refuses and `--help` never lists — "a value this build emits is a
+/// value it cannot read back", which is precisely the drift #387 exists to end.
+///
+/// A macro is the only construction in stable Rust (no new dependency — house rule 1) that
+/// removes the second list entirely. There is nothing left to fall behind.
+///
+/// Deliberately NOT extended to the `grade` ladder: that vocabulary is OPEN (ADR-0062
+/// decision 2), so there is no closed set to generate.
+macro_rules! subject_kinds {
+    ($( $(#[$doc:meta])* $variant:ident => $wire:literal ),+ $(,)?) => {
+        /// What an assertion names. Adding a member here means adding it to db/048's
+        /// `cairn_check_sensitivity_grade` in the same commit — and note that db/048 does
+        /// NOT refuse an unknown kind: an unrecognised subject kind from a future peer is
+        /// admitted and interpreted CONSERVATIVELY as chart-wide (ADR-0062; the floor
+        /// gates effect, not presence — ADR-0056).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum SubjectKind {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        impl SubjectKind {
+            /// Every member, in declaration order — the ONE list callers may enumerate
+            /// (the CLI's accepted values are built from it, so `--help` cannot drift from
+            /// the enum). Generated from the same table as the variants themselves, so it
+            /// is incapable of falling behind them.
+            pub const ALL: &'static [SubjectKind] = &[ $( SubjectKind::$variant ),+ ];
+
+            /// The wire word. Generated beside the variant it belongs to.
+            pub fn as_str(self) -> &'static str {
+                match self { $( SubjectKind::$variant => $wire ),+ }
+            }
+        }
+    };
 }
 
-impl SubjectKind {
-    /// Every member, in ladder-independent declaration order — the ONE list callers may
-    /// enumerate (the CLI's accepted values are built from it, so `--help` cannot drift
-    /// from the enum). Pinned by `all_lists_every_subject_kind`, which stops compiling if
-    /// a variant is added.
-    pub const ALL: [SubjectKind; 3] = [
-        SubjectKind::Event,
-        SubjectKind::Thread,
-        SubjectKind::Patient,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SubjectKind::Event => "event",
-            SubjectKind::Thread => "thread",
-            SubjectKind::Patient => "patient",
-        }
-    }
+subject_kinds! {
+    /// One event.
+    Event => "event",
+    /// A medication thread (`medication_id`). Later events on the thread inherit the grade
+    /// automatically, because the effective grade is computed at READ.
+    Thread => "thread",
+    /// The whole chart. Deliberately the most effortful path: db/005 requires a rationale,
+    /// and the blacklist can never author one (ADR-0062).
+    Patient => "patient",
 }
 
 /// Parse a subject kind at a LOCAL INPUT boundary — a CLI argument, a form field.
@@ -131,7 +175,8 @@ impl TryFrom<&str> for SubjectKind {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         SubjectKind::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|k| k.as_str() == s)
             .ok_or_else(|| {
                 let accepted: Vec<&str> = SubjectKind::ALL.iter().map(|k| k.as_str()).collect();
@@ -308,25 +353,34 @@ mod type_design {
     use super::*;
 
     #[test]
-    fn all_lists_every_subject_kind() {
-        // THE DRIFT GUARD, and it works in two directions at once. The `match` is
-        // exhaustive over the enum, so adding a variant stops this file COMPILING until
-        // someone looks here; the length assertion then stops them from fixing the compile
-        // error without also extending `ALL`. Before this, the closed set lived in three
-        // hand-maintained Rust copies and only the SQL side had test pressure.
-        for k in SubjectKind::ALL {
-            match k {
-                SubjectKind::Event | SubjectKind::Thread | SubjectKind::Patient => {}
-            }
-        }
-        assert_eq!(SubjectKind::ALL.len(), 3);
+    fn no_two_subject_kinds_share_a_wire_word() {
+        // COMPLETENESS is now structural: `ALL` and the enum expand from one table in
+        // `subject_kinds!`, so there is no second list left to fall behind. (The previous
+        // guard here tried to enforce that by hand with `assert_eq!(ALL.len(), 3)` and
+        // could not — `ALL` was declared `[SubjectKind; 3]`, so the assertion compared a
+        // constant to its own literal and never failed. That is why the macro exists.)
+        //
+        // What the macro does NOT catch is a duplicated wire word: `Thread => "event"` in
+        // that table compiles perfectly. `try_from` returns the FIRST match, so
+        // `--subject-kind thread` would silently author an EVENT-scoped grade — the wrong
+        // confidentiality scope, applied quietly, on the append-only path where it can
+        // only be corrected by overlay.
+        let listed: Vec<&str> = SubjectKind::ALL.iter().map(|k| k.as_str()).collect();
+        let mut unique = listed.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            listed.len(),
+            "two subject kinds share a wire word: {listed:?}"
+        );
     }
 
     #[test]
     fn every_subject_kind_round_trips_through_its_wire_word() {
         // `as_str` is what goes on the wire; `try_from` is what comes off a CLI argument.
         // If they ever disagree, a value this build emits is a value it cannot read back.
-        for k in SubjectKind::ALL {
+        for &k in SubjectKind::ALL {
             assert_eq!(SubjectKind::try_from(k.as_str()), Ok(k), "{}", k.as_str());
         }
     }
@@ -336,8 +390,14 @@ mod type_design {
         // Refused at the CLI boundary only. The APPLY door must keep admitting an
         // unrecognised kind (ADR-0056/ADR-0062 — it is interpreted conservatively as
         // chart-wide), so this must never be mistaken for a wire-level rejection.
-        let e = SubjectKind::try_from("episode").expect_err("not a subject kind this build has");
-        for k in SubjectKind::ALL {
+        //
+        // The fixture is deliberately UNSPELLABLE as a variant. An earlier version used
+        // "episode", which is a plausible future subject kind — the day someone adds it,
+        // this test would have flipped from "an unknown kind is refused" to "refusing a
+        // kind we support is correct", and defended the defect while staying green.
+        let e = SubjectKind::try_from("\u{0}not-a-subject-kind")
+            .expect_err("no variant can ever carry this wire word");
+        for &k in SubjectKind::ALL {
             assert!(
                 e.contains(k.as_str()),
                 "the error must name {}: {e}",
@@ -347,27 +407,61 @@ mod type_design {
     }
 
     #[test]
-    fn provenance_carries_the_two_values_adr_0062_names() {
-        // ADR-0062 decision 5 names exactly two and offers NO evolution argument — in sharp
-        // contrast to decision 2's extended case for `grade` being open. db/048 never reads
-        // `source`: it is checked non-empty, stored, and referenced by no query, no
-        // projection and no rank function. So `"Human"` / `"operator"` / `"advisory "` would
-        // pass builder AND floor into a plaintext, unconditionally-replicating body, and
-        // nothing would ever notice.
-        assert_eq!(Provenance::Human.as_str(), "human");
-        assert_eq!(Provenance::Advisory.as_str(), "advisory");
+    fn provenance_reaches_the_wire_as_the_two_words_db048_stores() {
+        // Pinned AT THE WIRE, not at the accessor: `as_str()` equalling its own literal
+        // proves nothing, and `source` is only ever interesting as the bytes that land in
+        // the signed body and the §3.13 twin. The `human` half is also covered by the
+        // builder tests above; `advisory` has no other caller yet (that is a later slice),
+        // so this is its only pin anywhere.
+        for (p, word) in [
+            (Provenance::Human, "human"),
+            (Provenance::Advisory, "advisory"),
+        ] {
+            let a = SensitivityAssertion {
+                subject_kind: SubjectKind::Thread,
+                subject_id: uuid::Uuid::nil(),
+                grade: GRADE_RESTRICTED,
+                source: p,
+                rationale: None,
+            };
+            assert_eq!(sensitivity_assertion_body(&a)["source"], word);
+            assert!(
+                render_sensitivity_twin(&a).contains(&format!("source: {word}")),
+                "the twin is the reason a typo here is permanent"
+            );
+        }
     }
 
     #[test]
-    fn the_ladder_constants_carry_db048s_wire_words() {
-        // The ladder is ranked in db/048 and, until now, had no Rust definition at all.
-        // These are `const`s and NOT an enum ON PURPOSE: ADR-0062 decision 2 makes `grade`
-        // an OPEN vocabulary, and an enum would both break that and make the
-        // inverted-unknown path (unknown ranks MAX) unreachable through the real API.
-        assert_eq!(GRADE_ROUTINE, "routine");
-        assert_eq!(GRADE_SENSITIVE, "sensitive");
-        assert_eq!(GRADE_RESTRICTED, "restricted");
-        assert_eq!(GRADE_SEQUESTERED, "sequestered");
+    fn the_ladder_constants_are_four_distinct_rungs() {
+        // NOT `assert_eq!(GRADE_ROUTINE, "routine")` — that compares a const to its own
+        // literal and cannot detect the drift its doc comment worries about. The real
+        // lockstep is `the_ladder_matches_db048s_rank_function` in
+        // `crates/cairn-node/tests/sensitivity_ladder.rs`, which feeds these four to
+        // `cairn_sensitivity_rank` over a live connection.
+        //
+        // What is worth pinning HERE, with no database: that a copy-paste never collapsed
+        // two rungs onto one word. Duplicating a rung would make a raise to the duplicated
+        // grade a silent no-op against the rung it shadows — in the direction that
+        // under-protects.
+        let ladder = [
+            GRADE_ROUTINE,
+            GRADE_SENSITIVE,
+            GRADE_RESTRICTED,
+            GRADE_SEQUESTERED,
+        ];
+        let mut unique = ladder.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            ladder.len(),
+            "two rungs collapsed: {ladder:?}"
+        );
+        assert!(
+            ladder.iter().all(|g| !g.trim().is_empty()),
+            "db/048 refuses a blank grade at the door: {ladder:?}"
+        );
     }
 
     #[test]

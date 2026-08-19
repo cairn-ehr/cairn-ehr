@@ -14,6 +14,13 @@
 use super::winner::WinningSubject;
 use uuid::Uuid;
 
+// NO `#[derive(Debug)]` ON THE ROW TYPES BELOW, DELIBERATELY. An earlier draft of this
+// slice derived it on all six; nothing consumed it, and `WithdrawalWorklistRow.rationale`
+// is peer-authored clear text that replicates and can never be unsaid (#378). In the one
+// module whose whole subject is confidentiality, a derive nothing needs turns
+// `tracing::debug!("{report:?}")` into a one-keystroke disclosure. Add it back only with a
+// caller that needs it, and only on a type that carries no clinical text.
+
 /// One row of `sensitivity_withdrawal_worklist` (db/048 section 11) — a withdrawal this
 /// node admitted that a human should look at.
 ///
@@ -29,7 +36,6 @@ use uuid::Uuid;
 ///
 /// A withdrawal lands, converges and stays re-assertable either way — ADR-0064 gates
 /// EFFECT, never admission, so nothing here is a refusal.
-#[derive(Debug)]
 pub struct WithdrawalWorklistRow {
     /// Hex `content_address` of the assertion this withdrawal targeted.
     pub withdraws: String,
@@ -56,7 +62,6 @@ pub struct WithdrawalWorklistRow {
 /// `cairn_clear_payload`, so a node with no DEK custody projects none of them and the
 /// report used to print "no medication threads on this chart" while honouring standing
 /// thread-scoped grades on those very threads (#383).
-#[derive(Debug)]
 pub struct StandingAssertion {
     pub content_address: String,
     pub subject_kind: String,
@@ -70,7 +75,6 @@ pub struct StandingAssertion {
 /// It is a grade this node is FAILING TO APPLY. It projects nothing, so the chart reads
 /// 'routine', and the only trace is a row in `event_deferred` that nothing in the §5.9 read
 /// path consulted before this slice.
-#[derive(Debug)]
 pub struct DeferredSensitivityEvent {
     pub event_id: Uuid,
     pub event_type: String,
@@ -85,10 +89,9 @@ pub struct DeferredSensitivityEvent {
 /// One event on this chart whose emitted safety rung was FINER than the standing grade
 /// licensed (#405 part 2, recorded by db/049 at the LOCAL door only).
 ///
-/// A LEDGER, not a view — ADR-0064 decision 3: flag what cannot self-heal, view what can.
+/// A LEDGER, not a view — ADR-0064 decision 6: flag what cannot self-heal, view what can.
 /// A published byte can never improve, so unlike the withdrawal worklist this row will
 /// never stop being true.
-#[derive(Debug)]
 pub struct SafetyOverclaim {
     pub content_address: String,
     pub emitted_rung: String,
@@ -97,7 +100,7 @@ pub struct SafetyOverclaim {
 
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
-/// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
+/// `chart_grade`/`chart_subject` is the CHART-WIDE reading: the effective grade computed
 /// off the chart's own registration event (its birth act). Exactly one such event is read
 /// because `patient_registration_current` is a `SELECT DISTINCT ON (patient_id) ... ORDER BY
 /// ... ASC` view (db/045) — NOT because #345 forbids a second registration, which it does
@@ -125,7 +128,6 @@ pub struct SafetyOverclaim {
 /// into `sensitivity-withdraw`) caught was missing from an earlier draft of this struct.
 /// Without it, withdrawing anything through the CLI alone would be impossible — an
 /// operator would have to fall back to raw SQL, defeating the point of this surface.
-#[derive(Debug)]
 pub struct ChartReport {
     pub chart_grade: String,
     /// Which subject produced `chart_grade`, and the hex `content_address` to feed
@@ -164,7 +166,6 @@ pub struct ChartReport {
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
-#[derive(Debug)]
 pub struct ThreadGrade {
     pub thread_id: Uuid,
     pub grade: String,
@@ -248,7 +249,14 @@ pub async fn chart_sensitivity(
                     row.get::<_, String>(0),
                     // Not a specific subject: nothing anchors these assertions to a
                     // registration event here, so the honest phrase is the coarsening one.
-                    WinningSubject::from_row("coarsened", row.get::<_, Option<String>>(1)),
+                    //
+                    // `coarsened`, NOT `from_row`: winner-ness is already settled here by
+                    // the row existing, and `cairn_sensitivity_standing` selects a BYTEA
+                    // PRIMARY KEY, so there is no NULL to interpret. Reading column 1 as a
+                    // non-optional `String` makes a future widening of that query a loud
+                    // type error rather than a silent collapse to "nothing applies" — see
+                    // `WinningSubject::coarsened`.
+                    WinningSubject::coarsened(row.get::<_, String>(1)),
                 ),
                 // Genuinely nothing: no registration AND no standing assertion.
                 None => (
@@ -363,7 +371,7 @@ pub async fn chart_sensitivity(
     // The one PERMANENT list on this report. Every other block describes a state that can
     // still improve — a withdrawal can be re-asserted, a deferred event re-adjudicated, a
     // DEK granted. A published byte cannot be clawed back, so an overclaim row never stops
-    // being true (ADR-0064 decision 3: flag what cannot self-heal, view what can). Ordered
+    // being true (ADR-0064 decision 6: flag what cannot self-heal, view what can). Ordered
     // with content_address as the tie-break because recorded_at defaults from
     // clock_timestamp() and two rows written in one transaction can share it.
     let overclaim_rows = client

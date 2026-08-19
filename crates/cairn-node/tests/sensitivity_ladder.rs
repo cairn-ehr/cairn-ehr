@@ -34,9 +34,31 @@ async fn the_ladder_orders_the_named_grades_and_ranks_the_unknown_maximum() {
         }
     };
 
-    assert_eq!(rank("routine").await, 0, "no protection asserted");
-    assert!(rank("sensitive").await < rank("restricted").await);
-    assert!(rank("restricted").await < rank("sequestered").await);
+    // THE RUST<->SQL LOCKSTEP FOR THE LADDER WORDS (#387). These four are fed from the
+    // `GRADE_*` consts, not from literals, because this is the only place that can pin them
+    // to anything: `cairn-event` has no database, so asserting `GRADE_ROUTINE == "routine"`
+    // there compares a const to its own literal and cannot fail. Here a rung renamed on
+    // either side falls out of the ladder and ranks MAX, which the assertions below catch.
+    //
+    // This is NOT the mirror pair ADR-0064 warns about: no ORDERING is copied into Rust.
+    // The four words are asserted to be the four words db/048 ranks; the ranking itself
+    // stays in `cairn_sensitivity_rank`, read live.
+    assert_eq!(rank(GRADE_ROUTINE).await, 0, "no protection asserted");
+    assert!(rank(GRADE_SENSITIVE).await < rank(GRADE_RESTRICTED).await);
+    assert!(rank(GRADE_RESTRICTED).await < rank(GRADE_SEQUESTERED).await);
+    for g in [
+        GRADE_ROUTINE,
+        GRADE_SENSITIVE,
+        GRADE_RESTRICTED,
+        GRADE_SEQUESTERED,
+    ] {
+        assert_ne!(
+            rank(g).await,
+            i32::MAX,
+            "{g:?} is a NAMED rung in Rust but db/048 ranks it as the unknown — the two \
+             definitions of the ladder have drifted"
+        );
+    }
 
     // The inverted unknown. A future peer's grade must coarsen, never expose.
     assert_eq!(
@@ -1248,7 +1270,7 @@ async fn withdraw_sensitivity_requires_the_human_key_and_then_lowers_the_grade()
     // The hex `content_address` an operator would actually have to copy off
     // `patient-sensitivity`'s own printed output to fill in `--withdraws` — sourced from
     // `chart_sensitivity` itself (not a direct table query) so this test also proves
-    // `chart_content_address` round-trips a real, usable value end to end.
+    // `chart_subject.content_address()` round-trips a real, usable value end to end.
     let ca_hex = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
         .await
         .unwrap()
@@ -1879,5 +1901,16 @@ async fn a_chart_with_no_local_registration_reports_its_standing_grade_not_routi
     assert!(
         report.chart_subject.content_address().is_some(),
         "and the winning assertion must still be nameable, so it can be withdrawn"
+    );
+    // AND IT MUST SAY WHY IT CANNOT NAME A SUBJECT. Asserting only `is_some()` left the
+    // phrase free to read "none" beside a real 'sequestered' grade — a self-contradicting
+    // line on the surface this whole test exists to protect, and in the disclosure
+    // direction. `WinningSubject::coarsened` is what now makes that unrepresentable; this
+    // pins the wording it produces.
+    assert_eq!(
+        report.chart_subject.phrase(),
+        cairn_node::sensitivity::subject_kind_phrase("coarsened"),
+        "the grade could not be anchored to a registration, and the report must say so \
+         rather than claim nothing applies"
     );
 }

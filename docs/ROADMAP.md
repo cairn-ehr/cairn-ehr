@@ -188,54 +188,59 @@ PRs; the *why* is in each ADR and must not be restated here).**
 
 - **Slice 57 — `clinical.medication` 6b: the coding-overlay event types** (completes
   [ADR-0059](spec/decisions/0059-medication-drug-coding-drugref-moiety-anchor.md) decision 3; `db/042`,
-  SCHEMA 41→42). Coding is a **separately-authored act**, both types `('additive', FALSE)` so a
+  `SCHEMA_GENERATION` 41→42). Coding is a **separately-authored act**, both types `('additive', FALSE)` so a
   pharmacist is not routed through the ADR-0043 owner gate. The decision it turns on: a reviewer who
-  establishes a drug is NOT metformin but cannot say what it is must record *"not that, and I don't
-  know"* (principle 4), so a **strike NULLs the anchor** rather than deleting the row. CLI
-  `medication-code` / `medication-code-correct`, deliberately **no** `--attest-as`. Also closed #295 and
-  **#296** (a cairn-sync test dropped `event_log.seq` and permanently reordered a SHARED test database —
-  root cause of the long-carried "recreate the test DBs" gotcha). **Lessons:** a redundant projection
-  column is a convergence hazard · nullable-widening a column means re-reading every aggregate over it
-  (`array_agg` KEEPS NULLs). **Still open:** no drugref code in the tree, so the **coded↔uncoded**
-  duplicate case stays open (ADR-0059 decision 5 is explicit the key does not close it); #294; #300; the
-  coding UI and its §1.2 budget.
+  establishes a drug is NOT metformin but cannot say what it is must record *"not that, and I don't know"*
+  (principle 4), so a **strike NULLs the anchor** rather than deleting the row. `patient_medication_uncoded`
+  is the coder worklist; CLI `medication-code` / `medication-code-correct`, deliberately **no**
+  `--attest-as`. Also closed #295 and **#296** (a cairn-sync test dropped `event_log.seq` and permanently
+  reordered a SHARED test database — root cause of the long-carried "recreate the test DBs" gotcha).
+  **Lessons:** a redundant projection column is a convergence hazard · nullable-widening a column means
+  re-reading every aggregate over it (`array_agg` KEEPS NULLs). **Still open:** no drugref code in the
+  tree, so the **coded↔uncoded** duplicate case
+  stays open (ADR-0059 decision 5 is explicit the key does not close it); #294 (blocked on #232 part B);
+  [#300](https://github.com/cairn-ehr/cairn-ehr/issues/300); the coding UI and its §1.2 budget.
 - **Slice 58 — the ADR-0056 floor: admit uninterpreted, re-adjudicate before power** (PR #302; closes
-  [#265](https://github.com/cairn-ehr/cairn-ehr/issues/265) + #266; SCHEMA 42→43). `apply_remote_event`
-  used to RAISE on an `event_type` absent from `event_type_class`, so the event was **never stored at
-  all** — a phone-tier node carrying a chart between two upgraded facilities acquired nothing past the
-  first unknown-type event. The door now admits verbatim, projects nothing, confers nothing, and records
-  `event_deferred` (node-local, never on the wire); `cairn_readjudicate_deferred` (db/043) re-runs the
-  classification-gated checks **before** anything reprojects. **Lessons:** refusal hides, admission cannot
-  · an unverified value stored "for later" leaks into a live gate, and the fix is **neutrality, not
-  strictness** · a promotion must PROVE the event takes effect. **Caveat that outlives the slice:**
-  without `CAIRN_TEST_PG2`/`PG3` the multi-node convergence suites self-skip and cargo counts them
-  *passed*. **Still open:** #301 (the node/actor plane still fail-closes, so §6.5's invariant holds **for
-  clinical events only**), #308, #309.
-- **Slice 59 — floor determinism + tech-debt-loop launch readiness** (PR #311 closes #75). The §3.13
+  [#265](https://github.com/cairn-ehr/cairn-ehr/issues/265) + [#266](https://github.com/cairn-ehr/cairn-ehr/issues/266); `SCHEMA_GENERATION` 42→43). `apply_remote_event` used to RAISE on an `event_type`
+  absent from `event_type_class`, so the event was **never stored at all** — a phone-tier node carrying a
+  chart between two upgraded facilities acquired nothing past the first unknown-type event. The door now
+  admits verbatim, projects nothing, confers nothing, and records `event_deferred` (node-local, never on
+  the wire); `cairn_readjudicate_deferred` (db/043) re-runs the classification-gated checks **before**
+  anything reprojects. **Lessons:** refusal hides, admission cannot · an unverified value stored "for
+  later" leaks into a live gate, and the fix is **neutrality, not strictness** · a promotion must PROVE
+  the event takes effect (an early version bricked the node). **Caveat that outlives the slice:** without
+  `CAIRN_TEST_PG2`/`PG3` the multi-node convergence suites self-skip and cargo counts them as *passed*.
+  **Still open:** [#301](https://github.com/cairn-ehr/cairn-ehr/issues/301)
+  (the node/actor plane still fail-closes, so §6.5's invariant holds **for clinical events only**), [#308](https://github.com/cairn-ehr/cairn-ehr/issues/308), [#309](https://github.com/cairn-ehr/cairn-ehr/issues/309).
+- **Slice 59 — floor determinism + tech-debt-loop launch readiness** (PR #311 closes [#75](https://github.com/cairn-ehr/cairn-ehr/issues/75)). The §3.13
   twin blank-test was **collation-dependent — a convergence break, not the cosmetic asymmetry #75
   described**: Postgres's `\s` is `[[:space:]]`, whose ctype membership the collation decides, and
   `cairn_event_twin` is also the remote-apply gate, so **the same signed event could apply on one node and
-  raise on another** (principle 1). **Generalisable: a "merely cosmetic" asymmetry between two
-  implementations of one predicate is worth measuring before it is filed as benign.** Same PR readied the
-  tech-debt loop (#312).
+  raise on another** (principle 1). Fixed by `cairn_twin_is_present(text)` in db/005, spelling the 25
+  Unicode `White_Space=Yes` points as visible `U&'\XXXX'` escapes. **Generalisable: a "merely cosmetic"
+  asymmetry between two implementations of one predicate is worth measuring before it is filed as
+  benign.** Same PR readied the tech-debt loop ([#312](https://github.com/cairn-ehr/cairn-ehr/issues/312)).
 - **Interlude — the loop ran unattended (07-31 → 08-01).** Nine PRs, no slice of their own. Closed **#79**,
-  **#11** (residue #317), **#100**, **#119**, **#120**. Loop fixes: PRs #316, #321 (a headless worker dies
-  at turn end, so a successful cycle counted as a failure), #325. **Open:** #312, #314, #315, #322, #326,
-  #327.
-- **Slice 60 — ADR-0056 decision 5: the residual refusal contract, clinical plane** (closes #267/#270).
+  **#11** (the RustCrypto stacks converged once the unifying majors landed — the earlier "still blocked"
+  reading had probed our own `Cargo.lock`, which can never show a new upstream major; residue [#317](https://github.com/cairn-ehr/cairn-ehr/issues/317)),
+  **#100**, **#119**, **#120**. Loop fixes: PRs #316, #321 (a headless worker dies at turn end, so a
+  successful cycle counted as a failure), #325. **Open:** #312, #314, #315, #322, #326, #327.
+- **Slice 60 — ADR-0056 decision 5: the residual refusal contract, clinical plane** (closes [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267)/[#270](https://github.com/cairn-ehr/cairn-ehr/issues/270)).
   A *deliberate* floor refusal on **verifiable** bytes persisted nothing, froze the cursor and **exited
   SUCCESS** — a wedged peer link indistinguishable from a healthy one. Now penned by digest, deduped,
   auto-released when the refusal later applies, and a frozen watermark fails loudly. **Three lessons:** a
-  refusal that persists nothing cannot be audited · when a call site cannot make a distinction, check
-  whether an intermediate layer threw it away (`apply_signed` flattened `postgres::Error` to a `String`,
-  discarding the SQLSTATE #228 later leaned on — **`P0001` is a contract with the pull loop**:
-  `cairn-sync` treats it as deliberate (skip, re-offer) and anything else as transient (freeze the
-  cursor), so a bare `decode()` inside a door stalls sync from that peer permanently. PR #371 fixed the
-  node plane; **[#370](https://github.com/cairn-ehr/cairn-ehr/issues/370) is the same defect on the
-  CLINICAL plane and is still open**) · symmetry between two planes is a hypothesis, not a goal — the
-  naive #268 alignment would be a defect, since the node plane's deny-all is routine *scoping*, not
-  refused history. **Still open:** #268 (blocked on a refusal-class partition in `db/007`); the pen is
-  fillable by a hostile-but-enrolled peer, bounded by the per-peer quota (§6.3).
+  refusal that persists nothing cannot be audited (the fix was reusing the durable path, not more logging)
+  · when a call site cannot make a distinction, check whether an intermediate layer threw it away
+  (`apply_signed` flattened `postgres::Error` to a `String`, discarding the SQLSTATE #228 later leaned on
+  — **`P0001` is a contract with the pull loop**: `cairn-sync` treats it as deliberate (skip, re-offer)
+  and anything else as transient (freeze the cursor), so a bare `decode()` inside a door stalls sync from
+  that peer permanently. PR #371 fixed the node plane; **[#370](https://github.com/cairn-ehr/cairn-ehr/issues/370)
+  is the same defect on the CLINICAL plane and is still open**)
+  · symmetry between two planes is a hypothesis, not a goal — the naive
+  [#268](https://github.com/cairn-ehr/cairn-ehr/issues/268) alignment would be a defect, since the node
+  plane's deny-all is routine *scoping*, not refused history. **Still open:** #268 (blocked on a
+  refusal-class partition in `db/007`); the pen is fillable by a hostile-but-enrolled peer, bounded by the
+  per-peer quota (§6.3).
 
 **Slices 61+62 — the med-list node tier and WINDOW: Cairn's first clinical READ path and first
 runnable clinical surface (2026-08-02/03; branches `feat/med-list-ui-slice-288` and
@@ -434,25 +439,42 @@ the fix is visibility, not a door refusal — refusing at apply would fork the e
 chart"* is indistinguishable from *"not arrived yet"* on a node holding neither. All five production
 mutations tried against the new tests were killed.
 
-
 **Slice 69 follow-on — §5.9 type design (2026-08-19; closes
 [#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); no ADR, no migration, SCHEMA stays 49).** Four
-closed sets get one definition each; the third is the load-bearing one. **(1)** `source` becomes a
-`Provenance` enum — ADR-0062 decision 5 names two values with **no** evolution argument, db/048 never
-reads it, nothing branches on it, so `"Human"` or `"advisory "` would have passed builder *and* floor
-into a plaintext, unconditionally-replicating body and been noticed by nothing, ever. **(2)** Four
-`GRADE_*` **consts, not an enum** (an enum closes the open vocabulary and makes the inverted-unknown path
-unreachable). Documentary only: a survey found **exactly one** grade literal in production code
-workspace-wide — the rest are `#[cfg(test)]` or doc comments — so this is not the de-duplication #387
-assumed. **(3) `WinningSubject` fuses `chart_source` + `chart_content_address`, making ADR-0062 erratum
-E6 structurally unrepeatable:** `content_address IS NOT NULL` is the "did anything win" test, never
+closed sets get one definition each; the third and fourth are the load-bearing ones. **(1)** `source`
+becomes a `Provenance` enum — db/048 checks it non-empty, stores it, and then reads it from **no query,
+no projection and no rank function**, so `"Human"` or `"advisory "` would have passed builder *and* floor
+into a plaintext, unconditionally-replicating body. Not harmless: `render_sensitivity_twin` prints it into
+the signed §3.13 legibility twin, which is permanent. Builder-side only — the door still admits a peer's
+future value, and db/048 itself mints a third (`'unreadable'`, on the born-sealed branch), so a read model
+must keep `source` as open text. **(2)** Four `GRADE_*` **consts, not an enum** (an enum closes the open
+vocabulary and makes the inverted-unknown path unreachable). Documentary: a survey found **exactly one**
+grade literal in production code workspace-wide, so this is not the de-duplication #387 assumed. They are
+pinned where it is possible to pin them — `sensitivity_ladder.rs` feeds all four to
+`cairn_sensitivity_rank` live, since a Rust-only assertion compares a const to its own literal.
+**(3) `WinningSubject` fuses `chart_source` + `chart_content_address`, making ADR-0062 erratum E6
+structurally unrepeatable:** `content_address IS NOT NULL` is the "did anything win" test, never
 `subject_kind <> 'none'` (`none` is a legal open-vocabulary kind a peer can send), and a consumer keying
-on the phrase would drop the address needed to withdraw a real winner. One constructor takes that
-decision now, and it reads the address; it lives in its own `sensitivity/winner.rs` so it cannot be
-buried among DB reads. **(4)** `SubjectKind: TryFrom<&str>` + `ALL` collapse three hand-maintained copies
-(`as_str`, the clap value list, a CLI `match`) into one — `--help` derives from the enum, the
-`unreachable` bail is gone, and the drift guard bites both ways: shrinking `ALL` fails a test, adding a
-variant stops the file compiling.
+on the phrase would drop the address needed to withdraw a real winner. Its payload fields are **private**,
+so the two constructors in `sensitivity/winner.rs` are the only producers — a claim about construction has
+to be enforced by visibility or it is a wish. **(4)** `SubjectKind` and its wire words are **generated
+from one table** by a small `macro_rules!`, which is the only construction that actually works: the
+hand-written `ALL` this replaced was guarded by `assert_eq!(ALL.len(), 3)` over an `[SubjectKind; 3]` —
+a constant compared to its own literal, which could never fail. Adding a fourth variant left the suite
+green while `--help` and `try_from` silently refused a kind `as_str` was emitting.
+
+**The lesson this slice is really about: a guard defined over the list it guards is not a guard.** Every
+finding in its review was one of those — the drift guard above, `from_row` "the ONE place" over public
+fields, "hex" as an unenforced doc claim, and four tests asserting a const against its own literal. The
+code was right; three of the four headline claims were true only in the comments. Second-order fixes that
+came out of it: the last two hand-written copies of the subject-kind set are gone (`parse_subject_kind`
+is `try_from`, `subject_kind_phrase` matches on the enum, so its `_` arm can no longer swallow a new
+variant); the thread grade line is rendered by a test for the first time (the whole
+`withdraws=<hex>` clause could previously be deleted green — and it is the operator's only route to
+withdrawing a thread-scoped grade without raw SQL); `render_assert_readback` takes `&'static str` so peer
+text cannot reach the one slot it prints unescaped; and `cli_sensitivity_surface.rs` pins `--help`
+against the enum, the only place `ALL`'s contents are user-visible.
+
 
 ## Phase 5 — Security & compliance core
 

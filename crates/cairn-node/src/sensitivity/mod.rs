@@ -70,10 +70,24 @@ pub use winner::WinningSubject;
 /// reads as coarsened to chart-wide — the same safe direction, put into words rather than
 /// second-guessed.
 pub fn subject_kind_phrase(kind: &str) -> &'static str {
+    // THE THREE CLOSED KINDS RESOLVE THROUGH `SubjectKind` ITSELF (#387), never through
+    // their wire words retyped here. This was the last hand-maintained copy of that set,
+    // and the most dangerous kind: its `_` arm meant a fourth variant would produce no
+    // compile error at all, just a silent demotion of the new kind to "an unrecognised
+    // scope" — a phrase that is safe in direction but false about this build's own
+    // capability. Routing through `try_from` makes the `match` below exhaustive, so adding
+    // a variant now stops this file compiling until a human chooses its phrase, which is
+    // the one decision that genuinely cannot be generated.
+    if let Ok(k) = SubjectKind::try_from(kind) {
+        return match k {
+            SubjectKind::Patient => "chart-wide",
+            SubjectKind::Thread => "this thread",
+            SubjectKind::Event => "this event",
+        };
+    }
+    // The OPEN remainder: db/048's own sentinels plus anything a future peer sends. Still
+    // total, and still coarsening in the safe direction.
     match kind {
-        "patient" => "chart-wide",
-        "thread" => "this thread",
-        "event" => "this event",
         "coarsened" => "chart-wide (an assertion that names no subject on this chart)",
         "none" => "none",
         _ => "an unrecognised scope (read chart-wide)",
