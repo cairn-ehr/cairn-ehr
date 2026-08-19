@@ -603,6 +603,10 @@ enum Cmd {
     /// (ADR-0053), so this always needs a bound human author: --attester-key must name an
     /// enrolled `kind='human'` actor (run `enroll-human` first), and db/048's ceremony
     /// refuses the event otherwise.
+    ///
+    /// Reports back what the withdrawal ACHIEVED, not merely that it was written: a claim
+    /// below ADR-0064's authority bar lands and converges while removing no protection at
+    /// all, so "withdrew" alone would be true of an act that changed nothing.
     SensitivityWithdraw {
         /// The chart the withdrawn assertion belongs to.
         #[arg(long)]
@@ -1094,83 +1098,6 @@ enum Cmd {
     /// (a missing overlay target arriving, for instance). A healthy node whose code
     /// covers everything it has received lists nothing.
     Deferred,
-}
-
-/// Read back what now stands over the subject an operator just asserted a grade over.
-///
-/// Returns `(standing grade, winning subject phrase, scope label)`. The scope label is what
-/// makes the readback honest: the three subject kinds resolve against three DIFFERENT
-/// things, and saying "now stands on this chart" after a thread-scoped assert would be a
-/// precise untruth about an assertion that did exactly what was asked of it.
-///
-/// * `Patient` — the chart-wide reading, off the chart's registration event.
-/// * `Event` — `cairn_effective_sensitivity` over the asserted event itself.
-/// * `Thread` — over the thread's currently projected head. A node holding no DEK custody
-///   has no such row, and this says so rather than reporting a grade for something it
-///   cannot see (principle 4: an imprecise near-truth beats a precise untruth).
-async fn sensitivity_assert_readback(
-    db: &mut tokio_postgres::Client,
-    patient: uuid::Uuid,
-    kind: cairn_event::sensitivity::SubjectKind,
-    subject_id: uuid::Uuid,
-) -> anyhow::Result<(String, String, &'static str)> {
-    use cairn_event::sensitivity::SubjectKind;
-    match kind {
-        SubjectKind::Patient => {
-            let after = cairn_node::sensitivity::chart_sensitivity(db, patient).await?;
-            Ok((after.chart_grade, after.chart_source, "this chart"))
-        }
-        SubjectKind::Event => {
-            let row = db
-                .query_one(
-                    "SELECT grade, subject_kind FROM cairn_effective_sensitivity($1::text::uuid)",
-                    &[&subject_id.to_string()],
-                )
-                .await?;
-            let kind_s: String = row.get(1);
-            Ok((
-                row.get::<_, String>(0),
-                cairn_node::sensitivity::subject_kind_phrase(&kind_s).to_string(),
-                "that event",
-            ))
-        }
-        SubjectKind::Thread => {
-            // The thread's current head is the row medication_statement holds for it — an
-            // ON CONFLICT DO UPDATE table (db/031), so this names a real, locally-resolvable
-            // event when this node can open the thread at all.
-            let head = db
-                .query_opt(
-                    "SELECT ces.grade, ces.subject_kind
-                       FROM medication_statement ms
-                       JOIN event_log e ON e.content_address = ms.content_address,
-                            LATERAL cairn_effective_sensitivity(e.event_id) ces
-                      WHERE ms.medication_id = $1::text::uuid",
-                    &[&subject_id.to_string()],
-                )
-                .await?;
-            match head {
-                Some(row) => {
-                    let kind_s: String = row.get(1);
-                    Ok((
-                        row.get::<_, String>(0),
-                        cairn_node::sensitivity::subject_kind_phrase(&kind_s).to_string(),
-                        "that thread",
-                    ))
-                }
-                // Not an error: the assertion landed and is perfectly valid. This node just
-                // cannot project the thread it grades, which is ordinary on a node without
-                // DEK custody. Say that, rather than reporting a grade for a thread this
-                // node cannot see or claiming the assertion did nothing.
-                None => Ok((
-                    "(not readable here)".to_string(),
-                    "no locally projected row for that thread — this node may hold no DEK \
-                     custody (#383)"
-                        .to_string(),
-                    "that thread",
-                )),
-            }
-        }
-    }
 }
 
 #[tokio::main]
@@ -1923,10 +1850,13 @@ async fn main() -> anyhow::Result<()> {
                  chart {patient} (event {event_id})"
             );
             // #388 part 4: never echo the typed grade as though it were the outcome. Both
-            // orchestrators mint a local Uuid and return it without reading anything back,
-            // so an assertion outranked by a standing chart-wide grade looked identical to
-            // one that took effect. Re-read and report BOTH facts — the assertion may be
-            // correctly outranked, which the operator needs to see rather than infer.
+            // §5.9 orchestrators mint a local Uuid and return it without reading anything
+            // back, so an assertion outranked by a standing chart-wide grade looked
+            // identical to one that took effect. Re-read and report BOTH facts — the
+            // assertion may be correctly outranked, which the operator needs to see rather
+            // than infer. The withdraw arm below carries its own read-back for the same
+            // reason (#435) — until it did, this comment named "both orchestrators" while
+            // only one of them had the fix.
             //
             // RESOLVED AGAINST THE SUBJECT ACTUALLY ASSERTED. `chart_sensitivity` resolves
             // the chart-wide reading off the chart's REGISTRATION event, and neither a
@@ -1942,11 +1872,15 @@ async fn main() -> anyhow::Result<()> {
             // means a landed, signed, replicated assertion reports as a failure, and a
             // retry appends a permanent duplicate. Same reasoning as `safety.rs`'s
             // `advisory_or_least`: an advisory read may never fail a clinical write.
-            match sensitivity_assert_readback(&mut db, patient, kind, subject_id).await {
-                Ok((standing, subject, scope)) => println!(
+            match cairn_node::sensitivity::subject_reading(&mut db, patient, kind, subject_id).await
+            {
+                Ok(r) => println!(
                     "{}",
                     cairn_node::sensitivity::render::render_assert_readback(
-                        &grade, &standing, &subject, scope,
+                        &grade,
+                        &r.grade,
+                        &r.winning_subject,
+                        r.scope,
                     )
                 ),
                 Err(e) => eprintln!(
@@ -1990,6 +1924,35 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "withdrew sensitivity assertion {withdraws} on chart {patient} (event {event_id})"
             );
+            // #435: never let "withdrew" stand alone. ADR-0064 gates EFFECT, not admission
+            // — a withdrawal below the authority bar LANDS, converges and stays
+            // re-assertable while removing no protection at all — so the line above is
+            // equally true of an act that changed nothing, and an inert withdrawal is the
+            // headline subject of this whole subsystem. The read-back reports the
+            // accountability fact and the effect fact SEPARATELY: db/048's worklist is a
+            // union whose two arms mean OPPOSITE things, and `stranger-attested` is a
+            // COMPLETED removal of protection that must never be worded as a failure (see
+            // `sensitivity::readback`).
+            //
+            // NOT `?`, for the same reason as the assert arm above. The event is already
+            // committed and its success line already printed; letting a read-back set the
+            // exit code makes a landed, signed, replicated withdrawal report as a failure,
+            // and the natural retry appends a permanent duplicate.
+            match cairn_node::sensitivity::withdraw_readback(&mut db, patient, event_id, &withdraws)
+                .await
+            {
+                Ok(outcome) => {
+                    for line in cairn_node::sensitivity::render::render_withdraw_readback(&outcome)
+                    {
+                        println!("{line}");
+                    }
+                }
+                Err(e) => eprintln!(
+                    "WARNING: the withdrawal LANDED (event {event_id}) but reading back what \
+                     it achieved failed, so whether it took effect is unknown from here — run \
+                     `cairn-node patient-sensitivity {patient}`: {e:#}"
+                ),
+            }
         }
         Cmd::PatientSensitivity { patient } => {
             // A pure read — no signing key, no HLC tick, nothing authored.
