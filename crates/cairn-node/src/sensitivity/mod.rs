@@ -34,6 +34,7 @@ use cairn_event::sensitivity::{
 use cairn_event::{event_address, sign, sign_attestation, ClockGrade, EventBody, SigningKey};
 use uuid::Uuid;
 
+pub mod readback;
 pub mod render;
 pub mod report;
 
@@ -41,6 +42,7 @@ pub mod report;
 // `cairn_node::sensitivity::ChartReport` keep working unchanged at every call site. The
 // module split is an internal organisation decision; it is not an API change, and making
 // callers move would turn a mechanical refactor into a reviewable one for no gain.
+pub use readback::{subject_reading, withdraw_readback};
 pub use report::{chart_sensitivity, ChartReport, ThreadGrade};
 
 /// Map the `subject_kind` `cairn_effective_sensitivity` returns to the phrase a human

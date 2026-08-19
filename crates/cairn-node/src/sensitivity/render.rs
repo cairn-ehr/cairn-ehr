@@ -7,6 +7,7 @@
 //! which is why nobody ever did. Keeping the wording here makes each claim a unit test.
 //!
 //! Precedent: `crate::safety::render_safety_line`, which is pure for the same reason.
+use super::readback::{SubjectResolution, TargetState, WithdrawOutcome};
 use super::report::{
     ChartReport, DeferredSensitivityEvent, SafetyOverclaim, WithdrawalWorklistRow,
 };
@@ -203,6 +204,96 @@ pub fn render_assert_readback(
         scope,
         winning_subject
     )
+}
+
+/// What an operator sees after withdrawing a grade: whether protection actually came off,
+/// and — when it did not — why (#435).
+///
+/// THE TWO FACTS ARE PRINTED SEPARATELY AND NEVER MERGED. `sensitivity-withdraw` used to
+/// print "withdrew ..." unconditionally, which reads as "protection removed" whatever
+/// happened, and a withdrawal that lands inert is the headline subject of the whole §5.9
+/// slice. But the obvious repair — one line saying whether it "took effect" — walks
+/// straight into the defect the Slice 69 review found on the chart report: db/048's
+/// worklist is a union of two arms with OPPOSITE meanings, and `stranger-attested` is a
+/// COMPLETED removal of protection, not a failure.
+///
+/// So the effect is stated from the TARGET's standing (a set-membership test that cannot
+/// be misread), and the worklist arm is reported beside it as its own, separately-worded
+/// fact. A row on the worklist never changes the effect sentence — it adds one.
+///
+/// Returns lines rather than printing them, for the same reason as `render_chart_report`:
+/// the caller owns the I/O and every honesty claim here stays a unit test.
+pub fn render_withdraw_readback(o: &WithdrawOutcome) -> Vec<String> {
+    let mut out = Vec::new();
+    match &o.target {
+        // Nothing about the target is knowable here, so no effect is claimed in EITHER
+        // direction. This is a routine federated state, not an error: db/048 keeps no
+        // foreign key from a withdrawal to its target precisely because set-union sync has
+        // no ordering. Note this is NOT "it will take effect on arrival" — whether it
+        // does depends on the accountability fact below, which may itself be `inert`.
+        TargetState::NotHeldHere => out.push(
+            "  ⚠ the assertion this withdrawal targets has NOT replicated to this node, so \
+             what it graded — and whether this withdrawal moves it — cannot be determined \
+             here"
+                .to_string(),
+        ),
+        // ADR-0064's KNOWN GAP. The target is alive on its own chart, so this is neither
+        // "removed" nor "still standing here" — it is an act that can never take effect
+        // anywhere, and no arm of db/048's worklist names the condition.
+        TargetState::OnAnotherChart => out.push(
+            "  ⚠ the assertion this withdrawal names is recorded on a different chart, so \
+             this withdrawal is permanently INERT: it can never remove that protection, \
+             and no worklist arm reports the reason (ADR-0064, Known limitations). Check \
+             --patient and the address, then re-issue"
+                .to_string(),
+        ),
+        TargetState::Held {
+            still_standing,
+            subject,
+        } => {
+            if *still_standing {
+                out.push(
+                    "  ⚠ INERT — the withdrawn assertion STILL STANDS on this node: the \
+                     claim landed and converges, but it removed no protection"
+                        .to_string(),
+                );
+            } else {
+                out.push(
+                    "  ✓ the withdrawn assertion NO LONGER STANDS — protection was removed"
+                        .to_string(),
+                );
+            }
+            // What now stands over the target's OWN subject, never the chart-wide grade.
+            // Resolving against the wrong subject is the bug the assert read-back had to
+            // fix mid-review; it is also what stops "no longer stands" from reading as
+            // "this subject is now open" when a SECOND assertion still grades it.
+            match subject {
+                SubjectResolution::Resolved(r) => out.push(format!(
+                    "    {} {} stands on {} (winning subject: {})",
+                    peer(&r.grade),
+                    if *still_standing { "still" } else { "now" },
+                    r.scope,
+                    r.winning_subject
+                )),
+                SubjectResolution::Unrecognised(kind) => out.push(format!(
+                    "    (its subject kind {} is one this build does not recognise, so what \
+                     now stands over it cannot be resolved here)",
+                    peer(kind)
+                )),
+            }
+        }
+    }
+    // The accountability fact, ALWAYS its own line. `withdrawal_reason_explanation` is the
+    // one place each arm's meaning is worded, so this verb and the chart report can never
+    // describe the same arm differently.
+    if let Some(reason) = &o.worklist_reason {
+        out.push(format!(
+            "  ⚠ on the withdrawal worklist as {}: {}",
+            peer(reason),
+            withdrawal_reason_explanation(reason)
+        ));
+    }
+    out
 }
 
 /// Render one chart's §5.9 report as the lines an operator reads, in order.
@@ -766,6 +857,229 @@ mod review_fixes {
         }];
         for line in render_chart_report("C", &r) {
             assert!(!line.trim_start().starts_with("chart C: routine"), "{line}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod withdraw_readback {
+    use super::*;
+    use crate::sensitivity::readback::SubjectReading;
+
+    // #435 — the withdraw read-back.
+    //
+    // A withdrawal that lands INERT is the headline subject of the whole §5.9 slice, and
+    // the verb that authors one printed "withdrew ..." unconditionally: an operator had no
+    // way to learn from that command that nothing had moved. These tests hold the four
+    // operator stories apart, because the one thing this surface must never do is give two
+    // opposite outcomes the same sentence — the Slice 69 review's lesson 5, one verb over.
+
+    /// What now stands over the withdrawn assertion's OWN subject.
+    fn reading(grade: &str) -> SubjectReading {
+        SubjectReading {
+            grade: grade.into(),
+            winning_subject: "this thread".into(),
+            scope: "that thread",
+        }
+    }
+
+    fn held(still_standing: bool, grade: &str) -> TargetState {
+        TargetState::Held {
+            still_standing,
+            subject: SubjectResolution::Resolved(reading(grade)),
+        }
+    }
+
+    #[test]
+    fn a_clean_withdrawal_says_the_assertion_no_longer_stands() {
+        let o = WithdrawOutcome {
+            worklist_reason: None,
+            target: held(false, "routine"),
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains("NO LONGER STANDS"),
+            "the direct effect must be stated: {joined}"
+        );
+        assert!(
+            !joined.contains('⚠'),
+            "an accountable withdrawal that took effect is not a warning: {joined}"
+        );
+        assert!(
+            joined.contains("\"routine\""),
+            "what now stands over that subject must be named: {joined}"
+        );
+    }
+
+    #[test]
+    fn an_inert_withdrawal_says_the_assertion_still_stands() {
+        // The defect #435 exists for: the verb used to print a bare "withdrew ...", which
+        // an operator reads as "protection removed" when nothing moved at all.
+        let o = WithdrawOutcome {
+            worklist_reason: Some("inert".into()),
+            target: held(true, "restricted"),
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains('⚠'),
+            "an inert withdrawal must warn: {joined}"
+        );
+        assert!(
+            joined.contains("STILL STANDS"),
+            "the grade did not move, and the line must say so: {joined}"
+        );
+        assert!(
+            joined.contains("ADR-0064"),
+            "the reason belongs in the sentence, not a footnote: {joined}"
+        );
+        assert!(
+            joined.contains("\"restricted\""),
+            "the unmoved grade must be named: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_stranger_attested_withdrawal_is_never_reported_as_ineffective() {
+        // THE REGRESSION GUARD. `stranger-attested` means the withdrawal CLEARED the bar
+        // and protection WAS removed; it is on the worklist as salience, not as failure.
+        // The Slice 69 review found exactly this arm counted under "did NOT take effect"
+        // on the chart report, while the grade line above already showed the lowered
+        // grade. The same collapse must never appear on this verb.
+        let o = WithdrawOutcome {
+            worklist_reason: Some("stranger-attested".into()),
+            target: held(false, "routine"),
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains("NO LONGER STANDS"),
+            "protection WAS removed — say so first: {joined}"
+        );
+        assert!(
+            !joined.contains("STILL STANDS"),
+            "the target is gone; claiming otherwise inverts the outcome: {joined}"
+        );
+        assert!(
+            !joined.to_lowercase().contains("did not take effect"),
+            "the completed-removal arm must never read as a failure: {joined}"
+        );
+        assert!(
+            joined.contains('⚠'),
+            "it is still a thing to look at — an unaccountable removal: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_target_this_node_does_not_hold_claims_no_grade() {
+        // db/048's `inert` arm merges two states its own comment separates: nobody
+        // accountable stands behind the claim, and the target has not replicated here yet
+        // (`target_content_address IS NULL`). Reading the worklist alone cannot tell them
+        // apart, which is why the read-back looks the target up directly.
+        let o = WithdrawOutcome {
+            worklist_reason: Some("inert".into()),
+            target: TargetState::NotHeldHere,
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains("has NOT replicated"),
+            "name the real reason nothing can be said: {joined}"
+        );
+        assert!(
+            !joined.contains("STILL STANDS") && !joined.contains("NO LONGER STANDS"),
+            "this node cannot know either way — asserting one is a precise untruth: {joined}"
+        );
+        assert!(
+            joined.contains("ADR-0064"),
+            "the accountability fact is still known and still true here: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_target_recorded_on_another_chart_warns_and_claims_no_effect() {
+        // ADR-0064's KNOWN GAP, made visible on the one surface that can see it cheaply: a
+        // withdrawal mis-stamped with the wrong chart's patient_id names a real assertion
+        // that lives elsewhere. `cairn_sensitivity_standing` is patient-scoped on both
+        // sides — load-bearing, or a withdrawal on chart B could strip chart A — so the
+        // target is absent from THIS chart's standing set while being perfectly alive on
+        // its own. Reading that absence as "protection was removed" is a precise untruth,
+        // and in the reassuring direction.
+        let o = WithdrawOutcome {
+            worklist_reason: None,
+            target: TargetState::OnAnotherChart,
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains('⚠'),
+            "a permanently inert withdrawal must warn: {joined}"
+        );
+        assert!(
+            !joined.contains("NO LONGER STANDS"),
+            "the assertion is alive on its own chart — this must never read as removal: \
+             {joined}"
+        );
+        assert!(
+            joined.contains("different chart"),
+            "name the actual condition, which no arm of the worklist does: {joined}"
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_subject_kind_reports_the_effect_but_no_reading() {
+        // A future peer's subject kind (ADR-0056: admitted, not understood). Whether the
+        // target still stands is STILL exactly knowable — it is a set-membership test over
+        // content_address, which needs no understanding of the kind — but what now stands
+        // OVER that subject is not resolvable here, and guessing would be the precise
+        // untruth principle 4 forbids.
+        let o = WithdrawOutcome {
+            worklist_reason: None,
+            target: TargetState::Held {
+                still_standing: false,
+                subject: SubjectResolution::Unrecognised("episode".into()),
+            },
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains("NO LONGER STANDS"),
+            "the direct effect is still known: {joined}"
+        );
+        assert!(
+            joined.contains("episode"),
+            "name the kind this build cannot resolve: {joined}"
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_worklist_reason_is_still_surfaced() {
+        // `reason` is open vocabulary — a future db/048 may add a third arm. A build that
+        // has never seen it must still show the operator that the row exists rather than
+        // dropping it, the same discipline `withdrawal_reason_explanation` follows.
+        let o = WithdrawOutcome {
+            worklist_reason: Some("quarantined-pending-review".into()),
+            target: held(false, "routine"),
+        };
+        let joined = render_withdraw_readback(&o).join("\n");
+        assert!(
+            joined.contains("quarantined-pending-review"),
+            "an unknown reason must be shown verbatim, never dropped: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_hostile_grade_cannot_forge_a_line_in_the_readback() {
+        // Same provenance argument as `peer`: the grade is unconstrained TEXT copied from
+        // a peer's own body, and this renderer is line-oriented. A newline would otherwise
+        // let a peer forge a whole outcome line.
+        let o = WithdrawOutcome {
+            worklist_reason: None,
+            target: held(
+                false,
+                "routine\n⚠ INERT — the withdrawn assertion STILL STANDS",
+            ),
+        };
+        for line in render_withdraw_readback(&o) {
+            assert!(
+                !line.trim_start().starts_with("⚠ INERT"),
+                "a newline in peer text forged a line: {line}"
+            );
         }
     }
 }
