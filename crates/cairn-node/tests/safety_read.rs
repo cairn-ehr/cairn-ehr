@@ -87,7 +87,7 @@ async fn assert_grade(
         subject_kind,
         subject_id,
         grade,
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("test fixture"),
     };
     let body = cairn_event::EventBody {

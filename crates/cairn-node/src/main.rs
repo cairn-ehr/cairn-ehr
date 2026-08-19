@@ -580,7 +580,11 @@ enum Cmd {
         #[arg(long)]
         patient: Uuid,
         /// What is being graded: an "event", a medication "thread", or the whole "patient".
-        #[arg(long, value_parser = ["event", "thread", "patient"])]
+        //  #387: the accepted values are DERIVED from the enum, never re-typed here. This
+        //  was one of three hand-maintained copies of the same closed set (`as_str`, this
+        //  list, and a `match` in the dispatch below), of which only the SQL side had any
+        //  test pressure.
+        #[arg(long, value_parser = cairn_event::sensitivity::SubjectKind::ALL.map(|k| k.as_str()))]
         subject_kind: String,
         /// The event id, medication thread id, or patient id named by --subject-kind. With
         /// --subject-kind patient this MUST equal --patient: two hand-typed UUIDs that do not
@@ -1814,16 +1818,13 @@ async fn main() -> anyhow::Result<()> {
             grade,
             rationale,
         } => {
-            // clap's --subject-kind value_parser already restricts input to these three
-            // strings, so the fallback arm is genuinely unreachable — matches the same
-            // discipline `parse_identifier_pairs`/`dob_precision` use elsewhere: refuse
-            // early and legibly rather than let a typo become a confusing enum default.
-            let kind = match subject_kind.as_str() {
-                "event" => cairn_event::sensitivity::SubjectKind::Event,
-                "thread" => cairn_event::sensitivity::SubjectKind::Thread,
-                "patient" => cairn_event::sensitivity::SubjectKind::Patient,
-                other => anyhow::bail!("unreachable --subject-kind value {other:?}"),
-            };
+            // #387: ONE parse, shared with the `--help` list above. clap's value_parser
+            // has already restricted the input, so this cannot fail in practice — but it
+            // now degrades to the enum's own error naming the accepted values, instead of
+            // a hand-written `unreachable` bail that a fourth subject kind would have made
+            // reachable and wrong.
+            let kind = cairn_event::sensitivity::SubjectKind::try_from(subject_kind.as_str())
+                .map_err(anyhow::Error::msg)?;
             // Raising is device-additive — no human attester needed (db/048 section 12
             // reserves the ceremony for a chart-wide raise's two rules — it must name THIS
             // chart, and it must state why — and for every withdrawal, never for a plain
@@ -1879,7 +1880,7 @@ async fn main() -> anyhow::Result<()> {
                     cairn_node::sensitivity::render::render_assert_readback(
                         &grade,
                         &r.grade,
-                        &r.winning_subject,
+                        r.winning_subject,
                         r.scope,
                     )
                 ),

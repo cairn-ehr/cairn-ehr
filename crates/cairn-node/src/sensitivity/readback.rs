@@ -30,12 +30,16 @@ use uuid::Uuid;
 /// Replaces the bare `(String, String, &'static str)` the assert read-back used to return.
 /// Two of those three fields are interchangeable by type, and a call site that prints all
 /// three in one sentence is exactly where a transposition survives review unnoticed.
+#[derive(Debug)]
 pub struct SubjectReading {
     /// The effective grade now standing over the subject. PEER TEXT — unconstrained `TEXT`
     /// copied from a body, so the renderer escapes it (`render::peer`).
     pub grade: String,
     /// Which subject produced that grade: [`subject_kind_phrase`]'s output.
-    pub winning_subject: String,
+    ///
+    /// `&'static str` (#387): every producer already returns one, and the old code
+    /// `.to_string()`d it at each call site for nothing.
+    pub winning_subject: &'static str,
     /// What the grade was read OVER — "this chart" | "that event" | "that thread". The
     /// three subject kinds resolve against three DIFFERENT things, and saying "on this
     /// chart" after a thread-scoped act is a precise untruth about an act that did exactly
@@ -48,6 +52,7 @@ pub struct SubjectReading {
 /// A sum type rather than an `Option<SubjectReading>` beside a loose `subject_kind: String`:
 /// these are two different sentences an operator reads, and an unrecognised kind must NAME
 /// itself rather than degrade into an absent value that reads like "nothing applies".
+#[derive(Debug)]
 pub enum SubjectResolution {
     /// The subject kind is one this build understands, and this is what now stands over it.
     Resolved(SubjectReading),
@@ -58,6 +63,7 @@ pub enum SubjectResolution {
 }
 
 /// What this node can say about the assertion a withdrawal targeted.
+#[derive(Debug)]
 pub enum TargetState {
     /// Not in `sensitivity_assertion` here at all. Set-union sync has no ordering, so a
     /// withdrawal legitimately precedes its target — db/048 keeps NO foreign key for
@@ -115,6 +121,7 @@ pub enum TargetState {
 /// The two can honestly disagree in direction: `stranger-attested` means the withdrawal
 /// TOOK EFFECT and is still worth a look. Collapsing them into one verdict would reproduce,
 /// one verb over, the union-view defect the Slice 69 review found on the chart report.
+#[derive(Debug)]
 pub struct WithdrawOutcome {
     /// The worklist arm, verbatim. OPEN VOCABULARY — a build that has never seen a value
     /// must still surface it rather than drop the row (see
@@ -162,7 +169,7 @@ pub async fn subject_reading(
             let after = super::chart_sensitivity(client, patient).await?;
             Ok(SubjectReading {
                 grade: after.chart_grade,
-                winning_subject: after.chart_source,
+                winning_subject: after.chart_subject.phrase(),
                 scope: "this chart",
             })
         }
@@ -176,7 +183,7 @@ pub async fn subject_reading(
             let kind_s: String = row.get(1);
             Ok(SubjectReading {
                 grade: row.get(0),
-                winning_subject: subject_kind_phrase(&kind_s).to_string(),
+                winning_subject: subject_kind_phrase(&kind_s),
                 scope: "that event",
             })
         }
@@ -199,7 +206,7 @@ pub async fn subject_reading(
                     let kind_s: String = row.get(1);
                     SubjectReading {
                         grade: row.get(0),
-                        winning_subject: subject_kind_phrase(&kind_s).to_string(),
+                        winning_subject: subject_kind_phrase(&kind_s),
                         scope: "that thread",
                     }
                 }
@@ -210,8 +217,7 @@ pub async fn subject_reading(
                 None => SubjectReading {
                     grade: "(not readable here)".to_string(),
                     winning_subject: "no locally projected row for that thread — this node \
-                                      may hold no DEK custody (#383)"
-                        .to_string(),
+                                      may hold no DEK custody (#383)",
                     scope: "that thread",
                 },
             })

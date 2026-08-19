@@ -61,9 +61,9 @@ Slice 65's own follow-ons: **#374** (thread resolution resolves only a thread's 
 E4 narrows it), **#378** (the withdrawal rationale is clear text forever and replicates — the UI must warn
 at entry today), **#379** (the grade in the twin), **#381** (db/tests/048 mirror parity), **#382**
 (`REVOKE EXECUTE` on the `cairn_check_*` family), **#385** (index `content_address` on the five
-medication projections) and **#387** (type design — it touches the report structs Slice 69 just grew,
-and was deliberately kept out of that slice). **#386 is half-closed** — db/049's subset test *drives*
-it; db/048's still does not. **#383 and #388 closed 2026-08-18.**
+medication projections) and **#436** (the mis-chart withdrawal, when it arrives by replication).
+**#386 is half-closed** — db/049's subset test *drives* it; db/048's still does not. **#383/#388 closed
+2026-08-18; #434/#435/#387 on 2026-08-19.**
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
@@ -114,9 +114,6 @@ budget to match.**
 4. **[#370](https://github.com/cairn-ehr/cairn-ehr/issues/370)** — the clinical plane's copy of #228: a
    malformed `digest_hex` raises in the `22` class, which `cairn-sync` reads as transient and freezes the
    pull cursor on. An availability defect wearing a legibility defect's clothes.
-5. **[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387)** — type design over the §5.9 report
-   structs Slice 69 just grew (a `Provenance` enum, ladder constants, a sum type for the correlated
-   `Option` pair). Deliberately kept out of Slice 69 to keep both diffs reviewable.
 
 **Standing gate:** whole-project review cycles repeat periodically, and there will be **no release for
 clinical use before repeated review cycles pass cleanly.** Last full pass 2026-07-15
@@ -138,7 +135,7 @@ stretched a session's suites from ~3 min to ~90 min).
 
 ---
 
-**Session date:** 2026-08-19 (the §5.9 withdraw read-back) · **Spec/ADRs:** v0.66 (through **ADR-0064**,
+**Session date:** 2026-08-19 (the §5.9 withdraw read-back + type design) · **Spec/ADRs:** v0.66 (through **ADR-0064**,
 *admit the claim, withhold the power*; ADR-0063 gained erratum E1, **ADR-0064 gained erratum E1**) · **`SCHEMA_GENERATION`:** 49 (`db/049`) ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical
 surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
@@ -180,6 +177,27 @@ surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 ## Recent sessions — what to carry forward
 
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
+
+**2026-08-19 (later) — §5.9 type design** (closes
+[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); no ADR, no migration, SCHEMA stays 49). Four
+closed sets get one definition each. Two things worth carrying:
+
+1. **`WinningSubject` makes ADR-0062 erratum E6 structurally unrepeatable** — the trap the ⇒ NEXT block
+   below still warns about. `chart_source` + `chart_content_address` are fused into one sum type whose
+   single constructor (`from_row`, in its own `sensitivity/winner.rs`) keys on the ADDRESS. There is no
+   longer a place to key on the phrase, which is what E6 is about.
+2. **`GRADE_*` are consts and `Provenance` is an enum, and the asymmetry is the point.** ADR-0062
+   decision 2 argues at length for `grade` being OPEN (an enum would close it and make the
+   inverted-unknown path unreachable); decision 5 names `source`'s two values with no evolution argument
+   at all, db/048 never reads it, and nothing branches on it — so an untyped `source` bought nothing and
+   would have let `"Human"` into a plaintext, unconditionally-replicating body unnoticed forever.
+
+Finding worth recording: **#387's premise for the ladder constants does not survive contact with the
+code.** It cites ~69 grade literals across 7 files; a survey found **exactly one in production code**
+workspace-wide (`report.rs`'s routine fallback) — the rest are `#[cfg(test)]` or doc comments. The consts
+are documentary (the ladder had no Rust definition at all), not the de-duplication the issue assumed.
+Test literals were deliberately left alone: a test asserting `grade == GRADE_ROUTINE` while production
+also uses `GRADE_ROUTINE` agrees by construction rather than by assertion.
 
 **2026-08-19 — the withdraw read-back** (closes
 [#435](https://github.com/cairn-ehr/cairn-ehr/issues/435); opens

@@ -11,7 +11,7 @@
 //! the strength of a grade — a projection-layer filter with no floor beneath it is security
 //! theatre, since a client talking raw SQL walks straight past it. Real enforcement is
 //! custody narrowing (#232 part C / #376).
-use super::subject_kind_phrase;
+use super::winner::WinningSubject;
 use uuid::Uuid;
 
 /// One row of `sensitivity_withdrawal_worklist` (db/048 section 11) — a withdrawal this
@@ -29,6 +29,7 @@ use uuid::Uuid;
 ///
 /// A withdrawal lands, converges and stays re-assertable either way — ADR-0064 gates
 /// EFFECT, never admission, so nothing here is a refusal.
+#[derive(Debug)]
 pub struct WithdrawalWorklistRow {
     /// Hex `content_address` of the assertion this withdrawal targeted.
     pub withdraws: String,
@@ -55,6 +56,7 @@ pub struct WithdrawalWorklistRow {
 /// `cairn_clear_payload`, so a node with no DEK custody projects none of them and the
 /// report used to print "no medication threads on this chart" while honouring standing
 /// thread-scoped grades on those very threads (#383).
+#[derive(Debug)]
 pub struct StandingAssertion {
     pub content_address: String,
     pub subject_kind: String,
@@ -68,6 +70,7 @@ pub struct StandingAssertion {
 /// It is a grade this node is FAILING TO APPLY. It projects nothing, so the chart reads
 /// 'routine', and the only trace is a row in `event_deferred` that nothing in the §5.9 read
 /// path consulted before this slice.
+#[derive(Debug)]
 pub struct DeferredSensitivityEvent {
     pub event_id: Uuid,
     pub event_type: String,
@@ -85,6 +88,7 @@ pub struct DeferredSensitivityEvent {
 /// A LEDGER, not a view — ADR-0064 decision 3: flag what cannot self-heal, view what can.
 /// A published byte can never improve, so unlike the withdrawal worklist this row will
 /// never stop being true.
+#[derive(Debug)]
 pub struct SafetyOverclaim {
     pub content_address: String,
     pub emitted_rung: String,
@@ -121,15 +125,13 @@ pub struct SafetyOverclaim {
 /// into `sensitivity-withdraw`) caught was missing from an earlier draft of this struct.
 /// Without it, withdrawing anything through the CLI alone would be impossible — an
 /// operator would have to fall back to raw SQL, defeating the point of this surface.
+#[derive(Debug)]
 pub struct ChartReport {
     pub chart_grade: String,
-    /// Which subject won: "chart-wide" | "this thread" | "this event" | "none" (or the
-    /// unrecognised-scope phrase — see `subject_kind_phrase`).
-    pub chart_source: String,
-    /// Hex `content_address` of the assertion that produced `chart_grade`/`chart_source`
-    /// — feed this straight into `sensitivity-withdraw --withdraws`. `None` exactly when
-    /// `chart_source == "none"`: there is no assertion to name because nothing applies.
-    pub chart_content_address: Option<String>,
+    /// Which subject produced `chart_grade`, and the hex `content_address` to feed
+    /// `sensitivity-withdraw --withdraws` when one applies. One value, not two correlated
+    /// ones — see [`WinningSubject`] for why that matters here specifically.
+    pub chart_subject: WinningSubject,
     pub threads: Vec<ThreadGrade>,
     /// Withdrawals this node holds that a human should look at — the §1.2 budget's
     /// subject. Empty on a healthy chart, so the renderer stays silent there. See
@@ -162,14 +164,13 @@ pub struct ChartReport {
 }
 
 /// One medication thread's effective grade, as `chart_sensitivity` reports it.
+#[derive(Debug)]
 pub struct ThreadGrade {
     pub thread_id: Uuid,
     pub grade: String,
-    /// Which subject won — see `ChartReport::chart_source`.
-    pub source: String,
-    /// Hex `content_address` of the winning assertion, or `None` when nothing applies
-    /// (the thread reads "routine" / "none" — there is nothing to withdraw).
-    pub content_address: Option<String>,
+    /// Which subject won, and its withdrawable address — see
+    /// [`ChartReport::chart_subject`].
+    pub subject: WinningSubject,
 }
 
 /// Read `patient`'s current §5.9 sensitivity report. No key, no HLC tick, nothing authored
@@ -206,13 +207,12 @@ pub async fn chart_sensitivity(
             &[&patient_s],
         )
         .await?;
-    let (chart_grade, chart_source, chart_content_address) = match chart_row {
+    let (chart_grade, chart_subject) = match chart_row {
         Some(row) => {
             let kind: String = row.get(1);
             (
                 row.get::<_, String>(0),
-                subject_kind_phrase(&kind).to_string(),
-                row.get::<_, Option<String>>(2),
+                WinningSubject::from_row(&kind, row.get::<_, Option<String>>(2)),
             )
         }
         // NO REGISTRATION ON FILE — REACHABLE IN ORDINARY FEDERATED OPERATION, and the
@@ -248,14 +248,12 @@ pub async fn chart_sensitivity(
                     row.get::<_, String>(0),
                     // Not a specific subject: nothing anchors these assertions to a
                     // registration event here, so the honest phrase is the coarsening one.
-                    subject_kind_phrase("coarsened").to_string(),
-                    row.get::<_, Option<String>>(1),
+                    WinningSubject::from_row("coarsened", row.get::<_, Option<String>>(1)),
                 ),
                 // Genuinely nothing: no registration AND no standing assertion.
                 None => (
-                    "routine".to_string(),
-                    subject_kind_phrase("none").to_string(),
-                    None,
+                    cairn_event::sensitivity::GRADE_ROUTINE.to_string(),
+                    WinningSubject::None,
                 ),
             }
         }
@@ -290,8 +288,7 @@ pub async fn chart_sensitivity(
                 thread_id: Uuid::parse_str(&thread_id)
                     .expect("medication_id column is a valid UUID"),
                 grade,
-                source: subject_kind_phrase(&kind).to_string(),
-                content_address: row.get(3),
+                subject: WinningSubject::from_row(&kind, row.get(3)),
             }
         })
         .collect();
@@ -401,8 +398,7 @@ pub async fn chart_sensitivity(
 
     Ok(ChartReport {
         chart_grade,
-        chart_content_address,
-        chart_source,
+        chart_subject,
         threads,
         withdrawals_needing_review,
         standing,

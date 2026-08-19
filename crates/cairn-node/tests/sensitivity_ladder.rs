@@ -73,7 +73,7 @@ async fn assert_grade(
         subject_kind: kind,
         subject_id: subject,
         grade,
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("test fixture"),
     };
     submit_signed(
@@ -1118,7 +1118,8 @@ async fn the_chart_report_names_the_winning_subject_for_every_graded_thread() {
         .unwrap();
     assert_eq!(report.chart_grade, "sensitive");
     assert_eq!(
-        report.chart_source, "chart-wide",
+        report.chart_subject.phrase(),
+        "chart-wide",
         "the report must name WHICH subject won — otherwise nobody can tell why a whole \
          chart is blurred, and therefore nobody can fix it"
     );
@@ -1143,7 +1144,7 @@ async fn a_chart_with_no_assertions_reports_routine_and_names_no_winner() {
         .await
         .unwrap();
     assert_eq!(report.chart_grade, "routine");
-    assert_eq!(report.chart_source, "none");
+    assert_eq!(report.chart_subject.phrase(), "none");
     assert!(
         report.threads.is_empty(),
         "no medication threads exist on this chart"
@@ -1251,7 +1252,9 @@ async fn withdraw_sensitivity_requires_the_human_key_and_then_lowers_the_grade()
     let ca_hex = cairn_node::sensitivity::chart_sensitivity(&mut c, p)
         .await
         .unwrap()
-        .chart_content_address
+        .chart_subject
+        .content_address()
+        .map(str::to_string)
         .expect("a standing chart-wide assertion must carry a withdrawable content_address");
 
     // The plain device/agent key `setup` enrolled is NOT a human actor — withdraw_sensitivity
@@ -1381,16 +1384,16 @@ async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subj
         report.chart_grade, "routine",
         "a thread-scoped grade must not leak into the CHART-WIDE reading"
     );
-    assert_eq!(report.chart_source, "none");
+    assert_eq!(report.chart_subject.phrase(), "none");
     let a = report
         .threads
         .iter()
         .find(|t| t.thread_id == thread_a)
         .expect("thread A present");
     assert_eq!(a.grade, "restricted");
-    assert_eq!(a.source, "this thread");
+    assert_eq!(a.subject.phrase(), "this thread");
     assert!(
-        a.content_address.is_some(),
+        a.subject.content_address().is_some(),
         "a real winning assertion must carry a withdrawable content_address"
     );
     let b = report
@@ -1402,9 +1405,9 @@ async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subj
         b.grade, "routine",
         "thread B's own grade must not pick up thread A's"
     );
-    assert_eq!(b.source, "none");
+    assert_eq!(b.subject.phrase(), "none");
     assert!(
-        b.content_address.is_none(),
+        b.subject.content_address().is_none(),
         "nothing applies to thread B, so there is nothing to withdraw"
     );
 
@@ -1424,7 +1427,8 @@ async fn the_chart_report_lists_each_medication_thread_with_its_own_winning_subj
         "a higher chart-wide grade must win over the thread's own"
     );
     assert_eq!(
-        a.source, "chart-wide",
+        a.subject.phrase(),
+        "chart-wide",
         "and the report must say the CHART is what actually won, not the thread"
     );
 }
@@ -1873,7 +1877,7 @@ async fn a_chart_with_no_local_registration_reports_its_standing_grade_not_routi
          answering 'routine' here is the disclosure direction"
     );
     assert!(
-        report.chart_content_address.is_some(),
+        report.chart_subject.content_address().is_some(),
         "and the winning assertion must still be nameable, so it can be withdrawn"
     );
 }

@@ -27,8 +27,8 @@
 //! lives, so every caller reads the same phrase for the same wire value.
 use cairn_event::sensitivity::{
     render_sensitivity_twin, render_withdrawal_twin, sensitivity_assertion_body,
-    sensitivity_withdrawal_body, SensitivityAssertion, SensitivityWithdrawal, SubjectKind,
-    SENSITIVITY_EVENT_TYPE, SENSITIVITY_SCHEMA_VERSION, WITHDRAWAL_EVENT_TYPE,
+    sensitivity_withdrawal_body, Provenance, SensitivityAssertion, SensitivityWithdrawal,
+    SubjectKind, SENSITIVITY_EVENT_TYPE, SENSITIVITY_SCHEMA_VERSION, WITHDRAWAL_EVENT_TYPE,
     WITHDRAWAL_SCHEMA_VERSION,
 };
 use cairn_event::{event_address, sign, sign_attestation, ClockGrade, EventBody, SigningKey};
@@ -37,6 +37,7 @@ use uuid::Uuid;
 pub mod readback;
 pub mod render;
 pub mod report;
+pub mod winner;
 
 // Re-exported so `cairn_node::sensitivity::chart_sensitivity` and
 // `cairn_node::sensitivity::ChartReport` keep working unchanged at every call site. The
@@ -44,6 +45,7 @@ pub mod report;
 // callers move would turn a mechanical refactor into a reviewable one for no gain.
 pub use readback::{subject_reading, withdraw_readback};
 pub use report::{chart_sensitivity, ChartReport, ThreadGrade};
+pub use winner::WinningSubject;
 
 /// Map the `subject_kind` `cairn_effective_sensitivity` returns to the phrase a human
 /// reads in a report. Pure and total (every input has an output, including one this
@@ -81,10 +83,10 @@ pub fn subject_kind_phrase(kind: &str) -> &'static str {
 /// Author a `sensitivity.grade.asserted` event: raise (or re-state) a confidentiality
 /// grade over one event, one medication thread, or the whole chart.
 ///
-/// `source` is hardcoded to `"human"` — this function is the manual, operator-driven
+/// `source` is hardcoded to [`Provenance::Human`] — this function is the manual, operator-driven
 /// path (a clinician or records officer typed a grade), never the automatic blacklist
 /// candidate db/048 section 13 computes (`cairn_sensitivity_candidate`, which an
-/// advisory actor would assert with `source: "advisory"` — no such caller exists yet;
+/// advisory actor would assert with [`Provenance::Advisory`] — no such caller exists yet;
 /// that is a later slice, not this one).
 ///
 /// This is a thin builder, not a second door: a chart-wide raise (`SubjectKind::Patient`)
@@ -113,7 +115,7 @@ pub async fn assert_sensitivity(
         subject_kind,
         subject_id,
         grade,
-        source: "human",
+        source: Provenance::Human,
         rationale,
     };
     let body = EventBody {

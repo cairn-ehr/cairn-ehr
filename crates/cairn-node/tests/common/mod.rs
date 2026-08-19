@@ -240,7 +240,7 @@ pub async fn assert_chart_grade(
         subject_kind: cairn_event::sensitivity::SubjectKind::Patient,
         subject_id: patient,
         grade,
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("protected witness"),
     };
     let id = Uuid::now_v7();
