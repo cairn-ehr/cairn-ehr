@@ -1,2 +1,15 @@
 target/
-Cargo.lock
+# Cargo.lock IS COMMITTED for this tree, deliberately — do not re-add it here.
+#
+# It was ignored until 2026-08-20 (#445), a leftover from cargo's default for a LIBRARY
+# crate. cairn_pgx is not a library anyone depends on: it is a DEPLOYED ARTIFACT, a shared
+# object loaded into a running PostgreSQL, and the one that enforces the in-DB safety floor.
+# For a deployed artifact the lockfile is the record of what was actually built, and the
+# repo's other two trees (root workspace, cairn-gui) have always committed theirs.
+#
+# The gap this closed was not theoretical. With no committed lock, `cargo pgrx install`
+# re-resolved dependencies on every CI run, and on 2026-08-20 that resolve selected the
+# compromised `arrayref` 0.3.10 and tried to fetch `proc-macro1` — a typosquat that would
+# have executed AT COMPILE TIME inside the extension. It failed only because crates.io had
+# already removed the typosquat; in the window before that removal, this build would have
+# taken it. Two of three trees were pinned; the most safety-critical one was not.
