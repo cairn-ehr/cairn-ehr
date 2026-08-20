@@ -56,7 +56,8 @@ Slice 65's own follow-ons still open: **#374** (thread resolution resolves only 
 — erratum E4 narrows it), **#378** (the withdrawal rationale is clear text forever and replicates — the UI
 must warn at entry today), **#379** (the grade in the twin) and **#436** (the mis-chart withdrawal, when it
 arrives by replication). **#386 is half-closed** — db/049's subset test *drives* it; db/048's still does
-not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/#382/#385/#439** (08-20).
+not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/#382/#385/#439** and
+**#446/#442/#443** (08-20).
 
 > [!NOTE]
 > **RESOLVED 2026-08-20 — the `arrayref` supply-chain incident ([#445](https://github.com/cairn-ehr/cairn-ehr/issues/445)),
@@ -80,9 +81,9 @@ not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/
 > because crates.io had already pulled the typosquat, and it was **nondeterministic**: the run twelve
 > minutes earlier passed on a `rust-cache`-restored lockfile. Two of three trees were pinned and the
 > unpinned one was the extension that enforces the in-DB safety floor. Now committed (`5d23d0a`), with the
-> `.gitignore` carrying a comment saying why it must not be re-added. **A CI guard asserting every cargo
-> tree has a tracked lockfile is still owed** — this hid for months behind two lines nobody had reason to
-> read.
+> `.gitignore` carrying a comment saying why it must not be re-added. **The CI guard that finding owed is
+> now built** ([#446](https://github.com/cairn-ehr/cairn-ehr/issues/446), 2026-08-21) — see the
+> silent-gate entry below. It found two more unpinned trees and one manifest cargo could not place at all.
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
@@ -161,7 +162,8 @@ and one `test_serial_guard` advisory lock (a stray loop once stretched a session
 
 ---
 
-**Session date:** 2026-08-20 (a trap-clearing pass: #439/#382/#385/#381) · **Spec/ADRs:** v0.66 (through **ADR-0064**,
+**Session date:** 2026-08-21 (two passes: the 08-20 #439/#382/#385/#381 trap-clearing, then the
+#446/#442/#443 silent-gate pass) · **Spec/ADRs:** v0.66 (through **ADR-0064**,
 *admit the claim, withhold the power*; ADR-0063 gained erratum E1, **ADR-0064 gained erratum E1**) · **`SCHEMA_GENERATION`:** 49 (`db/049`) ·
 **Phase:** architecture complete (every original §11 question closed); **first production clinical
 surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
@@ -203,190 +205,156 @@ surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 ROADMAP carries the per-slice narrative; this section keeps only what a *next* session needs.
 
-**2026-08-20 — a trap-clearing pass** (closes
-[#439](https://github.com/cairn-ehr/cairn-ehr/issues/439), **#382**, **#385**,
-[#381](https://github.com/cairn-ehr/cairn-ehr/issues/381); no ADR, no migration, SCHEMA stays 49). Four
-small independent items — a red docs build and three §5.9 review follow-ons. Worth carrying:
+**2026-08-20/21 — the silent-gate pass** (closes
+[#446](https://github.com/cairn-ehr/cairn-ehr/issues/446),
+[#442](https://github.com/cairn-ehr/cairn-ehr/issues/442),
+[#443](https://github.com/cairn-ehr/cairn-ehr/issues/443); opens
+[#447](https://github.com/cairn-ehr/cairn-ehr/issues/447); no ADR, no migration file, SCHEMA stays 49).
+Three gates that could pass **without running**. Workspace sweep 1395 passed / 0 failed. Carry:
+
+1. **Ask the authority, do not re-implement it.** `cargo_lockfiles_tracked.rs` asks `cargo locate-project
+   --workspace` which manifests own a lockfile, rather than parsing `members`/`exclude` itself — the #382
+   "read the list" lesson applied to a tool instead of a table. It paid a dividend a hand-rolled parser
+   could not: **`packaging/crates` was in no workspace and not excluded**, so *every* cargo command in
+   that directory had been erroring since the crates graduated to the top-level workspace. A crate
+   published to crates.io that no checkout could build, invisible because nobody had reason to `cd` there.
+2. **`git check-ignore` needs `--no-index`, and the failure mode is vacuity, not noise.** Without it git
+   *skips tracked paths*, so the ignore-rule guard would report "nothing ignored" no matter what the
+   `.gitignore` files said. Verified, not assumed: with a rule re-added, plain `check-ignore` exits 1 and
+   `--no-index` exits 0.
+3. **The lockfile rule now has ZERO exemptions** — `poc/iced-ui-spike` and `packaging/crates` gained
+   committed locks. The spike's deps are all optional so its *default* build resolves nothing; that was
+   deliberately not treated as an exemption, because **one rule with no exceptions is worth more than the
+   two trees an exception list would spare**, and the next tree will be added by someone not thinking
+   about any of this.
+4. **The #442 guard derives its variable list from the test sources**, so a future `CAIRN_TEST_PG4` is
+   covered with no edit. It binds only under `$CI`; the local self-skip stays. **Fix 2 of #442 was
+   deliberately NOT done**: unifying the 342 bare `else { return }` sites would add ~1000 lines of
+   boilerplate and make [#327](https://github.com/cairn-ehr/cairn-ehr/issues/327)'s job *bigger* — its end
+   state is one shared `cs_or_skip()` replacing 64 identical local `cs()` copies, which would then have to
+   collapse 399 four-line blocks instead of 342 one-liners. Recorded as a comment on #327.
+5. **#443 was never an exposure** — `cairn_event_twin` failed closed one layer deeper. What it cost was
+   legibility, which is all #382 bought too. Its REVOKE is safe because every live caller is either
+   `SECURITY DEFINER` or owner-run; a future *invoker-rights* caller reachable by `cairn_agent`/`cairn_node`
+   would need an explicit GRANT, and that is the change that would turn the line into a breakage.
+6. **Residual, stated not closed: #447** — cargo-deny covers three of the six cargo trees, so the two poc
+   trees are pinned but unaudited for AGPL compatibility and RUSTSEC advisories. Not on the clinical path.
+
+
+**2026-08-20 — a trap-clearing pass** (closes #439, #382, #385, #381; no ADR, no migration). Four small
+independent items — a red docs build and three §5.9 review follow-ons. Worth carrying:
 
 1. **`cargo doc` was red on main, and that is what made it dangerous.** Two rustdoc errors meant the build
    only completed under `-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, under which
-   every LATER rustdoc error is invisible too. The fix is the gate, not the edit. **The blocking copy
-   lives in the REQUIRED `test` job** (root workspace + `--features fixtures` + `cairn_pgx`, as its last
+   every LATER rustdoc error is invisible too. **The fix is the gate, not the edit.** The blocking copy
+   lives in the REQUIRED `test` job (root workspace + `--features fixtures` + `cairn_pgx`, as its last
    steps, so a rustdoc nit cannot abort the floor tests); the fast `doc` job duplicates the root build for
-   feedback in under a minute, and cairn-gui's rides `gui`. Putting the root build only in `doc` was the
-   review finding that mattered — **both of #439's defects were in the root workspace, i.e. in the one
-   tree whose gate did not block** (#444). `RUSTDOCFLAGS=-D warnings` is set EXPLICITLY because only the
-   root workspace denies warnings via `[workspace.lints]`. Both #439 defects are **warn-by-default
-   rustdoc lints**, not hard errors — an earlier comment said otherwise, and believing it would make the
-   `RUSTDOCFLAGS` line look redundant and un-gate the other two trees.
+   feedback, and cairn-gui's rides `gui`. Putting the root build only in `doc` was the review finding that
+   mattered — **both of #439's defects were in the root workspace, i.e. in the one tree whose gate did not
+   block** (#444). `RUSTDOCFLAGS=-D warnings` is set EXPLICITLY because only the root workspace denies
+   warnings via `[workspace.lints]`, and both defects are **warn-by-default** lints, not hard errors.
 2. **A convention followed by 5 of 22 is worse than one followed by none.** `REVOKE EXECUTE … FROM PUBLIC`
    on the `cairn_check_*` validators is genuinely LOW severity, but a reader could not tell an oversight
-   from a decision. What was bought is that it is **checkable**:
-   `crates/cairn-node/tests/floor_execute_grants.rs` asserts it over the `pg_proc` CATALOGUE, so a future
-   migration is covered the moment it loads. **Read `proacl`, never assume: a NULL ACL is the PERMISSIVE
-   case** (Postgres's default for a function is EXECUTE to PUBLIC), and inverting that polarity makes the
-   guard pass by seeing nothing. Its second test ratchets the half that IS load-bearing — the projection
-   appliers — and reads them from the **`cairn_projection_apply` REGISTRY, not from the `_apply` name
-   suffix**: the registry holds 21 and exactly one, `medication_dose_seed_initial`, does not carry the
-   suffix, so the first draft's name pattern could not see it at all (it is revoked, so there was never an
-   exposure — the ratchet simply had a blind spot). Where a family HAS an authoritative list, read the
-   list. db/005 states the two-reasons-one-statement distinction once.
-3. **Every new guard was mutation-tested before being trusted**, because two of the three (#385's type
-   short-circuit, #381's cross-chart pin) are exactly the shape the 08-19 review lesson warns about.
-   #385's short-circuit is pinned by seeding a **decoy** `medication_statement` row carrying a note's own
-   content address; #381's cross-chart block seeds an **attested** withdrawal, since an unattested one
-   fails to lower for an unrelated reason and would pass with the pin deleted.
-4. **`cairn_event_thread` no longer asks a note for its medication thread**, and the five projections now
-   index `content_address`. No query-plan assertion, deliberately — at test scale Postgres correctly
-   prefers a seq scan, so an `EXPLAIN` test would fail on a *correct* index. **The magnitude of the win is
-   still unmeasured on volume data**; that is a real residual, not a closed question.
-5. **THE LESSON OF THIS PR, found in review: an optimisation removed a redundancy that was load-bearing,
+   from a decision. What was bought is that it is **checkable**, over the `pg_proc` CATALOGUE. **Read
+   `proacl`, never assume: a NULL ACL is the PERMISSIVE case** (Postgres's default for a function is
+   EXECUTE to PUBLIC), and inverting that polarity makes the guard pass by seeing nothing. Its second test
+   reads the appliers from the **`cairn_projection_apply` REGISTRY, not from the `_apply` name suffix**:
+   the registry holds 21 and exactly one, `medication_dose_seed_initial`, lacks the suffix, so the first
+   draft's name pattern could not see it at all. **Where a family HAS an authoritative list, read the
+   list.**
+3. **Every new guard was mutation-tested before being trusted.** #385's short-circuit is pinned by seeding
+   a **decoy** `medication_statement` row carrying a note's own content address; #381's cross-chart block
+   seeds an **attested** withdrawal, since an unattested one fails to lower for an unrelated reason and
+   would pass with the pin deleted. Also: the five thread projections now index `content_address`, with no
+   query-plan assertion deliberately (at test scale Postgres correctly prefers a seq scan, so an `EXPLAIN`
+   test would fail on a *correct* index) — **the magnitude of that win is still unmeasured on volume
+   data.**
+4. **THE LESSON OF THIS PR, found in review: an optimisation removed a redundancy that was load-bearing,
    and the comment explaining it asserted the exact opposite.** The #385 short-circuit's first draft said
-   widening §10b's list could only over-protect — "there is no spelling of that list that makes this
-   leak". Measured, it is the reverse: §11's conservative bound is gated on the NEGATION of the same
-   predicate, so a type added to the list is EXCLUDED from the bound, and after #385 it also stops
-   resolving. All three thread arms fall silent and a standing `sequestered` grade reads back as
-   `('routine','none')`. **Before #385 the identical edit was harmless**, because §11's resolved arm was
-   an independent net that never consulted the predicate. Two things to carry: (a) when an optimisation
-   makes two code paths share a predicate, ask what redundancy that share destroyed; (b) the comment did
-   not merely mislead — it told the reader that
-   `no_medication_event_type_is_classified_thread_free` was a quality guard, when it is one of only two
-   things standing between a six-line `LIKE` edit and silent protection loss across every medication
-   thread. **A wrong safety argument is worse than none: it disarms the guard it describes.**
+   widening §10b's list could only over-protect. Measured, it is the reverse: §11's conservative bound is
+   gated on the NEGATION of the same predicate, so a type added to the list is EXCLUDED from the bound and
+   also stops resolving — all three thread arms fall silent and a standing `sequestered` grade reads back
+   as `('routine','none')`. **Before #385 the identical edit was harmless**, because §11's resolved arm
+   was an independent net that never consulted the predicate. Carry: (a) when an optimisation makes two
+   code paths share a predicate, ask what redundancy that share destroyed; (b) **a wrong safety argument
+   is worse than none — it disarms the guard it describes.**
 
-**2026-08-19 (later) — §5.9 type design** (closes
-[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); opened
-[#439](https://github.com/cairn-ehr/cairn-ehr/issues/439), **closed 2026-08-20**; no ADR, no migration).
-Four closed sets get one definition each. **`WinningSubject`** fuses `chart_source` +
-`chart_content_address` into a sum type keyed on the ADDRESS, making ADR-0062 erratum E6 structurally
-unrepeatable — its payload fields are **private**, so its two constructors really are the only producers
-(the first draft left them public while the doc claimed otherwise). **`GRADE_*` are consts and
-`Provenance` is an enum, and the asymmetry is the point**: ADR-0062 decision 2 argues for `grade` being
-OPEN, while `source` closes because of what **db/048 does** — stores it, reads it from no query, no
-projection, no rank function. Builder-side only; db/048 mints a THIRD value itself (`'unreadable'`), so a
-read model must keep `source` open text. **`SubjectKind` is generated from one table, not hand-listed.**
 
-**⇒ THE REVIEW LESSON, and it generalises far past that slice: a guard defined over the list it guards is
-not a guard.** Every finding there was that shape and none was a behaviour bug — the code was right;
-three of four headline claims were true only in the comments. `assert_eq!(SubjectKind::ALL.len(), 3)` over
-an `[SubjectKind; 3]` compared a compile-time constant to its own literal and could not fail; `from_row`
-was "the ONE place" over **public** fields. **When reviewing a guard, ask what independent source it
-checks against. If the answer is "itself", it is documentation wearing a test's clothes.** (The 08-20 pass
-applied this by mutation-testing every new guard before trusting it.)
+**2026-08-19 → 08-18 — Slice 69 and its two follow-ons, condensed** (closes #388, #383, #421, #435, #387;
+opens #436, #439; ADR-0064 erratum E1; ROADMAP carries each in full). Five things that outlive them:
 
-Also recorded: **#387's premise did not survive contact with the code** — it cited ~69 grade literals
-across 7 files; a survey found **exactly one in production code** workspace-wide. The consts are
-documentary, not de-duplication, and are pinned only where pinning is possible (`sensitivity_ladder.rs`
-feeds all four to `cairn_sensitivity_rank` live, since a Rust-only assertion compares a const to itself).
-
-**2026-08-19 — the withdraw read-back** (closes
-[#435](https://github.com/cairn-ehr/cairn-ehr/issues/435); opens
-[#436](https://github.com/cairn-ehr/cairn-ehr/issues/436); no ADR, no migration). Slice 69's read-back
-comment claimed *"both orchestrators"*; only one had it, so `sensitivity-withdraw` printed plain success
-over a withdrawal that removed nothing. New `sensitivity/readback.rs` reports **two independently
-observed facts, never merged** — which worklist arm (accountability) and what this node can say about the
-target (effect). Three things to carry:
-
-1. **The effect fact needs its own query.** db/048's `inert` arm merges *"nobody accountable"* with *"the
-   target has not replicated here yet"* — its own comment says so — and only reading
-   `sensitivity_assertion` separates them. Resolved against the target's OWN subject, never the
-   chart-wide grade.
-2. **`TargetState::OnAnotherChart` must never collapse into `Held { still_standing: false }`.** ADR-0064's
+1. **NAME, NEVER COUNT.** `patient-sensitivity <chart>` is the one query that tells the whole truth, and a
+   count cannot separate **custody-blind** from **genuinely empty** — the one question the line exists to
+   answer. A later "simplification" back to a count is a regression. Related: **a union view whose arms
+   mean opposite things must never get one summary sentence** — the worklist's `stranger-attested` arm DID
+   take effect, yet the draft counted it under *"N withdrawal(s) did NOT take effect"*, telling the
+   operator a completed, unaccountable removal of protection had not happened. One header per reason now.
+2. **The report declares what it cannot contain** — ADR-0064's invisible cross-chart withdrawal, #414's
+   unconsumed `RAISE WARNING`, #434's prefix filter — each asserted by a test over an **empty** list: the
+   case where silence is most convincing and most wrong. And **peer text is not display text**:
+   `node_origin`/`event_type`/`grade` are unconstrained `TEXT` copied verbatim from a peer's body, and a
+   newline forged a whole line, so `render.rs::peer()` Debug-escapes every such field.
+3. **`TargetState::OnAnotherChart` must never collapse into `Held { still_standing: false }`.** ADR-0064's
    KNOWN GAP: a withdrawal mis-stamped with the wrong chart's `patient_id` names a real assertion living
    elsewhere, and `cairn_sensitivity_standing` is patient-scoped on both sides (load-bearing — else chart
    B strips chart A), so the target IS genuinely absent from this chart's standing set. A naive membership
    test therefore reports the withdrawal **effective** — a precise untruth in the *reassuring* direction,
-   on a confidentiality surface. Caught in this slice's own first draft; it now has a test.
-3. **#436 is the residual, and it is a visibility problem, not a door problem.** The same shape arriving
-   by REPLICATION is invisible to every §5.9 read surface. Refusing at apply would fork the event set, and
-   *"on another chart"* is indistinguishable from *"not arrived yet"* on a node holding neither — so any
-   block built for it must say WHICH it is claiming, rather than merging the pair the way `inert` does.
+   on a confidentiality surface. **#436 is the residual**, and it is a visibility problem, not a door
+   problem: refusing at apply would fork the event set, and *"on another chart"* is indistinguishable from
+   *"not arrived yet"* on a node holding neither.
+4. **⇒ THE REVIEW LESSON, which generalises far past §5.9: a guard defined over the list it guards is not
+   a guard.** Every #387 finding was that shape and none was a behaviour bug — the code was right; three
+   of four headline claims were true only in the comments. `assert_eq!(SubjectKind::ALL.len(), 3)` over an
+   `[SubjectKind; 3]` compared a compile-time constant to its own literal and could not fail. **When
+   reviewing a guard, ask what independent source it checks against. If the answer is "itself", it is
+   documentation wearing a test's clothes.** Also: #387's premise did not survive contact with the code —
+   it cited ~69 grade literals across 7 files; a survey found **exactly one** in production code.
+5. **Two Rust traps.** A type named only inside `#[cfg(test)]` compiles clean under `cargo test --lib` and
+   fails the integration build under `-D warnings` — use `--all-targets`. And a **chart-scoped definer,
+   not a table grant**: `event_deferred` is granted to `cairn_node`, NOT `cairn_agent`, so db/043 gained
+   `cairn_patient_deferred_sensitivity(uuid)` granted to BOTH group roles — the first draft granted it to
+   `cairn_agent` alone and called that "the runtime role", which it is not (**#425** owns that question).
 
-All five production mutations tried against the new tests were killed.
 
-**2026-08-18 — Slice 69: the §5.9 operator surface** (closes #388, #383, #421; **ADR-0064 gains erratum
-E1**; no new ADR, no new migration). Three slices had shipped a §5.9 mechanism and no way to look at it;
-`patient-sensitivity <chart>` is now the one query that tells the whole truth. Carry:
+**2026-08-16 → 08-14 — Slices 67/68 and the two §5.9 leak fixes, condensed** (ROADMAP + ADR-0063/0064
+carry each in full; closes #375, #380, #405, #412, #426). Four things a next session still needs:
 
-1. **NAME, NEVER COUNT.** A count cannot separate **custody-blind** from **genuinely empty** — the one
-   question the line exists to answer. A later "simplification" back to a count is a regression.
-2. **A chart-scoped definer, not a table grant — granted to BOTH group roles.** `event_deferred` is
-   granted to `cairn_node`, NOT `cairn_agent`, so db/043 gained `cairn_patient_deferred_sensitivity(uuid)`
-   and its test pins **why it exists** (asserting `cairn_agent` genuinely lacks `SELECT`). The first draft
-   granted EXECUTE to `cairn_agent` alone and called it "the runtime role" — it is not; the only
-   role-membership grant in the tree is `GRANT cairn_node TO <login role>` (`db.rs`). **#425** owns which
-   role the runtime should be.
-3. **The report declares what it cannot contain** — ADR-0064's invisible cross-chart withdrawal, #414's
-   unconsumed `RAISE WARNING`, #434's prefix filter — each asserted by a test over an **empty** list: the
-   case where silence is most convincing and most wrong.
-4. **Two Rust traps.** A type named only inside `#[cfg(test)]` compiles clean under `cargo test --lib` and
-   fails the integration build under `-D warnings` — use `--all-targets`. And `search_path_pg_temp.rs`
-   compares `rows.len() >= PINNED_TODAY` deliberately: a 26th definer needs **no** number moved.
+1. **A pinned `search_path` must deny the temp schema the FIRST look**, not merely end in `pg_temp`. `SET
+   search_path = public` does not exclude it, so with a decoy `event_log` in place `submit_event` and
+   `apply_remote_event` each **returned SUCCESS while the owner-privileged INSERT landed in the caller's
+   temp table** — live data loss at both write doors, demonstrated as `cairn_agent`, a role with no write
+   privilege on `event_log` at all. 21 headers gained `, pg_temp`; the guard is over `pg_proc`, not a name
+   list. Still open: **#430** (~100 unpinned invoker-rights functions; `cairn_patient_has_events` is safe
+   only by *inheriting* `submit_event`'s path) and **#431** (`cairn_execute_shred`, catalogue-only —
+   a diverted shred would report an erasure that never happened).
+2. **A parameter name is not a security property.**
+   `classify_authorship_confidence(&body.contributors, &body.signer_key_id, None)` compiled, read
+   naturally, and graded a forgery `Attested`. Both key arguments are now a `VerifiedKid` newtype
+   (mint-site allowlist unpinned: **#428**). **`attester_key` alone is NOT proof** — db/020's deferred arm
+   stores a peer's token unverified, which is why SQL's R1 pairs it with `cairn_attestation_vouched`.
+3. **Slice 68's two properties:** the authority floor **gates effect, never admission**, and only in the
+   withholding direction, so a claim below the bar still lands and converges (no fork — the **#342**
+   trap); and **computing the verdict at read cuts both ways** — both routes resolve through
+   `actor_current`, so revoking someone *after* their withdrawal landed silently re-raises the grade
+   (**#409**), while the Rust↔SQL authority mapping separately diverges on two shapes (**#408**, root
+   cause **#413**). Also: **flag what cannot self-heal, view what can** — the worklist is a VIEW,
+   `safety_overclaim_flag` a LEDGER. The PR #410 review ran six agents plus mutation testing on a live
+   PG18 and **7 of 11 production-code mutations survived a green suite** — the review in one statistic.
+   Two mechanics worth keeping: R2's self-identity equality was completely unpinned because every
+   un-attested fixture used the *device* as both asserter and withdrawer (pinning it needs two DISTINCT
+   human actors), and **`EXCEPTION WHEN OTHERS` does not catch a statement timeout** (PostgreSQL's
+   `OTHERS` excludes `query_canceled`, 57014). Filed, not fixed: **#413**, **#414**, **#415**
+   (`stranger-attested` measures the SIGNER, so it fires on routine care — **expect noise**), **#416**,
+   **#417**, **#418**, **#419**, **#420**, **#422**.
+4. **Slice 67 (ADR-0063, SCHEMA 48→49): the seal boundary is the coarsening boundary.** Precise
+   `{class, severity}` travels sealed with the body, a grade-chosen **rung** rides the envelope in the
+   clear, so *coarsen-but-survive* after a crypto-shred is structural. **Two coarsenings, load-bearing for
+   DIFFERENT reasons:** emission binds a peer's raw-SQL client; read answers a peer that legitimately
+   emitted a finer rung, and **read coarsening is a rendering choice, not a floor**. `safety_class_map`
+   ships **EMPTY** — the seam drugref plugs into. Open: **#407** (the sealed precise claim is read by
+   nothing), **#406** (no supersession — a ceased drug warns forever), **#394**, **#395**, **#397**,
+   **#398**, **#399**, **#400**, **#401**, **#402**.
 
-**The PR #433 review landed a fix wave.** Three lessons generalise well past the slice. **(a) A union view
-whose arms mean opposite things must never get one summary sentence:** the worklist's `stranger-attested`
-arm DID take effect, yet the draft counted it under *"N withdrawal(s) did NOT take effect"* — telling the
-operator a completed, unaccountable removal of protection had not happened. One header per reason now.
-**(b) A proxy is not a fact when the fact is exactly determinable:** custody-blindness was inferred from
-`standing.is_empty()` — wrong both ways, since grading is opt-in (#383 surviving inside its own fix) and
-partial custody is invisible to any proxy; `event_log` keeps the sealed row, `event_clear` is what this
-node can open, and db/048 §11b measures the difference. **(c) Peer text is not display text:**
-`node_origin`/`event_type`/`grade` are unconstrained `TEXT` copied verbatim from a peer's body, and a
-newline forged a whole line — `render.rs::peer()` Debug-escapes every such field.
-
-**2026-08-16 (later) — the pinned `search_path` that pinned nothing** (closes
-[#426](https://github.com/cairn-ehr/cairn-ehr/issues/426); 21 function headers gained `, pg_temp`).
-**Live data loss at both owner-rights write doors, not hygiene:** `SET search_path = public` does not
-exclude the session temp schema, so with a decoy `event_log` in place `submit_event` and
-`apply_remote_event` each **RETURNED SUCCESS while the owner-privileged INSERT landed in the caller's temp
-table**. A pinned path must **deny the temp schema the first look** (not merely "end in `pg_temp`"), and
-the guard is over `pg_proc`, not a name list. Still open: **#430** (~100 unpinned invoker-rights
-functions; `cairn_patient_has_events` is safe only by *inheriting* `submit_event`'s path) and **#431**
-(`cairn_execute_shred`, catalogue-only coverage — a diverted shred would report an erasure that never
-happened).
-
-**2026-08-16 — two live §5.9 leaks, one per plane** (closes #412 and #405; ADR-0063 erratum E1). Both were
-**a guarantee asserted in a comment that the code did not provide** — and the review of the fix reproduced
-that exact shape in its own prose. The column-grant half is carried in ⇒ NEXT (residual **#427**). The
-other half generalises: **a parameter name is not a security property** —
-`classify_authorship_confidence(&body.contributors, &body.signer_key_id, None)` compiled, read naturally,
-and graded a forgery `Attested`. Both key arguments are now a `VerifiedKid` newtype (mint-site allowlist
-unpinned: **#428**). **`attester_key` alone is NOT proof** — db/020's deferred arm stores a peer's token
-unverified, which is why SQL's R1 pairs it with `cairn_attestation_vouched`.
-
-**2026-08-15 — Slice 68: claim authority at the apply door** (closes #380, discharges #405 part 2;
-**ADR-0064**, spec v0.66). Full reasoning is ADR-0064's nine decisions; the floor itself is summarised in
-⇒ NEXT. Two properties to carry: it **gates effect, never admission**, and only in the withholding
-direction — a claim below the bar still lands and converges, so no fork (the **#342** trap); and
-**computing the verdict at read cuts both ways** — both routes resolve through `actor_current`, so
-revoking someone *after* their withdrawal landed silently re-raises the grade (**#409**), while the
-Rust↔SQL authority mapping separately diverges on two shapes (**#408**, root cause **#413**). Also:
-**flag what cannot self-heal, view what can** — the withdrawal worklist is a VIEW, `safety_overclaim_flag`
-a LEDGER.
-
-**The PR #410 review** ran six agents plus mutation testing on a live PG18; **7 of 11 production-code
-mutations survived a green suite** — the review in one statistic. What generalises: **(a)** R2's
-self-identity equality was completely unpinned (`c.actor_id = t.actor_id` → `TRUE` left the suite green
-and reopened #380 in full, because every un-attested fixture used the *device* as both asserter and
-withdrawer; pinning it needs two DISTINCT human actors). **(b) `EXCEPTION WHEN OTHERS` does not catch a
-statement timeout** — PostgreSQL's `OTHERS` excludes `query_canceled` (57014), so a blanket handler let a
-timeout abort `submit_event`, reproducing the incident ADR-0063 decision 8 exists to prevent. **(c)**
-Comments asserting guarantees the code does not provide were the largest single class, and the #405 *fix*
-re-committed it. Filed, not fixed: **#413** · **#414** (the overclaim ledger rests on a `RAISE WARNING`
-nothing consumes) · **#415** (`stranger-attested` measures the SIGNER, so it fires on routine care —
-**expect noise**) · **#416** (a sealed withdrawal is inert and invisible) · **#417** (wrong ADR line
-citations; ADRs are immutable) · **#418** · **#419** · **#420** · **#422**.
-
-**2026-08-14 — Slice 67: the §5.9 safety projection, part B** (closes #375, discharges #294; **ADR-0063**,
-spec v0.65, SCHEMA 48→49). **The seal boundary is the coarsening boundary:** precise `{class, severity}`
-travels sealed with the body, a grade-chosen **rung** rides the envelope in the clear, so
-*coarsen-but-survive* after a crypto-shred is structural. **Two coarsenings, load-bearing for DIFFERENT
-reasons:** emission binds a peer's raw-SQL client; read answers a peer that legitimately emitted a finer
-rung, and **read coarsening is a rendering choice, not a floor**. **`safety_class_map` ships EMPTY** — the
-seam drugref plugs into. The PR #403 review also fixed **#404** (`cairn_prospective_sensitivity`'s thread
-arm had diverged from db/048, so `p_thread` was inert). Open: **#407** (the sealed precise claim is read by
-nothing), **#406** (no supersession — a ceased drug warns forever), **#394**, **#395**, **#397**, **#398**,
-**#399**, **#400**, **#401**, **#402**.
 
 **2026-08-11 → 08-02 — Slices 66, 65, 63, 61+62, condensed** (ROADMAP carries each in full).
 **Slice 66** (closes #231; ADR-0052 erratum E1) pinned the unwrap-cert kid to `trust_peer` (db/007) —
