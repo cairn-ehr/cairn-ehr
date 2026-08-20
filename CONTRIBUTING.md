@@ -35,6 +35,17 @@ job's `name:` and GitHub matches required checks by that **exact name**.
 | `ruff + pytest` | `matcher.yml` · `lint-test` | The advisory Python matcher: `ruff check` + the **pure** pytest suite (no database). |
 | `clippy + cargo test (cairn_pgx floor)` | `rust.yml` · `test` | The **in-DB safety floor**: builds `cairn_pgx` into a real PostgreSQL 18, then `cargo clippy -D warnings` + `cargo test --workspace` **and** the matcher's DB-gated suite, all with `CAIRN_TEST_PG` set so the gated tests actually run (they self-skip when it is unset). The same job also runs the `db/tests/*.sql` **mirrors** via `scripts/run-db-sql-tests.sh`. |
 
+### Jobs that run but do not yet block
+
+Two jobs run on every pull request and are **not** in `main`'s branch-protection set, so today they can
+go red without stopping a merge. Only a repository admin can promote them; until one does, treat a red
+run here as a blocker by hand.
+
+| Check | Workflow · job | What it gates |
+|---|---|---|
+| `clippy + cargo test (cairn-gui)` | `rust.yml` · `gui` | The reference UI's separate cargo workspace — which `cargo test --workspace` does not cover — including the JS/Rust drift guard that is the only compensating control for a webview with no type checking. |
+| `cargo doc (API surface)` | `rust.yml` · `doc` | `cargo doc --no-deps` under `RUSTDOCFLAGS=-D warnings` on **all three** cargo trees (the root workspace here; the cairn-gui and `cairn_pgx` halves ride the `gui` and `test` jobs, which already install the system libraries those trees need). A broken docs build is a gap in the ADR-0021 public API surface, and it hides every subsequent rustdoc error ([#439](https://github.com/cairn-ehr/cairn-ehr/issues/439)). |
+
 Three things that have bitten us, so they are worth stating outright:
 
 - **The floor check's name is deliberately PostgreSQL-version-independent** (`… (cairn_pgx floor)`, not

@@ -821,7 +821,7 @@ struct UnwrapKeyCertBody {
 /// A node's signed unwrap-key certificate: binds its X25519 public unwrap key
 /// to its Ed25519 identity, in its own ADR-0040 signing context so it can
 /// never be replayed as an event or attestation. CBOR payload:
-/// {"kid": <hex ed25519 pub>, "x25519_pub": <hex 32 bytes>}.
+/// `{"kid": <hex ed25519 pub>, "x25519_pub": <hex 32 bytes>}`.
 pub fn sign_unwrap_key_cert(sk: &SigningKey, x25519_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
     let body = UnwrapKeyCertBody {
         kid: hex::encode(sk.verifying_key().to_bytes()),

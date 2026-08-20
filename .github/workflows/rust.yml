@@ -53,6 +53,41 @@ jobs:
       - name: rustfmt (cairn-gui workspace)
         run: cargo fmt --all --check --manifest-path cairn-gui/Cargo.toml
 
+  # API-docs gate — fast, no Postgres (issue #439). `cargo doc` was RED on main for an
+  # unknown number of commits: a bare `<hex>` in a doc comment parses as an HTML tag, and a
+  # public item linked to a private one. Neither is a warning — rustdoc reports
+  # `error: could not document`, so the generated API surface simply did not build. It went
+  # unnoticed because the only way anyone completed the build was by passing
+  # `-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, under which any NEW
+  # rustdoc error is invisible too (one was introduced, and caught only by a reviewer running
+  # the build by hand).
+  #
+  # Why it is a gate and not a nicety: ADR-0021 makes the native API "capability-described and
+  # conformance-tested", built on the same public surface every other client uses. Generated
+  # API docs are part of that surface.
+  #
+  # RUSTDOCFLAGS is set EXPLICITLY rather than relying on each tree's lint config: only the
+  # root workspace sets `[workspace.lints.rust] warnings = "deny"`, so in cairn-gui and
+  # cairn_pgx a rustdoc *warning* (the class both of #439's errors belong to) would otherwise
+  # pass this job in silence. The flag makes the bar identical in all three trees.
+  #
+  # This job covers the pure-Rust root workspace only. The other two trees need system
+  # libraries (WebKitGTK; the PostgreSQL server headers + libclang), so their doc build rides
+  # the job that already installs them — see `gui` and `test` below. All three ARE covered.
+  doc:
+    name: cargo doc (API surface)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the pinned toolchain (+ rustfmt/clippy)
+        run: rustup show
+      - name: Cache the cargo registry and build
+        uses: Swatinem/rust-cache@v2
+      - name: cargo doc (workspace)
+        run: cargo doc --no-deps --workspace
+
   # Supply-chain gate — fast, no Postgres. Enforces the AGPL-compatible license allow-list,
   # RUSTSEC advisories, wildcard/source bans (deny.toml). Runs on ALL THREE trees; the
   # extension tree shares the root deny.toml, while cairn-gui has its own (Tauri's webview
@@ -143,6 +178,14 @@ jobs:
 
       - name: cargo test (cairn-gui — view model, session lock, JS/Rust drift guard)
         run: cargo test --manifest-path cairn-gui/Cargo.toml --workspace
+
+      # The cairn-gui half of the #439 doc gate. It lives here, not in the `doc` job, because
+      # Tauri does not build at all without the WebKitGTK stack this job already installed —
+      # standing that up a second time would be minutes of apt for a docs build.
+      - name: cargo doc (cairn-gui workspace)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --manifest-path cairn-gui/Cargo.toml --workspace
 
   test:
     # This job's name is a REQUIRED status check in main's branch protection, and GitHub
@@ -309,6 +352,19 @@ jobs:
       # stops covering the code it gated is worse than no gate.
       - name: cargo test (cairn-medication-view, fixtures feature)
         run: cargo test -p cairn-medication-view --features fixtures
+
+      # The cairn_pgx half of the #439 doc gate. Same reasoning as the cairn-gui step: pgrx
+      # cannot even generate its bindings without the PostgreSQL server headers and libclang
+      # this job installed, so the extension's docs build here rather than in the fast `doc`
+      # job. The feature flags mirror the install step above — documenting the default feature
+      # set would resolve a different PG major than the one under test.
+      - name: cargo doc (cairn_pgx extension)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --no-deps \
+            --manifest-path extensions/cairn_pgx/Cargo.toml \
+            --no-default-features --features "pg${PG_MAJOR}"
 
       # ---- SQL mirrors: db/tests/*.sql (#212) ----------------------------------------
       # These previously ran NOWHERE (the mechanism that manufactured the #182 twin-
