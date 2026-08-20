@@ -646,7 +646,7 @@ async fn a_withdrawal_inert_because_its_target_has_not_replicated_heals_when_it_
         subject_kind: SubjectKind::Patient,
         subject_id: p,
         grade: "sequestered",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("protected witness"),
     };
     let assert_body = body_from_spec(

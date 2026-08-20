@@ -439,6 +439,42 @@ the fix is visibility, not a door refusal — refusing at apply would fork the e
 chart"* is indistinguishable from *"not arrived yet"* on a node holding neither. All five production
 mutations tried against the new tests were killed.
 
+**Slice 69 follow-on — §5.9 type design (2026-08-19; closes
+[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); no ADR, no migration, SCHEMA stays 49).** Four
+closed sets get one definition each; the third and fourth are the load-bearing ones. **(1)** `source`
+becomes a `Provenance` enum — db/048 checks it non-empty, stores it, and then reads it from **no query,
+no projection and no rank function**, so `"Human"` or `"advisory "` would have passed builder *and* floor
+into a plaintext, unconditionally-replicating body. Not harmless: `render_sensitivity_twin` prints it into
+the signed §3.13 legibility twin, which is permanent. Builder-side only — the door still admits a peer's
+future value, and db/048 itself mints a third (`'unreadable'`, on the born-sealed branch), so a read model
+must keep `source` as open text. **(2)** Four `GRADE_*` **consts, not an enum** (an enum closes the open
+vocabulary and makes the inverted-unknown path unreachable). Documentary: a survey found **exactly one**
+grade literal in production code workspace-wide, so this is not the de-duplication #387 assumed. They are
+pinned where it is possible to pin them — `sensitivity_ladder.rs` feeds all four to
+`cairn_sensitivity_rank` live, since a Rust-only assertion compares a const to its own literal.
+**(3) `WinningSubject` fuses `chart_source` + `chart_content_address`, making ADR-0062 erratum E6
+structurally unrepeatable:** `content_address IS NOT NULL` is the "did anything win" test, never
+`subject_kind <> 'none'` (`none` is a legal open-vocabulary kind a peer can send), and a consumer keying
+on the phrase would drop the address needed to withdraw a real winner. Its payload fields are **private**,
+so the two constructors in `sensitivity/winner.rs` are the only producers — a claim about construction has
+to be enforced by visibility or it is a wish. **(4)** `SubjectKind` and its wire words are **generated
+from one table** by a small `macro_rules!`, which is the only construction that actually works: the
+hand-written `ALL` this replaced was guarded by `assert_eq!(ALL.len(), 3)` over an `[SubjectKind; 3]` —
+a constant compared to its own literal, which could never fail. Adding a fourth variant left the suite
+green while `--help` and `try_from` silently refused a kind `as_str` was emitting.
+
+**The lesson this slice is really about: a guard defined over the list it guards is not a guard.** Every
+finding in its review was one of those — the drift guard above, `from_row` "the ONE place" over public
+fields, "hex" as an unenforced doc claim, and four tests asserting a const against its own literal. The
+code was right; three of the four headline claims were true only in the comments. Second-order fixes that
+came out of it: the last two hand-written copies of the subject-kind set are gone (`parse_subject_kind`
+is `try_from`, `subject_kind_phrase` matches on the enum, so its `_` arm can no longer swallow a new
+variant); the thread grade line is rendered by a test for the first time (the whole
+`withdraws=<hex>` clause could previously be deleted green — and it is the operator's only route to
+withdrawing a thread-scoped grade without raw SQL); `render_assert_readback` takes `&'static str` so peer
+text cannot reach the one slot it prints unescaped; and `cli_sensitivity_surface.rs` pins `--help`
+against the enum, the only place `ALL`'s contents are user-visible.
+
 
 ## Phase 5 — Security & compliance core
 

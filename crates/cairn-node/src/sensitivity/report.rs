@@ -11,8 +11,15 @@
 //! the strength of a grade — a projection-layer filter with no floor beneath it is security
 //! theatre, since a client talking raw SQL walks straight past it. Real enforcement is
 //! custody narrowing (#232 part C / #376).
-use super::subject_kind_phrase;
+use super::winner::WinningSubject;
 use uuid::Uuid;
+
+// NO `#[derive(Debug)]` ON THE ROW TYPES BELOW, DELIBERATELY. An earlier draft of this
+// slice derived it on all six; nothing consumed it, and `WithdrawalWorklistRow.rationale`
+// is peer-authored clear text that replicates and can never be unsaid (#378). In the one
+// module whose whole subject is confidentiality, a derive nothing needs turns
+// `tracing::debug!("{report:?}")` into a one-keystroke disclosure. Add it back only with a
+// caller that needs it, and only on a type that carries no clinical text.
 
 /// One row of `sensitivity_withdrawal_worklist` (db/048 section 11) — a withdrawal this
 /// node admitted that a human should look at.
@@ -82,7 +89,7 @@ pub struct DeferredSensitivityEvent {
 /// One event on this chart whose emitted safety rung was FINER than the standing grade
 /// licensed (#405 part 2, recorded by db/049 at the LOCAL door only).
 ///
-/// A LEDGER, not a view — ADR-0064 decision 3: flag what cannot self-heal, view what can.
+/// A LEDGER, not a view — ADR-0064 decision 6: flag what cannot self-heal, view what can.
 /// A published byte can never improve, so unlike the withdrawal worklist this row will
 /// never stop being true.
 pub struct SafetyOverclaim {
@@ -93,7 +100,7 @@ pub struct SafetyOverclaim {
 
 /// One chart's grades, as `patient-sensitivity` renders them.
 ///
-/// `chart_grade`/`chart_source` is the CHART-WIDE reading: the effective grade computed
+/// `chart_grade`/`chart_subject` is the CHART-WIDE reading: the effective grade computed
 /// off the chart's own registration event (its birth act). Exactly one such event is read
 /// because `patient_registration_current` is a `SELECT DISTINCT ON (patient_id) ... ORDER BY
 /// ... ASC` view (db/045) — NOT because #345 forbids a second registration, which it does
@@ -123,13 +130,10 @@ pub struct SafetyOverclaim {
 /// operator would have to fall back to raw SQL, defeating the point of this surface.
 pub struct ChartReport {
     pub chart_grade: String,
-    /// Which subject won: "chart-wide" | "this thread" | "this event" | "none" (or the
-    /// unrecognised-scope phrase — see `subject_kind_phrase`).
-    pub chart_source: String,
-    /// Hex `content_address` of the assertion that produced `chart_grade`/`chart_source`
-    /// — feed this straight into `sensitivity-withdraw --withdraws`. `None` exactly when
-    /// `chart_source == "none"`: there is no assertion to name because nothing applies.
-    pub chart_content_address: Option<String>,
+    /// Which subject produced `chart_grade`, and the hex `content_address` to feed
+    /// `sensitivity-withdraw --withdraws` when one applies. One value, not two correlated
+    /// ones — see [`WinningSubject`] for why that matters here specifically.
+    pub chart_subject: WinningSubject,
     pub threads: Vec<ThreadGrade>,
     /// Withdrawals this node holds that a human should look at — the §1.2 budget's
     /// subject. Empty on a healthy chart, so the renderer stays silent there. See
@@ -165,11 +169,9 @@ pub struct ChartReport {
 pub struct ThreadGrade {
     pub thread_id: Uuid,
     pub grade: String,
-    /// Which subject won — see `ChartReport::chart_source`.
-    pub source: String,
-    /// Hex `content_address` of the winning assertion, or `None` when nothing applies
-    /// (the thread reads "routine" / "none" — there is nothing to withdraw).
-    pub content_address: Option<String>,
+    /// Which subject won, and its withdrawable address — see
+    /// [`ChartReport::chart_subject`].
+    pub subject: WinningSubject,
 }
 
 /// Read `patient`'s current §5.9 sensitivity report. No key, no HLC tick, nothing authored
@@ -206,13 +208,12 @@ pub async fn chart_sensitivity(
             &[&patient_s],
         )
         .await?;
-    let (chart_grade, chart_source, chart_content_address) = match chart_row {
+    let (chart_grade, chart_subject) = match chart_row {
         Some(row) => {
             let kind: String = row.get(1);
             (
                 row.get::<_, String>(0),
-                subject_kind_phrase(&kind).to_string(),
-                row.get::<_, Option<String>>(2),
+                WinningSubject::from_row(&kind, row.get::<_, Option<String>>(2)),
             )
         }
         // NO REGISTRATION ON FILE — REACHABLE IN ORDINARY FEDERATED OPERATION, and the
@@ -248,14 +249,19 @@ pub async fn chart_sensitivity(
                     row.get::<_, String>(0),
                     // Not a specific subject: nothing anchors these assertions to a
                     // registration event here, so the honest phrase is the coarsening one.
-                    subject_kind_phrase("coarsened").to_string(),
-                    row.get::<_, Option<String>>(1),
+                    //
+                    // `coarsened`, NOT `from_row`: winner-ness is already settled here by
+                    // the row existing, and `cairn_sensitivity_standing` selects a BYTEA
+                    // PRIMARY KEY, so there is no NULL to interpret. Reading column 1 as a
+                    // non-optional `String` makes a future widening of that query a loud
+                    // type error rather than a silent collapse to "nothing applies" — see
+                    // `WinningSubject::coarsened`.
+                    WinningSubject::coarsened(row.get::<_, String>(1)),
                 ),
                 // Genuinely nothing: no registration AND no standing assertion.
                 None => (
-                    "routine".to_string(),
-                    subject_kind_phrase("none").to_string(),
-                    None,
+                    cairn_event::sensitivity::GRADE_ROUTINE.to_string(),
+                    WinningSubject::None,
                 ),
             }
         }
@@ -290,8 +296,7 @@ pub async fn chart_sensitivity(
                 thread_id: Uuid::parse_str(&thread_id)
                     .expect("medication_id column is a valid UUID"),
                 grade,
-                source: subject_kind_phrase(&kind).to_string(),
-                content_address: row.get(3),
+                subject: WinningSubject::from_row(&kind, row.get(3)),
             }
         })
         .collect();
@@ -366,7 +371,7 @@ pub async fn chart_sensitivity(
     // The one PERMANENT list on this report. Every other block describes a state that can
     // still improve — a withdrawal can be re-asserted, a deferred event re-adjudicated, a
     // DEK granted. A published byte cannot be clawed back, so an overclaim row never stops
-    // being true (ADR-0064 decision 3: flag what cannot self-heal, view what can). Ordered
+    // being true (ADR-0064 decision 6: flag what cannot self-heal, view what can). Ordered
     // with content_address as the tie-break because recorded_at defaults from
     // clock_timestamp() and two rows written in one transaction can share it.
     let overclaim_rows = client
@@ -401,8 +406,7 @@ pub async fn chart_sensitivity(
 
     Ok(ChartReport {
         chart_grade,
-        chart_content_address,
-        chart_source,
+        chart_subject,
         threads,
         withdrawals_needing_review,
         standing,

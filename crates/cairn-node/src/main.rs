@@ -579,8 +579,14 @@ enum Cmd {
         /// The chart this grade applies to.
         #[arg(long)]
         patient: Uuid,
-        /// What is being graded: an "event", a medication "thread", or the whole "patient".
-        #[arg(long, value_parser = ["event", "thread", "patient"])]
+        /// What is being graded.
+        //  #387: the accepted values are DERIVED from `SubjectKind`, never re-typed here —
+        //  INCLUDING in the doc line above, which clap prints in the same `--help` block as
+        //  `[possible values: ...]`. Enumerating them there (as this comment's first draft
+        //  did) put a fourth hand-maintained copy directly beside the generated one, where
+        //  a drift would render as a help page contradicting itself.
+        #[arg(long, value_parser = cairn_event::sensitivity::SubjectKind::ALL
+            .iter().map(|k| k.as_str()).collect::<Vec<_>>())]
         subject_kind: String,
         /// The event id, medication thread id, or patient id named by --subject-kind. With
         /// --subject-kind patient this MUST equal --patient: two hand-typed UUIDs that do not
@@ -1814,16 +1820,13 @@ async fn main() -> anyhow::Result<()> {
             grade,
             rationale,
         } => {
-            // clap's --subject-kind value_parser already restricts input to these three
-            // strings, so the fallback arm is genuinely unreachable — matches the same
-            // discipline `parse_identifier_pairs`/`dob_precision` use elsewhere: refuse
-            // early and legibly rather than let a typo become a confusing enum default.
-            let kind = match subject_kind.as_str() {
-                "event" => cairn_event::sensitivity::SubjectKind::Event,
-                "thread" => cairn_event::sensitivity::SubjectKind::Thread,
-                "patient" => cairn_event::sensitivity::SubjectKind::Patient,
-                other => anyhow::bail!("unreachable --subject-kind value {other:?}"),
-            };
+            // #387: ONE parse, shared with the `--help` list above. clap's value_parser
+            // has already restricted the input, so this cannot fail in practice — but it
+            // now degrades to the enum's own error naming the accepted values, instead of
+            // a hand-written `unreachable` bail that a fourth subject kind would have made
+            // reachable and wrong.
+            let kind = cairn_event::sensitivity::SubjectKind::try_from(subject_kind.as_str())
+                .map_err(anyhow::Error::msg)?;
             // Raising is device-additive — no human attester needed (db/048 section 12
             // reserves the ceremony for a chart-wide raise's two rules — it must name THIS
             // chart, and it must state why — and for every withdrawal, never for a plain
@@ -1845,9 +1848,13 @@ async fn main() -> anyhow::Result<()> {
                 rationale.as_deref(),
             )
             .await?;
+            // `kind.as_str()`, not the raw `subject_kind` argument: they are identical
+            // today only because clap validated first, and the wire word is what actually
+            // went into the signed body.
             println!(
-                "asserted sensitivity grade {grade:?} over {subject_kind} {subject_id} on \
-                 chart {patient} (event {event_id})"
+                "asserted sensitivity grade {grade:?} over {} {subject_id} on \
+                 chart {patient} (event {event_id})",
+                kind.as_str()
             );
             // #388 part 4: never echo the typed grade as though it were the outcome. Both
             // §5.9 orchestrators mint a local Uuid and return it without reading anything
@@ -1879,7 +1886,7 @@ async fn main() -> anyhow::Result<()> {
                     cairn_node::sensitivity::render::render_assert_readback(
                         &grade,
                         &r.grade,
-                        &r.winning_subject,
+                        r.winning_subject,
                         r.scope,
                     )
                 ),
@@ -2001,12 +2008,19 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             for l in &lines {
+                // `subject_kind_phrase`, not the raw wire word. This line and
+                // `patient-sensitivity`'s report state the SAME fact, and until now they
+                // worded it differently — `safety` said "winning subject: patient" where
+                // the sensitivity report said "chart-wide" — which falsified
+                // `sensitivity`'s own module doc ("the one place this mapping lives, so
+                // every caller reads the same phrase for the same wire value"). Two
+                // wordings for one fact is how an operator learns to distrust both.
                 println!(
                     "{}  {}  (grade {}, winning subject: {})",
                     cairn_node::safety::render_safety_line(l),
                     l.event_type,
                     l.grade,
-                    l.subject_kind
+                    cairn_node::sensitivity::subject_kind_phrase(&l.subject_kind)
                 );
             }
             println!(

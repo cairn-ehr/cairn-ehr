@@ -337,7 +337,7 @@ async fn a_strangers_earlier_presence_that_replicates_late_clears_the_row() {
         subject_kind: SubjectKind::Patient,
         subject_id: p,
         grade: "restricted",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("earlier presence, arriving late"),
     };
     let earlier_body = body_from_spec(

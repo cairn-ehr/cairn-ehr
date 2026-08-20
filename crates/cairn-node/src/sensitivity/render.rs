@@ -11,6 +11,7 @@ use super::readback::{SubjectResolution, TargetState, WithdrawOutcome};
 use super::report::{
     ChartReport, DeferredSensitivityEvent, SafetyOverclaim, WithdrawalWorklistRow,
 };
+use super::winner::WinningSubject;
 
 /// The prefix `cairn_patient_deferred_sensitivity` filters on. Named once, here, so the
 /// footer that declares the block's limit cannot drift from the SQL that creates it.
@@ -30,6 +31,29 @@ const DEFERRED_PREFIX: &str = "sensitivity.%";
 /// already used — this extends it to every other field with the same provenance.
 fn peer(s: &str) -> String {
     format!("{s:?}")
+}
+
+/// The `(winning subject: …)` clause both grade lines end with.
+///
+/// ONE function, because the chart line and the thread line must read identically — a
+/// reader who learns the shape on one must be able to trust it on the other. Before
+/// [`WinningSubject`] existed this was the same six-line `match` written twice, over a pair
+/// of fields whose correlation was held only by a doc comment.
+///
+/// The address is printed UNQUOTED: `withdraws=<hex>` is a copy-paste CONTRACT into
+/// `sensitivity-withdraw --withdraws`, and hex from `encode(…, 'hex')` carries no
+/// line-forging risk to escape (unlike the peer-authored grade beside it).
+///
+/// That "it is hex" is not a hope: [`WinningSubject`]'s payload fields are private, so the
+/// only producers are its two constructors, and every caller of those feeds them
+/// `encode(…, 'hex')`. A new producer would have to be added inside `winner.rs`, next to
+/// this reasoning. Likewise the phrase is `&'static str`, so neither half of this line can
+/// become peer text without a type change.
+fn winner_clause(w: &WinningSubject) -> String {
+    match w.content_address() {
+        Some(ca) => format!("(winning subject: {}, withdraws={ca})", w.phrase()),
+        None => format!("(winning subject: {})", w.phrase()),
+    }
 }
 
 /// Why a worklist row is on the worklist, in words. Pure and TOTAL — every input has an
@@ -191,10 +215,16 @@ fn render_overclaims(os: &[SafetyOverclaim]) -> Vec<String> {
 /// chart-wide assert and a thread-scoped assert against different subjects. Without it, a
 /// thread-scoped `restricted` on a routine chart read back as "routine now stands", which
 /// looks exactly like "your assertion did nothing" for an assertion that fully took effect.
+///
+/// `winning_subject` is `&'static str` because it is the one value here printed
+/// UNESCAPED — `asserted` and `standing` both go through `peer`. Peer text arrives as
+/// `String`, so the narrower type is what makes routing it into that slot impossible
+/// rather than merely unlikely (#387; the same reasoning as `SubjectReading`'s field and
+/// `WinningSubject::phrase`).
 pub fn render_assert_readback(
     asserted: &str,
     standing: &str,
-    winning_subject: &str,
+    winning_subject: &'static str,
     scope: &str,
 ) -> String {
     format!(
@@ -311,14 +341,10 @@ pub fn render_withdraw_readback(o: &WithdrawOutcome) -> Vec<String> {
 pub fn render_chart_report(chart: &str, r: &ChartReport) -> Vec<String> {
     let mut out = Vec::new();
     out.push(format!(
-        "chart {}: {} (winning subject: {}{})",
+        "chart {}: {} {}",
         chart,
         peer(&r.chart_grade),
-        r.chart_source,
-        match &r.chart_content_address {
-            Some(ca) => format!(", withdraws={ca}"),
-            None => String::new(),
-        }
+        winner_clause(&r.chart_subject)
     ));
     out.extend(render_withdrawals(&r.withdrawals_needing_review));
     out.extend(render_deferred(&r.deferred));
@@ -420,14 +446,10 @@ fn render_threads(r: &ChartReport) -> Vec<String> {
 /// same way and neither can drift from the other's wording.
 fn render_thread_line(t: &super::ThreadGrade) -> String {
     format!(
-        "  thread {}: {} (winning subject: {}{})",
+        "  thread {}: {} {}",
         t.thread_id,
         peer(&t.grade),
-        t.source,
-        match &t.content_address {
-            Some(ca) => format!(", withdraws={ca}"),
-            None => String::new(),
-        }
+        winner_clause(&t.subject)
     )
 }
 
@@ -440,13 +462,11 @@ mod tests {
     fn healthy() -> ChartReport {
         ChartReport {
             chart_grade: "routine".into(),
-            chart_source: "none".into(),
-            chart_content_address: None,
+            chart_subject: WinningSubject::None,
             threads: vec![ThreadGrade {
                 thread_id: uuid::Uuid::nil(),
                 grade: "routine".into(),
-                source: "none".into(),
-                content_address: None,
+                subject: WinningSubject::None,
             }],
             withdrawals_needing_review: vec![],
             standing: vec![],
@@ -457,6 +477,46 @@ mod tests {
     }
 
     #[test]
+    fn the_thread_line_keeps_the_same_shape_as_the_chart_line() {
+        // THE THREAD LINE WAS RENDERED BY NO TEST AT ALL until this one. Every fixture used
+        // `WinningSubject::None`, so `(winning subject: …, withdraws=<hex>)` could be
+        // deleted from `render_thread_line` outright — or lose its leading space — with the
+        // whole suite green. That hex is the operator's ONLY route to withdrawing a
+        // thread-scoped grade without raw SQL, i.e. exactly the contract
+        // `the_grade_line_keeps_its_documented_shape` was written to protect one function
+        // away on the chart line.
+        let mut r = healthy();
+        r.threads[0].grade = "restricted".into();
+        r.threads[0].subject = WinningSubject::from_row("thread", Some("a3f".into()));
+        let line = render_thread_line(&r.threads[0]);
+        assert_eq!(
+            line,
+            format!(
+                "  thread {}: \"restricted\" (winning subject: this thread, withdraws=a3f)",
+                uuid::Uuid::nil()
+            ),
+            "byte-for-byte, including the two-space indent and the space before `(`"
+        );
+    }
+
+    #[test]
+    fn a_thread_with_no_winner_offers_no_withdraws_clause() {
+        // The other arm, equally unpinned before: `healthy()`'s thread has no winner, so
+        // the line must carry the phrase and NO `withdraws=`, or an operator would be
+        // handed an address for an assertion that does not exist.
+        let r = healthy();
+        let line = render_thread_line(&r.threads[0]);
+        assert_eq!(
+            line,
+            format!(
+                "  thread {}: \"routine\" (winning subject: none)",
+                uuid::Uuid::nil()
+            )
+        );
+        assert!(!line.contains("withdraws="));
+    }
+
+    #[test]
     fn the_grade_line_keeps_its_documented_shape() {
         // `sensitivity-withdraw --withdraws` documents its argument as "the hex
         // content_address, as patient-sensitivity prints it". That is a CONTRACT: an
@@ -464,8 +524,7 @@ mod tests {
         // the CLI caught it. Pin the shape so the next refactor cannot quietly break it.
         let mut r = healthy();
         r.chart_grade = "sequestered".into();
-        r.chart_source = "chart-wide".into();
-        r.chart_content_address = Some("a3f".into());
+        r.chart_subject = WinningSubject::from_row("patient", Some("a3f".into()));
         let lines = render_chart_report("C", &r);
         // The grade is Debug-quoted: it is unconstrained peer text (see `peer`). The part
         // that is a copy-paste CONTRACT — `withdraws=<hex>` — is unquoted and unchanged.
@@ -698,13 +757,11 @@ mod review_fixes {
     fn base() -> ChartReport {
         ChartReport {
             chart_grade: "routine".into(),
-            chart_source: "none".into(),
-            chart_content_address: None,
+            chart_subject: WinningSubject::None,
             threads: vec![ThreadGrade {
                 thread_id: uuid::Uuid::nil(),
                 grade: "routine".into(),
-                source: "none".into(),
-                content_address: None,
+                subject: WinningSubject::None,
             }],
             withdrawals_needing_review: vec![],
             standing: vec![],
@@ -878,7 +935,7 @@ mod withdraw_readback {
     fn reading(grade: &str) -> SubjectReading {
         SubjectReading {
             grade: grade.into(),
-            winning_subject: "this thread".into(),
+            winning_subject: "this thread",
             scope: "that thread",
         }
     }

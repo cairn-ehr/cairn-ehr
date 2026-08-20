@@ -121,7 +121,7 @@ async fn chart_with_an_overclaiming_note(
         subject_kind: SubjectKind::Patient,
         subject_id: patient,
         grade: "restricted",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("test fixture"),
     };
     let grade_body = cairn_event::EventBody {

@@ -217,7 +217,7 @@ async fn attested_in_rust_is_attested_in_sql_and_unverified_is_unverified() {
         subject_kind: SubjectKind::Patient,
         subject_id: p,
         grade: "sequestered",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("lockstep fixture: claimed, never attested"),
     };
     let mut unverified_body = body_from_spec(

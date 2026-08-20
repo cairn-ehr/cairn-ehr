@@ -34,8 +34,14 @@ pub struct SubjectReading {
     /// The effective grade now standing over the subject. PEER TEXT — unconstrained `TEXT`
     /// copied from a body, so the renderer escapes it (`render::peer`).
     pub grade: String,
-    /// Which subject produced that grade: [`subject_kind_phrase`]'s output.
-    pub winning_subject: String,
+    /// Which subject produced that grade: [`subject_kind_phrase`]'s output — or, on the
+    /// thread branch only, a sentence saying this node cannot project the thread at all.
+    ///
+    /// `&'static str` (#387). The allocation saved is incidental; the reason that matters
+    /// is that `render::render_assert_readback` prints this field UNESCAPED, unlike the
+    /// grades beside it. Peer text off `tokio-postgres` is always `String`, so making this
+    /// `&'static str` is what stops peer text reaching an unescaped print position at all.
+    pub winning_subject: &'static str,
     /// What the grade was read OVER — "this chart" | "that event" | "that thread". The
     /// three subject kinds resolve against three DIFFERENT things, and saying "on this
     /// chart" after a thread-scoped act is a precise untruth about an act that did exactly
@@ -127,18 +133,19 @@ pub struct WithdrawOutcome {
 ///
 /// Pure and total. `None` is NOT an error: db/048 admits an unrecognised subject kind from
 /// a future peer and interprets it conservatively (ADR-0062/ADR-0056), so this build must
-/// be able to hold "a kind I do not know" as an ordinary value.
+/// be able to hold "a kind I do not know" as an ordinary value. That is why this returns
+/// `Option` and discards the error text `TryFrom` builds — the message names what a local
+/// operator may type, which is the wrong sentence entirely for a value that arrived by
+/// replication and was correctly admitted.
 ///
-/// TODO(#387) — collapses into `SubjectKind: TryFrom<&str>` along with the clap value
-/// parser and the CLI's hand-rolled match, which are the same closed set written three
-/// times.
+/// #387: the body is now `SubjectKind::try_from`, not a fourth hand-written copy of the
+/// closed set. The copy it replaced carried a `_ => None` wildcard, so — unlike every other
+/// copy — a new variant produced NO compile error here at all. It would simply have started
+/// reporting the new kind as one "this build does not recognise" (a false claim about the
+/// build's own capability) and, worse, skipped the read-back entirely, so an operator who
+/// had just withdrawn a grade would never learn what now stands over it.
 fn parse_subject_kind(kind: &str) -> Option<SubjectKind> {
-    match kind {
-        "event" => Some(SubjectKind::Event),
-        "thread" => Some(SubjectKind::Thread),
-        "patient" => Some(SubjectKind::Patient),
-        _ => None,
-    }
+    SubjectKind::try_from(kind).ok()
 }
 
 /// Read what now stands over ONE subject.
@@ -162,7 +169,7 @@ pub async fn subject_reading(
             let after = super::chart_sensitivity(client, patient).await?;
             Ok(SubjectReading {
                 grade: after.chart_grade,
-                winning_subject: after.chart_source,
+                winning_subject: after.chart_subject.phrase(),
                 scope: "this chart",
             })
         }
@@ -176,7 +183,7 @@ pub async fn subject_reading(
             let kind_s: String = row.get(1);
             Ok(SubjectReading {
                 grade: row.get(0),
-                winning_subject: subject_kind_phrase(&kind_s).to_string(),
+                winning_subject: subject_kind_phrase(&kind_s),
                 scope: "that event",
             })
         }
@@ -199,7 +206,7 @@ pub async fn subject_reading(
                     let kind_s: String = row.get(1);
                     SubjectReading {
                         grade: row.get(0),
-                        winning_subject: subject_kind_phrase(&kind_s).to_string(),
+                        winning_subject: subject_kind_phrase(&kind_s),
                         scope: "that thread",
                     }
                 }
@@ -210,8 +217,7 @@ pub async fn subject_reading(
                 None => SubjectReading {
                     grade: "(not readable here)".to_string(),
                     winning_subject: "no locally projected row for that thread — this node \
-                                      may hold no DEK custody (#383)"
-                        .to_string(),
+                                      may hold no DEK custody (#383)",
                     scope: "that thread",
                 },
             })

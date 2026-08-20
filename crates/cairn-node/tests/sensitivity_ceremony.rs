@@ -89,7 +89,7 @@ async fn the_local_door_requires_a_rationale_for_a_chart_wide_raise() {
         subject_kind: SubjectKind::Thread,
         subject_id: Uuid::now_v7(),
         grade: "restricted",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: None,
     };
     submit_signed(
@@ -245,7 +245,7 @@ async fn the_local_door_refuses_a_chart_wide_grade_that_names_another_chart() {
         subject_kind: SubjectKind::Thread,
         subject_id: Uuid::now_v7(),
         grade: "restricted",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: None,
     };
     submit_signed(

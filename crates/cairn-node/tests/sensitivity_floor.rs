@@ -29,7 +29,7 @@ async fn the_floor_refuses_a_malformed_assertion_and_admits_a_well_formed_one() 
         subject_kind: SubjectKind::Thread,
         subject_id: Uuid::now_v7(),
         grade: "restricted",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: None,
     };
     submit_signed(
@@ -383,7 +383,7 @@ async fn an_assertion_projects_and_a_withdrawal_projects_independently_of_arriva
         subject_kind: SubjectKind::Patient,
         subject_id: p,
         grade: "sensitive",
-        source: "human",
+        source: cairn_event::sensitivity::Provenance::Human,
         rationale: Some("staff member treated here"),
     };
     let assertion_body = EventBody {
