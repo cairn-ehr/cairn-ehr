@@ -56,28 +56,17 @@ use cairn_event::registration::{
     REGISTRATION_SCHEMA_VERSION,
 };
 use cairn_event::{sign, EventBody, SigningKey};
-use common::{body_from_spec, cs, setup, submit_registration, submit_signed_with_id, EventSpec};
+use common::{
+    body_from_spec, cs, setup, submit_registration, submit_signed_with_id, EventSpec,
+    NOT_EXTENSION_OWNED, REPO_SCHEMAS,
+};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// Schemas the repo is answerable for: everything a migration could create a function in.
-///
-/// NOT pinned to `public`, deliberately. A migration that introduces its own schema would be
-/// invisible to a `nspname = 'public'` filter AND would not lower the row count, so neither
-/// this file's floor guards nor its offender list would notice — silent under-coverage of
-/// exactly the kind these tests exist to prevent. System schemas are Postgres's own.
-const REPO_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
-       AND n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%'";
-
-/// Extension-owned objects: `cairn_pgx` and `pgcrypto` install into `public` too, and this
-/// repo's invariant is not theirs to satisfy.
-///
-/// `classid` is constrained because `pg_depend.objid` is unique only WITHIN a catalog — an
-/// unrelated object carrying an extension dependency whose OID happened to equal a function's
-/// would otherwise drop that function silently out of both guards.
-const NOT_EXTENSION_OWNED: &str = "NOT EXISTS (SELECT 1 FROM pg_depend d
-                        WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass
-                          AND d.deptype = 'e')";
+// `REPO_SCHEMAS` / `NOT_EXTENSION_OWNED` — "which functions is this repo answerable for?" —
+// moved to `common/mod.rs` when `floor_execute_grants.rs` (#382) became the second guard
+// needing them. A catalogue filter copied into two suites diverges silently: the narrowed
+// copy reports "no offenders" rather than failing. See that module for the full reasoning.
 
 /// Functions this repo defines, with the `search_path` each one pins, as
 /// `(signature, setting)`.

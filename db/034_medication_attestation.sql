@@ -95,6 +95,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_medication_attestation(text, jsonb) FROM PUBLIC;
 
 -- 3. Register the verb's floor + HARD twin requirement in the #173/ADR-0048 registry
 --    (the single db/005 dispatcher reads these rows). Placed AFTER the check fn above

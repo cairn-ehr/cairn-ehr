@@ -127,6 +127,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_sensitivity_grade(text, jsonb) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 4. The structural floor for a withdrawal.
@@ -158,6 +161,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_sensitivity_withdrawal(text, jsonb) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 5. Twin-check registrations (ADR-0048). ADDING A ROW HERE MEANS BUMPING THE EXPECTED
