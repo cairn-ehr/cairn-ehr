@@ -72,11 +72,20 @@ not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/
 > the ideal payload because it runs at *compile* time. The chain is
 > `arrayref → blake3 → bao → cairn-event`, i.e. the content-addressing and signing crate.
 >
-> **We are safe right now**, for two reasons and only one of them is ours: the committed lockfile pins
-> 0.3.9 at its 2024 checksum (yanking changes neither the bytes nor the checksum), and crates.io appears
-> to have already removed `proc-macro1`, so the update **fails closed** rather than fetching a payload.
-> Hold the pin. If crates.io deletes 0.3.10 and un-yanks the real versions, the gate goes green with no
-> repo change — check before touching anything. See #445 for the full evidence and the options.
+> **The exposure was worse than a lockfile pin suggests, and it is worth knowing why.** Two of three
+> cargo trees were pinned; `extensions/cairn_pgx` had its `Cargo.lock` **gitignored**, so `cargo pgrx
+> install` re-resolved on every CI run — and today's run took `arrayref 0.3.10` and tried to fetch
+> `proc-macro1`, dying in 45s on a docs-only commit (the trace shows `blake3 v1.0.0` against the root's
+> pinned `1.8.5`: a fresh resolve, not a locked one). It failed **closed** only because crates.io had
+> already pulled the typosquat; in the window before that, it would have compiled an unknown proc macro
+> **at build time** into the shared object that enforces the in-DB floor. It was also nondeterministic —
+> the run twelve minutes earlier passed on a restored `rust-cache` lockfile. **Fixed in `5d23d0a`:** that
+> lockfile is now committed (pre-incident resolve, arrayref 0.3.9) and its `.gitignore` says why it must
+> not be re-added.
+>
+> Hold the pin. `cargo-deny` stays red on the yanked 0.3.9 and is **deliberately not worked around**. If
+> crates.io deletes 0.3.10 and un-yanks the real versions, the gate goes green with no repo change —
+> check before touching anything. See #445 for the full evidence and the options.
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
