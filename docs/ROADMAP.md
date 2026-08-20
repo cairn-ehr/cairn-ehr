@@ -288,7 +288,9 @@ stream's first two parts; full detail in git, the PRs and the linked ADRs).**
   **Withhold the key, never the bytes** — refusing the bytes would fork the event set. Repair is TWO steps
   (`pull --full`, then `cairn_reproject()`). Same day (PR #390): `unsound = "all"` in both `deny.toml`
   trees, cargo-deny v2's `"none"` default having let an advisory pass in silence; one finding ignored with
-  a reason and an expiry ([#389](https://github.com/cairn-ehr/cairn-ehr/issues/389)).
+  a reason ([#389](https://github.com/cairn-ehr/cairn-ehr/issues/389)) — but **no** expiry, which this
+  line wrongly claimed until 2026-08-21: cargo-deny 0.19.9 accepts only `id` and `reason`, so a review
+  date now lives in the `reason` and `advisory_ignore_review_dates.rs` fails when it passes.
 - **67 — the §5.9 safety projection, part B** (closes
   [#375](https://github.com/cairn-ehr/cairn-ehr/issues/375), discharges #294;
   [ADR-0063](spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md), spec v0.65,
