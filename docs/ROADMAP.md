@@ -439,29 +439,40 @@ relabelling the guard that catches it, was this PR's most consequential review f
 coarsening arm, and the type-scoped conservative bound. All new guards were mutation-tested; each kills
 its mutation. Residuals, stated rather than closed: the magnitude of #385's index win is unmeasured on
 volume data; two hand-maintained mirror lists ([#441](https://github.com/cairn-ehr/cairn-ehr/issues/441));
-the DB-gated suite can go silently green if `CAIRN_TEST_PG` is ever unset
-([#442](https://github.com/cairn-ehr/cairn-ehr/issues/442) — **closed 2026-08-21**);
-`cairn_event_twin` still holds default PUBLIC EXECUTE
-([#443](https://github.com/cairn-ehr/cairn-ehr/issues/443) — **closed 2026-08-21**).
+and both #442 and #443, closed 2026-08-21 by the next entry.
 
 **2026-08-20/21 — the silent-gate pass** (closes
 [#446](https://github.com/cairn-ehr/cairn-ehr/issues/446), **#442**, **#443**; no ADR, no migration file,
 SCHEMA stays 49). Three gates that could pass without running, all fallout from the 48h before it.
 **(1) #446:** `crates/cairn-node/tests/cargo_lockfiles_tracked.rs` asks **cargo** — not a hand-rolled
 `members`/`exclude` parser — which manifests own a lockfile, then asserts each one's `Cargo.lock` is
-tracked by git AND matched by no ignore rule. Two trees failed and now carry committed lockfiles
-(`poc/iced-ui-spike`, `packaging/crates`); a third defect fell out of asking cargo at all —
-`packaging/crates` was in **no** workspace and **not** excluded, so every cargo command in that directory
-had been erroring since the crates graduated to the top-level workspace. **(2) #442:**
-`db_gate_actually_ran.rs` fails loudly when `$CI` is set and the gate variables are not; the variable
-names are **derived from the test sources**, so a future `CAIRN_TEST_PG4` is covered with no edit.
+tracked by git AND matched by no ignore rule. Two of the six trees failed and now carry committed
+lockfiles; a third defect fell out of asking cargo at all — `packaging/crates` was in **no** workspace and
+**not** excluded, so every cargo command there had been erroring since the crates graduated to the
+top-level workspace. **(2) #442:** `db_gate_actually_ran.rs` fails loudly when `$CI` is set and the gate
+variables are not, over a variable list **derived from the test sources** rather than written down.
 **(3) #443:** `cairn_event_twin` joins the #382 convention (db/005 `REVOKE`, third family in
-`floor_execute_grants.rs`). Every new guard was mutation-tested. Residuals, stated rather than closed:
-the two new lockfiles are outside cargo-deny's three configured trees
+`floor_execute_grants.rs`). Every new guard was mutation-tested.
+**The review pass on PR #448 then found the guards' own reassurance was the weakest part**, and three
+fixes landed in the same PR. **(a)** The #446 header claimed lockfile *currency* was `--locked`'s job
+"and CI passes it" — CI passed it nowhere but two `cargo install`s of third-party tools, so a lock behind
+its manifest was still silently re-resolved mid-build. Made true rather than deleted: **every repo cargo
+invocation in `rust.yml` now passes `--locked`**, fronted by `cargo fetch --locked` for `cargo pgrx
+install`, which has no such flag. **(b)** `git check-ignore` has **three** exit codes (0 ignored /
+1 clean / **128 error**), and reading 128 as "clean" made that guard vacuous for any path git declines to
+evaluate. **(c)** "22 dispatch targets" was wrong and contradicted the paragraph above it: the registry
+names **16 distinct** `check_fn`s across **24 rows**; **22** is the `cairn_check_%` prefix family, the
+REVOKE convention's membership. #443's title was the source and is corrected. Residuals, stated rather
+than closed — cargo-deny still covers three of the six trees
 ([#447](https://github.com/cairn-ehr/cairn-ehr/issues/447)); the 342 bare `else { return }` skip sites
-stay silent locally, deliberately left to ride the `cs()` dedupe
-([#327](https://github.com/cairn-ehr/cairn-ehr/issues/327)).
-
+stay silent locally, left to ride the `cs()` dedupe
+([#327](https://github.com/cairn-ehr/cairn-ehr/issues/327)); the `CAIRN_TEST_*` scan still reads *prose*,
+so a name in a Rust doc comment becomes a CI requirement
+([#449](https://github.com/cairn-ehr/cairn-ehr/issues/449)); `$CI` fails **open**
+([#450](https://github.com/cairn-ehr/cairn-ehr/issues/450)); the matcher's 15 Python DB-gated files keep
+the identical #442 hole ([#451](https://github.com/cairn-ehr/cairn-ehr/issues/451)); plus
+[#452](https://github.com/cairn-ehr/cairn-ehr/issues/452) and
+[#453](https://github.com/cairn-ehr/cairn-ehr/issues/453).
 
 ## Phase 5 — Security & compliance core
 

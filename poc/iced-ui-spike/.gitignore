@@ -2,7 +2,9 @@
 # Cargo.lock is NOT ignored here, deliberately (#446) — do not re-add it.
 #
 # Spike 0004 is frozen (iced FAILED the accessibility bar; the reference UI is Tauri 2), and
-# every one of this crate's dependencies is optional, so the DEFAULT build resolves nothing.
+# every one of this crate's dependencies is optional, so the DEFAULT build COMPILES nothing.
+# It still RESOLVES everything — cargo's resolution is feature-independent, which is why the
+# committed lockfile is 4023 lines for a crate whose default build is empty.
 # Neither fact is a reason to leave it unpinned: `--features gui` pulls the whole iced/winit/
 # wgpu tree, and the person who runs that is by definition someone revisiting a decision, not
 # someone auditing a dependency graph. The repo-wide rule is one line with no exceptions —

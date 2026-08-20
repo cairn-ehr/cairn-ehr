@@ -90,9 +90,12 @@ $$;
 -- registration ever mentions. A validator renamed out of the prefix therefore leaves the
 -- family silently; an applier cannot leave the registry and stay reachable.
 --
--- A THIRD family, of one, was added by #443: cairn_event_twin, the dispatcher these validators
--- hang off. Its REVOKE and the reasoning for it sit next to its definition below, not here,
--- because the safety argument is about ITS callers rather than about this convention.
+-- A THIRD family, of one, was added by #443: cairn_event_twin, the dispatcher that routes an
+-- event type to whichever of these validators the registry names for it. (Not to all of them —
+-- as the paragraph above says, several prefix members are helpers no registration mentions. The
+-- registry names 16 distinct check_fns across 24 rows; the REVOKE convention covers all 22.)
+-- Its REVOKE and the reasoning for it sit next to its definition below, not here, because the
+-- safety argument is about ITS callers rather than about this convention.
 -- ---------------------------------------------------------------------------------
 REVOKE EXECUTE ON FUNCTION cairn_check_twin_registry_fn() FROM PUBLIC;
 
@@ -391,10 +394,10 @@ BEGIN
 END;
 $$;
 
--- #443 — the dispatcher joins the convention its twenty-two dispatch targets follow.
+-- #443 — the dispatcher joins the REVOKE convention its cairn_check_* siblings follow.
 --
--- Until 2026-08-20 cairn_event_twin kept Postgres's default EXECUTE-to-PUBLIC while every
--- cairn_check_* it dispatches to was revoked. That failed CLOSED (a PUBLIC caller reached the
+-- Until 2026-08-21 cairn_event_twin kept Postgres's default EXECUTE-to-PUBLIC while all 22 of
+-- the cairn_check_* functions were revoked. That failed CLOSED (a PUBLIC caller reached the
 -- dispatcher and was refused one layer deeper, by "permission denied for function
 -- cairn_check_…"), so nothing leaked and nothing was writable. It was still the wrong resting
 -- state, for the reason the convention block above gives: a rule followed by every member of a
@@ -413,7 +416,6 @@ $$;
 -- Asserted over the catalogue by crates/cairn-node/tests/floor_execute_grants.rs
 -- (public_cannot_execute_the_twin_dispatcher).
 REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;
-
 
 -- Suppression owner-gate (ADR-0043 / issue #99). A suppressing overlay
 -- (salience.downgrade / visibility.suppress) that forecloses on a HUMAN author's

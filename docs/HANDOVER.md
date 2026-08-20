@@ -57,33 +57,19 @@ Slice 65's own follow-ons still open: **#374** (thread resolution resolves only 
 must warn at entry today), **#379** (the grade in the twin) and **#436** (the mis-chart withdrawal, when it
 arrives by replication). **#386 is half-closed** — db/049's subset test *drives* it; db/048's still does
 not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/#382/#385/#439** and
-**#446/#442/#443** (08-20).
+**#446/#442/#443** (08-21).
 
 > [!NOTE]
-> **RESOLVED 2026-08-20 — the `arrayref` supply-chain incident ([#445](https://github.com/cairn-ehr/cairn-ehr/issues/445)),
-> kept here because one of its two findings outlives it.**
->
-> `arrayref` 0.3.5–0.3.9 were all yanked and a 0.3.10 published 2026-08-20 07:15Z added a *normal*
-> dependency on **`proc-macro1`** — a crate that 404s on crates.io and typosquats `proc-macro2`. Upstream
-> `droundy/arrayref` was still 0.3.9 with no such dependency and no 0.3.10 tag: **the published artifact
-> did not match its own source.** A proc macro executes at *compile* time, and the chain was
-> `arrayref → blake3 → bao → cairn-event`.
->
-> **Fixed by `blake3` 1.8.7** (published the same day; the BLAKE3 team dropped `arrayref`), applied to all
-> three lockfiles. No code change. `bao` was NOT the cause and removing it would not have helped —
-> `cairn-event` depends on `blake3` directly, and `bao`'s only normal deps are `arrayvec` + `blake3`.
-> `abao` is staler than `bao` and is not a remedy; `bao-tree` is the live successor, reviewed separately
-> as a maintenance question.
->
-> **THE FINDING THAT OUTLIVES IT: `extensions/cairn_pgx/Cargo.lock` was gitignored**, so `cargo pgrx
-> install` re-resolved dependencies on every CI run and took the compromised 0.3.10 (the failure trace
-> shows `blake3 v1.0.0` against the root's pinned `1.8.5` — a fresh resolve). It failed *closed* only
-> because crates.io had already pulled the typosquat, and it was **nondeterministic**: the run twelve
-> minutes earlier passed on a `rust-cache`-restored lockfile. Two of three trees were pinned and the
-> unpinned one was the extension that enforces the in-DB safety floor. Now committed (`5d23d0a`), with the
-> `.gitignore` carrying a comment saying why it must not be re-added. **The CI guard that finding owed is
-> now built** ([#446](https://github.com/cairn-ehr/cairn-ehr/issues/446), 2026-08-21) — see the
-> silent-gate entry below. It found two more unpinned trees and one manifest cargo could not place at all.
+> **CLOSED — the `arrayref` supply-chain incident ([#445](https://github.com/cairn-ehr/cairn-ehr/issues/445), 2026-08-20).**
+> A 0.3.10 whose published artifact did not match its own source added a *normal* dependency on
+> **`proc-macro1`**, a `proc-macro2` typosquat, reaching `cairn-event` via `blake3 → bao`. Fixed by
+> `blake3` 1.8.7 the same day; no code change — `bao` was **not** the cause (`cairn-event` depends on
+> `blake3` directly), though it is stale, and `bao-tree` as successor is now
+> [#454](https://github.com/cairn-ehr/cairn-ehr/issues/454). **The finding that outlived it** — `cairn_pgx`'s lockfile
+> was gitignored, so the extension enforcing the in-DB floor re-resolved on every CI run — is now closed
+> in both halves: every tree commits its lock (#446) **and** CI passes `--locked` (PR #448). The full
+> narrative, including why cargo is asked rather than the manifests parsed, lives in
+> `crates/cairn-node/tests/cargo_lockfiles_tracked.rs`.
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
@@ -210,7 +196,7 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
 [#442](https://github.com/cairn-ehr/cairn-ehr/issues/442),
 [#443](https://github.com/cairn-ehr/cairn-ehr/issues/443); opens
 [#447](https://github.com/cairn-ehr/cairn-ehr/issues/447); no ADR, no migration file, SCHEMA stays 49).
-Three gates that could pass **without running**. Workspace sweep 1395 passed / 0 failed. Carry:
+Three gates that could pass **without running**. Workspace sweep 1396 passed / 0 failed. Carry:
 
 1. **Ask the authority, do not re-implement it.** `cargo_lockfiles_tracked.rs` asks `cargo locate-project
    --workspace` which manifests own a lockfile, rather than parsing `members`/`exclude` itself — the #382
@@ -223,10 +209,10 @@ Three gates that could pass **without running**. Workspace sweep 1395 passed / 0
    `.gitignore` files said. Verified, not assumed: with a rule re-added, plain `check-ignore` exits 1 and
    `--no-index` exits 0.
 3. **The lockfile rule now has ZERO exemptions** — `poc/iced-ui-spike` and `packaging/crates` gained
-   committed locks. The spike's deps are all optional so its *default* build resolves nothing; that was
-   deliberately not treated as an exemption, because **one rule with no exceptions is worth more than the
-   two trees an exception list would spare**, and the next tree will be added by someone not thinking
-   about any of this.
+   committed locks. The spike's deps are all optional so its *default* build **compiles** nothing; it
+   still *resolves* everything (cargo resolution is feature-independent — hence a 4023-line lock for an
+   empty default build), and neither fact was treated as an exemption, because **one rule with no
+   exceptions is worth more than the two trees an exception list would spare**.
 4. **The #442 guard derives its variable list from the test sources**, so a future `CAIRN_TEST_PG4` is
    covered with no edit. It binds only under `$CI`; the local self-skip stays. **Fix 2 of #442 was
    deliberately NOT done**: unifying the 342 bare `else { return }` sites would add ~1000 lines of
@@ -239,6 +225,18 @@ Three gates that could pass **without running**. Workspace sweep 1395 passed / 0
    would need an explicit GRANT, and that is the change that would turn the line into a breakage.
 6. **Residual, stated not closed: #447** — cargo-deny covers three of the six cargo trees, so the two poc
    trees are pinned but unaudited for AGPL compatibility and RUSTSEC advisories. Not on the clinical path.
+7. **The review pass found the guards' own reassurance was the weak part** (PR #448, 08-21). Three to
+   carry. **(a) A tracked lockfile is only half of "pinned"** — a lock behind its manifest is silently
+   re-resolved mid-build, and the header claimed `--locked` covered that "and CI passes it" when CI passed
+   it nowhere. **Every repo cargo invocation in `rust.yml` now passes `--locked`**; `cargo pgrx install`
+   has no such flag, so it is fronted by `cargo fetch --locked`. **(b) `git check-ignore` has THREE exit
+   codes** — 0 ignored, 1 clean, **128 error** — and reading 128 as "clean" made that guard vacuous. Both
+   git helpers now match the code and panic on anything else. **(c) "22 dispatch targets" was wrong**: the
+   registry names **16 distinct** `check_fn`s across **24 rows**; **22** is the `cairn_check_%` prefix
+   family (the REVOKE convention's membership). #443's title was the source and is corrected. Opens
+   **#449** (narrow the `CAIRN_TEST_*` scan to `env::var` sites — prose can still invent a gate variable),
+   **#450** (`$CI` fails *open*), **#451** (the matcher's 15 Python DB-gated files keep the identical #442
+   hole), **#452**, **#453**.
 
 
 **2026-08-20 — a trap-clearing pass** (closes #439, #382, #385, #381; no ADR, no migration). Four small

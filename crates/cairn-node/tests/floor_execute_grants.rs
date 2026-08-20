@@ -64,10 +64,10 @@
 //! explicit `GRANT EXECUTE … TO cairn_agent` on an applier — that would need its own
 //! assertion, and no migration does it today.
 //!
-//! A third family joined in #443: `cairn_event_twin`, the dispatcher those validators hang
-//! off, which until then carried default `PUBLIC` EXECUTE. That already failed closed — a
-//! `PUBLIC` caller reached the dispatcher and was refused one layer deeper — so the fix
-//! bought legibility rather than privilege, which is exactly what the twenty-two bought.
+//! A third family joined in #443: `cairn_event_twin`, the dispatcher that routes an event type
+//! to its validator, which until then carried default `PUBLIC` EXECUTE. That already failed
+//! closed — a `PUBLIC` caller reached the dispatcher and was refused one layer deeper — so the
+//! fix bought legibility rather than privilege, which is exactly what the twenty-two bought.
 //!
 //! # Why there is no `db/tests/` SQL mirror
 //!
@@ -141,8 +141,17 @@ const CHECK_FAMILY: &str = r"p.proname LIKE 'cairn\_check\_%'";
 /// ever covers the names someone remembered to follow.
 const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_apply)";
 
-/// The dispatcher the twenty-two validators hang off, identified by NAME because a family of
-/// one has no list to read (#443).
+/// The dispatcher that routes an event type to its validator, identified by NAME because a
+/// family of one has no list to read (#443).
+///
+/// Note what it does NOT dispatch to: all twenty-two of them. The `cairn_event_twin_check`
+/// registry holds 24 rows naming **16 distinct** `cairn_check_*` functions; the remaining six
+/// prefix-siblings are helpers no registration mentions (`cairn_check_coding_object`,
+/// `cairn_check_safety_signal` and the like — `db/005_submit.sql` says so where it explains why
+/// [`CHECK_FAMILY`] is read from a name prefix rather than from a registry). The twenty-two is
+/// the REVOKE *convention's* membership, which is the set this file cares about; the sixteen is
+/// the dispatch fan-out, which it does not. Conflating them is what #443's title did, and the
+/// arithmetic was wrong in both directions at once.
 ///
 /// Naming it is the honest option here, not a lapse from the [`APPLY_FAMILY`] standard. The
 /// registry `cairn_event_twin_check` lists the validators this function dispatches TO; nothing
@@ -156,11 +165,11 @@ const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_
 /// cairn_check_…`. Nothing leaks and nothing is writable — but the refusal came from the wrong
 /// place, and told the caller which validator a given event type maps to. More to the point,
 /// #382's whole argument was that a convention a reader cannot verify is worth nothing, and
-/// "all twenty-two members revoked, their dispatcher not" is exactly the half-followed state
-/// that argument was about.
+/// "all twenty-two prefix-siblings revoked, the dispatcher that reaches them not" is exactly
+/// the half-followed state that argument was about.
 const DISPATCHER_FAMILY: &str = "p.proname = 'cairn_event_twin'";
 
-/// What the loaded schema holds today (2026-08-20), as floors rather than equalities.
+/// What the loaded schema holds today (2026-08-21), as floors rather than equalities.
 ///
 /// `>=` against today's exact count, in the shape `search_path_pg_temp.rs` established: the
 /// count only ever RISES as migrations add functions, so this never needs revising upward —
