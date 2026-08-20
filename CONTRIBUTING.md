@@ -33,18 +33,40 @@ job's `name:` and GitHub matches required checks by that **exact name**.
 | `rustfmt` | `rust.yml` · `fmt` | `cargo fmt --check` across **both** cargo trees (workspace + the `cairn_pgx` extension), against the pinned toolchain (`rust-toolchain.toml`). |
 | `cargo-deny` | `rust.yml` · `deny` | AGPL-compatible license allow-list + RUSTSEC advisories + wildcard/source bans (`deny.toml`), on both trees. |
 | `ruff + pytest` | `matcher.yml` · `lint-test` | The advisory Python matcher: `ruff check` + the **pure** pytest suite (no database). |
-| `clippy + cargo test (cairn_pgx floor)` | `rust.yml` · `test` | The **in-DB safety floor**: builds `cairn_pgx` into a real PostgreSQL 18, then `cargo clippy -D warnings` + `cargo test --workspace` **and** the matcher's DB-gated suite, all with `CAIRN_TEST_PG` set so the gated tests actually run (they self-skip when it is unset). The same job also runs the `db/tests/*.sql` **mirrors** via `scripts/run-db-sql-tests.sh`. |
+| `clippy + cargo test (cairn_pgx floor)` | `rust.yml` · `test` | The **in-DB safety floor**: builds `cairn_pgx` into a real PostgreSQL 18, then `cargo clippy -D warnings` + `cargo test --workspace` **and** the matcher's DB-gated suite, all with `CAIRN_TEST_PG` set so the gated tests actually run (they self-skip when it is unset). The same job also runs the `db/tests/*.sql` **mirrors** via `scripts/run-db-sql-tests.sh`, and — as its last steps — the **blocking half of the `cargo doc` gate** (root workspace, the `fixtures` feature, and `cairn_pgx`). |
+
+### Where the `cargo doc` gate actually blocks
+
+`cargo doc --no-deps` under `RUSTDOCFLAGS=-D warnings` runs over **all three** cargo trees, but not all
+of it blocks a merge, so it is worth being precise rather than implying a uniform gate. A broken docs
+build is a gap in the ADR-0021 public API surface, and — the reason [#439](https://github.com/cairn-ehr/cairn-ehr/issues/439)
+mattered — it hides every subsequent rustdoc error behind the `-A` flags someone adds to get past it.
+
+| Tree | Runs in | Blocks a merge? |
+|---|---|---|
+| root workspace (`cairn-event`, `cairn-node`, `cairn-sync`, …) | `test` (last steps) **and** `doc` | **Yes**, via `test` |
+| `cairn-medication-view` with `--features fixtures` | `test` (last steps) | **Yes**, via `test` |
+| `cairn_pgx` extension | `test` (last steps) | **Yes**, via `test` |
+| cairn-gui workspace | `gui` | No — see below |
+
+The root-workspace build is deliberately run **twice**: once in the fast standalone `doc` job for
+feedback in under a minute, and once inside `test`, which is a required check. Both of #439's actual
+defects were in the root workspace, so relying on the advisory job alone would have let the same
+regression merge green.
 
 ### Jobs that run but do not yet block
 
 Two jobs run on every pull request and are **not** in `main`'s branch-protection set, so today they can
-go red without stopping a merge. Only a repository admin can promote them; until one does, treat a red
-run here as a blocker by hand.
+go red without stopping a merge. Only a repository admin can promote them
+([#444](https://github.com/cairn-ehr/cairn-ehr/issues/444)); until one does, treat a red run here as a
+blocker by hand. **This table records the branch-protection state as of 2026-08-20** — it lives on
+GitHub, not in this repo, so no gate can keep it honest. Verify with
+`gh api repos/:owner/:repo/branches/main/protection`, and update this section when #444 lands.
 
 | Check | Workflow · job | What it gates |
 |---|---|---|
-| `clippy + cargo test (cairn-gui)` | `rust.yml` · `gui` | The reference UI's separate cargo workspace — which `cargo test --workspace` does not cover — including the JS/Rust drift guard that is the only compensating control for a webview with no type checking. |
-| `cargo doc (API surface)` | `rust.yml` · `doc` | `cargo doc --no-deps` under `RUSTDOCFLAGS=-D warnings` on **all three** cargo trees (the root workspace here; the cairn-gui and `cairn_pgx` halves ride the `gui` and `test` jobs, which already install the system libraries those trees need). A broken docs build is a gap in the ADR-0021 public API surface, and it hides every subsequent rustdoc error ([#439](https://github.com/cairn-ehr/cairn-ehr/issues/439)). |
+| `clippy + cargo test (cairn-gui)` | `rust.yml` · `gui` | The reference UI's separate cargo workspace — which `cargo test --workspace` does not cover — including the JS/Rust drift guard that is the only compensating control for a webview with no type checking. Also carries the cairn-gui half of the `cargo doc` gate. |
+| `cargo doc (API surface)` | `rust.yml` · `doc` | The root workspace's docs build, as a **fast advisory duplicate** of the copy inside `test`. Nothing is gated only here — promoting it buys speed of signal, not coverage. |
 
 Three things that have bitten us, so they are worth stating outright:
 

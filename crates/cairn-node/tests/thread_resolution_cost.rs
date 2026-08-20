@@ -11,14 +11,21 @@
 //! Worse, it was paid unconditionally: the function never asked whether the event's TYPE
 //! could belong to a medication thread at all, so a note, a demographic edit or a
 //! registration ran all five scans to learn what its type already guaranteed. The chart-wide
-//! reading in `chart_sensitivity` always resolves off a registration event, so it paid the
-//! full five, per chart, every time.
+//! reading in `chart_sensitivity` resolves off the chart's registration event whenever one is
+//! on file, so on the common path it paid the full five, per chart, every time. (Not
+//! *always*: `sensitivity/report.rs` has an explicit no-registration arm — reachable in
+//! ordinary federated operation, when a chart's events arrive by sync ahead of its
+//! registration — which reads `cairn_sensitivity_standing` directly and never came here.)
 //!
 //! # What is asserted here, and what is deliberately not
 //!
-//! **Asserted:** the five indexes exist; the type short-circuit genuinely fires; and the
-//! predicate it keys on still answers "might have a thread" for every medication event type,
-//! which is the precondition that keeps the short-circuit from swallowing a real resolution.
+//! **Asserted:** the five indexes exist (leading-column, valid, on the `public` table); the
+//! type short-circuit genuinely fires; and the predicate it keys on still answers "might have
+//! a thread" for every medication event type — which since #385 is not merely a precondition
+//! for the optimisation but the guard standing between a §10b list edit and silent protection
+//! loss across every medication thread. See
+//! [`no_medication_event_type_is_classified_thread_free`], which carries the measured
+//! before/after.
 //!
 //! **Not asserted: a query plan.** A planner assertion (`EXPLAIN` showing an Index Scan)
 //! would be a lie at test scale — on a table of a few dozen rows Postgres will correctly
@@ -29,7 +36,8 @@
 //! benchmark on the Pi rig (#272), not in a unit gate.
 //!
 //! Every test here self-skips without `$CAIRN_TEST_PG` (see `common::cs`); a skipped run
-//! prints `ok` and proves nothing. CI sets it.
+//! prints `ok` and proves nothing. CI sets it. That the whole DB-gated suite can go silently
+//! green if that one variable is ever unset is a suite-wide hole, tracked in #442.
 mod common;
 use common::{
     content_address_of, cs, setup, submit_registration, submit_signed_with_id, EventSpec,
@@ -72,18 +80,38 @@ async fn every_medication_thread_projection_indexes_content_address() {
 
     let mut missing = Vec::new();
     for table in THREAD_PROJECTIONS {
-        // An index whose FIRST key column is content_address. Leading-column, not
-        // "mentions the column anywhere": only a leading key serves an equality lookup on
-        // it, so a composite index that merely happens to include content_address later
-        // must not read as coverage.
+        // THE TABLE IS RESOLVED BY QUALIFIED NAME, NOT BY `relname`, and that is not
+        // fussiness — the `relname = $1` form has a demonstrated false-positive path, the
+        // one failure mode a guard must never have (reporting coverage that is not there).
+        // `relname` is unique only WITHIN a schema, so dropping the real index and creating a
+        // same-named table with one in any other schema makes the unqualified query answer
+        // `true`. A `pg_temp` table in the very same session is enough, and pg_temp is
+        // searched first.
+        //
+        // `REPO_SCHEMAS` does NOT fix this, which was worth measuring rather than assuming:
+        // it excludes Postgres's own schemas, and a decoy schema is not one of those — the
+        // decoy still matches. It is the right filter for "which functions is this repo
+        // answerable for" and the wrong one for "is THIS table indexed". `to_regclass` is the
+        // right tool, and it is the same idiom db/048 §10 uses to probe for these very
+        // tables.
+        //
+        // `indisvalid` closes the narrower second hole: a failed CREATE INDEX (e.g.
+        // CONCURRENTLY) leaves a row in pg_index that the planner will never use — present in
+        // the catalogue, useless in practice, indistinguishable here without this clause.
+        //
+        // An index whose FIRST key column is content_address (`indkey[0]`, an int2vector, so
+        // 0-based). Leading-column, not "mentions the column anywhere": only a leading key
+        // serves an equality lookup on it, so a composite index that merely happens to
+        // include content_address later must not read as coverage.
         let indexed: bool = c
             .query_one(
                 "SELECT EXISTS (
                      SELECT 1 FROM pg_index i
-                       JOIN pg_class t ON t.oid = i.indrelid
                        JOIN pg_attribute a
-                         ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
-                      WHERE t.relname = $1 AND a.attname = 'content_address')",
+                         ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+                      WHERE i.indrelid = to_regclass('public.' || $1)
+                        AND a.attname = 'content_address'
+                        AND i.indisvalid)",
                 &[&table],
             )
             .await
@@ -167,11 +195,6 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(
-        planted, 1,
-        "the probe must be present, or the NULL below proves nothing"
-    );
-
     // UUID BINDING: cairn-node does not enable tokio-postgres's `with-uuid-1`, so a Uuid has
     // no ToSql/FromSql — bind as text, cast in SQL, and read the result back as text.
     let resolved: Option<String> = c
@@ -182,6 +205,29 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
         .await
         .unwrap()
         .get(0);
+
+    // BOTH FACTS ARE NOW IN HAND, SO REMOVE THE PROBE BEFORE ASSERTING ON THEM. The ordering
+    // is the point: an assertion that fired first would panic past this cleanup and leave the
+    // decoy behind on exactly the runs someone is debugging.
+    //
+    // `connect_and_load_schema` does not truncate and `setup()` only TRUNCATEs the tables it
+    // is told about, so without this the decoy survives every later test in the shared
+    // database — one more per run. Nothing today is harmed (every other read of
+    // medication_statement is scoped by patient_id or medication_id), but it is a projection
+    // row that contradicts the event log, and the first person to write the very plausible
+    // guard "every projection row's content_address resolves to an event of a type registered
+    // for that projection" would find it and have no idea where it came from.
+    c.execute(
+        "DELETE FROM medication_statement WHERE content_address = $1",
+        &[&address],
+    )
+    .await
+    .expect("decoy projection row removed");
+
+    assert_eq!(
+        planted, 1,
+        "the probe must have been present, or the NULL below proves nothing"
+    );
     assert!(
         resolved.is_none(),
         "a note.added is a type db/048 §10b has confirmed thread-free, so cairn_event_thread \
@@ -189,14 +235,29 @@ async fn a_thread_free_event_type_never_reaches_the_medication_scans() {
     );
 }
 
-/// The precondition the short-circuit rests on, pinned so widening §10b's list cannot
-/// silently disable resolution for a type that genuinely has a thread.
+/// **The load-bearing guard of #385. Do not delete it as a tidy-up.**
 ///
-/// Note the safe asymmetry this does NOT need to guard: if a future edit added a
-/// thread-BEARING type to the list, both this short-circuit and §11's conservative bound key
-/// on the same predicate, so resolution and the bound would move together — toward
-/// over-protection, never toward exposure. This test exists because over-protecting the whole
-/// medication stream would still be a serious defect, not because it would leak.
+/// It pins the precondition the §10 short-circuit rests on: widening §10b's list to cover a
+/// type that genuinely has a thread must not be possible without something going red.
+///
+/// An earlier draft of this docstring described that widening as a safe asymmetry — "both the
+/// short-circuit and §11's conservative bound key on the same predicate, so resolution and the
+/// bound move together, toward over-protection, never toward exposure". **That is exactly
+/// backwards**, and it matters because it reads as licence to delete this test.
+///
+/// §11's bound arm is gated on the NEGATION (`AND NOT cairn_event_type_has_no_thread(...)`),
+/// so a type in the list is EXCLUDED from the bound rather than covered by it. Add a
+/// medication type and all three thread arms fall silent at once — resolved (this returns
+/// NULL now), bound (predicate TRUE), coarsened (the thread is on this very chart) — and a
+/// standing `sequestered` thread grade reads back as `('routine','none')`. Measured: adding
+/// `OR p_type LIKE 'clinical.%'` to §10b does precisely that. Before #385 the same edit was
+/// harmless, because §11's resolved arm was an independent net that never consulted the
+/// predicate. The short-circuit removed that independence, so this test and
+/// `sensitivity_ladder.rs::f5a_*` are what remain.
+///
+/// KNOWN LIMIT: `MEDICATION_EVENT_TYPES` is hand-maintained, so a SEVENTH medication verb is
+/// unguarded until someone adds it here — the mirror-pair hazard `common/mod.rs` warns about,
+/// tracked in #441.
 #[tokio::test]
 async fn no_medication_event_type_is_classified_thread_free() {
     let Some(base) = cs() else { return };

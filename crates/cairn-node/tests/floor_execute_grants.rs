@@ -4,15 +4,25 @@
 //!
 //! Two families of function in `db/*.sql` are meant to be unreachable by `PUBLIC`:
 //!
-//! * **`cairn_check_*`** — the per-event-type structural validators the `submit_event` /
-//!   `apply_remote_event` doors dispatch through. These are pure `jsonb` shape checks: they
-//!   read no table, write nothing and grant nothing, so the severity of a `PUBLIC` caller
-//!   invoking one is genuinely low — it learns strictly less than the door already tells it
-//!   by refusing, and the refusal messages are deliberately legible.
-//! * **`*_apply`** — the projection appliers the `event_log` triggers call. These are the
-//!   load-bearing half: each one WRITES a projection table, so a runtime role able to call
-//!   one directly could forge projection state that no event supports — the projections
-//!   would then disagree with the append-only log they are supposed to be derived from.
+//! * **`cairn_check_*`** — mostly the per-event-type structural validators the `submit_event`
+//!   / `apply_remote_event` doors dispatch through, plus two registry triggers
+//!   (`cairn_check_twin_registry_fn`, `cairn_check_projection_registry_fn`) that take no
+//!   `jsonb` body at all and fire on INSERT into the registry tables. The severity of a
+//!   `PUBLIC` caller invoking any of them is genuinely low: **none writes, none grants**, and
+//!   the only tables any of them read are open vocabularies already `SELECT`-able by `PUBLIC`
+//!   (`event_type_class` in the projection-registry trigger, `contributor_role` in
+//!   `cairn_check_contributors`, `medication_coding_system` reached via
+//!   `cairn_check_coding_object`). A caller learns strictly less than the door already tells
+//!   it by refusing, and the refusal messages are deliberately legible.
+//!
+//!   The earlier version of this paragraph said "pure `jsonb` shape checks: they read no
+//!   table". That was false for four of the twenty-two, which does not change the conclusion
+//!   but did make the conclusion unverifiable — so it is spelled out above instead.
+//! * **the registered projection appliers** — the functions `cairn_projection_apply` names,
+//!   which the `event_log` dispatcher calls. These are the load-bearing half: each one WRITES
+//!   a projection table, so a runtime role able to call one directly could forge projection
+//!   state that no event supports — the projections would then disagree with the append-only
+//!   log they are supposed to be derived from.
 //!
 //! Both are revoked, for different reasons. Stating that difference here rather than
 //! flattening it is the point: a reader who thinks the two are equally severe will
@@ -30,19 +40,34 @@
 //! # Why it is written over the catalogue, not over `db/*.sql`
 //!
 //! A guard that greps the migration text proves what someone typed. This one proves what the
-//! database ended up with, which is the only thing an attacker meets — and it covers whatever
-//! a future migration adds, the moment it loads. Grepping would also miss the case that makes
-//! ACLs subtle: `CREATE OR REPLACE FUNCTION` **preserves** the existing ACL, so a function
-//! first defined (and revoked) in one migration and replaced in a later one stays revoked
-//! with no `REVOKE` in the later file at all. Two of these functions are exactly that shape.
+//! database ended up with, which is the only thing an attacker meets. Grepping would also miss
+//! the case that makes ACLs subtle: `CREATE OR REPLACE FUNCTION` **preserves** the existing
+//! ACL, so a function first defined (and revoked) in one migration and replaced in a later one
+//! stays revoked with no `REVOKE` in the later file at all. Two of these functions are exactly
+//! that shape (`cairn_check_demographic_field`, db/011 → db/014; `cairn_check_medication_dose`,
+//! db/032 → db/035).
+//!
+//! How far "it covers whatever a future migration adds" actually goes differs by family, and
+//! the difference is the point: the applier half reads the **registry**, so a new applier is
+//! covered the moment it becomes reachable. The check half reads a **name pattern**, so a
+//! validator renamed out of the `cairn_check_` prefix leaves the family silently. That
+//! asymmetry is deliberate — the appliers have an authoritative list and the validators do
+//! not — but it is a real limit, not a technicality.
 //!
 //! # What this guard does NOT claim
 //!
 //! It says nothing about which non-`PUBLIC` roles hold `EXECUTE`. `cairn_node` and
-//! `cairn_agent` reach these functions the only way they should: from *inside* the
-//! `SECURITY DEFINER` doors, which run as the schema owner. Nothing here would catch an
+//! `cairn_agent` reach the dispatched validators and the appliers from *inside* the
+//! `SECURITY DEFINER` doors, which run as the schema owner; the two registry triggers are
+//! reached differently again, by `BEFORE INSERT` triggers during migration replay, where
+//! Postgres does not ACL-check the trigger function at all. Nothing here would catch an
 //! explicit `GRANT EXECUTE … TO cairn_agent` on an applier — that would need its own
 //! assertion, and no migration does it today.
+//!
+//! It also says nothing about `cairn_event_twin`, the dispatcher those validators hang off,
+//! which still carries default `PUBLIC` EXECUTE. That fails closed (a `PUBLIC` caller now gets
+//! `permission denied for function cairn_check_…` rather than the structural refusal), but it
+//! is a gap in the same legibility story — tracked in #443.
 //!
 //! # Why there is no `db/tests/` SQL mirror
 //!
@@ -52,11 +77,13 @@
 //!
 //! Every test here self-skips without `$CAIRN_TEST_PG` (see `common::cs`), and a skipped run
 //! prints `ok` while proving nothing. CI sets it; `scripts/run-db-gated-tests.sh` bakes it in.
+//! That the whole DB-gated suite can go silently green if that one variable is ever unset is a
+//! suite-wide hole, tracked in #442.
 mod common;
 use common::{cs, NOT_EXTENSION_OWNED, REPO_SCHEMAS};
 
-/// Repo-defined functions whose name matches `pattern`, each with whether `PUBLIC` can
-/// execute it.
+/// Repo-defined functions selected by `membership` — a SQL predicate over the `pg_proc` alias
+/// `p` — each with whether `PUBLIC` can execute it.
 ///
 /// **The ACL, read from `proacl` rather than `has_function_privilege`.** A NULL `proacl`
 /// means "nobody has touched the grants", and PostgreSQL's default for a function is
@@ -66,10 +93,9 @@ use common::{cs, NOT_EXTENSION_OWNED, REPO_SCHEMAS};
 /// and grantee `0` — the `PUBLIC` pseudo-role, which has no `pg_authid` row — is looked for
 /// directly.
 ///
-/// `pattern` is matched with `\\_` escaping the underscores: unescaped, `_` is LIKE's
-/// single-character wildcard, so `cairn_check_%` would also match a hypothetical
-/// `cairnXcheckY`. Harmless today, wrong tomorrow.
-fn public_execute(pattern: &str) -> String {
+/// `membership` is a fragment rather than a name pattern because the two families are
+/// identified in genuinely different ways — see [`CHECK_FAMILY`] and [`APPLY_FAMILY`].
+fn public_execute(membership: &str) -> String {
     format!(
         "SELECT p.oid::regprocedure::text,
                 (p.proacl IS NULL
@@ -78,11 +104,39 @@ fn public_execute(pattern: &str) -> String {
            FROM pg_proc p
            JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE {REPO_SCHEMAS}
-            AND p.proname LIKE '{pattern}'
+            AND ({membership})
             AND {NOT_EXTENSION_OWNED}
           ORDER BY 1"
     )
 }
+
+/// The `cairn_check_*` family, identified by NAME, because that is genuinely all it is: a
+/// naming convention with no registry behind it. `cairn_event_twin_check.check_fn` names the
+/// dispatched validators, but it is not the family — helpers those validators call
+/// (`cairn_check_coding_object`) and the two registry triggers appear in no registration at
+/// all, and are family members every bit as much. There is nothing authoritative to read, so
+/// the prefix is what there is.
+///
+/// The underscores are escaped as `\_`: unescaped, `_` is LIKE's single-character wildcard, so
+/// `cairn_check_%` would also match a hypothetical `cairnXcheckY`. Harmless today, wrong
+/// tomorrow.
+const CHECK_FAMILY: &str = r"p.proname LIKE 'cairn\_check\_%'";
+
+/// The projection appliers, identified by REGISTRATION rather than by name — the authoritative
+/// list is the `cairn_projection_apply` registry (ADR-0057/#208), which is what the `event_log`
+/// dispatcher actually calls.
+///
+/// This started life as `p.proname LIKE '%\_apply'` and that was wrong, in the quiet way: the
+/// registry holds 21 appliers and exactly one of them, `medication_dose_seed_initial`
+/// (db/032), does not end in `_apply`. It writes `medication_dose_event` — squarely inside the
+/// threat this guard names — and was invisible to the pattern. It happens to be revoked, so
+/// there was never an exposure; the defect was that the ratchet could not have noticed if it
+/// were not, and would not notice the next off-convention name either.
+///
+/// Reading the registry instead makes the guard self-updating: an applier is covered the
+/// moment it is registered, which is the moment it becomes reachable. A name convention only
+/// ever covers the names someone remembered to follow.
+const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_apply)";
 
 /// What the loaded schema holds today (2026-08-20), as floors rather than equalities.
 ///
@@ -91,8 +145,12 @@ fn public_execute(pattern: &str) -> String {
 /// but it trips the moment coverage *shrinks*, which is what would happen if a rename or a
 /// failed migration load quietly emptied the query. Without it, "no offenders" and "no rows
 /// examined" are the same green.
+///
+/// The floor is a LIVENESS check on the query, not a definition of the family — the offender
+/// scan below iterates every returned row, so fifty functions with twenty-eight unrevoked
+/// still fails loudly with twenty-eight names.
 const CHECK_FNS_TODAY: usize = 22;
-const APPLY_FNS_TODAY: usize = 20;
+const APPLY_FNS_TODAY: usize = 21;
 
 /// Run one family's assertion: at least `floor` functions matched, and none of them is
 /// `PUBLIC`-executable.
@@ -100,14 +158,14 @@ const APPLY_FNS_TODAY: usize = 20;
 /// Pure-ish helper over the connection so the two tests differ only in their inputs and their
 /// failure prose — the alternative is two near-identical 30-line bodies where a fix applied to
 /// one silently misses the other.
-async fn assert_public_cannot_execute(pattern: &str, floor: usize, family: &str, fix: &str) {
+async fn assert_public_cannot_execute(membership: &str, floor: usize, family: &str, fix: &str) {
     let Some(base) = cs() else { return };
     let _guard = cairn_node::db::test_serial_guard(&base).await.unwrap();
     let c = cairn_node::db::connect_and_load_schema(&base)
         .await
         .unwrap();
 
-    let rows = c.query(&public_execute(pattern), &[]).await.unwrap();
+    let rows = c.query(&public_execute(membership), &[]).await.unwrap();
     assert!(
         rows.len() >= floor,
         "expected at least the schema's {floor} {family} functions, found {} — has the \
@@ -133,7 +191,7 @@ async fn assert_public_cannot_execute(pattern: &str, floor: usize, family: &str,
 #[tokio::test]
 async fn public_cannot_execute_any_floor_check_function() {
     assert_public_cannot_execute(
-        r"cairn\_check\_%",
+        CHECK_FAMILY,
         CHECK_FNS_TODAY,
         "cairn_check_*",
         "Fix: add `REVOKE EXECUTE ON FUNCTION <name>(<args>) FROM PUBLIC;` after the \
@@ -145,12 +203,15 @@ async fn public_cannot_execute_any_floor_check_function() {
 
 /// The load-bearing half. This one holds already — it is a **ratchet**, not a fix: it stops
 /// the next projection applier from shipping callable by every role on the node.
+///
+/// Driven off the `cairn_projection_apply` registry, NOT off the `_apply` name suffix. See
+/// [`APPLY_FAMILY`] for why the name-based version was one applier short of the truth.
 #[tokio::test]
 async fn public_cannot_execute_any_projection_applier() {
     assert_public_cannot_execute(
-        r"%\_apply",
+        APPLY_FAMILY,
         APPLY_FNS_TODAY,
-        "*_apply",
+        "registered projection applier",
         "An applier WRITES a projection table. Callable by PUBLIC, it lets any role forge \
          projection state no event in the append-only log supports. Add `REVOKE EXECUTE ON \
          FUNCTION <name>(event_log) FROM PUBLIC;` after the definition.",

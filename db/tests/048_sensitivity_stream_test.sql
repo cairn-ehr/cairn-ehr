@@ -317,12 +317,23 @@ END $$;
 --         the bound does not apply to it. Without the type gate, one thread-scoped assertion
 --         would coarsen the ENTIRE chart (every note, every demographic field), silently
 --         turning thread scope into chart scope.
---       * an event of a type this version has never heard of is COARSENED — "might have a
---         thread" is the safe default, and a future clinical stream inherits the bound by
---         simply not appearing in section 10b's list. `lab.result.asserted` is used rather
+--       * an event of a type this version has never heard of takes the CONSERVATIVE BOUND:
+--         "might have a thread" is the safe default, and a future clinical stream inherits
+--         the bound by simply not appearing in section 10b's list. Note it is reported as
+--         subject_kind 'thread', NOT the literal 'coarsened' of block 2d — that is a
+--         different arm, and the words "coarsen" and "'coarsened'" are easy to conflate here. `lab.result.asserted` is used rather
 --         than a medication event precisely because it exercises that unknown-type path:
 --         seeding a well-formed medication assert would create the projection row that makes
 --         its thread RESOLVE, which is the other arm entirely.
+--
+--     WHAT THIS BLOCK DOES NOT COVER: db/048 section 10's #385 type SHORT-CIRCUIT. That is
+--     behaviour-neutral by construction, so a SQL mirror cannot distinguish it — with or
+--     without it, both assertions here read identically, because section 11's gate (the same
+--     predicate) is what produces the output either way. The short-circuit's only coverage is
+--     thread_resolution_cost.rs::a_thread_free_event_type_never_reaches_the_medication_scans,
+--     which plants a decoy projection row to make the difference observable. Do not read this
+--     block as covering section 10b generally: it pins the WIRING of the predicate into
+--     section 11, and nothing about section 10.
 DO $$
 DECLARE
     chart     uuid := gen_random_uuid();
@@ -338,6 +349,16 @@ BEGIN
         jsonb_build_object('subject_kind', 'thread', 'subject_id', gen_random_uuid()::text,
                             'grade', 'restricted', 'source', 'human'), 12);
 
+    -- NOT VACUOUS ONLY BECAUSE OF THE POSITIVE ASSERTION BELOW. This is the one
+    -- "nothing happened" check among the three blocks added here, so it also passes under
+    -- several unrelated setup failures (the thread-scoped seed never projected, the wrong
+    -- chart, a renamed grade). What rules those out is the a_lab assertion that follows,
+    -- which is positive and would fail in every one of them. Do not delete or weaken the
+    -- second half: on its own, this first half proves nothing.
+    --
+    -- got_kind is read but not asserted here, deliberately: 'restricted' is the only standing
+    -- grade in this block, so grade = 'routine' IS "no arm matched", and naming an expected
+    -- kind alongside it would suggest a second, independent fact is being checked.
     SELECT grade, subject_kind INTO got_grade, got_kind
         FROM cairn_effective_sensitivity(a_note);
     IF got_grade <> 'routine' THEN

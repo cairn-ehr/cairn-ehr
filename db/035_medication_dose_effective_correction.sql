@@ -39,6 +39,11 @@ UPDATE medication_dose_correction
 -- 3. Extend the correction floor (whole fn re-created; the dose-change branch is
 --    byte-identical to db/032, the correction branch gains strike/patch validation).
 --    Registry mapping (db/032) is untouched — same fn name/signature.
+-- #382 EXECUTE CONVENTION, NO REVOKE HERE ON PURPOSE: CREATE OR REPLACE FUNCTION PRESERVES
+-- the existing ACL, so the REVOKE in db/032 still holds after this redefinition. Adding a second
+-- one would be harmless but misleading; what would NOT be safe is turning this into
+-- DROP + CREATE, which resets the ACL to the PUBLIC default and trips
+-- crates/cairn-node/tests/floor_execute_grants.rs. See the convention block in db/005.
 CREATE OR REPLACE FUNCTION cairn_check_medication_dose(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

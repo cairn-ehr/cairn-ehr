@@ -477,23 +477,34 @@ Four small independent items — one red build, three §5.9 review follow-ons. *
 failing on `main` (a bare `<hex>` parsed as an unclosed HTML tag; a public item linked to a private one),
 which mattered less for the two errors than for the workaround — the build only completed under
 `-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, hiding every later rustdoc error.
-Fixed, and now gated: a fast `doc` job for the root workspace plus a doc step in the `gui` and `test` jobs
-for the two trees that need system libraries, all under an EXPLICIT `RUSTDOCFLAGS=-D warnings` (only the
-root workspace denies warnings via `[workspace.lints]`, so an inherited setting would have passed the
-others in silence). `CONTRIBUTING.md` gains a "jobs that run but do not yet block" table — neither `doc`
-nor `gui` is in branch protection, and only an admin can promote them. **(2) #382:** the
-`REVOKE EXECUTE … FROM PUBLIC` convention was followed by 5 of 22 `cairn_check_*` validators. Severity is
-genuinely low (pure jsonb shape checks), so the deliverable is the CHECKABILITY, not the privilege:
+Fixed, and now gated — with the BLOCKING copy in the required `test` job (root workspace, the `fixtures`
+feature, and `cairn_pgx`, as its last steps), a fast advisory `doc` job duplicating the root build, and
+cairn-gui's half in `gui`; all under an EXPLICIT `RUSTDOCFLAGS=-D warnings`, since only the root workspace
+denies warnings via `[workspace.lints]` and both defects are warn-by-default lints rather than hard
+errors. Putting the root build only in the unrequired `doc` job was a review finding: **both of #439's
+defects were in the root workspace**, so that arrangement would have let the same regression merge green
+([#444](https://github.com/cairn-ehr/cairn-ehr/issues/444) tracks promoting `doc`/`gui` properly).
+**(2) #382:** the `REVOKE EXECUTE … FROM PUBLIC` convention was followed by 5 of 22 `cairn_check_*`
+validators. Severity is genuinely low (none writes, none grants; the few tables any of them read are open
+vocabularies already public), so the deliverable is the CHECKABILITY, not the privilege:
 `floor_execute_grants.rs` asserts it over the `pg_proc` catalogue — reading `proacl`, where a NULL ACL is
-the PERMISSIVE case — and a second test ratchets the half that IS load-bearing, the 20 `*_apply`
-projection writers. **(3) #385:** the five medication thread projections now index `content_address`, and
-`cairn_event_thread` returns early for event types §10b confirms cannot carry a thread — behaviour-neutral
-(only medication appliers write those tables, and only under a medication event's own address), so it is
-pinned by a DECOY projection row carrying a note's own address, which the removed short-circuit would
-find. **(4) #381:** the db/048 SQL mirror gains the cross-chart withdrawal pin, the mis-targeted-subject
+the PERMISSIVE case — and a second test ratchets the half that IS load-bearing, the projection appliers,
+read from the `cairn_projection_apply` REGISTRY rather than the `_apply` name suffix (one of the 21,
+`medication_dose_seed_initial`, carries no suffix and was invisible to the first draft's pattern).
+**(3) #385:** the five medication thread projections now index `content_address`, and `cairn_event_thread`
+returns early for event types §10b confirms cannot carry a thread — behaviour-neutral for today's list, so
+it is pinned by a DECOY projection row carrying a note's own address, which the removed short-circuit
+would find. **The short-circuit also made §10b's list safety-critical in the DISCLOSURE direction**, since
+§11's conservative bound is gated on the negation of the same predicate: widening the list wrongly now
+silences all three thread arms at once. The first draft's comment claimed the opposite; correcting it, and
+relabelling the guard that catches it, was this PR's most consequential review finding.
+**(4) #381:** the db/048 SQL mirror gains the cross-chart withdrawal pin, the mis-targeted-subject
 coarsening arm, and the type-scoped conservative bound. All new guards were mutation-tested; each kills
-its mutation. Residual, stated rather than closed: the magnitude of #385's index win is unmeasured on
-volume data.
+its mutation. Residuals, stated rather than closed: the magnitude of #385's index win is unmeasured on
+volume data; two hand-maintained mirror lists ([#441](https://github.com/cairn-ehr/cairn-ehr/issues/441));
+the DB-gated suite can go silently green if `CAIRN_TEST_PG` is ever unset
+([#442](https://github.com/cairn-ehr/cairn-ehr/issues/442)); `cairn_event_twin` still holds default PUBLIC
+EXECUTE ([#443](https://github.com/cairn-ehr/cairn-ehr/issues/443)).
 
 
 ## Phase 5 — Security & compliance core

@@ -61,9 +61,16 @@ $$;
 --
 -- Postgres grants EXECUTE to PUBLIC by default and every role is a member of PUBLIC, so
 -- an un-REVOKEd function is directly callable by anyone holding a connection. For this
--- family the severity is genuinely LOW: these are pure jsonb shape validators that read
--- no table, write nothing and grant nothing, and a caller invoking one learns strictly
--- less than the door already tells it by refusing.
+-- family the severity is genuinely LOW: NONE of them writes and NONE of them grants, and a
+-- caller invoking one learns strictly less than the door already tells it by refusing.
+--
+-- Say that precisely rather than as "pure jsonb shape validators that read no table", which
+-- an earlier draft did and which is false for four of the twenty-two: the two registry
+-- triggers (twin_registry_fn, projection_registry_fn) are RETURNS trigger and take no jsonb
+-- body at all — the latter reads event_type_class; cairn_check_contributors reads
+-- contributor_role; cairn_check_coding_object reads medication_coding_system. All three of
+-- those tables are open vocabularies already SELECT-able by PUBLIC, so the conclusion holds —
+-- but a rationale a reader cannot verify is worth no more than no rationale.
 --
 -- It is applied uniformly anyway, because the value is that the convention becomes
 -- CHECKABLE. It was previously followed by 5 of 22 functions, and a reader could not tell
@@ -71,10 +78,17 @@ $$;
 -- probably fine" is the wrong resting state. crates/cairn-node/tests/floor_execute_grants.rs
 -- asserts it over the catalogue, so the next omission fails a test instead of going unnoticed.
 --
--- Distinct from, and much less load-bearing than, the same REVOKE on the *_apply family:
--- an applier WRITES a projection table, so one callable by the runtime role would let it
--- forge projection state no event in the append-only log supports. Same statement, two
+-- Distinct from, and much less load-bearing than, the same REVOKE on the projection
+-- appliers: an applier WRITES a projection table, so one callable by the runtime role would
+-- let it forge projection state no event in the append-only log supports. Same statement, two
 -- different reasons. Do not collapse them into one rule of thumb.
+--
+-- The two families are also IDENTIFIED differently by the guard, and for a reason worth
+-- knowing: appliers are read from the cairn_projection_apply REGISTRY (the authoritative list
+-- the dispatcher actually calls), while this family is read from its NAME PREFIX, because it
+-- has no registry — plenty of members, like cairn_check_coding_object, are helpers no
+-- registration ever mentions. A validator renamed out of the prefix therefore leaves the
+-- family silently; an applier cannot leave the registry and stay reachable.
 -- ---------------------------------------------------------------------------------
 REVOKE EXECUTE ON FUNCTION cairn_check_twin_registry_fn() FROM PUBLIC;
 

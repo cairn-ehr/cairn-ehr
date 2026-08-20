@@ -55,25 +55,37 @@ jobs:
 
   # API-docs gate — fast, no Postgres (issue #439). `cargo doc` was RED on main for an
   # unknown number of commits: a bare `<hex>` in a doc comment parses as an HTML tag, and a
-  # public item linked to a private one. Neither is a warning — rustdoc reports
-  # `error: could not document`, so the generated API surface simply did not build. It went
-  # unnoticed because the only way anyone completed the build was by passing
+  # public item linked to a private one, so the generated API surface simply did not build.
+  # It went unnoticed because the only way anyone completed the build was by passing
   # `-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, under which any NEW
   # rustdoc error is invisible too (one was introduced, and caught only by a reviewer running
   # the build by hand).
+  #
+  # BOTH ARE WARN-BY-DEFAULT RUSTDOC LINTS. That matters, and an earlier version of this
+  # comment got it wrong by calling them hard errors: they become `error: could not document`
+  # only because the ROOT workspace sets `[workspace.lints.rust] warnings = "deny"`
+  # (Cargo.toml) and every root crate opts in with `[lints] workspace = true`. Neither
+  # cairn-gui nor cairn_pgx sets any `[lints]` at all. So on the cairn-gui and cairn_pgx doc
+  # steps specifically, `RUSTDOCFLAGS: -D warnings` is LOAD-BEARING, not belt-and-braces —
+  # drop it there and those two trees silently accept exactly the class of defect #439 was.
+  # On the root-workspace invocations (this job, and the copy inside `test`) it is redundant,
+  # since the root already denies; it is set anyway so every doc invocation in this file reads
+  # identically and no one has to remember which tree denies where.
   #
   # Why it is a gate and not a nicety: ADR-0021 makes the native API "capability-described and
   # conformance-tested", built on the same public surface every other client uses. Generated
   # API docs are part of that surface.
   #
-  # RUSTDOCFLAGS is set EXPLICITLY rather than relying on each tree's lint config: only the
-  # root workspace sets `[workspace.lints.rust] warnings = "deny"`, so in cairn-gui and
-  # cairn_pgx a rustdoc *warning* (the class both of #439's errors belong to) would otherwise
-  # pass this job in silence. The flag makes the bar identical in all three trees.
-  #
   # This job covers the pure-Rust root workspace only. The other two trees need system
   # libraries (WebKitGTK; the PostgreSQL server headers + libclang), so their doc build rides
-  # the job that already installs them — see `gui` and `test` below. All three ARE covered.
+  # the job that already installs them — see `gui` and `test` below. All three ARE covered,
+  # and `test` additionally covers cairn-medication-view's off-by-default `fixtures` feature,
+  # which no default-feature doc build compiles.
+  #
+  # NOT A REQUIRED CHECK (#444), and the root workspace is where both of #439's defects
+  # actually lived — so this job alone would let the same regression merge green. The root doc
+  # build is therefore ALSO run as a step inside `test`, which IS required. This job stays for
+  # fast feedback: it answers in under a minute without waiting on a PostgreSQL build.
   doc:
     name: cargo doc (API surface)
     runs-on: ubuntu-24.04
@@ -353,19 +365,6 @@ jobs:
       - name: cargo test (cairn-medication-view, fixtures feature)
         run: cargo test -p cairn-medication-view --features fixtures
 
-      # The cairn_pgx half of the #439 doc gate. Same reasoning as the cairn-gui step: pgrx
-      # cannot even generate its bindings without the PostgreSQL server headers and libclang
-      # this job installed, so the extension's docs build here rather than in the fast `doc`
-      # job. The feature flags mirror the install step above — documenting the default feature
-      # set would resolve a different PG major than the one under test.
-      - name: cargo doc (cairn_pgx extension)
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: |
-          cargo doc --no-deps \
-            --manifest-path extensions/cairn_pgx/Cargo.toml \
-            --no-default-features --features "pg${PG_MAJOR}"
-
       # ---- SQL mirrors: db/tests/*.sql (#212) ----------------------------------------
       # These previously ran NOWHERE (the mechanism that manufactured the #182 twin-
       # registry drift). The script builds a THROWAWAY database on this same cluster
@@ -393,6 +392,44 @@ jobs:
         env:
           CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
         run: uv run --extra pipeline pytest -q
+
+      # ---- the #439 doc gate's BLOCKING half -------------------------------------------
+      # Placed LAST in the job, deliberately. These steps gate documentation prose; the ones
+      # above gate the floor itself. Running docs earlier means a rustdoc nit aborts the job
+      # before the SQL mirrors and the matcher suite have run at all, which trades a real
+      # signal for a cosmetic one.
+      #
+      # WHY THE ROOT WORKSPACE IS DOCUMENTED HERE AS WELL AS IN THE `doc` JOB: this job's name
+      # is a REQUIRED status check and `doc`'s is not (#444). Both of #439's actual defects
+      # were in the root workspace, so without this step the regression #439 exists to prevent
+      # could recur and merge green. It costs seconds on an already-warm cache, and it needs no
+      # admin to take effect. `doc` stays as the fast advisory signal.
+      - name: cargo doc (root workspace — the blocking copy)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --workspace
+
+      # cairn-medication-view's `fixtures` feature is off by default, so the line above does
+      # not compile it — the same reasoning as the `cargo test --features fixtures` step, and
+      # the same conclusion: a gate that silently stops covering the code it gated is worse
+      # than no gate.
+      - name: cargo doc (cairn-medication-view, fixtures feature)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps -p cairn-medication-view --features fixtures
+
+      # The cairn_pgx half of the #439 doc gate. Same reasoning as the cairn-gui step: pgrx
+      # cannot even generate its bindings without the PostgreSQL server headers and libclang
+      # this job installed, so the extension's docs build here rather than in the fast `doc`
+      # job. The feature flags mirror the install step above — documenting the default feature
+      # set would resolve a different PG major than the one under test.
+      - name: cargo doc (cairn_pgx extension)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --no-deps \
+            --manifest-path extensions/cairn_pgx/Cargo.toml \
+            --no-default-features --features "pg${PG_MAJOR}"
 
       # If anything above failed, the server log is the first thing a human wants.
       - name: PostgreSQL log (on failure)

@@ -83,12 +83,16 @@ not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/
    `cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`. The fixture
    chart deliberately carries a cross-patient line and an invisible group so the ADR-0060 warnings are
    exercised. Automating the DOM assertions is **#332** (needs a JS-toolchain decision: plain JS, no npm).
-3. **Make two CI jobs REQUIRED status checks** — "clippy + cargo test (cairn-gui)" (PR #343: the
-   reference-UI workspace and its JS/Rust drift guard) and "cargo doc (API surface)" (#439: the
-   docs build across all three cargo trees). Both run on every PR; neither is in main's branch
-   protection, so both can go red without blocking a merge, and only a repo admin can promote them.
-   Match the job names exactly — a mismatch orphans the required check and blocks every PR silently.
-   `CONTRIBUTING.md` now carries them in a "jobs that run but do not yet block" table.
+3. **Make two CI jobs REQUIRED status checks** ([#444](https://github.com/cairn-ehr/cairn-ehr/issues/444),
+   admin-only) — "clippy + cargo test (cairn-gui)" (PR #343: the reference-UI workspace and its JS/Rust
+   drift guard) and "cargo doc (API surface)" (#439). Both run on every PR; neither is in main's branch
+   protection, so both can go red without blocking a merge. Match the job names exactly — a mismatch
+   orphans the required check and blocks every PR silently. `CONTRIBUTING.md` carries the current state
+   in a "jobs that run but do not yet block" table, **dated, because branch protection lives on GitHub
+   and no gate can keep that table honest**. Note the doc gate is no longer *only* advisory: the
+   root-workspace, `--features fixtures` and `cairn_pgx` doc builds all run as the last steps of the
+   REQUIRED `test` job, so promoting `doc` now buys speed of signal, not coverage. Only cairn-gui's half
+   still depends on an unrequired job.
 
 **If a measurement falls outside its budget, that is the finding — file an issue; do not adjust the
 budget to match.**
@@ -180,19 +184,27 @@ small independent items — a red docs build and three §5.9 review follow-ons. 
 
 1. **`cargo doc` was red on main, and that is what made it dangerous.** Two rustdoc errors meant the build
    only completed under `-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, under which
-   every LATER rustdoc error is invisible too. The fix is the gate, not the edit: a fast `doc` job covers
-   the root workspace, and the cairn-gui / `cairn_pgx` halves ride the `gui` and `test` jobs, which
-   already install the system libraries those trees cannot build without. `RUSTDOCFLAGS=-D warnings` is
-   set EXPLICITLY — only the root workspace denies warnings via `[workspace.lints]`, so inherited, the
-   job would have passed the other two trees in silence.
+   every LATER rustdoc error is invisible too. The fix is the gate, not the edit. **The blocking copy
+   lives in the REQUIRED `test` job** (root workspace + `--features fixtures` + `cairn_pgx`, as its last
+   steps, so a rustdoc nit cannot abort the floor tests); the fast `doc` job duplicates the root build for
+   feedback in under a minute, and cairn-gui's rides `gui`. Putting the root build only in `doc` was the
+   review finding that mattered — **both of #439's defects were in the root workspace, i.e. in the one
+   tree whose gate did not block** (#444). `RUSTDOCFLAGS=-D warnings` is set EXPLICITLY because only the
+   root workspace denies warnings via `[workspace.lints]`. Both #439 defects are **warn-by-default
+   rustdoc lints**, not hard errors — an earlier comment said otherwise, and believing it would make the
+   `RUSTDOCFLAGS` line look redundant and un-gate the other two trees.
 2. **A convention followed by 5 of 22 is worse than one followed by none.** `REVOKE EXECUTE … FROM PUBLIC`
    on the `cairn_check_*` validators is genuinely LOW severity, but a reader could not tell an oversight
    from a decision. What was bought is that it is **checkable**:
    `crates/cairn-node/tests/floor_execute_grants.rs` asserts it over the `pg_proc` CATALOGUE, so a future
    migration is covered the moment it loads. **Read `proacl`, never assume: a NULL ACL is the PERMISSIVE
    case** (Postgres's default for a function is EXECUTE to PUBLIC), and inverting that polarity makes the
-   guard pass by seeing nothing. Its second test ratchets the half that IS load-bearing — the 20 `*_apply`
-   projection writers. db/005 states the two-reasons-one-statement distinction once.
+   guard pass by seeing nothing. Its second test ratchets the half that IS load-bearing — the projection
+   appliers — and reads them from the **`cairn_projection_apply` REGISTRY, not from the `_apply` name
+   suffix**: the registry holds 21 and exactly one, `medication_dose_seed_initial`, does not carry the
+   suffix, so the first draft's name pattern could not see it at all (it is revoked, so there was never an
+   exposure — the ratchet simply had a blind spot). Where a family HAS an authoritative list, read the
+   list. db/005 states the two-reasons-one-statement distinction once.
 3. **Every new guard was mutation-tested before being trusted**, because two of the three (#385's type
    short-circuit, #381's cross-chart pin) are exactly the shape the 08-19 review lesson warns about.
    #385's short-circuit is pinned by seeding a **decoy** `medication_statement` row carrying a note's own
@@ -202,6 +214,19 @@ small independent items — a red docs build and three §5.9 review follow-ons. 
    index `content_address`. No query-plan assertion, deliberately — at test scale Postgres correctly
    prefers a seq scan, so an `EXPLAIN` test would fail on a *correct* index. **The magnitude of the win is
    still unmeasured on volume data**; that is a real residual, not a closed question.
+5. **THE LESSON OF THIS PR, found in review: an optimisation removed a redundancy that was load-bearing,
+   and the comment explaining it asserted the exact opposite.** The #385 short-circuit's first draft said
+   widening §10b's list could only over-protect — "there is no spelling of that list that makes this
+   leak". Measured, it is the reverse: §11's conservative bound is gated on the NEGATION of the same
+   predicate, so a type added to the list is EXCLUDED from the bound, and after #385 it also stops
+   resolving. All three thread arms fall silent and a standing `sequestered` grade reads back as
+   `('routine','none')`. **Before #385 the identical edit was harmless**, because §11's resolved arm was
+   an independent net that never consulted the predicate. Two things to carry: (a) when an optimisation
+   makes two code paths share a predicate, ask what redundancy that share destroyed; (b) the comment did
+   not merely mislead — it told the reader that
+   `no_medication_event_type_is_classified_thread_free` was a quality guard, when it is one of only two
+   things standing between a six-line `LIKE` edit and silent protection loss across every medication
+   thread. **A wrong safety argument is worse than none: it disarms the guard it describes.**
 
 **2026-08-19 (later) — §5.9 type design** (closes
 [#387](https://github.com/cairn-ehr/cairn-ehr/issues/387); opened
