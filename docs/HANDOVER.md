@@ -58,6 +58,26 @@ must warn at entry today), **#379** (the grade in the twin) and **#436** (the mi
 arrives by replication). **#386 is half-closed** — db/049's subset test *drives* it; db/048's still does
 not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/#382/#385/#439** (08-20).
 
+> [!WARNING]
+> **SUPPLY CHAIN, LIVE AS OF 2026-08-20 — read before running any `cargo update`.**
+> **[#445](https://github.com/cairn-ehr/cairn-ehr/issues/445): do NOT run `cargo update -p arrayref`,
+> and do NOT set `[advisories] yanked = "warn"` to get `cargo-deny` green.**
+>
+> `cargo-deny` is red **on every branch, `main` included** (`Cargo.lock` is byte-identical across them,
+> so this is not any PR's doing). The cause is not a routine deprecation: `arrayref` 0.3.5–0.3.9 were
+> **all yanked**, and a 0.3.10 published 2026-08-20 07:15Z adds a *normal* dependency on
+> **`proc-macro1`** — a crate that **404s on crates.io** and is a typosquat of `proc-macro2`. Upstream
+> `droundy/arrayref` `master` is still 0.3.9 with no such dependency and no 0.3.10 tag: **the published
+> artifact does not match its own source.** That is a compromised publishing account, and a proc-macro is
+> the ideal payload because it runs at *compile* time. The chain is
+> `arrayref → blake3 → bao → cairn-event`, i.e. the content-addressing and signing crate.
+>
+> **We are safe right now**, for two reasons and only one of them is ours: the committed lockfile pins
+> 0.3.9 at its 2024 checksum (yanking changes neither the bytes nor the checksum), and crates.io appears
+> to have already removed `proc-macro1`, so the update **fails closed** rather than fetching a payload.
+> Hold the pin. If crates.io deletes 0.3.10 and un-yanks the real versions, the gate goes green with no
+> repo change — check before touching anything. See #445 for the full evidence and the options.
+
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
 >
