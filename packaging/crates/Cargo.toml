@@ -1,3 +1,17 @@
+# Name reservation on crates.io for "cairn-ehr" — a placeholder package, not the product.
+# See packaging/README.md for what is reserved where.
+#
+# The empty [workspace] table detaches this package from the root /Cargo.toml workspace,
+# which encloses it by directory but does not list it in `members`. Without it, cargo
+# refuses EVERY command run in this directory ("current package believes it's in a
+# workspace when it's not"), so a crate published to crates.io could not be built from a
+# checkout at all — true here from the day the crates graduated to the top-level workspace
+# until #446, because nothing had a reason to cd in here. Detaching (rather than joining
+# `members`) is what keeps this placeholder out of `cargo test --workspace`, which is the
+# reason it was never a member; the same choice, and the same reason, as
+# poc/iced-ui-spike.
+[workspace]
+
 [package]
 name = "cairn-ehr"
 version = "0.0.0"

@@ -64,10 +64,10 @@
 //! explicit `GRANT EXECUTE … TO cairn_agent` on an applier — that would need its own
 //! assertion, and no migration does it today.
 //!
-//! It also says nothing about `cairn_event_twin`, the dispatcher those validators hang off,
-//! which still carries default `PUBLIC` EXECUTE. That fails closed (a `PUBLIC` caller now gets
-//! `permission denied for function cairn_check_…` rather than the structural refusal), but it
-//! is a gap in the same legibility story — tracked in #443.
+//! A third family joined in #443: `cairn_event_twin`, the dispatcher that routes an event type
+//! to its validator, which until then carried default `PUBLIC` EXECUTE. That already failed
+//! closed — a `PUBLIC` caller reached the dispatcher and was refused one layer deeper — so the
+//! fix bought legibility rather than privilege, which is exactly what the twenty-two bought.
 //!
 //! # Why there is no `db/tests/` SQL mirror
 //!
@@ -77,8 +77,11 @@
 //!
 //! Every test here self-skips without `$CAIRN_TEST_PG` (see `common::cs`), and a skipped run
 //! prints `ok` while proving nothing. CI sets it; `scripts/run-db-gated-tests.sh` bakes it in.
-//! That the whole DB-gated suite can go silently green if that one variable is ever unset is a
-//! suite-wide hole, tracked in #442.
+//! That the whole DB-gated suite could go silently green if that variable were ever unset was
+//! a suite-wide hole; `db_gate_actually_ran.rs` closes it by failing loudly when `$CI` is set
+//! and the gate variables are not (#442). It does NOT make a skipped LOCAL run louder — the
+//! bare `else { return }` sites stay silent until the duplicated `cs()` helper is unified
+//! (#327).
 mod common;
 use common::{cs, NOT_EXTENSION_OWNED, REPO_SCHEMAS};
 
@@ -138,7 +141,35 @@ const CHECK_FAMILY: &str = r"p.proname LIKE 'cairn\_check\_%'";
 /// ever covers the names someone remembered to follow.
 const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_apply)";
 
-/// What the loaded schema holds today (2026-08-20), as floors rather than equalities.
+/// The dispatcher that routes an event type to its validator, identified by NAME because a
+/// family of one has no list to read (#443).
+///
+/// Note what it does NOT dispatch to: all twenty-two of them. The `cairn_event_twin_check`
+/// registry holds 24 rows naming **16 distinct** `cairn_check_*` functions; the remaining six
+/// prefix-siblings are helpers no registration mentions (`cairn_check_coding_object`,
+/// `cairn_check_safety_signal` and the like — `db/005_submit.sql` says so where it explains why
+/// [`CHECK_FAMILY`] is read from a name prefix rather than from a registry). The twenty-two is
+/// the REVOKE *convention's* membership, which is the set this file cares about; the sixteen is
+/// the dispatch fan-out, which it does not. Conflating them is what #443's title did, and the
+/// arithmetic was wrong in both directions at once.
+///
+/// Naming it is the honest option here, not a lapse from the [`APPLY_FAMILY`] standard. The
+/// registry `cairn_event_twin_check` lists the validators this function dispatches TO; nothing
+/// in the schema lists the dispatcher itself, and a derivation invented for it — "the function
+/// whose body contains an EXECUTE over the registry" — would be a cleverer way of writing the
+/// same single name, with a failure mode (silently matching nothing) the plain name does not
+/// have. The `CHECK_FNS_TODAY`-style floor below is what covers the "matched nothing" case.
+///
+/// Why it is revoked at all, given it fails closed either way: before this, `PUBLIC` could
+/// reach the dispatcher and be refused one layer deeper, by `permission denied for function
+/// cairn_check_…`. Nothing leaks and nothing is writable — but the refusal came from the wrong
+/// place, and told the caller which validator a given event type maps to. More to the point,
+/// #382's whole argument was that a convention a reader cannot verify is worth nothing, and
+/// "all twenty-two prefix-siblings revoked, the dispatcher that reaches them not" is exactly
+/// the half-followed state that argument was about.
+const DISPATCHER_FAMILY: &str = "p.proname = 'cairn_event_twin'";
+
+/// What the loaded schema holds today (2026-08-21), as floors rather than equalities.
 ///
 /// `>=` against today's exact count, in the shape `search_path_pg_temp.rs` established: the
 /// count only ever RISES as migrations add functions, so this never needs revising upward —
@@ -151,6 +182,7 @@ const APPLY_FAMILY: &str = "p.proname IN (SELECT apply_fn FROM cairn_projection_
 /// still fails loudly with twenty-eight names.
 const CHECK_FNS_TODAY: usize = 22;
 const APPLY_FNS_TODAY: usize = 21;
+const DISPATCHER_FNS_TODAY: usize = 1;
 
 /// Run one family's assertion: at least `floor` functions matched, and none of them is
 /// `PUBLIC`-executable.
@@ -215,6 +247,26 @@ async fn public_cannot_execute_any_projection_applier() {
         "An applier WRITES a projection table. Callable by PUBLIC, it lets any role forge \
          projection state no event in the append-only log supports. Add `REVOKE EXECUTE ON \
          FUNCTION <name>(event_log) FROM PUBLIC;` after the definition.",
+    )
+    .await;
+}
+
+/// The dispatcher, closing the gap this file's own header used to declare as open (#443).
+///
+/// It is one function, so the floor of 1 is doing more work than it looks: it is the only
+/// thing standing between a rename of `cairn_event_twin` and a test that passes by examining
+/// nothing at all.
+#[tokio::test]
+async fn public_cannot_execute_the_twin_dispatcher() {
+    assert_public_cannot_execute(
+        DISPATCHER_FAMILY,
+        DISPATCHER_FNS_TODAY,
+        "twin-dispatch",
+        "Fix: `REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;` in \
+         db/005_submit.sql. Every live caller reaches it either from inside a SECURITY \
+         DEFINER door (submit_event, apply_remote_event) or as the schema owner \
+         (cairn_readjudicate_deferred, itself already revoked), so no runtime role \
+         needs a grant.",
     )
     .await;
 }

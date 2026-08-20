@@ -89,6 +89,13 @@ $$;
 -- has no registry — plenty of members, like cairn_check_coding_object, are helpers no
 -- registration ever mentions. A validator renamed out of the prefix therefore leaves the
 -- family silently; an applier cannot leave the registry and stay reachable.
+--
+-- A THIRD family, of one, was added by #443: cairn_event_twin, the dispatcher that routes an
+-- event type to whichever of these validators the registry names for it. (Not to all of them —
+-- as the paragraph above says, several prefix members are helpers no registration mentions. The
+-- registry names 16 distinct check_fns across 24 rows; the REVOKE convention covers all 22.)
+-- Its REVOKE and the reasoning for it sit next to its definition below, not here, because the
+-- safety argument is about ITS callers rather than about this convention.
 -- ---------------------------------------------------------------------------------
 REVOKE EXECUTE ON FUNCTION cairn_check_twin_registry_fn() FROM PUBLIC;
 
@@ -386,6 +393,29 @@ BEGIN
     RETURN cairn_twin_skeleton(p_type, b);
 END;
 $$;
+
+-- #443 — the dispatcher joins the REVOKE convention its cairn_check_* siblings follow.
+--
+-- Until 2026-08-21 cairn_event_twin kept Postgres's default EXECUTE-to-PUBLIC while all 22 of
+-- the cairn_check_* functions were revoked. That failed CLOSED (a PUBLIC caller reached the
+-- dispatcher and was refused one layer deeper, by "permission denied for function
+-- cairn_check_…"), so nothing leaked and nothing was writable. It was still the wrong resting
+-- state, for the reason the convention block above gives: a rule followed by every member of a
+-- family EXCEPT its entry point is a rule a reader cannot tell from an oversight, and the
+-- refusal it produced named which validator an event type maps to — from the wrong layer.
+--
+-- Safe because no live caller needs a grant, and the three kinds of caller are worth naming so
+-- a future one is checked against them rather than assumed: submit_event (below) and
+-- apply_remote_event (db/020) are SECURITY DEFINER and run as this schema's owner;
+-- cairn_readjudicate_deferred (db/043) is invoker-rights but runs during schema load as the
+-- owner, and is itself already REVOKEd FROM PUBLIC. A future INVOKER-rights caller reachable by
+-- cairn_agent or cairn_node would need an explicit GRANT here — that is the one change that
+-- would turn this line into a breakage, and it should be made deliberately, not by deleting
+-- this REVOKE.
+--
+-- Asserted over the catalogue by crates/cairn-node/tests/floor_execute_grants.rs
+-- (public_cannot_execute_the_twin_dispatcher).
+REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;
 
 -- Suppression owner-gate (ADR-0043 / issue #99). A suppressing overlay
 -- (salience.downgrade / visibility.suppress) that forecloses on a HUMAN author's
