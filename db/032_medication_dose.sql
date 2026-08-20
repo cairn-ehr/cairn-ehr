@@ -135,6 +135,11 @@ CREATE TABLE IF NOT EXISTS medication_dose_event (
 );
 GRANT SELECT ON medication_dose_event TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_dose_event_med_idx ON medication_dose_event (medication_id);
+-- #385: cairn_event_thread (db/048 §10) resolves an event to its medication thread with a
+-- five-way UNION ALL filtered on content_address, and cairn_effective_sensitivity calls it
+-- once per thread by LATERAL. Unindexed, a chart report cost O(threads on chart x every
+-- medication row on the node) — the very shape db/048 §6 cites #336 to avoid.
+CREATE INDEX IF NOT EXISTS medication_dose_event_content_address_idx ON medication_dose_event (content_address);
 
 -- 6. Corrections, keyed by the TARGET dose event they fix (a correction overlays a
 --    specific point). HLC-wins if one point is corrected twice; converges if the
@@ -155,6 +160,8 @@ CREATE TABLE IF NOT EXISTS medication_dose_correction (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON medication_dose_correction TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_dose_correction_content_address_idx
+    ON medication_dose_correction (content_address);
 
 -- 7. Seed point 0 from the assert (a SECOND, additive trigger on the assert type; the
 --    slice-1 statement/cessation triggers are untouched). dose_event_id = the assert's

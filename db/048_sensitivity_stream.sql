@@ -437,6 +437,7 @@ CREATE OR REPLACE FUNCTION cairn_event_thread(p_event_id uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_ca     bytea;
+    v_type   text;
     v_thread uuid;
 BEGIN
     -- !! LANGUAGE plpgsql, NOT sql, AND THE GUARD IS LOAD-BEARING !!
@@ -467,8 +468,32 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_event_id;
+    -- Read the type alongside the address — one row, one lookup, no extra query.
+    SELECT content_address, event_type INTO v_ca, v_type
+      FROM event_log WHERE event_id = p_event_id;
     IF v_ca IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- #385: a type section 10b has POSITIVELY confirmed to be thread-free (note.%,
+    -- demographic.%, identity.%, patient.%, sensitivity.%, erasure.%) cannot appear in any
+    -- of the five medication projections below, because only the medication apply functions
+    -- write them and only ever under a medication event's own address. So the five scans can
+    -- only ever return nothing — and the chart-wide reading in `chart_sensitivity` ALWAYS
+    -- resolves off a registration event, i.e. it paid for all five, per chart, every time.
+    --
+    -- BEHAVIOUR-NEUTRAL, and the neutrality is worth stating because a reader will suspect a
+    -- short-circuit on a safety surface. The answer for these types was already NULL; this
+    -- returns the same NULL sooner. The sole caller, cairn_effective_sensitivity §11, then
+    -- takes the conservative-bound arm, which is itself gated on the SAME predicate — so
+    -- even if this list were later widened wrongly, both the resolution and the bound move
+    -- in the over-protecting direction together. There is no spelling of that list that makes
+    -- this leak.
+    --
+    -- Deliberately calls cairn_event_type_has_no_thread, defined BELOW in section 10b:
+    -- plpgsql binds at first execution, not at CREATE, so file order does not matter (the
+    -- same late-binding property the to_regclass guard above depends on).
+    IF cairn_event_type_has_no_thread(v_type) THEN
         RETURN NULL;
     END IF;
 
