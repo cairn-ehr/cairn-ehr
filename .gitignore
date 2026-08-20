@@ -12,10 +12,14 @@ venv/
 .DS_Store
 *.swp
 
-# Packaging placeholders — build artifacts (never committed)
+# Packaging placeholders — build artifacts (never committed).
+# NOTE: packaging/crates/Cargo.lock is NOT ignored, deliberately. It was until 2026-08-20
+# (#446), and the rule that removed it is now repo-wide: every cargo tree here commits its
+# lockfile, so no tree ever resolves dependencies fresh in CI. See #445 for what an
+# unpinned resolve cost us, and crates/cairn-node/tests/cargo_lockfiles_tracked.rs for the
+# guard that will fail if this line comes back.
 packaging/pypi/dist/
 packaging/crates/target/
-packaging/crates/Cargo.lock
 packaging/npm/node_modules/
 
 # Rust workspace build output (never committed)
