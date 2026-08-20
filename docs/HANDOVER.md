@@ -58,34 +58,31 @@ must warn at entry today), **#379** (the grade in the twin) and **#436** (the mi
 arrives by replication). **#386 is half-closed** — db/049's subset test *drives* it; db/048's still does
 not. Closed: **#383/#388** (2026-08-18) · **#434/#435/#387** (08-19) · **#381/#382/#385/#439** (08-20).
 
-> [!WARNING]
-> **SUPPLY CHAIN, LIVE AS OF 2026-08-20 — read before running any `cargo update`.**
-> **[#445](https://github.com/cairn-ehr/cairn-ehr/issues/445): do NOT run `cargo update -p arrayref`,
-> and do NOT set `[advisories] yanked = "warn"` to get `cargo-deny` green.**
+> [!NOTE]
+> **RESOLVED 2026-08-20 — the `arrayref` supply-chain incident ([#445](https://github.com/cairn-ehr/cairn-ehr/issues/445)),
+> kept here because one of its two findings outlives it.**
 >
-> `cargo-deny` is red **on every branch, `main` included** (`Cargo.lock` is byte-identical across them,
-> so this is not any PR's doing). The cause is not a routine deprecation: `arrayref` 0.3.5–0.3.9 were
-> **all yanked**, and a 0.3.10 published 2026-08-20 07:15Z adds a *normal* dependency on
-> **`proc-macro1`** — a crate that **404s on crates.io** and is a typosquat of `proc-macro2`. Upstream
-> `droundy/arrayref` `master` is still 0.3.9 with no such dependency and no 0.3.10 tag: **the published
-> artifact does not match its own source.** That is a compromised publishing account, and a proc-macro is
-> the ideal payload because it runs at *compile* time. The chain is
-> `arrayref → blake3 → bao → cairn-event`, i.e. the content-addressing and signing crate.
+> `arrayref` 0.3.5–0.3.9 were all yanked and a 0.3.10 published 2026-08-20 07:15Z added a *normal*
+> dependency on **`proc-macro1`** — a crate that 404s on crates.io and typosquats `proc-macro2`. Upstream
+> `droundy/arrayref` was still 0.3.9 with no such dependency and no 0.3.10 tag: **the published artifact
+> did not match its own source.** A proc macro executes at *compile* time, and the chain was
+> `arrayref → blake3 → bao → cairn-event`.
 >
-> **The exposure was worse than a lockfile pin suggests, and it is worth knowing why.** Two of three
-> cargo trees were pinned; `extensions/cairn_pgx` had its `Cargo.lock` **gitignored**, so `cargo pgrx
-> install` re-resolved on every CI run — and today's run took `arrayref 0.3.10` and tried to fetch
-> `proc-macro1`, dying in 45s on a docs-only commit (the trace shows `blake3 v1.0.0` against the root's
-> pinned `1.8.5`: a fresh resolve, not a locked one). It failed **closed** only because crates.io had
-> already pulled the typosquat; in the window before that, it would have compiled an unknown proc macro
-> **at build time** into the shared object that enforces the in-DB floor. It was also nondeterministic —
-> the run twelve minutes earlier passed on a restored `rust-cache` lockfile. **Fixed in `5d23d0a`:** that
-> lockfile is now committed (pre-incident resolve, arrayref 0.3.9) and its `.gitignore` says why it must
-> not be re-added.
+> **Fixed by `blake3` 1.8.7** (published the same day; the BLAKE3 team dropped `arrayref`), applied to all
+> three lockfiles. No code change. `bao` was NOT the cause and removing it would not have helped —
+> `cairn-event` depends on `blake3` directly, and `bao`'s only normal deps are `arrayvec` + `blake3`.
+> `abao` is staler than `bao` and is not a remedy; `bao-tree` is the live successor, reviewed separately
+> as a maintenance question.
 >
-> Hold the pin. `cargo-deny` stays red on the yanked 0.3.9 and is **deliberately not worked around**. If
-> crates.io deletes 0.3.10 and un-yanks the real versions, the gate goes green with no repo change —
-> check before touching anything. See #445 for the full evidence and the options.
+> **THE FINDING THAT OUTLIVES IT: `extensions/cairn_pgx/Cargo.lock` was gitignored**, so `cargo pgrx
+> install` re-resolved dependencies on every CI run and took the compromised 0.3.10 (the failure trace
+> shows `blake3 v1.0.0` against the root's pinned `1.8.5` — a fresh resolve). It failed *closed* only
+> because crates.io had already pulled the typosquat, and it was **nondeterministic**: the run twelve
+> minutes earlier passed on a `rust-cache`-restored lockfile. Two of three trees were pinned and the
+> unpinned one was the extension that enforces the in-DB safety floor. Now committed (`5d23d0a`), with the
+> `.gitignore` carrying a comment saying why it must not be re-added. **A CI guard asserting every cargo
+> tree has a tracked lockfile is still owed** — this hid for months behind two lines nobody had reason to
+> read.
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
