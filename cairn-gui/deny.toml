@@ -80,21 +80,37 @@ unsound = "all"
 # iterator impls: a `*mut c_char` out-parameter passed as `&p` instead of `&mut p`, which recent
 # rustc optimises away entirely, so `CStr::from_ptr` then dereferences NULL. Impact is a CRASH
 # (CVSS VC:N/VI:L/VA:N — no disclosure, no data corruption), on Linux only, since the whole GTK
-# stack is absent on macOS and Windows.
+# stack is absent on macOS and Windows. No Cairn code calls it: nothing in this repo references
+# `glib` at all (re-verified 2026-08-21), so reachability is entirely inside the GTK/webkit
+# stack we do not drive directly.
 #
-# UNFIXABLE FROM HERE TODAY, verified rather than assumed (2026-08-11): patched is >= 0.20.0;
-# we are on glib 0.18.5 because gtk 0.18.2 requires `glib ^0.18`, and that whole gtk-rs 0.18
-# stack is pulled by tauri 2.11.5 via muda/tao/wry/webkit2gtk. tauri 2.11.5 IS the latest
-# published tauri, and `cargo update glib` moves zero packages. Unblocking needs Tauri's Linux
-# backend to move to gtk-rs 0.20+, which is an upstream decision.
+# WE DO NOT PIN glib. No Cairn manifest mentions it. 0.18.5 is a transitive CEILING:
 #
-# No Cairn code calls `VariantStrIter` (checked: no `glib::Variant` use anywhere in cairn-gui),
-# so reachability is entirely inside the GTK/webkit stack we do not drive directly.
+#     cairn-gui-tauri → tauri "2" (resolves 2.11.5, still the latest)
+#       → wry/tao/muda → webkit2gtk 2.0.2 (requires gtk ^0.18.0, glib ^0.18.0)
+#         → gtk 0.18.2 (requires glib ^0.18)
 #
-# TRACKED — do not silently extend this ignore to other advisories, and delete it the moment
-# Tauri's Linux backend moves. See the issue linked in the reason.
+# THE EXIT CONDITION THIS ENTRY USED TO STATE WAS UNREACHABLE, which is worse than no exit
+# condition: it said "remove when Tauri's Linux backend moves to gtk-rs 0.20+". There is no
+# gtk-rs 0.20 for GTK3 and there will not be one. The `gtk` crate's terminal release is 0.18.2
+# (2024-12-09); gtk-rs archived the GTK3 bindings and moved to the separate `gtk4` crate, which
+# is the one now on glib 0.22. So watching gtk-rs releases is the WRONG SIGNAL — a reader who
+# followed the old sentence would check "has 0.20 shipped?", see no, and re-defer forever.
+#
+# THE REAL EXIT CONDITION: Tauri's Linux backend migrating off webkit2gtk (GTK3) onto
+# webkitgtk-6.0 (GTK4). That is a toolkit migration, not a version bump, and it is an upstream
+# decision that may take years or may never land for Tauri v2. Check THAT, not gtk-rs versions.
+#
+# Bounded in time because cargo-deny 0.19.9 has no `expires` field (it accepts only `id` and
+# `reason`), so an ignore is permanent by default — an open-ended suppression of a security
+# advisory, which is the silent-gate shape this repo keeps finding. The `review-by` marker below
+# is enforced by crates/cairn-node/tests/advisory_ignore_review_dates.rs, which FAILS once the
+# date passes. Extending it is meant to be a deliberate re-decision, not a default.
+#
+# DO NOT silently extend this ignore to cover other advisories. One entry, one id, one rationale:
+# a second finding that arrives under this block's cover is a finding nobody assessed.
 id = "RUSTSEC-2024-0429"
-reason = "glib 0.18.5 unsoundness (crash-only, Linux-only); pinned by tauri 2.11.5's gtk-rs 0.18 stack, patched only in glib >= 0.20.0 — tracked in issue #389, remove when Tauri's Linux backend moves"
+reason = "glib 0.18.5 unsoundness (crash-only, Linux-only, unreachable from Cairn code); a transitive ceiling from tauri 2.11.5's webkit2gtk/GTK3 stack, NOT a pin of ours — patched only in glib >= 0.20, which GTK3 bindings never reach. Clears when Tauri's Linux backend moves to GTK4/webkitgtk-6.0. Tracked in issue #389. review-by 2026-11-21"
 
 [bans]
 # Duplicate transitive versions are HYGIENE, not a safety failure, and a webview stack carries

@@ -360,7 +360,9 @@ before it, any self-signed cert reaching the serve port obtained read-custody of
 sealed body. **Withhold the key, never the bytes**; refusing the bytes would fork the event set, and
 repair is TWO steps (`pull --full`, then `cairn_reproject()`). Same day (PR #390) cargo-deny's v2
 `unsound = "none"` default let an unsound advisory pass in silence; `unsound = "all"` is now set in
-**both** `deny.toml` trees, with **#389** ignored with a reason and an expiry. **Slice 65** (ADR-0062,
+**both** `deny.toml` trees, with **#389** ignored with a reason. It had **no** expiry despite this
+line once claiming one — cargo-deny 0.19.9 has no `expires` field — so the review date is now carried
+in the `reason` and enforced by `advisory_ignore_review_dates.rs` (2026-08-21). **Slice 65** (ADR-0062,
 spec v0.64) — its unknown-ranks-MAX trap is in the ⇒ NEXT callout, and the grade being **node-relative**
 is in the part C bullet. **Slice 63** (ADR-0061, spec v0.63) — carry into any registration work: **the
 attestation NAMES the displayed candidates, it does not count them** (*was the duplicate on screen when
