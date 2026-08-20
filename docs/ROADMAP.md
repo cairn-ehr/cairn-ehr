@@ -297,48 +297,43 @@ but not db/045). **Deliberately NOT done:** the rule never reaches a patient nam
 **Slice 65 — the §5.9 sensitivity stream, part A (2026-08-10; #232 part A;
 [ADR-0062](spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md), spec v0.64,
 SCHEMA 47→48, `db/048`).** Graded append-only assertions over an event / a thread / a whole chart; the
-effective grade is the **max** over all three. Computes and reports only — a projection-layer filter with
-no floor beneath it is security theatre. **Three traps that outlive the slice** (all three repeated in
-HANDOVER, because each is the cleanup a later reader is most likely to attempt in good faith): (1)
-**unknown ranks MAX**, inverting db/040's `ELSE 0` — there rank 0 withholds *reject power* (safe), here
-it would withhold *protection*; absence still ranks 0. (2) **The effective grade is node-relative** — a
-node with less custody deliberately computes a *higher* grade, so any cross-node equality test needs
-*given equal custody*, and (ADR-0064 §4) equal actor-registry state too. (3) Erratum E6:
-`content_address IS NOT NULL` is the "did anything win" test, never `subject_kind <> 'none'` — the
+effective grade is the **max** over all three. Computes and reports only. **Three traps that outlive the
+slice** (all repeated in HANDOVER, because each is the cleanup a later reader is most likely to attempt in
+good faith): **unknown ranks MAX**, inverting db/040's `ELSE 0` (there rank 0 withholds *reject power* —
+safe; here it would withhold *protection*; absence still ranks 0); **the effective grade is node-relative**
+(a node with less custody deliberately computes a *higher* grade, so any cross-node equality test needs
+*given equal custody*, and per ADR-0064 §4 equal actor-registry state too); and erratum E6,
+`content_address IS NOT NULL` is the "did anything win" test, never `subject_kind <> 'none'` (the
 catch-all arm reports `'coarsened'`, and `none` is a legal open-vocabulary value that collided with the
-sentinel. **Parts:** B #375 (**Slice 67**), C
+sentinel). **Parts:** B #375 (**Slice 67**), C
 [#376](https://github.com/cairn-ehr/cairn-ehr/issues/376) (sequester — **unblocked by Slice 66**), D
-[#377](https://github.com/cairn-ehr/cairn-ehr/issues/377). **Follow-ons:** #374, #378, #379, #381, #382,
-#385, #386, #387 and **#436** — #383/#388 closed in Slice 69, #434/#435 in its follow-on.
+[#377](https://github.com/cairn-ehr/cairn-ehr/issues/377). **Follow-ons still open:** #374, #378, #379,
+#386 and **#436** — #383/#388 closed in Slice 69, #434/#435/#387 in its follow-ons, #381/#382/#385 in the
+2026-08-20 trap-clearing pass.
 
 **Slice 66 — custody follows admission (2026-08-11; closes
 [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231); ADR-0052 §4 deferred, erratum E1).** The
 unwrap-cert `kid` is pinned to `trust_peer` (db/007); before it, any self-signed cert reaching the serve
 port obtained read-custody of every non-shredded sealed body. **Withhold the key, never the bytes** — an
 unadmitted puller still receives the events, because refusing would fork the event set. **Repair is TWO
-steps:** `pull --full` then `cairn_reproject()` (the sweep restores custody; the chart stays empty until
-reprojected). This is what makes born-sealed bodies (ADR-0052) confidentiality-capable rather than merely
-an erasability substrate.
-
-- **Interlude — the supply-chain gate (2026-08-11, PR #390).** `unsound = "all"` in both `deny.toml`
-  trees: cargo-deny's v2 default of `"none"` let an advisory flagged `informational = "unsound"` pass in
-  silence while Dependabot alerted on the same GHSA. One finding ignored with a reason and an expiry —
-  [#389](https://github.com/cairn-ehr/cairn-ehr/issues/389), glib 0.18.5, unfixable until Tauri's Linux
-  backend moves to gtk-rs 0.20+.
+steps:** `pull --full` then `cairn_reproject()`. This is what makes born-sealed bodies (ADR-0052)
+confidentiality-capable rather than merely an erasability substrate. Same day (**PR #390**): `unsound =
+"all"` in both `deny.toml` trees — cargo-deny's v2 default of `"none"` let an advisory flagged
+`informational = "unsound"` pass in silence while Dependabot alerted on the same GHSA; one finding is
+ignored with a reason and an expiry ([#389](https://github.com/cairn-ehr/cairn-ehr/issues/389), glib
+0.18.5, unfixable until Tauri's Linux backend moves to gtk-rs 0.20+).
 
 **Slice 67 — the §5.9 safety projection, part B (2026-08-14; closes
 [#375](https://github.com/cairn-ehr/cairn-ehr/issues/375), discharges #294;
 [ADR-0063](spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md), spec v0.65,
-SCHEMA 48→49).** **The seal boundary is the coarsening boundary:** the precise `{class, severity}`
-travels sealed with the body, a grade-chosen **rung** rides the envelope in the clear, so
-*coarsen-but-survive* after a crypto-shred is structural. **Two coarsenings, load-bearing for DIFFERENT
-reasons:** emission binds a peer's raw-SQL client; read answers a peer that legitimately emitted a finer
-rung (the grade is node-relative), and **read coarsening is a rendering choice, not a floor**.
-`safety_class_map` ships **EMPTY** — Cairn ships the lookup, never the drug knowledge; it is the seam
-drugref plugs into. The PR #403 review also fixed **#404**: `cairn_prospective_sensitivity`'s thread arm
-had diverged from db/048 and, its two arms being exhaustive, `p_thread` was inert — a thread-scoped grade
-coarsened chart-wide and emission disagreed with read on the same node. **Still open:** #394, #395, #397,
-#398, #399, #400, #401, #402, #406, #407.
+SCHEMA 48→49).** **The seal boundary is the coarsening boundary:** the precise `{class, severity}` travels
+sealed with the body, a grade-chosen **rung** rides the envelope in the clear, so *coarsen-but-survive*
+after a crypto-shred is structural. **Two coarsenings, load-bearing for DIFFERENT reasons:** emission binds
+a peer's raw-SQL client; read answers a peer that legitimately emitted a finer rung, and **read coarsening
+is a rendering choice, not a floor**. `safety_class_map` ships **EMPTY** — Cairn ships the lookup, never
+the drug knowledge; it is the seam drugref plugs into. The PR #403 review also fixed **#404**
+(`cairn_prospective_sensitivity`'s thread arm had diverged from db/048 and, its two arms being exhaustive,
+`p_thread` was inert). **Still open:** #394, #395, #397, #398, #399, #400, #401, #402, #406, #407.
 
 **Slice 68 — claim authority at the apply door (2026-08-15/16; closes
 [#380](https://github.com/cairn-ehr/cairn-ehr/issues/380), discharges #405 part 2, gives
@@ -347,32 +342,30 @@ coarsened chart-wide and emission disagreed with read on the same node. **Still 
 A protection-removing claim takes effect only when a human this node can hold responsible stands behind
 it. **One predicate, one site:** `cairn_claim_authority(claim, target) → 'attested' | 'self' |
 'unverified'` (db/005), consulted at exactly one clause in `cairn_sensitivity_standing` (db/048), so
-display coarsening, safety-rung emission and part C's dial all inherit it — the anti-drift answer to
-#404. It **gates effect, never admission**, and only in the withholding direction, so no door refusal and
-no fork (the #342 trap). *Flag what cannot self-heal; view what can* became a stated rule: the withdrawal
+display coarsening, safety-rung emission and part C's dial all inherit it — the anti-drift answer to #404.
+It **gates effect, never admission**, and only in the withholding direction, so no door refusal and no
+fork (the #342 trap). *Flag what cannot self-heal; view what can* became a stated rule: the withdrawal
 worklist is a VIEW, the new `safety_overclaim_flag` a LEDGER. The PR #410 review found **7 of 11
-production-code mutations survived a green suite** — an unpinned R2 self-identity equality (`TRUE` left
-the suite green and reopened #380 in full), `EXCEPTION WHEN OTHERS` not catching a statement timeout
-(57014 is one of the two codes it excludes), a **fail-OPEN** protection-stripping comparison, and comments
-asserting guarantees the fixtures never delivered. Full reasoning is ADR-0064's nine decisions. **Still
-open:** #408, #409, #413, #414, #415, #416, #417, #418, #419, #420, #422.
+production-code mutations survived a green suite** — an unpinned R2 self-identity equality (`TRUE` left the
+suite green and reopened #380 in full), `EXCEPTION WHEN OTHERS` not catching a statement timeout (57014 is
+one of the two codes it excludes), a **fail-OPEN** protection-stripping comparison, and comments asserting
+guarantees the fixtures never delivered. Full reasoning is ADR-0064's nine decisions. **Still open:** #408,
+#409, #413, #414, #415, #416, #417, #418, #419, #420, #422.
 
 - **Interlude — one §5.9 leak closed, one narrowed (2026-08-16; closes
   [#412](https://github.com/cairn-ehr/cairn-ehr/issues/412) and
-  [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405); ADR-0063 gains erratum E1; no schema
-  change).** Both defects were **a guarantee stated in a comment that the code did not provide**, one per
-  plane — and the review found the first fix had reproduced that shape in its own prose. **(1) In SQL:** a
-  column-level `REVOKE` cannot narrow a table-level `GRANT` (Postgres tracks them separately, and a table
-  grant covers columns added later), so db/049 §8 drops `cairn_agent` to an explicit 23-column grant
+  [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405); ADR-0063 gains erratum E1).** Both defects
+  were **a guarantee stated in a comment that the code did not provide**, one per plane — and the review
+  found the first fix had reproduced that shape in its own prose. **In SQL:** a column-level `REVOKE`
+  cannot narrow a table-level `GRANT`, so db/049 §8 drops `cairn_agent` to an explicit 23-column grant
   omitting `safety` and both read functions became `SECURITY DEFINER` — a pair where either half alone is
   broken. **Cost-raising, not a floor:** `event_log.safety` copies a *clear* field of the signed body and
-  `signed_bytes` stays granted, so `cairn_body(signed_bytes) -> 'safety'` returns it uncoarsened to the
-  same role (#424 closed; the open design question is **#432**), and the runtime role is a `cairn_node`
-  member db/049 never narrows (**#425**). ADR-0063 decision 2 — emission-time coarsening — is what binds.
-  Residual replay window: **#427**. **(2) In Rust:** a parameter name is not a security property;
-  `classify_authorship_confidence` graded a forgery `Attested` because it took the signer as `&str` beside
-  `EventBody`'s *self-asserted* `signer_key_id`. Both key arguments are now a `VerifiedKid` newtype;
-  mint-site allowlist unpinned: **#428**.
+  `signed_bytes` stays granted (#424 closed; the open design question is **#432**), and the runtime role
+  is a `cairn_node` member db/049 never narrows (**#425**). ADR-0063 decision 2 — emission-time coarsening
+  — is what binds. Residual replay window: **#427**. **In Rust:** a parameter name is not a security
+  property; `classify_authorship_confidence` graded a forgery `Attested` because it took the signer as
+  `&str` beside `EventBody`'s *self-asserted* `signer_key_id`. Both key arguments are now a `VerifiedKid`
+  newtype; mint-site allowlist unpinned: **#428**.
 - **Interlude — the `search_path` that pinned nothing (2026-08-16; closes
   [#426](https://github.com/cairn-ehr/cairn-ehr/issues/426); 21 headers gained `, pg_temp`).** Live data
   loss at both owner-rights write doors, not hygiene: `SET search_path = public` does not exclude the
@@ -412,8 +405,8 @@ fact when the fact is exactly determinable:** custody-blindness was inferred fro
 `event_log` keeps the sealed row and `event_clear` does not, so db/048 §11b *measures* it — and the
 partial-custody case, which no proxy can see, now warns. **(c) Peer text is not display text:** every
 field copied verbatim from a peer's body is Debug-escaped, since a newline in `node_origin`/`event_type`/
-`grade` forged a line in a line-oriented report. Still open on this surface: **#387** (type design over
-these exact structs, deliberately deferred), **#414**, **#416**.
+`grade` forged a line in a line-oriented report. Still open on this surface: **#414**, **#416** (#387 was
+closed by the type-design follow-on below).
 
 **Slice 69 follow-on — the withdraw read-back (2026-08-19; closes
 [#435](https://github.com/cairn-ehr/cairn-ehr/issues/435); opens
@@ -474,6 +467,44 @@ variant); the thread grade line is rendered by a test for the first time (the wh
 withdrawing a thread-scoped grade without raw SQL); `render_assert_readback` takes `&'static str` so peer
 text cannot reach the one slot it prints unescaped; and `cli_sensitivity_surface.rs` pins `--help`
 against the enum, the only place `ALL`'s contents are user-visible.
+
+**Trap-clearing pass (2026-08-20; closes
+[#439](https://github.com/cairn-ehr/cairn-ehr/issues/439),
+[#382](https://github.com/cairn-ehr/cairn-ehr/issues/382),
+[#385](https://github.com/cairn-ehr/cairn-ehr/issues/385),
+[#381](https://github.com/cairn-ehr/cairn-ehr/issues/381); no ADR, no migration, SCHEMA stays 49).**
+Four small independent items — one red build, three §5.9 review follow-ons. **(1) #439:** `cargo doc` was
+failing on `main` (a bare `<hex>` parsed as an unclosed HTML tag; a public item linked to a private one),
+which mattered less for the two errors than for the workaround — the build only completed under
+`-A rustdoc::invalid_html_tags -A rustdoc::private_intra_doc_links`, hiding every later rustdoc error.
+Fixed, and now gated — with the BLOCKING copy in the required `test` job (root workspace, the `fixtures`
+feature, and `cairn_pgx`, as its last steps), a fast advisory `doc` job duplicating the root build, and
+cairn-gui's half in `gui`; all under an EXPLICIT `RUSTDOCFLAGS=-D warnings`, since only the root workspace
+denies warnings via `[workspace.lints]` and both defects are warn-by-default lints rather than hard
+errors. Putting the root build only in the unrequired `doc` job was a review finding: **both of #439's
+defects were in the root workspace**, so that arrangement would have let the same regression merge green
+([#444](https://github.com/cairn-ehr/cairn-ehr/issues/444) tracks promoting `doc`/`gui` properly).
+**(2) #382:** the `REVOKE EXECUTE … FROM PUBLIC` convention was followed by 5 of 22 `cairn_check_*`
+validators. Severity is genuinely low (none writes, none grants; the few tables any of them read are open
+vocabularies already public), so the deliverable is the CHECKABILITY, not the privilege:
+`floor_execute_grants.rs` asserts it over the `pg_proc` catalogue — reading `proacl`, where a NULL ACL is
+the PERMISSIVE case — and a second test ratchets the half that IS load-bearing, the projection appliers,
+read from the `cairn_projection_apply` REGISTRY rather than the `_apply` name suffix (one of the 21,
+`medication_dose_seed_initial`, carries no suffix and was invisible to the first draft's pattern).
+**(3) #385:** the five medication thread projections now index `content_address`, and `cairn_event_thread`
+returns early for event types §10b confirms cannot carry a thread — behaviour-neutral for today's list, so
+it is pinned by a DECOY projection row carrying a note's own address, which the removed short-circuit
+would find. **The short-circuit also made §10b's list safety-critical in the DISCLOSURE direction**, since
+§11's conservative bound is gated on the negation of the same predicate: widening the list wrongly now
+silences all three thread arms at once. The first draft's comment claimed the opposite; correcting it, and
+relabelling the guard that catches it, was this PR's most consequential review finding.
+**(4) #381:** the db/048 SQL mirror gains the cross-chart withdrawal pin, the mis-targeted-subject
+coarsening arm, and the type-scoped conservative bound. All new guards were mutation-tested; each kills
+its mutation. Residuals, stated rather than closed: the magnitude of #385's index win is unmeasured on
+volume data; two hand-maintained mirror lists ([#441](https://github.com/cairn-ehr/cairn-ehr/issues/441));
+the DB-gated suite can go silently green if `CAIRN_TEST_PG` is ever unset
+([#442](https://github.com/cairn-ehr/cairn-ehr/issues/442)); `cairn_event_twin` still holds default PUBLIC
+EXECUTE ([#443](https://github.com/cairn-ehr/cairn-ehr/issues/443)).
 
 
 ## Phase 5 — Security & compliance core

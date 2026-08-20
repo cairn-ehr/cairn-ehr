@@ -68,6 +68,9 @@ BEGIN
     -- The cessation verb carries only medication_id (+ optional stopped/reason) — done.
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_medication_assertion(text, jsonb) FROM PUBLIC;
 
 -- 3. Register both medication verbs' structural floor + hard twin requirement in the #173
 --    registry (replaces the copied cairn_event_twin dispatch chain; the single db/005
@@ -210,6 +213,11 @@ CREATE TABLE IF NOT EXISTS medication_statement (
 );
 GRANT SELECT ON medication_statement TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_statement_patient_idx ON medication_statement (patient_id);
+-- #385: cairn_event_thread (db/048 §10) resolves an event to its medication thread with a
+-- five-way UNION ALL filtered on content_address, and cairn_effective_sensitivity calls it
+-- once per thread by LATERAL. Unindexed, a chart report cost O(threads on chart x every
+-- medication row on the node) — the very shape db/048 §6 cites #336 to avoid.
+CREATE INDEX IF NOT EXISTS medication_statement_content_address_idx ON medication_statement (content_address);
 
 -- 4b. The drug-identity coding projection (ADR-0059). A SEPARATE table, not columns on
 --     medication_statement, for two reasons: one fact gets one home (slice 6b's coding
@@ -233,6 +241,7 @@ CREATE TABLE IF NOT EXISTS medication_coding (
 GRANT SELECT ON medication_coding TO cairn_agent;
 CREATE INDEX IF NOT EXISTS medication_coding_anchor_idx
     ON medication_coding (coding_system, coding_code);
+CREATE INDEX IF NOT EXISTS medication_coding_content_address_idx ON medication_coding (content_address);
 
 -- 5. Fold clinical.medication.asserted into medication_statement. e.body is the
 --    payload; patient_id is a column. Overlay-winner keeps set-union convergence.
@@ -370,6 +379,7 @@ CREATE TABLE IF NOT EXISTS medication_cessation (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 GRANT SELECT ON medication_cessation TO cairn_agent;
+CREATE INDEX IF NOT EXISTS medication_cessation_content_address_idx ON medication_cessation (content_address);
 
 -- The per-type trigger is superseded by cairn_projection_dispatch_trg (db/005,
 -- ADR-0057); this fn is now registered in cairn_projection_apply below (#208).

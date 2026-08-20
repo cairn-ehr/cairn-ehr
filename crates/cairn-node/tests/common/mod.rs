@@ -863,3 +863,36 @@ pub async fn attestation_count(c: &Client, thread: Uuid) -> i64 {
     .unwrap()
     .get(0)
 }
+
+// ---------------------------------------------------------------------------------
+// Catalogue predicates: "which functions is this repo answerable for?"
+//
+// Every repo-wide guard written over `pg_proc` needs the same two filters, and they are
+// security-relevant: getting either wrong makes the guard pass by seeing less. They live
+// here once, because a filter copied into two suites is the hand-maintained mirror pair
+// this project keeps being bitten by (#404) — and here the divergence would be SILENT,
+// since a narrowed filter reports "no offenders", not an error.
+//
+// They are SQL fragments rather than a whole query on purpose: each guard selects
+// different columns and applies its own extra conditions. `p` is the `pg_proc` alias and
+// `n` the `pg_namespace` alias the caller must use.
+// ---------------------------------------------------------------------------------
+
+/// Schemas the repo is answerable for: everything a migration could create a function in.
+///
+/// NOT pinned to `public`, deliberately. A migration that introduces its own schema would be
+/// invisible to a `nspname = 'public'` filter AND would not lower any guard's row count, so
+/// neither the floor guards nor the offender lists would notice — silent under-coverage of
+/// exactly the kind these guards exist to prevent. System schemas are Postgres's own.
+pub const REPO_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
+       AND n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%'";
+
+/// Extension-owned objects: `cairn_pgx` and `pgcrypto` install into `public` too, and this
+/// repo's invariants are not theirs to satisfy.
+///
+/// `classid` is constrained because `pg_depend.objid` is unique only WITHIN a catalog — an
+/// unrelated object carrying an extension dependency whose OID happened to equal a function's
+/// would otherwise drop that function silently out of every guard.
+pub const NOT_EXTENSION_OWNED: &str = "NOT EXISTS (SELECT 1 FROM pg_depend d
+                        WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass
+                          AND d.deptype = 'e')";

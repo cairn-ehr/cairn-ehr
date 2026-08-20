@@ -22,6 +22,11 @@ BEGIN;
 -- Signature unified to (p_type text, b jsonb) for the #173 registry dispatch (p_type unused;
 -- this check validates the body). No DROP here — db/011 already dropped the stale (jsonb)
 -- overload earlier in load order; this is a plain CREATE OR REPLACE of the unified signature.
+-- #382 EXECUTE CONVENTION, NO REVOKE HERE ON PURPOSE: CREATE OR REPLACE FUNCTION PRESERVES
+-- the existing ACL, so the REVOKE in db/011 still holds after this redefinition. Adding a second
+-- one would be harmless but misleading; what would NOT be safe is turning this into
+-- DROP + CREATE, which resets the ACL to the PUBLIC default and trips
+-- crates/cairn-node/tests/floor_execute_grants.rs. See the convention block in db/005.
 CREATE OR REPLACE FUNCTION cairn_check_demographic_field(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

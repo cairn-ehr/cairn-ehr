@@ -127,6 +127,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_sensitivity_grade(text, jsonb) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 4. The structural floor for a withdrawal.
@@ -158,6 +161,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_sensitivity_withdrawal(text, jsonb) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 5. Twin-check registrations (ADR-0048). ADDING A ROW HERE MEANS BUMPING THE EXPECTED
@@ -431,6 +437,7 @@ CREATE OR REPLACE FUNCTION cairn_event_thread(p_event_id uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_ca     bytea;
+    v_type   text;
     v_thread uuid;
 BEGIN
     -- !! LANGUAGE plpgsql, NOT sql, AND THE GUARD IS LOAD-BEARING !!
@@ -461,8 +468,53 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT content_address INTO v_ca FROM event_log WHERE event_id = p_event_id;
+    -- Read the type alongside the address — one row, one lookup, no extra query.
+    SELECT content_address, event_type INTO v_ca, v_type
+      FROM event_log WHERE event_id = p_event_id;
     IF v_ca IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- #385: a type section 10b has POSITIVELY confirmed to be thread-free (note.%,
+    -- demographic.%, identity.%, patient.%, sensitivity.%, erasure.%) cannot be WRITTEN into
+    -- any of the five medication projections below, because only the medication apply
+    -- functions write them and only ever under their own triggering event's address. So the
+    -- five scans can only ever return nothing — and the chart-wide reading in
+    -- `chart_sensitivity` resolves off the chart's registration event whenever one is on file
+    -- (it has an explicit no-registration arm — see sensitivity/report.rs — which does not
+    -- reach here at all), i.e. the common path paid for all five, per chart, every time.
+    --
+    -- BEHAVIOUR-NEUTRAL FOR THE LIST AS IT STANDS: every type in it already answered NULL, so
+    -- this returns the same NULL sooner. The neutrality is worth stating because a reader will
+    -- suspect a short-circuit on a safety surface — but it is a property of THIS list, not of
+    -- the mechanism, and the next paragraph is the one that matters.
+    --
+    -- !! WIDENING THIS LIST WRONGLY IS THE DISCLOSURE DIRECTION, NOT THE SAFE ONE !!
+    -- An earlier draft of this comment claimed the opposite ("both the resolution and the
+    -- bound move in the over-protecting direction together"). That is false, and this
+    -- short-circuit is what made it false. Section 11's conservative-bound arm is gated on the
+    -- NEGATION of this predicate (`AND NOT cairn_event_type_has_no_thread(ev.event_type)`), so
+    -- a type added here is EXCLUDED from the bound — that exclusion is the entire purpose of
+    -- section 10b. Add a medication type to the list and all three thread arms fall silent at
+    -- once: the resolved arm (this function now returns NULL), the bound arm (predicate now
+    -- TRUE), and the coarsened catch-all (the thread IS on this chart). A standing
+    -- 'sequestered' thread grade becomes ('routine','none'). Measured, not reasoned: adding
+    -- `OR p_type LIKE 'clinical.%'` here turns (sequestered, thread) into (routine, none) for
+    -- an event whose thread resolves; before #385 the SAME edit was harmless, because the
+    -- resolved arm was an INDEPENDENT net that never consulted this predicate.
+    --
+    -- That independence is gone. This six-line LIST IS NOW SAFETY-CRITICAL, and the only
+    -- things standing between a careless widening and silent protection loss across every
+    -- medication thread are two tests — do not delete either:
+    --   * thread_resolution_cost.rs::no_medication_event_type_is_classified_thread_free
+    --   * sensitivity_ladder.rs::f5a_a_resolved_thread_carries_its_own_grade_and_not_a_different_threads
+    -- Section 10b's own header states the list is closed by test enumeration, not by
+    -- construction; adding a prefix means adding its counter-example alongside.
+    --
+    -- Deliberately calls cairn_event_type_has_no_thread, defined BELOW in section 10b:
+    -- plpgsql binds at first execution, not at CREATE, so file order does not matter (the
+    -- same late-binding property the to_regclass guard above depends on).
+    IF cairn_event_type_has_no_thread(v_type) THEN
         RETURN NULL;
     END IF;
 
@@ -497,8 +549,9 @@ BEGIN
     --
     -- BUT "EVERY SUPERSEDED MEDICATION EVENT RESOLVES TO NULL" IS FALSE, and an earlier draft
     -- of this comment (and of ADR-0062) said it. medication_dose_event is keyed PER EVENT
-    -- (`PRIMARY KEY (dose_event_id)`, `ON CONFLICT ... DO NOTHING`) and db/032:403 registers
-    -- `medication_dose_seed_initial` for `clinical.medication.asserted`, seeding a row whose
+    -- (`PRIMARY KEY (dose_event_id)`, `ON CONFLICT ... DO NOTHING`) and db/032 registers
+    -- `medication_dose_seed_initial` in cairn_projection_apply for
+    -- `clinical.medication.asserted`, seeding a row whose
     -- dose_event_id IS that assert's own event_id and whose content_address is that assert's
     -- own. So a superseded `clinical.medication.asserted` — and likewise a superseded
     -- `-dose-change.asserted` — still resolves here, permanently and precisely.
@@ -548,6 +601,17 @@ $$;
 --      clinical stream therefore inherits the bound automatically, for free, simply by
 --      not appearing in this list — the safe default requires no one to remember to add
 --      it.
+--
+--      THE LIST IS CLOSED BY TEST ENUMERATION, NOT BY CONSTRUCTION, and since #385 it is
+--      SAFETY-CRITICAL in the disclosure direction. A prefix wrongly added here does not
+--      merely over-protect: section 10's short-circuit makes it return NULL from
+--      cairn_event_thread, this predicate excludes it from section 11's bound, and the
+--      coarsened catch-all does not cover a thread that is on this very chart — so all three
+--      thread arms fall silent and a standing grade evaporates to ('routine','none'). See the
+--      "!! WIDENING THIS LIST WRONGLY IS THE DISCLOSURE DIRECTION !!" block in section 10 for
+--      the measured before/after. Adding a prefix here therefore means adding its
+--      counter-example to db/tests/048 (as `lab.result.asserted` already is) — nothing in the
+--      structure of this function will catch it for you.
 CREATE OR REPLACE FUNCTION cairn_event_type_has_no_thread(p_type text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
     SELECT p_type LIKE 'demographic.%' OR p_type LIKE 'identity.%'

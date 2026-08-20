@@ -93,6 +93,9 @@ BEGIN
     END IF;
 END;
 $$;
+-- PUBLIC holds EXECUTE by default; the cairn_check_* family is revoked uniformly (#382,
+-- convention stated in db/005 above cairn_check_twin_registry_fn).
+REVOKE EXECUTE ON FUNCTION cairn_check_erasure_shred(text, jsonb) FROM PUBLIC;
 
 INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VALUES
     ('erasure.shred.asserted', 'cairn_check_erasure_shred',

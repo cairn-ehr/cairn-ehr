@@ -87,7 +87,9 @@ impl WinningSubject {
     /// Separate from [`Self::from_row`], and the address is NOT optional, because that
     /// caller is in a categorically different position: "did anything win" was already
     /// answered by the row existing at all, and `cairn_sensitivity_standing` selects a
-    /// `BYTEA PRIMARY KEY` (db/048:186), so there is no NULL to interpret.
+    /// `BYTEA PRIMARY KEY` (`sensitivity_assertion.content_address`, db/048 §6), so there is
+    /// no NULL to interpret. Pinned by symbol rather than by line: the line number this used
+    /// to carry was already stale, having moved when db/048 gained two comment blocks.
     ///
     /// Routing it through `from_row`'s `Option` — as the first version of this did — made
     /// the coarsening phrase a CONSEQUENCE of a column's nullability in another file. If

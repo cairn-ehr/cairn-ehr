@@ -194,6 +194,186 @@ BEGIN
     END IF;
 END $$;
 
+-- 2c. THE CROSS-CHART WITHDRAWAL PIN (#381) — the single most safety-load-bearing predicate
+--     in db/048 section 9, and until now Rust-only
+--     (sensitivity_ladder.rs::f1_a_withdrawal_authored_on_a_different_chart_does_not_lower_...).
+--
+--     `cairn_sensitivity_standing` matches a withdrawal to the assertion it withdraws on
+--     content_address AND on `w.patient_id = p_patient_id`. Drop that second conjunct and a
+--     withdrawal authored on ANY chart strips protection from the chart it names — the
+--     unrecoverable direction, and one no later event can repair, because the protection is
+--     simply gone from the read model while the assertion still sits in the log looking intact.
+--
+--     THE WITHDRAWAL HERE MUST BE AUTHORITATIVE OR THIS TEST PROVES NOTHING. An unattested
+--     withdrawal fails to lower for a completely different reason (#380/ADR-0064, block 2b
+--     above), so it would leave `sequestered` standing whether or not the patient_id pin
+--     existed — which is exactly how the Rust twin passed vacuously until its final review
+--     caught it. The attester is enrolled with a DISTINCT role from block 2's: `actor_id`
+--     content-addresses the pinned determinant set, so two humans enrolled as the same role
+--     collide into one actor and the second enroll is refused (ADR-0044/#152), and these
+--     blocks share one transaction.
+DO $$
+DECLARE
+    victim      uuid := gen_random_uuid();
+    attacker    uuid := gen_random_uuid();
+    target      uuid;
+    ca_hex      text;
+    v_w         uuid;
+    verdict     text;
+    landed      int;
+    got_grade   text;
+    human_key   text  := encode(gen_random_bytes(32), 'hex');
+    human_key_b bytea := decode(human_key, 'hex');
+BEGIN
+    target := _sensitivity_seed_event(victim, 'note.added', jsonb_build_object('text', 'n'), 10);
+    PERFORM _sensitivity_seed_event(victim, 'sensitivity.grade.asserted',
+        jsonb_build_object('subject_kind', 'patient', 'subject_id', victim::text,
+                            'grade', 'sequestered', 'source', 'human'), 11);
+
+    SELECT encode(content_address, 'hex') INTO ca_hex
+        FROM sensitivity_assertion WHERE patient_id = victim;
+
+    -- The attack: same content_address (globally unique, so unambiguous about WHICH
+    -- assertion it names), authored under the ATTACKER's chart.
+    PERFORM enroll_actor('human', jsonb_build_object('role', 'test-witness-cross-chart'),
+                         human_key);
+    v_w := _sensitivity_seed_event(attacker, 'sensitivity.grade-withdrawal.asserted',
+        jsonb_build_object('withdraws', ca_hex, 'rationale', 'cross-chart'), 12,
+        human_key_b);
+
+    -- Precondition 1: it really is authoritative, so the patient_id pin is the ONLY thing
+    -- left between the attacker's chart and the victim's.
+    SELECT cairn_claim_authority(v_w, NULL) INTO verdict;
+    IF verdict <> 'attested' THEN
+        RAISE EXCEPTION 'FAIL: precondition — the cross-chart withdrawal must be attested, got %', verdict;
+    END IF;
+
+    -- Precondition 2: it really PROJECTED. A withdrawal that never landed would leave the
+    -- grade standing for a reason that has nothing to do with the pin under test.
+    SELECT count(*) INTO landed
+        FROM sensitivity_withdrawal WHERE withdraws = decode(ca_hex, 'hex');
+    IF landed <> 1 THEN
+        RAISE EXCEPTION 'FAIL: precondition — the cross-chart withdrawal must project, got % rows', landed;
+    END IF;
+
+    SELECT grade INTO got_grade FROM cairn_effective_sensitivity(target);
+    IF got_grade <> 'sequestered' THEN
+        RAISE EXCEPTION 'FAIL: an AUTHORITATIVE withdrawal authored on a DIFFERENT chart must never strip this chart''s protection (#381/F1), got %', got_grade;
+    END IF;
+END $$;
+
+-- 2d. THE MIS-TARGETED SUBJECT COARSENS, IT DOES NOT EVAPORATE (#381) — section 11's
+--     catch-all arm, until now Rust-only (sensitivity_ladder.rs's F2i/F2ii).
+--
+--     A standing assertion whose subject cannot be matched on this chart is a claim someone
+--     made that something here is sensitive, with the WHICH unreadable. Dropping it would be
+--     the disclosure direction; db/006's recall discipline says over-select instead. So it is
+--     read as chart-wide, bounded by this envelope's patient, and reports subject_kind
+--     'coarsened' so a reader can tell an over-selection from a precise hit.
+DO $$
+DECLARE
+    chart_a   uuid := gen_random_uuid();
+    chart_b   uuid := gen_random_uuid();
+    note_a    uuid;
+    note_b    uuid;
+    got_grade text;
+    got_kind  text;
+BEGIN
+    -- i. a 'patient' assertion naming a DIFFERENT patient.
+    note_a := _sensitivity_seed_event(chart_a, 'note.added', jsonb_build_object('text', 'n'), 10);
+    PERFORM _sensitivity_seed_event(chart_a, 'sensitivity.grade.asserted',
+        jsonb_build_object('subject_kind', 'patient', 'subject_id', gen_random_uuid()::text,
+                            'grade', 'restricted', 'source', 'human'), 11);
+
+    SELECT grade, subject_kind INTO got_grade, got_kind
+        FROM cairn_effective_sensitivity(note_a);
+    IF (got_grade, got_kind) IS DISTINCT FROM ('restricted', 'coarsened') THEN
+        RAISE EXCEPTION 'FAIL: a ''patient'' assertion naming a DIFFERENT patient must coarsen its own chart, not evaporate (#381/F2i), got (%, %)',
+            got_grade, got_kind;
+    END IF;
+
+    -- ii. an 'event' assertion naming no event on THIS chart — indistinguishable, locally,
+    --     from one whose target simply has not replicated yet, which is why it over-selects.
+    note_b := _sensitivity_seed_event(chart_b, 'note.added', jsonb_build_object('text', 'n'), 10);
+    PERFORM _sensitivity_seed_event(chart_b, 'sensitivity.grade.asserted',
+        jsonb_build_object('subject_kind', 'event', 'subject_id', gen_random_uuid()::text,
+                            'grade', 'sensitive', 'source', 'human'), 11);
+
+    SELECT grade, subject_kind INTO got_grade, got_kind
+        FROM cairn_effective_sensitivity(note_b);
+    IF (got_grade, got_kind) IS DISTINCT FROM ('sensitive', 'coarsened') THEN
+        RAISE EXCEPTION 'FAIL: an ''event'' assertion naming no event on THIS chart must coarsen the chart, not evaporate (#381/F2ii), got (%, %)',
+            got_grade, got_kind;
+    END IF;
+END $$;
+
+-- 2e. THE UNRESOLVED-THREAD BOUND IS SCOPED BY EVENT TYPE (#381) — the behavioural half of
+--     section 10b. The block near the end of this file pins the PREDICATE
+--     (`cairn_event_type_has_no_thread`) in isolation; nothing here drove it through
+--     `cairn_effective_sensitivity`, where its being wired up at all is what matters.
+--
+--     With a thread-scoped grade standing on a chart whose thread this node cannot resolve:
+--       * a note.added stays ROUTINE — it structurally cannot be on a medication thread, so
+--         the bound does not apply to it. Without the type gate, one thread-scoped assertion
+--         would coarsen the ENTIRE chart (every note, every demographic field), silently
+--         turning thread scope into chart scope.
+--       * an event of a type this version has never heard of takes the CONSERVATIVE BOUND:
+--         "might have a thread" is the safe default, and a future clinical stream inherits
+--         the bound by simply not appearing in section 10b's list. Note it is reported as
+--         subject_kind 'thread', NOT the literal 'coarsened' of block 2d — that is a
+--         different arm, and the words "coarsen" and "'coarsened'" are easy to conflate here. `lab.result.asserted` is used rather
+--         than a medication event precisely because it exercises that unknown-type path:
+--         seeding a well-formed medication assert would create the projection row that makes
+--         its thread RESOLVE, which is the other arm entirely.
+--
+--     WHAT THIS BLOCK DOES NOT COVER: db/048 section 10's #385 type SHORT-CIRCUIT. That is
+--     behaviour-neutral by construction, so a SQL mirror cannot distinguish it — with or
+--     without it, both assertions here read identically, because section 11's gate (the same
+--     predicate) is what produces the output either way. The short-circuit's only coverage is
+--     thread_resolution_cost.rs::a_thread_free_event_type_never_reaches_the_medication_scans,
+--     which plants a decoy projection row to make the difference observable. Do not read this
+--     block as covering section 10b generally: it pins the WIRING of the predicate into
+--     section 11, and nothing about section 10.
+DO $$
+DECLARE
+    chart     uuid := gen_random_uuid();
+    a_note    uuid;
+    a_lab     uuid;
+    got_grade text;
+    got_kind  text;
+BEGIN
+    a_note := _sensitivity_seed_event(chart, 'note.added', jsonb_build_object('text', 'n'), 10);
+    a_lab  := _sensitivity_seed_event(chart, 'lab.result.asserted',
+        jsonb_build_object('panel', 'fbc'), 11);
+    PERFORM _sensitivity_seed_event(chart, 'sensitivity.grade.asserted',
+        jsonb_build_object('subject_kind', 'thread', 'subject_id', gen_random_uuid()::text,
+                            'grade', 'restricted', 'source', 'human'), 12);
+
+    -- NOT VACUOUS ONLY BECAUSE OF THE POSITIVE ASSERTION BELOW. This is the one
+    -- "nothing happened" check among the three blocks added here, so it also passes under
+    -- several unrelated setup failures (the thread-scoped seed never projected, the wrong
+    -- chart, a renamed grade). What rules those out is the a_lab assertion that follows,
+    -- which is positive and would fail in every one of them. Do not delete or weaken the
+    -- second half: on its own, this first half proves nothing.
+    --
+    -- got_kind is read but not asserted here, deliberately: 'restricted' is the only standing
+    -- grade in this block, so grade = 'routine' IS "no arm matched", and naming an expected
+    -- kind alongside it would suggest a second, independent fact is being checked.
+    SELECT grade, subject_kind INTO got_grade, got_kind
+        FROM cairn_effective_sensitivity(a_note);
+    IF got_grade <> 'routine' THEN
+        RAISE EXCEPTION 'FAIL: a thread-scoped grade must NOT reach an event type that structurally has no thread — thread scope would become chart scope (#381/§10b), got (%, %)',
+            got_grade, got_kind;
+    END IF;
+
+    SELECT grade, subject_kind INTO got_grade, got_kind
+        FROM cairn_effective_sensitivity(a_lab);
+    IF (got_grade, got_kind) IS DISTINCT FROM ('restricted', 'thread') THEN
+        RAISE EXCEPTION 'FAIL: an event of an UNRECOGNISED type must take the conservative bound — unknown must coarsen, never expose (#381/§10b), got (%, %)',
+            got_grade, got_kind;
+    END IF;
+END $$;
+
 DROP FUNCTION _sensitivity_seed_event(uuid, text, jsonb, bigint, bytea);
 
 ROLLBACK;

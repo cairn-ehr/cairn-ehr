@@ -133,7 +133,7 @@ fn confirm_explicit(
 ///   explicit `--superseded-node` (validated to be on the medium), or auto-resolve a sole
 ///   enroll. More than one enroll without a marker is `Ambiguous`.
 ///
-/// In every branch an explicit `--superseded-node` is validated by [`confirm_explicit`], so
+/// In every branch an explicit `--superseded-node` is validated by `confirm_explicit`, so
 /// naming a peer or an off-medium id is rejected BEFORE any key-minting or DB write.
 pub fn resolve_dead_node(
     container: &Container,
