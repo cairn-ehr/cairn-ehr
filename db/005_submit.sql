@@ -417,6 +417,30 @@ $$;
 -- (public_cannot_execute_the_twin_dispatcher).
 REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;
 
+-- #453 — and its two HELPERS, which #443 left behind.
+--
+-- cairn_twin_skeleton (the mechanical fallback rendering) and cairn_twin_is_present (the ONE
+-- blank-test) are the functions cairn_event_twin dispatches through. Revoking the entry point
+-- and leaving its helpers on the default EXECUTE-to-PUBLIC is the same half-followed state
+-- #443 was about, one layer down: a reader still cannot tell an oversight from a decision.
+--
+-- Same severity as #443 — a pure predicate and a pure formatter over a body a PUBLIC caller has
+-- no way to submit through any door — so what is bought is legibility, not privilege.
+-- ("predicates" alone was wrong: cairn_twin_skeleton renders, it does not decide. #456 review.)
+--
+-- !! cairn_twin_is_present NEEDS A PAIRED GRANT, AND IT LIVES IN db/015 !!
+-- It is called from inside cairn_twin_provenance_of, which db/015's event_twin_provenance VIEW
+-- calls, and that view is GRANTed to cairn_agent. PostgreSQL ACL-checks a function called
+-- inside a view against the INVOKING user (unlike table access, which is checked against the
+-- view owner), so this REVOKE alone breaks that read surface. db/015 grants both halves back
+-- to cairn_agent, with the measured evidence; do not remove either without reading it.
+--
+-- The db/015 pair (cairn_twin_is_authored, cairn_twin_provenance_of) is revoked there, beside
+-- its own definitions. All four are asserted over the catalogue by
+-- crates/cairn-node/tests/floor_execute_grants.rs (public_cannot_execute_any_twin_helper).
+REVOKE EXECUTE ON FUNCTION cairn_twin_skeleton(text, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_twin_is_present(text) FROM PUBLIC;
+
 -- Suppression owner-gate (ADR-0043 / issue #99). A suppressing overlay
 -- (salience.downgrade / visibility.suppress) that forecloses on a HUMAN author's
 -- event is self-only: only that human may suppress it. Cross-human suppression is

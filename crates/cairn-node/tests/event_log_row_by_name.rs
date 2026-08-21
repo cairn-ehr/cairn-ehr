@@ -22,26 +22,14 @@
 //! gaining columns, and the only one this has actually bitten. Only EXECUTABLE source is
 //! scanned (`crates/`, `db/`): `docs/` holds superseded plan records whose whole value is
 //! being an unedited account of what was done at the time, including the mistakes.
-use std::fs;
-use std::path::Path;
+//! The recursive walk is the SHARED one (#452). This file used to carry its own, which
+//! returned early on an unreadable directory and skipped an unreadable file — either one
+//! silently shrinking the scanned set while the guard still reported success. See
+//! `tests/common/sources.rs` for why that fix belongs in one place.
+#[path = "common/sources.rs"]
+mod sources;
 
-/// Walk `crates/` and `db/`, returning every `.rs`/`.sql` path (skipping `target/`).
-fn source_files(root: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            if p.file_name().is_some_and(|n| n == "target") {
-                continue;
-            }
-            source_files(&p, out);
-        } else if p.extension().is_some_and(|x| x == "rs" || x == "sql") {
-            out.push(p);
-        }
-    }
-}
+use sources::{read_source, repo_root, source_files};
 
 /// True when this line is a comment (Rust `//`, `//!`, SQL `--`) rather than executable
 /// text. The fix's own explanatory comments name the banned pattern verbatim — that is the
@@ -53,31 +41,32 @@ fn is_commentary(line: &str) -> bool {
 
 #[test]
 fn no_positional_event_log_row_construction() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/cairn-node -> repo root")
-        .to_path_buf();
-    let mut files = Vec::new();
-    source_files(&repo.join("crates"), &mut files);
-    source_files(&repo.join("db"), &mut files);
+    let repo = repo_root();
+    let files = source_files(
+        &[repo.join("crates"), repo.join("db")],
+        &["target"],
+        &["rs", "sql"],
+    );
     assert!(!files.is_empty(), "found no source files to scan");
 
     // This file names the banned pattern in a string literal (the matcher) and in the
     // failure message, so it must exempt itself — the same self-exemption db/041's
     // drugref source guard needs, and for the same reason: a guard that describes what it
     // forbids will always match itself.
-    let self_path = Path::new(file!())
-        .file_name()
-        .expect("this file has a name");
+    //
+    // Matched as a path SUFFIX, not by basename (#456 review). A second file with this name
+    // anywhere under `crates/` or `db/` would otherwise be silently exempted too, taking any
+    // positional construction that lived only there out of the checked set while this still
+    // printed `ok`. `db_gate_actually_ran.rs` states the same reasoning for its own exclusion;
+    // this file kept the weaker form when it adopted the shared walk.
+    let mut self_exclusions = 0usize;
     let mut offenders = Vec::new();
     for f in &files {
-        if f.file_name() == Some(self_path) {
+        if f.ends_with(file!()) {
+            self_exclusions += 1;
             continue;
         }
-        let Ok(text) = fs::read_to_string(f) else {
-            continue;
-        };
+        let text = read_source(f);
         // A positional construction always ends `)::event_log`, and always starts with a
         // `ROW(` or a bare `(` argument list. Matching the CAST is what makes this precise:
         // `jsonb_populate_record(NULL::event_log, …)` names the type as an ARGUMENT, never
@@ -96,6 +85,18 @@ fn no_positional_event_log_row_construction() {
             }
         }
     }
+    // The self-exclusion must actually have fired. If the `file!()` suffix match ever stops
+    // identifying this file — a build reporting absolute paths, a moved crate — the exclusion
+    // would silently do nothing, this file's own matcher literal would be reported as an
+    // offender, and a maintainer would "fix" it by widening the exemption. Asserted, not
+    // assumed, for `db_gate_actually_ran.rs`'s reason.
+    assert_eq!(
+        self_exclusions,
+        1,
+        "expected to exclude exactly this file ({}) from the scan, excluded {self_exclusions}",
+        file!()
+    );
+
     assert!(
         offenders.is_empty(),
         "positional `…)::event_log` construction found — bind by COLUMN NAME instead \

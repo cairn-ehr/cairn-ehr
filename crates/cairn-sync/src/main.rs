@@ -6105,7 +6105,11 @@ mod fingerprint_db_tests {
 ///
 /// and the two db/006 recall-ceremony doors (`recall_event`,
 /// `events_by_actor_epoch`), which were loaded-but-undriven in the first cut of
-/// this test — the exact shape the late-binding trap needs (PR #222 review).
+/// this test — the exact shape the late-binding trap needs (PR #222 review);
+/// and db/048's sensitivity read model (`cairn_event_thread`,
+/// `cairn_effective_sensitivity`, `cairn_thread_patient`), which was the same
+/// shape again — in the SCHEMA list, confirmed to CREATE, and never once CALLED
+/// on the medication-less schema its `to_regclass` guards exist for (#386).
 /// db/021 ships only the `sync_quarantine` TABLE (the quarantine writes are
 /// daemon-side SQL, not PL/pgSQL), so there is no quarantine function to drive:
 /// with these four (plus `enroll_actor` in the setup), every caller-facing entry
@@ -6205,6 +6209,59 @@ mod schema_subset_tests {
             safety: None,
         };
         // ADR-0039: author the twin into the signed body, as every production author does.
+        let body = materialise_generic_twin(body);
+        sign(&body, sk).unwrap().signed_bytes
+    }
+
+    /// Build + sign one event of a type this schema generation does NOT know
+    /// (`observation.vital.recorded`) — the ADR-0056 admit-uninterpreted case.
+    ///
+    /// Needed by Door 5 for a reason worth stating precisely, because getting it slightly
+    /// wrong is how the first version of that fixture came out vacuous.
+    ///
+    /// The order inside `cairn_event_thread` (db/048) is: the two `to_regclass` probes FIRST,
+    /// then the `event_log` lookup, then §10b's thread-free type gate, and only then the
+    /// five-table UNION. So on a subset node every event — `patient.`, `identity.`, all of
+    /// them — reaches the probes and is stopped THERE; the type gate is what is never reached.
+    /// (The first cut of this comment had that backwards, and a maintainer trusting it would
+    /// conclude that moving the probes after the gate is free. It is not — #456 review.)
+    ///
+    /// The consequence is what matters, and it survives the correction: once the stub
+    /// `medication_statement` below makes probe 1 pass, a thread-FREE event falls through to
+    /// the type gate, which returns NULL before the UNION — so deleting probe 2 would still
+    /// look green. Only a type OUTSIDE §10b's list survives the gate and reaches the UNION
+    /// that raises. That is what this fixture supplies.
+    ///
+    /// Not `clinical.%`: ADR-0052 makes those born-sealed, and a plaintext clinical body is a
+    /// shape that should not exist. An unknown *non*-clinical type is the honest fixture — a
+    /// peer one schema generation ahead is precisely who sends one, and admitting it
+    /// uninterpreted is the ADR-0056 floor working as designed.
+    fn signed_uninterpreted(
+        sk: &SigningKey,
+        kid: &str,
+        patient_id: &str,
+        wall: i64,
+        origin: &str,
+    ) -> Vec<u8> {
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: patient_id.to_string(),
+            event_type: "observation.vital.recorded".into(),
+            schema_version: "observation/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: origin.into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"observation": "from a peer we cannot interpret"}),
+            attachments: vec![],
+            plaintext_twin: None,
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
         let body = materialise_generic_twin(body);
         sign(&body, sk).unwrap().signed_bytes
     }
@@ -6418,8 +6475,9 @@ mod schema_subset_tests {
         );
 
         // ── Door 4: db/049's safety read model — CALL it, don't just load it (#386) ───
-        // #386 records that db/048's subset coverage LOADED that migration into SCHEMA but
-        // never DROVE it, so the guarantee it appeared to give was untested at runtime.
+        // #386 recorded that db/048's subset coverage LOADED that migration into SCHEMA but
+        // never DROVE it, so the guarantee it appeared to give was untested at runtime. Door 5
+        // below closes that half; this one is the same trap for the NEXT migration.
         // db/049 sits in the exact same trap: it is IN the SCHEMA list above, and Door 1's
         // submit_event calls already exercise cairn_check_safety_signal in passing (db/005
         // §1d PERFORMs it unconditionally on every LOCAL write) — but nothing so far has
@@ -6440,13 +6498,170 @@ mod schema_subset_tests {
             "a sequestered grade must coarsen to the least-disclosing rung"
         );
 
-        // Four admitted events total (registration + the three doors) — nothing quarantined,
-        // nothing lost.
+        // ── Door 5: db/048's sensitivity read model — the OTHER half of #386 ─────────
+        // db/048 was in the SCHEMA list above and the file was confirmed to CREATE, which is
+        // the half that matters for cairn_event_thread's `LANGUAGE plpgsql, NOT sql` decision.
+        // Nothing ever CALLED it here. PL/pgSQL binds at first EXECUTION, so until now the
+        // `to_regclass(...) RETURN NULL` guard bodies could have been deleted (keeping
+        // plpgsql) and the whole workspace would have stayed green — the first client read
+        // against a cairn-sync-shaped node would then raise `relation "medication_statement"
+        // does not exist`. That is the #198/#227 first-write outage class, on the one file
+        // whose comments lean hardest on being guarded against it.
+        //
+        // A subset node holds NO medication projections, so every one of these must answer the
+        // honest "I cannot resolve a thread here", which is the same state as holding no
+        // custody: section 11's conservative bound then applies, and the direction is safe.
+        let thread: Option<String> = c
+            .query_one(
+                "SELECT cairn_event_thread($1::text::uuid)::text",
+                &[&local_event_id],
+            )
+            .expect("cairn_event_thread must be CALLABLE against the subset alone (#386)")
+            .get(0);
+        assert_eq!(
+            thread, None,
+            "a node with no medication projections cannot resolve a thread — it must answer \
+             NULL, not raise"
+        );
+
+        let grade: String = c
+            .query_one(
+                "SELECT grade FROM cairn_effective_sensitivity($1::text::uuid)",
+                &[&local_event_id],
+            )
+            .expect("cairn_effective_sensitivity must be callable against the subset alone")
+            .get(0);
+        assert_eq!(
+            grade, "routine",
+            "absence of every assertion reads as routine, never as unknown (ADR-0062)"
+        );
+
+        let unknown_thread = uuid::Uuid::now_v7().to_string();
+        let thread_patient: Option<String> = c
+            .query_one(
+                "SELECT cairn_thread_patient($1::text::uuid)::text",
+                &[&unknown_thread],
+            )
+            .expect("cairn_thread_patient must be callable against the subset alone")
+            .get(0);
+        assert_eq!(thread_patient, None);
+
+        // A THREAD-BEARING event type, admitted uninterpreted (ADR-0056). Every event above
+        // carries a §10b thread-FREE prefix (`patient.`, `identity.`), and once the stub below
+        // makes the FIRST to_regclass probe pass, such an event is absorbed by the type gate —
+        // which sits AFTER both probes — and returns NULL before reaching the UNION that would
+        // raise. That is why the window below needs a different event to be non-vacuous. A peer
+        // one schema generation ahead sending a type this node cannot interpret is the
+        // realistic source of one.
+        let uninterpreted =
+            signed_uninterpreted(&sk, &kid, &patient_id, now_ms() + 2, "subset-peer");
+        c.query_one(
+            "SELECT apply_remote_event($1, NULL, NULL)",
+            &[&uninterpreted],
+        )
+        .expect("an uninterpreted type must be ADMITTED, not refused (ADR-0056)");
+        let uninterpreted_id: String = c
+            .query_one(
+                "SELECT event_id::text FROM event_log WHERE event_type = 'observation.vital.recorded'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        let unknown_type_thread: Option<String> = c
+            .query_one(
+                "SELECT cairn_event_thread($1::text::uuid)::text",
+                &[&uninterpreted_id],
+            )
+            .expect("a thread-bearing type must reach the probes without raising")
+            .get(0);
+        assert_eq!(
+            unknown_type_thread, None,
+            "no medication projections exist here, so no thread can resolve"
+        );
+
+        // ── The crash-mid-replay window: db/031 present, db/032 absent ────────────────
+        // cairn_event_thread probes a representative table from EACH of db/031 and db/032,
+        // because the loop that replays db/*.sql is not one atomic transaction — a loader that
+        // crashes between them leaves medication_statement existing and medication_dose_event
+        // not. NO SCHEMA IN THE TREE HAS THAT SHAPE (cairn-node loads both, cairn-sync
+        // neither), so until now the second probe had never decided anything anywhere. This
+        // database can model the window exactly, with a stub carrying only the columns the
+        // reachable code paths touch.
+        //
+        // NON-VACUITY, which is the whole difficulty here: "returns NULL" is also what the
+        // FIRST probe produces, so the assertion alone cannot tell which probe saved us. The
+        // seeded row settles it — cairn_thread_patient has only ONE probe, so reading the
+        // patient back out proves to_regclass now SEES medication_statement and the first probe
+        // is passing. Only then does cairn_event_thread's NULL become attributable to the
+        // second. Delete that second probe and this raises `relation "medication_cessation"
+        // does not exist` — the UNION's SECOND branch, which is the first missing relation the
+        // parser reaches; the mutation run in PR #456 reports exactly that string. (The first
+        // cut of this comment named medication_dose_event, the branch the deleted PROBE
+        // mentions, which is not the same thing.)
+        // In a TRANSACTION, so the stub cannot outlive a failure (#456 review). `postgres`
+        // is autocommit, so the first cut's trailing `DROP TABLE` only ran on the success
+        // path: any panic in the window below committed a 3-column `medication_statement`
+        // into the shared $CAIRN_TEST_PG2 database — and db/031 creates that table with
+        // `IF NOT EXISTS`, so a schema reload does NOT heal it. The real table has 16
+        // columns, so `patient_medication` then fails with `column s.term does not exist`
+        // for every other suite sharing that database, attributed to the wrong test in a
+        // different crate. `to_regclass` sees uncommitted DDL from the same session, so the
+        // probes behave identically; and a panic drops the client, which rolls back — which
+        // is strictly stronger than a DROP that only runs when nothing failed.
+        c.batch_execute("BEGIN")
+            .expect("open the transaction the stub lives inside");
+        c.batch_execute(
+            "CREATE TABLE medication_statement (
+                 medication_id   uuid PRIMARY KEY,
+                 patient_id      uuid NOT NULL,
+                 content_address bytea)",
+        )
+        .expect("the db/031-without-db/032 window is modelled with a stub");
+        c.execute(
+            "INSERT INTO medication_statement (medication_id, patient_id)
+             VALUES ($1::text::uuid, $2::text::uuid)",
+            &[&unknown_thread, &patient_id],
+        )
+        .unwrap();
+
+        let probed: Option<String> = c
+            .query_one(
+                "SELECT cairn_thread_patient($1::text::uuid)::text",
+                &[&unknown_thread],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            probed.as_deref(),
+            Some(patient_id.as_str()),
+            "the stub must be VISIBLE to to_regclass, or the assertion below proves nothing"
+        );
+
+        let still_null: Option<String> = c
+            .query_one(
+                "SELECT cairn_event_thread($1::text::uuid)::text",
+                &[&uninterpreted_id],
+            )
+            .expect(
+                "with db/031's table present and db/032's absent, the SECOND to_regclass probe \
+                 is the only thing standing between this call and a missing-relation error",
+            )
+            .get(0);
+        assert_eq!(still_null, None);
+
+        // Leave the database in the subset-only shape the rest of this test asserted. ROLLBACK
+        // rather than DROP: it undoes the whole window, and it is what the backend would have
+        // done for us had anything above panicked.
+        c.batch_execute("ROLLBACK")
+            .expect("the stub must not outlive the window it models");
+
+        // Five admitted events total (registration + the three doors + the uninterpreted
+        // observation Door 5 needs) — nothing quarantined, nothing lost.
         let events: i64 = c
             .query_one("SELECT count(*) FROM event_log", &[])
             .unwrap()
             .get(0);
-        assert_eq!(events, 4);
+        assert_eq!(events, 5);
     }
 }
 

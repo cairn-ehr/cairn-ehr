@@ -3,9 +3,10 @@ name: matcher
 # CI gate for the advisory Python matcher (matcher/). Before this the entire advisory tier had
 # NO automated gate — ruff + pytest ran only when a developer remembered, so it could rot
 # silently while the Rust side stayed green. Fast (no database): runs ruff lint + the pure
-# pytest suite. The DB-gated integration tests self-skip here (no CAIRN_TEST_PG); they run in
-# the `rust` workflow's floor job instead (issue #145), against the PG + cairn_pgx cluster that
-# job already stands up — so we don't build the expensive extension a second time here.
+# pytest suite. The DB-gated integration tests self-skip here; they run in the `rust` workflow's
+# floor job instead (issue #145), against the PG + cairn_pgx cluster that job already stands up
+# — so we don't build the expensive extension a second time here. Since #451 that skip is
+# DECLARED rather than inferred, on the pytest step below.
 
 on:
   push:
@@ -40,5 +41,13 @@ jobs:
       - name: ruff (lint — the pinned rule set in pyproject.toml)
         run: uv run ruff check .
 
-      - name: pytest (pure suite; DB-gated tests self-skip without CAIRN_TEST_PG)
+      # This job runs the pure suite DELIBERATELY without a database — the DB-gated tests run
+      # in the `rust` workflow's floor job, against the PG + cairn_pgx cluster it already
+      # stands up. Since #451 that intent has to be DECLARED: test_db_gate_actually_ran.py
+      # fails closed when a gate variable the suite reads is unset, so a run that means to skip
+      # the database tier says so here, at the site that means it, and every other unattended
+      # run stays bound (#450 — an absent opt-out is not permission).
+      - name: pytest (pure suite; the DB tier is skipped here BY DECLARATION)
+        env:
+          CAIRN_ALLOW_DB_SKIP: "1"
         run: uv run pytest -q

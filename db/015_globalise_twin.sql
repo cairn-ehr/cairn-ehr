@@ -73,4 +73,54 @@ CREATE OR REPLACE VIEW event_twin_provenance AS
 
 GRANT SELECT ON event_twin_provenance TO cairn_agent;
 
+-- #453 — the db/015 half of the cairn_twin_% REVOKE family (db/005 carries the other two).
+--
+-- Neither is an exposure: both take the signed bytes as an ARGUMENT, so a caller must already
+-- hold what they parse. What the REVOKE buys is the same thing #382 and #443 bought — a
+-- convention a reader can verify, instead of one followed by all-but-two of a family.
+REVOKE EXECUTE ON FUNCTION cairn_twin_is_authored(bytea) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_twin_provenance_of(bytea) FROM PUBLIC;
+
+-- ...and the two grants that keep the surface above WORKING, which are the load-bearing half.
+--
+-- PostgreSQL checks *table* access inside a normal view against the VIEW OWNER, but a
+-- *function* called inside that view against the INVOKING user. (CREATE VIEW's documentation
+-- says so: "functions called in the view are treated the same as if they had been called
+-- directly from the query using the view".) Carrying the table rule across to functions is the
+-- easy mistake, so this was MEASURED on PG 18.1 rather than reasoned about — as cairn_agent,
+-- with the REVOKE above in place and no grant:
+--
+--     ERROR:  permission denied for function cairn_twin_provenance_of
+--
+-- and, with only the outer function granted, the INNER call is checked too:
+--
+--     ERROR:  permission denied for function cairn_twin_is_present
+--     CONTEXT:  PL/pgSQL function cairn_twin_provenance_of(bytea) line 6 at assignment
+--
+-- Hence TWO grants for a one-function view. cairn_twin_is_present is defined and revoked in
+-- db/005; its grant lives here because the NEED lives here.
+--
+-- This is still a narrowing: PUBLIC (every role on the node, including ones a future migration
+-- adds) loses EXECUTE; one named role keeps it. cairn_node is deliberately NOT granted — it
+-- does not hold SELECT on the view either, so granting it would widen past the declared
+-- surface, and #425 owns the question of which role the runtime should be.
+--
+-- Rejected: making cairn_twin_provenance_of SECURITY DEFINER to dodge the inner check. That
+-- points owner privilege at a function taking arbitrary caller-supplied bytea into the pgrx
+-- COSE parser, and adds another search_path-pinning obligation (#426) — a worse trade for what
+-- is a legibility fix.
+--
+-- Pinned by crates/cairn-node/tests/floor_execute_grants.rs
+-- (the_declared_twin_provenance_read_surface_still_works): delete either grant and it fails.
+--
+-- That test had to grow a DIRECT call on cairn_twin_is_present to make the second half of that
+-- sentence true (#456 review). The view is LATERAL over event_log, so the INNER function's ACL
+-- is checked only when the PL/pgSQL body actually runs — once per row. Against an EMPTY
+-- event_log the view returns zero rows without entering the body, and revoking this grant
+-- raises nothing at all. Measured on PG 18.1. Whichever suite last truncated the shared test
+-- database therefore decided whether this grant was pinned; a direct call has no such
+-- precondition.
+GRANT EXECUTE ON FUNCTION cairn_twin_provenance_of(bytea) TO cairn_agent;
+GRANT EXECUTE ON FUNCTION cairn_twin_is_present(text) TO cairn_agent;
+
 COMMIT;

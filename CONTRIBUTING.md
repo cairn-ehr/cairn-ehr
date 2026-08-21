@@ -21,6 +21,33 @@ A few essentials up front:
 - **The mission is the tie-breaker**, and **paper-parity is the governing law**: no clinical workflow
   may be slower, harder, more cognitively demanding, or impossible than its paper equivalent.
 
+## Running the tests locally
+
+`cargo test --workspace` builds and runs everything, but a large part of this repo's test suite is
+**DB-gated**: it needs a local PostgreSQL 18 with the `cairn_pgx` extension installed, reached
+through three connection strings.
+
+| Variable | Database | Needed by |
+|---|---|---|
+| `CAIRN_TEST_PG` | `cairn_test` | every in-DB floor / projection / identity / medication suite |
+| `CAIRN_TEST_PG2` | `cairn_test2` | the multi-node convergence and schema-subset suites |
+| `CAIRN_TEST_PG3` | `cairn_test3` | the three-node federation acceptance test |
+
+`scripts/run-db-gated-tests.sh` bakes all three in and also runs the `db/tests/*.sql` mirrors — it is
+the one command for the database slice of the local gate.
+
+**Without a database, declare it: `export CAIRN_ALLOW_DB_SKIP=1`.** Every DB-gated test self-skips
+when its connection string is missing, and a skipped test prints `ok` — so a run that proved nothing
+is byte-identical to one that proved everything. `db_gate_actually_ran.rs` closes that by failing
+when a gate variable the suite reads is unset, and it **fails closed**
+([#450](https://github.com/cairn-ehr/cairn-ehr/issues/450)): an absent opt-out is not permission, and
+neither is `CAIRN_ALLOW_DB_SKIP=false`. Only `1`/`true`/`yes`/`on` opts out. The same variable and
+the same rule cover the matcher's Python DB-gated suite
+([#451](https://github.com/cairn-ehr/cairn-ehr/issues/451)).
+
+You lose real coverage by setting it — that is the point of having to say so. The pure Rust crates
+and the matcher's pure suite (`cd matcher && uv run pytest`, never venv/pip) still run in full.
+
 ## Continuous integration — the required checks
 
 Every pull request must pass this set of **required status checks** before it can merge to `main`.
