@@ -491,9 +491,14 @@ BEGIN
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy; ADR-0013,
-    -- rendition set per ADR-0042). Shared with the submit door via cairn_learn_attachment_refs
-    -- (db/027) so the two doors never drift.
-    PERFORM cairn_learn_attachment_refs(b);
+    -- rendition set per ADR-0042). The LENIENT learner (db/050), not the strict one the submit
+    -- door calls: this event is ALREADY A FACT, so a malformed reference must be recorded and
+    -- skipped, never allowed to refuse the whole clinical event. Refusing here does not un-mint
+    -- the event — it only blinds this node to content its peers can read, forking the event set,
+    -- and the pen never releases because the malformed field is inside an immutable signature
+    -- (#460). The two learners share their accessors AND their traversal, so "malformed" cannot
+    -- come to mean two different things at the two doors.
+    PERFORM cairn_learn_attachment_refs_lenient(b);
 
     -- 10. The erasure plane at the SYNC door (ADR-0052) — LENIENT: unlike submit, there
     --     is NO target-existence requirement. A shred may precede its target on the wire;

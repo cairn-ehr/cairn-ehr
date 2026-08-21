@@ -45,42 +45,31 @@
 -- (uppercase hex, an absent byte_len, a byte_len encoded as a digit STRING) are accepted
 -- deliberately and pinned by tests, not left to chance.
 --
--- ⚠️ BOTH DOORS REFUSE THE WHOLE EVENT TODAY, AND THAT IS AN INTERIM STATE (issue #460).
+-- THE TWO DOORS DIFFER, AND THE DIFFERENCE IS ADR-0063's RULE (#460).
 --
--- Refusing is strictly better than the freeze it replaces, so it ships now. It is NOT the
--- right end state at the REMOTE door, and the argument that first appeared here for why it
--- was is recorded below as wrong, because a wrong safety argument is worse than none — it
--- disarms the guard it describes.
+-- These accessors raise P0001. What a door DOES with that refusal is not the same at both:
 --
--- What that argument said: "a P0001 refusal is not a loss, because ADR-0056 decision 5 pens
--- the bytes, re-offers them and auto-releases when the refusal stops applying — and a
--- malformed digest is deterministic, exactly the pen's case."
+--   submit_event (db/005) calls cairn_learn_attachment_refs (below) and the refusal REFUSES
+--     THE EVENT. The field is being MINTED; the event is not yet a fact of the world and this
+--     node is the only one that can stop a permanently-defective event entering an append-only
+--     replicating record.
 --
--- Why it is wrong: cairn-sync re-offers THE SAME BYTES every cycle, and the malformed field
--- sits INSIDE the signature. The author cannot repair it; the event is immutable. So release
--- requires THIS NODE'S FLOOR to change — a human editing this file. "Deterministic" is not
--- the reason the pen is safe here, it is the reason the pen is permanent. A note event
--- carrying "adrenaline 1 mg IM given" plus one malformed photo reference is withheld from
--- this node's record indefinitely, while every peer that admitted it can read it. Slice 66
--- settled this exact shape one level up — WITHHOLD THE KEY, NEVER THE BYTES, because
--- refusing the bytes forks the event set. Here: withhold the REFERENCE, never the EVENT.
--- ADR-0056 already admits the strictly harder case (an entirely unknown event type), and
--- ADR-0060 decision 2 says partial completion must be REPORTED — an instruction to report,
--- not to refuse.
+--   apply_remote_event (db/020) calls cairn_learn_attachment_refs_lenient (db/050), which
+--     RECORDS the refusal and skips that rendition. The field has ARRIVED; the event is
+--     already a fact, and refusing it would only blind this node to content its peers can
+--     read — a fork of the event set, and a pen that never releases, because the malformed
+--     field is inside an immutable signature the author cannot re-issue.
 --
--- THE ASYMMETRY IS THE DESIGN, and #460 builds it: refuse HERE at db/005, where the event is
--- not yet a fact of the world and this node is the only one that can stop a permanently
--- defective event entering an append-only replicating record; ADMIT AND FLAG at db/020,
--- where the event is already a fact and refusing does not un-mint it. That is the strict/
--- lenient split the floor already uses for #345's registration precedence and for the shred
--- target-existence requirement.
+-- ADR-0063 decided this shape for the §5.9 `safety` field before this file was written —
+-- "an envelope-level field is constrained where it is MINTED and read permissively where it
+-- ARRIVES" — and its rejected alternatives reject apply-door refusal on BLAST RADIUS: a field
+-- on a clinical event, refused at apply, drops the clinical event. #370's first fix refused at
+-- both doors, which contradicted that ADR; #460 is the repair. Issue #461 proposes naming the
+-- rule in its own ADR, because it is currently findable only under another field's title.
 --
--- WHY THE VALIDATORS LIVE HERE and not in db/001 like cairn_decode_hex_or_raise: the db/001
--- placement rule (issue #198's late-binding trap) applies to helpers reached from MORE THAN
--- ONE migration subset. These three are called from exactly one place — the loop below, in
--- this file — and db/027 is itself in cairn-sync's subset, so they travel wherever their
--- only caller does. cairn_decode_hex_or_raise is in db/001 because six doors across two
--- planes call it.
+-- SO: DO NOT "align" the two doors. The asymmetry is the design, and it is the same split the
+-- floor already uses for #345's registration precedence and the shred target-existence
+-- requirement.
 
 BEGIN;
 

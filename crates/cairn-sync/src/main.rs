@@ -171,6 +171,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "049_safety_projection",
         include_str!("../../../db/049_safety_projection.sql"),
     ),
+    // db/050 (#460): the attachment-reference ledger + the LENIENT learner db/020 calls, so a
+    // malformed rendition reference from a peer is recorded and skipped instead of refusing an
+    // already-signed clinical event (which forks the event set and never releases from the pen).
+    (
+        "050_attachment_reference_flag",
+        include_str!("../../../db/050_attachment_reference_flag.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS

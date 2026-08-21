@@ -52,31 +52,34 @@
 //! BLANK `media_type`, and an attachment that is a scalar (learns nothing, says nothing).
 //! Finding one and fixing one would have left the freeze in place for the other eight.
 //!
-//! ## Refusal granularity — INTERIM, and the first answer here was wrong (issue #460)
+//! ## Refusal granularity: the doors differ, and #370's first fix broke a written rule
 //!
-//! #370 asks whether a malformed *rendition reference* should sink the whole clinical event
-//! or be quarantined while the event is admitted. **Both doors refuse today**, which is
-//! strictly better than the freeze it replaces and is what this suite pins — but it is not
-//! the right end state at the REMOTE door, and the argument first written here for why it
-//! was is wrong in its load-bearing claim.
+//! #370 asked whether a malformed *rendition reference* should sink the whole clinical event.
+//! It refused at both doors. That contradicted [ADR-0063], written eight days earlier, which
+//! decides the same shape for the §5.9 `safety` field in a table — *malformed field: local
+//! door REFUSE, remote door ADMIT* — and states the rule generally: **an envelope-level field
+//! is constrained where it is MINTED and read permissively where it ARRIVES.**
 //!
-//! It said a P0001 refusal is not a loss, because ADR-0056 decision 5 pens the bytes and
-//! auto-releases when the refusal stops applying, "and a malformed digest is deterministic,
-//! exactly the pen's case". `cairn-sync` re-offers **the same bytes** every cycle, and the
-//! malformed field sits **inside the signature** — the author cannot repair it and the event
-//! is immutable, so release requires *this node's floor* to change. Deterministic is why the
-//! pen is **permanent**, not why it is safe. Meanwhile Slice 66 settled the same shape one
-//! level up (*withhold the key, never the bytes — refusing the bytes forks the event set*),
-//! ADR-0056 already admits the strictly harder unknown-type case, and ADR-0060 decision 2
-//! says partial completion must be **reported**, which is an instruction to report rather
-//! than to refuse.
+//! Its rejected-alternatives section rejects apply-door refusal in terms that never mention
+//! `safety`: *"the safety signal is a field on a clinical event, so refusing it at apply drops
+//! the medication assertion — an advisory field cancelling clinical content, which ADR-0060
+//! forbids in as many words. It also forks the event set between honest peers running
+//! different versions (the #342 trap, hit four times in this project already)."* #370 made it
+//! five.
 //!
-//! **The asymmetry is the design, and #460 builds it:** refuse at `submit_event`, where the
-//! event is not yet a fact of the world and this node is the only one that can stop a
-//! permanently-defective event entering an append-only replicating record; **admit and flag**
-//! at `apply_remote_event`, where the event is already a fact and refusing does not un-mint
-//! it — it only blinds this node to what its peers can read. When #460 lands,
-//! `the_apply_door_refuses_a_malformed_digest_skippably` is the test that changes.
+//! An attachment rendition reference is the same category. A **sensitivity assertion** IS an
+//! event, so refusing a malformed one drops one assertion. `safety`, `clock_grade` and a
+//! rendition reference are **fields on** a clinical event — refusing one at apply drops the
+//! note, the medication assertion, the clinical act it rode on. ADR-0063 names the deciding
+//! argument: **blast radius, not category.**
+//!
+//! So `submit_event` refuses (the field is being minted, the author is present, and this node
+//! is the only one that can stop a permanently-defective event entering an append-only
+//! replicating record) and `apply_remote_event` admits-and-flags (the event is already a fact;
+//! refusing forks the event set, and the pen never releases because the malformed field sits
+//! inside a signature the author cannot re-issue). Issue #461 proposes giving that rule its own
+//! ADR, since it is currently findable only under another field's title — which is exactly how
+//! #370 missed it.
 //!
 //! ## What this suite pins
 //!
@@ -506,15 +509,58 @@ async fn enrolled_signer(c: &Client) -> (SigningKey, String) {
     (sk, kid)
 }
 
-/// **The #370 regression test.** A validly-signed peer event with a malformed `digest_hex`
-/// is refused by `apply_remote_event` with P0001, so `cairn-sync` pens it and advances.
+/// A rendition with a chosen digest, media type and role — for events that carry more than one.
+fn rendition(role: &str, digest_hex: &str) -> Rendition {
+    Rendition {
+        role: role.into(),
+        alg: "blake3".into(),
+        digest_hex: digest_hex.into(),
+        media_type: "image/jpeg".into(),
+        byte_len: 1024,
+        inline: None,
+        seal: None,
+    }
+}
+
+/// The flag rows this node recorded for one event, as `(attachment_index, rendition_index, reason)`.
+async fn flags_for(c: &Client, event_id: &str) -> Vec<(i32, i32, String)> {
+    c.query(
+        "SELECT attachment_index, rendition_index, reason FROM attachment_reference_flag \
+         WHERE event_id = $1::text::uuid ORDER BY attachment_index, rendition_index",
+        &[&event_id],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| (r.get(0), r.get(1), r.get(2)))
+    .collect()
+}
+
+async fn is_in_event_log(c: &Client, event_id: &str) -> bool {
+    c.query_one(
+        "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid",
+        &[&event_id],
+    )
+    .await
+    .unwrap()
+    .get::<_, i64>(0)
+        == 1
+}
+
+/// **The #460 regression test.** A validly-signed peer event with a malformed `digest_hex` is
+/// ADMITTED, and the unlearnable reference is recorded.
 ///
-/// This is the door whose SQLSTATE a *program* reads, so it is the one that turns the defect
-/// from a legibility complaint into a permanent clinical-sync outage. Asserting the code and
-/// not only the message is the whole point: a fix that produced a beautiful message under
-/// SQLSTATE 22023 would leave the freeze exactly where it was.
+/// The event is already a fact of the world by the time it reaches this door. Refusing does not
+/// un-mint it — it forks the event set, hiding clinical content this node's peers can read, and
+/// the pen never releases because the malformed field sits inside a signature the author cannot
+/// re-issue. So: withhold the REFERENCE, never the EVENT (Slice 66's rule, one level down).
+///
+/// The assertion is deliberately in three parts — admitted, no reference learned, and the fact
+/// RECORDED — because any two of them without the third is a defect. Admitted-and-silent is the
+/// "record looks complete" untruth #370's first fix was right to fear; admitted-and-learned would
+/// put a garbage address in `blob_store`.
 #[tokio::test]
-async fn the_apply_door_refuses_a_malformed_digest_skippably() {
+async fn the_apply_door_admits_a_malformed_digest_and_flags_it() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -526,35 +572,41 @@ async fn the_apply_door_refuses_a_malformed_digest_skippably() {
     let body = note_with_digest(&kid, Uuid::now_v7(), "0xABC");
     let signed = sign(&body, &sk).unwrap().signed_bytes;
 
-    let e = c
-        .execute("SELECT apply_remote_event($1)", &[&signed])
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
         .await
-        .expect_err("a malformed digest_hex must be refused at the apply door");
-    let db_err = e.as_db_error().expect("a database error");
+        .expect("a malformed rendition reference must not sink the clinical event");
 
-    assert_eq!(
-        db_err.code(),
-        &SqlState::RAISE_EXCEPTION,
-        "the apply door must refuse with P0001 so cairn-sync pens and ADVANCES; \
-         {:?} freezes the clinical pull from this peer permanently (issue #370). Message: {}",
-        db_err.code(),
-        db_err.message()
-    );
     assert!(
-        db_err.message().contains("digest_hex"),
-        "the refusal must name the field: {}",
-        db_err.message()
+        is_in_event_log(&c, &body.event_id).await,
+        "the event must be in the record: refusing it forks the event set (issue #460)"
+    );
+
+    let flags = flags_for(&c, &body.event_id).await;
+    assert_eq!(
+        flags.len(),
+        1,
+        "exactly one unlearnable rendition must be recorded, got {flags:?}"
+    );
+    let (att, ren, reason) = &flags[0];
+    assert_eq!((*att, *ren), (0, 0), "the flag must NAME which rendition");
+    assert!(
+        reason.contains("digest_hex"),
+        "the recorded reason must be the accessor's own refusal text: {reason}"
     );
 }
 
-/// The same body refused at the LOCAL door too — one floor, two doors.
+/// The same body is still REFUSED at the local door — the other half of the asymmetry.
 ///
-/// `submit_event` is where a local author would sign this, and the two doors share
-/// `cairn_learn_attachment_refs` precisely so they cannot drift. A fix wired into only the
-/// remote door would leave a local client able to write a reference the sync door refuses,
-/// which is the divergence db/027 was extracted to prevent.
+/// At `submit_event` the event is not yet a fact of the world and this node is the only one that
+/// can stop it: admitting mints a permanently-defective event into an append-only, replicating
+/// record, correctable only by overlay, with the broken original resident for the life of the
+/// record. This is the same strict/lenient split the floor already uses for #345's registration
+/// precedence and for the shred target-existence requirement.
+///
+/// If this ever goes green by the submit door admitting, the asymmetry has collapsed into "admit
+/// everywhere" and the local guard is gone.
 #[tokio::test]
-async fn the_submit_door_refuses_the_same_body() {
+async fn the_submit_door_still_refuses_the_same_body() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -572,13 +624,220 @@ async fn the_submit_door_refuses_the_same_body() {
     let e = c
         .execute("SELECT submit_event($1)", &[&signed])
         .await
-        .expect_err("a malformed digest_hex must be refused at the submit door");
+        .expect_err("a malformed digest_hex must be refused at the SUBMIT door");
     let db_err = e.as_db_error().expect("a database error");
     assert_eq!(db_err.code(), &SqlState::RAISE_EXCEPTION);
     assert!(
         db_err.message().contains("digest_hex"),
         "the refusal must name the field: {}",
         db_err.message()
+    );
+    assert!(
+        !is_in_event_log(&c, &body.event_id).await,
+        "a refused submit must write nothing"
+    );
+}
+
+/// **A defect on one rendition never invalidates another** — ADR-0060, applied where it does fit.
+///
+/// Three renditions, the middle one malformed. The two good references are learned and the bad one
+/// is flagged. A fix that abandoned the whole attachment at the first fault would pass every other
+/// test in this file while quietly losing a preview the node could have fetched.
+#[tokio::test]
+async fn a_defect_on_one_rendition_never_invalidates_its_siblings() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = enrolled_signer(&c).await;
+
+    let good_a = "1e20d0d0d0d0";
+    let good_b = "1e20d1d1d1d1";
+    for hex in [good_a, good_b] {
+        c.execute(
+            "DELETE FROM blob_store WHERE blob_address = decode($1, 'hex')",
+            &[&hex],
+        )
+        .await
+        .unwrap();
+    }
+
+    let mut body = note_with_digest(&kid, Uuid::now_v7(), good_a);
+    body.attachments[0].renditions = vec![
+        rendition("original", good_a),
+        rendition("preview", "0xNOPE"),
+        rendition("extracted-text", good_b),
+    ];
+    let signed = sign(&body, &sk).unwrap().signed_bytes;
+
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
+        .await
+        .expect("the event is admitted");
+
+    for hex in [good_a, good_b] {
+        let n: i64 = c
+            .query_one(
+                "SELECT count(*) FROM blob_store WHERE blob_address = decode($1, 'hex')",
+                &[&hex],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            n, 1,
+            "the well-formed rendition {hex} must still be learned — a defect on one line never \
+             invalidates another (ADR-0060)"
+        );
+    }
+
+    let flags = flags_for(&c, &body.event_id).await;
+    assert_eq!(
+        flags.len(),
+        1,
+        "only the malformed rendition is flagged, got {flags:?}"
+    );
+    assert_eq!(
+        (flags[0].0, flags[0].1),
+        (0, 1),
+        "the flag must name rendition index 1, the middle one"
+    );
+}
+
+/// Re-applying the same event records no second flag — sync is set-union.
+///
+/// `cairn-sync` re-offers bytes freely (a full sweep, a re-pull from zero, a peer serving the same
+/// event twice). Without a dedup key the ledger would grow one row per delivery and an operator
+/// reading it would see one defect as many.
+#[tokio::test]
+async fn re_applying_the_same_event_adds_no_second_flag() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = enrolled_signer(&c).await;
+
+    let body = note_with_digest(&kid, Uuid::now_v7(), "0xABC");
+    let signed = sign(&body, &sk).unwrap().signed_bytes;
+
+    for pass in 1..=2 {
+        c.execute("SELECT apply_remote_event($1)", &[&signed])
+            .await
+            .unwrap_or_else(|e| panic!("apply pass {pass} must succeed: {e}"));
+    }
+
+    assert_eq!(
+        flags_for(&c, &body.event_id).await.len(),
+        1,
+        "a re-offered event must dedupe onto its existing flag row"
+    );
+}
+
+/// A flagged event is NOT deferred: it projects, and confers what it normally confers.
+///
+/// `event_deferred` (ADR-0056) means "admitted uninterpreted — projects nothing, confers nothing",
+/// and it is the tempting place to put this flag because a row already exists for "something about
+/// this event is not fully handled". Reusing it would suppress the clinical content, which is
+/// nearly as harmful as the refusal being removed. The whole point is that only the blob reference
+/// is unlearnable; the event itself is ordinary.
+#[tokio::test]
+async fn a_flagged_event_is_not_treated_as_deferred() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = enrolled_signer(&c).await;
+
+    let body = note_with_digest(&kid, Uuid::now_v7(), "0xABC");
+    let signed = sign(&body, &sk).unwrap().signed_bytes;
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
+        .await
+        .unwrap();
+
+    let deferred: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_deferred WHERE event_id = $1::text::uuid",
+            &[&body.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        deferred, 0,
+        "an unlearnable attachment reference must not defer the event: a deferred event projects \
+         nothing and confers nothing, which would suppress the clinical content this fix exists \
+         to preserve (issue #460)"
+    );
+}
+
+/// **The safety property that makes the lenient path acceptable at all: a REAL fault still
+/// propagates.**
+///
+/// The lenient learner records a refusal instead of raising it, which is only sound while it can
+/// tell *our* refusal from someone else's failure. It catches `raise_exception` (P0001) — the code
+/// our own accessors raise — and nothing else. `WHEN OTHERS` would be the disaster: a disk error, a
+/// serialization failure or a broken constraint would be silently written down as "the peer sent
+/// garbage" and the event admitted as if nothing had gone wrong. (`OTHERS` also does not catch a
+/// statement timeout — 57014 is one of the two codes it excludes — the Slice 68 lesson.)
+///
+/// Driven by a temporary trigger that raises a 22-class error on one specific address, so the fault
+/// is real, deterministic, and provably not ours.
+#[tokio::test]
+async fn the_lenient_learner_does_not_swallow_a_real_fault() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = enrolled_signer(&c).await;
+
+    // A fault that is emphatically NOT one of our accessors' P0001 refusals.
+    c.batch_execute(
+        "CREATE OR REPLACE FUNCTION cairn_test_blob_fault() RETURNS trigger \
+         LANGUAGE plpgsql AS $f$ BEGIN \
+             IF NEW.blob_address = decode('1e20facade01', 'hex') THEN \
+                 RAISE EXCEPTION 'injected infrastructure fault' USING ERRCODE = '22023'; \
+             END IF; RETURN NEW; END $f$;
+         DROP TRIGGER IF EXISTS cairn_test_blob_fault_trg ON blob_store;
+         CREATE TRIGGER cairn_test_blob_fault_trg BEFORE INSERT ON blob_store \
+             FOR EACH ROW EXECUTE FUNCTION cairn_test_blob_fault();",
+    )
+    .await
+    .unwrap();
+
+    let body = note_with_digest(&kid, Uuid::now_v7(), "1e20facade01");
+    let signed = sign(&body, &sk).unwrap().signed_bytes;
+    let result = c.execute("SELECT apply_remote_event($1)", &[&signed]).await;
+
+    // Tear the trigger down BEFORE asserting, so a failure cannot poison every later test.
+    c.batch_execute(
+        "DROP TRIGGER IF EXISTS cairn_test_blob_fault_trg ON blob_store; \
+         DROP FUNCTION IF EXISTS cairn_test_blob_fault();",
+    )
+    .await
+    .unwrap();
+
+    let e = result.expect_err(
+        "a genuine infrastructure fault must NOT be swallowed and recorded as a malformed \
+         reference — that is the silent-failure species this ledger must never become",
+    );
+    let code = e.as_db_error().expect("a database error").code().clone();
+    assert_eq!(
+        code,
+        SqlState::from_code("22023"),
+        "the real fault must reach the caller unchanged, so cairn-sync can treat it as transient \
+         and RETRY; got {code:?}"
+    );
+    assert_eq!(
+        flags_for(&c, &body.event_id).await.len(),
+        0,
+        "a real fault must leave no flag row claiming the peer sent a malformed reference"
     );
 }
 
