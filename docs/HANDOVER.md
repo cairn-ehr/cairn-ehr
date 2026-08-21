@@ -185,9 +185,10 @@ that generalise past the slice that found them.
 
 ### 2026-08-22 — admit and flag: the rule was already written, under another field's name
 
-**Closes [#460](https://github.com/cairn-ehr/cairn-ehr/issues/460); opens
-[#461](https://github.com/cairn-ehr/cairn-ehr/issues/461); `db/050`, SCHEMA 49 → 50; NO new ADR — and
-that is the finding.**
+**Closes [#460](https://github.com/cairn-ehr/cairn-ehr/issues/460); `db/050`, SCHEMA 49 → 50; NO new
+ADR — and that is the finding. #461 raised one and was CLOSED unbuilt (maintainer, 08-22): the rule
+stays findable only under `safety`'s title, accepted as a known cost, mitigated by db/027's and db/050's
+headers both stating it where a reader is already working.**
 
 1. **⇒ #370's FIX CONTRADICTED AN ADR WRITTEN EIGHT DAYS EARLIER, AND NOBODY LOOKED.** CLAUDE.md says
    *read the relevant ADR before reopening any settled question*. The question was not open.
@@ -240,8 +241,8 @@ that is the finding.**
    · 22003 (`byte_len` past bigint) — **and four SILENT paths that wrote something wrong**: an empty
    `digest_hex` (the address is `blob_store`'s PRIMARY KEY, so every empty reference from every peer
    collides into ONE row), a negative `byte_len`, a blank `media_type`, and a scalar attachment
-   (**#458**, still open — it raises nothing and belongs to a structural floor, not the reference
-   learner). **Probe the family before fixing the member.**
+   (**#458**, re-scoped 08-22 — it raises nothing, and the remedy is the #460 ledger plus a UI that
+   fails loud, NOT a floor rule; see the callout below). **Probe the family before fixing the member.**
 2. **The rule the fix follows: refuse what already FAILED, plus what was silently WRONG; accept
    everything that already worked.** Uppercase hex, an absent `byte_len`, a digit-STRING `byte_len` are
    accepted **deliberately** and pinned, because every refusal added at a remote door is a new way for a
@@ -356,6 +357,20 @@ ROADMAP carries every slice in full. These are the ones a next session can still
     never fired because a shared accessor counted every poll as activity — **test the path the product
     actually calls**); and **a compensating control outside CI is not a control** (**#444**). Slice 65's
     traps are in the ⇒ NEXT callout and the part C bullet.
+
+> [!IMPORTANT]
+> **The loud failure belongs in the UI, not the floor** (maintainer decision 2026-08-22, from #458).
+> *If an attachment — or anything like it — is defective or unacceptable for any reason, the **user
+> interface** is where it must fail loud, with immediate feedback, and **without blast radius for the
+> rest of the clinical event**.* Three consequences for the attachment UI when it is built: **validate
+> the rendition reference before submit**, because the submit door refuses the whole event (db/027) and
+> that is correct only as a backstop that never fires; **fail at the attachment, not at the save**, while
+> the clinician is still looking at it — the paper affordance is that a photo which will not stick is
+> obvious when you try to stick it, and does not invalidate what is already written on the page; and
+> **no confirmation dialog** (principle 3). Same decision refused a mandatory `descriptor` as a floor
+> rule: **principle 4 forbids a required field satisfiable only by fabrication** — a rushed clinician
+> types `x`, and the record then carries a precise untruth where it carried an honest absence. Cairn
+> ships the mechanism; policy combines it (principle 9, ADR-0021's soft-policy-in-the-UI line).
 
 > [!IMPORTANT]
 > **[ADR-0060](spec/decisions/0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md):
