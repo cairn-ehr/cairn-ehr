@@ -45,14 +45,35 @@
 -- (uppercase hex, an absent byte_len, a byte_len encoded as a digit STRING) are accepted
 -- deliberately and pinned by tests, not left to chance.
 --
--- WHY THE WHOLE EVENT IS REFUSED rather than the rendition skipped: a P0001 refusal is not
--- a loss (ADR-0056 decision 5 pens the bytes, re-offers them, and auto-releases when the
--- refusal stops applying — and a malformed digest is deterministic, exactly the pen's
--- case), whereas admitting the event and dropping the reference would make the record look
--- complete while an attachment it names is unrecorded and unfetchable — a precise untruth
--- in the reassuring direction. ADR-0060's "a defect on one line never invalidates another"
--- is about independent lines of a composite object; a rendition reference is not another
--- line, it is part of this event's own body.
+-- ⚠️ BOTH DOORS REFUSE THE WHOLE EVENT TODAY, AND THAT IS AN INTERIM STATE (issue #460).
+--
+-- Refusing is strictly better than the freeze it replaces, so it ships now. It is NOT the
+-- right end state at the REMOTE door, and the argument that first appeared here for why it
+-- was is recorded below as wrong, because a wrong safety argument is worse than none — it
+-- disarms the guard it describes.
+--
+-- What that argument said: "a P0001 refusal is not a loss, because ADR-0056 decision 5 pens
+-- the bytes, re-offers them and auto-releases when the refusal stops applying — and a
+-- malformed digest is deterministic, exactly the pen's case."
+--
+-- Why it is wrong: cairn-sync re-offers THE SAME BYTES every cycle, and the malformed field
+-- sits INSIDE the signature. The author cannot repair it; the event is immutable. So release
+-- requires THIS NODE'S FLOOR to change — a human editing this file. "Deterministic" is not
+-- the reason the pen is safe here, it is the reason the pen is permanent. A note event
+-- carrying "adrenaline 1 mg IM given" plus one malformed photo reference is withheld from
+-- this node's record indefinitely, while every peer that admitted it can read it. Slice 66
+-- settled this exact shape one level up — WITHHOLD THE KEY, NEVER THE BYTES, because
+-- refusing the bytes forks the event set. Here: withhold the REFERENCE, never the EVENT.
+-- ADR-0056 already admits the strictly harder case (an entirely unknown event type), and
+-- ADR-0060 decision 2 says partial completion must be REPORTED — an instruction to report,
+-- not to refuse.
+--
+-- THE ASYMMETRY IS THE DESIGN, and #460 builds it: refuse HERE at db/005, where the event is
+-- not yet a fact of the world and this node is the only one that can stop a permanently
+-- defective event entering an append-only replicating record; ADMIT AND FLAG at db/020,
+-- where the event is already a fact and refusing does not un-mint it. That is the strict/
+-- lenient split the floor already uses for #345's registration precedence and for the shred
+-- target-existence requirement.
 --
 -- WHY THE VALIDATORS LIVE HERE and not in db/001 like cairn_decode_hex_or_raise: the db/001
 -- placement rule (issue #198's late-binding trap) applies to helpers reached from MORE THAN

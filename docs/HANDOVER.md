@@ -205,11 +205,20 @@ Workspace sweep 1434 passed / 0 failed, `clinical_pull` green in the parallel ru
    everything that already worked.** Every refusal added at a remote door is a new way for a peer's
    clinical event to be penned, so the shapes the old code happened to accept — uppercase hex, an absent
    `byte_len`, a `byte_len` encoded as a digit STRING — are accepted **deliberately** and pinned by
-   tests, not left to chance. **Granularity, the question #370 left open, is answered *refuse the
-   event*:** P0001 is not a loss (ADR-0056 decision 5 pens, re-offers, auto-releases, and a malformed
-   digest is deterministic — exactly the pen's case), while admitting-and-dropping the reference would
-   make the record *look* complete while an attachment it names is unrecorded. ADR-0060 governs
-   independent **lines** of a composite object; a rendition reference is not another line.
+   tests, not left to chance. **⇒ GRANULARITY: BOTH DOORS REFUSE TODAY, AND THAT IS
+   INTERIM ([#460](https://github.com/cairn-ehr/cairn-ehr/issues/460)).** Refusal is strictly better than
+   the freeze it replaces, so it ships — but the argument first written for it was wrong in its
+   load-bearing claim, and is corrected in place because **a wrong safety argument disarms the guard it
+   describes**. It said "P0001 is not a loss — the pen re-offers and auto-releases, and a malformed digest
+   is deterministic, exactly the pen's case." `cairn-sync` re-offers **the same bytes**, and the malformed
+   field sits **inside the signature**: the author cannot repair it, so release needs *this node's floor*
+   to change. **Deterministic is why the pen is PERMANENT, not why it is safe.** Slice 66 settled the
+   shape one level up — *withhold the key, never the bytes; refusing the bytes forks the event set* — so
+   here: withhold the REFERENCE, never the EVENT. **The asymmetry is the design:** refuse at
+   `submit_event`, where the event is not yet a fact of the world and this node alone can stop a
+   permanently-defective event entering an append-only replicating record; **admit and flag** at
+   `apply_remote_event`, where it is already a fact and refusing only blinds this node to what its peers
+   read. Same strict/lenient split as #345's precedence rule and the shred target-existence requirement.
 3. **#457 — the harness polled a PORT and never the CHILD.** So EADDRINUSE, a missing `--key` and a panic
    during schema load all produced one 60 s message blaming startup latency, which is why #238's ceiling
    and #263's port floor both aimed at the wrong thing. `crates/cairn-sync/tests/common/serve.rs` now

@@ -52,22 +52,31 @@
 //! BLANK `media_type`, and an attachment that is a scalar (learns nothing, says nothing).
 //! Finding one and fixing one would have left the freeze in place for the other eight.
 //!
-//! ## Refusal granularity — the question #370 left open, and how it is answered
+//! ## Refusal granularity — INTERIM, and the first answer here was wrong (issue #460)
 //!
-//! The issue asks whether a malformed *rendition reference* should sink the whole clinical
-//! event, or be quarantined while the event is admitted. This fix refuses the **event**,
-//! for three reasons:
+//! #370 asks whether a malformed *rendition reference* should sink the whole clinical event
+//! or be quarantined while the event is admitted. **Both doors refuse today**, which is
+//! strictly better than the freeze it replaces and is what this suite pins — but it is not
+//! the right end state at the REMOTE door, and the argument first written here for why it
+//! was is wrong in its load-bearing claim.
 //!
-//! 1. A P0001 refusal is not a loss. ADR-0056 decision 5's residual refusal contract pens
-//!    the bytes verbatim, re-offers them, and auto-releases when the refusal stops
-//!    applying — and a malformed digest is deterministic, which is exactly the pen's case.
-//! 2. Admitting the event while dropping the reference would make the record *look*
-//!    complete while an attachment it names is unrecorded and unfetchable — a precise
-//!    untruth in the reassuring direction (principle 4), and ADR-0060 decision 2 requires
-//!    partial completion to be REPORTED, never implied.
-//! 3. ADR-0060's "a defect on one line never invalidates another" governs independent
-//!    lines of a composite clinical object. A rendition reference is not another line; it
-//!    is part of this event's own body.
+//! It said a P0001 refusal is not a loss, because ADR-0056 decision 5 pens the bytes and
+//! auto-releases when the refusal stops applying, "and a malformed digest is deterministic,
+//! exactly the pen's case". `cairn-sync` re-offers **the same bytes** every cycle, and the
+//! malformed field sits **inside the signature** — the author cannot repair it and the event
+//! is immutable, so release requires *this node's floor* to change. Deterministic is why the
+//! pen is **permanent**, not why it is safe. Meanwhile Slice 66 settled the same shape one
+//! level up (*withhold the key, never the bytes — refusing the bytes forks the event set*),
+//! ADR-0056 already admits the strictly harder unknown-type case, and ADR-0060 decision 2
+//! says partial completion must be **reported**, which is an instruction to report rather
+//! than to refuse.
+//!
+//! **The asymmetry is the design, and #460 builds it:** refuse at `submit_event`, where the
+//! event is not yet a fact of the world and this node is the only one that can stop a
+//! permanently-defective event entering an append-only replicating record; **admit and flag**
+//! at `apply_remote_event`, where the event is already a fact and refusing does not un-mint
+//! it — it only blinds this node to what its peers can read. When #460 lands,
+//! `the_apply_door_refuses_a_malformed_digest_skippably` is the test that changes.
 //!
 //! ## What this suite pins
 //!
