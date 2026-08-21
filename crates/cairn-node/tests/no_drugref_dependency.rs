@@ -57,16 +57,15 @@
 //! narrowed deliberately (to the trusted surface — db/ and the floor path), never simply
 //! deleted: the load-bearing invariant is that the FLOOR and the PROJECTIONS never depend
 //! on a drug database, not that no client code exists anywhere.
-use std::borrow::Cow;
-use std::fs;
-use std::path::{Path, PathBuf};
+//! The recursive walk is the SHARED one (#452). This file used to carry its own, built on
+//! `path.is_dir()` — which FOLLOWS symlinks, so a symlink to an ancestor would have made the
+//! walk unbounded. See `tests/common/sources.rs` for why that fix belongs in one place.
+#[path = "common/sources.rs"]
+mod sources;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root")
-}
+use sources::{read_source, repo_root};
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 /// Every `.sql`/`.rs` under db/, crates/, and extensions/ — the trusted surface (the
 /// in-DB floor plus the Rust code that submits and projects through it). `extensions/`
@@ -74,31 +73,20 @@ fn repo_root() -> PathBuf {
 /// SEPARATE Cargo/pgrx build from the `crates/` workspace, but it is exactly as
 /// load-bearing as `db/`, so a guard that skipped it would be proving less than its own
 /// doc comment claims.
+///
+/// `tests` joins `target` in the skip list because a test may legitimately NAME drugref in
+/// prose or in a fixture; `src/` and `db/` may not.
 fn trusted_sources() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![
-        repo_root().join("db"),
-        repo_root().join("crates"),
-        repo_root().join("extensions"),
-    ];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).expect("read dir") {
-            let p = entry.expect("dir entry").path();
-            if p.is_dir() {
-                // tests/ may legitimately NAME drugref in prose; src/ and db/ may not.
-                if p.file_name().is_some_and(|n| n == "target" || n == "tests") {
-                    continue;
-                }
-                stack.push(p);
-            } else if matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("sql") | Some("rs")
-            ) {
-                out.push(p);
-            }
-        }
-    }
-    out
+    let root = repo_root();
+    sources::source_files(
+        &[
+            root.join("db"),
+            root.join("crates"),
+            root.join("extensions"),
+        ],
+        &["target", "tests"],
+        &["sql", "rs"],
+    )
 }
 
 /// The three tokens ADR-0059 decision 2 registers in `medication_coding_system` — DATA
@@ -412,7 +400,7 @@ fn strip_rust_cfg_test_tail(text: &str) -> String {
 /// no reason to trust. Returns the ORIGINAL line text (trimmed) for a readable failure
 /// message, even though the decision was made on the blanked residue.
 fn offending_lines(path: &Path) -> Vec<String> {
-    let text = fs::read_to_string(path).expect("read source");
+    let text = read_source(path);
     let is_rust = path.extension().and_then(|e| e.to_str()) == Some("rs");
     let scanned: Cow<'_, str> = if is_rust {
         Cow::Owned(strip_rust_cfg_test_tail(&text))

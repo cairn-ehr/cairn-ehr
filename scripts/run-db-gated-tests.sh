@@ -17,6 +17,12 @@
 #      the DB-gated suites actually run — they self-skip when the env is
 #      unset, so a plain `cargo test` is a strict SUBSET of this run.
 #
+# Since #450 that subset is no longer SILENT: a `cargo test` without the three
+# variables fails `db_gate_actually_ran`, naming what is missing, rather than
+# skipping and printing `ok`. Running it without a database is still fine — it
+# just has to be declared, with CAIRN_ALLOW_DB_SKIP=1. This script never sets
+# that: it exists precisely to run the tier the opt-out waives.
+#
 # Defaults target the standard local rig (PG18 + cairn_pgx on 127.0.0.1:5532,
 # role = current user, databases cairn_test/2/3 — docs/HANDOVER.md "Test env").
 # Override individual pieces via PGHOST/PGPORT/PGUSER, or set the full
