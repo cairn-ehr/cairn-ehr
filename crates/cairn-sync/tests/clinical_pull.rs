@@ -25,8 +25,14 @@ use cairn_node::medication::{
     ChangeDoseInput, CodeMedicationInput, CorrectCodingInput, ReconcileInput,
 };
 use cairn_node::shred::shred_event;
+/// #457 — spawning `serve` and waiting for it are ONE call, and the wait watches the child
+/// rather than only the port. See `tests/common/serve.rs` for why that distinction is the
+/// whole fix; its own tests live in `tests/serve_readiness_shared.rs`.
+#[path = "common/serve.rs"]
+mod serve_harness;
+use serve_harness::serve;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Command;
 use tempfile::TempDir;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -58,18 +64,30 @@ fn cs_b() -> Option<String> {
 
 /// Fixed local ports for A's serve loop — ONE PER TEST in this file, and ALL
 /// BELOW the ephemeral-port floor. Two separate constraints meet here:
-/// - ONE PER TEST: the serial guard means at most one DB-gated test runs at a
-///   time, and the guard below kills the child on drop; but a test re-binding
-///   the PREVIOUS test's port can still hit EADDRINUSE from a lingering
-///   TIME_WAIT socket of the killed child (std's TcpListener does not set
-///   SO_REUSEADDR), so each test owns its own port.
 /// - BELOW THE EPHEMERAL FLOOR (issue #263): the kernel assigns local ports for
 ///   ordinary outbound connections from its ephemeral range (Linux 32768–60999,
 ///   macOS 49152–65535). The previous 397xx ports sat inside Linux's range, so
 ///   on CI any transient outbound connection could hold one at bind time — the
-///   serve child died with EADDRINUSE and the test burned the full
-///   wait_listening ceiling. Ports below 32768 are never auto-assigned; the
-///   guard test below enforces the floor.
+///   serve child died with EADDRINUSE and the test burned the full readiness
+///   ceiling. Ports below 32768 are never auto-assigned; the guard test below
+///   enforces the floor. This is the load-bearing constraint.
+/// - ONE PER TEST: cheap attribution, NOT a correctness requirement. A leaked
+///   listener is traceable to the one test that owns its port, and a readiness
+///   failure names an address only one test ever uses.
+///
+/// ⚠️ CORRECTED (#457). This comment used to justify one-port-per-test by claiming
+/// "std's TcpListener does not set SO_REUSEADDR", so a killed child's lingering
+/// TIME_WAIT socket would make the next test's bind fail. **That is false**, and it
+/// mattered: it put TIME_WAIT on the list of suspects for a flake that is not caused
+/// by it. `std::net::TcpListener::bind` sets `SO_REUSEADDR` on every non-Windows
+/// target — verified against this repository's pinned toolchain, 1.96.0,
+/// `library/std/src/sys/net/connection/socket/mod.rs:550-553`, whose own comment says
+/// it "allows to quickly rebind a socket, without needing to wait for the OS to clean
+/// up the previous one". `cairn-sync serve` binds through exactly that call
+/// (`cmd_serve`, `crates/cairn-sync/src/main.rs`), so rebinding a port left in
+/// TIME_WAIT is permitted. Re-verify against the pinned std source before writing any
+/// socket-behaviour claim here; a wrong reason in a comment sends the next reader after
+/// the wrong cause, which is how #457 survived two rounds of fixes.
 const LISTEN_CONVERGE: &str = "127.0.0.1:25717";
 const LISTEN_FREEZE: &str = "127.0.0.1:25718";
 const LISTEN_LOWHLC: &str = "127.0.0.1:25719";
@@ -103,10 +121,10 @@ const ALL_LISTEN: [&str; 12] = [
 /// Guard for issue #263: a fixed listen port must sit BELOW every kernel's
 /// ephemeral-port floor (Linux defaults to 32768–60999, macOS to 49152–65535).
 /// The kernel hands out local ports from that range to ORDINARY OUTBOUND
-/// connections — the wait_listening probes, the pull clients, every Postgres
+/// connections — the readiness probes, the pull clients, every Postgres
 /// session — so a fixed listener inside it can find its port already taken the
 /// moment it binds: the serve child dies with EADDRINUSE and the test burns the
-/// full wait_listening ceiling before panicking. Ports below the floor can only
+/// full readiness ceiling before panicking. Ports below the floor can only
 /// collide with an explicit listener, which nothing on a CI runner is.
 /// Runs without the DB gate, so it holds even where CAIRN_TEST_PG is unset.
 #[test]
@@ -170,16 +188,6 @@ async fn enroll_device(c: &Client, kid: &str) {
     )
     .await
     .unwrap();
-}
-
-/// Kill the spawned `serve` child when the test ends (pass or panic) so a leaked
-/// listener can never wedge a later run on the fixed port.
-struct ServeGuard(Child);
-impl Drop for ServeGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 /// Truncate the log + the medication projections + the sync bookkeeping on one node
@@ -552,23 +560,6 @@ async fn snapshot(c: &Client) -> Vec<String> {
     out
 }
 
-/// Wait until A's serve loop accepts TCP (readiness poll, bounded).
-///
-/// The ceiling is deliberately generous (60 s, issue #238): under a parallel
-/// `cargo test --workspace` the freshly-spawned serve binary competes with every
-/// other suite for CPU, and the original 5 s ceiling flaked intermittently on
-/// loaded machines. The poll returns the moment the socket accepts, so a large
-/// ceiling costs nothing on the happy path — it only buys headroom on the slow one.
-fn wait_listening(addr: &str) {
-    for _ in 0..600 {
-        if std::net::TcpStream::connect(addr).is_ok() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    panic!("serve did not start listening on {addr} within 60s");
-}
-
 /// Count the ADR-0052 custody rows a node holds for one content event: the wrapped
 /// DEK (`event_dek`) and the operational clear shadow (`event_clear`). `(1, 1)` means
 /// full crypto-shred custody + a projectable clear view; `(0, 0)` means the node holds
@@ -774,21 +765,7 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
     // serve under A's authoring key (--key key_a): only that key can unwrap A's DEKs to
     // re-wrap sealed-body custody for the puller (ADR-0052).
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_CONVERGE,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_CONVERGE);
+    let _serve = serve(bin, &base_a, LISTEN_CONVERGE, &key_a);
     // pull under B's own key (--key key_b): B presents the matching unwrap cert and
     // gains custody of the sealed bodies it replicates.
     let pull = Command::new(bin)
@@ -1065,21 +1042,7 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
     // serve under A's authoring key so the custody sidecar can travel (ADR-0052).
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_FREEZE,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_FREEZE);
+    let _serve = serve(bin, &base_a, LISTEN_FREEZE, &key_a);
     // pull under B's own key so the recovered pull gains sealed-body custody.
     let pull_cmd = || {
         Command::new(bin)
@@ -1220,21 +1183,7 @@ async fn low_hlc_below_cursor_still_converges() {
 
     // Serve A; pull B once. B applies both and checkpoints last_seq(node-a) = 2.
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_LOWHLC,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_LOWHLC);
+    let _serve = serve(bin, &base_a, LISTEN_LOWHLC, &key_a);
     let pull1 = Command::new(bin)
         .args([
             "pull",
@@ -1349,21 +1298,7 @@ async fn full_sweep_reconciles_a_skipped_seq() {
     .unwrap();
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_SWEEP,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_SWEEP);
+    let _serve = serve(bin, &base_a, LISTEN_SWEEP, &key_a);
 
     // Incremental pull: seq > 2 fetches nothing → e2 stays missing.
     let inc = Command::new(bin)
@@ -1463,21 +1398,7 @@ async fn repull_from_zero_converges() {
             .unwrap();
     }
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_REPULL,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_REPULL);
+    let _serve = serve(bin, &base_a, LISTEN_REPULL, &key_a);
     let pull = Command::new(bin)
         .args([
             "pull",
@@ -1635,21 +1556,7 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
 
     // --- 2. the wire: serve A, pull B; the custody sidecar flows ---
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_SEALED,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_SEALED);
+    let _serve = serve(bin, &base_a, LISTEN_SEALED, &key_a);
     let pull_b = || {
         // A closure so the shred-propagation pull below reuses the exact same wire.
         Command::new(bin)
@@ -2007,21 +1914,7 @@ async fn an_unadmitted_puller_replicates_events_but_gains_no_custody() {
     );
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_UNPEERED,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_UNPEERED);
+    let _serve = serve(bin, &base_a, LISTEN_UNPEERED, &key_a);
     let pull = Command::new(bin)
         .args([
             "pull",
@@ -2156,21 +2049,7 @@ async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
     let content_eid = content_event_id_of(&a, med).await;
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_REVOKED,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_REVOKED);
+    let _serve = serve(bin, &base_a, LISTEN_REVOKED, &key_a);
     let pull = Command::new(bin)
         .args([
             "pull",
@@ -2284,21 +2163,7 @@ async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
     let content_eid = content_event_id_of(&a, med).await;
 
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_REPAIR,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_REPAIR);
+    let _serve = serve(bin, &base_a, LISTEN_REPAIR, &key_a);
     let pull_args = [
         "pull",
         "--conn",
@@ -2533,21 +2398,7 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
 
     // Serve A under its authoring key so DEKs can be re-wrapped for a puller.
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_GUARD,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_GUARD);
+    let _serve = serve(bin, &base_a, LISTEN_GUARD, &key_a);
     let full_pull_b = || {
         Command::new(bin)
             .args([
@@ -2782,21 +2633,7 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
 
     // Serve A, pull B once over real TCP.
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_SEALSCOPE,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_SEALSCOPE);
+    let _serve = serve(bin, &base_a, LISTEN_SEALSCOPE, &key_a);
     let pull = Command::new(bin)
         .args([
             "pull",
@@ -3010,21 +2847,7 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
 
     // Serve A, pull B once over real TCP.
     let bin = env!("CARGO_BIN_EXE_cairn-sync");
-    let _serve = ServeGuard(
-        Command::new(bin)
-            .args([
-                "serve",
-                "--conn",
-                &base_a,
-                "--listen",
-                LISTEN_FORWARD,
-                "--key",
-                &key_a,
-            ])
-            .spawn()
-            .expect("spawn serve"),
-    );
-    wait_listening(LISTEN_FORWARD);
+    let _serve = serve(bin, &base_a, LISTEN_FORWARD, &key_a);
     let pull = Command::new(bin)
         .args([
             "pull",

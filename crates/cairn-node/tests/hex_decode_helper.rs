@@ -179,6 +179,13 @@ fn every_hex_door_still_calls_the_helper() {
         ("007_node_federation.sql", 4),
         // restore_node_event: both branches of the v_subject CASE
         ("009_node_supersede_and_restore.sql", 2),
+        // cairn_rendition_address: the content address of a by-reference attachment
+        // rendition (issue #370). The FIRST clinical-plane call site, and it matters for the
+        // same reason db/048's apply-side one does: cairn_learn_attachment_refs runs inside
+        // BOTH clinical doors, so a bare decode() here raised in the 22 class and froze the
+        // CLINICAL pull from the peer that sent the malformed digest — strictly worse than
+        // the node plane, which stalls peering metadata rather than the record.
+        ("027_attachment_rendition_references.sql", 1),
         // §5.9 sensitivity (ADR-0062): the withdrawal names the assertion it withdraws by
         // hex content_address, and BOTH the structural floor and the projection apply fn
         // decode it — cairn_check_sensitivity_withdrawal, then sensitivity_withdrawal_apply.
