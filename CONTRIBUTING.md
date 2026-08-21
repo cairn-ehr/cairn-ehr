@@ -31,7 +31,7 @@ through three connection strings.
 |---|---|---|
 | `CAIRN_TEST_PG` | `cairn_test` | every in-DB floor / projection / identity / medication suite |
 | `CAIRN_TEST_PG2` | `cairn_test2` | the multi-node convergence and schema-subset suites |
-| `CAIRN_TEST_PG3` | `cairn_test3` | the three-node convergence suites |
+| `CAIRN_TEST_PG3` | `cairn_test3` | the three-node federation acceptance test |
 
 `scripts/run-db-gated-tests.sh` bakes all three in and also runs the `db/tests/*.sql` mirrors — it is
 the one command for the database slice of the local gate.

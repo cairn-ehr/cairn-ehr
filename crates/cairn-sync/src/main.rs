@@ -6216,12 +6216,21 @@ mod schema_subset_tests {
     /// Build + sign one event of a type this schema generation does NOT know
     /// (`observation.vital.recorded`) — the ADR-0056 admit-uninterpreted case.
     ///
-    /// Needed by Door 5 for a reason worth stating, because it is exactly the trap #386 is
-    /// about. `cairn_event_thread` short-circuits on §10b's thread-FREE prefixes
-    /// (`demographic.` `identity.` `note.` `patient.` `sensitivity.` `erasure.`), and every
-    /// other event this test authors carries one of them — so none of them ever reaches the
-    /// `to_regclass` probes at all. A type outside that list is conservatively treated as one
-    /// that COULD carry a thread, which is what drives the probes.
+    /// Needed by Door 5 for a reason worth stating precisely, because getting it slightly
+    /// wrong is how the first version of that fixture came out vacuous.
+    ///
+    /// The order inside `cairn_event_thread` (db/048) is: the two `to_regclass` probes FIRST,
+    /// then the `event_log` lookup, then §10b's thread-free type gate, and only then the
+    /// five-table UNION. So on a subset node every event — `patient.`, `identity.`, all of
+    /// them — reaches the probes and is stopped THERE; the type gate is what is never reached.
+    /// (The first cut of this comment had that backwards, and a maintainer trusting it would
+    /// conclude that moving the probes after the gate is free. It is not — #456 review.)
+    ///
+    /// The consequence is what matters, and it survives the correction: once the stub
+    /// `medication_statement` below makes probe 1 pass, a thread-FREE event falls through to
+    /// the type gate, which returns NULL before the UNION — so deleting probe 2 would still
+    /// look green. Only a type OUTSIDE §10b's list survives the gate and reaches the UNION
+    /// that raises. That is what this fixture supplies.
     ///
     /// Not `clinical.%`: ADR-0052 makes those born-sealed, and a plaintext clinical body is a
     /// shape that should not exist. An unknown *non*-clinical type is the honest fixture — a
@@ -6538,10 +6547,12 @@ mod schema_subset_tests {
         assert_eq!(thread_patient, None);
 
         // A THREAD-BEARING event type, admitted uninterpreted (ADR-0056). Every event above
-        // carries a §10b thread-FREE prefix (`patient.`, `identity.`), so cairn_event_thread
-        // returns on the type gate and NEVER REACHES the to_regclass probes — which is why the
-        // window below needs a different event to be non-vacuous. A peer one schema generation
-        // ahead sending a type this node cannot interpret is the realistic source of one.
+        // carries a §10b thread-FREE prefix (`patient.`, `identity.`), and once the stub below
+        // makes the FIRST to_regclass probe pass, such an event is absorbed by the type gate —
+        // which sits AFTER both probes — and returns NULL before reaching the UNION that would
+        // raise. That is why the window below needs a different event to be non-vacuous. A peer
+        // one schema generation ahead sending a type this node cannot interpret is the
+        // realistic source of one.
         let uninterpreted =
             signed_uninterpreted(&sk, &kid, &patient_id, now_ms() + 2, "subset-peer");
         c.query_one(
@@ -6582,8 +6593,23 @@ mod schema_subset_tests {
         // seeded row settles it — cairn_thread_patient has only ONE probe, so reading the
         // patient back out proves to_regclass now SEES medication_statement and the first probe
         // is passing. Only then does cairn_event_thread's NULL become attributable to the
-        // second. Delete that second probe and this raises `relation "medication_dose_event"
-        // does not exist`.
+        // second. Delete that second probe and this raises `relation "medication_cessation"
+        // does not exist` — the UNION's SECOND branch, which is the first missing relation the
+        // parser reaches; the mutation run in PR #456 reports exactly that string. (The first
+        // cut of this comment named medication_dose_event, the branch the deleted PROBE
+        // mentions, which is not the same thing.)
+        // In a TRANSACTION, so the stub cannot outlive a failure (#456 review). `postgres`
+        // is autocommit, so the first cut's trailing `DROP TABLE` only ran on the success
+        // path: any panic in the window below committed a 3-column `medication_statement`
+        // into the shared $CAIRN_TEST_PG2 database — and db/031 creates that table with
+        // `IF NOT EXISTS`, so a schema reload does NOT heal it. The real table has 16
+        // columns, so `patient_medication` then fails with `column s.term does not exist`
+        // for every other suite sharing that database, attributed to the wrong test in a
+        // different crate. `to_regclass` sees uncommitted DDL from the same session, so the
+        // probes behave identically; and a panic drops the client, which rolls back — which
+        // is strictly stronger than a DROP that only runs when nothing failed.
+        c.batch_execute("BEGIN")
+            .expect("open the transaction the stub lives inside");
         c.batch_execute(
             "CREATE TABLE medication_statement (
                  medication_id   uuid PRIMARY KEY,
@@ -6623,8 +6649,10 @@ mod schema_subset_tests {
             .get(0);
         assert_eq!(still_null, None);
 
-        // Leave the database in the subset-only shape the rest of this test asserted.
-        c.batch_execute("DROP TABLE medication_statement")
+        // Leave the database in the subset-only shape the rest of this test asserted. ROLLBACK
+        // rather than DROP: it undoes the whole window, and it is what the backend would have
+        // done for us had anything above panicked.
+        c.batch_execute("ROLLBACK")
             .expect("the stub must not outlive the window it models");
 
         // Five admitted events total (registration + the three doors + the uninterpreted

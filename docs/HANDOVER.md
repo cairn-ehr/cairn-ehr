@@ -195,7 +195,7 @@ ROADMAP carries the per-slice narrative; this section keeps only what a *next* s
 
 **2026-08-21 — the second trap-clearing pass** (closes #449, #450, #451, #452, #453,
 [#386](https://github.com/cairn-ehr/cairn-ehr/issues/386); no ADR, no migration file, SCHEMA stays 49;
-opens nothing). Workspace sweep **1412 passed / 0 failed**. Four things to carry:
+opens nothing). Workspace sweep **1416 passed / 0 failed** (`clinical_pull` re-run at `--test-threads=2`: #238's serve-bind ceiling still flakes when 14 servers start at once on a loaded box — 14/14 in 6.7s serialised vs 3 timeouts in 195s parallel). Five things to carry:
 
 1. **⚠️ A DATABASE-FREE `cargo test` NOW FAILS UNLESS YOU DECLARE IT: `export CAIRN_ALLOW_DB_SKIP=1`.**
    #450 inverted `db_gate_actually_ran.rs` to fail CLOSED — it used to bind only when `$CI` was set, and
@@ -219,8 +219,9 @@ opens nothing). Workspace sweep **1412 passed / 0 failed**. Four things to carry
 3. **⇒ THE LESSON OF THIS PASS: #386's first fixture was VACUOUS, and only the mutation test said so.**
    Driving db/048 on the cairn-sync subset looked done — `cairn_event_thread` returned NULL as expected —
    but deleting the second `to_regclass` probe left the suite GREEN. Cause: every event the subset test
-   authors carries a §10b thread-FREE prefix (`patient.`, `identity.`), so resolution short-circuits on
-   the TYPE GATE and never reaches the probes at all. The fixture only became real once an **ADR-0056
+   authors carries a §10b thread-FREE prefix (`patient.`, `identity.`), and the TYPE GATE sits *after*
+   both probes — so once the stub makes probe 1 pass, such an event is absorbed by the gate and returns
+   NULL before reaching the UNION that would raise. The fixture only became real once an **ADR-0056
    admit-uninterpreted event of a thread-BEARING type** was applied. **A test that asserts the right value
    for the wrong reason is indistinguishable from one that works — only the mutation separates them.**
 4. **#452's argument is not DRY.** Three guard tests each rolled their own source walk; one followed
@@ -229,6 +230,15 @@ opens nothing). Workspace sweep **1412 passed / 0 failed**. Four things to carry
    module pulled in with `#[path]`, deliberately NOT `common/mod.rs`, whose DB imports a pure
    source-inspection binary must not drag in and whose public helpers are pinned by
    `identity_scaffolding_shared.rs`'s identity-cluster array.
+5. **⇒ AND THE REVIEW FOUND THE SAME SPECIES IN THE FIXES THEMSELVES — again only via mutation.** Three of
+   this pass's own guards proved nothing. `db_skip_is_allowed` was tested through a hand-written COPY of
+   its `matches!`, so reducing it to `{ true }` turned the **whole** #442/#450 guard into a no-op with
+   every test still green. The Python walk used `Path.rglob`, which swallows `OSError` on an unreadable
+   directory — the #452 defect, in the file citing #452 as its authority. And #452's headline symlink fix
+   had **no test at all**, invisible because the repo contains no symlink, so the tree supplied no
+   incidental coverage. All three are now pinned by fixtures that go red when mutated (and the two env
+   predicates were split into pure functions to make that possible). **Write the test that fails when the
+   fix is removed, not the one that passes while it is present.**
 
 
 **2026-08-20/21 — the silent-gate pass** (closes #446, #442, #443; opens #447; no ADR, no migration file,

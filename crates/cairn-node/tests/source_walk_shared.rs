@@ -77,12 +77,46 @@ fn every_root_is_walked() {
 }
 
 /// Output order is deterministic, so a failing guard names its offenders identically twice.
+///
+/// Over a FIXTURE tree with a known answer, not over `db/` compared against a sorted copy of
+/// itself. That earlier shape detected a deleted `out.sort()` only when `read_dir` happened to
+/// return `db/` unsorted — true on APFS today, filesystem-defined in general, so its detection
+/// rate depended on the machine (#456 review). Here the files are created in an order that is
+/// deliberately not their sorted order, and the expected sequence is written out.
 #[test]
 fn output_is_sorted() {
-    let files = source_files(&[repo_root().join("db")], &["target"], &["sql"]);
-    let mut expected = files.clone();
-    expected.sort();
-    assert_eq!(files, expected, "source_files must return sorted paths");
+    let tmp = std::env::temp_dir().join(format!("cairn-sort-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("b")).expect("fixture: b/");
+    // Created c, a, b/a — sorted order is a, b/a, c. Any of the three orderings a filesystem
+    // might hand back is wrong, so the assertion cannot pass by accident.
+    for (path, body) in [
+        ("c.sql", "SELECT 3;\n"),
+        ("a.sql", "SELECT 1;\n"),
+        ("b/a.sql", "SELECT 2;\n"),
+    ] {
+        std::fs::write(tmp.join(path), body).expect("fixture: file");
+    }
+
+    let files = source_files(std::slice::from_ref(&tmp), &["target"], &["sql"]);
+    let relative: Vec<String> = files
+        .iter()
+        .map(|p| {
+            p.strip_prefix(&tmp)
+                .expect("walk results sit under the fixture root")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+
+    // Clean up BEFORE asserting, so a failure leaves nothing behind in /tmp.
+    std::fs::remove_dir_all(&tmp).expect("fixture teardown");
+
+    assert_eq!(
+        relative,
+        vec!["a.sql", "b/a.sql", "c.sql"],
+        "source_files must return sorted paths regardless of creation or read_dir order"
+    );
 }
 
 /// An unreadable root PANICS naming the path rather than contributing nothing.
@@ -105,6 +139,60 @@ fn a_missing_root_is_loud() {
 #[should_panic(expected = "unreadable source file")]
 fn a_missing_file_is_loud() {
     read_source(&repo_root().join("no-such-file-exists-here.rs"));
+}
+
+/// A symlink is neither descended into nor collected (#452) — the walk's HEADLINE property.
+///
+/// This is the fix `sources.rs` exists for, and until the PR #456 review it had **no test at
+/// all**: swapping `DirEntry::file_type` back for `Path::is_dir` — one word, in two places —
+/// passed every other test in this file and all three guard binaries. It could not be caught
+/// incidentally either, because the repository contains no symlink (`find crates db extensions
+/// -type l` is empty), so the tree supplies no coverage of its own. A guard's most important
+/// property being the one nothing checks is the exact species this PR is about.
+///
+/// The directory case is the load-bearing half: `Path::is_dir` follows a symlink, so one
+/// pointing at an ancestor makes the walk unbounded — a hang in a required check, which
+/// presents as CI flakiness rather than as a defect.
+///
+/// Deliberately built with a link to a SIBLING and not to an ancestor. An ancestor link would
+/// demonstrate the hang, and a regression would then *hang CI* instead of failing it — a worse
+/// outcome than the bug. A sibling link terminates either way: if the walk follows it, the
+/// marker file below appears and this fails fast, naming it.
+///
+/// Unix-only because `std::os::unix::fs::symlink` is; the same property holds on Windows, and
+/// no contributor rig or CI runner in this project is Windows today.
+#[cfg(unix)]
+#[test]
+fn symlinks_are_neither_followed_nor_collected() {
+    use std::os::unix::fs::symlink;
+
+    // A hand-rolled temporary directory rather than a `tempfile` dev-dependency: one test does
+    // not justify a new crate in the supply chain (house rule 1 asks for a licence check on
+    // every dependency, and this needs none). Named by process id so a parallel `cargo test`
+    // of another binary cannot collide.
+    let tmp = std::env::temp_dir().join(format!("cairn-source-walk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let walked = tmp.join("walked");
+    let elsewhere = tmp.join("elsewhere");
+    std::fs::create_dir_all(&walked).expect("fixture: walked/");
+    std::fs::create_dir_all(&elsewhere).expect("fixture: elsewhere/");
+    std::fs::write(tmp.join("real.rs"), "fn main() {}\n").expect("fixture: real.rs");
+    std::fs::write(elsewhere.join("marker.rs"), "fn m() {}\n").expect("fixture: marker.rs");
+    symlink(&elsewhere, walked.join("link_to_dir")).expect("fixture: dir symlink");
+    symlink(tmp.join("real.rs"), walked.join("link_to_file.rs")).expect("fixture: file symlink");
+
+    let found = source_files(std::slice::from_ref(&walked), &["target"], &["rs"]);
+
+    // Clean up BEFORE asserting: a failing assertion must not leave a symlinked tree in
+    // /tmp for the next run to trip over.
+    std::fs::remove_dir_all(&tmp).expect("fixture teardown");
+
+    assert!(
+        found.is_empty(),
+        "a symlinked directory must not be descended into and a symlinked file must not be \
+         collected — `DirEntry::file_type` does not follow symlinks, `Path::is_dir` does. \
+         Found: {found:?}"
+    );
 }
 
 /// `repo_root()` really is the repository root, checked against landmarks it does not choose.

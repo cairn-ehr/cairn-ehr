@@ -424,8 +424,9 @@ REVOKE EXECUTE ON FUNCTION cairn_event_twin(text, jsonb) FROM PUBLIC;
 -- and leaving its helpers on the default EXECUTE-to-PUBLIC is the same half-followed state
 -- #443 was about, one layer down: a reader still cannot tell an oversight from a decision.
 --
--- Same severity as #443 — pure predicates over a body a PUBLIC caller has no way to submit
--- through any door — so what is bought is legibility, not privilege.
+-- Same severity as #443 — a pure predicate and a pure formatter over a body a PUBLIC caller has
+-- no way to submit through any door — so what is bought is legibility, not privilege.
+-- ("predicates" alone was wrong: cairn_twin_skeleton renders, it does not decide. #456 review.)
 --
 -- !! cairn_twin_is_present NEEDS A PAIRED GRANT, AND IT LIVES IN db/015 !!
 -- It is called from inside cairn_twin_provenance_of, which db/015's event_twin_provenance VIEW

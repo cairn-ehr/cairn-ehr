@@ -455,8 +455,12 @@ against the **invoking** user, so a bare REVOKE breaks `event_twin_provenance` f
 on PG 18.1, and the inner call is checked too. **#386** finally DRIVES db/048 on the cairn-sync subset:
 its `to_regclass` guards were load-bearing and untested, and the second probe (the crash-mid-replay
 window) had never decided anything anywhere. **Its first fixture was vacuous** — every event the subset
-test authors carries a §10b thread-FREE prefix, so `cairn_event_thread` short-circuits before the probes;
-the mutation only failed once an ADR-0056 admit-uninterpreted event of a thread-BEARING type was applied.
+test authors carries a §10b thread-FREE prefix, and the type gate sits AFTER both probes, so such an
+event is absorbed there and returns before the UNION that would raise; the mutation only failed once an
+ADR-0056 admit-uninterpreted event of a thread-BEARING type was applied. **The review then found the same
+species in the fixes**: `db_skip_is_allowed` was tested through a COPY of its own `matches!` (so `{ true }`
+made the whole guard a no-op, green), the Python walk used `OSError`-swallowing `rglob`, and #452's
+headline symlink fix had no test at all — all three now pinned by mutation-verified fixtures.
 Opens nothing.
 
 ## Phase 5 — Security & compliance core

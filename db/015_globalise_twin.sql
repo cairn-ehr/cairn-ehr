@@ -112,6 +112,14 @@ REVOKE EXECUTE ON FUNCTION cairn_twin_provenance_of(bytea) FROM PUBLIC;
 --
 -- Pinned by crates/cairn-node/tests/floor_execute_grants.rs
 -- (the_declared_twin_provenance_read_surface_still_works): delete either grant and it fails.
+--
+-- That test had to grow a DIRECT call on cairn_twin_is_present to make the second half of that
+-- sentence true (#456 review). The view is LATERAL over event_log, so the INNER function's ACL
+-- is checked only when the PL/pgSQL body actually runs — once per row. Against an EMPTY
+-- event_log the view returns zero rows without entering the body, and revoking this grant
+-- raises nothing at all. Measured on PG 18.1. Whichever suite last truncated the shared test
+-- database therefore decided whether this grant was pinned; a direct call has no such
+-- precondition.
 GRANT EXECUTE ON FUNCTION cairn_twin_provenance_of(bytea) TO cairn_agent;
 GRANT EXECUTE ON FUNCTION cairn_twin_is_present(text) TO cairn_agent;
 
