@@ -322,3 +322,88 @@ fn an_unparseable_connection_string_degrades_to_an_honest_label() {
          asserting only non-emptiness let a label of `x` pass (PR #478 review): {label}"
     );
 }
+
+/// How many times does `needle` appear in `haystack`? Non-overlapping.
+///
+/// A local copy of the helper `db_diagnosis`'s own unit tests use: those live inside the
+/// module and cannot be reached from here, and the count is the whole assertion below —
+/// "the diagnosis appears" is satisfied by a line that says it twice.
+fn occurrences(haystack: &str, needle: &str) -> usize {
+    haystack.matches(needle).count()
+}
+
+/// A REAL SERVER ERROR must be rendered ONCE by `operator_chain` — the `Kind::Db` arm.
+///
+/// # Why this needed a database, and why its absence hid a defect
+///
+/// `operator_chain`'s unit tests build their fixture from an unparseable connection
+/// string, which is `Kind::ConfigParse`. That arm renders through `kind_and_causes`, which
+/// **already walks `source()`** — so the rendered text ends with the cause's own text, the
+/// suffix rule drops the next chain layer, and the dedupe appears to work.
+///
+/// `Kind::Db` behaves differently and is the arm every in-DB refusal takes.
+/// `legible_db_error` renders it as `message [SQLSTATE] — DETAIL — HINT`, while
+/// `Error::source()` hands back the `DbError` underneath, whose own `Display` is
+/// `severity: message` + `\nDETAIL:` + `\nHINT:`. Neither is a suffix of the other, so the
+/// suffix rule does not fire and the server's message is printed twice on one line — the
+/// exact duplication the function's own header rejects `{e:#}` for.
+///
+/// No fixture could have caught it without a live server: a `DbError` cannot be
+/// constructed by hand, which is the same reason `compose_db_diagnosis` is tested
+/// separately from the extraction that feeds it.
+#[tokio::test]
+async fn a_server_error_is_rendered_once_through_the_whole_chain() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let c = db::connect(&base).await.unwrap();
+
+    // A bare RAISE, so the message, DETAIL and HINT are all ours and all distinctive —
+    // a substring that could occur incidentally would make the count meaningless.
+    let pg = c
+        .batch_execute(
+            "DO $$ BEGIN RAISE EXCEPTION 'the medication list refused' \
+             USING ERRCODE = 'P0001', DETAIL = 'a distinctive detail', \
+             HINT = 'a distinctive hint'; END $$;",
+        )
+        .await
+        .expect_err("the DO block always raises");
+
+    // The shape `sync.rs` actually builds: a rendered local fault, with a caller's layer
+    // on top. Both are the sites PR #478 converted.
+    let chained = anyhow::Error::from(cairn_node::db_diagnosis::LocalDbFault::new(
+        "reading the medication list",
+        pg,
+    ))
+    .context("pull cycle 7");
+
+    let line = cairn_node::db_diagnosis::operator_chain(&chained);
+
+    assert!(
+        line.starts_with("pull cycle 7: "),
+        "the layer leads: {line}"
+    );
+    assert!(
+        line.contains("reading the medication list"),
+        "…and the operation is named: {line}"
+    );
+    assert!(line.contains("[P0001]"), "the SQLSTATE survives: {line}");
+    assert_eq!(
+        occurrences(&line, "the medication list refused"),
+        1,
+        "the server's message appears EXACTLY once — twice is `{{e:#}}`'s defect, which \
+         this function exists to avoid: {line}"
+    );
+    assert_eq!(
+        occurrences(&line, "a distinctive detail"),
+        1,
+        "so does the DETAIL: {line}"
+    );
+    assert_eq!(
+        occurrences(&line, "a distinctive hint"),
+        1,
+        "so does the HINT: {line}"
+    );
+    assert!(!line.contains('\n'), "still one line: {line}");
+}

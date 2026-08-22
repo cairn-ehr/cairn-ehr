@@ -976,9 +976,12 @@ fn mark_cursor_outcome_unknown(metrics: &mut serde_json::Value) {
 /// that IS recognised must therefore be claimed explicitly above, or it silently becomes a
 /// partition — which is exactly the defect #469 records.
 ///
-/// Caveat worth knowing before you wrap `do_pull`: `downcast_ref` does NOT walk `source()`.
-/// A `.map_err` or a retry wrapper anywhere on this path turns all four arms back into
-/// `partition`, silently.
+/// The caveat this used to carry — *`downcast_ref` does NOT walk `source()`, so a
+/// `.map_err` or a retry wrapper anywhere on this path turns the arms back into
+/// `partition`, silently* — is retired for the postgres arm, which now walks the chain
+/// (see [`chain_reaches_a_postgres_error`]). It still binds the two arms ABOVE it, and
+/// deliberately so: those match the outermost type because a database error found
+/// *beneath* a `PullIntegrityError` or a `CursorCommitError` must not re-label it.
 fn classify_pull_failure(
     e: &(dyn Error + 'static),
 ) -> (&'static [&'static str], serde_json::Value) {
@@ -993,12 +996,47 @@ fn classify_pull_failure(
         };
         return (classes, ce.metrics.clone());
     }
-    if e.downcast_ref::<postgres::Error>().is_some() {
+    if chain_reaches_a_postgres_error(e) {
         // No metrics: these escape BEFORE the metrics object is built, so there is
         // nothing to report about this cycle beyond the class and the error text.
         return (&["local_fault"], serde_json::Value::Null);
     }
     (&["partition"], serde_json::Value::Null)
+}
+
+/// Does a `postgres::Error` sit anywhere in `e`'s `source()` chain?
+///
+/// # Why this walks, when the two arms above do not (issue #479)
+///
+/// `downcast_ref` on a `dyn Error` inspects the OUTERMOST type only. That was fine while
+/// every local database failure on this path was a bare `?` — and it made the one
+/// improvement anybody would reach for next, *naming the operation that failed*, into a
+/// silent regression: a `LocalDbFault` (or any `.map_err`, or a retry wrapper) pushed the
+/// `postgres::Error` one layer down and the classifier fell through to `partition`,
+/// sending an operator to the WAN for a dead local database and charging the Bet A
+/// availability figure for it. That is #469's own defect, reinstated by its own fix. The
+/// classifier's header used to carry this as a caveat to be careful about; walking the
+/// chain removes it instead.
+///
+/// **This is deliberately the LAST class checked**, after `PullIntegrityError` and
+/// `CursorCommitError`, both of which are matched on the outermost type and would be
+/// wrongly re-labelled if a database error were found beneath them. Order is the whole
+/// safety argument here.
+///
+/// Safe to widen this far because of where `do_pull` sits: it reaches its peer over a raw
+/// `TcpStream`, so every non-database failure on this path is an `io::Error` or a `String`
+/// — neither of which can carry a `postgres::Error` underneath it. The hop limit matches
+/// [`kind_and_causes`] and [`operator_chain`]: a cyclic chain must not hang the daemon.
+fn chain_reaches_a_postgres_error(e: &(dyn Error + 'static)) -> bool {
+    let mut layer = Some(e);
+    for _ in 0..8 {
+        let Some(cause) = layer else { return false };
+        if cause.is::<postgres::Error>() {
+            return true;
+        }
+        layer = cause.source();
+    }
+    false
 }
 
 /// Write one failed cycle's classification into its log line. (PR #472 review, finding 8.)
@@ -1009,7 +1047,10 @@ fn classify_pull_failure(
 /// that used it were reachable only by running the daemon. A dropped `line["pull"]`, a
 /// hardcoded key, or a swapped class would have passed the entire suite.
 fn record_pull_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) {
-    line["pull_error"] = serde_json::json!(e.to_string());
+    // `operator_chain`, never `to_string()`: a `postgres::Error`'s own `Display` is the
+    // literal two words `db error`, and this key is read by a machine as well as a human
+    // (issue #479).
+    line["pull_error"] = serde_json::json!(operator_chain(e));
     let (classes, metrics) = classify_pull_failure(e);
     for class in classes {
         line[*class] = serde_json::json!(true);
@@ -1262,12 +1303,143 @@ fn kind_and_causes(e: &postgres::Error) -> String {
     text
 }
 
-fn legible_db_error(e: postgres::Error) -> String {
+fn legible_db_error(e: &postgres::Error) -> String {
     match e.as_db_error() {
         Some(db) => compose_db_diagnosis(db.message(), db.code().code(), db.detail(), db.hint()),
         // Not a server error at all (refused socket, connection closed, TLS, encode): the
         // kind names the LAYER that failed, the chain beneath it names the failure.
-        None => kind_and_causes(&e),
+        None => kind_and_causes(e),
+    }
+}
+
+/// Render a whole `Box<dyn Error>` chain as ONE operator line, with each layer said once.
+/// **Pure.**
+///
+/// # The defect this exists for (issue #479)
+///
+/// `postgres::Error`'s `Display` is the literal string `db error`, and a `Box<dyn Error>`
+/// delegates its own `Display` straight to it. So when this node's database died, the run
+/// loop's terminal line and the machine-readable JSONL that `bet_a.py` reads both said:
+///
+/// ```text
+/// cycle 118: PULL FAILED: db error
+/// {"cycle":118,"pull_error":"db error","local_fault":true}
+/// ```
+///
+/// `53300` (connections exhausted), `57P01` (admin shutdown), `42501` (a grant revoked by a
+/// restore) and a dead socket were one indistinguishable string — and `cmd_run` builds its
+/// client ONCE, outside the loop, so after the database goes away this repeats every cycle
+/// for the life of the process. #469 fixed the *class* and never the *message*; its test
+/// asserted only the class, which is why this survived it.
+///
+/// # The rule, in three parts
+///
+/// * a `postgres::Error` is rendered through [`legible_db_error`], never as its kind;
+/// * a layer is **dropped when the layer above already ends with it** — a suffix test, not
+///   a type test, so any future self-rendering wrapper inherits it. [`LocalDbFault`] is
+///   today's case: its `Display` already embeds the rendered cause;
+/// * the walk **stops at the first `postgres::Error`**, because [`legible_db_error`] has
+///   already consumed that error's whole source subtree (the `Kind::Db` arm reads the
+///   `DbError`'s message, SQLSTATE, DETAIL and HINT; every other arm walks `source()`
+///   itself through [`kind_and_causes`]). Descending further printed the server's message
+///   twice on one line — measured, and fixed in the `cairn-node` twin in the same commit.
+///
+/// **Twin.** `cairn-node`'s `db_diagnosis::operator_chain` is the same three rules over an
+/// `anyhow` chain. The difference is structural rather than stylistic and is worth knowing
+/// before porting between them: `anyhow::Error::chain()` walks `source()` for you, while
+/// here the walk is explicit — and `downcast_ref` on a `dyn Error` does NOT walk, which is
+/// the caveat [`classify_pull_failure`] carries for the same reason.
+///
+/// The hop limit matches [`kind_and_causes`]: a cyclic source chain would otherwise spin
+/// forever, and no diagnostic is worth hanging the daemon over.
+fn operator_chain(e: &(dyn Error + 'static)) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut layer = Some(e);
+
+    for _ in 0..8 {
+        let Some(cause) = layer else { break };
+        let pg = cause.downcast_ref::<postgres::Error>();
+        let rendered = match pg {
+            Some(pg) => legible_db_error(pg),
+            None => one_line(&cause.to_string()),
+        };
+        // An empty layer would make the suffix test vacuously true for everything after
+        // it, so it is dropped outright rather than reasoned about.
+        if !rendered.is_empty() && !parts.last().is_some_and(|above| above.ends_with(&rendered)) {
+            parts.push(rendered);
+        }
+        if pg.is_some() {
+            // Stop: `legible_db_error` already consumed this error's whole source subtree.
+            break;
+        }
+        layer = cause.source();
+    }
+    parts.join(": ")
+}
+
+/// A failure of **this node's own database**, rendered for a human without throwing away
+/// the error underneath it (issue #479). The `cairn-sync` twin of `cairn-node`'s
+/// `db_diagnosis::LocalDbFault`.
+///
+/// # Why a type and not a `format!(…).into()`
+///
+/// Every other bare `?` on this path could have been fixed by rendering into a `String`
+/// error at the site. Not these. [`classify_pull_failure`] tells *this node's database
+/// failed* from *the peer did not answer* by looking for a `postgres::Error`, and a
+/// `String` error has no `source()` — so rendering into one would have silently reverted
+/// every local fault to `partition`, which is #469's defect reinstated inside the fix for
+/// its sibling. That is the trap in this change most likely to be sprung in good faith.
+///
+/// So this type does both jobs at once: `Display` is the legible rendering an operator
+/// reads, and `source()` is the original error the classifier can find.
+///
+/// # Why `Debug` is hand-written
+///
+/// `fn main() -> R<()>` has no error printer, so an `Err` reaching Rust's `Termination`
+/// is printed as `Error: {err:?}`. A derived `Debug` would deliver the diagnosis wrapped
+/// in struct syntax with the `postgres::Error` re-dumped beside it — the same defect the
+/// PR #478 review found in `RequeueInterruptedError`, which is why that type does this too.
+struct LocalDbFault {
+    /// What this node was DOING — an operator-facing phrase, not a SQL fragment. A
+    /// SQLSTATE names the condition; only the caller knows which statement met it.
+    doing: String,
+    /// [`legible_db_error`] of [`Self::source`], rendered once at construction.
+    rendered: String,
+    /// The original error, kept REACHABLE. Dropping it is what breaks the classifier.
+    source: postgres::Error,
+}
+
+impl LocalDbFault {
+    fn new(doing: impl Into<String>, source: postgres::Error) -> Self {
+        let rendered = legible_db_error(&source);
+        Self {
+            doing: doing.into(),
+            rendered,
+            source,
+        }
+    }
+
+    /// Box it as the crate's error type, which is what every call site actually wants.
+    fn boxed(doing: impl Into<String>, source: postgres::Error) -> Box<dyn Error> {
+        Box::new(Self::new(doing, source))
+    }
+}
+
+impl std::fmt::Display for LocalDbFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.doing, self.rendered)
+    }
+}
+
+impl std::fmt::Debug for LocalDbFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl Error for LocalDbFault {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
     }
 }
 
@@ -1567,7 +1739,7 @@ fn embedded_schema_version() -> i32 {
 fn load_migration(client: &mut postgres::Client, name: &str, sql: &str) -> R<()> {
     client
         .batch_execute(sql)
-        .map_err(|e| format!("loading {name}: {}", legible_db_error(e)).into())
+        .map_err(|e| format!("loading {name}: {}", legible_db_error(&e)).into())
 }
 
 /// Connect, naming the reason and NEVER echoing the connection string (issue #475).
@@ -1582,7 +1754,7 @@ fn load_migration(client: &mut postgres::Client, name: &str, sql: &str) -> R<()>
 /// `cairn-node`'s `db::connect` rule, which these sites did not have.
 fn connect_db(conn: &str) -> R<postgres::Client> {
     postgres::Client::connect(conn, postgres::NoTls)
-        .map_err(|e| format!("connecting to the database: {}", legible_db_error(e)).into())
+        .map_err(|e| format!("connecting to the database: {}", legible_db_error(&e)).into())
 }
 
 fn load_schema(client: &mut postgres::Client) -> R<()> {
@@ -2520,19 +2692,29 @@ fn do_pull(
     // structurally at the door — custody is simply not gained on this cycle.
     key: Option<&SigningKey>,
 ) -> R<serde_json::Value> {
-    client.execute(
-        "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
-        &[&peer_name],
-    )?;
+    // The first two statements happen BEFORE any network I/O, so a failure here is
+    // always this node's own database — and `cmd_run` builds its client once, outside the
+    // loop, so after the database goes away every later cycle fails right here for the
+    // life of the process. `LocalDbFault` names the operation AND keeps the
+    // `postgres::Error` reachable, which is what `classify_pull_failure` needs to keep
+    // calling this a local fault rather than link downtime (issue #479).
+    client
+        .execute(
+            "INSERT INTO sync_state (peer) VALUES ($1) ON CONFLICT (peer) DO NOTHING",
+            &[&peer_name],
+        )
+        .map_err(|e| LocalDbFault::boxed("registering this peer in sync_state", e))?;
     // The committed seq cursor + the seq re-offer floor for this peer (db/036).
     // `last_seq` is the highest serving-node event_log.seq we have pulled — the
     // node-LOCAL insertion order, NOT the HLC. `quarantine_floor_seq` (NULL = none)
     // is the seq of the first unresolved refused slot, a SEPARATE persisted column
     // so it self-clears on a clean cycle while the pen row survives as an audit trace.
-    let st = client.query_one(
-        "SELECT last_seq, quarantine_floor_seq FROM sync_state WHERE peer=$1",
-        &[&peer_name],
-    )?;
+    let st = client
+        .query_one(
+            "SELECT last_seq, quarantine_floor_seq FROM sync_state WHERE peer=$1",
+            &[&peer_name],
+        )
+        .map_err(|e| LocalDbFault::boxed("reading this peer's sync cursor", e))?;
     let last_seq: i64 = st.get(0);
     let floor_seq: Option<i64> = st.get(1);
 
@@ -3013,7 +3195,7 @@ fn do_pull(
               WHERE peer = $1",
             &[&peer_name, &max_seq, &new_floor],
         )
-        .map_err(legible_db_error)
+        .map_err(|e| legible_db_error(&e))
         // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
         // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
         // of this function makes the row, so this needs a concurrent `DELETE FROM
@@ -3045,7 +3227,7 @@ fn do_pull(
         &format!("pull {peer_name}"),
         flag_watermark
             .and_then(|since| unlearnable_references(client, &applied_addresses, since))
-            .map_err(legible_db_error),
+            .map_err(|e| legible_db_error(&e)),
     );
 
     // The loud-integrity diagnosis is composed BEFORE the cursor-commit check, because the
@@ -3138,11 +3320,17 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
     // at a time inside the loop, so a pen holding a whole legacy history cannot
     // OOM the recovery path (#110 review: the pen is unbounded-ish by design —
     // quota-capped — and requeue is exactly when it is fullest).
+    // PR #478 converted the three statements INSIDE the loop and left the one that opens
+    // the function: a `SELECT` revoked by a restore gave `Error: "db error"` from the very
+    // command #471 was filed against. Nothing has been examined yet, so there is no
+    // partial-completion report to make (contrast `RequeueInterruptedError` below) — only
+    // a legible reason (issue #479).
     let digests: Vec<Vec<u8>> = client
         .query(
             "SELECT content_digest FROM sync_quarantine ORDER BY first_seen",
             &[],
-        )?
+        )
+        .map_err(|e| LocalDbFault::boxed("listing the quarantine pen", e))?
         .iter()
         .map(|r| r.get(0))
         .collect();
@@ -3183,7 +3371,7 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                 still_quarantined,
                 vanished,
                 &hex_prefix(digest),
-                &legible_db_error(e),
+                &legible_db_error(&e),
             ),
             // null, NEVER 0: the #465 report never ran, and a number here would tell a
             // monitor this run had looked and found nothing (#465's own rule).
@@ -3298,7 +3486,7 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         "requeue",
         flag_watermark
             .and_then(|since| unlearnable_references(client, &released_addresses, since))
-            .map_err(legible_db_error),
+            .map_err(|e| legible_db_error(&e)),
     );
 
     Ok(snapshot(
@@ -3617,7 +3805,7 @@ fn do_blobd(
                         // socket, an unresolvable host and a TLS timeout all as `error
                         // connecting to server`. The errno lives in `source()`.
                         Err(e) => {
-                            eprintln!("blob worker connect failed: {}", legible_db_error(e));
+                            eprintln!("blob worker connect failed: {}", legible_db_error(&e));
                             return;
                         }
                     };
@@ -3675,7 +3863,11 @@ fn do_blobd(
                                  VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
                                 &[&addr, &(idx as i32), &bytes],
                             ) {
-                                eprintln!("blob_chunk insert failed: {e}");
+                                // Same rendering as the connect arms in this function
+                                // (issue #479): `{e}` here is the two words `db error`,
+                                // and the byte tier's failures are already invisible
+                                // enough — this is the only line a starved chunk gets.
+                                eprintln!("blob_chunk insert failed: {}", legible_db_error(&e));
                             } else {
                                 fetched.fetch_add(1, Ordering::Relaxed);
                             }
@@ -3788,8 +3980,32 @@ fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<Sign
 /// Format the byte-tier thread's per-pass failure line (issue #202). Pure so the
 /// log contract is unit-testable: the line must name the subsystem, carry the
 /// underlying cause, and say the loop retries.
-fn blobd_error_line(e: &dyn Error) -> String {
-    format!("blobd pass failed (will retry next interval): {e}")
+fn blobd_error_line(e: &(dyn Error + 'static)) -> String {
+    format!(
+        "blobd pass failed (will retry next interval): {}",
+        operator_chain(e)
+    )
+}
+
+/// Format the run loop's "the fingerprint is missing, and here is why" line. **Pure.**
+///
+/// # The silence this ends (issue #479)
+///
+/// The call site was `if let Ok(fp) = do_fingerprint(&mut client)` with **no `else`, no
+/// log line, nothing**. A schema skew made the `fingerprint` key vanish from every later
+/// JSONL line and the status string quietly stop showing event counts, with zero evidence
+/// why — and a reader of that log has no way to tell a node that stopped reporting from a
+/// node that reported nothing to report.
+///
+/// The line therefore names three things: the missing artefact, the CONSEQUENCE for every
+/// later line (so the gap in the log is self-explaining), and the diagnosis. It does NOT
+/// say the loop retries, because a schema skew does not heal on the next cycle — claiming
+/// it would be exactly the reassuring untruth principle 4 forbids.
+fn fingerprint_error_line(e: &(dyn Error + 'static)) -> String {
+    format!(
+        "fingerprint failed — this cycle's line and status carry no event/blob counts: {}",
+        operator_chain(e)
+    )
 }
 
 /// Unattended field runner: serve in the background, then every `interval_ms`
@@ -3867,7 +4083,7 @@ fn cmd_run(
                     std::thread::sleep(Duration::from_millis(interval_ms));
                 },
                 // Same as the worker above: name the errno, not the layer.
-                Err(e) => eprintln!("blob thread could not connect: {}", legible_db_error(e)),
+                Err(e) => eprintln!("blob thread could not connect: {}", legible_db_error(&e)),
             },
         );
     }
@@ -3913,19 +4129,28 @@ fn cmd_run(
                 // live in `classify_pull_failure` / `record_pull_failure`, pure and
                 // unit-tested, because a wrong branch here is a wrong DIAGNOSIS
                 // handed to an operator at 3am.
-                status += &format!(": PULL FAILED: {e}");
+                // Same rendering as the JSONL key below, for the same reason: `{e}`
+                // over a boxed `postgres::Error` prints `db error` (issue #479).
+                status += &format!(": PULL FAILED: {}", operator_chain(e.as_ref()));
                 record_pull_failure(&mut line, e.as_ref());
             }
         }
         // Cumulative blobs fetched by the separate byte-tier thread (informational;
         // never blocks this loop).
         line["blobs_fetched"] = serde_json::json!(blobs_fetched.load(Ordering::Relaxed));
-        if let Ok(fp) = do_fingerprint(&mut client) {
-            status += &format!(
-                ", {} events, blobs {}+{}",
-                fp["events"], fp["blobs_present"], fp["blobs_referenced_only"]
-            );
-            line["fingerprint"] = fp;
+        match do_fingerprint(&mut client) {
+            Ok(fp) => {
+                status += &format!(
+                    ", {} events, blobs {}+{}",
+                    fp["events"], fp["blobs_present"], fp["blobs_referenced_only"]
+                );
+                line["fingerprint"] = fp;
+            }
+            // Never fatal — the fingerprint is a convergence PROBE, and a node that
+            // cannot take one must still pull. But never silent either (issue #479): the
+            // `if let Ok(..)` this replaces had no else arm at all, so a schema skew
+            // dropped the key from every later line with no evidence anywhere.
+            Err(e) => eprintln!("{}", fingerprint_error_line(e.as_ref())),
         }
 
         writeln!(log, "{line}")?;
@@ -4239,7 +4464,14 @@ fn look_up_peer_trust(client: &mut postgres::Client, kid: &str) -> TrustLookup {
             let undefined_table = e
                 .code()
                 .is_some_and(|c| c == &postgres::error::SqlState::UNDEFINED_TABLE);
-            eprintln!("cairn-sync serve: trust-set lookup for puller {kid} failed: {e}");
+            // The AUTHORIZATION path for an inbound peer: "why did this peer stop being
+            // served" was answered with the eight characters `db error`, on the one line
+            // the operator lines above point the reader at. `e.code()` is read one
+            // statement up, so the SQLSTATE was in hand and thrown away (issue #479).
+            eprintln!(
+                "cairn-sync serve: trust-set lookup for puller {kid} failed: {}",
+                legible_db_error(&e)
+            );
             if undefined_table {
                 TrustLookup::NodePlaneAbsent
             } else {
@@ -5601,6 +5833,224 @@ mod tests {
         assert!(line.contains("retr"), "says the loop retries: {line}");
     }
 
+    // ─── #479: the "db error" species in cairn-sync's OWN run loop ────────────────────
+    //
+    // #469 fixed the CLASS of a local database failure and never its MESSAGE, and its
+    // test asserted only the class — so `cycle 118: PULL FAILED: db error` reached both
+    // the terminal and the JSONL `bet_a.py` reads, every cycle for the life of the
+    // process. These pin the message.
+
+    /// A real `postgres::Error` with a live `source()`, built with NO database and no
+    /// network: `Config`'s own parser is the only way to get one by hand, because
+    /// `DbError` cannot be constructed outside `tokio-postgres`. The same fixture trick
+    /// `cairn-node`'s `db_diagnosis` uses.
+    ///
+    /// It is a `Kind::ConfigParse`, not a `Kind::Db` — worth knowing, because those two
+    /// arms of [`legible_db_error`] behave differently and only a live server can produce
+    /// the second. `clinical_pull.rs` covers the server arm end to end.
+    fn a_real_pg_error() -> postgres::Error {
+        "host=localhost port=not-a-number"
+            .parse::<postgres::Config>()
+            .expect_err("a non-numeric port is not a parseable connection string")
+    }
+
+    /// A purpose-built chain link, so a multi-layer chain can be written down exactly.
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<dyn Error + 'static>>);
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.1.as_deref()
+        }
+    }
+
+    #[test]
+    fn operator_chain_names_every_layer_in_order() {
+        let e = Layer(
+            "pull cycle 7",
+            Some(Box::new(Layer("reading the sync cursor", None))),
+        );
+        assert_eq!(operator_chain(&e), "pull cycle 7: reading the sync cursor");
+    }
+
+    #[test]
+    fn operator_chain_drops_a_layer_the_layer_above_already_ends_with() {
+        // The `LocalDbFault` shape, written down structurally: a wrapper whose own
+        // `Display` already embeds its cause. Printing the cause again is the `{e:#}`
+        // defect, and for a server error the trailing copy is the literal `db error`.
+        // THREE layers, deliberately: with only two, "dropped the duplicate" and "never
+        // walked the chain at all" produce the same string, and the test cannot tell them
+        // apart. The outermost layer here is NOT the answer, so a walk has to happen.
+        let e = Layer(
+            "pull cycle 7",
+            Some(Box::new(Layer(
+                "reading the sync cursor: permission denied for table sync_state [42501]",
+                Some(Box::new(Layer(
+                    "permission denied for table sync_state [42501]",
+                    None,
+                ))),
+            ))),
+        );
+        assert_eq!(
+            operator_chain(&e),
+            "pull cycle 7: reading the sync cursor: permission denied for table \
+             sync_state [42501]",
+            "a layer already ending in its cause must not repeat it"
+        );
+    }
+
+    #[test]
+    fn operator_chain_renders_a_postgres_error_rather_than_its_kind() {
+        let e = Layer("reading the sync cursor", Some(Box::new(a_real_pg_error())));
+        let line = operator_chain(&e);
+
+        assert!(line.starts_with("reading the sync cursor: "), "{line}");
+        assert!(
+            line.contains("port"),
+            "the diagnosis must survive, not just the layer: {line}"
+        );
+        assert!(
+            !line.ends_with("db error") && !line.contains(": db error"),
+            "#479's whole subject: {line}"
+        );
+    }
+
+    #[test]
+    fn operator_chain_renders_a_bare_postgres_error() {
+        // No wrapper at all — the shape `do_pull`'s first two statements produce today.
+        let e = a_real_pg_error();
+        let line = operator_chain(&e);
+        assert!(!line.is_empty(), "a chain of one must still say something");
+        assert_ne!(line, "db error", "{line}");
+        assert!(line.contains("port"), "{line}");
+    }
+
+    #[test]
+    fn operator_chain_never_forges_a_log_line() {
+        // A server DETAIL arrives with raw newlines, and this log is line-oriented: a
+        // multi-line cause must be collapsed, never dropped. Same rule
+        // `compose_db_diagnosis` already obeys — this is the other door into that log.
+        let e = Layer(
+            "first line\nFATAL: forged second line",
+            Some(Box::new(Layer("cause\nsecond forged line", None))),
+        );
+        let line = operator_chain(&e);
+        assert!(!line.contains('\n'), "one line per event: {line}");
+        assert!(
+            line.contains("forged second line"),
+            "collapsed, never dropped: {line}"
+        );
+        assert!(line.contains("second forged line"), "both layers: {line}");
+    }
+
+    #[test]
+    fn a_local_db_fault_names_the_operation_and_keeps_its_cause() {
+        let fault = LocalDbFault::new("reading the sync cursor", a_real_pg_error());
+
+        let shown = fault.to_string();
+        assert!(shown.starts_with("reading the sync cursor: "), "{shown}");
+        assert!(shown.contains("port"), "the diagnosis rides along: {shown}");
+        assert_ne!(shown, "db error", "{shown}");
+
+        // `Debug` delegates to `Display`, because `main`'s `Termination` prints `{err:?}`.
+        assert_eq!(format!("{fault:?}"), shown);
+
+        // The cause stays REACHABLE. Dropping it is what silently reverts every local
+        // fault to `partition`.
+        assert!(
+            Error::source(&fault).is_some_and(|c| c.is::<postgres::Error>()),
+            "the postgres error must still be findable through source()"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_local_db_fault_is_still_a_local_fault_not_a_partition() {
+        // THE TRAP, pinned. `downcast_ref` on a `dyn Error` does NOT walk `source()`, so
+        // naming the operation at a failing statement — which is the whole point of
+        // `LocalDbFault` — would otherwise push the error out of the classifier's reach
+        // and log this node's dead database as link downtime, charging the Bet A
+        // availability figure for it. #469's defect, reinstated by its own fix.
+        let e: Box<dyn Error> = LocalDbFault::boxed("reading the sync cursor", a_real_pg_error());
+        let (classes, metrics) = classify_pull_failure(e.as_ref());
+
+        assert_eq!(
+            classes,
+            &["local_fault"],
+            "this node's database is gone; the link was never touched: {e}"
+        );
+        assert!(
+            metrics.is_null(),
+            "it failed before any work was measurable: {metrics}"
+        );
+    }
+
+    #[test]
+    fn a_failed_pull_records_a_legible_reason_not_db_error() {
+        // The JSONL surface `bet_a.py` reads. `record_pull_failure` is the ONE seam both
+        // the machine-readable line and the operator's terminal line pass through, so
+        // pinning it here pins both.
+        let mut line = serde_json::json!({ "cycle": 118 });
+        let e: Box<dyn Error> = LocalDbFault::boxed("reading the sync cursor", a_real_pg_error());
+        record_pull_failure(&mut line, e.as_ref());
+
+        let reported = line["pull_error"].as_str().expect("a reason is recorded");
+        assert_ne!(reported, "db error", "#479's title sentence");
+        assert!(
+            reported.starts_with("reading the sync cursor: "),
+            "the operator learns WHAT FAILED, not only that something did: {reported}"
+        );
+        assert!(reported.contains("port"), "…and why: {reported}");
+        assert_eq!(line["local_fault"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn blobd_error_line_carries_a_database_diagnosis() {
+        // The line's own doc says it "must carry the underlying cause". Over a
+        // `postgres::Error` it carried the two words `db error` — #202's fix meeting
+        // #479's species.
+        let e: Box<dyn Error> = Box::new(a_real_pg_error());
+        let line = blobd_error_line(e.as_ref());
+        assert!(line.contains("blobd"), "{line}");
+        assert!(line.contains("retr"), "{line}");
+        assert!(
+            line.contains("port"),
+            "the cause must be the DIAGNOSIS, not the kind: {line}"
+        );
+    }
+
+    #[test]
+    fn a_missing_fingerprint_says_why() {
+        // `if let Ok(fp) = do_fingerprint(…)` had NO else arm: a schema skew made the
+        // `fingerprint` key vanish from every later JSONL line and the status string
+        // quietly stop showing event counts, with zero evidence why.
+        //
+        // The fixture's operation phrase deliberately does NOT contain the word
+        // "fingerprint": the line must name the missing thing ITSELF, or it passes on any
+        // error that happens to mention one and says nothing when the error does not.
+        let e: Box<dyn Error> = LocalDbFault::boxed("reading the event count", a_real_pg_error());
+        let line = fingerprint_error_line(e.as_ref());
+        assert!(
+            line.contains("fingerprint"),
+            "names the missing thing: {line}"
+        );
+        assert!(
+            line.contains("counts"),
+            "…and its CONSEQUENCE — every later line silently loses the counts, which is \
+             the whole reason the silence mattered: {line}"
+        );
+        assert!(line.contains("port"), "carries the diagnosis: {line}");
+        assert!(
+            !line.contains('\n'),
+            "one line per event, like every other line here: {line}"
+        );
+    }
+
     #[test]
     fn write_frame_refuses_an_over_cap_frame() {
         // PR #225 review: the read cap alone is asymmetric — a serving node whose
@@ -6607,6 +7057,88 @@ mod quarantine_tests {
             metrics.is_null(),
             "it failed before any work was measurable, so it claims nothing: {metrics}"
         );
+
+        // …AND THE MESSAGE, which is the half this test used to leave unasserted — the
+        // reason #479 survived the fix that added the class above. This is the end-to-end
+        // form of `a_failed_pull_records_a_legible_reason_not_db_error`: not a constructed
+        // error but the real one a terminated backend produces, through the real door.
+        let mut line = serde_json::json!({ "cycle": 118 });
+        record_pull_failure(&mut line, err.as_ref());
+        let reported = line["pull_error"].as_str().expect("a reason is recorded");
+
+        assert_ne!(reported, "db error", "#479's title sentence, verbatim");
+        assert!(
+            reported.starts_with("registering this peer in sync_state: ")
+                || reported.starts_with("reading this peer's sync cursor: "),
+            "the operator learns WHICH statement met the dead backend — either of the two \
+             is correct, since which one is reached first depends on how far the \
+             termination had progressed: {reported}"
+        );
+        assert!(
+            !reported.contains('\n'),
+            "one line, even end to end: {reported}"
+        );
+    }
+
+    /// A REAL SERVER ERROR is rendered ONCE by [`operator_chain`] — the `Kind::Db` arm.
+    ///
+    /// The pure fixtures above build their `postgres::Error` from an unparseable
+    /// connection string, which is `Kind::ConfigParse`. That arm renders through
+    /// [`kind_and_causes`], which **already walks `source()`**, so the rendered text ends
+    /// with the cause's own text, the suffix rule drops the next layer, and the dedupe
+    /// appears to work whether or not the walk stops.
+    ///
+    /// `Kind::Db` — the arm every in-DB refusal takes — behaves differently.
+    /// [`legible_db_error`] renders it as `message [SQLSTATE] — DETAIL — HINT`, while
+    /// `Error::source()` hands back the `DbError` underneath, whose own `Display` is
+    /// `severity: message` + `\nDETAIL:` + `\nHINT:`. Neither is a suffix of the other,
+    /// so without the `break` the server's message is printed TWICE on one line — the
+    /// exact duplication `operator_chain`'s header rejects `{e:#}` for.
+    ///
+    /// It needs a live server because a `DbError` cannot be constructed by hand. The
+    /// identical test exists in `cairn-node`'s `db_diagnosis` suite, where the same defect
+    /// was found and fixed in the same commit.
+    #[test]
+    fn a_server_error_is_rendered_once_through_the_whole_chain() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        // No schema and no writes: a bare connection is the whole fixture, so this needs
+        // neither the serial guard nor a loaded database.
+        let mut c = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+
+        // Distinctive strings throughout — a substring that could occur incidentally
+        // would make the counts below meaningless.
+        let pg = c
+            .batch_execute(
+                "DO $$ BEGIN RAISE EXCEPTION 'the quarantine pen refused' \
+                 USING ERRCODE = 'P0001', DETAIL = 'a distinctive detail', \
+                 HINT = 'a distinctive hint'; END $$;",
+            )
+            .expect_err("the DO block always raises");
+
+        let wrapped: Box<dyn Error> = LocalDbFault::boxed("listing the quarantine pen", pg);
+        let line = operator_chain(wrapped.as_ref());
+
+        assert!(
+            line.starts_with("listing the quarantine pen: "),
+            "the operation leads: {line}"
+        );
+        assert!(line.contains("[P0001]"), "the SQLSTATE survives: {line}");
+        for once in [
+            "the quarantine pen refused",
+            "a distinctive detail",
+            "a distinctive hint",
+        ] {
+            assert_eq!(
+                line.matches(once).count(),
+                1,
+                "{once:?} must appear EXACTLY once — twice is `{{e:#}}`'s defect, which \
+                 this function exists to avoid: {line}"
+            );
+        }
+        assert!(!line.contains('\n'), "still one line: {line}");
     }
 
     /// A mixed batch (valid · garbage · valid): the garbage event is quarantined
@@ -6960,7 +7492,7 @@ mod quarantine_tests {
             .unwrap();
         let err = unlearnable_references(&mut c, &[vec![0u8; 34]], 0)
             .expect_err("the ledger is not on the search_path here");
-        let legible = legible_db_error(err);
+        let legible = legible_db_error(&err);
         c.batch_execute("ROLLBACK;").unwrap();
 
         assert_ne!(legible, "db error", "the whole point: {legible}");
