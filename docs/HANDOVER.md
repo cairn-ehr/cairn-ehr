@@ -10,12 +10,11 @@ the cross-cutting authority floor and the operator surface over all three are bu
 re-derive their decisions.**
 
 - **BUILT.** **Part A** (Slice 65, ADR-0062) — graded append-only assertions over an event / a thread /
-  a whole chart, the effective grade being the **max** over all three; computes and reports only.
-  **Part B** (Slice 67, ADR-0063) — the precise `{class, severity}` is captured **pre-seal** and sealed
-  with the body, while a **rung** chosen by the standing grade rides the envelope in the clear; emits a
-  *signal*, enforces nothing. **The operator surface** (Slice 69) — `patient-sensitivity <chart>`, the
-  one query that tells the whole truth, ADR-0064's §1.2 budget **MET** and pinned by a test (residual
-  [#436](https://github.com/cairn-ehr/cairn-ehr/issues/436)).
+  a whole chart, effective grade = **max** over all three; computes and reports only. **Part B**
+  (Slice 67, ADR-0063) — the precise `{class, severity}` is captured **pre-seal** and sealed with the
+  body, while a **rung** chosen by the standing grade rides the envelope in the clear; emits a
+  *signal*, enforces nothing. **The operator surface** (Slice 69) — `patient-sensitivity <chart>`,
+  ADR-0064's §1.2 budget **MET** and pinned by a test (residual **#436**).
 - **The authority floor** (Slice 68, ADR-0064, spec v0.66) — a protection-removing claim takes effect
   only when a human this node can hold responsible stands behind it: ONE predicate
   (`cairn_claim_authority`, db/005) at exactly ONE site (the `NOT EXISTS` in
@@ -47,15 +46,9 @@ Slice 65's own follow-ons still open: **#374** (thread resolution resolves only 
 **#379** (the grade in the twin) and **#436** (the mis-chart withdrawal when it arrives by replication).
 **#374 and #379 each need a DECISION, not a patch** — #374 puts a body read on the safety-critical grade
 path, and #379 must choose *which* grade an immutable artefact states, landing with #283 or the
-demographic twin-match floor refuses a one-sided widening.
-
-> [!NOTE]
-> **CLOSED — the `arrayref` supply-chain incident (#445, 2026-08-20)**: a typosquat reached
-> `cairn-event` via `blake3 → bao`, fixed upstream the same day, no code change. One residue open:
-> `bao` is stale, so evaluating `bao-tree` is
-> [#454](https://github.com/cairn-ehr/cairn-ehr/issues/454). The finding that outlived it — a
-> gitignored `cairn_pgx` lockfile — is closed (#446); narrative in
-> `crates/cairn-node/tests/cargo_lockfiles_tracked.rs`.
+demographic twin-match floor refuses a one-sided widening. The `arrayref` supply-chain incident (#445) is
+**closed** — a typosquat reached `cairn-event` via `blake3 → bao`, fixed upstream the same day, no code
+change; one residue, **#454** (`bao` is stale — evaluate `bao-tree`).
 
 > [!IMPORTANT]
 > **Two code traps that outlive their slices, repeated here because both look like tidy-ups.**
@@ -121,7 +114,7 @@ runnable clinical surface exists that has never been through one — include it 
 
 ---
 
-**Session date:** 2026-08-22 (08-21's four passes, then four more: **#460**, the admit-and-flag repair of #370's door asymmetry, which had contradicted ADR-0063 · **#465**, the operator signal that repair owed · **#467/#469**, the two places a database failure said nothing · **#471/#473/#474/#475**, the sweep that finished them) · **Spec/ADRs:** v0.66 (through **ADR-0064**; **no new ADR** in any of the three) · **`SCHEMA_GENERATION`:** 50 (`db/050`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-08-23 (the db-error sweep's tail: **#481**, the DB-skip guard that could not bind the crate it guarded · **#479**, the run loop's own `db error` · **#477**, the §5.7 auto-apply ceremony) · **Spec/ADRs:** v0.66 (through **ADR-0064**; no new ADR) · **`SCHEMA_GENERATION`:** 50 (`db/050`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — one line each; ROADMAP + the ADR log + git carry the detail:
 
@@ -130,17 +123,15 @@ runnable clinical surface exists that has never been through one — include it 
   veto-gated pipeline/blocking, B3 eval harness, compound keys, generator, weight-learning).
 - **The §5.7 identity core C1–C5** (link · apply seam · auto-apply band · dispute · identify · repudiate
   + the alias pool; C5+ `reattribute` waits on a clinical-note surface) · **the §5.4 John-Doe subsystem**
-  (slices A–D, photo/text evidence, the `enroll-human` ceremony; §5.12 push-alert open).
-- **The §5.3/§5.8 search-before-create funnel** (ADR-0061) — the registration act, its db/045 floor and
-  projection, the advisory db/046 search, `cairn-patient-search`, and the **precedence rule** (#345,
-  db/005 step 8b; `patient.created` retired in db/047).
+  (slices A–D, photo/text evidence, the `enroll-human` ceremony; §5.12 push-alert open) · **the §5.3/§5.8
+  search-before-create funnel** (ADR-0061 — the registration act, db/045 floor + projection, the advisory
+  db/046 search, `cairn-patient-search`, and the **precedence rule** #345 at db/005 step 8b).
 - **`clinical.medication` slices 1–6b** — assert/cease · bitemporal dose timeline · cross-thread
   reconciliation (ADR-0047) · attestation overlay (ADR-0049) · per-field dose correction (ADR-0050) ·
   inline `substance.coding` (ADR-0059); with the twin-check registry (ADR-0048) and the contributor-role
-  floor (ADR-0051).
-- **Born-sealed clinical bodies** (ADR-0052) · **per-write human authorship** (ADR-0053 — grading
-  half-live until #245) · **the §5.9 stream COMPLETE through its read surface** (see ⇒ NEXT).
-  **§5.9 enforces nothing beyond display/emission.**
+  floor (ADR-0051). **Born-sealed bodies** (ADR-0052) · **per-write human authorship** (ADR-0053 —
+  grading half-live until #245) · **the §5.9 stream COMPLETE through its read surface** (see ⇒ NEXT),
+  which **enforces nothing beyond display/emission**.
 - **The L3 reference UI** — `cairn-gui/`, a standalone workspace, one-way GUI → crates. The iced shell
   FAILED the accessibility bar (spike 0004, retired 08-03); today it is **`cairn-gui-tauri`**, a Tauri 2
   window on one patient's medication chart (plain JS, no npm). The pane/routing/freshness state machine
@@ -157,256 +148,144 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-08-22 (last) — finishing the sweep a database failure started
+### 2026-08-23 (last) — the sweep's tail, and the guard that could not bind the crate it guarded
 
-**Closes [#473](https://github.com/cairn-ehr/cairn-ehr/issues/473),
-[#474](https://github.com/cairn-ehr/cairn-ehr/issues/474),
-[#475](https://github.com/cairn-ehr/cairn-ehr/issues/475),
-[#471](https://github.com/cairn-ehr/cairn-ehr/issues/471); opens
-[#477](https://github.com/cairn-ehr/cairn-ehr/issues/477). `crates/cairn-node` +
-`crates/cairn-sync` — no migration file, no ADR, SCHEMA stays 50.** The four the #472 review
-raised and could not absorb. Every item mutation-checked.
+**Closes [#481](https://github.com/cairn-ehr/cairn-ehr/issues/481),
+[#479](https://github.com/cairn-ehr/cairn-ehr/issues/479),
+[#477](https://github.com/cairn-ehr/cairn-ehr/issues/477); opens
+[#485](https://github.com/cairn-ehr/cairn-ehr/issues/485). `crates/cairn-node` +
+`crates/cairn-sync` — no migration file, no ADR, SCHEMA stays 50.** Every item
+mutation-checked.
 
-1. **⇒ THE ONE PIECE THAT IS NOT A RENDERING: `db_diagnosis::LocalDbFault`.** `db.rs` renders with
-   `anyhow!("…: {}", legible_db_error(&e))`, which is right *there* — nothing downstream reads the
-   cause. `sync.rs` is different: `run`'s catch-all must tell "this node's database failed" from "the
-   peer did not answer", and that walks the error chain. **`anyhow!` empties it** — the macro takes a
+1. **⇒ A GUARD ONLY RUNS WHEN ITS OWN CRATE IS TESTED.** #450's fail-closed DB-skip guard was
+   correct and lived in a `cairn-node` integration test, so `cargo test -p cairn-sync` printed
+   `101 passed` with no database — over the crate holding the ONLY test of a real mid-loop
+   requeue interruption (#471) and the whole of #475's acceptance criterion. The guard moved to
+   `tests/common/db_gate.rs` and both crates pull it in with `#[path]`: **one implementation,
+   two binaries, deliberately not two copies** (#452's lesson). CI was never exposed —
+   `run-db-gated-tests.sh` runs a *workspace* test — but a per-crate job would have been.
+2. **⇒ `file!()` IS THE PATH THE INCLUDING FILE WROTE, NOT A CANONICAL ONE.** So the shared
+   module has two spellings, the self-exclusion stopped firing, and the walk started feeding
+   the file's OWN fixture names (`CAIRN_TEST_PG8`, …) into the requirement list. Caught by name
+   the first time it ran, because the existing assertion checks the exclusion **fired exactly
+   once** rather than assuming it did — an assertion that had never had a worked example until
+   then. New pure `lexically_normalized` folds `..` without touching the filesystem
+   (`canonicalize` needs a path that exists relative to the process cwd, which under
+   `cargo test -p X` is the crate dir, not the workspace root).
+3. **The durable half is `every_crate_with_db_gated_tests_runs_this_guard`** — the obligation is
+   DERIVED from which crates read a gate variable, so a third crate growing DB-gated tests
+   cannot reopen the hole silently.
+4. **⇒ THE FIX THAT LANDED THE DAY BEFORE PRINTED THE WHOLE DIAGNOSIS TWICE.**
+   `db_diagnosis::operator_chain` walked past the `tokio_postgres::Error` it had just rendered
+   into that error's own `DbError`, so a server error read
+   `… refused [P0001] — detail — HINT: hint: ERROR: … refused DETAIL: detail HINT: hint`. Its
+   suffix rule cannot catch this: `compose_db_diagnosis` and `DbError::Display` format the same
+   three fields differently, so neither ends with the other. **It survived because every
+   fixture built its error from an unparseable connection string** — `Kind::ConfigParse`, whose
+   rendering ends with its cause's text, so the suffix rule fired and the dedupe LOOKED
+   correct. The arm every in-DB refusal actually takes had no coverage at all, and could not:
+   a `DbError` cannot be constructed by hand. Fix is one `break` — `legible_db_error` has
+   already consumed that error's whole source subtree — plus a DB-gated test in **both** crates.
+5. **#479 — the run loop's own species, on the surface `bet_a.py` reads.** `cycle 118: PULL
+   FAILED: db error`, every cycle for the life of the process, because `cmd_run` builds its
+   client ONCE outside the loop. New pure `operator_chain` (the `Box<dyn Error>` twin of
+   `cairn-node`'s) now feeds both the terminal line and the JSONL `pull_error` key. Eight sites
+   in all: `do_pull`'s two pre-network statements, `do_requeue`'s opening query (PR #478
+   converted the three INSIDE the loop and left the one that opens the function), the byte
+   tier's chunk insert, the serve trust-set lookup — the AUTHORIZATION path for an inbound
+   peer, answered with eight characters — and `do_fingerprint`'s call site, which had **no
+   `else` arm at all**: a schema skew dropped the `fingerprint` key from every later JSONL line
+   with zero evidence why.
+6. **⇒ THE LANDMINE THE ISSUE WARNED ABOUT, DISARMED RATHER THAN AVOIDED.** Naming the failing
+   operation means wrapping, and `downcast_ref` on a `dyn Error` inspects the OUTERMOST type
+   only — so a wrapper would have pushed the `postgres::Error` out of
+   `classify_pull_failure`'s reach and logged this node's dead database as link downtime,
+   charging the Bet A availability figure. #469's defect, reinstated by its own fix.
+   `chain_reaches_a_postgres_error` walks instead, **last**, after the two arms that match on
+   the outermost type deliberately. **The HANDOVER's old claim that cairn-sync's classifier
+   "cannot" walk the chain is retired.**
+7. **#477 — the §5.7 auto-apply ceremony, converted as a SUBSYSTEM.** `auto_apply.rs` alone
+   would have left `resolve_failure_line` — the line that fires when an epoch's actor cannot be
+   resolved at all — rendering `matcher_actor.rs`'s three unwrapped registry reads. Both files
+   are now in `GUARDED` (five files), each with its own count pin. **The two count pins
+   deliberately count different shapes:** `sync.rs` counts bare `LocalDbFault::new(` because one
+   of its twelve sites spans several lines; `auto_apply.rs` counts the `.map_err(|e| …` shape,
+   because its TEST module builds one too and the bare form would report a real drop as healthy.
+8. **Where an interpolation scan cannot reach, pin the SITES.** `cairn-sync/src/main.rs` stays
+   out of `GUARDED` for the reason #479 itself gives (10.1k lines, most `{e}` sites hold errors
+   that are not database errors). Its eight fixed sites are pinned by exact shape plus a count,
+   in `cairn-node`'s guard file — which reads by repo path, so a fourth copy of the machinery
+   was not needed. **Honest about being narrower than a scan:** it protects the sites that were
+   fixed and NOT the next one somebody writes.
+9. **Two prose corrections the work forced.** `ApplyError` was called "legible by construction"
+   in the guard's own header — it is not (#480). And the guard's scope sentence gains its
+   measured residual rather than an estimate: 23 further files under `crates/cairn-node/src/`
+   execute SQL and are outside `GUARDED` (**#485**); those sites are ugly-but-not-silent — a
+   bare `?` preserves `source()`, so anyhow's chain printing still reaches the `DbError` — but
+   they name no operation.
+
+**Still open from the sweep** (all four raised by PR #478's review, none fixed here):
+[**#480**](https://github.com/cairn-ehr/cairn-ehr/issues/480) (`ApplyError` conflates a door
+refusal with a transient local fault, so `requeue` can annotate a pen row with a claim the door
+never adjudicated) · [**#482**](https://github.com/cairn-ehr/cairn-ehr/issues/482) (an mTLS pin
+mismatch is logged `PARTITION`, so a revoked peer key reads as link downtime) ·
+[**#483**](https://github.com/cairn-ehr/cairn-ehr/issues/483) (`connection_label` will not
+compile on Windows; no exposure, all CI is `ubuntu-24.04`) ·
+[**#484**](https://github.com/cairn-ehr/cairn-ehr/issues/484) (`do_requeue` reports through an
+untyped `serde_json::Value`). Also **#476** (~124 test-guard comments calling a per-database
+advisory lock "cluster-wide").
+
+### 2026-08-22 — the db-error sweep, in four passes (condensed)
+
+**Closed #460, #465, #467, #469, #471, #473, #474, #475; `db/050`, SCHEMA 49 → 50; no new ADR in
+any of them.** ROADMAP carries each pass in full. What still binds a next session:
+
+1. **⇒ `tokio_postgres::Error`'s `Display` IS THE STRING `"db error"`** — a bare match on kind
+   that never chains to the source holding the message, the DETAIL and the SQLSTATE. And
+   **`anyhow!("…: {e}")` discards the source too**, so the wrapper meant to add context
+   subtracts the diagnosis. `db_diagnosis` renders `message [SQLSTATE] — DETAIL — HINT`,
+   byte-identical to `cairn-sync`'s `legible_db_error`, so an operator learns one format.
+2. **⇒ `LocalDbFault` IS NOT A RENDERING AND MUST NOT BE "TIDIED" INTO AN `anyhow!`.** `Display`
+   is the legible text, `source()` is the original error a classifier walks. `anyhow!` takes a
    formatted `String`, so the `tokio_postgres::Error` is consumed by the `format!` and is never
-   anyone's `source()`. Rendering the sync path that way would have reinstated #469's defect inside
-   the fix for it. `LocalDbFault` does both: `Display` is the legible text, `source()` is the original
-   error. **Replacing it with an `anyhow!` looks like a tidy-up and silently reverts every local fault
-   to `partition`** — the trap in this pass most likely to be sprung in good faith.
-2. **#473 — the advisory lookup on the CLINICAL path.** All three `safety.rs` queries render at the
-   SOURCE, which fixes every caller at once (#473's own preferred fix — `{e:#}` at the log site is
-   weaker, because with a bare `?` the anyhow chain bottoms out at the same `Display`). The generic
-   binding is now `why`, and **the contract it rests on is written down**: the caller hands in an
-   already-rendered diagnosis. A future caller can still break it, so both feeds are pinned by test.
-3. **#474 — three lines and a misdiagnosis.** The deny-all arm threw away the door's own `RAISE` text,
-   which on that arm IS the entire diagnosis. The FREEZE arm — where the cursor HALTS — could not
-   separate `40001`/`40P01` from `53100` from `42501`, the exact list its own comment gives as the
-   reason the freeze exists. And `run: PARTITION` was asserted over what is routinely a LOCAL failure.
-   **The two crates' classifiers are NOT copy-paste-compatible:** `pull_failure_class` walks
-   `chain()`; `cairn-sync`'s cannot, because `downcast_ref` on a `dyn Error` stops at the outermost
-   type. Read both docs before porting between them. Item 4: **`let _ = connection.await;` was the
-   only place a mid-session death was reported** — which is *why* a later client can only say
-   "connection closed" (`Kind::Closed`'s `source()` is genuinely `None`). A clean close returns
-   `Ok(())`, so a healthy node stays quiet; `connection_label` names which connection died, parsed
-   rather than echoed because the string can carry a password.
-4. **#475 / #471 — `cairn-sync`'s two loops.** `init` now reads `loading 031_medication: relation
-   "decoy" does not exist [42P01] — this migration never loaded`; nine bare `Client::connect` sites
-   gained a reason and the never-echo rule. `do_requeue`'s three in-loop `?`s carry
-   `RequeueInterruptedError` — `CursorCommitError`'s shape one command over — so a run that released
-   four rows and then died still reports those four (ADR-0060 decision 2).
-   `references_unlearnable` goes **null, never 0**, and each site reports the counts as they TRULY
-   stand: at the release `DELETE`, `released` has not moved for that row, because the event is in
-   `event_log` but the pen row is not yet gone.
-5. **⇒ THE GUARD'S OWN FALSE POSITIVE, and the reason it is worth knowing.** Widening `GUARDED` to
-   three files failed on exactly three lines — **all of them comments explaining the defect and
-   quoting the shape that caused it.** The production code was already clean. A guard that punishes
-   the most precise available description of the bug it protects against pushes every future writer
-   toward vaguer prose. The predicate now skips whole-line comments (a trailing comment after code is
-   still scanned — erring safe), pinned by its own test. **`cairn-sync/src/main.rs` stays OUT**, with
-   the reason stated rather than left as a gap: 9,000 lines mixing production and test code, dozens of
-   `{e}` sites over errors that are not database errors, so the scan would be mostly noise — and a
-   guard whose failures are usually noise is one people learn to silence.
-6. **Test mechanic, second outing:** the `FOR UPDATE` row lock under a short `lock_timeout` forced
-   #471's mid-loop failure. Note *which* statement it catches: MVCC readers do not block, so the
-   `SELECT` succeeds and the event applies through the real door — only the pen-row `DELETE` fails,
-   which is exactly the mid-loop shape the issue is about.
-
-7. **⇒ THE REVIEW FOUND THE SWEEP HAD LEFT ITS OWN SPECIES ALIVE, IN THE FILE IT SWEPT.**
-   `anyhow::Error`'s plain `Display` prints **only the outermost message** — so `.context()` over an
-   already-rendered database failure printed the layer and threw the diagnosis away. Two live sites:
-   `serve`'s per-session line (`serve: session with <peer> ended: serve: connecting to DB`, once per
-   inbound session for the whole of a local DB outage) and `run`'s `PARTITION` line (which also lost
-   `with_io_timeout`'s `(stalled peer)` text, the only thing separating a silent peer from a gone
-   one). **The widened guard reported green over both**, because the fix for its false positives had
-   been to RENAME the bindings — and two of the renamed ones genuinely held database errors. *A
-   rename is not proof;* the guard's doc now says so, and says which two shapes it cannot see at all.
-   **And `{e:#}` is NOT the fix:** `LocalDbFault`'s `Display` already embeds the rendered cause, so
-   the alternate form prints it twice — for a server error the trailing copy is the literal
-   `db error`. New pure `db_diagnosis::operator_chain` walks the chain, renders any
-   `tokio_postgres::Error` through `legible_db_error`, and **drops a layer the layer above already
-   ends with** — a suffix test, not a type test, so any future self-rendering wrapper inherits it.
-8. **⇒ A FROZEN CURSOR LOOKED EXACTLY LIKE A HEALTHY CYCLE.** All three of `pull_into`'s freeze paths
-   `break` and return `Ok`, which is correct (freezing is the deliberate availability choice) — but
-   `run`'s `Ok` arm then printed an ordinary summary, `pending=0` included. A `53100` disk-full froze
-   the cursor and emitted **neither** `LOCAL FAULT` nor `PARTITION`: the whole new classification is
-   blind to it, because the cycle did not fail. A monitor keyed on those two tokens would watch a
-   stuck node forever. `PullStats.frozen: Option<i64>` plus a pure `frozen_cursor_line` fixes it;
-   the seq is the number that says whether the next cycle made progress.
-9. **Smaller review fixes worth knowing.** `RequeueInterruptedError`'s `Debug` is now hand-written to
-   delegate to `Display` — `fn main() -> R<()>` has no error printer, so `Termination` prints
-   `{err:?}`, and #471's whole acceptance criterion is a *sentence*; both tests asserted
-   `to_string()` and passed while production delivered struct syntax. The interrupted message said
-   "the remaining rows were never examined", which was **false about the row it stopped on** — that
-   row was reached, and on a failed release its event may already be durable in `event_log` while its
-   pen row survives; it is now named as undecided (principle 4: never a precise untruth). Three
-   `password=hunter2` literals became runtime-derived canaries (house rule 6, and the same file
-   already derived one 60 lines above). The connection-death LINE got a pure seam and a test —
-   reverting it to `let _ = connection.await;` had left the workspace green — and its comment no
-   longer lists "a TLS teardown" among the causes, on a connection opened `NoTls`.
-10. **Comment rot the review caught, worth reading before trusting a nearby claim.** `safety.rs`
-    justified rendering-at-source with "with a bare `?` the anyhow chain bottoms out at the same
-    `Display`" — **false**: `Error::db` stores the parsed `DbError` as the cause, and its `Display`
-    is message + DETAIL + HINT. The fix is still right, for three *other* reasons (no SQLSTATE in
-    `DbError`'s `Display`, raw newlines, and `advisory_or_withheld` being generic over `E: Display`),
-    and those are now what the comment says. `ApplyError` was called "legible by construction" — it
-    is not (its `None` arm is `e.to_string()`), and that has a behavioural consequence now filed as
-    **#480**. `custody_withheld` was called "bound" when it is *escaped* and says so in capitals.
-
-**The scope sentence that had to go.** The widened guard claimed its three files were "every
-production file in this crate whose statements talk to the database". **28** files under
-`crates/cairn-node/src/` execute SQL, and the claim *replaced* a correct one in a section headed
-"Scope, stated so coverage is not confused with aspiration" — while this very HANDOVER named two live
-offenders it excluded. A reader who believes the crate is covered never widens the guard. Where the
-interpolation scan cannot reach, pin by COUNT instead: `sync.rs`'s twelve `LocalDbFault` sites are
-now pinned, because reverting any one to `.context()` compiles and leaves every existing test green.
-
-**Raised, not fixed: [#477](https://github.com/cairn-ehr/cairn-ehr/issues/477)** — the same species
-survives outside the three guarded files. `auto_apply.rs:304/:324` render `db error` on the **§5.7
-identity auto-apply ceremony** (verified: `apply_auto_candidate` returns `anyhow::Result` and reaches
-the database with a bare `?`), and ~24 further raw `?` sites elsewhere in `cairn-node` name no
-operation. Those 24 are **ugly-but-not-silent** — a bare `?` preserves the source, so anyhow's chain
-printing still reaches the `DbError` — which is why they are the lower half of that issue.
-
-**Also raised by the review, not fixed** (house rule 5):
-[**#479**](https://github.com/cairn-ehr/cairn-ehr/issues/479) — the same species live in
-`cairn-sync`'s OWN run loop: `do_pull`'s first two statements are bare `?` *before any network I/O*,
-so `cycle 118: PULL FAILED: db error` reaches both the terminal and the JSONL `bet_a.py` reads, every
-cycle for the life of the process. #469 fixed the *class* and never the *message*, and its test
-asserts only the class. Plus `do_requeue`'s opening query, a `do_fingerprint` result discarded with
-no `else`, and the inbound puller's trust-set lookup.
-[**#480**](https://github.com/cairn-ehr/cairn-ehr/issues/480) — `ApplyError` conflates a door refusal
-with a transient local fault, so `requeue` can annotate a pen row `last_requeue_error = "connection
-closed"`, a claim that the door adjudicated bytes it never saw.
-[**#481**](https://github.com/cairn-ehr/cairn-ehr/issues/481) — #450's fail-closed DB-skip guard is a
-`cairn-node` test only, so `cargo test -p cairn-sync` with no database exits 0 — and #471's and
-#475's behavioural halves live in exactly that crate.
-[**#482**](https://github.com/cairn-ehr/cairn-ehr/issues/482) — `PullFailureClass` needs a third
-class: an mTLS **pin mismatch** is logged `PARTITION`, so a revoked peer key reads as link downtime
-and is charged against the availability figure. `cairn-sync` already carries three classes.
-[**#483**](https://github.com/cairn-ehr/cairn-ehr/issues/483) — `connection_label` will not compile
-on Windows (`Host::Unix` is `#[cfg(unix)]`); no exposure today, all CI is `ubuntu-24.04`.
-[**#484**](https://github.com/cairn-ehr/cairn-ehr/issues/484) — `do_requeue` reports through an
-untyped `serde_json::Value`, so its **null-never-zero** rule is one hand-written argument rather than
-an `Option<u64>`, and the shared-key-set guarantee is a closure's lexical scope.
-
-### 2026-08-22 — the two places a database failure said nothing
-
-**Closes [#467](https://github.com/cairn-ehr/cairn-ehr/issues/467) and
-[#469](https://github.com/cairn-ehr/cairn-ehr/issues/469); `crates/cairn-node` +
-`crates/cairn-sync` + `bet_a.py` — no schema change, no ADR, SCHEMA stays 50.** Both are #109's
-species, and both were found by a real failure rather than by reading. Every item mutation-checked.
-
-1. **⇒ `tokio_postgres::Error`'s `Display` IS THE STRING `"db error"`** — a bare match on kind that
-   never chains to the source holding the message, the DETAIL and the SQLSTATE. Worse, `anyhow!("…:
-   {e}")` *also discards the source*, so anyhow's chain printing has nothing left either: the wrapper
-   meant to add context subtracted the diagnosis. That is the whole content of the CI line `loading
-   031_medication: db error`. New pure `cairn-node::db_diagnosis` renders `message [SQLSTATE] —
-   DETAIL — HINT`, **byte-identical to cairn-sync's `legible_db_error`** so an operator learns one
-   format; all 14 sites in `db.rs` route through it, and the `connect` door **never echoes the
-   connection string** (it can carry a password). **A three-line loop body cannot be tested**, and
-   #467's criterion is a sentence about a *message*, so the replay loop's body is now
-   `db::load_migration` — a named door drivable with a deliberately failing body.
-2. **⇒ A LOCAL DB WRITE FAILURE WAS LOGGED AS LINK DOWNTIME.** `do_pull`'s cursor commit is the ONLY
-   propagation point between the apply loop and the metrics object, so a bare `?` there lost every
-   number describing work that HAD happened — and `run`'s catch-all called it `"partition": true`,
-   sending an operator to the WAN and charging the Bet A availability figure. New third class
-   `CursorCommitError` → `"local_fault"`, via a pure `classify_pull_failure` whose default arm is
-   `partition` **last**, so an unclaimed failure is the one where nothing was reached. `bet_a.py`
-   counts and prints it — a key nothing counts is the silence the fix exists to end.
-3. **⇒ A FAILED WRITE MUST NOT REPORT THE VALUES IT MEANT TO SET.** `cursor_seq` and `floor_active`
-   are claims *about that write*; publishing them after it failed tells a monitor the cursor advanced
-   when it did not — and after a mid-statement connection loss this node genuinely cannot know. Both
-   go `null` (`mark_cursor_outcome_unknown`), `references_unlearnable`'s null-never-zero rule one
-   field over, with the attempted seq named in the message instead.
-4. **Test mechanic worth reusing:** to force a write failure in a SHARED test database, hold a `FOR
-   UPDATE` row lock from a second connection under a short `lock_timeout`. A trigger or a `REVOKE`
-   persists if the test panics and poisons every later suite; a row lock dies with its connection.
-
-**PR #472 review round (2026-08-22).** The review found a defect at the fix's own centre and five
-around it; all were fixed on that branch. Two still teach something:
-
-1. **`legible_db_error`'s fallback arm was #467 one kind over, and REGRESSED `db::connect`.**
-   `Display` is a bare kind match for *every* kind, not just `Kind::Db`, and never chains to
-   `source()` — so `error connecting to server` was the whole of what the node said about a refused
-   socket, an unresolvable host and a TLS timeout alike. Worse, `connect` had been a bare `?`, which
-   anyhow preserved (`Caused by: Connection refused (os error 61)`), and the new wrapper deleted it.
-   **The test covering that arm could not fail:** it asserted only `!= "db error"` and non-empty, both
-   true of the broken output. **`hint()` was dropped at all 14 sites** — on a `42883`, PostgreSQL's
-   own remedy.
-2. **#469's misdiagnosis survived two statements above its own fix.** `do_pull`'s first two statements
-   are bare `?` on a `postgres::Error` *before any network I/O*, and `cmd_run` builds its client ONCE
-   outside the loop — so after the database went away, every later cycle for the life of the process
-   was logged as link downtime.
-
-The rest: a failed commit swallowed a co-occurring integrity condition (the classes are a SET now); an
-operator line asserted what the metric withheld; and six smaller precision fixes. **#473/#474/#475 and
-#476 were raised here** — the first three are CLOSED by the entry above; **#476** (~120 comments still
-calling a per-database advisory lock "cluster-wide") remains open.
-
-### 2026-08-22 (later) — the signal admit-and-flag owed
-
-**Closes [#465](https://github.com/cairn-ehr/cairn-ehr/issues/465); `crates/cairn-sync` only.** After
-#460 a peer event with an unlearnable reference produced a successful cycle, exit 0 and a log line
-byte-identical to a healthy pull. It now gets a `references_unlearnable` metric AND its own stderr line
-on **both** admit paths (`pull` and `requeue` share the db/020 door). ROADMAP carries the pass in full;
-four things a next session can still break:
-
-1. **⇒ A FLAG CAN BE BORN ON A RE-APPLY, AND v1 REPORTED `0` FOR IT.** db/020 calls
-   `cairn_learn_attachment_refs_lenient` **unconditionally** (no `v_rows` guard), so a first-ever flag
-   row can land for an event already held — a node upgrading onto db/050 flags its whole pre-#460
-   back-catalogue and would have said `0`. Keyed on **two** things now: the addresses the door admitted
-   **and a `flag_id` watermark** taken before the run. Drop either clause and five tests go red.
-2. **`cycle_is_loud`'s two exclusions share ONE test:** the event set is COMPLETE and the loss is
-   declared elsewhere. Anything else that leaves this node not holding an offered event is loud.
-3. **⇒ PEER TEXT IS NOT DISPLAY TEXT — TWICE.** The ledger `reason` carries a bounded 8-char prefix,
-   escaped `{:?}`; the review then found the LARGER channel on the very line cited as its precedent —
-   `custody_withheld` is **unbounded prose from an unadmitted peer**, printed raw, enough to forge a
-   `0 attachment reference(s)` all-clear on the alarm #465 had just installed.
-4. **A failed read reports `null`, never `0`** — zero is a claim, and after a failed read it would mute
-   a monitor exactly when this node stopped being able to see. `cairn_attachment_flag_health()` finally
-   has a caller (`cairn-sync attachment-flags`).
-
-**Still open from #460's review:** **#463** (resolution path — a DECISION, overlay vs delete) · **#464**
-(unbounded per-rendition subtransactions) · **#458** (non-object attachment element — a loud UI, NOT a
-floor rule). **Raised by that pass and still open:**
-**[#468](https://github.com/cairn-ehr/cairn-ehr/issues/468)** (**this alert fires ONCE EVER** while
-`custody_withheld`, its stated precedent, re-fires every cycle — and an unlearnable reference is
-unrepairable in place, so the steady state carries no standing signal) ·
-**[#470](https://github.com/cairn-ehr/cairn-ehr/issues/470)** (the per-cycle ledger read is
-owner-privileged — cairn-sync cannot carry it onto the unprivileged runtime role). **#467/#469 are
-CLOSED** (entry below), opening **[#471](https://github.com/cairn-ehr/cairn-ehr/issues/471)**.
-
-### 2026-08-22 — admit and flag: the rule was already written, under another field's name
-
-**Closes [#460](https://github.com/cairn-ehr/cairn-ehr/issues/460); `db/050`, SCHEMA 49 → 50; NO new
-ADR — and that is the finding. #461 raised one and was CLOSED unbuilt (maintainer): the rule stays
-findable only under `safety`'s title, an accepted cost mitigated by db/027's and db/050's headers.
-ROADMAP carries this pass in full; these are the parts a next session can still break.**
-
-1. **⇒ #370's FIX CONTRADICTED AN ADR WRITTEN EIGHT DAYS EARLIER, AND NOBODY LOOKED.** ADR-0063
-   decides this exact shape for the §5.9 `safety` field, in a table (*malformed field: local door
-   REFUSE, remote door ADMIT*), and its rejected-alternatives argument never mentions `safety`:
-   refusing a field at apply drops the clinical act it rode on, and **forks the event set between
-   honest peers** — the #342 trap, hit four times before #370 made it five.
-2. **THE CATEGORY TEST, which is the part worth memorising.** A sensitivity assertion **IS** an
-   event — refusing a malformed one drops that assertion and nothing else. `safety`, `clock_grade`
-   and an attachment rendition reference are **FIELDS ON** a clinical event. **Blast radius, not
-   category** — ADR-0063's own deciding argument.
-3. **⇒ THE RULE HAS THREE IMPLEMENTATIONS AND NO NAME** (db/040's `clock_grade` · ADR-0063's
-   `safety` · db/050), *mint-strict, arrive-permissive*, **which is why it keeps breaking**.
-4. **The one thing not to "align":** `submit_event` calls the strict learner (db/027),
-   `apply_remote_event` the lenient one (db/050). They share accessors and traversal
-   (`cairn_by_reference_renditions`, pinned in `db/tests/050` §9) and differ only in
-   `EXCEPTION WHEN raise_exception` → record instead of raise. **`WHEN OTHERS` there would be a
+   anyone's `source()` — **silently reverting every local fault to `partition`.** The trap in
+   that sweep most likely to be sprung in good faith.
+3. **⇒ A FROZEN CURSOR LOOKED EXACTLY LIKE A HEALTHY CYCLE.** All three of `pull_into`'s freeze
+   paths `break` and return `Ok` (correct — freezing is the deliberate availability choice), so
+   a `53100` disk-full emitted **neither** `LOCAL FAULT` nor `PARTITION` and a monitor keyed on
+   those two tokens would watch a stuck node forever. `PullStats.frozen` + `frozen_cursor_line`.
+4. **⇒ #370's FIX CONTRADICTED AN ADR WRITTEN EIGHT DAYS EARLIER.** ADR-0063 decides that exact
+   shape for `safety` — *mint-strict, arrive-permissive*. **THE CATEGORY TEST:** a sensitivity
+   assertion **IS** an event (refusing a malformed one drops that assertion and nothing else);
+   `safety`, `clock_grade` and a rendition reference are **FIELDS ON** a clinical event, and
+   refusing those forks the event set between honest peers — the **#342** trap, hit five times.
+   The rule has three implementations and no name, which is why it keeps breaking. The one thing
+   not to "align": db/027 raises where db/050 records, and **`WHEN OTHERS` there would be a
    disaster** — a disk error written into the ledger as "the peer sent garbage".
-5. **⇒ THE REVIEW FOUND PROSE ASSERTING SAFETY PROPERTIES THE CODE DID NOT IMPLEMENT — over a fully
-   green branch.** And a **REGRESSION**: admitting a non-array `attachments` meant *storing* it, and
-   `read_photo_refs` (`patient/search.rs`) walks it with `jsonb_array_elements` → **22023** on the
-   §5.3/§5.8 candidate list, the wrong-chart-prevention surface. **The refusal had not been removed,
-   only relocated** — out of a door that pens and names it, into a read path with no handling.
+5. **⇒ A FLAG CAN BE BORN ON A RE-APPLY.** db/020 calls the lenient learner **unconditionally**,
+   so a node upgrading onto db/050 flags its whole pre-#460 back-catalogue. The report is keyed
+   on the admitted addresses **and** a `flag_id` watermark; drop either clause and five tests go
+   red. **A failed read reports `null`, never `0`** — zero is a claim, and after a failed read it
+   would mute a monitor exactly when this node stopped being able to see.
+6. **⇒ PEER TEXT IS NOT DISPLAY TEXT.** `custody_withheld` is **unbounded prose from an
+   unadmitted peer**, printed raw — enough to forge a `0 attachment reference(s)` all-clear on
+   the alarm #465 had just installed.
+7. **⇒ A GUARD THAT PUNISHES THE PRECISE DESCRIPTION OF ITS OWN BUG** pushes every future writer
+   toward vaguer prose. Widening `GUARDED` failed on exactly three lines, all comments quoting
+   the shape that caused the defect. Whole-line comments are skipped; a trailing comment after
+   code is still scanned. **And a rename is not proof** — two renamed bindings genuinely held
+   database errors, and the widened guard reported green over both.
+8. **Two test mechanics worth reusing.** A `FOR UPDATE` row lock from a second connection under
+   a short `lock_timeout` forces a write failure in a SHARED test database (a trigger or a
+   `REVOKE` persists if the test panics and poisons every later suite; a row lock dies with its
+   connection) — and note *which* statement it catches: MVCC readers do not block. And
+   **`Debug` must delegate to `Display`** on any error that can reach `main`: `fn main() -> R<()>`
+   has no error printer, so `Termination` prints `{err:?}`.
+
+**Still open from those passes:** #463 (attachment-flag resolution — a DECISION, overlay vs
+delete) · #464 (unbounded per-rendition subtransactions) · #458 (non-object attachment element —
+a loud UI, NOT a floor rule) · #468 (the unlearnable-reference alert fires ONCE EVER while its
+stated precedent re-fires every cycle) · #470 (the per-cycle ledger read is owner-privileged).
 
 ### 2026-08-21 — the freeze that hid, the flake that lied, six trap-clearing fixes, three silent gates
 
@@ -418,19 +297,18 @@ ROADMAP carries this pass in full; these are the parts a next session can still 
   accept everything that already worked** — every refusal added at a remote door is a new way for a
   peer's clinical event to be penned.
 - **⚠️ A DATABASE-FREE `cargo test` FAILS UNLESS YOU DECLARE IT: `export CAIRN_ALLOW_DB_SKIP=1`**
-  (#450; #451 gives the matcher the same variable). The polarity subtlety: an **opt-out** must read
-  an unrecognised value as *NOT permission*, or `CAIRN_ALLOW_DB_SKIP=please` quietly restores
-  fail-open. Only `1`/`true`/`yes`/`on` opt out.
+  (#450; #451 the matcher, #481 the per-crate runs). An **opt-out** must read an unrecognised value
+  as *NOT permission*, or `CAIRN_ALLOW_DB_SKIP=please` quietly restores fail-open.
 - **#457 — the harness polled a PORT and never the CHILD**, so three unrelated causes produced one
-  message blaming startup latency. It now watches both and captures stderr **to a file, never a pipe**
-  (an unread pipe blocks the child). **Cause named, not fixed:** a macOS `_dyld_start` loader stall.
+  message blaming startup latency. Stderr goes **to a file, never a pipe** (an unread pipe blocks the
+  child). **Cause named, not fixed:** a macOS `_dyld_start` loader stall.
 - **Check a claim against the pinned source before writing it down** — a load-bearing comment saying
   `std`'s `TcpListener` does not set `SO_REUSEADDR` was false and had steered two rounds of fixes.
 - **Three mechanics.** (a) PostgreSQL checks a function called inside a VIEW against the **INVOKING**
   user — the INNER call too. (b) **Ask the authority:** `cargo locate-project` found `packaging/crates`
   was in no workspace. (c) `git check-ignore` needs `--no-index` and has **THREE** exit codes
-  (0/1/**128**). Every repo cargo invocation in `rust.yml` now passes `--locked`.
-- **A mutation that does not change the property tests nothing.** **Residual: #447**, **#327.**
+  (0/1/**128**). **A mutation that does not change the property tests nothing.** Residual: **#447**,
+  **#327**.
 ### Older passes (Slices 61–69, 2026-08-02 → 08-20) — the lessons still worth holding
 
 ROADMAP carries every slice in full. These are the ones a next session can still break.
@@ -458,8 +336,8 @@ ROADMAP carries every slice in full. These are the ones a next session can still
    confidentiality surface. **#436** is the residual, and it is visibility, not a door.
 5. **A pinned `search_path` must deny the temp schema the FIRST look.** `SET search_path = public` does
    not exclude it, so with a decoy `event_log` in place both write doors **returned SUCCESS while the
-   owner-privileged INSERT landed in the caller's temp table** — live data loss, as a role with no write
-   privilege on `event_log` at all. Open: **#430** (~100 unpinned invoker-rights functions), **#431**.
+   owner-privileged INSERT landed in the caller's temp table** — live data loss, from a role with no
+   write privilege on `event_log` at all. Open: **#430** (~100 unpinned invoker-rights fns), **#431**.
 6. **A parameter name is not a security property.** `classify_authorship_confidence(&body.contributors,
    &body.signer_key_id, None)` compiled, read naturally, and graded a forgery `Attested`; both key
    arguments are now a `VerifiedKid` newtype (mint-site allowlist unpinned: **#428**). **`attester_key`
@@ -531,8 +409,7 @@ demographics + matcher · identity/John-Doe/medication · five-priority review �
 **GUI/L3 design threads (2026-07-16/18, design-only).** Detail in `scratch/ui-sketches/`; source
 screenshots git-ignored under `docs/untracked_for_brainstorming/` — real photos, **never commit or
 publish**. Headline: easyGP's six editing-area invariants ≅ Cairn's event envelope near line-for-line.
-**Scope:** the easyGP co-author may lead GP-facing GUI, HH designs ED & ward; the role-manifest layer
-is the seam (ADR-0021). The open half is under "Blocked on external access" above.
+The role-manifest layer is the seam (ADR-0021); the open half is under "Blocked on external access".
 
 **Status of this file:** disposable scaffolding, **not** a source of truth; canonical docs win.
 Regenerate each session, **under 500 lines** (#368) — *why* in the ADRs, *what* in the spec.
@@ -564,7 +441,7 @@ CLAUDE.md carries the document hierarchy in full; this adds only what it does no
   surrogates (`db/008` + the leakage guard).
 - **Test rig:** DB-gated tests need local PG18 + `cairn_pgx` (`cargo pgrx install`) and self-serialize
   via a Postgres advisory lock (`db::test_serial_guard`). **Not "cluster-wide" — advisory locks are
-  scoped PER DATABASE** (this file said cluster-wide until 2026-08-22; #467 caught it), which is why
+  scoped PER DATABASE** (#467; ~124 test-guard comments still say otherwise, **#476**), which is why
   every caller must take the guard against `CAIRN_TEST_PG` specifically, whatever database its own
   work then uses. Strings and runner under Open threads → Test env.
 - **Tech-debt loop** — `/techdebt-loop` triages into `loop:*` labels and drives `/techdebt-next` one
