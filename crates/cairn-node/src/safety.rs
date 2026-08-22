@@ -27,6 +27,7 @@
 //! value as `text` and letting the database parse it is the repo-wide idiom (see
 //! `tests/observed_evidence.rs`), and it keeps the failure — if any — on the database's
 //! side where the error message is about the data rather than about the driver.
+use crate::db_diagnosis::legible_db_error;
 use anyhow::Context;
 use cairn_event::medication::SubstanceCoding;
 use cairn_event::safety::SafetyRung;
@@ -59,6 +60,16 @@ use uuid::Uuid;
 /// The failure is written to stderr rather than swallowed: a lookup that is failing for
 /// every write is a real operational fault, and a silently degraded safety projection would
 /// look identical to a correctly empty one.
+///
+/// # What the caller owes this function (issue #473)
+///
+/// The error it hands in must ALREADY be human-readable. `tokio_postgres::Error`'s own
+/// `Display` is the literal string `db error`, and `anyhow::Error` prints only its
+/// outermost message — so a bare `?` on a query produces exactly those eight characters,
+/// and this line then says nothing on the one surface whose whole purpose is to be
+/// distinguishable from silence. Both production feeds satisfy the contract by rendering
+/// through [`crate::db_diagnosis::legible_db_error`] at the query itself, and
+/// `tests/safety_lookup_is_legible.rs` pins that they do.
 pub fn advisory_or_withheld<T, E: std::fmt::Display>(
     lookup: Result<T, E>,
     withheld: T,
@@ -66,9 +77,17 @@ pub fn advisory_or_withheld<T, E: std::fmt::Display>(
 ) -> T {
     match lookup {
         Ok(value) => value,
-        Err(e) => {
+        // NAMING, because it looks like a dodge and is not. `tests/db_errors_stay_legible.rs`
+        // flags `{e}` in this file, and its predicate is name-based because a source scan
+        // cannot type-check. This binding is generic (`E: Display`) and by contract holds an
+        // ALREADY-RENDERED diagnosis, so the name says so. The contract is not free — a
+        // future caller could break it by handing in a raw `tokio_postgres::Error` — which
+        // is why both production feeds render at the source and a test pins them. A binding
+        // named `e` here would instead make the guard's judgement wrong, and a guard whose
+        // judgement is wrong reports the same green as one that is right.
+        Err(why) => {
             eprintln!(
-                "safety: {what} failed ({e}); withholding the signal and continuing — an \
+                "safety: {what} failed ({why}); withholding the signal and continuing — an \
                  advisory lookup never cancels a clinical write (ADR-0060)"
             );
             withheld
@@ -94,7 +113,16 @@ pub async fn lookup_class(
             "SELECT class, severity FROM cairn_safety_class_candidate($1::text::jsonb)",
             &[&coding_json.to_string()],
         )
-        .await?;
+        .await
+        // #473: a bare `?` here made the `tokio_postgres::Error` the outermost error, and
+        // its `Display` is the literal string `db error`. `advisory_or_withheld` then
+        // printed those eight characters on a CLINICAL write path, where the SQLSTATEs
+        // they hide — `42P01` (db/049 never loaded here), `42501` (a revoked grant),
+        // `57014` (timeout), `55P03`/`40P01` (contention), `53300` (connections
+        // exhausted) — are five different operator actions. Rendering at the SOURCE fixes
+        // every caller at once, which is why #473 picks it over printing `{e:#}` at the
+        // log site: with a bare `?` the anyhow chain bottoms out at the same `Display`.
+        .map_err(|e| anyhow::anyhow!("the safety class lookup: {}", legible_db_error(&e)))?;
     Ok(rows.first().map(|r| (r.get(0), r.get(1))))
 }
 
@@ -124,7 +152,11 @@ pub async fn prospective_rung(
              FROM cairn_prospective_sensitivity($1::text::uuid, $2::text::uuid) g",
             &[&patient.to_string(), &thread.map(|t| t.to_string())],
         )
-        .await?
+        .await
+        // #473, same argument as `lookup_class` above. The failure of THIS lookup ships
+        // the event at `SafetyRung::Existence` — the chart's grade never consulted — so
+        // the operator line is the only artifact that it happened at all.
+        .map_err(|e| anyhow::anyhow!("the standing sensitivity grade: {}", legible_db_error(&e)))?
         .get(0);
     Ok(rung_from_name(&rung))
 }
@@ -229,7 +261,12 @@ pub async fn chart_safety(
              FROM cairn_patient_safety($1::text::uuid)",
             &[&patient.to_string()],
         )
-        .await?;
+        .await
+        // #473: the operator's own `patient-safety` query, so a failure here is the one
+        // they are staring at while trying to work out what is wrong. Same renderer.
+        .map_err(|e| {
+            anyhow::anyhow!("reading the chart safety report: {}", legible_db_error(&e))
+        })?;
     rows.iter()
         .map(|r| {
             let event_id_text: String = r.get(0);
