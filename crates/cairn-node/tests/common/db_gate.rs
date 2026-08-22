@@ -1,0 +1,845 @@
+//! #442 — the DB-gated suite cannot go silently green.
+//!
+//! # The hole
+//!
+//! Every DB-gated test in this crate opens with some form of `let Some(base) = cs() else {
+//! return };`, so a machine without PostgreSQL can still run `cargo test`. That is the right
+//! default locally and the wrong one unattended, because a *skipped* test prints `ok`. Nothing
+//! distinguishes "the in-DB floor suite proved its invariants" from "the same tests returned on
+//! line 1" — the two runs produce byte-identical output — and that total is the number that
+//! ends up quoted in a PR description as evidence.
+//!
+//! `CAIRN_TEST_PG` and its two siblings are set **together** in exactly one place *in CI*: a
+//! step-level `env:` block in `.github/workflows/rust.yml`. (`scripts/run-db-gated-tests.sh`
+//! exports the trio too, for local runs; `CAIRN_TEST_PG` alone also appears in the matcher's
+//! own step. The first cut of this sentence said the trio appeared once and listed the script
+//! as a `CAIRN_TEST_PG`-alone site — wrong on both halves, #456 review.) A typo in one of those
+//! keys, a step split, or a job copied without its `env:` would skip the entire DB-gated suite
+//! at once, and the run would be greener than usual rather than red. That is the failure mode
+//! this file removes: after it, the same typo is a named, failing test.
+//!
+//! # Why the variable list is derived rather than written down
+//!
+//! The 2026-08-19 review lesson (recorded on #387) was that a guard defined over the list it
+//! guards is not a guard. A hardcoded `["CAIRN_TEST_PG", "CAIRN_TEST_PG2", "CAIRN_TEST_PG3"]`
+//! would assert that three names this file chose are set, and would be blind to the fourth the
+//! moment a future multi-node suite starts reading it — which is precisely when the coverage
+//! claim stops being true.
+//!
+//! So the names come from the **test sources**, which are the independent authority on what
+//! the suite actually reads. A new gate variable is covered the moment the first test reads it,
+//! with no edit here. The two sources being compared — the source text and the process
+//! environment — are genuinely separate, which is what the #387 lesson asks for.
+//!
+//! # The scan reads CODE, not prose (#449)
+//!
+//! The first cut matched the literal prefix `CAIRN_TEST_` anywhere in any `.rs` file under
+//! `crates/`, which made *prose* a source of requirements: a name written in a doc comment
+//! became a variable CI had to supply, and the resulting failure blamed the environment for a
+//! variable nothing reads. This repo's own worked example — the sentence about "a future
+//! `CAIRN_TEST_PG4`", which has lived in `HANDOVER.md` and now lives in this change's plan
+//! record — was live bait: `.md` files are outside the scan, but this repo's house style is
+//! long `//!` headers, and the first person to paraphrase that sentence into a Rust module
+//! header would have reddened the required `test` job.
+//!
+//! A name now counts only when it sits inside an `env::var("…")` / `env::var_os("…")`
+//! argument, and whole-line comments are dropped before the scan. Both narrowings keep the
+//! derivation — the authority is still the source text, not a list this file maintains — while
+//! making the sentence "whatever the suite READS is what CI must provide" literally true rather
+//! than approximately true.
+//!
+//! Three honest limits. A call site quoted verbatim *inside* a trailing comment, after code on
+//! the same line, is still read as a call site; the same is true inside a `/* … */` BLOCK
+//! comment, which `without_comment_lines` does not strip (the first cut of this header claimed
+//! the tree contained no Rust block comments — it contains two, `transport.rs` and
+//! `medication/attestation.rs`, neither holding an `env::var` call, but the exemption never
+//! rested on that being true); and a name assembled at runtime
+//! (`env::var(&format!("CAIRN_TEST_PG{n}"))`) is invisible, because there is no literal to
+//! read. The first two are deliberate acts rather than accidents of prose; the third would be a
+//! new idiom, and the `GATE_VARS_TODAY` floor below is what notices coverage shrinking.
+//!
+//! # Polarity: it fails CLOSED (#450)
+//!
+//! It used to bind only when `$CI` was set. `CI` is set in **zero** places in this repo — it is
+//! inherited from the runner — so a self-hosted runner started from a scrubbed environment, a
+//! container run without `-e CI`, `env -i`, or a future cron/systemd invocation would each
+//! silently disable it, and the DB-gated suite would then skip and print `ok`, which is #442.
+//! The guard's own trigger was the one unverified assumption in a file whose entire argument is
+//! that unverified assumptions are how a suite goes silently green, and it failed **open**
+//! while every other floor in this repo fails closed.
+//!
+//! So it binds by default, and a run that means to skip the database tier says so:
+//! `CAIRN_ALLOW_DB_SKIP=1`. A contributor with no PostgreSQL sets it once (`CONTRIBUTING.md`
+//! says so, and the failure message repeats it); `matcher.yml`'s deliberately database-free
+//! job declares it in its own `env:` block, at the site that means it. Nothing else in CI does,
+//! so every other unattended run is bound whether or not anything sets `CI`.
+//!
+//! # Scope, stated so coverage is not confused with aspiration
+//!
+//! It covers the Rust tests under `crates/`. Three trees are outside it, and each is outside
+//! for its own reason: `cairn-gui` is a separate workspace with its own `cargo test` CI job (it
+//! reads no gate variable today); `extensions/cairn_pgx` is a separate pgrx build whose tests
+//! run against the extension's own harness, not a connection string (it reads none either);
+//! and the matcher's Python DB-gated tests get their own copy of this guard in
+//! `matcher/tests/test_db_gate_actually_ran.py` (#451), sharing the same opt-out variable so
+//! there is one rule and not two. A gate variable read only under `extensions/` would be
+//! uncovered — stated here rather than left to be discovered (#456 review).
+//!
+//! It also does not claim the substrate is *healthy* — only that the environment declared one.
+//! A connection string pointing at a dead cluster fails loudly in the tests themselves, which
+//! is the behaviour we want and is a different property from this one.
+//!
+//! # Why this lives in `tests/common/` and is pulled into TWO crates (#481)
+//!
+//! The guard used to be an integration test of `cairn-node` alone. Everything above was still
+//! true of it — and it still could not bind `cargo test -p cairn-sync`, because a test binary
+//! only runs when its own crate is tested. Measured before the fix: `cargo test -p cairn-sync`
+//! with no gate variable set and no opt-out declared printed `101 passed; 0 failed` and exited
+//! `0`, over a crate holding the only test that exercises a real mid-loop requeue interruption
+//! (#471) and the whole of #475's acceptance criterion.
+//!
+//! So the guard moved here and both crates pull it in with `#[path]`:
+//!
+//! ```ignore
+//! // crates/cairn-node/tests/db_gate_actually_ran.rs
+//! #[path = "common/db_gate.rs"]
+//! mod db_gate;
+//!
+//! // crates/cairn-sync/tests/db_gate_actually_ran.rs
+//! #[path = "../../cairn-node/tests/common/db_gate.rs"]
+//! mod db_gate;
+//! ```
+//!
+//! **One implementation, two binaries — deliberately not two copies.** The issue asked whether
+//! a second copy would need a drift test keeping the two in lockstep. It would; #452 is this
+//! repo's record of what happens when a walk is copied three times (two of the three carried
+//! defects the third had already fixed). Sharing the file removes the question rather than
+//! answering it: there is nothing to drift, and a fix to the parser or the polarity lands in
+//! both binaries in the same commit, unavoidably.
+//!
+//! The requirement set does **not** narrow per crate. The scan walks all of `crates/`, so both
+//! binaries demand every gate variable *any* crate reads — `cairn-sync`'s binary requires
+//! `CAIRN_TEST_PG3` even though nothing in `cairn-sync` reads it. That is the intended
+//! direction: the variables are set as a trio by one `env:` block and one script, so a run that
+//! supplied two of three has a misconfiguration worth failing on wherever it is noticed.
+//!
+//! `repo_root()` survives the move because it is derived, not written down: it expands
+//! `CARGO_MANIFEST_DIR` at the *including* crate's compile time, and `crates/cairn-sync/../..`
+//! is the same repo root as `crates/cairn-node/../..`. A crate nested at a different depth
+//! would break it loudly (`canonicalize` on a non-existent path), not silently.
+//!
+//! # The per-crate ratchet
+//!
+//! [`every_crate_with_db_gated_tests_runs_this_guard`] is the part that makes the fix durable.
+//! Adding the second binary fixes today's hole; a *third* crate growing DB-gated tests would
+//! reopen it, and nothing here would have noticed. That test derives the obligation instead of
+//! restating it — a crate that reads a gate variable must have a test binary that pulls this
+//! module in — so the hole cannot be reopened silently by adding a crate.
+#[path = "sources.rs"]
+mod sources;
+
+use sources::{read_source, repo_root, source_files};
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
+
+/// The prefix every DB-gate variable shares.
+const PREFIX: &str = "CAIRN_TEST_";
+
+/// The explicit opt-out. Set it to an affirmative value to allow a database-free run.
+///
+/// Deliberately NOT prefixed `CAIRN_TEST_`: it is not a gate variable, and prefixing it would
+/// make the scan below demand that the opt-out itself be set — a guard that requires its own
+/// escape hatch.
+const OPT_OUT: &str = "CAIRN_ALLOW_DB_SKIP";
+
+/// This file's own path, from `file!()` — **as written by whichever binary included it**.
+///
+/// Excluded from the scan because the fixture tests below contain literal `env::var("…")` call
+/// sites inside raw strings — synthetic source, written to pin the parser, which the parser
+/// would otherwise read as real call sites and turn into requirements CI cannot satisfy.
+///
+/// Matched as a path suffix rather than by basename: a second file with this name elsewhere
+/// under `crates/` — a plausible outcome of the #327 `cs()` unification — would otherwise be
+/// silently excluded too, taking any variable only it reads out of the checked set.
+///
+/// # It has two spellings, and that is why [`lexically_normalized`] exists (#481)
+///
+/// `file!()` expands to the path the *including* file wrote, not a canonical one. Since #481
+/// there are two includers, so this constant is one of:
+///
+/// ```text
+/// crates/cairn-node/tests/common/db_gate.rs
+/// crates/cairn-sync/tests/../../cairn-node/tests/common/db_gate.rs
+/// ```
+///
+/// The second is not a suffix of any path the walk produces, so the self-exclusion silently
+/// stopped firing when the second binding was added — and the walk then fed this file's own
+/// fixture names (`CAIRN_TEST_PG8`, `CAIRN_TEST_PG9`, …) into the requirement list, demanding
+/// variables nothing reads and nothing sets. It was caught immediately and by name, because
+/// [`the_db_gated_suite_actually_ran`] asserts the exclusion **fired exactly once** rather
+/// than assuming it did. That assertion had no coverage of its own until this moment; it now
+/// has a worked example, which is the argument for writing it in the first place.
+const THIS_FILE: &str = file!();
+
+/// The floor on how many gate variables the scan must find, as a liveness check on the scan
+/// itself rather than a definition of the set.
+///
+/// Without it, a scan that silently found nothing — a moved directory, a changed calling
+/// idiom, a parser that stopped recognising the call shape — would pass for the same reason a
+/// correctly-configured run passes. Three is what the suite reads today (`CAIRN_TEST_PG` plus
+/// the `PG2`/`PG3` the multi-node convergence suites need).
+///
+/// A *fourth* variable needs no edit here; the floor still holds. What does need an edit is a
+/// variable legitimately going away — a retired multi-node suite, or #327's `cs()` unification
+/// collapsing two of them — and that is meant to be a conscious act rather than a silent
+/// narrowing of coverage, which is why the failure message names both causes.
+const GATE_VARS_TODAY: usize = 3;
+
+/// Drop whole-line comments, keeping line structure so a call spanning two lines still parses.
+///
+/// Crude on purpose: a line whose first non-whitespace is `//` is prose (`//`, `///`, `//!` all
+/// qualify), and this repo writes essentially all of its commentary that way. Block comments
+/// are not stripped, and a trailing comment after code on the same line is left in place —
+/// both are limits the header states.
+fn without_comment_lines(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            if l.trim_start().starts_with("//") {
+                ""
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every `CAIRN_TEST_*` name passed as a literal to `env::var` / `env::var_os` in `text`.
+///
+/// A hand-rolled scan rather than a parser, because the shape being matched is tiny and fixed:
+/// the call path, an open paren, a plain double-quoted literal. Whitespace between the paren
+/// and the literal is tolerated so a rustfmt-wrapped call still reads.
+///
+/// `env::var` matches `std::env::var` too (it is a suffix of it), which is the form every call
+/// site in this tree uses. A near-miss like `env::variable_os(` is rejected: after `env::var`
+/// the scanner requires either `(` or `_os(`, and `iable_os(` is neither.
+fn gate_var_names_in(text: &str) -> BTreeSet<String> {
+    const CALL: &str = "env::var";
+    let scanned = without_comment_lines(text);
+    let mut found = BTreeSet::new();
+
+    for (idx, _) in scanned.match_indices(CALL) {
+        let mut rest = &scanned[idx + CALL.len()..];
+        // `env::var_os` is the same read through a different return type.
+        rest = rest.strip_prefix("_os").unwrap_or(rest);
+        let Some(rest) = rest.trim_start().strip_prefix('(') else {
+            continue;
+        };
+        // A plain `"…"` literal. Raw/byte-string literals are not used for env names, and a
+        // non-literal argument (a variable, a `format!`) has no name to read — see the header.
+        let Some(rest) = rest.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else { continue };
+        let name = &rest[..end];
+        if name.starts_with(PREFIX) && name.len() > PREFIX.len() {
+            found.insert(name.to_string());
+        }
+    }
+    found
+}
+
+/// Every `CAIRN_TEST_*` environment variable the Rust suite under `crates/` actually reads,
+/// plus how many times this file excluded itself (asserted below — see [`THIS_FILE`]).
+fn gate_vars_read_by_the_suite() -> (BTreeSet<String>, usize) {
+    let mut found = BTreeSet::new();
+    let mut self_exclusions = 0usize;
+
+    // Build output only. Everything else under crates/ is in scope, including `tests/` —
+    // which is where every reader of these variables actually lives.
+    for path in source_files(&[repo_root().join("crates")], &["target"], &["rs"]) {
+        if is_this_file(&path) {
+            self_exclusions += 1;
+            continue;
+        }
+        found.extend(gate_var_names_in(&read_source(&path)));
+    }
+    (found, self_exclusions)
+}
+
+/// Is `path` this very source file? Compared as a path suffix — see [`THIS_FILE`].
+fn is_this_file(path: &Path) -> bool {
+    path.ends_with(lexically_normalized(Path::new(THIS_FILE)))
+}
+
+/// Fold `a/b/../c` to `a/c`, and drop `./`, **without touching the filesystem**.
+///
+/// Purely lexical on purpose. `canonicalize` would resolve symlinks and would need the path to
+/// exist relative to the process's working directory — and `file!()` paths are relative to the
+/// workspace root while `cargo test -p <crate>` runs from the crate directory, so it would fail
+/// on exactly the spelling this exists to handle.
+///
+/// A leading `..` has nothing to cancel and is kept, so the result is never *shorter* than the
+/// path describes. Built through [`Path::components`] rather than by splitting on `/`, so the
+/// platform separator is the compiler's business rather than this function's.
+fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Only a real directory name can be cancelled. Popping a `RootDir` or an
+                // earlier `..` would invent a path that means something else.
+                if out
+                    .components()
+                    .next_back()
+                    .is_some_and(|c| matches!(c, Component::Normal(_)))
+                {
+                    out.pop();
+                } else {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Is `raw` — the opt-out's raw value — an affirmative?
+///
+/// **Only an explicit affirmative opts out.** This is the OPPOSITE default from the `$CI`
+/// predicate it replaced, and the inversion is the whole point: there, an unrecognised value
+/// was read as "yes, this is CI", which bound the guard — the safe direction. Here an
+/// unrecognised value must NOT be read as permission, or `CAIRN_ALLOW_DB_SKIP=please` (or
+/// `=false`, or `=0`) silently restores the fail-open behaviour #450 removed.
+///
+/// Split from the environment read below so the DECISION is drivable by a test. The PR #456
+/// review found the split missing and the consequence exact: the fixture asserted over a
+/// hand-written COPY of this `matches!`, so `db_skip_is_allowed() { true }` turned the whole
+/// #442/#450 guard into a no-op — measured, 5 of 5 tests still green with no gate variable
+/// set at all. A guard defined over a copy of itself is not a guard (#387), which is the
+/// lesson this very file was written to apply.
+fn is_affirmative(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// May this run skip the database tier? The environment read, and nothing else.
+///
+/// Everything decidable lives in [`is_affirmative`]; this is the one line that cannot be
+/// exercised without `std::env::set_var`, which is process-wide and unsound to call while
+/// these tests run in parallel. [`the_env_read_is_wired_to_the_decision`] covers the residue
+/// differentially, without mutating anything.
+fn db_skip_is_allowed() -> bool {
+    is_affirmative(&std::env::var(OPT_OUT).unwrap_or_default())
+}
+
+/// Is `raw` a value a connection string could be built from?
+///
+/// An *empty* value counts as missing. GitHub Actions resolves an undefined expression —
+/// `CAIRN_TEST_PG3: ${{ env.TYPO }}` — to the empty string rather than to nothing, so the key
+/// is present, `env::var` returns `Ok("")`, and a naive `is_err()` check passes while the suite
+/// skips. That is the same species of typo the header names, arriving one layer lower down.
+///
+/// Split from [`is_usefully_set`] for [`is_affirmative`]'s reason: before the split, that
+/// defence — the only thing standing between a mistyped `env:` key and a silent skip — had no
+/// fixture in either language, and relaxing it to a bare `is_ok()` passed everywhere.
+fn value_is_useful(raw: Option<&str>) -> bool {
+    raw.is_some_and(|v| !v.trim().is_empty())
+}
+
+/// Is `name` set to something a connection string could be built from? The environment read.
+fn is_usefully_set(name: &str) -> bool {
+    value_is_useful(std::env::var(name).ok().as_deref())
+}
+
+/// The guard: every gate variable the suite reads must actually be set, unless this run has
+/// explicitly declared that it is skipping the database tier.
+#[test]
+fn the_db_gated_suite_actually_ran() {
+    let (vars, self_exclusions) = gate_vars_read_by_the_suite();
+
+    // The self-exclusion must actually have fired. `file!()` is compared as a path suffix, and
+    // if that ever stops matching — a build that reports absolute paths, a moved crate — the
+    // exclusion would silently do nothing AND THE TEST WOULD STILL PASS on a correctly
+    // configured machine, because the fixtures below name variables no environment sets. It is
+    // asserted rather than assumed.
+    assert_eq!(
+        self_exclusions, 1,
+        "expected to exclude exactly this file ({THIS_FILE}) from the scan, excluded \
+         {self_exclusions} — the `file!()` suffix match has stopped identifying it, so its own \
+         fixture call sites are now feeding the requirement list (#442)."
+    );
+
+    assert!(
+        vars.len() >= GATE_VARS_TODAY,
+        "the CAIRN_TEST_* scan found {} variable(s), fewer than the {GATE_VARS_TODAY} this \
+         suite is known to read (#442). Either the scan has gone stale — a moved directory, or \
+         a calling idiom the `env::var(\"…\")` matcher no longer recognises — in which case it \
+         would now pass without checking anything, or a gate variable was deliberately \
+         retired, in which case lower this floor in the same commit. Found: {vars:?}",
+        vars.len()
+    );
+
+    if db_skip_is_allowed() {
+        return;
+    }
+
+    let missing: Vec<&String> = vars.iter().filter(|v| !is_usefully_set(v)).collect();
+
+    assert!(
+        missing.is_empty(),
+        "these DB-gate variables are unset or empty: {missing:?}\n\nEvery DB-gated test in this \
+         crate self-skips without them AND PRINTS `ok`, so the whole in-DB floor suite would \
+         have reported success while proving nothing (#442).\n\n\
+         · In CI: set them in the job's `env:` block — see the `cargo test (workspace, in-DB \
+         floor)` step in .github/workflows/rust.yml.\n\
+         · Locally with PostgreSQL 18 + cairn_pgx: `scripts/run-db-gated-tests.sh` bakes all \
+         three in.\n\
+         · Locally WITHOUT a database: export {OPT_OUT}=1 to declare that this run skips the \
+         database tier (see CONTRIBUTING.md). The guard fails closed on purpose — an absent \
+         opt-out is not permission (#450)."
+    );
+}
+
+// ─── Fixture tests: the parser is pinned over synthetic source, not over the tree ──────────
+//
+// ANTI-VACUITY. The scan above runs against whatever `crates/` happens to contain, so on any
+// given day it could pass while recognising very little. These pin the two properties #449 is
+// about — prose is ignored, a real read is found — over strings written here, so they fail if
+// the parser regresses regardless of what the real tree looks like.
+//
+// The raw strings below contain genuine `env::var("CAIRN_TEST_…")` call sites. That is exactly
+// why THIS_FILE is excluded from the walk: without the exclusion these fixtures would become
+// requirements the environment has to satisfy.
+
+/// A name mentioned only in prose is NOT a requirement. This is #449 itself.
+#[test]
+fn prose_does_not_invent_a_gate_variable() {
+    let doc_comment = r#"
+//! Set CAIRN_TEST_PG4 before running the multi-node suites.
+/// See CAIRN_TEST_PG5 for the fourth cluster.
+// TODO: CAIRN_TEST_PG6 once the sweep lands.
+"#;
+    assert!(
+        gate_var_names_in(doc_comment).is_empty(),
+        "a name written in a comment must not become a variable CI has to supply (#449)"
+    );
+
+    // Prose that is not even in a comment — a failure message, a doc string — is likewise
+    // inert, because it sits in no `env::var` argument.
+    let message = r#"eprintln!("skipped: set CAIRN_TEST_PG7");"#;
+    assert!(
+        gate_var_names_in(message).is_empty(),
+        "a bare name in a string literal is not a read"
+    );
+
+    // A COMMENTED-OUT CALL SITE — the only fixture here that actually pins
+    // `without_comment_lines`. The three above contain no `env::var(` shape at all, so they
+    // are rejected by the call-shape matcher and would still pass with the comment stripper
+    // deleted outright: the PR #456 review measured exactly that, leaving half of #449
+    // unpinned. This one fails without the stripper.
+    let commented_out_call = r#"
+    // let base = std::env::var("CAIRN_TEST_PG8").ok();
+        /// Superseded: std::env::var_os("CAIRN_TEST_PG9") was read here until #327.
+"#;
+    assert!(
+        gate_var_names_in(commented_out_call).is_empty(),
+        "a call site that has been COMMENTED OUT is not a read — this is what the \
+         whole-line comment stripper is for (#449)"
+    );
+}
+
+/// A real read IS found, in every form the tree uses.
+#[test]
+fn a_real_read_is_found() {
+    let calls = r#"
+        let base = std::env::var("CAIRN_TEST_PG").ok();
+        let (a, b) = (cs(), std::env::var("CAIRN_TEST_PG2").ok());
+        let os = std::env::var_os("CAIRN_TEST_PG3");
+        let wrapped = std::env::var(
+            "CAIRN_TEST_PG9",
+        );
+    "#;
+    let found = gate_var_names_in(calls);
+    assert_eq!(
+        found,
+        [
+            "CAIRN_TEST_PG",
+            "CAIRN_TEST_PG2",
+            "CAIRN_TEST_PG3",
+            "CAIRN_TEST_PG9"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<BTreeSet<_>>(),
+        "every literal env::var / env::var_os read must be picked up"
+    );
+}
+
+/// Near-misses and non-gate variables contribute nothing.
+#[test]
+fn near_misses_are_rejected() {
+    let cases = [
+        // Not a gate variable — including this file's own opt-out, which must never become a
+        // requirement.
+        r#"std::env::var("CAIRN_ALLOW_DB_SKIP")"#,
+        r#"std::env::var("CI")"#,
+        // A different function whose name merely starts the same way.
+        r#"sys_env::variable_os("CAIRN_TEST_PG4")"#,
+        // The prefix alone names nothing.
+        r#"std::env::var("CAIRN_TEST_")"#,
+        // No literal to read: the name is assembled at runtime.
+        r#"std::env::var(&format!("CAIRN_TEST_PG{n}"))"#,
+        // A left-boundary near-miss: the argument is a DIFFERENT variable.
+        r#"std::env::var("OLD_CAIRN_TEST_PG4")"#,
+    ];
+    for case in cases {
+        assert!(
+            gate_var_names_in(case).is_empty(),
+            "must contribute no variable: {case}"
+        );
+    }
+}
+
+/// The opt-out recognises affirmatives only — an unrecognised value is not permission.
+///
+/// Drives the REAL [`is_affirmative`], which is the whole of the decision. The previous
+/// version of this test re-implemented the `matches!` as a local closure and asserted over
+/// the copy; the PR #456 review mutation-tested it and found the guard could be reduced to
+/// `db_skip_is_allowed() { true }` — a total no-op — with every test still green.
+#[test]
+fn only_an_explicit_affirmative_opts_out() {
+    for yes in ["1", "true", "TRUE", " yes ", "on"] {
+        assert!(is_affirmative(yes), "{yes:?} must opt out");
+    }
+    // The whole point of #450: anything else binds the guard.
+    for no in ["", "0", "false", "no", "off", "please", "maybe", "  "] {
+        assert!(!is_affirmative(no), "{no:?} must NOT be read as permission");
+    }
+}
+
+/// The environment read is wired to the decision — the residue [`is_affirmative`] cannot cover.
+///
+/// `set_var` is process-wide and unsound under parallel tests, so this asserts DIFFERENTIALLY
+/// over whatever value this process was actually given: [`db_skip_is_allowed`] must agree with
+/// [`is_affirmative`] applied to the raw `$CAIRN_ALLOW_DB_SKIP`. That catches every mutation
+/// the pure fixture cannot — a constant return, a different variable name, an inverted sense —
+/// in any run that did not opt out, which is every CI run (no Rust job sets it) and every local
+/// run without it.
+///
+/// Honest about its own shape: in a run that DID opt out, both sides are `true` and this proves
+/// little. That is the correct asymmetry — the case worth catching is a guard that waves a run
+/// through, and that case is exactly the one this covers.
+#[test]
+fn the_env_read_is_wired_to_the_decision() {
+    let raw = std::env::var(OPT_OUT).unwrap_or_default();
+    assert_eq!(
+        db_skip_is_allowed(),
+        is_affirmative(&raw),
+        "db_skip_is_allowed() must be nothing but is_affirmative() over ${OPT_OUT} (raw: \
+         {raw:?}). If these disagree it has stopped reading that variable, or stopped \
+         delegating — either way the #450 polarity is no longer what is_affirmative says it \
+         is, and the whole guard can be waved through."
+    );
+}
+
+/// Every crate that reads a gate variable is REACHED by the walk, and its read is PARSED there.
+///
+/// The fixtures above pin the parser over synthetic strings; the floor pins that the real scan
+/// found at least three names. Neither notices a PARTIAL collapse of the walk: if
+/// `crates/cairn-sync/` stopped being reached, `vars.len() >= 3` would still hold from
+/// `crates/cairn-node/` alone, and a variable read only there would silently leave the
+/// requirement set. Named per crate rather than counted, because a count cannot tell "found
+/// both" from "found one twice" — the Python guard made that argument first (#451), and this
+/// is the Rust side adopting it (#456 review).
+///
+/// The two files are named rather than derived on purpose: this is the one assertion in the
+/// file that is allowed to know something concrete about the tree, and it is checked in the
+/// direction that fails if the tree moves out from under it.
+#[test]
+fn every_crate_that_reads_a_gate_variable_is_reached() {
+    let files = source_files(&[repo_root().join("crates")], &["target"], &["rs"]);
+    for anchor in [
+        "crates/cairn-node/tests/common/mod.rs",
+        "crates/cairn-sync/src/main.rs",
+    ] {
+        let path = files
+            .iter()
+            .find(|p| p.ends_with(anchor))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the walk over crates/ never reached {anchor}, which reads a CAIRN_TEST_* \
+                     variable — the scan has silently narrowed, and any variable read only \
+                     under that crate has dropped out of the requirement set (#442)."
+                )
+            });
+        let found = gate_var_names_in(&read_source(path));
+        assert!(
+            !found.is_empty(),
+            "{anchor} reads a CAIRN_TEST_* variable and the parser must see it THERE. \
+             Asserting only over the union lets one crate cover for another going silent."
+        );
+    }
+}
+
+/// An empty or whitespace-only value counts as MISSING (#456 review).
+///
+/// The GitHub-Actions defence [`value_is_useful`] describes had no fixture in either language:
+/// relaxing it to a bare `is_ok()` passed everywhere, because CI sets these variables non-empty
+/// and no test ever supplied an empty one.
+#[test]
+fn an_empty_value_counts_as_missing() {
+    assert!(value_is_useful(Some("host=127.0.0.1 dbname=cairn_test")));
+    // `CAIRN_TEST_PG3: ${{ env.TYPO }}` resolves to "" — the key is present and the read
+    // succeeds, which is precisely how a mistyped env: block skips the tier while looking set.
+    for empty in ["", "   ", "\t\n"] {
+        assert!(
+            !value_is_useful(Some(empty)),
+            "{empty:?} must count as missing"
+        );
+    }
+    assert!(!value_is_useful(None), "an unset variable is missing");
+}
+
+// ─── The per-crate ratchet: a crate with DB-gated tests must RUN this guard (#481) ─────────
+//
+// Adding `cairn-sync`'s binding closes today's hole. This is what stops it reopening: the
+// obligation is DERIVED from which crates read a gate variable, not restated as a list, so a
+// third crate growing DB-gated tests is required to bind the guard the moment it does — and
+// fails here by name if it does not.
+
+/// The floor on how many crates the derivation must find, as a liveness check on the
+/// derivation itself.
+///
+/// Same shape and same reason as [`GATE_VARS_TODAY`]: without it, a scan that silently found
+/// *no* crate — a moved directory, a changed calling idiom — would pass for the same reason a
+/// correctly-bound tree passes. Two is what the tree holds today (`cairn-node` and
+/// `cairn-sync`); `cairn-event`, `cairn-medication-view` and `cairn-patient-search` read no
+/// gate variable, so they carry no obligation.
+///
+/// A *third* crate needs no edit here. What needs one is a crate legitimately losing its
+/// DB-gated tests, and that is meant to be a conscious act rather than a silent narrowing.
+const CRATES_WITH_DB_GATED_TESTS_TODAY: usize = 2;
+
+/// The path suffix that identifies a `#[path]` include of THIS module — `common/db_gate.rs`.
+///
+/// Derived from [`THIS_FILE`] rather than written down, so renaming or relocating this file
+/// cannot leave the ratchet matching a name nothing uses any more. The last two components are
+/// what both bindings have in common: `cairn-node` writes `"common/db_gate.rs"` and
+/// `cairn-sync` writes `"../../cairn-node/tests/common/db_gate.rs"`, and only the tail is
+/// shared.
+fn shared_module_marker() -> String {
+    let path = lexically_normalized(Path::new(THIS_FILE));
+    let file = path
+        .file_name()
+        .expect("file!() names a file")
+        .to_string_lossy();
+    let dir = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .expect("file!() sits in a directory")
+        .to_string_lossy();
+    format!("{dir}/{file}")
+}
+
+/// Does `text` pull in the module identified by `marker` with a `#[path]` include?
+///
+/// Whitespace between the tokens is tolerated so a rustfmt-wrapped attribute still reads, and
+/// the literal must *end* with `marker` so both spellings of the same include match.
+///
+/// Whole-line comments are stripped first, for #449's reason one obligation over: a crate that
+/// merely *mentions* this module in a header has not bound the guard, and letting prose
+/// discharge the obligation is exactly how a guard comes to cover less than it claims.
+fn includes_shared_module(text: &str, marker: &str) -> bool {
+    const ATTR: &str = "#[path";
+    let scanned = without_comment_lines(text);
+
+    scanned.match_indices(ATTR).any(|(idx, _)| {
+        let rest = &scanned[idx + ATTR.len()..];
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            return false;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('"') else {
+            return false;
+        };
+        let Some(end) = rest.find('"') else {
+            return false;
+        };
+        rest[..end].ends_with(marker)
+    })
+}
+
+/// The crate directory a walked path sits in — `crates/<name>/…` → `<name>`.
+///
+/// Returns `None` for anything not under `crates/`, which the callers treat as "contributes
+/// nothing" because the walk is rooted there and cannot produce one.
+fn crate_dir_of(path: &Path, crates_root: &Path) -> Option<String> {
+    path.strip_prefix(crates_root)
+        .ok()?
+        .components()
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+}
+
+/// Every crate that reads a gate variable (so has DB-gated tests) and every crate that binds
+/// this guard, derived in one walk.
+///
+/// One walk rather than two because both answers come from the same files, and reading the
+/// tree twice invites the two halves to disagree about what the tree contains.
+fn gate_reading_and_guard_binding_crates() -> (BTreeSet<String>, BTreeSet<String>) {
+    let crates_root = repo_root().join("crates");
+    let marker = shared_module_marker();
+    let (mut reading, mut binding) = (BTreeSet::new(), BTreeSet::new());
+
+    for path in source_files(std::slice::from_ref(&crates_root), &["target"], &["rs"]) {
+        // This file's fixtures are synthetic source — see [`THIS_FILE`]. Counting them would
+        // make `cairn-node` "read a gate variable" even if it had stopped doing so.
+        if is_this_file(&path) {
+            continue;
+        }
+        let Some(krate) = crate_dir_of(&path, &crates_root) else {
+            continue;
+        };
+        let text = read_source(&path);
+
+        if !gate_var_names_in(&text).is_empty() {
+            reading.insert(krate.clone());
+        }
+        // Only a file DIRECTLY under `crates/<c>/tests/` is a test binary. A `#[path]` include
+        // sitting in `tests/common/` is a shared module, not a binary, so it runs nothing —
+        // and this module's own header contains the include line as a worked example.
+        if path.parent().is_some_and(|p| p.ends_with("tests"))
+            && includes_shared_module(&text, &marker)
+        {
+            binding.insert(krate);
+        }
+    }
+    (reading, binding)
+}
+
+/// Every crate whose tests are DB-gated must have a test binary that RUNS this guard.
+///
+/// This is the durable half of #481. The measured hole was not that the guard was wrong — it
+/// was that `cargo test -p cairn-sync` never executed it, so a crate holding the only test of
+/// a real mid-loop requeue interruption (#471) and the whole of #475's acceptance criterion
+/// reported `101 passed` with no database in sight.
+#[test]
+fn every_crate_with_db_gated_tests_runs_this_guard() {
+    let (reading, binding) = gate_reading_and_guard_binding_crates();
+
+    assert!(
+        reading.len() >= CRATES_WITH_DB_GATED_TESTS_TODAY,
+        "the derivation found {} crate(s) reading a CAIRN_TEST_* variable, fewer than the \
+         {CRATES_WITH_DB_GATED_TESTS_TODAY} this tree is known to hold (#481). Either the walk \
+         has gone stale — in which case this test now passes without checking anything — or a \
+         crate deliberately lost its DB-gated tests, in which case lower this floor in the same \
+         commit. Found: {reading:?}",
+        reading.len()
+    );
+
+    let unbound: Vec<&String> = reading.difference(&binding).collect();
+
+    assert!(
+        unbound.is_empty(),
+        "these crates hold DB-gated tests but no test binary that runs this guard: \
+         {unbound:?}\n\nEvery DB-gated test in them self-skips when the gate variables are \
+         unset AND PRINTS `ok`, so `cargo test -p <crate>` reports success while proving \
+         nothing (#442, #481).\n\n\
+         Fix: add `crates/<crate>/tests/db_gate_actually_ran.rs` containing nothing but\n\
+         \x20   #[path = \"../../cairn-node/tests/{}\"]\n\
+         \x20   mod db_gate;\n\n\
+         Sharing this file rather than copying it is deliberate — see the header (#452).",
+        shared_module_marker()
+    );
+}
+
+/// The include scanner is pinned over synthetic source, not over the tree.
+///
+/// ANTI-VACUITY, the same argument the parser fixtures above make: the ratchet runs against
+/// whatever `crates/` happens to contain, so on any given day it could pass while recognising
+/// very little. Without this, `includes_shared_module` could be reduced to `|_, _| true` — the
+/// mutation that turns the ratchet into a no-op — with the real tree still green.
+#[test]
+fn only_a_real_include_binds_the_guard() {
+    let marker = shared_module_marker();
+    assert_eq!(
+        marker, "common/db_gate.rs",
+        "the marker is the file's own tail"
+    );
+
+    for real in [
+        r#"#[path = "common/db_gate.rs"]
+           mod db_gate;"#,
+        r#"#[path = "../../cairn-node/tests/common/db_gate.rs"]
+           mod db_gate;"#,
+        // rustfmt may wrap; whitespace between the tokens must not matter.
+        "#[path\n    =\n    \"common/db_gate.rs\"\n]\nmod db_gate;",
+    ] {
+        assert!(
+            includes_shared_module(real, &marker),
+            "must count as binding the guard: {real}"
+        );
+    }
+
+    for not_real in [
+        // Prose. A header that merely NAMES this module has bound nothing — #449's rule,
+        // one obligation over.
+        r#"//! See #[path = "common/db_gate.rs"] in the sibling crate."#,
+        r#"// #[path = "common/db_gate.rs"]"#,
+        // A different shared module.
+        r#"#[path = "common/sources.rs"]
+           mod sources;"#,
+        // A left-boundary near-miss: a DIFFERENT file whose name merely ends the same way.
+        r#"#[path = "common/not_db_gate.rs"]
+           mod other;"#,
+        // No literal to read.
+        r#"#[path = SOME_CONST]"#,
+    ] {
+        assert!(
+            !includes_shared_module(not_real, &marker),
+            "must NOT count as binding the guard: {not_real}"
+        );
+    }
+}
+
+/// `..` is folded lexically, so the same shared module has ONE identity from both includers.
+///
+/// ANTI-VACUITY, and unusually load-bearing: reduced to the identity function, this passes in
+/// the `cairn-node` binary (whose `file!()` has no `..` to fold) and fails only in the
+/// `cairn-sync` one. A property that holds in one of two binaries is exactly the shape that
+/// gets "fixed" by whoever runs the passing one — so it is pinned here over written-down
+/// spellings rather than left to whichever binary happens to be run.
+#[test]
+fn a_relative_include_path_normalizes_to_one_identity() {
+    let cases = [
+        // The two spellings of THIS_FILE — see [`THIS_FILE`].
+        (
+            "crates/cairn-sync/tests/../../cairn-node/tests/common/db_gate.rs",
+            "crates/cairn-node/tests/common/db_gate.rs",
+        ),
+        (
+            "crates/cairn-node/tests/common/db_gate.rs",
+            "crates/cairn-node/tests/common/db_gate.rs",
+        ),
+        // `./` contributes nothing.
+        (
+            "crates/./cairn-node/tests/./x.rs",
+            "crates/cairn-node/tests/x.rs",
+        ),
+        // A leading `..` has nothing to cancel and is KEPT — folding it would shorten the
+        // path into one that means something else.
+        ("../outside/x.rs", "../outside/x.rs"),
+        ("../../a/../b.rs", "../../b.rs"),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(
+            lexically_normalized(Path::new(raw)),
+            Path::new(expected),
+            "{raw} must normalize to {expected}"
+        );
+    }
+}

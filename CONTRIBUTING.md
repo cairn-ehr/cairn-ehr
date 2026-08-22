@@ -45,6 +45,13 @@ neither is `CAIRN_ALLOW_DB_SKIP=false`. Only `1`/`true`/`yes`/`on` opts out. The
 the same rule cover the matcher's Python DB-gated suite
 ([#451](https://github.com/cairn-ehr/cairn-ehr/issues/451)).
 
+The guard binds **per-crate runs too**, not just the workspace one
+([#481](https://github.com/cairn-ehr/cairn-ehr/issues/481)): a test binary only runs when its own
+crate is tested, so until that issue `cargo test -p cairn-sync` reported `101 passed` with no
+database in sight. Both crates that hold DB-gated tests now pull in one shared guard module rather
+than keeping a copy each, and a test derived from the tree fails by name if a third crate grows
+DB-gated tests without binding it.
+
 You lose real coverage by setting it — that is the point of having to say so. The pure Rust crates
 and the matcher's pure suite (`cd matcher && uv run pytest`, never venv/pip) still run in full.
 
