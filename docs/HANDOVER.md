@@ -166,37 +166,37 @@ that generalise past the slice that found them.
 
 ### 2026-08-22 (later) — the signal admit-and-flag owed
 
-**Closes [#465](https://github.com/cairn-ehr/cairn-ehr/issues/465); `crates/cairn-sync` only — no
-schema change, no ADR. The entry above is the fix; this is the half of it that was missing.**
+**Closes [#465](https://github.com/cairn-ehr/cairn-ehr/issues/465); `crates/cairn-sync` only — no schema
+change, no ADR. The entry above is the fix; this is the half of it that was missing.**
 
 1. **⇒ ADMITTING WAS RIGHT; GOING SILENT WAS NOT.** After #460 a peer event with an unlearnable
-   reference produced a successful cycle, exit 0 and a log line byte-identical to a healthy pull,
-   with the evidence in a table nothing read. It now gets its own `references_unlearnable` metric
-   AND its own stderr line on **both** admit paths — `pull` and `requeue` reach the same db/020
-   door — following `custody_withheld` (#231) exactly. `cycle_is_loud` now states the shared test
-   for its two exclusions: **the event set is COMPLETE and the loss is declared elsewhere.**
-2. **The count is THIS CYCLE'S NEWS, not the node's standing state** — keyed on the content
-   addresses of the events the cycle applied. Without that key a concurrent pull's defect is
-   charged to this peer, and set-union re-delivery re-announces the same defect every cycle
-   forever, which is how an operator learns to ignore a line. **Measured: removing that `WHERE`
-   clause turns exactly ONE test red and leaves the other six green**, because each of those runs
-   against a ledger whose only rows are its own.
-3. **A failed ledger read reports `null`, never `0`** (principle 4): zero is a claim, and after a
-   failed read it is a precise untruth that would mute a monitor alerting on `> 0` exactly when
-   this node has stopped being able to see. That failure gets its own line too.
-4. **`cairn_attachment_flag_health()` had no caller** — the Slice 69 finding again. New verb
-   `cairn-sync attachment-flags` prints it: one JSON row per (event type, reason), each NAMING an
-   example event. The per-cycle line and this standing view answer different questions on purpose.
-5. **⇒ PEER TEXT IS NOT DISPLAY TEXT, ON A NEW SURFACE.** The ledger `reason` embeds a prefix of
-   the peer's own value — db/001's hex accessor puts it there deliberately, because it separates a
-   truncated digest from a wrongly-encoded one — so a newline in it forged a whole log line. Escaped
-   with `{:?}`, the idiom `sensitivity::render::peer` already uses. **Found in this pass's own work**,
-   pinned by a test that fails without the escape; every other new assertion was mutation-checked too.
+   reference produced a successful cycle, exit 0 and a log line byte-identical to a healthy pull. It now
+   gets its own `references_unlearnable` metric AND its own stderr line on **both** admit paths — `pull`
+   and `requeue` reach the same db/020 door — following `custody_withheld` (#231) exactly.
+   `cycle_is_loud` now states the shared test for its two exclusions: **the event set is COMPLETE and
+   the loss is declared elsewhere.**
+2. **The count is THIS CYCLE'S NEWS, not the node's standing state** — keyed on the content addresses of
+   the events the cycle applied. Without that key a concurrent pull's defect is charged to this peer,
+   and set-union re-delivery re-announces the same defect every cycle forever. **Measured: removing that
+   `WHERE` clause turns exactly ONE test red and leaves the other six green.**
+3. **A failed ledger read reports `null`, never `0`** (principle 4): zero is a claim, and after a failed
+   read it mutes a monitor alerting on `> 0` exactly when this node cannot see. It gets its own line too.
+4. **`cairn_attachment_flag_health()` had no caller** — the Slice 69 finding again. New verb `cairn-sync
+   attachment-flags` prints it, one JSON row per (event type, reason), each NAMING an example event.
+5. **⇒ PEER TEXT IS NOT DISPLAY TEXT, ON A NEW SURFACE.** The ledger `reason` embeds a prefix of the
+   peer's own value — db/001's hex accessor puts it there deliberately, because it separates a truncated
+   digest from a wrongly-encoded one — so a newline in it forged a whole log line. Escaped with `{:?}`,
+   the `sensitivity::render::peer` idiom. **Found in this pass's own work**, pinned by a test that fails
+   without it; every other new assertion was mutation-checked too.
 
-**Still open from #460's review:** **#463** (the ledger has no resolution path — a DECISION, overlay
-vs delete, and the two siblings in this repo made opposite ones) · **#464** (unbounded per-rendition
-subtransactions; the cap is a clinical judgement) · **#458** (a non-object attachment element — the
-remedy is a loud UI, NOT a floor rule; see the callout below).
+**Still open from #460's review:** **#463** (the ledger has no resolution path — a DECISION, overlay vs
+delete, and the two siblings made opposite ones) · **#464** (unbounded per-rendition subtransactions; the
+cap is a clinical judgement) · **#458** (a non-object attachment element — a loud UI, NOT a floor rule).
+**Raised by this pass:
+[#467](https://github.com/cairn-ehr/cairn-ehr/issues/467)** — the required CI floor job flaked once and
+could say only *"loading 031_medication: db error"*, because `db.rs` has NINE `anyhow!("…: {e}")`
+wrappings over `tokio_postgres::Error`, whose `Display` IS that string: message, DETAIL and SQLSTATE all
+dropped. **#109's species, in the file that fails first and can least explain itself.**
 
 ### 2026-08-22 — admit and flag: the rule was already written, under another field's name
 
