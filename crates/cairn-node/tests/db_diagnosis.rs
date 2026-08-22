@@ -27,6 +27,22 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
+/// A password-shaped canary, DERIVED at runtime — house rule 6.
+///
+/// Every test below asserts this string is ABSENT from some rendering, so it has to look
+/// like a real secret. Writing it as a literal beside a `password=` key is exactly the
+/// shape CodeQL's hard-coded-credential queries flag, which blocks the scan until a human
+/// dismisses it (issue #146). Deriving keeps the fixture deterministic while presenting no
+/// literal to the scanner, and it keeps the query live for production code.
+///
+/// 16 distinct letters, long and odd enough that it cannot collide with any word the
+/// server, `tokio_postgres` or `anyhow` might independently produce.
+fn derived_secret() -> String {
+    (0..16u8)
+        .map(|i| char::from(b'a' + (i.wrapping_mul(7) % 26)))
+        .collect()
+}
+
 /// The extraction arm: message, SQLSTATE and DETAIL all come off a real server error.
 ///
 /// The mutation this pins is the one the whole issue is about — `e.to_string()` in place
@@ -174,11 +190,7 @@ async fn a_failed_connect_never_echoes_the_password_it_was_given() {
         eprintln!("skipped: CAIRN_TEST_PG is URI-form; this test appends keyword-form options");
         return;
     }
-    // 16 distinct letters, computed. Long and odd enough that it cannot collide with any
-    // word the server or anyhow might independently produce.
-    let secret: String = (0..16u8)
-        .map(|i| char::from(b'a' + (i.wrapping_mul(7) % 26)))
-        .collect();
+    let secret = derived_secret();
     // A user that does not exist forces authentication to fail while the password we
     // supplied is in play — the server answers, so this is a DbError, not a transport
     // failure. Whatever it says, our secret must not be in it.
@@ -228,5 +240,85 @@ async fn a_refused_socket_names_the_errno_not_just_the_layer() {
         !text.ends_with("error connecting to server"),
         "naming the layer and stopping is the same silent failure #467 was filed for, \
          one kind over: {text}"
+    );
+}
+
+/// The label a dying connection names itself by (issue #474 item 4). Pure: no database, no
+/// network, no gating.
+///
+/// The connection task is the only place a mid-session death is ever reported, and a node
+/// routinely holds several connections at once — the boot connection, one per pull cycle,
+/// one per served session. "the connection died" is not enough; WHICH one? The label
+/// answers that from the connection string, and the one thing it must never do is echo the
+/// string itself: it can carry a password, and an error line is exactly the text that gets
+/// pasted into an issue.
+#[test]
+fn a_connection_label_names_the_database_and_never_the_password() {
+    let secret = derived_secret();
+    let label = db::connection_label(&format!(
+        "host=db.example port=5544 dbname=cairn user=n password={secret}"
+    ));
+    assert!(
+        label.contains("cairn"),
+        "the database must be named: {label}"
+    );
+    assert!(
+        label.contains("db.example"),
+        "\u{2026}and the host: {label}"
+    );
+    // The port is the discriminator on this project's own rigs (Mac :5532/:5432, DGX
+    // :5444), so a label without it does not do the job the label exists for. Without
+    // this assertion, dropping `:{port}` from the format string passed (PR #478 review).
+    assert!(label.contains("5544"), "\u{2026}and the port: {label}");
+    assert!(
+        !label.contains(&secret) && !label.contains("password"),
+        "a label is spliced into a log line; it must never carry the secret: {label}"
+    );
+}
+
+/// The sentence a dying connection leaves behind (issue #474 item 4; PR #478 review,
+/// finding 11 — the behaviour had a pure helper but no test of the LINE, so reverting the
+/// arm to `let _ = connection.await;` left the whole workspace green).
+///
+/// Pure: no database, no network, no gating.
+#[test]
+fn a_dying_connection_names_which_connection_and_why() {
+    let pg = "host=localhost port=not-a-number"
+        .parse::<tokio_postgres::Config>()
+        .expect_err("a non-numeric port is not a parseable connection string");
+    let line = db::connection_ended_line("cairn@db.example:5544", &pg);
+
+    assert!(
+        line.contains("cairn@db.example:5544"),
+        "a node holds several connections at once — WHICH one died is half the line: {line}"
+    );
+    assert!(
+        line.contains("port"),
+        "…and the reason is the other half, rendered rather than left as a kind: {line}"
+    );
+    assert_ne!(line, "db error", "#467's species, one kind over: {line}");
+    assert!(
+        !line.contains('\n'),
+        "one line per event, like every other rendering here: {line}"
+    );
+}
+
+/// An unparseable connection string must still produce a usable label rather than
+/// panicking or falling back to the raw string — this runs on an error path, where the
+/// input is by definition the suspect thing.
+#[test]
+fn an_unparseable_connection_string_degrades_to_an_honest_label() {
+    let secret = derived_secret();
+    let label = db::connection_label(&format!(
+        "host=localhost port=not-a-number password={secret}"
+    ));
+    assert!(
+        !label.contains(&secret),
+        "never the secret, least of all on the degrade path: {label}"
+    );
+    assert!(
+        label.contains("unparseable"),
+        "a degrade must SAY it degraded, or the label silently means something else; \
+         asserting only non-emptiness let a label of `x` pass (PR #478 review): {label}"
     );
 }

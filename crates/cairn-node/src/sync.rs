@@ -33,7 +33,61 @@ use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use crate::db;
+use crate::db_diagnosis::{legible_db_error, operator_chain, LocalDbFault};
 use crate::transport::{self, TrustStore};
+
+/// What kind of failure ended a pull cycle? (Issue #474 item 3; issue #469 is the same
+/// distinction in `cairn-sync`.)
+///
+/// The two send an operator to two entirely different places, so collapsing them is not a
+/// cosmetic loss: `Partition` means *go and look at the link*, and it is what an
+/// availability figure is charged against. Calling a failed local `UPDATE` a partition
+/// spends an operator's attention on a healthy WAN and understates this node's own uptime
+/// at the same time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullFailureClass {
+    /// **This node's own database** failed. The peer and the link were never the problem —
+    /// on this path the peer had usually already answered in full.
+    LocalFault,
+    /// The peer did not answer. The default, reached by elimination.
+    Partition,
+}
+
+/// Classify a failed pull. **Pure**, so the mapping is unit-testable over constructed
+/// errors instead of being reachable only by breaking a live database mid-cycle — which is
+/// exactly why this defect survived as long as it did in the sibling crate.
+///
+/// # Why it walks the chain rather than inspecting the outermost error
+///
+/// Every database call **in [`pull_into`]** is wrapped: [`LocalDbFault`] adds the context
+/// an operator needs, and callers may add a `.context()` of their own on top. Note
+/// [`pull_once`] is NOT the same path — its own `db::connect` is a `.context()` over an
+/// already-rendered `anyhow`, so a *connect* failure there would classify as `Partition`.
+/// `run` never takes that route: it connects itself and calls `pull_into` directly. Anyone
+/// routing `run` through `pull_once`, or adding a per-cycle reconnect inside `pull_into`,
+/// reinstates the defect silently (PR #478 review, I2). A classifier
+/// that looked only at the outermost type would call all of those `Partition`, silently,
+/// which is the defect this function exists to fix. `anyhow::Error::chain()` walks
+/// `source()` to the bottom, so a wrapper anywhere on the path is harmless.
+///
+/// (`cairn-sync`'s sibling `classify_pull_failure` carries the opposite caveat, because
+/// `downcast_ref` on a `dyn Error` does NOT walk the chain. The two crates reach the same
+/// answer by different routes, and the difference is worth knowing before porting a change
+/// from one to the other.)
+///
+/// # Why the default is `Partition`, and why it is LAST
+///
+/// A failure this function does not recognise is, by elimination, one where the peer did
+/// not answer. Every failure that IS local must therefore be claimed explicitly above. The
+/// asymmetry is deliberate: an unclaimed local fault becomes a partition and misdirects an
+/// operator, so the recognised arm is the one that has to be kept complete — which is why
+/// `tests/pull_failure_class.rs` pins a bare error, a wrapped one and a doubly-wrapped one.
+pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
+    if e.chain().any(|c| c.is::<tokio_postgres::Error>()) {
+        return PullFailureClass::LocalFault;
+    }
+    PullFailureClass::Partition
+}
 
 /// Per-peer bounds on the node-plane quarantine pen (issue #111, mirroring the
 /// clinical plane's #110 quota). Identical re-offers dedupe onto one row, so only
@@ -103,6 +157,30 @@ pub struct PullStats {
     pub rejected: u64,
     pub quarantined: u64,
     pub pending: u64,
+    /// The seq the cursor FROZE below, when this cycle hit one of `pull_into`'s three
+    /// freeze paths (pen at quota, a failed pen write, a transient fault while applying).
+    ///
+    /// `None` on every healthy cycle, which is what makes the loud line in `run` free of
+    /// noise. It exists because all three freeze paths `break` and then return `Ok` — so
+    /// the cycle is not a failure, `pull_failure_class` never sees it, and without this
+    /// field the summary line for a stuck node was indistinguishable from a healthy one
+    /// (PR #478 review, finding 6).
+    pub frozen: Option<i64>,
+}
+
+/// The operator line for a cycle that froze its cursor. **Pure**, so the sentence is
+/// pinned by `tests/frozen_cursor_is_loud.rs` with no database and no peer.
+///
+/// It deliberately does NOT restate the cause: every freeze site prints its own reason
+/// immediately before this line runs, and repeating it would either drift from that text
+/// or force the reason to be threaded through `PullStats` as prose. Pointing up one line
+/// is both accurate and cheaper.
+pub fn frozen_cursor_line(peer: &str, seq: i64) -> String {
+    format!(
+        "run: FROZEN pulling {peer}: the cursor stopped below seq {seq} and will not \
+         advance until the cause above this line is fixed — the cycle itself succeeded, \
+         so this is the only signal that the node is stuck."
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -173,13 +251,28 @@ pub fn trust_store_from_set(set: TrustSet) -> TrustStore {
 /// (`SELECT peer_pubkey FROM trust_peer WHERE status='active'`). Called once at
 /// `run` start and again each cycle so revocations/additions take effect live.
 pub async fn refresh_trust_set(db: &Client, set: &TrustSet) -> anyhow::Result<()> {
+    // THE RULE FOR THIS WHOLE FILE (issue #474), stated once here because this is the
+    // first site a reader meets: every POSTGRES call is wrapped in `LocalDbFault`, never
+    // in `.context()`. Two reasons that travel together. `.context()` renders the context
+    // and then `tokio_postgres::Error`'s own useless `Display` — the literal string
+    // `db error` — so the diagnosis is lost; and `run`'s catch-all needs the error itself
+    // still reachable through `source()` to tell a local database failure from a
+    // partition (`pull_failure_class`). Transport, TLS, serde and hex calls KEEP
+    // `.context()`: they are not database failures, and the classifier must not claim them.
+    //
+    // ONE database call is exempt, and a reader applying the rule literally would otherwise
+    // try and fail: `db::connect` returns `anyhow`, not `tokio_postgres::Error`, with the
+    // cause already rendered into a string — so there is nothing left to wrap. Its failures
+    // are handled at their own sites and never reach `pull_failure_class`. A `.context()`
+    // stacked ON TOP of a `LocalDbFault` is fine too; the classifier walks the chain.
+    // (PR #478 review, I1.)
     let rows = db
         .query(
             "SELECT peer_pubkey FROM trust_peer WHERE status='active' AND peer_pubkey IS NOT NULL",
             &[],
         )
         .await
-        .context("snapshotting active peer pubkeys for the trust set")?;
+        .map_err(|e| LocalDbFault::new("snapshotting active peer pubkeys for the trust set", e))?;
     let fresh: HashSet<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
     *set.write()
         .map_err(|_| anyhow::anyhow!("trust set lock poisoned"))? = fresh;
@@ -259,8 +352,12 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     loop {
         let (tcp, peer) = match cfg.listener.accept().await {
             Ok(v) => v,
-            Err(e) => {
-                eprintln!("serve: accept error: {e}");
+            // NOT a database error (an `io::Error` from `accept`), and named so — the
+            // `db_errors_stay_legible` guard's predicate is name-based because a source
+            // scan cannot type-check, and a name that says what the value IS leaves the
+            // source more informative than `e` was.
+            Err(accept_err) => {
+                eprintln!("serve: accept error: {accept_err}");
                 continue;
             }
         };
@@ -273,9 +370,20 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         let acceptor = acceptor.clone();
         let db_conn = cfg.db_conn.clone();
         tokio::spawn(async move {
+            // Spans TLS, framing AND the database, so the layer that failed is not
+            // knowable here — which is why the line renders the whole chain. A plain
+            // `{session_err}` printed only the OUTERMOST layer, so a local database
+            // outage logged `serve: session with <peer> ended: serve: connecting to DB`
+            // once per inbound session for the whole outage, with the SQLSTATE that
+            // `db::connect` had already rendered discarded one line before it was
+            // printed (PR #478 review, finding 1 — #467's own species, inside the sweep
+            // that closed it).
             let _permit = permit; // held for the session's lifetime
-            if let Err(e) = serve_conn(acceptor, tcp, &db_conn).await {
-                eprintln!("serve: session with {peer} ended: {e}");
+            if let Err(session_err) = serve_conn(acceptor, tcp, &db_conn).await {
+                eprintln!(
+                    "serve: session with {peer} ended: {}",
+                    operator_chain(&session_err)
+                );
             }
         });
     }
@@ -325,7 +433,7 @@ async fn stream_node_events<S: AsyncWriteExt + Unpin>(
             &[&after_seq],
         )
         .await
-        .context("selecting node_event bytes to stream")?;
+        .map_err(|e| LocalDbFault::new("selecting node_event bytes to stream", e))?;
     for row in &rows {
         let seq: i64 = row.get(0);
         let bytes: Vec<u8> = row.get(1);
@@ -418,7 +526,7 @@ async fn quarantine_node_event(
             &[&digest],
         )
         .await
-        .context("bumping an existing node quarantine row")?;
+        .map_err(|e| LocalDbFault::new("bumping an existing node quarantine row", e))?;
     if bumped > 0 {
         return Ok(true);
     }
@@ -453,7 +561,7 @@ async fn quarantine_node_event(
             ],
         )
         .await
-        .context("penning a new node quarantine row")?;
+        .map_err(|e| LocalDbFault::new("penning a new node quarantine row", e))?;
     if inserted > 0 {
         return Ok(true);
     }
@@ -465,7 +573,7 @@ async fn quarantine_node_event(
             &[&digest],
         )
         .await
-        .context("checking whether the node quarantine row landed")?
+        .map_err(|e| LocalDbFault::new("checking whether the node quarantine row landed", e))?
         .get(0);
     Ok(exists)
 }
@@ -484,7 +592,7 @@ pub async fn list_node_quarantine(db: &Client) -> anyhow::Result<Vec<serde_json:
             &[],
         )
         .await
-        .context("listing node_event_quarantine")?;
+        .map_err(|e| LocalDbFault::new("listing node_event_quarantine", e))?;
     Ok(rows
         .iter()
         .map(|r| {
@@ -516,7 +624,7 @@ pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Resul
             &[&digest],
         )
         .await
-        .context("acking a node quarantine row")?;
+        .map_err(|e| LocalDbFault::new("acking a node quarantine row", e))?;
     Ok(n)
 }
 
@@ -558,7 +666,7 @@ pub async fn pull_into(
             &[&peer_key],
         )
         .await
-        .context("reading sync cursor")?
+        .map_err(|e| LocalDbFault::new("reading sync cursor", e))?
         .get(0);
     // The DERIVED re-offer floor (issue #111): the lowest serving `seq` at which this
     // peer still has an UNACKED quarantined event. Fetching from BELOW it keeps a penned
@@ -571,7 +679,7 @@ pub async fn pull_into(
             &[&peer_key],
         )
         .await
-        .context("reading the node quarantine re-offer floor")?
+        .map_err(|e| LocalDbFault::new("reading the node quarantine re-offer floor", e))?
         .get(0);
     // Request point: full sweep pulls everything; otherwise from the cursor, pulled back
     // to just BELOW the earliest refused slot when a floor is set. The `- 1` is load-bearing:
@@ -649,7 +757,12 @@ pub async fn pull_into(
                         &[&digest],
                     )
                     .await
-                    .context("auto-releasing a node quarantine row on successful apply")?;
+                    .map_err(|e| {
+                        LocalDbFault::new(
+                            "auto-releasing a node quarantine row on successful apply",
+                            e,
+                        )
+                    })?;
                 }
             }
             // Classify the refusal by RE-VERIFYING the bytes ONCE (bind the error for the
@@ -673,14 +786,17 @@ pub async fn pull_into(
                                 "pull: node_event_quarantine for {peer_key} at capacity — \
                                  freezing the cursor at seq {seq} (inspect + ack, or delete, to release)"
                             );
+                            stats.frozen = Some(seq);
                             break;
                         }
                         Err(qe) => {
                             // A pen WRITE error is transient infrastructure trouble; freeze
                             // conservatively rather than advancing past an un-penned refusal.
                             eprintln!(
-                                "pull: could not pen node_event at seq {seq}: {qe} — freezing"
+                                "pull: could not pen node_event at seq {seq}: {} — freezing",
+                                operator_chain(&qe)
                             );
+                            stats.frozen = Some(seq);
                             break;
                         }
                     }
@@ -692,17 +808,31 @@ pub async fn pull_into(
                 // later peer.added / code arrival + full sweep.
                 Ok(_) if e.code().map(|c| c.code()) == Some("P0001") => {
                     stats.rejected += 1;
-                    eprintln!("pull: node_event refused (recoverable, non-fatal): {e}");
+                    // #474 item 1: this is the arm where the door's own `RAISE` text IS
+                    // the entire diagnosis — untrusted author? unknown event type? —
+                    // and `{e}` printed `db error` in its place. The reason was one
+                    // `as_db_error()` away the whole time.
+                    eprintln!(
+                        "pull: node_event refused (recoverable, non-fatal): {}",
+                        legible_db_error(&e)
+                    );
                 }
                 // Any OTHER error on a verifiable event is NOT a deliberate refusal: a transient
                 // DB fault (serialization_failure / deadlock / statement_timeout / disk-full …)
                 // or a dropped connection (no db_error object). FREEZE — advancing past it would
                 // silently lose a valid event until the next full sweep (the #111 review's A1).
                 Ok(_) => {
+                    // #474 item 2: the cursor HALTS here, which makes this the most
+                    // consequential line in the loop — and `{e}` could not separate
+                    // `40001`/`40P01` (retry, self-heals) from `53100` (disk full) from
+                    // `42501` (a missing grant) from a dropped connection. That is the
+                    // exact list the comment above gives as the REASON the freeze exists.
                     eprintln!(
-                        "pull: transient/unexpected error applying node_event at seq {seq}: {e} \
-                         — freezing (not skipped past)"
+                        "pull: transient/unexpected error applying node_event at seq {seq}: {} \
+                         — freezing (not skipped past)",
+                        legible_db_error(&e)
                     );
+                    stats.frozen = Some(seq);
                     break;
                 }
             },
@@ -726,7 +856,7 @@ pub async fn pull_into(
             &[&peer_key, &max_seq],
         )
         .await
-        .context("checkpointing sync cursor")?;
+        .map_err(|e| LocalDbFault::new("checkpointing sync cursor", e))?;
     }
     // The LOUD signal: this peer's unacked pen rows AFTER the cycle. `run` logs a distinct
     // integrity line every cycle while this is non-zero — until the cause is fixed (the
@@ -737,7 +867,7 @@ pub async fn pull_into(
             &[&peer_key],
         )
         .await
-        .context("counting unacked node quarantine rows")?
+        .map_err(|e| LocalDbFault::new("counting unacked node quarantine rows", e))?
         .get(0);
     stats.pending = pending as u64;
     Ok(stats)
@@ -794,8 +924,14 @@ pub async fn run(
         // restart is picked up by the next cycle's reconnect.
         let cycle_db = match db::connect(&db_conn).await {
             Ok(c) => c,
-            Err(e) => {
-                eprintln!("run: DB unreachable, serving last-known set, skipping pull: {e}");
+            // A database error, and ALREADY legible: `db::connect` renders through
+            // `legible_db_error` and returns `anyhow`. The name records that rather than
+            // hiding it — there is nothing to fix at this site.
+            Err(connect_err) => {
+                eprintln!(
+                    "run: DB unreachable, serving last-known set, skipping pull: {}",
+                    operator_chain(&connect_err)
+                );
                 if serve_handle.is_finished() {
                     anyhow::bail!("run: serve task exited unexpectedly");
                 }
@@ -808,8 +944,15 @@ pub async fn run(
         // the DB is reachable again — the deliberate availability-over-consistency
         // trade (we never halt federation on a transient DB blip); the still-pinned
         // mTLS + in-DB admission gate remain the hard floor regardless.
-        if let Err(e) = refresh_trust_set(&cycle_db, &trust_set).await {
-            eprintln!("run: trust refresh failed, serving last-known set: {e}");
+        // This is the instance of #474 that was actually OBSERVED (the other eleven
+        // `.context()`→`LocalDbFault` conversions in the same sweep are the same species):
+        // `refresh_trust_set` used `.context()` over a postgres call, so the line printed
+        // the context and dropped the cause. It now renders through `LocalDbFault`.
+        if let Err(refresh_err) = refresh_trust_set(&cycle_db, &trust_set).await {
+            eprintln!(
+                "run: trust refresh failed, serving last-known set: {}",
+                operator_chain(&refresh_err)
+            );
         }
         // Full sweep on cadence OR whenever the active peer set changed this cycle (so a
         // freshly-peered node's backlog is pulled at once, not after FULL_SWEEP_EVERY).
@@ -833,6 +976,12 @@ pub async fn run(
                 // quarantined node_events, say so every cycle — the operator must fix the
                 // cause (the event then auto-releases) or ack the row. Not fatal: the loop
                 // keeps serving and pulling (availability over consistency).
+                // A frozen cursor returns `Ok`, so neither `LOCAL FAULT` nor `PARTITION`
+                // can fire for it — this is the only line that says the node is stuck
+                // (PR #478 review, finding 6).
+                if let Some(seq) = s.frozen {
+                    eprintln!("{}", frozen_cursor_line(&peer.to_string(), seq));
+                }
                 if s.pending > 0 {
                     eprintln!(
                         "run: INTEGRITY: {} unacked quarantined node_event(s) from {peer} — \
@@ -841,8 +990,39 @@ pub async fn run(
                     );
                 }
             }
-            // A sustained outage = a partition. Logged, never fatal.
-            Err(e) => eprintln!("run: PARTITION pulling {peer}: {e}"),
+            // #474 item 3 / #469: a failed pull is NOT automatically a partition. Every
+            // postgres call in `pull_into` talks to THIS node's database — the peer is
+            // reached over TLS/TCP — so a `tokio_postgres::Error` anywhere in the chain
+            // means the local database failed, whatever the link was doing. (It does not
+            // prove the link was healthy, and would not separate the two at all if
+            // `db_conn` ever pointed at a remote Postgres — PR #478 review, I10.) Calling that a
+            // partition sends an operator to the WAN for a local write failure and charges
+            // link downtime for it. Neither class is fatal: the loop keeps serving and
+            // pulling (availability over consistency).
+            Err(pull_err) => match pull_failure_class(&pull_err) {
+                PullFailureClass::LocalFault => eprintln!(
+                    "run: LOCAL FAULT pulling {peer} — this node's own DATABASE, not the \
+                     peer and not the link: {}. Fix the local database fault; the \
+                     next cycle re-offers from wherever the cursor actually is and \
+                     re-applies idempotently either way.",
+                    operator_chain(&pull_err)
+                ),
+                // A sustained outage = a partition. Logged, never fatal.
+                //
+                // Rendered as a CHAIN, not as `{pull_err}` (PR #478 review, finding 2):
+                // every transport failure on this path is a `.context()` over an
+                // `io::Error`, so the plain form printed `connecting to 10.0.0.3:9443`
+                // and dropped the errno — and *refused* / *timed out* / *no route* are
+                // three different operator actions. It also drops `with_io_timeout`'s
+                // `(stalled peer)` text, which is the ONLY thing separating a peer that
+                // is silent from one that is gone.
+                PullFailureClass::Partition => {
+                    eprintln!(
+                        "run: PARTITION pulling {peer}: {}",
+                        operator_chain(&pull_err)
+                    )
+                }
+            },
         }
         if serve_handle.is_finished() {
             anyhow::bail!("run: serve task exited unexpectedly");
