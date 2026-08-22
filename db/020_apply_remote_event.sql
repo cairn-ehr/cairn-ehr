@@ -310,7 +310,10 @@ BEGIN
 
     -- 6. Provenance binding (C3): an advisory must cite its source blob's address.
     IF v_type = 'advisory.added' THEN
-        IF jsonb_array_length(COALESCE(b -> 'attachments', '[]'::jsonb)) = 0 THEN
+        -- cairn_json_list_or_empty, not COALESCE: jsonb_array_length raises 22023 on a scalar,
+        -- and this runs ~190 lines BEFORE the learner, so a non-list attachments froze the pull
+        -- cursor here (non-P0001 = "transient", retried forever) no matter what the learner did.
+        IF jsonb_array_length(cairn_json_list_or_empty(b -> 'attachments')) = 0 THEN
             RAISE EXCEPTION 'apply_remote_event: advisory.added must carry a provenance attachment reference';
         END IF;
     END IF;
@@ -443,7 +446,7 @@ BEGIN
         -- on the DEK path v_twin is the CLEAR twin.) Unsealed rows store the real twin.
         CASE WHEN v_sealed THEN COALESCE(NULLIF(v_twin_stub, ''), cairn_twin_skeleton(v_type, b))
              ELSE v_twin END,
-        COALESCE(b -> 'attachments','[]'::jsonb),
+        cairn_json_list_or_empty(b -> 'attachments'),
         v_att, v_att_key, v_actor_id, v_sealed, v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
     -- Capture the insert outcome BEFORE the set_config below: PERFORM overwrites
@@ -491,9 +494,14 @@ BEGIN
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy; ADR-0013,
-    -- rendition set per ADR-0042). Shared with the submit door via cairn_learn_attachment_refs
-    -- (db/027) so the two doors never drift.
-    PERFORM cairn_learn_attachment_refs(b);
+    -- rendition set per ADR-0042). The LENIENT learner (db/050), not the strict one the submit
+    -- door calls: this event is ALREADY A FACT, so a malformed reference must be recorded and
+    -- skipped, never allowed to refuse the whole clinical event. Refusing here does not un-mint
+    -- the event — it only blinds this node to content its peers can read, forking the event set,
+    -- and the pen never releases because the malformed field is inside an immutable signature
+    -- (#460). The two learners share their accessors AND their traversal, so "malformed" cannot
+    -- come to mean two different things at the two doors.
+    PERFORM cairn_learn_attachment_refs_lenient(b);
 
     -- 10. The erasure plane at the SYNC door (ADR-0052) — LENIENT: unlike submit, there
     --     is NO target-existence requirement. A shred may precede its target on the wire;

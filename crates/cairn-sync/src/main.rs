@@ -69,10 +69,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "026_blob_verify_floor",
         include_str!("../../../db/026_blob_verify_floor.sql"),
     ),
-    // Both write doors PERFORM cairn_learn_attachment_refs unconditionally (db/005
-    // + db/020), and PL/pgSQL late binding means omitting its defining migration
-    // loads cleanly and fails only at the FIRST write — a total write outage on a
-    // fresh `cairn-sync init` database (issue #198, review finding B3).
+    // Both write doors learn attachment references unconditionally, through the ONE
+    // traversal declared here (cairn_by_reference_renditions) — db/005 via the strict
+    // learner, db/020 via db/050's lenient one (#460). PL/pgSQL late binding means
+    // omitting this migration loads cleanly and fails only at the FIRST write — a total
+    // write outage on a fresh `cairn-sync init` database (issue #198, review finding B3).
     (
         "027_attachment_rendition_references",
         include_str!("../../../db/027_attachment_rendition_references.sql"),
@@ -170,6 +171,13 @@ const SCHEMA: &[(&str, &str)] = &[
     (
         "049_safety_projection",
         include_str!("../../../db/049_safety_projection.sql"),
+    ),
+    // db/050 (#460): the attachment-reference ledger + the LENIENT learner db/020 calls, so a
+    // malformed rendition reference from a peer is recorded and skipped instead of refusing an
+    // already-signed clinical event (which forks the event set and never releases from the pen).
+    (
+        "050_attachment_reference_flag",
+        include_str!("../../../db/050_attachment_reference_flag.sql"),
     ),
 ];
 
@@ -6097,7 +6105,9 @@ mod fingerprint_db_tests {
 ///
 ///   * `submit_event` → `cairn_learn_attachment_refs` (db/027) — unconditional on
 ///     EVERY submit, exercised end-to-end here with a by-reference attachment whose
-///     lazy blob reference must land in `blob_store`;
+///     lazy blob reference must land in `blob_store`. Since #460 the remote door reaches
+///     `cairn_learn_attachment_refs_lenient` (db/050) instead, so this test also covers
+///     db/050's presence in the subset: door 2 below resolves that name or raises 42883;
 ///   * the db/002 `patient_chart` trigger → `cairn_hlc_triple_collision` +
 ///     `cairn_record_hlc_collision` (db/029) — parsed on the first
 ///     `patient.amended`, EXECUTED here by applying a genuine Byzantine pair (two
@@ -6384,7 +6394,8 @@ mod schema_subset_tests {
         );
 
         // ── Door 2: the REMOTE door, overlaying the same patient ──────────────────
-        // apply_remote_event PERFORMs cairn_learn_attachment_refs too (db/020), and
+        // apply_remote_event PERFORMs cairn_learn_attachment_refs_lenient (db/050) — the
+        // LENIENT half of the #460 asymmetry, not db/027's strict learner — and
         // with a current demographic winner standing, the db/002 trigger now parses
         // AND executes the db/029 collision predicate (FOUND = true, collision false).
         let wall_b = now_ms() + 1;

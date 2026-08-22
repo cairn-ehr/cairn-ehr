@@ -2,10 +2,14 @@
 //! BY-REFERENCE rendition of an event's attachments (reference-eager, byte-lazy), skipping
 //! inline renditions. Real Postgres, gated on $CAIRN_TEST_PG.
 //!
-//! Coverage note: the submit door (db/005) and the remote-apply door (db/020) learn references
-//! through the SAME `cairn_learn_attachment_refs(b)` helper, so their rendition walk cannot
-//! behaviourally diverge — the shared-helper guarantee. Both call sites are now exercised
-//! directly here: `by_reference_rendition_registers_a_blob_reference_row` (submit) and
+//! Coverage note: since #460 the two doors call DIFFERENT learners — db/005 the strict
+//! `cairn_learn_attachment_refs`, db/020 the lenient `cairn_learn_attachment_refs_lenient`
+//! (db/050) — because a malformed reference must refuse a locally-minted event and merely be
+//! recorded on one that has already arrived. What they still share, and what stops their
+//! rendition walk diverging, is the accessors and the ONE traversal
+//! `cairn_by_reference_renditions` (db/027); `db/tests/050` section 9 reads pg_proc and fails if
+//! either learner stops calling it. Both call sites are exercised directly here:
+//! `by_reference_rendition_registers_a_blob_reference_row` (submit) and
 //! `apply_door_learns_a_blob_reference_per_by_reference_rendition` (apply), so a future edit that
 //! breaks either door's one-line call (passing the wrong `b`) is caught.
 
@@ -166,7 +170,9 @@ async fn inline_rendition_registers_no_blob_reference() {
 
 #[tokio::test]
 async fn apply_door_learns_a_blob_reference_per_by_reference_rendition() {
-    // Directly exercise the db/020 remote-apply call site of cairn_learn_attachment_refs: an
+    // Directly exercise the db/020 remote-apply call site — since #460 that is db/050's
+    // cairn_learn_attachment_refs_lenient, not db/027's strict learner. On a WELL-FORMED
+    // rendition the two are indistinguishable, which is exactly what this asserts: an
     // event arriving BY SYNC with a by-reference rendition must register the same reference-only
     // (present=FALSE) blob row the submit door learns. Closes the coverage gap the module note
     // previously named (only the submit door was exercised before).
