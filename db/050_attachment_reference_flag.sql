@@ -318,6 +318,15 @@ $$;
 -- db/040 is the sibling that got this right: a cairn_agent-only flag TABLE paired with a
 -- node-wide cairn_clock_health() granted to both roles. Same shape here.
 --
+-- WHO CALLS IT (issue #465, added after this file shipped without a caller). This
+-- function is the STANDING picture — every flag this node holds, whoever delivered it.
+-- The per-CYCLE news is cairn-sync's: both `pull` and `requeue` read the ledger for the
+-- events they just admitted and report a `references_unlearnable` count plus one stderr
+-- line naming an example, following the `custody_withheld` precedent (a degradation that
+-- must be visible without failing the cycle). The two are deliberately different
+-- questions — "what did this pull just discover" vs "what does this node stand holding"
+-- — and an operator woken by the first comes here for the second.
+--
 -- NAME, NEVER COUNT still holds: this returns one row per (event_type, reason) with the events
 -- that carry it, so "47 flags" can never be all an operator sees.
 -- ---------------------------------------------------------------------------

@@ -653,12 +653,24 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// A human `ack` on a pen row is deliberately NOT counted by the caller: an
 /// acked exclusion is a recorded decision, not an unresolved refusal.
 ///
-/// One state that fits the wording above is deliberately EXCLUDED: a peer that
-/// withheld custody (issue #231). This node then holds sealed bodies it cannot read —
-/// knowingly lacking something the peer holds — but every event it was offered did
-/// arrive, the degradation is the sanctioned ADR-0052 one, and failing every cycle
-/// would make an un-finished peering ceremony read as a broken link. It gets its own
-/// stderr line and its own `custody_withheld` metric instead (see `do_pull`).
+/// TWO states that fit the wording above are deliberately EXCLUDED, for one shared
+/// reason: in both, every event the peer offered DID arrive and applied, and what is
+/// missing is a sanctioned degradation ABOVE the event set. Failing every cycle for
+/// either would turn a known, recorded gap into a link that reads as broken — and an
+/// operator who learns that a red pull means "probably the usual thing" is worse off
+/// than one with no signal at all. Each gets its own stderr line and its own metric
+/// instead (see `do_pull`):
+///
+/// * `custody_withheld` (issue #231) — this node holds sealed bodies it cannot read,
+///   the sanctioned ADR-0052 degradation, usually an un-finished peering ceremony;
+/// * `references_unlearnable` (issue #465) — an admitted event carried an attachment
+///   reference this node could not learn, so its BYTES are unfetchable here while the
+///   clinical content is intact. #460 made the apply door admit-and-flag rather than
+///   refuse, which is what moved this state out of `refused` and into its own line.
+///
+/// Neither exclusion is a licence for a third: the test is that the event set is
+/// COMPLETE and the loss is declared elsewhere. Anything that leaves this node not
+/// holding an event a peer offered is loud.
 fn cycle_is_loud(unverifiable: usize, refused: usize, frozen: bool, pen_failed: bool) -> bool {
     unverifiable > 0 || refused > 0 || frozen || pen_failed
 }
@@ -737,6 +749,156 @@ fn loud_pull_message(
         ""
     };
     format!("pull {peer_name}: {lead}{diagnosis}{pen}{freeze}{remedy}")
+}
+
+// ---------------------------------------------------------------------------
+// Unlearnable attachment references — the signal admit-and-flag owed (issue #465)
+// ---------------------------------------------------------------------------
+//
+// WHAT CHANGED UNDER US. Before #460, a peer event carrying a malformed rendition
+// reference was REFUSED by the apply door (P0001), penned in `sync_quarantine`, counted
+// as `refused_verifiable`, and turned this whole cycle into a `PullIntegrityError` an
+// operator could not miss. #460 made the remote door ADMIT and FLAG instead — correct,
+// because refusing a FIELD at the apply door drops the clinical act it rode on and forks
+// the event set (ADR-0063; db/050's header carries the full argument). But the loud
+// signal was removed and nothing replaced it: the same defect now produces a successful
+// cycle, exit 0, a log line byte-identical to a healthy pull, and a row in a table
+// nothing reads.
+//
+// THE SHAPE, AND WHOSE PRECEDENT IT FOLLOWS. `custody_withheld` (issue #231) is the
+// same situation one level up — a degradation this node must know about that must NOT
+// fail the cycle — and it got its own metric AND its own stderr line. So does this. It
+// is deliberately NOT folded into `cycle_is_loud`: see that function's doc for why a
+// second excluded state is not a slippery slope but the same argument twice.
+//
+// NAME, NEVER COUNT (the Slice 69 rule). "3 events have bad references" cannot tell an
+// operator whether to chase one peer's encoder bug or one corrupted import — which is
+// the question db/050's own header poses — so the line carries an example event id and
+// the accessor's own refusal text, and points at the standing node-wide ledger.
+
+/// What ONE pull cycle discovered about attachment references it could not learn.
+///
+/// `count` counts REFERENCES, not events: a single note can carry a whole rendition set
+/// (original + preview + extracted text), and how much of it is broken is exactly what
+/// distinguishes "one bad file" from "this peer's encoder is emitting garbage".
+struct UnlearnableReferences {
+    count: i64,
+    /// The EARLIEST flag of this cycle (ordered by `flag_id`), so an operator who
+    /// re-reads the line lands on the same event they were just looking at.
+    example_event: String,
+    /// That flag's recorded reason — the db/027 accessor's own refusal message and its
+    /// DETAIL, which is the half that tells truncation from wrong-encoding.
+    example_reason: String,
+}
+
+/// The operator-facing line for a run that admitted references it cannot fetch.
+///
+/// Pure and unit-tested for the same reason [`loud_pull_message`] is: this text IS the
+/// product on this path. What it must convey, in order: that the events themselves are
+/// NOT lost (the opposite of what the refusal it replaces meant), which reference is
+/// broken and why, and where to look for the standing picture.
+///
+/// `context` is the caller's own prefix — `"pull node-a"` or `"requeue"` — because TWO
+/// paths admit remote events through db/020 and both can discover an unlearnable
+/// reference. Passing it in keeps this function ignorant of which one it is serving.
+///
+/// ⚠️ THE REASON IS PEER TEXT AND IS PRINTED WITH `{:?}` FOR THAT REASON. db/001's
+/// `cairn_decode_hex_or_raise` quotes a prefix of the peer's own value inside its refusal
+/// message (that prefix is what tells a truncated digest from a wrongly-encoded one), and
+/// db/050 records the message verbatim. A newline in it would forge a whole line in a
+/// line-oriented log — the Slice 69 finding, on a new surface. `{:?}` escapes control
+/// characters while leaving ordinary text readable, the same idiom
+/// `cairn_node::sensitivity::render::peer` uses. The event id needs no such treatment: it
+/// is a `uuid` rendered by Postgres, not a string a peer chose.
+fn unlearnable_reference_message(context: &str, found: &UnlearnableReferences) -> String {
+    format!(
+        "{context}: {} attachment reference(s) in this batch could not be learned. \
+         The events themselves ARE in the record and their clinical content is intact — \
+         only the referenced bytes are unfetchable here, and stay so until the author \
+         re-issues the reference (the malformed field sits inside the signature, so it \
+         cannot be repaired in place). Example: event {} — {:?}. Standing picture: \
+         `SELECT * FROM cairn_attachment_flag_health()`.",
+        found.count, found.example_event, found.example_reason
+    )
+}
+
+/// Turn the ledger read's outcome into `(metric value, optional operator line)`.
+///
+/// Pure, so all three outcomes are testable without a database — and the third is the
+/// one worth the function: a read that FAILED reports the metric as JSON `null`, never
+/// as `0`. Zero is a claim ("I looked, there were none"); after a failed read it is a
+/// precise untruth in the reassuring direction on an operator surface, and it would let
+/// a monitor alerting on `references_unlearnable > 0` fall silent exactly when this node
+/// has stopped being able to see (principle 4: an honest unknown beats a precise
+/// untruth). The failed read is itself never silent — it gets a line of its own.
+fn unlearnable_report(
+    context: &str,
+    read: Result<Option<UnlearnableReferences>, String>,
+) -> (serde_json::Value, Option<String>) {
+    match read {
+        Ok(None) => (serde_json::json!(0), None),
+        Ok(Some(found)) => (
+            serde_json::json!(found.count),
+            Some(unlearnable_reference_message(context, &found)),
+        ),
+        Err(e) => (
+            serde_json::Value::Null,
+            Some(format!(
+                "{context}: could not read the attachment-reference ledger for this \
+                 run: {e}. The `references_unlearnable` metric is UNKNOWN (null) rather \
+                 than zero — the run itself is unaffected and its events are applied. \
+                 Check the standing picture directly: \
+                 `SELECT * FROM cairn_attachment_flag_health()`."
+            )),
+        ),
+    }
+}
+
+/// Read db/050's ledger for the events THIS cycle newly applied.
+///
+/// Keyed on the CONTENT ADDRESSES of the events applied above rather than on a timestamp
+/// or a `flag_id` watermark, and that choice is load-bearing twice:
+///
+/// * it attributes exactly — a concurrent pull from a DIFFERENT peer cannot have its
+///   flags reported under this peer's name, which on a surface whose whole job is to
+///   name things would be a precise untruth;
+/// * it reports only what this cycle DISCOVERED — an event newly inserted into
+///   `event_log` this cycle cannot carry an older flag, because the ledger's foreign key
+///   means no flag can exist before its event. A re-offered event (already held, so
+///   `applied_new` does not count it) is therefore silent here, while its row stays in
+///   the ledger as the standing fact. One alert, not one per cycle forever.
+///
+/// Returns `Ok(None)` when nothing was flagged — including the ordinary case of a cycle
+/// that applied nothing at all, which skips the query entirely.
+fn unlearnable_references(
+    client: &mut postgres::Client,
+    applied: &[Vec<u8>],
+) -> Result<Option<UnlearnableReferences>, postgres::Error> {
+    if applied.is_empty() {
+        return Ok(None);
+    }
+    let row = client.query_one(
+        "SELECT count(*)::bigint,
+                (array_agg(f.event_id::text ORDER BY f.flag_id))[1],
+                (array_agg(f.reason         ORDER BY f.flag_id))[1]
+           FROM attachment_reference_flag f
+           JOIN event_log e USING (event_id)
+          WHERE e.content_address = ANY($1)",
+        &[&applied],
+    )?;
+    let count: i64 = row.get(0);
+    if count == 0 {
+        return Ok(None);
+    }
+    // With count > 0 at least one row aggregated, so neither aggregate can be NULL.
+    // Should that ever stop being true, say so rather than printing a blank where an
+    // event id belongs — a blank reads as "no reason given", which is a different claim.
+    let unknown = || "unknown".to_string();
+    Ok(Some(UnlearnableReferences {
+        count,
+        example_event: row.get::<_, Option<String>>(1).unwrap_or_else(unknown),
+        example_reason: row.get::<_, Option<String>>(2).unwrap_or_else(unknown),
+    }))
 }
 
 /// Why the in-DB apply door said no, with the SQLSTATE preserved.
@@ -2037,6 +2199,11 @@ fn do_pull(
         (0usize, 0usize, 0usize, 0usize);
     // Verifiable events the floor refused and we penned this cycle (issue #267).
     let mut refused_verifiable = 0usize;
+    // Content addresses of the events NEWLY applied this cycle — the key the
+    // attachment-reference ledger is read back on at the end (issue #465). Held rather
+    // than counted because the report has to NAME an event, and because attributing a
+    // flag to this peer means proving the event came from this batch.
+    let mut applied_addresses: Vec<Vec<u8>> = Vec::new();
     // Highest CONTIGUOUS handled seq. Starts at the cursor so re-offered low-seq
     // events (below it) never rewind the checkpoint; new events above it advance it.
     let mut max_seq = last_seq;
@@ -2126,6 +2293,10 @@ fn do_pull(
                     Ok(new) => {
                         if new {
                             applied += 1;
+                            // Recomputed rather than threaded out of `apply_signed`: it
+                            // is a hash of bytes already in hand, and the alternative
+                            // changes a return type three call sites read (issue #465).
+                            applied_addresses.push(cairn_event::event_address(&signed_bytes));
                         }
                         // Auto-release (mirrors the node plane's issue #111
                         // behaviour): a re-offered event that NOW applies is no
@@ -2302,6 +2473,18 @@ fn do_pull(
     )?;
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+    // Issue #465: what did this cycle admit that it cannot fetch the bytes for? Read
+    // AFTER the cursor commit on purpose — this is a report about work already done, and
+    // a failure to produce it must never cost the pull its progress. A failed read is
+    // reported as UNKNOWN (null), never as zero; see `unlearnable_report`.
+    let (references_unlearnable, unlearnable_line) = unlearnable_report(
+        &format!("pull {peer_name}"),
+        unlearnable_references(client, &applied_addresses).map_err(|e| e.to_string()),
+    );
+    if let Some(line) = &unlearnable_line {
+        eprintln!("{line}");
+    }
+
     let metrics = serde_json::json!({
         "op": "pull", "peer": peer_name,
         "shipped": resp.events.len(), "applied_new": applied,
@@ -2318,6 +2501,12 @@ fn do_pull(
         // the pull having to fail. Revisit if a real deployment finds the line alone
         // too quiet to notice.
         "custody_withheld": resp.custody_withheld.is_some(),
+        // Attachment references admitted-but-unlearnable this cycle (issue #465), for
+        // the same reason and on the same terms as `custody_withheld` above: a real
+        // degradation this node must know about, which must not fail the cycle. Counts
+        // REFERENCES, not events, and is `null` — never 0 — when the ledger could not
+        // be read at all.
+        "references_unlearnable": references_unlearnable,
         "floor_active": new_floor.is_some(),
         "event_bytes": event_bytes, "wire_bytes": wire_bytes,
         "bytes_per_event": if resp.events.is_empty() { 0.0 }
@@ -2399,6 +2588,10 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         .map(|r| r.get(0))
         .collect();
     let (mut released, mut still_quarantined) = (0usize, 0usize);
+    // Content addresses of the events this run actually released into `event_log`
+    // (issue #465). `sync_quarantine.content_digest` IS the event content address —
+    // the same key the pull path's release DELETE uses — so no re-hashing is needed.
+    let mut released_addresses: Vec<Vec<u8>> = Vec::new();
     for digest in &digests {
         // The row can vanish between the listing and here only via operator
         // DELETE — skip it silently in that case.
@@ -2424,6 +2617,7 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                     &[&digest],
                 )?;
                 released += 1;
+                released_addresses.push(digest.clone());
                 eprintln!(
                     "requeue: released {} through the apply door",
                     hex_prefix(digest)
@@ -2445,11 +2639,23 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
             }
         }
     }
+    // A released event goes through the SAME apply door a pulled one does (db/020), so
+    // it can discover the same unlearnable references — and this path is even easier to
+    // miss, because it prints one cheerful "released" line per row (issue #465).
+    let (references_unlearnable, unlearnable_line) = unlearnable_report(
+        "requeue",
+        unlearnable_references(client, &released_addresses).map_err(|e| e.to_string()),
+    );
+    if let Some(line) = &unlearnable_line {
+        eprintln!("{line}");
+    }
+
     Ok(serde_json::json!({
         "op": "requeue",
         "examined": digests.len(),
         "released": released,
-        "still_quarantined": still_quarantined
+        "still_quarantined": still_quarantined,
+        "references_unlearnable": references_unlearnable
     }))
 }
 
@@ -2551,6 +2757,63 @@ fn quarantine_listing(client: &mut postgres::Client) -> R<Vec<serde_json::Value>
             })
         })
         .collect())
+}
+
+/// The standing attachment-reference ledger (db/050), grouped as
+/// `cairn_attachment_flag_health()` groups it: one row per (event type, refusal reason),
+/// commonest first, each naming an example event to go and look at.
+///
+/// This is the caller that read surface lacked (issue #465). Note what it is NOT: the
+/// per-cycle `references_unlearnable` metric answers "what did this pull just discover",
+/// while this answers "what does this node stand holding" — the question an operator
+/// woken by that line asks next, and the one that separates a single corrupted import
+/// from a peer whose encoder is emitting garbage.
+///
+/// One JSON object per row, like [`quarantine_listing`], which also settles the peer-text
+/// problem for free: `reason` embeds a prefix of the peer's own value (see
+/// [`unlearnable_reference_message`]), and JSON string escaping means a newline in it can
+/// never forge a second output line.
+fn attachment_flag_listing(client: &mut postgres::Client) -> R<Vec<serde_json::Value>> {
+    let rows = client.query(
+        "SELECT event_type, reason, flagged, first_flagged::text, last_flagged::text,
+                example_event::text
+         FROM cairn_attachment_flag_health()",
+        &[],
+    )?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "event_type": r.get::<_, String>(0),
+                "reason": r.get::<_, String>(1),
+                "flagged": r.get::<_, i64>(2),
+                "first_flagged": r.get::<_, String>(3),
+                "last_flagged": r.get::<_, String>(4),
+                "example_event": r.get::<_, String>(5)
+            })
+        })
+        .collect())
+}
+
+/// Print the standing attachment-reference ledger (see [`attachment_flag_listing`]).
+///
+/// `connect_checked` rather than the pgx-version gate, for `cmd_quarantine`'s reason: an
+/// operator must be able to read what this node cannot fetch even during a stale-
+/// `cairn_pgx` outage. This is a plain SELECT over a SECURITY DEFINER read; it calls no
+/// cairn_pgx.
+fn cmd_attachment_flags(conn: &str) -> R<()> {
+    let mut client = connect_checked(conn)?;
+    let listing = attachment_flag_listing(&mut client)?;
+    for row in &listing {
+        println!("{row}");
+    }
+    // Counted on stderr, NAMED on stdout: the count alone is what this surface exists to
+    // improve on, so it never appears without the rows above it.
+    eprintln!(
+        "{} (event type, reason) group(s) of unlearnable attachment reference(s)",
+        listing.len()
+    );
+    Ok(())
 }
 
 /// List the quarantine (one JSON line per row, oldest first) so an operator can
@@ -3626,6 +3889,8 @@ USAGE (all take --conn <postgres-uri>):
   pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--key PATH]
               (--key: this node's key; presents an unwrap cert so sealed events arrive with shred custody — ADR-0052)
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
+  attachment-flags --conn URI
+              (list attachment references this node admitted but cannot fetch: type, reason, count, example)
   requeue     --conn URI [--metrics]
               (re-process quarantined events through the apply door after fixing the cause)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
@@ -3725,6 +3990,7 @@ fn main() -> R<()> {
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
         )?,
         "quarantine" => cmd_quarantine(&need(conn))?,
+        "attachment-flags" => cmd_attachment_flags(&need(conn))?,
         "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
         "gen-blob" => cmd_gen_blob(
             &need(conn),
@@ -3905,6 +4171,124 @@ mod tests {
         );
         assert!(cycle_is_loud(0, 0, false, true), "the pen itself refused");
         assert!(cycle_is_loud(2, 3, true, true), "several at once");
+    }
+
+    /// Issue #465. The line an operator reads when a peer's event carried an attachment
+    /// reference this node could not learn must NAME the event, not merely count it.
+    ///
+    /// This is the Slice 69 rule applied to a new surface: "3 events have bad references"
+    /// cannot tell an operator whether to chase one peer's encoder bug or one corrupted
+    /// import, and the ledger's own header poses exactly that question. It must also say
+    /// what was NOT lost — the events applied, the clinical content is in the record —
+    /// because the loud failure this line replaces (#460) meant the opposite.
+    #[test]
+    fn an_unlearnable_reference_line_names_the_event_and_not_just_a_count() {
+        let found = UnlearnableReferences {
+            count: 2,
+            example_event: "018f0000-0000-7000-8000-00000000abcd".into(),
+            example_reason: "digest_hex is not valid hex (6 chars, starts \"ab...\") \
+                             — has an odd number of hex digits"
+                .into(),
+        };
+        let m = unlearnable_reference_message("pull peer-a", &found);
+        assert!(m.contains("peer-a"), "the peer is named: {m}");
+        assert!(
+            m.contains("2 attachment reference(s)"),
+            "the count is there, and counts REFERENCES: {m}"
+        );
+        assert!(
+            m.contains("018f0000-0000-7000-8000-00000000abcd"),
+            "NAME, NEVER COUNT — the example event id must be in the line: {m}"
+        );
+        assert!(
+            m.contains("digest_hex"),
+            "the recorded reason travels with it, so the operator can tell an encoder \
+             bug from a corrupted import: {m}"
+        );
+        assert!(
+            m.contains("cairn_attachment_flag_health"),
+            "the line points at the full ledger: {m}"
+        );
+    }
+
+    /// The recorded reason carries PEER TEXT, and this line is read line-by-line.
+    ///
+    /// db/001's `cairn_decode_hex_or_raise` puts a PREFIX OF THE PEER'S OWN VALUE in its
+    /// refusal message (deliberately — it is what tells a truncated digest from a wrongly
+    /// encoded one), db/050 records that message verbatim in the ledger, and this function
+    /// prints it. A newline in it forges a whole log line: an operator scanning `journalctl`
+    /// for pull lines would read a fabricated one as this node's own report. That is the
+    /// Slice 69 finding — peer text is not display text — reaching a second surface.
+    ///
+    /// `{:?}` is the idiom `sensitivity::render::peer` already uses: it escapes control
+    /// characters while leaving ordinary text readable.
+    #[test]
+    fn peer_text_in_the_reason_cannot_forge_a_second_line() {
+        let found = UnlearnableReferences {
+            count: 1,
+            example_event: "018f0000-0000-7000-8000-00000000abcd".into(),
+            // What a hostile encoder can actually put there: the accessor quotes the first
+            // few characters of the value it refused.
+            example_reason: "digest_hex is not valid hex (99 chars, starts \"\n\
+                             pull peer-b: 0 attachment reference(s)...\")"
+                .into(),
+        };
+        let m = unlearnable_reference_message("pull peer-a", &found);
+        assert_eq!(
+            m.lines().count(),
+            1,
+            "peer text must not forge a second line: {m}"
+        );
+        assert!(
+            m.contains("digest_hex is not valid hex"),
+            "…while an ordinary reason still reads naturally: {m}"
+        );
+    }
+
+    /// Three outcomes, and the third is the one that is easy to get wrong: a ledger read
+    /// that FAILED must report the metric as `null` (unknown), never as `0`.
+    ///
+    /// Zero is a claim — "I looked, there were none". Reporting it after a failed read is
+    /// a precise untruth in the reassuring direction on an operator surface (principle 4:
+    /// an honest unknown beats a precise untruth), and it would let a monitor alerting on
+    /// `references_unlearnable > 0` go quiet precisely when the node cannot see.
+    #[test]
+    fn the_unlearnable_report_separates_none_from_could_not_read() {
+        // Nothing to report: a plain 0 and no line. The common case, and it must stay silent.
+        let (metric, line) = unlearnable_report("pull peer-a", Ok(None));
+        assert_eq!(metric, serde_json::json!(0));
+        assert!(line.is_none(), "a clean cycle says nothing: {line:?}");
+
+        // Something to report: the count and the line.
+        let (metric, line) = unlearnable_report(
+            "pull peer-a",
+            Ok(Some(UnlearnableReferences {
+                count: 1,
+                example_event: "018f0000-0000-7000-8000-00000000abcd".into(),
+                example_reason: "digest_hex is not hex".into(),
+            })),
+        );
+        assert_eq!(metric, serde_json::json!(1));
+        assert!(
+            line.as_deref().is_some_and(|l| l.contains("018f0000")),
+            "the operator line carries the example: {line:?}"
+        );
+
+        // Could not look: UNKNOWN, and said out loud.
+        let (metric, line) = unlearnable_report("pull peer-a", Err("connection reset".into()));
+        assert!(
+            metric.is_null(),
+            "a failed read is UNKNOWN, not zero — got {metric}"
+        );
+        let line = line.expect("a failed read must not be silent");
+        assert!(
+            line.contains("connection reset"),
+            "the cause travels: {line}"
+        );
+        assert!(
+            line.contains("unknown") || line.contains("UNKNOWN"),
+            "the line must say the metric is unknown rather than zero: {line}"
+        );
     }
 
     /// The door's legible text (RAISE message + DETAIL, issue #109) and its
@@ -5032,6 +5416,312 @@ mod quarantine_tests {
             1,
             "the trace survives as history"
         );
+    }
+
+    /// A validly-signed peer `note.added` carrying `n` by-reference renditions whose
+    /// `digest_hex` is not hex at all — the #460 shape. Returns (signed bytes, event id).
+    ///
+    /// MALFORMED rather than merely unknown, on purpose: a well-formed digest for bytes
+    /// this node has never seen is the NORMAL case and is learned into `blob_store`
+    /// (references are eager, bytes are lazy). Only a reference the db/027 accessors
+    /// cannot parse reaches the ledger, and it is the only thing this metric counts.
+    fn peer_note_with_bad_references(
+        sk: &SigningKey,
+        kid: &str,
+        wall: i64,
+        n: usize,
+    ) -> (Vec<u8>, String) {
+        let event_id = uuid::Uuid::now_v7().to_string();
+        let renditions = (0..n)
+            .map(|i| cairn_event::Rendition {
+                role: format!("original-{i}"),
+                alg: "blake3".into(),
+                // Not hex, so `cairn_rendition_address` refuses it with P0001 and the
+                // LENIENT learner records the refusal instead of re-raising it.
+                digest_hex: "0xABC".into(),
+                media_type: "image/jpeg".into(),
+                byte_len: 1024,
+                inline: None,
+                seal: None,
+            })
+            .collect();
+        let body = EventBody {
+            event_id: event_id.clone(),
+            patient_id: uuid::Uuid::now_v7().to_string(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: "peer-src".into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"text": "note with a photograph"}),
+            attachments: vec![cairn_event::Attachment {
+                descriptor: "a photograph of the wound".into(),
+                renditions,
+            }],
+            plaintext_twin: Some("Progress note: note with a photograph".into()),
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        (sign(&body, sk).unwrap().signed_bytes, event_id)
+    }
+
+    /// How many flag rows this node holds for one event id.
+    fn flag_count(c: &mut postgres::Client, event_id: &str) -> i64 {
+        c.query_one(
+            "SELECT count(*) FROM attachment_reference_flag WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .unwrap()
+        .get(0)
+    }
+
+    /// **Issue #465.** The cycle stays QUIET (admit-and-flag, #460) but must not stay
+    /// SILENT: the references it could not learn are counted and named.
+    ///
+    /// Before #460 this exact batch produced a P0001 refusal, a penned event and a
+    /// `PullIntegrityError` an operator could not miss. Admitting is right — refusing
+    /// forks the event set and the pen never releases — but the loud signal was removed
+    /// without a replacement, and the ledger that replaced it had no caller. This test
+    /// pins BOTH halves of the trade: the cycle succeeds AND it reports.
+    ///
+    /// The batch is deliberately mixed and the bad event carries TWO bad renditions, so
+    /// the assertion separates "references" from "events": one event, two unlearnable
+    /// references, two other clean events' worth of clinical content untouched.
+    #[test]
+    fn pull_admits_a_malformed_reference_quietly_and_still_reports_it() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        let clean = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let (bad, bad_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026 + 2_000, 2);
+        let (bad2, _bad2_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026 + 3_000, 1);
+        let raw = response_json(&[&clean, &bad, &bad2], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+
+        let m = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect("a malformed attachment reference must NOT fail the cycle (#460)");
+
+        assert_eq!(m["applied_new"], 3, "every event is in the record");
+        assert_eq!(m["skipped_unverifiable"], 0, "nothing was penned");
+        assert_eq!(m["refused_verifiable"], 0, "the floor refused nothing");
+        assert_eq!(m["watermark_frozen"], false, "the cursor moved on");
+        assert_eq!(
+            m["references_unlearnable"], 3,
+            "TWO unlearnable references on one event and one on another — the metric \
+             counts REFERENCES, not events, because how much of a rendition set is \
+             broken is what separates one bad file from a broken encoder: {m}"
+        );
+        assert_eq!(
+            flag_count(&mut c, &bad_id),
+            2,
+            "the ledger holds the standing fact, keyed to the event that carries it"
+        );
+
+        // The EXAMPLE the operator line names must be the EARLIEST flag, and must not
+        // depend on the order the addresses happen to arrive in — an operator re-reading
+        // the line has to land on the same event they were just looking at. Asserted
+        // through the reader itself, because the example rides the stderr line rather
+        // than the metrics object.
+        let found = unlearnable_references(
+            &mut c,
+            &[
+                cairn_event::event_address(&bad2),
+                cairn_event::event_address(&bad),
+            ],
+        )
+        .unwrap()
+        .expect("three flags were just recorded");
+        assert_eq!(found.count, 3);
+        assert_eq!(
+            found.example_event, bad_id,
+            "the example is the earliest flag by flag_id, whatever order the events are \
+             asked about in"
+        );
+        assert!(
+            found.example_reason.contains("digest_hex"),
+            "and it carries the accessor's own words: {}",
+            found.example_reason
+        );
+    }
+
+    /// The metric reports what THIS cycle discovered, not what the node standing holds.
+    ///
+    /// Set-union sync re-offers the same bytes freely (a full sweep, a re-pull from zero,
+    /// a peer serving twice), and the recorder dedupes on re-delivery — so a metric read
+    /// off the whole ledger would re-announce the same defect every cycle forever, which
+    /// is how an operator learns to ignore a line. The standing view is
+    /// `cairn_attachment_flag_health()`; this number is the cycle's own news.
+    #[test]
+    fn a_re_offered_unlearnable_reference_is_not_reported_a_second_time() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        let (bad, bad_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026 + 1_000, 1);
+        let raw = response_json(&[&bad], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 2);
+
+        let first = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        assert_eq!(first["applied_new"], 1);
+        assert_eq!(first["references_unlearnable"], 1, "the cycle's own news");
+
+        let second = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        assert_eq!(second["applied_new"], 0, "set-union no-op on re-apply");
+        assert_eq!(
+            second["references_unlearnable"], 0,
+            "one alert, not one per cycle forever: {second}"
+        );
+        assert_eq!(
+            flag_count(&mut c, &bad_id),
+            1,
+            "the ledger keeps the standing fact (and dedupes the re-delivery)"
+        );
+    }
+
+    /// The standing picture the pull line points at — and the reason db/050's node-wide
+    /// read exists at all (issue #465's third acceptance criterion: it must have a caller
+    /// outside the tests).
+    ///
+    /// TWO DIFFERENT QUESTIONS, deliberately answered by two different surfaces. The pull
+    /// metric is this cycle's news: "what did I just admit that I cannot fetch?". This is
+    /// the standing state: "what does this node hold, from every delivery, ever?" — the
+    /// one that tells a single corrupted import from a peer whose encoder is broken,
+    /// which is the question db/050's own header poses. A read surface with no caller is
+    /// the Slice 69 finding, and this file shipped one.
+    #[test]
+    fn the_attachment_flags_listing_names_the_type_the_reason_and_an_example() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        assert!(
+            attachment_flag_listing(&mut c).unwrap().is_empty(),
+            "a healthy node lists nothing — the signal must not start as noise"
+        );
+
+        // Two unlearnable renditions on one note: same event type, same refusal text, so
+        // they group into ONE row carrying a count of two.
+        let (bad, bad_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026, 2);
+        c.execute("SELECT apply_remote_event($1)", &[&bad]).unwrap();
+
+        let rows = attachment_flag_listing(&mut c).unwrap();
+        assert_eq!(rows.len(), 1, "one (event_type, reason) group: {rows:?}");
+        assert_eq!(rows[0]["event_type"], "note.added");
+        assert_eq!(rows[0]["flagged"], 2);
+        assert_eq!(
+            rows[0]["example_event"], bad_id,
+            "NAME, NEVER COUNT — the group names an event to go and look at"
+        );
+        assert!(
+            rows[0]["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("digest_hex")),
+            "and says what was wrong with it: {rows:?}"
+        );
+    }
+
+    /// The count is attributed to the EVENTS THIS CYCLE APPLIED, not read off the whole
+    /// ledger — so a defect discovered elsewhere is never charged to this peer.
+    ///
+    /// This is the assertion that makes the `WHERE e.content_address = ANY(...)` clause
+    /// load-bearing rather than decorative: drop it and this test goes red while every
+    /// other one in this family stays green, because they all run against a ledger whose
+    /// only rows are their own. Two peers pulling concurrently is the real case, and a
+    /// line naming another peer's event under this peer's name is exactly the kind of
+    /// precise untruth an operator surface must not produce.
+    #[test]
+    fn a_flag_from_outside_this_cycle_is_not_charged_to_this_peer() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+
+        // A flagged event that arrived some OTHER way — a different peer's cycle, or a
+        // local hop. Applied directly through the same door, so the ledger row is real.
+        let (elsewhere, elsewhere_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026, 1);
+        c.execute("SELECT apply_remote_event($1)", &[&elsewhere])
+            .unwrap();
+        assert_eq!(
+            flag_count(&mut c, &elsewhere_id),
+            1,
+            "the ledger holds a standing flag before this peer's cycle begins"
+        );
+
+        // Now a perfectly clean batch from peer-a.
+        let clean = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let raw = response_json(&[&clean], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+
+        assert_eq!(m["applied_new"], 1);
+        assert_eq!(
+            m["references_unlearnable"], 0,
+            "this cycle learned every reference it was offered — the standing ledger is \
+             not its news, and another peer's defect is not its fault: {m}"
+        );
+    }
+
+    /// `requeue` releases penned bytes through the SAME apply door (db/020), so it can
+    /// discover the same unlearnable references — and it is the easier path to miss,
+    /// because it prints one cheerful "released" line per row and nothing else.
+    ///
+    /// The setup is the ADR-0056 decision 5 sequence: an event from an author this node
+    /// does not know is penned verbatim; enrolling the author repairs the cause; the
+    /// release then admits it AND flags the reference it cannot learn.
+    #[test]
+    fn requeue_reports_a_reference_it_could_not_learn_on_release() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk_x, kid_x) = cairn_event::generate_key().unwrap();
+
+        // Valid signature, unknown author, and a malformed reference riding along.
+        let (penned, penned_id) = peer_note_with_bad_references(&sk_x, &kid_x, WALL_2026, 1);
+        let raw = response_json(&[&penned], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+        let (_msg, m) = pull_integrity_err(&mut c, &addr, "peer-a");
+        assert_eq!(
+            m["refused_verifiable"], 1,
+            "the door refused an unknown author"
+        );
+        assert_eq!(
+            m["references_unlearnable"], 0,
+            "nothing was ADMITTED, so there was no reference to learn or to flag: {m}"
+        );
+        assert_eq!(flag_count(&mut c, &penned_id), 0);
+
+        // Repair the cause and release.
+        c.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"late-enrolled\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+            &[&kid_x],
+        )
+        .unwrap();
+        let m = do_requeue(&mut c).unwrap();
+        assert_eq!(m["released"], 1, "the repaired event is admitted");
+        assert_eq!(
+            m["references_unlearnable"], 1,
+            "…and the reference it could not learn is reported, not swallowed: {m}"
+        );
+        assert_eq!(flag_count(&mut c, &penned_id), 1);
     }
 
     /// Issue #267 — ADR-0056 decision 5 for bytes that VERIFY but the floor
