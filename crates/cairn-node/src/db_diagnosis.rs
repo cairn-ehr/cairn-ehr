@@ -149,6 +149,77 @@ pub fn legible_db_error(e: &tokio_postgres::Error) -> String {
     }
 }
 
+/// A database failure from **this node's own database**, rendered for a human without
+/// throwing away the error underneath it.
+///
+/// # Why a type and not another `anyhow!`
+///
+/// `db.rs` renders its failures as `anyhow!("\u{2026}: {}", legible_db_error(&e))`, and that is
+/// right there: nothing downstream of the schema loader reads the cause, so moving the
+/// rendered string in and dropping the error costs nothing.
+///
+/// `sync.rs` is different. Its `run` loop must tell apart two failures that look identical
+/// from the outside \u{2014} *this node's database failed* and *the peer did not answer* \u{2014} because
+/// they send an operator to two different places, and calling the first one a partition
+/// spends their attention on a healthy WAN while charging link downtime for a local write
+/// failure (issue #474 item 3; issue #469 is the same defect in `cairn-sync`, where the fix
+/// is a distinct error class). Classification walks the error chain, so the chain has to
+/// still BE there \u{2014} and `anyhow!` empties it: the macro takes a formatted STRING, so the
+/// `tokio_postgres::Error` is consumed by the `format!` and never becomes anyone's
+/// `source()`.
+///
+/// So this type does both jobs at once: `Display` is the legible rendering an operator
+/// reads, and `source()` is the original error a classifier can find. Replacing it with an
+/// `anyhow!` looks like a tidy-up and silently reverts every local fault to `partition`.
+///
+/// # Why the rendering happens at construction
+///
+/// [`legible_db_error`] is called once, in [`LocalDbFault::new`], and the result is stored.
+/// A `Display` impl that rendered on every call would re-walk the source chain for every
+/// log line, and \u{2014} worse \u{2014} would make the cost of formatting depend on how deep the chain
+/// is, on an error path. Rendering once, at the site that knows the context, is both
+/// cheaper and easier to reason about.
+#[derive(Debug)]
+pub struct LocalDbFault {
+    /// What this node was trying to do, in the caller's own words \u{2014} `"checkpointing sync
+    /// cursor"`. NEVER the connection string: it can carry a password.
+    context: String,
+    /// The [`legible_db_error`] rendering of `source`, computed once at construction.
+    rendered: String,
+    /// The original error, kept so [`std::error::Error::source`] can hand it back. This is
+    /// the field the whole type exists for.
+    source: tokio_postgres::Error,
+}
+
+impl LocalDbFault {
+    /// Wrap a failed database call with what it was doing.
+    ///
+    /// `context` is a short phrase in the caller's own words. It must never contain a
+    /// connection string, a password, or unbounded text from a peer \u{2014} it is spliced into a
+    /// one-line operator log, and this project has already had to bound one such channel
+    /// (`custody_withheld`, #466 review).
+    pub fn new(context: &str, source: tokio_postgres::Error) -> Self {
+        let rendered = legible_db_error(&source);
+        Self {
+            context: context.to_string(),
+            rendered,
+            source,
+        }
+    }
+}
+
+impl std::fmt::Display for LocalDbFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.rendered)
+    }
+}
+
+impl std::error::Error for LocalDbFault {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,6 +329,54 @@ mod tests {
             text.contains("submit_event: refused") && text.contains("second"),
             "collapsing must not DROP anything \u{2014} it only flattens: {text}"
         );
+    }
+
+    /// A `LocalDbFault` must do BOTH jobs at once, and the second is the one that is easy
+    /// to lose: it renders legibly (so an operator gets the SQLSTATE) *and* it keeps the
+    /// `tokio_postgres::Error` reachable through `source()` (so `sync.rs`'s classifier can
+    /// still tell a local database failure from a partition). `anyhow!("\u{2026}: {}", \u{2026})` does
+    /// the first and silently destroys the second, which would reinstate issue #469's
+    /// defect inside the fix for it.
+    ///
+    /// Exercised with no database and no network: `Config`'s own parser yields a real
+    /// `tokio_postgres::Error` with a live `source()`.
+    #[test]
+    fn a_local_db_fault_renders_legibly_and_keeps_its_cause() {
+        let pg = "host=localhost port=not-a-number"
+            .parse::<tokio_postgres::Config>()
+            .expect_err("a non-numeric port is not a parseable connection string");
+        let fault = LocalDbFault::new("checkpointing sync cursor", pg);
+
+        let text = fault.to_string();
+        assert!(
+            text.starts_with("checkpointing sync cursor: "),
+            "the caller's context leads, so the line says WHAT was being done: {text}"
+        );
+        assert!(
+            text.contains("port"),
+            "\u{2026}and the rendered cause follows, naming the failure: {text}"
+        );
+
+        // The half classification depends on.
+        let anyhow_err = anyhow::Error::from(fault);
+        assert!(
+            anyhow_err.chain().any(|c| c.is::<tokio_postgres::Error>()),
+            "the cause must stay reachable through the chain, or every local database \
+             failure is classified as a partition (#474 item 3): {anyhow_err:#}"
+        );
+        assert_ne!(format!("{anyhow_err}"), "db error", "{anyhow_err}");
+    }
+
+    /// `.context()` on top of a `LocalDbFault` must not break the chain walk \u{2014} a caller is
+    /// free to add its own layer, and the classifier has to survive it.
+    #[test]
+    fn an_added_context_layer_leaves_the_cause_reachable() {
+        let pg = "host=localhost port=not-a-number"
+            .parse::<tokio_postgres::Config>()
+            .unwrap_err();
+        let e = anyhow::Error::from(LocalDbFault::new("reading sync cursor", pg))
+            .context("pull cycle 7");
+        assert!(e.chain().any(|c| c.is::<tokio_postgres::Error>()), "{e:#}");
     }
 
     /// The composed shape is a contract shared with `cairn-sync` (see the module doc).
