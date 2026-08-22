@@ -112,8 +112,34 @@ CREATE TABLE IF NOT EXISTS event_log (
     -- t_recorded is a ceiling: the asserted effective time may precede it
     -- (backdating is legal) but the log never claims to have recorded the
     -- future. Clashes are flagged elsewhere, never auto-resolved (§3.6).
-    CONSTRAINT hlc_nonnegative CHECK (hlc_wall >= 0 AND hlc_counter >= 0)
+    CONSTRAINT hlc_nonnegative CHECK (hlc_wall >= 0 AND hlc_counter >= 0),
+    -- The attachments column is a PROJECTION for querying, not the authoritative body —
+    -- signed_bytes is. Every reader walks it with jsonb_array_elements, which raises 22023
+    -- (NOT P0001, so cairn-sync freezes rather than pens) on a scalar or an object. Since
+    -- #460 the apply door ADMITS a body whose attachments is not a list, so without this the
+    -- malformed value would be stored and the refusal merely RELOCATED — out of a door that
+    -- pens, names and reports it, into read paths with no handling at all, one of which is
+    -- the §5.3/§5.8 search-before-create funnel (crates/cairn-node/src/patient/search.rs).
+    -- Both doors coerce through cairn_json_list_or_empty, so a non-list can now only arrive
+    -- through a CODE defect; this constraint is what makes that defect loud instead of silent.
+    CONSTRAINT event_attachments_is_a_list CHECK (jsonb_typeof(attachments) = 'array')
 );
+
+-- Paired ALTER for databases created before the constraint existed (#207's rule: a widened
+-- CREATE TABLE that is only replayed, never re-created, needs an explicit ALTER or existing
+-- databases silently keep the old shape). ADD CONSTRAINT has no IF NOT EXISTS, so the guard is
+-- an explicit catalogue check; it validates existing rows, which is safe because the strict
+-- learner refused every non-list body before #460 and both doors coerce after it.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'event_log'::regclass
+                      AND conname = 'event_attachments_is_a_list') THEN
+        ALTER TABLE event_log
+            ADD CONSTRAINT event_attachments_is_a_list
+            CHECK (jsonb_typeof(attachments) = 'array');
+    END IF;
+END $$;
 
 -- The responsibility proof travels WITH the event (issue #91 / review A2+M7). A
 -- suppressing event (or any asserted responsibility) is admitted only against a valid
@@ -503,6 +529,24 @@ BEGIN
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_decode_hex_or_raise(text, text, text) FROM PUBLIC;
+
+-- A jsonb value coerced to a list, TOTALLY — this one never raises.
+--
+-- The permissive twin of db/027's cairn_json_list_or_raise, and the two are deliberately not the
+-- same function: a door that is MINTING a field wants the refusal (the author is present and can
+-- fix it), while a door that is STORING an already-signed field wants a value every reader can
+-- walk. Absent, JSON null, a string, a number and an object all become the empty array; an array
+-- passes through untouched.
+--
+-- WHY IT LIVES IN db/001 AND NOT BESIDE ITS SIBLING IN db/027: its callers are db/005 and db/020,
+-- both of which LOAD EARLIER than db/027. PL/pgSQL resolves a call at first execution so the
+-- forward reference would work, but a helper whose declaration a reader cannot reach by reading
+-- downwards is the shape issue #198 was filed about, and db/001 is the one file every migration
+-- subset loads. Its raising sibling stays in db/027, where its only callers are.
+CREATE OR REPLACE FUNCTION cairn_json_list_or_empty(v jsonb)
+RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN jsonb_typeof(v) = 'array' THEN v ELSE '[]'::jsonb END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Sync watermark per peer: the highest HLC this node has pulled from a peer.

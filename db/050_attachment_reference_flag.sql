@@ -14,9 +14,14 @@
 --
 --     | malformed / self-contradictory field | local door: REFUSE | remote door: ADMIT |
 --
--- and names the rule behind it: an envelope-level field is CONSTRAINED WHERE IT IS MINTED and
--- READ PERMISSIVELY WHERE IT ARRIVES. Its rejected-alternatives section rejects precisely what
--- #370 shipped:
+-- and names the rule behind it. QUOTED EXACTLY: "an envelope-level GRADED field is constrained
+-- where it is minted and read permissively where it arrives." An attachment rendition reference
+-- is NOT graded, so #460 EXTENDS that rule rather than merely applying it — and what carries the
+-- extension is not the sentence but the rejected-alternatives argument below, which turns on
+-- BLAST RADIUS and never mentions `safety`. (An earlier draft of this header dropped the word
+-- "graded" from inside the quotation marks, which made an extension read as a citation. That is
+-- what issue #461 exists to fix properly.) The rejected alternatives reject precisely what #370
+-- shipped:
 --
 --     "Refusing a malformed signal at the apply door ... fails on blast radius: the safety
 --      signal is a field on a clinical event, so refusing it at apply drops the medication
@@ -72,8 +77,10 @@ BEGIN;
 -- through the dispatch, never the doors, and the inputs are immutable.
 --
 -- NAME, NEVER COUNT (the Slice 69 rule): the row says WHICH attachment and WHICH rendition,
--- and carries the accessor's own refusal text verbatim. "3 events have bad references" cannot
--- tell an operator whether to chase a peer's encoder bug or one corrupted import.
+-- and carries the accessor's refusal MESSAGE **and its DETAIL** (cairn_flag_reason_text below —
+-- SQLERRM alone drops the DETAIL, which is the half that tells truncation from wrong-encoding).
+-- "3 events have bad references" cannot tell an operator whether to chase a peer's encoder bug
+-- or one corrupted import.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS attachment_reference_flag (
     flag_id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -83,9 +90,15 @@ CREATE TABLE IF NOT EXISTS attachment_reference_flag (
     -- consistency with its sibling and as a correct statement of intent, but do not cite it as a
     -- live guarantee — the guarantee is the reference itself.
     event_id         UUID NOT NULL REFERENCES event_log(event_id) ON DELETE CASCADE,
-    -- NULL means "not attributable to one rendition" — the attachments or renditions LIST
-    -- itself was not a list, so there is no index to name. A sentinel like -1 would be a
-    -- precise untruth; NULL is the honest unknown (principle 4).
+    -- Three shapes, and the NULLs are honest unknowns rather than sentinels (principle 4):
+    --
+    --   (i, j)      one rendition could not be learned — the common case.
+    --   (i, NULL)   attachment i's `renditions` was not a list, so no rendition index exists.
+    --               The ATTACHMENT index does exist and is recorded: NAME, NEVER COUNT.
+    --   (NULL,NULL) `attachments` itself was not a list. Nothing to point at, and nothing was
+    --               learnable, so nothing is lost by not pointing.
+    --
+    -- A sentinel like -1 would be a precise untruth in all three.
     attachment_index INT,
     rendition_index  INT,
     reason           TEXT        NOT NULL,
@@ -108,11 +121,22 @@ CREATE INDEX IF NOT EXISTS attachment_reference_flag_event_idx
 GRANT SELECT ON attachment_reference_flag TO cairn_agent;
 
 -- The recorder. STRUCTURALLY non-gating, in db/029's hlc_collision_log idiom: plain SQL, one
--- INSERT ... SELECT with an existence guard in the WHERE, plus ON CONFLICT DO NOTHING. It
--- cannot raise, by construction, and that is not decoration — this function runs INSIDE the
--- handler that is catching a refusal, so anything it raised would escape past the handler and
--- fail the apply door. A recorder that can take down the door turns a metadata problem into
--- the clinical-availability problem this entire file exists to prevent.
+-- INSERT ... SELECT with an existence guard in the WHERE, plus ON CONFLICT DO NOTHING. That
+-- matters because this function runs INSIDE the handler that is catching a refusal, so anything
+-- it raised would escape past the handler and fail the apply door — turning a metadata problem
+-- into the clinical-availability problem this entire file exists to prevent. Worse, the outer
+-- handler would then call it AGAIN and fail again, this time with nothing above it, leaving a
+-- non-P0001 code for cairn-sync to read as transient: a permanent freeze on an event that will
+-- never apply. So the property is load-bearing twice over.
+--
+-- ⚠️ STATE THE PROPERTY AS WHAT IT IS, NOT AS AN ABSOLUTE. The construction closes 23503 (the
+-- missing target) and 23505 (re-delivery). It does NOT close 42501: this function is not
+-- SECURITY DEFINER, so a caller holding only SELECT on the ledger gets "permission denied for
+-- table" — measured on PG 18.1, escaping both handlers. What closes that is a CALLER property
+-- (apply_remote_event is SECURITY DEFINER and runs as the owner) plus the REVOKE below, not the
+-- INSERT's shape. The previous wording — "it cannot raise, by construction" — was a strictly
+-- stronger absolute than the one this same block records as having been proven wrong two
+-- paragraphs down, on this same function.
 --
 -- ⚠️ THE `WHERE EXISTS` IS THE LOAD-BEARING PART, AND THE FIRST DRAFT DID NOT HAVE IT.
 -- `event_id` REFERENCES event_log, so a plain VALUES insert raises 23503 (foreign_key_violation)
@@ -138,45 +162,29 @@ $$;
 -- ---------------------------------------------------------------------------
 -- One iteration, two policies.
 --
--- The strict learner (db/027) and the lenient one below must never disagree about what
--- "malformed" means, and the cheapest way to guarantee that is to give them nothing to
--- disagree with: they share the same accessors, and now the same traversal. This function
--- owns the list coercion and the inline skip; the two learners differ ONLY in what they do
--- when an accessor refuses.
+-- The traversal itself — `cairn_by_reference_renditions` — lives in **db/027**, beside the
+-- accessors and the strict learner that also runs it. It is declared there rather than here
+-- for the reason db/027's header now records: its callers are in db/027 and db/050, both of
+-- which are in cairn-sync's subset, and putting the shared traversal in the LATER file would
+-- have meant the strict learner (earlier) forward-referencing it.
 --
--- Returns the by-reference renditions with their positions. INLINE renditions are skipped for
--- db/027's reason: their bytes ride the event itself, so there is no lazy blob to fetch and
--- noting one would create a phantom present=FALSE row that never resolves.
+-- The two learners differ ONLY in what they do with a fault: the strict one re-raises it, the
+-- lenient one records it. That is the whole difference, and `db/tests/050` section 9 reads
+-- pg_proc to fail if either ever stops calling the shared traversal — because four files
+-- asserted that guarantee while an earlier draft duplicated the loop.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION cairn_by_reference_renditions(b jsonb, p_door text)
-RETURNS TABLE (attachment_index int, rendition_index int, rendition jsonb)
-LANGUAGE plpgsql AS $$
-DECLARE
-    a jsonb;
-    r jsonb;
-    i int;
-    j int;
-BEGIN
-    FOR a, i IN
-        SELECT value, ordinality - 1
-        FROM jsonb_array_elements(
-                 cairn_json_list_or_raise(b -> 'attachments', 'attachments', p_door))
-             WITH ORDINALITY
-    LOOP
-        FOR r, j IN
-            SELECT value, ordinality - 1
-            FROM jsonb_array_elements(
-                     cairn_json_list_or_raise(a -> 'renditions', 'renditions', p_door))
-                 WITH ORDINALITY
-        LOOP
-            CONTINUE WHEN r ? 'inline';
-            attachment_index := i;
-            rendition_index := j;
-            rendition := r;
-            RETURN NEXT;
-        END LOOP;
-    END LOOP;
-END;
+
+-- The text an operator reads: the accessor's message AND its DETAIL.
+--
+-- SQLERRM returns the primary message only, and every accessor in db/027 puts the
+-- discriminating half in `USING DETAIL` — hex_decode_helper.rs states the standard: "its DETAIL
+-- says WHICH hex fault, because truncation and wrong-encoding want opposite responses from
+-- whoever reads the log." A ledger built on SQLERRM alone records the half that does not
+-- discriminate and drops the half that does, while calling the result verbatim.
+CREATE OR REPLACE FUNCTION cairn_flag_reason_text(p_message text, p_detail text)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT p_message
+        || CASE WHEN COALESCE(btrim(p_detail), '') = '' THEN '' ELSE ' — ' || p_detail END;
 $$;
 
 -- The LENIENT learner — db/020's half of the asymmetry.
@@ -187,19 +195,33 @@ $$;
 -- independent lines).
 --
 -- ⚠️ `WHEN raise_exception` IS NARROW ON PURPOSE, AND `WHEN OTHERS` HERE WOULD BE A DISASTER.
--- P0001 is what our own accessors raise; it is the only thing this may absorb. `WHEN OTHERS`
--- would write a disk error, a serialization failure or a broken constraint into the ledger as
--- "the peer sent a malformed reference" and then admit the event as though nothing had gone
--- wrong — a real fault laundered into a false accusation, and cairn-sync robbed of the
--- non-P0001 SQLSTATE it needs to treat the failure as transient and RETRY. (`OTHERS` also
--- does not catch a statement timeout: 57014 query_canceled is one of the two codes it
--- excludes — the Slice 68 lesson.) Measured on PG 18.1: a 22-class error raised inside this
--- block propagates past the handler untouched, and `the_lenient_learner_does_not_swallow_a_
--- real_fault` pins it with an injected fault.
+-- `WHEN OTHERS` would write a disk error, a serialization failure or a broken constraint into
+-- the ledger as "the peer sent a malformed reference" and then admit the event as though
+-- nothing had gone wrong — a real fault laundered into a false accusation, and cairn-sync
+-- robbed of the non-P0001 SQLSTATE it needs to treat the failure as transient and RETRY.
+-- (`OTHERS` also does not catch a statement timeout: 57014 query_canceled is one of the two
+-- codes it excludes — the Slice 68 lesson.) Measured on PG 18.1: a 22-class error raised
+-- inside this block propagates past the handler untouched, and
+-- `the_lenient_learner_does_not_swallow_a_real_fault` pins it with an injected fault.
 --
--- The OUTER handler catches the one fault that has no rendition to name — the attachments or
--- renditions list not being a list at all. cairn_by_reference_renditions materialises before
--- the loop body runs, so nothing has been learned yet when it raises.
+-- ⚠️ BUT P0001 IS NOT A SYNONYM FOR "OUR ACCESSORS", AND AN EARLIER DRAFT SAID IT WAS.
+-- The precise reason this narrow catch is safe today is: the only P0001 reachable inside the
+-- inner block comes from db/027's accessors, because `blob_note_reference` (db/003) is plain
+-- SQL and the one trigger on `blob_store` that raises bare — db/026's `cairn_blob_present_guard`
+-- — is declared `FOR EACH ROW WHEN (NEW.present)`, and `blob_note_reference` writes a row with
+-- `present` defaulted FALSE. THAT CONDITION LIVES IN ANOTHER FILE. Widen db/026's WHEN clause,
+-- or teach blob_note_reference to set `present`, and a wrong-bytes-under-a-content-address
+-- integrity refusal — the seam ADR-0013 names as this tier's safety-critical one — is silently
+-- rewritten as "the peer sent a malformed reference" and the event admitted. Pinned by
+-- `the_blob_present_guard_stays_out_of_reach_of_the_lenient_catch` in the Rust suite, which
+-- fails if that WHEN clause moves.
+--
+-- The OUTER handler catches the ONE fault that has no attachment to name: `attachments` itself
+-- not being a list. A malformed `renditions` list is NOT caught here — db/027's traversal
+-- returns it as a fault row so its siblings still learn and the flag names its attachment.
+-- Nothing has been learned when the outer handler fires, because a set-returning PL/pgSQL
+-- function materialises before its first row is returned — and here that costs nothing, since a
+-- non-list `attachments` had nothing learnable in it.
 --
 -- A NEW NAME rather than a second signature: `CREATE OR REPLACE FUNCTION` matches on the
 -- argument list, so adding a parameter to cairn_learn_attachment_refs would create an OVERLOAD
@@ -211,24 +233,46 @@ DECLARE
     rec RECORD;
     v_door CONSTANT text := 'cairn_learn_attachment_refs_lenient';
     v_event_id uuid := (b ->> 'event_id')::uuid;
+    v_detail text;
 BEGIN
     BEGIN
         FOR rec IN SELECT * FROM cairn_by_reference_renditions(b, v_door) LOOP
+            -- A whole attachment whose renditions were not a list. Its index EXISTS, so the
+            -- flag names it; recording NULL here would be a precise untruth (principle 4).
+            IF rec.fault IS NOT NULL THEN
+                PERFORM cairn_record_attachment_reference_flag(
+                    v_event_id, rec.attachment_index, NULL,
+                    cairn_flag_reason_text(rec.fault, rec.fault_detail));
+                CONTINUE;
+            END IF;
             BEGIN
                 PERFORM blob_note_reference(
                     cairn_rendition_address(rec.rendition, v_door),
                     cairn_rendition_media_type(rec.rendition, v_door),
                     cairn_rendition_byte_len(rec.rendition, v_door));
             EXCEPTION WHEN raise_exception THEN
+                GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
                 PERFORM cairn_record_attachment_reference_flag(
-                    v_event_id, rec.attachment_index, rec.rendition_index, SQLERRM);
+                    v_event_id, rec.attachment_index, rec.rendition_index,
+                    cairn_flag_reason_text(SQLERRM, v_detail));
             END;
         END LOOP;
     EXCEPTION WHEN raise_exception THEN
-        PERFORM cairn_record_attachment_reference_flag(v_event_id, NULL, NULL, SQLERRM);
+        GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+        PERFORM cairn_record_attachment_reference_flag(
+            v_event_id, NULL, NULL, cairn_flag_reason_text(SQLERRM, v_detail));
     END;
 END;
 $$;
+
+-- Neither the recorder nor the lenient learner is a public entry point: both are reached only
+-- from `apply_remote_event`, which is SECURITY DEFINER and therefore executes them as the owner.
+-- Leaving PUBLIC's default EXECUTE in place made two claims above false for a low-privilege
+-- caller — the recorder raises 42501 with only SELECT on the ledger (escaping BOTH handlers),
+-- and the lenient learner called with a body carrying no `event_id` absorbs every refusal and
+-- records nothing, the silently-unvalidated-door shape this file warns about for overloads.
+REVOKE EXECUTE ON FUNCTION cairn_record_attachment_reference_flag(uuid, int, int, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION cairn_learn_attachment_refs_lenient(jsonb) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- The read surface.
@@ -261,6 +305,47 @@ AS $$
     WHERE e.patient_id = p_patient
     ORDER BY f.flagged_at, f.attachment_index, f.rendition_index;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- The NODE-WIDE read, because the chart-scoped one answers the wrong question first.
+--
+-- cairn_patient_attachment_flags(uuid) requires you to already know WHICH chart to ask about.
+-- But a malformed reference is discovered FROM the ledger, not from a chart — and the question
+-- the ledger's own header poses ("chase a peer's encoder bug, or one corrupted import?") is
+-- fleet-shaped, not patient-shaped. A report you can only run once you already know the answer
+-- is the Slice 69 finding wearing a different hat.
+--
+-- db/040 is the sibling that got this right: a cairn_agent-only flag TABLE paired with a
+-- node-wide cairn_clock_health() granted to both roles. Same shape here.
+--
+-- NAME, NEVER COUNT still holds: this returns one row per (event_type, reason) with the events
+-- that carry it, so "47 flags" can never be all an operator sees.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION cairn_attachment_flag_health()
+RETURNS TABLE (
+    event_type    text,
+    reason        text,
+    flagged       bigint,
+    first_flagged timestamptz,
+    last_flagged  timestamptz,
+    example_event uuid)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT e.event_type, f.reason, count(*), min(f.flagged_at), max(f.flagged_at),
+           -- array_agg, not min(): PostgreSQL has no min() for uuid. Ordered by flagged_at then
+           -- flag_id so the example is the EARLIEST occurrence and is stable across calls — an
+           -- operator re-running this must land on the same event they were just looking at.
+           (array_agg(f.event_id ORDER BY f.flagged_at, f.flag_id))[1]
+    FROM attachment_reference_flag f
+    JOIN event_log e USING (event_id)
+    GROUP BY e.event_type, f.reason
+    ORDER BY count(*) DESC, e.event_type, f.reason;
+$$;
+
+REVOKE EXECUTE ON FUNCTION cairn_attachment_flag_health() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_attachment_flag_health() TO cairn_agent, cairn_node;
 
 REVOKE EXECUTE ON FUNCTION cairn_patient_attachment_flags(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_patient_attachment_flags(uuid) TO cairn_agent;

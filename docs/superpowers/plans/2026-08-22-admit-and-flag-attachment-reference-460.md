@@ -113,7 +113,7 @@ event and reason; never a count.
      asymmetry's other half);
    - the flagged event still **projects** — it is not deferred.
 2. **GREEN** — `db/050_attachment_reference_flag.sql`: the table, the recorder, the lenient learner,
-   the chart-scoped read. Register in `cairn-node`'s `MIGRATIONS` (db.rs) **and** `cairn-sync`'s
+   the chart-scoped read. Register in `cairn-node`'s `SCHEMA` (db.rs) **and** `cairn-sync`'s
    `SCHEMA` subset — the apply door needs it, and db/027's helpers must resolve there.
 3. Bump `SCHEMA_GENERATION` 49 → 50 (`crates/cairn-event/src/schema_generation.rs`); the guard test
    pins that the migration list carries the repo's newest file.
@@ -137,7 +137,8 @@ event and reason; never a count.
 **1. The framing was wrong, and correcting it removed a task.** Task 8 asked whether this warrants an
 ADR. It does not: **ADR-0063 already decides it**, in a table, for the §5.9 `safety` field — *malformed
 field: local door REFUSE, remote door ADMIT* — and states the rule generally (*an envelope-level field is
-constrained where it is MINTED and read permissively where it ARRIVES*), rejecting apply-door refusal on
+constrained where it is minted and read permissively where it arrives* — the ADR says **graded** field,
+and #460 extends the rule past graded ones on the blast-radius argument, not on the sentence), rejecting apply-door refusal on
 **blast radius** in words that never mention `safety`. So #460 is not a new decision; it is an existing
 rule applied where it already bound, and #370's fix had contradicted an ADR nobody read. What IS missing
 is a *findable* name for the rule — three implementations, filed under a fourth thing's title — which is
@@ -163,6 +164,42 @@ to end, and routing the ledger's own mechanics through `submit_event` would drag
 and #345's registration precedence — none of which the ledger is being tested for, all of which could
 fail it for unrelated reasons.
 
+**5. The shipped table is NOT the one specified above, and the difference is the whole
+not-attributable case.** The schema block specifies `attachment_index INT NOT NULL`,
+`rendition_index INT NOT NULL` and a plain `UNIQUE`. What shipped makes both indices **nullable** and
+the index **`NULLS NOT DISTINCT`** — because there are three legitimate shapes, not one: `(i, j)` for a
+rendition, `(i, NULL)` for an attachment whose `renditions` was not a list, and `(NULL, NULL)` for an
+`attachments` value that was not a list. `NOT NULL` cannot express the last two, and the default
+`NULLS DISTINCT` would make every re-offer of the last one a fresh row, forever. Recorded here because
+the block above is exactly the artefact a future reader would use to "simplify" it back.
+
+**6. The review pass rewrote three of this plan's own claims.** Six agents over the finished branch,
+every claim re-verified against PG 18.1 before acting:
+
+- **Design §3's "it runs the same accessors" understated what was needed, and the code understated it
+  further.** Sharing accessors does not stop the two doors drifting on *traversal* — the list coercion
+  and the inline skip. Four files asserted a shared traversal while the strict learner still ran its own
+  duplicated loop. Now genuinely shared (`cairn_by_reference_renditions`, db/027, iterated by both) and
+  pinned by `db/tests/050` §9 reading `pg_proc`, so the claim cannot outlive the code a second time.
+- **Design §4's principle was inverted by the implementation at the next granularity up.** "A defect on
+  one rendition never invalidates another" held for accessor faults and failed completely for list-shape
+  ones: a PL/pgSQL SRF materialises before its first row, so raising inside it discarded every
+  well-formed reference on every *other* attachment. Fault rows fixed it. **No Rust test could have
+  caught this** — `EventBody.attachments` is a `Vec` and `sign()` takes a typed body, so a non-list is
+  unrepresentable; the list-shape class is the SQL mirror's alone, now stated at the top of that file.
+- **§3's "`blob_note_reference` is plain SQL and cannot raise it" was true for the wrong reason.**
+  It INSERTs into `blob_store`, which carries db/026's `cairn_blob_present_guard` — a bare `RAISE`,
+  i.e. P0001 — held off only by `FOR EACH ROW WHEN (NEW.present)` **in another file**. Now pinned there.
+- **A regression this plan did not anticipate:** admitting a non-array `attachments` *stores* it, and
+  `read_photo_refs` walks that column with `jsonb_array_elements` (22023). The refusal was relocated,
+  not removed — into the §5.3/§5.8 search-before-create funnel. Fixed at both doors with a total
+  coercion plus a CHECK.
+- Task 5's mutation list was run and found the mirror weaker than it read: the lenient learner replaced
+  by `RETURN;` left every section green, because §1 drove it against an `event_id` absent from
+  `event_log`.
+
 **Lesson worth carrying past this slice:** *a comment written before a constraint does not update itself
-when the constraint lands.* Both defects above are that shape, and both were in prose asserting a safety
-property, not in the code implementing one.
+when the constraint lands.* Every defect above is that shape — prose asserting a safety property rather
+than code implementing one — and the branch was fully green through all of them. The corollary the
+review pass adds: **a claim about two things staying in step needs a guard that reads both**, or it
+decays into decoration the moment one of them moves.

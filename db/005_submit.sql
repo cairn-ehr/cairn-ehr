@@ -1119,7 +1119,7 @@ BEGIN
 
     -- 6. Provenance binding (C3): an advisory must cite its source blob's address.
     IF v_type = 'advisory.added' THEN
-        IF jsonb_array_length(COALESCE(b -> 'attachments', '[]'::jsonb)) = 0 THEN
+        IF jsonb_array_length(cairn_json_list_or_empty(b -> 'attachments')) = 0 THEN
             RAISE EXCEPTION 'submit_event: advisory.added must carry a provenance attachment reference';
         END IF;
     END IF;
@@ -1415,7 +1415,7 @@ BEGIN
         p_signed, v_ca, b -> 'payload', b -> 'contributors',
         b ->> 'signer_key_id',
         CASE WHEN v_sealed THEN v_twin_stub ELSE v_twin END,
-        COALESCE(b -> 'attachments','[]'::jsonb),
+        cairn_json_list_or_empty(b -> 'attachments'),
         v_att, v_att_key, v_actor_id, v_sealed,
         v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
@@ -1430,8 +1430,13 @@ BEGIN
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy).
-    -- Shared with the remote-apply door via cairn_learn_attachment_refs (db/027) so the
-    -- two doors never drift.
+    -- The STRICT learner: at this door the field is being MINTED, the author is present, and
+    -- this node is the only one that can stop a permanently-defective event entering an
+    -- append-only replicating record. So a malformed reference refuses the whole event.
+    -- The remote-apply door (db/020) calls cairn_learn_attachment_refs_lenient (db/050)
+    -- instead and RECORDS the fault — ADR-0063's rule, #460. THE ASYMMETRY IS THE DESIGN; do
+    -- not "align" them. What they share, and what stops them drifting into two definitions of
+    -- "malformed", is the accessors and the one traversal (cairn_by_reference_renditions).
     PERFORM cairn_learn_attachment_refs(b);
 
     -- 10. The erasure plane: an admitted shred tombstone EXECUTES here (ADR-0052).

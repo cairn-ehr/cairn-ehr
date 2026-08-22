@@ -211,8 +211,15 @@ headers both stating it where a reader is already working.**
    arrive-permissive* — and is documentation-only; all three implementations already comply.
 4. **The mechanism, and the one thing not to "align":** `submit_event` calls the strict learner
    (db/027), `apply_remote_event` calls `cairn_learn_attachment_refs_lenient` (db/050). They share
-   their accessors **and** their traversal (`cairn_by_reference_renditions`), so "malformed" cannot come
-   to mean two things; they differ only in `EXCEPTION WHEN raise_exception` → record instead of raise.
+   their accessors **and** their traversal — `cairn_by_reference_renditions`, declared in **db/027**
+   beside the accessors and iterated by both — so "malformed" cannot come to mean two things; they
+   differ only in `EXCEPTION WHEN raise_exception` → record instead of raise. **The shared traversal is
+   pinned, not trusted:** review found all four claim sites asserting it while the strict learner still
+   carried its own duplicated loop, so `db/tests/050` §9 now reads `pg_proc` and fails if either learner
+   stops calling it. The traversal returns a malformed `renditions` list as a **fault row** rather than
+   raising, because a PL/pgSQL SRF materialises before its first row: raising discarded every
+   well-formed reference on every *other* attachment — ADR-0060 inverted at the coarsest granularity,
+   in the file that exists to uphold it.
    **`WHEN OTHERS` there would be a disaster** — a disk error or serialization failure written into the
    ledger as *"the peer sent garbage"*, the event admitted as if nothing happened, and cairn-sync robbed
    of the non-P0001 SQLSTATE it needs to retry. Measured on PG 18.1: a 22-class error propagates past
@@ -226,6 +233,46 @@ headers both stating it where a reader is already working.**
    is append-only and db/001's trigger refuses DELETE outright, which is how the test found out. Both
    claims are now stated as what they are. **A comment written before a constraint does not update
    itself when the constraint lands.**
+6. **⇒ THE REVIEW PASS FOUND THE SAME SPECIES THREE MORE TIMES, AND ONE REAL REGRESSION.** Six agents
+   over the finished branch (code / tests / comments / silent-failure), each claim re-verified against
+   PG 18.1 before acting:
+   - **The stated anti-drift mechanism did not exist.** Four files said the two learners "share their
+     traversal"; `cairn_by_reference_renditions` had one caller. Fixed by making it true — the strict
+     learner now iterates it — plus a `pg_proc` guard so the claim can never outlive the code again.
+   - **The traversal was all-or-nothing.** One malformed `renditions` list discarded every good
+     reference on every other attachment, permanently (immutable event; `cairn_reproject` replays the
+     dispatch, not the doors), and flagged `(NULL, NULL)` while the attachment index was in scope.
+     Fault rows fixed both. **No Rust test could see it** — `EventBody.attachments` is a `Vec`, so a
+     non-list is unrepresentable and `sign()` takes a typed body: the list-shape class lives in the SQL
+     mirror *alone*, which is now stated at the top of that file.
+   - **REGRESSION, caught before merge:** admitting a non-array `attachments` meant *storing* it —
+     previously the strict learner's refusal rolled the row back. `read_photo_refs`
+     (`patient/search.rs`) walks that column with `jsonb_array_elements` → **22023**, so one peer's
+     malformed photo event failed the whole §5.3/§5.8 candidate list: the wrong-chart-prevention
+     surface. The refusal had not been removed, only **relocated** out of a door that pens and names it
+     into a read path with no handling. Fixed with `cairn_json_list_or_empty` (db/001, total) at both
+     doors plus a CHECK on the column; the same helper closes a pre-existing 22023 freeze at
+     db/020's `advisory.added` provenance check, which ran ~190 lines *before* the learner.
+   - **"P0001 means our accessors" was an assertion, not a property.** db/026's `cairn_blob_present_guard`
+     raises bare P0001 on `blob_store` — the table the catch writes to — and is out of reach only via
+     `WHEN (NEW.present)` **in another file**. A widened WHEN clause would launder a wrong-bytes-under-a-
+     content-address refusal into "the peer sent garbage". Now pinned at the source, where the edit lands.
+   - **Mutation testing killed less than the mirror claimed.** The lenient learner replaced by
+     `RETURN;` left every mirror section green — §1 ran it against an `event_id` not in `event_log`, so
+     `WHERE EXISTS` skipped every insert. Sections now assert it **records**, over all twelve shapes.
+   - Also: `SQLERRM` dropped `PG_EXCEPTION_DETAIL` while the header called the text verbatim; the
+     recorder's "cannot raise, by construction" ignored 42501 (fixed by REVOKE + honest wording); the
+     ADR-0063 quotation had silently dropped **"graded"**, which is the word doing the work of
+     extending the rule to a non-graded field.
+   **The lesson generalises past this slice:** every one of these was *prose asserting a safety
+   property* rather than code implementing one, and the branch was fully green throughout.
+   **Raised, not decided:** [#463](https://github.com/cairn-ehr/cairn-ehr/issues/463) the ledger has no
+   resolution path (a repaired floor leaves a permanent false accusation — overlay or delete is a real
+   choice, and the two siblings made opposite ones) · [#464](https://github.com/cairn-ehr/cairn-ehr/issues/464)
+   unbounded per-rendition subtransactions (~10^5 per event is reachable; option 3 in the issue — collect
+   faults, write once — probably dominates but wants measuring) ·
+   [#465](https://github.com/cairn-ehr/cairn-ehr/issues/465) admit-and-flag removed the loud pull signal
+   and PR #462 added the read surface but no caller; follow the `custody_withheld` precedent.
 
 ### 2026-08-21 (evening) — two self-contained defects: the freeze that hid, the flake that lied
 
@@ -241,8 +288,10 @@ headers both stating it where a reader is already working.**
    · 22003 (`byte_len` past bigint) — **and four SILENT paths that wrote something wrong**: an empty
    `digest_hex` (the address is `blob_store`'s PRIMARY KEY, so every empty reference from every peer
    collides into ONE row), a negative `byte_len`, a blank `media_type`, and a scalar attachment
-   (**#458**, re-scoped 08-22 — it raises nothing, and the remedy is the #460 ledger plus a UI that
-   fails loud, NOT a floor rule; see the callout below). **Probe the family before fixing the member.**
+   (**#458**, re-scoped 08-22 — it raises nothing, and the remedy is a UI that fails loud, NOT a floor
+   rule; see the callout below. **The #460 ledger does NOT see it**: `'"x"'::jsonb -> 'renditions'` is
+   SQL NULL, which coerces to `[]`, so the traversal yields no rows and writes no flag — an earlier
+   draft of this line named the ledger as the remedy and was wrong). **Probe the family before fixing the member.**
 2. **The rule the fix follows: refuse what already FAILED, plus what was silently WRONG; accept
    everything that already worked.** Uppercase hex, an absent `byte_len`, a digit-STRING `byte_len` are
    accepted **deliberately** and pinned, because every refusal added at a remote door is a new way for a

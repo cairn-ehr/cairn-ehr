@@ -60,16 +60,42 @@
 --     read — a fork of the event set, and a pen that never releases, because the malformed
 --     field is inside an immutable signature the author cannot re-issue.
 --
--- ADR-0063 decided this shape for the §5.9 `safety` field before this file was written —
--- "an envelope-level field is constrained where it is MINTED and read permissively where it
--- ARRIVES" — and its rejected alternatives reject apply-door refusal on BLAST RADIUS: a field
--- on a clinical event, refused at apply, drops the clinical event. #370's first fix refused at
+-- ADR-0063 decided this shape for the §5.9 `safety` field before this file was written. Quoted
+-- exactly, its rule reads: "an envelope-level GRADED field is constrained where it is minted and
+-- read permissively where it arrives." An attachment rendition reference is NOT a graded field,
+-- so #460 EXTENDS that rule rather than merely applying it — and what carries the extension is
+-- not the sentence but ADR-0063's rejected-alternatives argument, which turns on BLAST RADIUS and
+-- never mentions `safety`: a field on a clinical event, refused at apply, drops the clinical
+-- event. (An earlier draft quoted the rule with "graded" silently dropped, which made the
+-- extension look like a citation. Naming the widening is the point of issue #461.) #370's first fix refused at
 -- both doors, which contradicted that ADR; #460 is the repair. Issue #461 proposes naming the
 -- rule in its own ADR, because it is currently findable only under another field's title.
 --
 -- SO: DO NOT "align" the two doors. The asymmetry is the design, and it is the same split the
 -- floor already uses for #345's registration precedence and the shred target-existence
 -- requirement.
+--
+-- WHAT THE TWO DOORS DO SHARE, AND WHY IT IS ONE FUNCTION: both learners iterate
+-- cairn_by_reference_renditions (below). It owns the list coercion, the position numbering and
+-- the inline skip, so the doors cannot drift into two definitions of "which renditions are even
+-- candidates" or "what counts as a malformed list". They differ ONLY in what they do with a
+-- refusal. An earlier draft duplicated the traversal while four files asserted it was shared;
+-- `db/tests/050` section 9 now reads pg_proc and fails if either learner stops calling it.
+--
+-- WHY THE VALIDATORS LIVE HERE and not in db/001 like cairn_decode_hex_or_raise: the db/001
+-- placement rule (issue #198's late-binding trap) applies to helpers reached from a migration
+-- subset that might not carry the declaring file. These four are reached from db/027 and db/050
+-- only — db/050 was added to BOTH `SCHEMA` lists in the same change that introduced the caller —
+-- and db/027 is itself in cairn-sync's subset, so declaration and callers travel together.
+-- THE STANDING CONSTRAINT THAT LEAVES: any new file calling these MUST be in cairn-sync's subset
+-- (crates/cairn-sync/src/main.rs), or its schema loads cleanly and the apply door raises 42883 on
+-- its first admitted event — a non-P0001 code, i.e. the #370 freeze restored. Two guards hold
+-- it: `schema_subset_alone_satisfies_every_door` (cairn-sync's own tests) loads ONLY the subset
+-- and drives both doors against it, and `the_lenient_learners_migration_is_in_cairn_syncs_subset`
+-- (attachment_reference_shape.rs) checks the name→file→subset mapping without needing a database
+-- at all, so it still fails in a DB-free run.
+-- cairn_decode_hex_or_raise is in db/001 because six doors across two planes call it, and
+-- cairn_json_list_or_empty (db/001) is there because its callers load EARLIER than this file.
 
 BEGIN;
 
@@ -211,10 +237,104 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- THE ONE TRAVERSAL BOTH DOORS RUN.
+--
+-- Yields every by-reference rendition of every attachment in a signed body, with its position.
+-- INLINE renditions are skipped: their bytes ride the event itself, so there is no lazy blob to
+-- fetch and noting one would create a phantom present=FALSE row that never resolves.
+--
+-- ⚠️ A MALFORMED `renditions` LIST IS RETURNED AS A ROW, NOT RAISED. This is the single most
+-- important property of this function and it was learned the hard way.
+--
+-- A PL/pgSQL set-returning function materialises its ENTIRE tuplestore before its first row is
+-- returned. So when an earlier version raised on a non-list `renditions`, the raise happened
+-- before the caller's loop body ran even once — and an event with three attachments, one of them
+-- malformed, learned NOTHING. Two perfectly good content addresses on the other two attachments
+-- were silently discarded, permanently: the event is immutable, so no later arrival repairs it,
+-- and cairn_reproject replays the projection dispatch, never the doors. The single flag row left
+-- behind named no index at all.
+--
+-- That inverts ADR-0060 (*a defect on one element never invalidates the others*) at the coarsest
+-- possible granularity, in the file whose whole purpose is upholding it. Emitting the fault as a
+-- row keeps the traversal total: siblings still yield, and the fault carries the attachment index
+-- it belongs to — NAME, NEVER COUNT, and that index IS in scope when the coercion fails, so
+-- recording NULL there would be a precise untruth rather than an honest unknown (principle 4).
+--
+-- A fault row has `fault` non-NULL and `rendition` NULL. `fault_detail` carries the accessor's
+-- USING DETAIL, which SQLERRM alone drops — the half that tells one shape error from another.
+--
+-- The `attachments` value NOT being a list is still RAISED rather than returned, and that is the
+-- honest asymmetry: there is no attachment to name, and nothing was learnable in the first place,
+-- so aborting loses nothing. That is the one case with a legitimate NULL/NULL flag.
+-- ---------------------------------------------------------------------------
+-- ⚠️ AN EXPLICIT DROP, BECAUSE `CREATE OR REPLACE` CANNOT WIDEN A RETURN TYPE.
+-- The first version of this function returned three columns and lived in db/050. Replacing it
+-- with the five-column form raises 42P13 ("cannot change return type of existing function") in
+-- every database that already loaded that version — and connect_and_load_schema replays EVERY
+-- db/*.sql on every connect, so the whole schema load fails, not just this file. `IF EXISTS`
+-- keeps it a no-op on a fresh database. This is the same species as the overload trap db/050
+-- documents for cairn_learn_attachment_refs: CREATE OR REPLACE matches on the SIGNATURE, and a
+-- signature change is a different function, never an edit.
+DROP FUNCTION IF EXISTS cairn_by_reference_renditions(jsonb, text);
+
+CREATE OR REPLACE FUNCTION cairn_by_reference_renditions(b jsonb, p_door text)
+RETURNS TABLE (attachment_index int, rendition_index int, rendition jsonb,
+               fault text, fault_detail text)
+LANGUAGE plpgsql AS $$
+DECLARE
+    a jsonb;
+    r jsonb;
+    i int;
+    j int;
+    v_renditions jsonb;
+BEGIN
+    FOR a, i IN
+        SELECT value, ordinality - 1
+        FROM jsonb_array_elements(
+                 cairn_json_list_or_raise(b -> 'attachments', 'attachments', p_door))
+             WITH ORDINALITY
+    LOOP
+        -- Per-attachment, so one bad list cannot abandon the whole body. `raise_exception` is
+        -- narrow on purpose: P0001 is what cairn_json_list_or_raise raises, and absorbing
+        -- anything else here would relabel a real fault as bad caller input.
+        BEGIN
+            v_renditions := cairn_json_list_or_raise(a -> 'renditions', 'renditions', p_door);
+        EXCEPTION WHEN raise_exception THEN
+            attachment_index := i;
+            rendition_index := NULL;
+            rendition := NULL;
+            fault := SQLERRM;
+            GET STACKED DIAGNOSTICS fault_detail = PG_EXCEPTION_DETAIL;
+            RETURN NEXT;
+            CONTINUE;
+        END;
+
+        FOR r, j IN
+            SELECT value, ordinality - 1 FROM jsonb_array_elements(v_renditions) WITH ORDINALITY
+        LOOP
+            CONTINUE WHEN r ? 'inline';
+            attachment_index := i;
+            rendition_index := j;
+            rendition := r;
+            fault := NULL;
+            fault_detail := NULL;
+            RETURN NEXT;
+        END LOOP;
+    END LOOP;
+END;
+$$;
+
 -- Learn a lazy blob reference (reference-eager, byte-lazy) for every by-reference rendition
--- of every attachment in a signed body `b`. Skips INLINE renditions: their bytes ride the
--- event itself, so there is no lazy blob to fetch (noting one would create a phantom
--- present=FALSE row that never resolves). Idempotent via blob_note_reference's ON CONFLICT.
+-- of every attachment in a signed body `b`, refusing the whole body on the first fault.
+-- Idempotent via blob_note_reference's ON CONFLICT.
+--
+-- THE STRICT half of the asymmetry, called by submit_event (db/005) only. It runs the shared
+-- traversal above and re-raises a fault row rather than recording it — which is the entirety of
+-- the difference between the two learners, and the reason they cannot drift.
+--
+-- The re-raise reconstructs the original message AND its DETAIL, so a refusal reaching the author
+-- reads exactly as it did when cairn_json_list_or_raise raised it directly.
 --
 -- The door name in a refusal is this function, not its caller, because the signature stays
 -- one-argument: adding a `p_door` parameter would create an OVERLOAD rather than replace the
@@ -225,21 +345,17 @@ $$;
 CREATE OR REPLACE FUNCTION cairn_learn_attachment_refs(b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    a jsonb;
-    r jsonb;
+    rec RECORD;
     v_door CONSTANT text := 'cairn_learn_attachment_refs';
 BEGIN
-    FOR a IN SELECT jsonb_array_elements(
-                        cairn_json_list_or_raise(b -> 'attachments', 'attachments', v_door)) LOOP
-        FOR r IN SELECT jsonb_array_elements(
-                            cairn_json_list_or_raise(a -> 'renditions', 'renditions', v_door)) LOOP
-            -- Inline renditions carry their bytes in the event; no lazy blob reference.
-            CONTINUE WHEN r ? 'inline';
-            PERFORM blob_note_reference(
-                cairn_rendition_address(r, v_door),
-                cairn_rendition_media_type(r, v_door),
-                cairn_rendition_byte_len(r, v_door));
-        END LOOP;
+    FOR rec IN SELECT * FROM cairn_by_reference_renditions(b, v_door) LOOP
+        IF rec.fault IS NOT NULL THEN
+            RAISE EXCEPTION '%', rec.fault USING DETAIL = COALESCE(rec.fault_detail, '');
+        END IF;
+        PERFORM blob_note_reference(
+            cairn_rendition_address(rec.rendition, v_door),
+            cairn_rendition_media_type(rec.rendition, v_door),
+            cairn_rendition_byte_len(rec.rendition, v_door));
     END LOOP;
 END;
 $$;
