@@ -177,8 +177,9 @@ pub fn legible_db_error(e: &tokio_postgres::Error) -> String {
 ///   the `LocalDbFault` case and needs no knowledge of that type. A suffix test rather
 ///   than a type test keeps this honest for any future wrapper that renders its own cause.
 ///
-/// Every layer is flattened with [`one_line`]: this is the other door into the same
-/// one-line-per-event operator log `compose_db_diagnosis` already guards.
+/// Every layer is flattened with `one_line` (private to this module): this is the other
+/// door into the same one-line-per-event operator log `compose_db_diagnosis` already
+/// guards.
 pub fn operator_chain(e: &anyhow::Error) -> String {
     let mut parts: Vec<String> = Vec::new();
     for cause in e.chain() {
