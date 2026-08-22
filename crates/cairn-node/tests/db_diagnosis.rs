@@ -230,3 +230,43 @@ async fn a_refused_socket_names_the_errno_not_just_the_layer() {
          one kind over: {text}"
     );
 }
+
+/// The label a dying connection names itself by (issue #474 item 4). Pure: no database, no
+/// network, no gating.
+///
+/// The connection task is the only place a mid-session death is ever reported, and a node
+/// routinely holds several connections at once — the boot connection, one per pull cycle,
+/// one per served session. "the connection died" is not enough; WHICH one? The label
+/// answers that from the connection string, and the one thing it must never do is echo the
+/// string itself: it can carry a password, and an error line is exactly the text that gets
+/// pasted into an issue.
+#[test]
+fn a_connection_label_names_the_database_and_never_the_password() {
+    let label =
+        db::connection_label("host=db.example port=5544 dbname=cairn user=n password=hunter2");
+    assert!(
+        label.contains("cairn"),
+        "the database must be named: {label}"
+    );
+    assert!(
+        label.contains("db.example"),
+        "\u{2026}and the host: {label}"
+    );
+    assert!(
+        !label.contains("hunter2") && !label.contains("password"),
+        "a label is spliced into a log line; it must never carry the secret: {label}"
+    );
+}
+
+/// An unparseable connection string must still produce a usable label rather than
+/// panicking or falling back to the raw string — this runs on an error path, where the
+/// input is by definition the suspect thing.
+#[test]
+fn an_unparseable_connection_string_degrades_to_an_honest_label() {
+    let label = db::connection_label("host=localhost port=not-a-number password=hunter2");
+    assert!(
+        !label.contains("hunter2"),
+        "never the secret, least of all on the degrade path: {label}"
+    );
+    assert!(!label.is_empty(), "a label always names something: {label}");
+}

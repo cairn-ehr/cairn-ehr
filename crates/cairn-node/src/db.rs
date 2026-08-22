@@ -318,6 +318,43 @@ const SCHEMA: &[(&str, &str)] = &[
     ),
 ];
 
+/// Name a database connection for a log line, without ever echoing the connection string.
+/// **Pure.**
+///
+/// The connection task inside [`connect`] is the only place a mid-session connection death
+/// is ever reported, and a node routinely holds several connections at once — the boot
+/// connection, one per pull cycle, one per served session. A line saying only "the
+/// connection died" leaves an operator unable to tell a transient per-cycle reconnect from
+/// the daemon's own connection going away.
+///
+/// What it must NOT do is print the connection string, which can carry a password (the same
+/// rule [`connect`]'s own error obeys). So the string is parsed and exactly two facts are
+/// rendered back: the database name and the first host/port. A string that will not parse
+/// degrades to a fixed phrase rather than falling back to the raw input — this runs on an
+/// error path, where the input is by definition the suspect thing.
+///
+/// **Known limit, stated rather than hidden:** two concurrent connections to the same
+/// database produce the same label. They also say the same true thing, and a serial number
+/// would only mean something if opens were logged too — which would put a line in the log
+/// for every healthy cycle in order to sharpen one failure line.
+pub fn connection_label(conn: &str) -> String {
+    let Ok(cfg) = conn.parse::<tokio_postgres::Config>() else {
+        return "the database (connection string unparseable)".to_string();
+    };
+    let db = cfg.get_dbname().unwrap_or("<no dbname>");
+    let host = match cfg.get_hosts().first() {
+        Some(tokio_postgres::config::Host::Tcp(h)) => h.clone(),
+        Some(tokio_postgres::config::Host::Unix(path)) => path.display().to_string(),
+        None => "<no host>".to_string(),
+    };
+    let port = cfg
+        .get_ports()
+        .first()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "<no port>".to_string());
+    format!("{db}@{host}:{port}")
+}
+
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.
@@ -332,8 +369,25 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     let (client, connection) = tokio_postgres::connect(conn, NoTls)
         .await
         .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
+    // #474 item 4: this task is the ONLY place a mid-session connection death is ever
+    // reported, and `let _ = connection.await;` hid every one of them — `FATAL:
+    // terminating connection due to administrator command`, a backend crash, a server
+    // restart, an `idle_in_transaction_session_timeout`, a TLS teardown, an OOM-kill.
+    // That is *why* a client afterwards can only say `connection closed`:
+    // `Kind::Closed`'s `source()` is genuinely `None`, because the reason was delivered
+    // HERE and dropped on the floor. No amount of work in `legible_db_error` can recover
+    // it; it has to be logged at the one place it arrives.
+    //
+    // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
+    // healthy node logs nothing here and the line is never noise.
+    let label = connection_label(conn);
     tokio::spawn(async move {
-        let _ = connection.await;
+        if let Err(e) = connection.await {
+            eprintln!(
+                "db: the connection to {label} ended: {}",
+                legible_db_error(&e)
+            );
+        }
     });
     Ok(client)
 }
