@@ -300,6 +300,12 @@ def cmd_analyze(args):
     # (unverifiable events quarantined / signing-context skew) — those cycles
     # carry `integrity: true` and are NOT partitions: the peer answered.
     integrity = sum(1 for r in rows if r.get("integrity"))
+    # Since issue #469 a third loud class exists: the peer answered, the events
+    # applied, and THIS NODE'S database failed to record where the cycle got to.
+    # Counted separately for the same reason `integrity` is — it was previously
+    # falling through into `partitions` and inflating the link-downtime figure with
+    # a local fault.
+    local_faults = sum(1 for r in rows if r.get("local_fault"))
     dur_s = (rows[-1]["ts"] - rows[0]["ts"]) / 1000.0
     lat = [r["pull"]["elapsed_ms"] for r in rows if "pull" in r]
     # Post-A1 metric name; .get() keeps old pre-rename logs analysable.
@@ -317,6 +323,9 @@ def cmd_analyze(args):
     if integrity:
         print(f"  INTEGRITY       {integrity} cycle(s) failed loud on unverifiable/skewed "
               f"events (peer was reachable; see pull_error in the raw log)")
+    if local_faults:
+        print(f"  LOCAL FAULT     {local_faults} cycle(s) failed on THIS node's database, "
+              f"not the link (the events applied; the cursor commit did not)")
     print(f"  pull latency    p50 {median(lat):.0f}ms  p95 {p95(lat):.0f}ms  "
           f"max {max(lat):.0f}ms" if lat else "  pull latency    (no successful pulls)")
     print(f"  A2 verify-fails {vf}  ({'PASS' if vf == 0 else 'FAIL'})")
