@@ -1,4 +1,4 @@
-//! #467 stays fixed: no DB error in `db.rs` may reach an operator as `{e}`.
+//! #467 stays fixed: no DB error in this crate may reach an operator as its own `Display`.
 //!
 //! # Why a source scan rather than more behavioural tests
 //!
@@ -20,43 +20,90 @@
 //!
 //! # What counts as an offender
 //!
-//! Any interpolation of a bare binding named `e`/`err`/`error` inside a string in `db.rs`
-//! — `{e}`, `{err}`, `{error}`, and the positional `{}` forms that pass one of those names
-//! as an argument. The legitimate shape is `{}` fed by `legible_db_error(&e)`, which is
-//! why the check is on the INTERPOLATION and not on the word.
+//! Any interpolation of a bare binding named `e`/`err`/`error` inside a string in a guarded
+//! file — the `{e}` / `{err}` / `{error}` shapes. The legitimate form is `{}` fed by
+//! `legible_db_error(&e)`, which is why the check is on the INTERPOLATION and not on the
+//! word.
+//!
+//! **Comment lines are skipped**, and that is not a loophole: a comment renders nothing to
+//! an operator, and the three files here explain the defect by NAMING the shape that caused
+//! it. A guard that punished the most precise available description of the bug it protects
+//! against would push every future writer toward vaguer prose — which is the opposite of
+//! what #467 needs. (The skip is deliberately narrow: only a line whose first non-blank
+//! characters are `//`. A trailing comment after code is still scanned, which errs in the
+//! safe direction. The residual hole is a line INSIDE a multi-line string literal that
+//! happens to begin with `//`; no such line exists in this crate, and SQL — the only
+//! multi-line literal here — comments with `--`.)
 //!
 //! # Scope, stated so coverage is not confused with aspiration
 //!
-//! `crates/cairn-node/src/db.rs` only. It is the file #467 was filed against, the file
-//! that fails first on a fresh node, and the one whose every statement talks to the
-//! database. The same species elsewhere in the crate is real and tracked separately —
-//! `safety.rs` is #473 and `sync.rs` is #474 — and widening this guard to the whole crate
-//! today would simply fail on those two, so it would have to be born disabled. It is
-//! written to be widened once they are fixed: change `GUARDED` and delete this paragraph.
+//! Three files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
+//! fails first on a fresh node), `safety.rs` (#473 — the clinical write path) and `sync.rs`
+//! (#474 — the daemon loop). Together they are every production file in this crate whose
+//! statements talk to the database.
+//!
+//! `cairn-sync`'s `main.rs` is deliberately NOT here. It carries the twin renderer and its
+//! own loops were fixed alongside these (#475, #471), but it is one 9,000-line file mixing
+//! production code with its own test modules, and dozens of its `{e}`-shaped sites render
+//! errors that are not database errors at all — hex decoding, serde, I/O, and `ApplyError`,
+//! which is legible by construction. A name-based scan over that file would be mostly false
+//! positives, and a guard whose failures are usually noise is one people learn to silence.
+//! Splitting `main.rs` is separate work (#402's shape); until then the crate's DB-error
+//! legibility rests on its own tests rather than on a scan.
+//!
+//! # When a site here IS a false positive
+//!
+//! The predicate is name-based, because a source scan cannot type-check. A binding that
+//! genuinely does not hold a database error — an `io::Error` from `accept`, a serde failure
+//! — is resolved by NAMING it (`accept_err`, `session_err`), never by suppressing the
+//! check. The rename is only acceptable when the new name says what the value IS: that
+//! leaves the source more informative than `e` was, which is what makes it a fix rather
+//! than a dodge.
 
 #[path = "common/sources.rs"]
 mod sources;
 
-/// The files whose DB errors must stay legible. See the module doc for why this is one
-/// file today and what has to happen before it is more.
-const GUARDED: &[&str] = &["crates/cairn-node/src/db.rs"];
+/// The files whose DB errors must stay legible. See the module doc for which files these
+/// are and why `cairn-sync`'s `main.rs` is not among them.
+const GUARDED: &[&str] = &[
+    "crates/cairn-node/src/db.rs",
+    "crates/cairn-node/src/safety.rs",
+    "crates/cairn-node/src/sync.rs",
+];
 
 /// Bindings that, interpolated raw, render a `tokio_postgres::Error` as its useless kind.
 const RAW_ERROR_BINDINGS: &[&str] = &["e", "err", "error"];
 
+/// Is this line a comment, and therefore incapable of rendering anything to an operator?
+///
+/// Only a line whose first non-blank characters are `//` — which covers `//`, `///` and
+/// `//!`. A trailing comment after real code is deliberately NOT excluded: that line still
+/// contains code, and erring toward scanning it is the safe direction for a guard.
+///
+/// This exists because the widening pass found the guard's only three "offenders" were
+/// comments EXPLAINING the defect, quoting the exact shape that caused it. See the module
+/// doc for why naming the shape is worth protecting.
+fn is_a_comment_line(line: &str) -> bool {
+    line.trim_start().starts_with("//")
+}
+
 /// Does this line interpolate one of the raw error bindings into a string?
 ///
-/// Deliberately simple and slightly over-eager: it is a guard, and a false positive costs
-/// one `legible_db_error` call or one `#[allow]`-style rename, while a false negative costs
-/// an operator their diagnosis. Pure, so the judgement is testable without touching disk.
+/// Deliberately simple and slightly over-eager on CODE: it is a guard, and a false positive
+/// costs one `legible_db_error` call or one rename that names the error's kind, while a
+/// false negative costs an operator their diagnosis. Pure, so the judgement is testable
+/// without touching disk.
 fn interpolates_a_raw_error(line: &str) -> bool {
+    if is_a_comment_line(line) {
+        return false;
+    }
     RAW_ERROR_BINDINGS
         .iter()
         .any(|b| line.contains(&format!("{{{b}}}")))
 }
 
 #[test]
-fn no_db_error_in_the_schema_loader_reaches_an_operator_as_its_kind() {
+fn no_db_error_in_a_guarded_file_reaches_an_operator_as_its_kind() {
     let root = sources::repo_root();
     let mut offenders: Vec<String> = Vec::new();
 
@@ -98,5 +145,20 @@ fn the_predicate_catches_the_shape_that_filed_the_issue_and_spares_the_fix() {
     // A name that merely CONTAINS a guarded binding is not one.
     assert!(!interpolates_a_raw_error(
         r#"format!("{event}: {errors_seen}")"#
+    ));
+
+    // A comment cannot render anything to an operator, and all three files here explain
+    // the defect by naming its shape. Every comment form must be spared.
+    assert!(!interpolates_a_raw_error(
+        r#"    // and `{e}` printed `db error` in its place."#
+    ));
+    assert!(!interpolates_a_raw_error(
+        r#"/// flags `{e}` in this file, and its predicate is name-based."#
+    ));
+    assert!(!interpolates_a_raw_error(r#"//! `anyhow!("…: {e}")`"#));
+
+    // …but a trailing comment does not launder the code beside it.
+    assert!(interpolates_a_raw_error(
+        r#"eprintln!("failed: {e}"); // TODO: make legible"#
     ));
 }
