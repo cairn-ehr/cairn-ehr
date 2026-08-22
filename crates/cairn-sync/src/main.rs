@@ -385,6 +385,62 @@ impl std::fmt::Display for CursorCommitError {
 
 impl Error for CursorCommitError {}
 
+/// A `requeue` that failed PART-WAY THROUGH its loop, carrying what it had achieved
+/// (issue #471; ADR-0060 decision 2).
+///
+/// The three statements inside `do_requeue`'s loop were bare `?`, so a failure on row 5 of
+/// 20 returned a raw `postgres::Error` and the whole metrics object went with it. At that
+/// moment rows 1-4 HAVE been released — their events are durable in `event_log` and their
+/// pen rows are gone — and rows 6-20 were never examined. Reporting nothing about either is
+/// precisely the implied completion ADR-0060 decision 2 forbids: an operator re-runs the
+/// command (correctly — release is idempotent through the db/020 door) with no way to know
+/// from the failed run what it had already done, or whether the rows that vanished from the
+/// pen were released or lost.
+///
+/// Modelled on [`CursorCommitError`], which is the same decision one command over and for
+/// the same reason: the metrics have to survive the `Err`, so they travel inside it.
+#[derive(Debug)]
+struct RequeueInterruptedError {
+    message: String,
+    /// The counts as they stood when the statement failed, with `references_unlearnable`
+    /// held at `null` — the #465 report never ran, and `0` would be a claim that it had.
+    metrics: serde_json::Value,
+}
+
+impl std::fmt::Display for RequeueInterruptedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl Error for RequeueInterruptedError {}
+
+/// Compose the sentence an operator reads when a requeue is interrupted. **Pure.**
+///
+/// Every clause earns its place: the counts say what is DONE and durable, `at` says where
+/// it stopped (so the untouched remainder is knowable), `cause` says why — it was the eight
+/// characters `db error` before — and the remedy is stated because it is real and
+/// non-obvious: release runs through the same in-DB door a pull does, so re-running after
+/// fixing the fault re-releases nothing twice.
+fn requeue_interrupted_message(
+    examined: usize,
+    released: usize,
+    still_quarantined: usize,
+    vanished: usize,
+    at: &str,
+    cause: &str,
+) -> String {
+    format!(
+        "requeue: INTERRUPTED at {at}, of {examined} pen row(s) examined — this node's own \
+         DATABASE failed: {cause}. Work already done is NOT lost: {released} released \
+         (durable in event_log, their pen rows gone), {still_quarantined} still held, \
+         {vanished} vanished before release; the remaining rows were never examined. The \
+         attachment-reference report did not run, so it reports null rather than zero. Fix \
+         the local database fault and re-run — release goes through the same in-DB door a \
+         pull does, so it is idempotent."
+    )
+}
+
 /// One decoded wire entry: (signed event bytes, attestation, attester key).
 type WireEntry = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 
@@ -3065,6 +3121,52 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         .map(|r| r.get(0))
         .collect();
     let (mut released, mut still_quarantined, mut vanished) = (0usize, 0usize, 0usize);
+    // Every count as it stands RIGHT NOW, for either exit — the `Ok` at the bottom of this
+    // function or an interruption inside the loop (issue #471). Stated once so the two can
+    // never disagree about what a requeue reports.
+    let examined = digests.len();
+    let snapshot = |released: usize,
+                    still_quarantined: usize,
+                    vanished: usize,
+                    references_unlearnable: serde_json::Value| {
+        serde_json::json!({
+            "op": "requeue",
+            // examined == released + still_quarantined + vanished on a COMPLETE run; an
+            // interrupted one is short by exactly the rows it never reached, which is the
+            // fact the message states in words.
+            "examined": examined,
+            "released": released,
+            "still_quarantined": still_quarantined,
+            "vanished": vanished,
+            "references_unlearnable": references_unlearnable
+        })
+    };
+    // Built once per failing statement: the three sites below differ only in which
+    // statement failed, and every one of them owes the same report (ADR-0060 decision 2).
+    let interrupted = |digest: &[u8],
+                       released: usize,
+                       still_quarantined: usize,
+                       vanished: usize,
+                       e: postgres::Error| {
+        RequeueInterruptedError {
+            message: requeue_interrupted_message(
+                examined,
+                released,
+                still_quarantined,
+                vanished,
+                &hex_prefix(digest),
+                &legible_db_error(e),
+            ),
+            // null, NEVER 0: the #465 report never ran, and a number here would tell a
+            // monitor this run had looked and found nothing (#465's own rule).
+            metrics: snapshot(
+                released,
+                still_quarantined,
+                vanished,
+                serde_json::Value::Null,
+            ),
+        }
+    };
     // Content addresses of the events this run put through the apply door (issue #465).
     // `sync_quarantine.content_digest` IS the event content address — the same key the
     // pull path's release DELETE uses — so no re-hashing is needed. As on the pull path,
@@ -3080,11 +3182,16 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         // recovery session this command is run in. Counted rather than skipped silently,
         // because `examined` comes from the up-front listing: without this counter the
         // four numbers in the result object would not add up and nothing would say why.
-        let Some(row) = client.query_opt(
-            "SELECT signed_bytes, attestation, attester_key
+        // #471: a bare `?` here discarded the whole report of the rows already released.
+        // No counter has moved for THIS row yet — it has not been examined — so the counts
+        // passed in are exactly the completed ones.
+        let Some(row) = client
+            .query_opt(
+                "SELECT signed_bytes, attestation, attester_key
              FROM sync_quarantine WHERE content_digest=$1",
-            &[digest],
-        )?
+                &[digest],
+            )
+            .map_err(|e| interrupted(digest, released, still_quarantined, vanished, e))?
         else {
             vanished += 1;
             eprintln!(
@@ -3104,10 +3211,16 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         // normal pull once the peer serves it. Pass None (ADR-0052).
         match apply_signed(client, &signed, att.as_deref(), akey.as_deref(), None) {
             Ok(_) => {
-                client.execute(
-                    "DELETE FROM sync_quarantine WHERE content_digest=$1",
-                    &[&digest],
-                )?;
+                // #471: `released` has NOT been incremented for this row yet, and that is
+                // correct — the event is in `event_log`, but the row is not released until
+                // its pen entry is gone, and this is the statement that failed. Reporting
+                // it as released would be a precise untruth about the pen's contents.
+                client
+                    .execute(
+                        "DELETE FROM sync_quarantine WHERE content_digest=$1",
+                        &[&digest],
+                    )
+                    .map_err(|e| interrupted(digest, released, still_quarantined, vanished, e))?;
                 released += 1;
                 released_addresses.push(digest.clone());
                 eprintln!(
@@ -3118,14 +3231,23 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
             Err(e) => {
                 // Still refused: keep the row and record the door's CURRENT
                 // rejection beside (never over) the original reason.
-                client.execute(
-                    "UPDATE sync_quarantine
+                // #471, and the distinction a reader will otherwise miss: THE TWO HALVES
+                // OF THIS STATEMENT ARE ABOUT DIFFERENT ERRORS. The `e` being STORED is an
+                // `ApplyError` — the door's own refusal, already legible, kept beside (never
+                // over) the original reason. The error this `map_err` catches is a
+                // `postgres::Error` from the UPDATE itself, which renders `db error`; only
+                // that one is #467's species. `still_quarantined` has not moved for this row
+                // yet, and it stays that way: nothing recorded the current refusal.
+                client
+                    .execute(
+                        "UPDATE sync_quarantine
                      SET last_seen = clock_timestamp(),
                          last_requeue_at = clock_timestamp(),
                          last_requeue_error = $2
                      WHERE content_digest = $1",
-                    &[&digest, &e.to_string()],
-                )?;
+                        &[&digest, &e.to_string()],
+                    )
+                    .map_err(|ue| interrupted(digest, released, still_quarantined, vanished, ue))?;
                 still_quarantined += 1;
                 eprintln!("requeue: {} still refused: {e}", hex_prefix(digest));
             }
@@ -3142,15 +3264,12 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
             .map_err(legible_db_error),
     );
 
-    Ok(serde_json::json!({
-        "op": "requeue",
-        // examined == released + still_quarantined + vanished, always. See the loop.
-        "examined": digests.len(),
-        "released": released,
-        "still_quarantined": still_quarantined,
-        "vanished": vanished,
-        "references_unlearnable": references_unlearnable
-    }))
+    Ok(snapshot(
+        released,
+        still_quarantined,
+        vanished,
+        references_unlearnable,
+    ))
 }
 
 /// First 16 hex chars of a content digest — enough to identify a row in logs and
@@ -3211,16 +3330,32 @@ fn connect_checked_apply(conn: &str) -> R<postgres::Client> {
 fn cmd_requeue(conn: &str, metrics: bool) -> R<()> {
     // Requeue re-applies through the in-DB door, so it needs a current cairn_pgx.
     let mut client = connect_checked_apply(conn)?;
-    let m = do_requeue(&mut client)?;
-    if metrics {
-        println!("{m}");
-    } else {
-        println!(
-            "requeue: {} examined, {} released, {} still quarantined",
-            m["examined"], m["released"], m["still_quarantined"]
-        );
+    match do_requeue(&mut client) {
+        Ok(m) => {
+            if metrics {
+                println!("{m}");
+            } else {
+                println!(
+                    "requeue: {} examined, {} released, {} still quarantined",
+                    m["examined"], m["released"], m["still_quarantined"]
+                );
+            }
+            Ok(())
+        }
+        // #471 / ADR-0060 decision 2: an interrupted run still has a report to give, and it
+        // goes out on the SAME channel a successful one uses — a monitor parsing
+        // `--metrics` must not lose the object merely because the command failed, since
+        // that object is the only record of the events this run DID release. The command
+        // still exits non-zero: partial work is not success.
+        Err(e) => {
+            if metrics {
+                if let Some(interrupted) = e.downcast_ref::<RequeueInterruptedError>() {
+                    println!("{}", interrupted.metrics);
+                }
+            }
+            Err(e)
+        }
     }
-    Ok(())
 }
 
 /// One JSON value per quarantine row (oldest first) — the queryable core of
@@ -6982,6 +7117,148 @@ mod quarantine_tests {
             "…and the reference it could not learn is reported, not swallowed: {m}"
         );
         assert_eq!(flag_count(&mut c, &penned_id), 1);
+    }
+
+    /// #471 / ADR-0060 decision 2: the sentence an operator reads after an interrupted
+    /// requeue must say what the run ACHIEVED, not merely that it failed. **Pure**, so the
+    /// wording is pinned without breaking a database mid-loop.
+    #[test]
+    fn an_interrupted_requeue_reports_the_work_that_survived_it() {
+        let msg = requeue_interrupted_message(
+            20,
+            4,
+            1,
+            0,
+            "a1b2c3d4e5f60718",
+            "permission denied for table sync_quarantine [42501]",
+        );
+        assert!(
+            msg.contains("4 released"),
+            "the released events are DURABLE in event_log, and saying nothing about them \
+             is the implied-completion ADR-0060 decision 2 forbids: {msg}"
+        );
+        assert!(
+            msg.contains("20"),
+            "the size of the run must be named, or the operator cannot tell how much was \
+             never examined: {msg}"
+        );
+        assert!(
+            msg.contains("a1b2c3d4e5f60718"),
+            "…and WHERE it stopped: {msg}"
+        );
+        assert!(
+            msg.contains("[42501]"),
+            "…and the cause, which was the eight characters `db error` before: {msg}"
+        );
+        assert!(
+            msg.contains("idempotent"),
+            "the remedy is real — release runs through the same in-DB door a pull does — \
+             and an operator who does not know that cannot safely re-run: {msg}"
+        );
+    }
+
+    /// The behavioural half of #471: a requeue interrupted mid-loop still hands back the
+    /// four counts, and does NOT report `references_unlearnable` as `0` — a number is a
+    /// claim, and the #465 report never ran.
+    ///
+    /// # How the write failure is forced, and why it is a ROW LOCK
+    ///
+    /// A second connection holds `SELECT … FOR UPDATE` on the second pen row inside an open
+    /// transaction, and this client runs under a short `lock_timeout`, so its release
+    /// `DELETE` on that row fails with `55P03`. The `SELECT` above it is unaffected —
+    /// MVCC readers do not block — which is exactly right: the row is fetched, the event is
+    /// applied through the real door, and only the pen-row DELETE fails. That is the
+    /// mid-loop shape the issue is about.
+    ///
+    /// A trigger or a `REVOKE` would do the same job and would PERSIST if this test
+    /// panicked, poisoning every later suite in the shared database. A row lock dies with
+    /// its connection.
+    #[test]
+    fn a_requeue_interrupted_mid_loop_still_reports_what_it_released() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+
+        // Two events from an author this node does not know: db/020 refuses both with a
+        // bare RAISE, so both are penned verbatim (ADR-0056 decision 5).
+        let (sk_x, kid_x) = cairn_event::generate_key().unwrap();
+        let a = peer_note(&sk_x, &kid_x, WALL_2026 + 1_000);
+        let b = peer_note(&sk_x, &kid_x, WALL_2026 + 2_000);
+        let raw = response_json(&[&a, &b], Some(CTX_EVENT.as_str()));
+        let addr = serve_canned(raw, 1);
+        let (_msg, _m) = pull_integrity_err(&mut c, &addr, "peer-a");
+        assert_eq!(quarantine_rows(&mut c).len(), 2, "both events are penned");
+
+        // Repair the cause, so the door will now admit both on release.
+        c.execute(
+            "SELECT enroll_actor('agent', '{\"model\":\"late-enrolled\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+            &[&kid_x],
+        )
+        .unwrap();
+
+        // `do_requeue` walks the pen in `first_seen` order; block the SECOND row so the
+        // first genuinely releases before the failure. Read the order rather than assuming
+        // it — the assertion is about "row 2 of 2", not about which event that is.
+        let second: Vec<u8> = c
+            .query(
+                "SELECT content_digest FROM sync_quarantine ORDER BY first_seen",
+                &[],
+            )
+            .unwrap()[1]
+            .get(0);
+
+        let mut blocker = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        blocker.batch_execute("BEGIN").unwrap();
+        blocker
+            .query(
+                "SELECT 1 FROM sync_quarantine WHERE content_digest = $1 FOR UPDATE",
+                &[&second],
+            )
+            .unwrap();
+
+        // Short enough that the test is quick, long enough that a loaded rig does not
+        // trip it spuriously on the FIRST row (which is unlocked and returns at once).
+        c.batch_execute("SET lock_timeout = '750ms'").unwrap();
+        let err = do_requeue(&mut c).expect_err("the release DELETE on row 2 must fail");
+
+        // Let the blocker go before asserting: a panic below must not leave a lock held
+        // for the rest of the suite.
+        blocker.batch_execute("ROLLBACK").unwrap();
+        drop(blocker);
+        c.batch_execute("SET lock_timeout = 0").unwrap();
+
+        let interrupted = err
+            .downcast_ref::<RequeueInterruptedError>()
+            .unwrap_or_else(|| panic!("must be a RequeueInterruptedError, got: {err}"));
+
+        assert_eq!(
+            interrupted.metrics["released"], 1,
+            "row 1 WAS released and its event is durable; a run that says nothing about \
+             it is the silence ADR-0060 decision 2 forbids: {}",
+            interrupted.metrics
+        );
+        assert_eq!(
+            interrupted.metrics["examined"], 2,
+            "the size of the run survives the failure: {}",
+            interrupted.metrics
+        );
+        assert!(
+            interrupted.metrics["references_unlearnable"].is_null(),
+            "null, NEVER zero: the #465 report never ran, and `0` would tell a monitor \
+             this run had looked and found nothing: {}",
+            interrupted.metrics
+        );
+        assert_ne!(
+            interrupted.to_string(),
+            "db error",
+            "#467's species: {interrupted}"
+        );
+        assert!(
+            interrupted.to_string().contains("[55P03]"),
+            "the SQLSTATE must name the lock timeout, not hide behind a kind: {interrupted}"
+        );
     }
 
     /// Issue #267 — ADR-0056 decision 5 for bytes that VERIFY but the floor
