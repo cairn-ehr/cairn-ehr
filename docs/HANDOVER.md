@@ -22,8 +22,7 @@ re-derive their decisions.**
   (`cairn_claim_authority`, db/005) at exactly ONE site (the `NOT EXISTS` in
   `cairn_sensitivity_standing`, db/048), so display coarsening, safety-rung emission and part C's dial
   all inherit it structurally. It gives **#245** its first SQL counterpart — NOT its "mirror" (a word
-  both `contributor.rs` and ADR-0064 explicitly retract), and NOT its display half, which stays open.
-  **This is the floor part C keys on** — read it before touching sequester.
+  both `contributor.rs` and ADR-0064 retract), and NOT its display half. **Part C keys on this floor.**
 - **⇒ Part C — sequester / custody narrowing** ([#376](https://github.com/cairn-ehr/cairn-ehr/issues/376)):
   Slice 66 (#231) pinned custody to admission and Slice 68 closed the un-attested-strip hole a
   grade-keyed dial would otherwise have inherited. **What remains is the dial question, sharpened by
@@ -49,16 +48,16 @@ Slice 65's own follow-ons still open: **#374** (thread resolution resolves only 
 **#378** (the withdrawal rationale is clear text forever and replicates — the UI must warn at entry today),
 **#379** (the grade in the twin) and **#436** (the mis-chart withdrawal when it arrives by replication).
 **#374 and #379 each need a DECISION, not a patch** — #374 puts a body read on the safety-critical grade
-path, and #379 must choose *which* grade an immutable artefact states and land together with #283, or the
+path, and #379 must choose *which* grade an immutable artefact states, landing with #283 or the
 demographic twin-match floor refuses a one-sided widening. Closed: **#383/#388** · **#434/#435/#387** ·
 **#381/#382/#385/#439**, **#446/#442/#443**, **#449–#453/#386**, **#370/#457**, **#460/#461**, **#465**.
 
 > [!NOTE]
 > **CLOSED — the `arrayref` supply-chain incident (#445, 2026-08-20)**: a typosquat dependency reached
 > `cairn-event` via `blake3 → bao`, fixed upstream the same day, no code change. Two residues: `bao` is
-> stale, and evaluating `bao-tree` is [#454](https://github.com/cairn-ehr/cairn-ehr/issues/454); and the
+> stale, so evaluating `bao-tree` is [#454](https://github.com/cairn-ehr/cairn-ehr/issues/454); and the
 > finding that outlived it — `cairn_pgx`'s lockfile was gitignored, so the extension enforcing the in-DB
-> floor re-resolved on every CI run — is closed in both halves (#446, PR #448). Full narrative:
+> floor re-resolved on every CI run — is closed in both halves (#446, PR #448). Narrative:
 > `crates/cairn-node/tests/cargo_lockfiles_tracked.rs`.
 
 > [!IMPORTANT]
@@ -167,36 +166,48 @@ that generalise past the slice that found them.
 ### 2026-08-22 (later) — the signal admit-and-flag owed
 
 **Closes [#465](https://github.com/cairn-ehr/cairn-ehr/issues/465); `crates/cairn-sync` only — no schema
-change, no ADR. The entry above is the fix; this is the half of it that was missing.**
+change, no ADR.** The entry above is the fix; this is the half that was missing — and reviewing it found
+**two silent zeros in the new surface itself**. Every item below is mutation-checked.
 
 1. **⇒ ADMITTING WAS RIGHT; GOING SILENT WAS NOT.** After #460 a peer event with an unlearnable
    reference produced a successful cycle, exit 0 and a log line byte-identical to a healthy pull. It now
-   gets its own `references_unlearnable` metric AND its own stderr line on **both** admit paths — `pull`
-   and `requeue` reach the same db/020 door — following `custody_withheld` (#231) exactly.
-   `cycle_is_loud` now states the shared test for its two exclusions: **the event set is COMPLETE and
-   the loss is declared elsewhere.**
-2. **The count is THIS CYCLE'S NEWS, not the node's standing state** — keyed on the content addresses of
-   the events the cycle applied. Without that key a concurrent pull's defect is charged to this peer,
-   and set-union re-delivery re-announces the same defect every cycle forever. **Measured: removing that
-   `WHERE` clause turns exactly ONE test red and leaves the other six green.**
-3. **A failed ledger read reports `null`, never `0`** (principle 4): zero is a claim, and after a failed
-   read it mutes a monitor alerting on `> 0` exactly when this node cannot see. It gets its own line too.
-4. **`cairn_attachment_flag_health()` had no caller** — the Slice 69 finding again. New verb `cairn-sync
-   attachment-flags` prints it, one JSON row per (event type, reason), each NAMING an example event.
-5. **⇒ PEER TEXT IS NOT DISPLAY TEXT, ON A NEW SURFACE.** The ledger `reason` embeds a prefix of the
-   peer's own value — db/001's hex accessor puts it there deliberately, because it separates a truncated
-   digest from a wrongly-encoded one — so a newline in it forged a whole log line. Escaped with `{:?}`,
-   the `sensitivity::render::peer` idiom. **Found in this pass's own work**, pinned by a test that fails
-   without it; every other new assertion was mutation-checked too.
+   gets a `references_unlearnable` metric AND its own stderr line on **both** admit paths (`pull` and
+   `requeue` share the db/020 door). `cycle_is_loud` states the shared test for its two exclusions:
+   **the event set is COMPLETE and the loss is declared elsewhere.**
+2. **⇒ A FLAG CAN BE BORN ON A RE-APPLY, AND v1 REPORTED `0` FOR IT.** db/020 calls
+   `cairn_learn_attachment_refs_lenient` **unconditionally** — after its `ON CONFLICT DO NOTHING`, no
+   `v_rows` guard — so it re-runs on an idempotent re-apply and can write a FIRST-EVER flag row for an
+   event already held. Keying on newly-inserted events hid exactly those: a node upgrading onto db/050
+   flags its whole pre-#460 back-catalogue on the next full sweep and would have said `0`. Now keyed on
+   **two** things — the addresses of every event the door admitted (so another peer's defect is never
+   charged here) **and a `flag_id` watermark** taken before the run (so a re-delivery, which writes no
+   row, stays silent). Dropping either clause turns five tests red.
+3. **⇒ THE "NEVER SILENT" FAILURE LINE SAID `db error`.** `postgres::Error`'s `Display` is a bare match
+   on kind with no source chaining, so `.map_err(|e| e.to_string())` rendered a missing db/050, a
+   revoked grant and a statement timeout identically. `legible_db_error` now carries message + SQLSTATE
+   + DETAIL — **#467's species, committed on #467's own branch.**
+4. **⇒ PEER TEXT IS NOT DISPLAY TEXT — TWICE.** The ledger `reason` carries a bounded 8-char prefix of
+   the peer's value (what tells a truncated digest from a wrongly-encoded one is the DETAIL beside it,
+   **not** the prefix), escaped `{:?}`. The review then found the LARGER channel on the very line cited
+   as this one's precedent: `custody_withheld` is **unbounded prose from an unadmitted peer**, printed
+   raw — enough to forge a `0 attachment reference(s)` all-clear on the alarm #465 just installed.
+5. **Two smaller ones.** `cairn_attachment_flag_health()` still had no caller (the Slice 69 finding
+   again) — `cairn-sync attachment-flags` prints it, naming an example event per group **and** a total,
+   since a group count understates by an unbounded factor. And the line is now written by the ONLY
+   producer of the metric, so a caller cannot keep the count and drop the line; a `&mut dyn Write` sink
+   makes the write testable. `requeue` counts `vanished`, so its four numbers add up.
 
-**Still open from #460's review:** **#463** (the ledger has no resolution path — a DECISION, overlay vs
-delete, and the two siblings made opposite ones) · **#464** (unbounded per-rendition subtransactions; the
-cap is a clinical judgement) · **#458** (a non-object attachment element — a loud UI, NOT a floor rule).
-**Raised by this pass:
-[#467](https://github.com/cairn-ehr/cairn-ehr/issues/467)** — the required CI floor job flaked once and
-could say only *"loading 031_medication: db error"*, because `db.rs` has NINE `anyhow!("…: {e}")`
-wrappings over `tokio_postgres::Error`, whose `Display` IS that string: message, DETAIL and SQLSTATE all
-dropped. **#109's species, in the file that fails first and can least explain itself.**
+**Still open from #460's review:** **#463** (resolution path — a DECISION, overlay vs delete) · **#464**
+(unbounded per-rendition subtransactions) · **#458** (non-object attachment element — a loud UI, NOT a
+floor rule). **Raised by this pass:** **[#467](https://github.com/cairn-ehr/cairn-ehr/issues/467)**
+(`db.rs`'s nine `anyhow!("…: {e}")` over `tokio_postgres::Error` — #109's species where it hurts most) ·
+**[#468](https://github.com/cairn-ehr/cairn-ehr/issues/468)** (**this alert fires ONCE EVER** while
+`custody_withheld`, its stated precedent, re-fires every cycle — and an unlearnable reference is
+unrepairable in place, so the steady state carries no standing signal) ·
+**[#469](https://github.com/cairn-ehr/cairn-ehr/issues/469)** (a failed `sync_state` cursor commit loses
+the metrics object entirely and is logged as a `partition`) ·
+**[#470](https://github.com/cairn-ehr/cairn-ehr/issues/470)** (the per-cycle ledger read is
+owner-privileged — cairn-sync cannot carry it onto the unprivileged runtime role).
 
 ### 2026-08-22 — admit and flag: the rule was already written, under another field's name
 
@@ -218,17 +229,17 @@ ROADMAP carries this pass in full; these are the parts a next session can still 
    `safety` · db/050), *mint-strict, arrive-permissive*, **which is why it keeps breaking**.
 4. **The one thing not to "align":** `submit_event` calls the strict learner (db/027),
    `apply_remote_event` the lenient one (db/050). They share their accessors **and** their traversal
-   (`cairn_by_reference_renditions`, declared in db/027, pinned by a `pg_proc` read in
-   `db/tests/050` §9) and differ only in `EXCEPTION WHEN raise_exception` → record instead of raise.
-   **`WHEN OTHERS` there would be a disaster** — a disk error written into the ledger as "the peer
-   sent garbage", and cairn-sync robbed of the SQLSTATE it needs to retry.
+   (`cairn_by_reference_renditions`, pinned by a `pg_proc` read in `db/tests/050` §9) and differ only
+   in `EXCEPTION WHEN raise_exception` → record instead of raise. **`WHEN OTHERS` there would be a
+   disaster** — a disk error written into the ledger as "the peer sent garbage", and cairn-sync
+   robbed of the SQLSTATE it needs to retry.
 5. **⇒ THE REVIEW PASS FOUND PROSE ASSERTING SAFETY PROPERTIES THE CODE DID NOT IMPLEMENT — over a
    fully green branch.** Four files claimed a shared traversal that had one caller; a header claimed
-   "it cannot raise", written before the FK landed and left standing after; and a **REGRESSION**:
-   admitting a non-array `attachments` meant *storing* it, and `read_photo_refs`
-   (`patient/search.rs`) walks that column with `jsonb_array_elements` → **22023** on the §5.3/§5.8
-   candidate list, the wrong-chart-prevention surface. **The refusal had not been removed, only
-   relocated** — out of a door that pens and names it, into a read path with no handling.
+   "it cannot raise", written before the FK landed. And a **REGRESSION**: admitting a non-array
+   `attachments` meant *storing* it, and `read_photo_refs` (`patient/search.rs`) walks it with
+   `jsonb_array_elements` → **22023** on the §5.3/§5.8 candidate list, the wrong-chart-prevention
+   surface. **The refusal had not been removed, only relocated** — out of a door that pens and names
+   it, into a read path with no handling.
 
 ### 2026-08-21 — the freeze that hid, the flake that lied, six trap-clearing fixes, three silent gates
 
@@ -245,21 +256,17 @@ ROADMAP carries this pass in full; these are the parts a next session can still 
   an unrecognised value as *NOT permission*, the opposite of the `$CI` predicate it replaced, or
   `CAIRN_ALLOW_DB_SKIP=please` quietly restores fail-open. Only `1`/`true`/`yes`/`on` opt out.
 - **#457 — the harness polled a PORT and never the CHILD**, so EADDRINUSE, a missing `--key` and a
-  panic during schema load all produced one 60-second message blaming startup latency. It now
-  watches both and captures stderr **to a file, never a pipe** (an unread pipe blocks the child).
-  **The cause is named, not fixed:** always exactly three of twelve, macOS, only under a loaded
-  sweep — a macOS `_dyld_start` loader stall fits; a stall now reports a live pid to `sample`.
-- **A load-bearing comment was factually wrong and had steered two rounds of fixes:** `std`'s
-  `TcpListener` DOES set `SO_REUSEADDR` on every non-Windows target (verified in the pinned 1.96.0
-  source). **Check a socket-behaviour claim against the pinned std source before writing it down.**
+  panic during schema load all produced one message blaming startup latency. It now watches both and
+  captures stderr **to a file, never a pipe** (an unread pipe blocks the child). **Cause named, not
+  fixed:** a macOS `_dyld_start` loader stall; a stall now reports a live pid to `sample`.
+- **Check a claim against the pinned source before writing it down** — a load-bearing comment saying
+  `std`'s `TcpListener` does not set `SO_REUSEADDR` was false and had steered two rounds of fixes.
 - **Three mechanics.** (a) PostgreSQL checks a function called inside a VIEW against the **INVOKING**
-  user, not the view owner — and the INNER call too. (b) **Ask the authority, do not re-implement
-  it:** `cargo locate-project` found that `packaging/crates` was in no workspace. (c) `git
-  check-ignore` needs `--no-index` and has **THREE** exit codes (0/1/**128**). Every repo cargo
-  invocation in `rust.yml` now passes `--locked`, with zero lockfile exemptions.
-- **A mutation that does not change the property tests nothing** — two of seven #457 mutations
-  proved nothing until rewritten. **Not done, deliberately:** unifying the 342 bare `else { return }`
-  skip sites (would make **#327** bigger). **Residual: #447** (cargo-deny covers three of six trees).
+  user — the INNER call too. (b) **Ask the authority:** `cargo locate-project` found `packaging/crates`
+  was in no workspace. (c) `git check-ignore` needs `--no-index` and has **THREE** exit codes
+  (0/1/**128**). Every repo cargo invocation in `rust.yml` now passes `--locked`.
+- **A mutation that does not change the property tests nothing.** **Not done, deliberately:** unifying
+  the 342 bare `else { return }` skip sites (would make **#327** bigger). **Residual: #447.**
 ### Older passes (Slices 61–69, 2026-08-02 → 08-20) — the lessons still worth holding
 
 ROADMAP carries every slice in full. These are the ones a next session can still break.
@@ -361,40 +368,33 @@ tech-debt-loop "Interlude" entries, every still-open issue). Two lessons from Sl
 persists nothing is a refusal you cannot audit**, and **when a call site cannot make a distinction, check
 whether an intermediate layer threw it away** (`apply_signed` flattened `postgres::Error` to `String`,
 discarding the SQLSTATE separating a deliberate refusal from a transient fault). Arc 2026-06-25 → 08-01:
-demographics + matcher · identity/John-Doe/medication · the five-priority review course → ADR-0051–0058 ·
-ADR-0059 + medication 6a/6b · the ADR-0056 admit-uninterpreted floor · floor determinism (#75) ·
-tech-debt-loop launch.
+demographics + matcher · identity/John-Doe/medication · five-priority review → ADR-0051–0058 · ADR-0059
++ medication 6a/6b · the ADR-0056 admit-uninterpreted floor · floor determinism (#75) · loop launch.
 
-**GUI/L3 design threads (2026-07-16/18, design-only).** Detail in
-[`scratch/ui-sketches/easygp-consult-screen-inventory.md`](../scratch/ui-sketches/easygp-consult-screen-inventory.md)
-and `easygp-editing-area-inventory.md` (source screenshots git-ignored under
-`docs/untracked_for_brainstorming/` — real photos, **never commit or publish**). Headline: easyGP's six
-editing-area invariants ≅ Cairn's event envelope near line-for-line. **Open:** co-author questions in
-that note §7; results-inbox screenshots pending — three-zone vs two-pane rides on them, **don't
-improvise it**. **Scope:** the easyGP co-author may lead GP-facing GUI, HH designs ED & ward; the
-role-manifest layer is the seam (ADR-0021).
+**GUI/L3 design threads (2026-07-16/18, design-only).** Detail in `scratch/ui-sketches/`
+(`easygp-consult-screen-inventory.md`, `easygp-editing-area-inventory.md`; source screenshots
+git-ignored under `docs/untracked_for_brainstorming/` — real photos, **never commit or publish**).
+Headline: easyGP's six editing-area invariants ≅ Cairn's event envelope near line-for-line. **Open:**
+co-author questions in that note §7; results-inbox screenshots pending — three-zone vs two-pane rides on
+them, **don't improvise it**. **Scope:** the easyGP co-author may lead GP-facing GUI, HH designs ED &
+ward; the role-manifest layer is the seam (ADR-0021).
 
-**Status of this file:** Disposable working scaffolding, **not** a source of truth. Regenerate at the end
-of each session and **keep it under 500 lines** — its value is inversely proportional to its length
-(#368). If it disagrees with the canonical docs, **the canonical docs win.** The *why* lives in the ADR
-log, the *what* in the spec; this file carries only what lives *between* them.
+**Status of this file:** disposable scaffolding, **not** a source of truth; canonical docs win. Regenerate
+each session and **keep it under 500 lines** (#368) — the *why* is in the ADRs, the *what* in the spec.
 
 ---
 
 ## Read these first (the durable state)
 
-- **`docs/spec/index.md`** — canonical architecture spec (mission prose + document map + spec version).
-  One file per aspect; cross-refs like *§5.7* stay valid inside the aspect file.
-- **`docs/spec/decisions/README.md`** — the **ADR log index** (the *why*). Numbered, dated, **immutable**
-  — a reversal is a new superseding ADR, a factual correction is an appended erratum. **Read the relevant
-  ADR before reopening a settled question.**
-- **`docs/ROADMAP.md`** — the foundation build order, *below* the policy/GUI line, plus the per-slice
-  narrative. Disposable scaffolding like this file; the spec/ADRs win on any disagreement.
+- **`docs/spec/index.md`** — canonical spec (mission + document map + version); one file per aspect, so
+  cross-refs like *§5.7* stay valid inside the aspect file.
+- **`docs/spec/decisions/README.md`** — the **ADR log index** (the *why*): numbered, dated, **immutable**
+  (a reversal is a superseding ADR, a correction an erratum). **Read one before reopening its question.**
+- **`docs/ROADMAP.md`** — foundation build order *below* the policy/GUI line + the per-slice narrative.
 - **`docs/spikes/`** — 0001 (walking skeleton — Bet A ✓ → ADR-0015; Bet B ✓ twice); 0002 (advisory-actor
   — C1–C5 ✓ → ADR-0029/0030); 0003 (Postgres on Android — G0–G3 ✓); 0004 (iced UI — FAIL on a11y →
-  Tauri 2). **`docs/case-studies/`** — 0001 (2026-07-11): 16 Australian GP-software failure modes, all
-  absorbed, **0 new architecture**. **`docs/ecosystem/`** — 0001, 0003. **`docs/principles/`** —
-  mission/governance; root **`README.md`** repeats the founding principles.
+  Tauri 2). **`docs/case-studies/0001`**: 16 Australian GP-software failure modes, all absorbed, **0 new
+  architecture**. **`docs/ecosystem/`** 0001, 0003 · **`docs/principles/`** — mission/governance.
 - Code workspace: `/crates` (`cairn-event`, `cairn-sync`, `cairn-node`, `cairn-medication-view`,
   `cairn-patient-search`), `/extensions` (`cairn_pgx`), `/db`, `/cairn-gui` (separate workspace).
   `poc/` is frozen historical spikes.
@@ -404,10 +404,10 @@ log, the *what* in the spec; this file carries only what lives *between* them.
 ## Where the build actually is (the live, in-progress state)
 
 - **First federating node** (ADR-0017) — `cairn-node`: Ed25519 keystore, pairing/`peers`/`unpeer`, mTLS
-  pinned to the trust set, set-union `node_event` sync, the `db/007` doors with a deny-all admission
-  gate, genesis-stable `node_id`. **Every honest gap declared at build time is CLOSED**, including all
-  four ADR-0026 durability slices — only optional escrow *rungs* (Shamir/QR/TPM) remain. The
-  `localstate` read/apply **seams** are where the clinical tier plugs DEKs/drafts/config.
+  pinned to the trust set, set-union `node_event` sync, `db/007`'s doors with a deny-all admission gate,
+  genesis-stable `node_id`. **Every honest gap declared at build time is CLOSED**, all four ADR-0026
+  durability slices included — only optional escrow *rungs* (Shamir/QR/TPM) remain; the `localstate`
+  seams are where the clinical tier plugs DEKs/drafts/config.
 - **Dual-identifier discipline** (ADR-0031) — the canonical plane (UUIDv7 + multihash) is the *only*
   identifier on the wire/in signed bodies; the projection plane may intern node-local `bigint`
   surrogates (`db/008` + the leakage guard). The typed signed plane is the load-bearing guarantee.

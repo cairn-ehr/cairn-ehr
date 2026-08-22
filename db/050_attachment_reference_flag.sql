@@ -318,14 +318,26 @@ $$;
 -- db/040 is the sibling that got this right: a cairn_agent-only flag TABLE paired with a
 -- node-wide cairn_clock_health() granted to both roles. Same shape here.
 --
--- WHO CALLS IT (issue #465, added after this file shipped without a caller). This
--- function is the STANDING picture — every flag this node holds, whoever delivered it.
--- The per-CYCLE news is cairn-sync's: both `pull` and `requeue` read the ledger for the
--- events they just admitted and report a `references_unlearnable` count plus one stderr
--- line naming an example, following the `custody_withheld` precedent (a degradation that
--- must be visible without failing the cycle). The two are deliberately different
--- questions — "what did this pull just discover" vs "what does this node stand holding"
--- — and an operator woken by the first comes here for the second.
+-- WHO CALLS IT (issue #465, added after this file shipped without a caller):
+-- `cairn-sync attachment-flags` -> attachment_flag_listing(), one JSON row per group.
+--
+-- That verb is the STANDING picture — every flag this node holds, whoever delivered it.
+-- It is NOT the per-cycle surface: cairn-sync's `pull` and `requeue` answer a different
+-- question ("what did this run just discover?") and, needing to filter by the events they
+-- just admitted, query attachment_reference_flag DIRECTLY rather than through here. They
+-- report a `references_unlearnable` count plus one stderr line naming an example,
+-- following the `custody_withheld` precedent (a degradation that must be visible without
+-- failing the cycle). An operator woken by that line comes HERE for the standing state.
+--
+-- ⚠️ THAT DIRECT READ IS OWNER-PRIVILEGED, and this function deliberately is not. The
+-- table is GRANTed to cairn_agent only (above), while this SECURITY DEFINER is granted to
+-- both group roles precisely so the runtime can reach it (#425: a role provisioned as
+-- documented is a cairn_node member, NOT a cairn_agent member). cairn-sync already
+-- requires owner privileges for unrelated reasons — sync_state carries no grants at all
+-- and its pull loop writes it every cycle — so the direct read works today. If cairn-sync
+-- is ever moved onto the unprivileged runtime model, that read must move to a definer
+-- taking bytea[] + a flag_id watermark, or it will fail every cycle while this verb keeps
+-- working. Tracked as issue #470, not assumed.
 --
 -- NAME, NEVER COUNT still holds: this returns one row per (event_type, reason) with the events
 -- that carry it, so "47 flags" can never be all an operator sees.
