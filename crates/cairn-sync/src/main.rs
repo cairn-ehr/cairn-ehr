@@ -1433,7 +1433,7 @@ fn cmd_key_id(key_path: &str) -> R<()> {
 }
 
 fn cmd_init(conn: &str) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     // 004/005 call cairn_pgx functions; the extension must exist first.
     client.batch_execute("CREATE EXTENSION IF NOT EXISTS cairn_pgx;")?;
     // `CREATE EXTENSION IF NOT EXISTS` will NOT upgrade an already-installed extension,
@@ -1468,6 +1468,41 @@ fn embedded_schema_version() -> i32 {
 /// means "generation unknown" (a pre-#188 database, or a rig loaded by hand via
 /// psql) and the replay proceeds — the guard stops known downgrades, it does not
 /// lock out hand-built rigs. Mirrors cairn-node db::connect_and_load_schema.
+/// Apply ONE embedded migration, naming it if it fails (issue #475).
+///
+/// # Why a named door and not an inline `.map_err`
+///
+/// The loop this was extracted from ran `client.batch_execute(sql)?` with `name` in scope
+/// and unused on the failure path, so an operator whose `cairn-sync init` died had to count
+/// `applied \u{2026}` lines to work out which migration it was — on the very first command they
+/// ever run. Issue #467 fixed the identical loop in `cairn-node` by extracting exactly this
+/// door, for the reason that fix records: **a three-line loop body cannot be tested**, and
+/// the acceptance criterion here is a sentence about a *message*. A door can be driven with
+/// a deliberately failing body, which pins the criterion instead of restating it.
+///
+/// Renders through the same [`legible_db_error`] as everything else in this crate, so a
+/// node log and a sync log carry one format an operator has to learn once.
+fn load_migration(client: &mut postgres::Client, name: &str, sql: &str) -> R<()> {
+    client
+        .batch_execute(sql)
+        .map_err(|e| format!("loading {name}: {}", legible_db_error(e)).into())
+}
+
+/// Connect, naming the reason and NEVER echoing the connection string (issue #475).
+///
+/// `postgres::Error`'s `Display` renders a refused socket, an unresolvable host and a TLS
+/// timeout all as `error connecting to server` — a category, not a diagnosis — and a bare
+/// `?` gives an operator nothing else. [`legible_db_error`] walks `source()` for the errno,
+/// which is where `Connection refused (os error 61)` actually lives.
+///
+/// The connection string is deliberately absent from the message: it can carry a password,
+/// and an error line is exactly the text that ends up pasted into an issue. This is
+/// `cairn-node`'s `db::connect` rule, which these sites did not have.
+fn connect_db(conn: &str) -> R<postgres::Client> {
+    postgres::Client::connect(conn, postgres::NoTls)
+        .map_err(|e| format!("connecting to the database: {}", legible_db_error(e)).into())
+}
+
 fn load_schema(client: &mut postgres::Client) -> R<()> {
     // Serialize the whole check→replay→stamp against every OTHER loader on this
     // database (2026-07-19 review of PR #251, finding 1): without it the guard is
@@ -1526,7 +1561,7 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
         }
     }
     for (name, sql) in SCHEMA {
-        client.batch_execute(sql)?;
+        load_migration(client, name, sql)?;
         eprintln!("applied {name}");
     }
     // ADR-0056 decision 4 (#266) / PR #302 finding F3: RE-ADJUDICATE FIRST, REPROJECT
@@ -1598,7 +1633,7 @@ fn cmd_enroll(conn: &str, key_path: &str, kind: &str) -> R<()> {
     // agent enrollment pins model/version/skill-epoch (ADR-0029); that ceremony
     // lives with the agent deployment, not this CLI.
     let pinned = serde_json::json!({ "kind": kind, "signing_key": kid }).to_string();
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     client.execute(
         "SELECT enroll_actor($1, $2::text::jsonb, $3)",
         &[&kind, &pinned, &kid],
@@ -1764,7 +1799,7 @@ fn cmd_write(
     } else {
         patient.to_string()
     };
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     let body = emit_event(
         &mut client,
         node,
@@ -1795,7 +1830,7 @@ fn cmd_gen(
     rate: f64,
 ) -> R<()> {
     let (sk, kid) = load_or_create_key(key_path)?;
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
 
     let mut pids = Vec::new();
     for i in 0..patients.max(1) {
@@ -1923,7 +1958,7 @@ fn do_fingerprint(client: &mut postgres::Client) -> R<serde_json::Value> {
 }
 
 fn cmd_fingerprint(conn: &str) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     println!("{}", do_fingerprint(&mut client)?);
     Ok(())
 }
@@ -1942,7 +1977,7 @@ fn pct(sorted: &[f64], p: f64) -> f64 {
 /// cost does not grow with the log.
 fn cmd_bench_insert(conn: &str, node: &str, key_path: &str, count: usize) -> R<()> {
     let (sk, kid) = load_or_create_key(key_path)?;
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     let log_size: i64 = client
         .query_one("SELECT count(*) FROM event_log", &[])?
         .get(0);
@@ -1992,7 +2027,7 @@ fn cmd_bench_insert(conn: &str, node: &str, key_path: &str, count: usize) -> R<(
 /// twins (the version-independent §3.13 substrate). The paper-parity floor: this must
 /// beat "grab the paper chart."
 fn cmd_chart(conn: &str, patient: &str) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     let t = Instant::now();
     let demo = client.query_opt(
         "SELECT name, dob, sex, note_count FROM patient_chart WHERE patient_id=$1::text::uuid",
@@ -3131,7 +3166,7 @@ fn hex_prefix(digest: &[u8]) -> String {
 /// the first refused frame, with only stderr as evidence). Fail fast and
 /// legibly instead.
 fn connect_checked(conn: &str) -> R<postgres::Client> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     // Probe the NEWEST piece of the schema this binary needs — the db/036 seq
     // cursor (event_log.seq + sync_quarantine.refused_seq) — not just table
     // existence: a DB created by an earlier revision would pass a bare to_regclass
@@ -3406,8 +3441,11 @@ fn do_blobd(
                     // return would not be Send across the thread boundary.
                     let mut wc = match postgres::Client::connect(&conn, postgres::NoTls) {
                         Ok(c) => c,
+                        // #475's species: `postgres::Error`'s `Display` renders a refused
+                        // socket, an unresolvable host and a TLS timeout all as `error
+                        // connecting to server`. The errno lives in `source()`.
                         Err(e) => {
-                            eprintln!("blob worker connect failed: {e}");
+                            eprintln!("blob worker connect failed: {}", legible_db_error(e));
                             return;
                         }
                     };
@@ -3656,7 +3694,8 @@ fn cmd_run(
                     };
                     std::thread::sleep(Duration::from_millis(interval_ms));
                 },
-                Err(e) => eprintln!("blob thread could not connect: {e}"),
+                // Same as the worker above: name the errno, not the layer.
+                Err(e) => eprintln!("blob thread could not connect: {}", legible_db_error(e)),
             },
         );
     }
@@ -4112,7 +4151,7 @@ fn serve_conn(
     corrupt: bool,
     own_key: Option<Arc<SigningKey>>,
 ) -> R<()> {
-    let mut client = postgres::Client::connect(conn, postgres::NoTls)?;
+    let mut client = connect_db(conn)?;
     // Our own unwrap secret, derived once per connection from this node's signing
     // seed (ADR-0026 escrow: the secret is never in the DB). Used only to open our
     // locally-stored DEKs so the EventsAfterSeq arm can re-wrap them for the peer.
@@ -5905,6 +5944,87 @@ mod tests {
             out,
             vec![None, None],
             "no requester key means all-None custody"
+        );
+    }
+}
+
+/// Issue #475: `cairn-sync init` must name the migration that failed.
+///
+/// A tiny DB-gated module of its own rather than a lodger in `quarantine_tests`, because
+/// it shares none of that suite's fixture: it takes no advisory lock, loads no schema and
+/// truncates nothing. The whole fixture is a bare connection and a statement the server
+/// refuses, so it can run beside anything.
+#[cfg(test)]
+mod schema_load_diagnosis_tests {
+    use super::*;
+
+    fn cs() -> Option<String> {
+        std::env::var("CAIRN_TEST_PG").ok()
+    }
+
+    /// The acceptance criterion of #467, unmet in the operator's FIRST command until now:
+    /// *a schema-load failure names the migration, the SQLSTATE and the server's message +
+    /// DETAIL*.
+    ///
+    /// Drives the extracted door with a body guaranteed to fail, exactly as `cairn-node`'s
+    /// `tests/db_diagnosis.rs` does for its half — so what is under test is the composition
+    /// an operator meets, not a restatement of it. The SQL is synthetic on purpose: forcing
+    /// a real migration to fail would mean planting a decoy object in a shared database,
+    /// which is both destructive and coupled to whichever migration tripped over it.
+    #[test]
+    fn a_failed_migration_names_the_migration_and_the_cause() {
+        let Some(conn) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = postgres::Client::connect(&conn, postgres::NoTls).unwrap();
+
+        let err = load_migration(
+            &mut c,
+            "031_medication",
+            r#"DO $$ BEGIN RAISE EXCEPTION 'relation "decoy" does not exist'
+                         USING ERRCODE = '42P01', DETAIL = 'this migration never loaded'; END $$;"#,
+        )
+        .expect_err("a bare RAISE always fails")
+        .to_string();
+
+        assert_ne!(err, "db error", "the whole of #467/#475: {err}");
+        assert!(
+            err.contains("031_medication"),
+            "an operator must not have to COUNT `applied \u{2026}` lines to find it: {err}"
+        );
+        assert!(
+            err.contains("[42P01]"),
+            "\u{2026}and the SQLSTATE is the part they can search for: {err}"
+        );
+        assert!(
+            err.contains("this migration never loaded"),
+            "\u{2026}and the DETAIL, where this project's own doors put the reason (#109): {err}"
+        );
+    }
+
+    /// A failed connect names the reason and never the connection string. `postgres::Error`
+    /// renders a refused socket as `error connecting to server` — a category, not a
+    /// diagnosis — and the errno lives in `source()`. Needs no database: nothing listens.
+    #[test]
+    fn a_failed_connect_names_the_errno_and_never_the_password() {
+        // `expect_err` would need `postgres::Client: Debug`; a match says the same thing.
+        let err = match connect_db("host=127.0.0.1 port=1 dbname=cairn user=n password=hunter2") {
+            Ok(_) => panic!("nothing listens on port 1"),
+            Err(e) => e.to_string(),
+        };
+
+        assert!(
+            !err.contains("hunter2"),
+            "the connection string can carry a password and must never be echoed: {err}"
+        );
+        assert!(
+            err.contains("connecting to the database"),
+            "the line must say what was being attempted: {err}"
+        );
+        assert!(
+            err.to_lowercase().contains("refused") || err.contains("os error"),
+            "\u{2026}and name the errno, which is the half `Display` drops: {err}"
         );
     }
 }
