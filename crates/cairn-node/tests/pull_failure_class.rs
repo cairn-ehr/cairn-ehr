@@ -4,8 +4,11 @@
 //! to look for a link fault while the link was healthy and a local `UPDATE` had failed,
 //! and it charged the Bet A availability figure for it. `cairn-node` has the same
 //! catch-all over the same kind of failure — `checkpointing sync cursor`, `counting
-//! unacked node quarantine rows`, `snapshotting active peer pubkeys` are all THIS node's
-//! database, reached after the peer has already answered.
+//! unacked node quarantine rows` and `auto-releasing a node quarantine row` are all THIS
+//! node's database, and the first two are reached after the peer has already answered in
+//! full. (Not all of them are: `reading sync cursor` and `reading the node quarantine
+//! re-offer floor` run BEFORE the TCP connect, which is why the production doc hedges with
+//! "usually" — PR #478 review, I4.)
 //!
 //! The classifier is pure, so the mapping is pinned here with no database and no peer.
 //! That matters: the alternative is a test that can only be written by breaking a live
@@ -55,7 +58,8 @@ fn a_local_fault_survives_an_added_context_layer() {
 
 /// A bare `tokio_postgres::Error` with no wrapper at all is still local: every postgres
 /// call on this path talks to THIS node's database, because the peer is reached over
-/// TLS/TCP and never through libpq.
+/// TLS/TCP and never through a Postgres connection. (Not "never through libpq" — these
+/// crates are pure-Rust protocol implementations and libpq is not in the tree at all.)
 #[test]
 fn a_bare_postgres_error_is_local() {
     let e = anyhow::Error::from(a_real_pg_error());
@@ -86,6 +90,10 @@ fn the_local_fault_line_carries_the_cause() {
         a_real_pg_error(),
     ));
     let text = format!("{e}");
+    // A statement of the acceptance criterion, NOT a mutation-killer: this fixture is a
+    // `Kind::ConfigParse` error, whose `Display` is `invalid connection string`, so it
+    // could never render `db error` whatever the code did. The two assertions below are
+    // the ones that do the work (PR #478 review).
     assert_ne!(text, "db error", "{text}");
     assert!(
         text.contains("checkpointing sync cursor"),

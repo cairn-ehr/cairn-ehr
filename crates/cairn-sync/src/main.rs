@@ -390,8 +390,9 @@ impl Error for CursorCommitError {}
 ///
 /// The three statements inside `do_requeue`'s loop were bare `?`, so a failure on row 5 of
 /// 20 returned a raw `postgres::Error` and the whole metrics object went with it. At that
-/// moment rows 1-4 HAVE been released — their events are durable in `event_log` and their
-/// pen rows are gone — and rows 6-20 were never examined. Reporting nothing about either is
+/// moment rows 1-4 have each been RESOLVED one way or another — released (durable in
+/// `event_log`, pen row gone), still held, or vanished; only the released ones are durable
+/// — and rows 6-20 were never examined. Reporting nothing about either is
 /// precisely the implied completion ADR-0060 decision 2 forbids: an operator re-runs the
 /// command (correctly — release is idempotent through the db/020 door) with no way to know
 /// from the failed run what it had already done, or whether the rows that vanished from the
@@ -399,7 +400,13 @@ impl Error for CursorCommitError {}
 ///
 /// Modelled on [`CursorCommitError`], which is the same decision one command over and for
 /// the same reason: the metrics have to survive the `Err`, so they travel inside it.
-#[derive(Debug)]
+///
+/// `Debug` is HAND-WRITTEN to delegate to `Display`, and that is load-bearing rather than
+/// tidy: `fn main() -> R<()>` has no error printer, so an `Err` reaches Rust's
+/// `Termination`, which prints `Error: {err:?}`. With a derived `Debug` the composed
+/// sentence — which is the whole acceptance criterion of #471 — arrived wrapped in struct
+/// syntax with the metrics re-dumped in Rust debug form beside the JSON already on stdout
+/// (PR #478 review, finding 7).
 struct RequeueInterruptedError {
     message: String,
     /// The counts as they stood when the statement failed, with `references_unlearnable`
@@ -413,15 +420,31 @@ impl std::fmt::Display for RequeueInterruptedError {
     }
 }
 
+/// See the type's doc: `Termination` prints `Debug`, so `Debug` must be the sentence.
+impl std::fmt::Debug for RequeueInterruptedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
 impl Error for RequeueInterruptedError {}
 
 /// Compose the sentence an operator reads when a requeue is interrupted. **Pure.**
 ///
 /// Every clause earns its place: the counts say what is DONE and durable, `at` says where
-/// it stopped (so the untouched remainder is knowable), `cause` says why — it was the eight
-/// characters `db error` before — and the remedy is stated because it is real and
-/// non-obvious: release runs through the same in-DB door a pull does, so re-running after
-/// fixing the fault re-releases nothing twice.
+/// it stopped, `cause` says why — it was the eight characters `db error` before — and the
+/// remedy is stated because it is real and non-obvious: release runs through the same
+/// in-DB door a pull does, so re-running after fixing the fault re-releases nothing twice.
+///
+/// # The row it stopped ON is its own case, and saying otherwise is a precise untruth
+///
+/// `examined` is the size of the up-front LISTING, not a count of rows processed, and the
+/// three counters are the COMPLETED ones — so the row named by `at` is in none of them.
+/// The first draft therefore said "the remaining rows were never examined", which was
+/// false for exactly that row: on a failed release its event is already durable in
+/// `event_log` while its pen row survives. Principle 4 makes this the wrong trade — an
+/// imprecise near-truth beats a precise untruth — so the row is named as undecided rather
+/// than folded into either side of the arithmetic (PR #478 review, finding 12).
 fn requeue_interrupted_message(
     examined: usize,
     released: usize,
@@ -431,10 +454,13 @@ fn requeue_interrupted_message(
     cause: &str,
 ) -> String {
     format!(
-        "requeue: INTERRUPTED at {at}, of {examined} pen row(s) examined — this node's own \
+        "requeue: INTERRUPTED at {at}, of {examined} pen row(s) listed — this node's own \
          DATABASE failed: {cause}. Work already done is NOT lost: {released} released \
          (durable in event_log, their pen rows gone), {still_quarantined} still held, \
-         {vanished} vanished before release; the remaining rows were never examined. The \
+         {vanished} vanished before release. The row at {at} is counted in none of those \
+         three: it was reached, and the failure above is exactly what left its outcome \
+         undecided — on a failed release its event may already be durable in event_log \
+         while its pen row survives. Every row after it was never examined. The \
          attachment-reference report did not run, so it reports null rather than zero. Fix \
          the local database fault and re-run — release goes through the same in-DB door a \
          pull does, so it is idempotent."
@@ -3131,9 +3157,11 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                     references_unlearnable: serde_json::Value| {
         serde_json::json!({
             "op": "requeue",
-            // examined == released + still_quarantined + vanished on a COMPLETE run; an
-            // interrupted one is short by exactly the rows it never reached, which is the
-            // fact the message states in words.
+            // examined == released + still_quarantined + vanished on a COMPLETE run. An
+            // interrupted one is short by the rows it never reached PLUS ONE — the row it
+            // stopped on, which was reached and is deliberately counted nowhere because
+            // the failure is what left its outcome undecided. The message states both in
+            // words; reconciling the four numbers alone would mislead by exactly that one.
             "examined": examined,
             "released": released,
             "still_quarantined": still_quarantined,
@@ -3233,10 +3261,19 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                 // rejection beside (never over) the original reason.
                 // #471, and the distinction a reader will otherwise miss: THE TWO HALVES
                 // OF THIS STATEMENT ARE ABOUT DIFFERENT ERRORS. The `e` being STORED is an
-                // `ApplyError` — the door's own refusal, already legible, kept beside (never
-                // over) the original reason. The error this `map_err` catches is a
-                // `postgres::Error` from the UPDATE itself, which renders `db error`; only
-                // that one is #467's species. `still_quarantined` has not moved for this row
+                // `ApplyError`, kept beside (never over) the original reason. The error
+                // this `map_err` catches is a `postgres::Error` from the UPDATE itself,
+                // which renders `db error`; only that one is #467's species.
+                //
+                // `ApplyError` is USUALLY the door's own refusal and legible — but NOT by
+                // construction, and an earlier draft of this comment claimed otherwise
+                // (PR #478 review, C3). `ApplyError::from` falls back to
+                // `postgres::Error`'s own `Display` when there is no `DbError` (a dropped
+                // connection), and `apply_signed`'s EXISTS probe converts a raw
+                // `postgres::Error` into one — so a transient LOCAL fault can land in this
+                // arm wearing a refusal's clothes and be recorded as one. Filed rather
+                // than fixed here: it needs an `is_deliberate_refusal()` split on the
+                // apply path, which is wider than this sweep. `still_quarantined` has not moved for this row
                 // yet, and it stays that way: nothing recorded the current refusal.
                 client
                     .execute(
@@ -6143,14 +6180,22 @@ mod schema_load_diagnosis_tests {
     /// diagnosis — and the errno lives in `source()`. Needs no database: nothing listens.
     #[test]
     fn a_failed_connect_names_the_errno_and_never_the_password() {
+        // DERIVED, never a literal — house rule 6. A password-shaped literal beside a
+        // `password=` key is the shape CodeQL flags (issue #146), and this string exists
+        // only to be asserted ABSENT, so it must still look like a real secret.
+        let secret: String = (0..16u8)
+            .map(|i| char::from(b'a' + (i.wrapping_mul(7) % 26)))
+            .collect();
         // `expect_err` would need `postgres::Client: Debug`; a match says the same thing.
-        let err = match connect_db("host=127.0.0.1 port=1 dbname=cairn user=n password=hunter2") {
+        let err = match connect_db(&format!(
+            "host=127.0.0.1 port=1 dbname=cairn user=n password={secret}"
+        )) {
             Ok(_) => panic!("nothing listens on port 1"),
             Err(e) => e.to_string(),
         };
 
         assert!(
-            !err.contains("hunter2"),
+            !err.contains(&secret),
             "the connection string can carry a password and must never be echoed: {err}"
         );
         assert!(
@@ -7154,6 +7199,66 @@ mod quarantine_tests {
             msg.contains("idempotent"),
             "the remedy is real — release runs through the same in-DB door a pull does — \
              and an operator who does not know that cannot safely re-run: {msg}"
+        );
+        // PR #478 review, finding 12. The row it stopped ON is in none of the three
+        // counters, so a sentence that folds it into "never examined" is a precise
+        // untruth about a row whose event may already be durable (principle 4).
+        assert!(
+            !msg.contains("the remaining rows were never examined"),
+            "the row at `at` WAS reached, so this claim is false about it: {msg}"
+        );
+        assert!(
+            msg.contains("counted in none of those three"),
+            "…so the undecided row is named as undecided instead: {msg}"
+        );
+        assert!(
+            msg.contains("listed"),
+            "`examined` is the size of the up-front listing, not a count of rows \
+             processed; calling it `examined` fought the next clause: {msg}"
+        );
+    }
+
+    /// #471's acceptance criterion is a SENTENCE AN OPERATOR READS — so the rendering
+    /// that actually reaches them has to be the composed one. (PR #478 review, finding 7.)
+    ///
+    /// `fn main() -> R<()>` has no error printer, so an `Err` reaches Rust's `Termination`,
+    /// which prints `Error: {err:?}` — the **`Debug`** impl, not `Display`. With a derived
+    /// `Debug` the operator saw the sentence wrapped in struct syntax with the metrics
+    /// object re-dumped in Rust debug form beside the JSON already on stdout:
+    ///
+    /// ```text
+    /// Error: RequeueInterruptedError { message: "requeue: INTERRUPTED at …", metrics: Object {…} }
+    /// ```
+    ///
+    /// Both other tests assert `to_string()`, so they passed while production delivered
+    /// the other rendering. **Pure.**
+    #[test]
+    fn the_interrupted_sentence_survives_the_debug_rendering_main_actually_prints() {
+        let e = RequeueInterruptedError {
+            message: requeue_interrupted_message(
+                20,
+                4,
+                1,
+                0,
+                "a1b2c3d4e5f60718",
+                "permission denied for table sync_quarantine [42501]",
+            ),
+            metrics: serde_json::json!({ "op": "requeue" }),
+        };
+
+        let debug = format!("{e:?}");
+        assert!(
+            !debug.contains("RequeueInterruptedError {"),
+            "`Termination` prints Debug; struct syntax is not a sentence: {debug}"
+        );
+        assert_eq!(
+            debug,
+            e.to_string(),
+            "Debug delegates to Display, so the operator reads the composed line either way"
+        );
+        assert!(
+            debug.contains("4 released") && debug.contains("[42501]"),
+            "…and the whole report survives it: {debug}"
         );
     }
 

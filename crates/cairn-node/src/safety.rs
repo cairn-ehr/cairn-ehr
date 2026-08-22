@@ -119,9 +119,23 @@ pub async fn lookup_class(
         // printed those eight characters on a CLINICAL write path, where the SQLSTATEs
         // they hide — `42P01` (db/049 never loaded here), `42501` (a revoked grant),
         // `57014` (timeout), `55P03`/`40P01` (contention), `53300` (connections
-        // exhausted) — are five different operator actions. Rendering at the SOURCE fixes
-        // every caller at once, which is why #473 picks it over printing `{e:#}` at the
-        // log site: with a bare `?` the anyhow chain bottoms out at the same `Display`.
+        // exhausted) — are five different operator actions.
+        //
+        // Rendering at the SOURCE fixes every caller at once, and it is chosen over
+        // switching the log site to `{e:#}` for three reasons — NOT, as an earlier draft
+        // of this comment claimed, because the chain bottoms out at the same `Display`.
+        // It does not: `Error::db` stores the parsed `DbError` as the cause, and
+        // `DbError`'s own `Display` is message + DETAIL + HINT, so `{e:#}` would have
+        // reached something useful (PR #478 review, finding 5). The real reasons are that
+        // `DbError`'s `Display` never prints `code()`, so the bracketed SQLSTATE — the one
+        // machine-stable, greppable part — is missing from it; that it emits raw newlines
+        // before DETAIL and HINT, which `one_line` exists to collapse; and that
+        // `advisory_or_withheld` is generic over `E: Display` and prints `{why}`, so it
+        // cannot force the alternate form on a caller even if it wanted to.
+        //
+        // `anyhow!` rather than `LocalDbFault` is also deliberate here: nothing downstream
+        // classifies a safety failure, so the cause has no reader and the `db.rs` criterion
+        // applies. See `LocalDbFault`'s own doc for when that stops being true.
         .map_err(|e| anyhow::anyhow!("the safety class lookup: {}", legible_db_error(&e)))?;
     Ok(rows.first().map(|r| (r.get(0), r.get(1))))
 }

@@ -214,12 +214,83 @@ raised and could not absorb. Every item mutation-checked.
    `SELECT` succeeds and the event applies through the real door — only the pen-row `DELETE` fails,
    which is exactly the mid-loop shape the issue is about.
 
+7. **⇒ THE REVIEW FOUND THE SWEEP HAD LEFT ITS OWN SPECIES ALIVE, IN THE FILE IT SWEPT.**
+   `anyhow::Error`'s plain `Display` prints **only the outermost message** — so `.context()` over an
+   already-rendered database failure printed the layer and threw the diagnosis away. Two live sites:
+   `serve`'s per-session line (`serve: session with <peer> ended: serve: connecting to DB`, once per
+   inbound session for the whole of a local DB outage) and `run`'s `PARTITION` line (which also lost
+   `with_io_timeout`'s `(stalled peer)` text, the only thing separating a silent peer from a gone
+   one). **The widened guard reported green over both**, because the fix for its false positives had
+   been to RENAME the bindings — and two of the renamed ones genuinely held database errors. *A
+   rename is not proof;* the guard's doc now says so, and says which two shapes it cannot see at all.
+   **And `{e:#}` is NOT the fix:** `LocalDbFault`'s `Display` already embeds the rendered cause, so
+   the alternate form prints it twice — for a server error the trailing copy is the literal
+   `db error`. New pure `db_diagnosis::operator_chain` walks the chain, renders any
+   `tokio_postgres::Error` through `legible_db_error`, and **drops a layer the layer above already
+   ends with** — a suffix test, not a type test, so any future self-rendering wrapper inherits it.
+8. **⇒ A FROZEN CURSOR LOOKED EXACTLY LIKE A HEALTHY CYCLE.** All three of `pull_into`'s freeze paths
+   `break` and return `Ok`, which is correct (freezing is the deliberate availability choice) — but
+   `run`'s `Ok` arm then printed an ordinary summary, `pending=0` included. A `53100` disk-full froze
+   the cursor and emitted **neither** `LOCAL FAULT` nor `PARTITION`: the whole new classification is
+   blind to it, because the cycle did not fail. A monitor keyed on those two tokens would watch a
+   stuck node forever. `PullStats.frozen: Option<i64>` plus a pure `frozen_cursor_line` fixes it;
+   the seq is the number that says whether the next cycle made progress.
+9. **Smaller review fixes worth knowing.** `RequeueInterruptedError`'s `Debug` is now hand-written to
+   delegate to `Display` — `fn main() -> R<()>` has no error printer, so `Termination` prints
+   `{err:?}`, and #471's whole acceptance criterion is a *sentence*; both tests asserted
+   `to_string()` and passed while production delivered struct syntax. The interrupted message said
+   "the remaining rows were never examined", which was **false about the row it stopped on** — that
+   row was reached, and on a failed release its event may already be durable in `event_log` while its
+   pen row survives; it is now named as undecided (principle 4: never a precise untruth). Three
+   `password=hunter2` literals became runtime-derived canaries (house rule 6, and the same file
+   already derived one 60 lines above). The connection-death LINE got a pure seam and a test —
+   reverting it to `let _ = connection.await;` had left the workspace green — and its comment no
+   longer lists "a TLS teardown" among the causes, on a connection opened `NoTls`.
+10. **Comment rot the review caught, worth reading before trusting a nearby claim.** `safety.rs`
+    justified rendering-at-source with "with a bare `?` the anyhow chain bottoms out at the same
+    `Display`" — **false**: `Error::db` stores the parsed `DbError` as the cause, and its `Display`
+    is message + DETAIL + HINT. The fix is still right, for three *other* reasons (no SQLSTATE in
+    `DbError`'s `Display`, raw newlines, and `advisory_or_withheld` being generic over `E: Display`),
+    and those are now what the comment says. `ApplyError` was called "legible by construction" — it
+    is not (its `None` arm is `e.to_string()`), and that has a behavioural consequence now filed as
+    **#480**. `custody_withheld` was called "bound" when it is *escaped* and says so in capitals.
+
+**The scope sentence that had to go.** The widened guard claimed its three files were "every
+production file in this crate whose statements talk to the database". **28** files under
+`crates/cairn-node/src/` execute SQL, and the claim *replaced* a correct one in a section headed
+"Scope, stated so coverage is not confused with aspiration" — while this very HANDOVER named two live
+offenders it excluded. A reader who believes the crate is covered never widens the guard. Where the
+interpolation scan cannot reach, pin by COUNT instead: `sync.rs`'s twelve `LocalDbFault` sites are
+now pinned, because reverting any one to `.context()` compiles and leaves every existing test green.
+
 **Raised, not fixed: [#477](https://github.com/cairn-ehr/cairn-ehr/issues/477)** — the same species
 survives outside the three guarded files. `auto_apply.rs:304/:324` render `db error` on the **§5.7
 identity auto-apply ceremony** (verified: `apply_auto_candidate` returns `anyhow::Result` and reaches
 the database with a bare `?`), and ~24 further raw `?` sites elsewhere in `cairn-node` name no
 operation. Those 24 are **ugly-but-not-silent** — a bare `?` preserves the source, so anyhow's chain
 printing still reaches the `DbError` — which is why they are the lower half of that issue.
+
+**Also raised by the review, not fixed** (house rule 5):
+[**#479**](https://github.com/cairn-ehr/cairn-ehr/issues/479) — the same species live in
+`cairn-sync`'s OWN run loop: `do_pull`'s first two statements are bare `?` *before any network I/O*,
+so `cycle 118: PULL FAILED: db error` reaches both the terminal and the JSONL `bet_a.py` reads, every
+cycle for the life of the process. #469 fixed the *class* and never the *message*, and its test
+asserts only the class. Plus `do_requeue`'s opening query, a `do_fingerprint` result discarded with
+no `else`, and the inbound puller's trust-set lookup.
+[**#480**](https://github.com/cairn-ehr/cairn-ehr/issues/480) — `ApplyError` conflates a door refusal
+with a transient local fault, so `requeue` can annotate a pen row `last_requeue_error = "connection
+closed"`, a claim that the door adjudicated bytes it never saw.
+[**#481**](https://github.com/cairn-ehr/cairn-ehr/issues/481) — #450's fail-closed DB-skip guard is a
+`cairn-node` test only, so `cargo test -p cairn-sync` with no database exits 0 — and #471's and
+#475's behavioural halves live in exactly that crate.
+[**#482**](https://github.com/cairn-ehr/cairn-ehr/issues/482) — `PullFailureClass` needs a third
+class: an mTLS **pin mismatch** is logged `PARTITION`, so a revoked peer key reads as link downtime
+and is charged against the availability figure. `cairn-sync` already carries three classes.
+[**#483**](https://github.com/cairn-ehr/cairn-ehr/issues/483) — `connection_label` will not compile
+on Windows (`Host::Unix` is `#[cfg(unix)]`); no exposure today, all CI is `ubuntu-24.04`.
+[**#484**](https://github.com/cairn-ehr/cairn-ehr/issues/484) — `do_requeue` reports through an
+untyped `serde_json::Value`, so its **null-never-zero** rule is one hand-written argument rather than
+an `Option<u64>`, and the shared-key-set guarantee is a closure's lexical scope.
 
 ### 2026-08-22 — the two places a database failure said nothing
 

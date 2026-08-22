@@ -2,13 +2,14 @@
 //!
 //! # Why a source scan rather than more behavioural tests
 //!
-//! PR #472 rerouted all fourteen `tokio_postgres::Error` renderings in
+//! PR #472 rerouted every `tokio_postgres::Error` rendering in
 //! `crates/cairn-node/src/db.rs` through `db_diagnosis::legible_db_error`, and two of them
 //! are pinned behaviourally by `tests/db_diagnosis.rs` (the migration door and the connect
-//! door). The other twelve are the same one-line composition, and writing twelve more
-//! near-identical DB-gated tests would buy little.
+//! door). The rest are the same one-line composition, and writing that many more
+//! near-identical DB-gated tests would buy little. (This paragraph used to hardcode the
+//! counts, which this sweep's own new site immediately made wrong — PR #478 review, I9.)
 //!
-//! What that leaves unguarded is not any individual site but the **class**: the fifteenth
+//! What that leaves unguarded is not any individual site but the **class**: the NEXT
 //! site, written six months from now by someone who has never read #467, as the
 //! `anyhow!("…: {e}")` that every other Rust codebase writes without thinking. It would be
 //! correct-looking, would pass every test in the tree, and would put `db error` back in
@@ -39,8 +40,17 @@
 //!
 //! Three files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
 //! fails first on a fresh node), `safety.rs` (#473 — the clinical write path) and `sync.rs`
-//! (#474 — the daemon loop). Together they are every production file in this crate whose
-//! statements talk to the database.
+//! (#474 — the daemon loop). They are the three files those issues were filed against, and
+//! **not** every production file in this crate that talks to the database: **28** files
+//! under `crates/cairn-node/src/` execute SQL. `auto_apply.rs:304`/`:324` are live
+//! offenders today — `db error` on the §5.7 identity auto-apply ceremony — and roughly 24
+//! further raw `?` sites elsewhere name no operation. All of it is tracked as **#477**.
+//!
+//! An earlier draft of this paragraph claimed the three files WERE the whole set. That
+//! claim was false, contradicted by this repo's own HANDOVER, and worse than the honest
+//! gap it replaced: a reader who believes the crate is covered never widens the guard
+//! (PR #478 review, finding 3). Add a file to `GUARDED` when its sites are fixed — each
+//! one converted is a durable ratchet.
 //!
 //! `cairn-sync`'s `main.rs` is deliberately NOT here. It carries the twin renderer and its
 //! own loops were fixed alongside these (#475, #471), but it is one 9,000-line file mixing
@@ -55,10 +65,22 @@
 //!
 //! The predicate is name-based, because a source scan cannot type-check. A binding that
 //! genuinely does not hold a database error — an `io::Error` from `accept`, a serde failure
-//! — is resolved by NAMING it (`accept_err`, `session_err`), never by suppressing the
-//! check. The rename is only acceptable when the new name says what the value IS: that
-//! leaves the source more informative than `e` was, which is what makes it a fix rather
-//! than a dodge.
+//! — is resolved by NAMING it (`accept_err`), never by suppressing the check. The rename is
+//! only acceptable when the new name says what the value IS: that leaves the source more
+//! informative than `e` was, which is what makes it a fix rather than a dodge.
+//!
+//! **A rename is not, by itself, proof.** The first version of this widening renamed five
+//! bindings in `sync.rs`, and two of them (`session_err`, `pull_err`) genuinely DID hold
+//! database errors on some branches — so the guard reported green over two live instances
+//! of the defect it had just been widened to catch (PR #478 review, findings 1, 2 and 9).
+//! Both now render through `db_diagnosis::operator_chain`, which walks the whole `anyhow`
+//! chain. Before renaming a binding, establish that every branch reaching it is
+//! non-database; if any branch is, render the chain instead.
+//!
+//! The predicate cannot see two further shapes, stated so they are not mistaken for
+//! coverage: the positional `format!("…: {}", e)` form, and any renamed binding at all.
+//! That is why `sync.rs`'s `LocalDbFault` discipline is pinned by COUNT below rather than
+//! by the interpolation scan.
 
 #[path = "common/sources.rs"]
 mod sources;
@@ -100,6 +122,51 @@ fn interpolates_a_raw_error(line: &str) -> bool {
     RAW_ERROR_BINDINGS
         .iter()
         .any(|b| line.contains(&format!("{{{b}}}")))
+}
+
+/// Every `sync.rs` postgres call that PROPAGATES is wrapped in `LocalDbFault`.
+///
+/// Twelve is not a magic number — it is the count of postgres calls in `sync.rs` that
+/// return their error to a caller. (The thirteenth, `SELECT apply_remote_node_event`, is
+/// matched inline and never propagates, so it has no wrapper to lose.) Bump it
+/// deliberately when a query is added or removed, exactly as `twin_registry.rs` and
+/// `db/tests/034` are bumped.
+const SYNC_LOCAL_DB_FAULT_SITES: usize = 12;
+
+/// The `LocalDbFault` discipline in `sync.rs`, pinned by count (PR #478 review, finding 8).
+///
+/// # Why a count, when the file already states the rule in a doc comment
+///
+/// Reverting any one `map_err(|e| LocalDbFault::new(…))` to `.context(…)` compiles, leaves
+/// the interpolation scan above green (no `{e}` appears), and leaves
+/// `tests/pull_failure_class.rs` green (it builds its own `LocalDbFault` and never asserts
+/// that a production site produces one). Yet it reinstates BOTH defects at once: the line
+/// loses its SQLSTATE, and — because `pull_failure_class` walks the chain looking for a
+/// `tokio_postgres::Error` that `.context()` leaves in place but `anyhow!` does not — the
+/// discipline that keeps the chain intact stops being verifiable at all. That is issue
+/// #474 item 3's machinery, unpinned.
+///
+/// A count is crude, and it is the only thing that catches site 13 written six months from
+/// now — the same argument the interpolation scan above makes for itself.
+#[test]
+fn every_propagating_postgres_call_in_sync_is_wrapped_in_a_local_db_fault() {
+    let root = sources::repo_root();
+    let text = std::fs::read_to_string(root.join("crates/cairn-node/src/sync.rs"))
+        .expect("sync.rs is in the tree");
+    let found = text.matches("LocalDbFault::new(").count();
+
+    assert_eq!(
+        found, SYNC_LOCAL_DB_FAULT_SITES,
+        "sync.rs has {found} `LocalDbFault::new(` sites, expected \
+         {SYNC_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump the \
+         constant. If this DROPPED, a call was reverted to `.context()` — which loses the \
+         SQLSTATE and unpins the chain the partition classifier reads (#474 item 3)."
+    );
+    assert!(
+        !text.contains(".context(\"checkpointing"),
+        "the cursor checkpoint is the canonical #474 item 3 site: it must never be a \
+         `.context()`, whatever the count says"
+    );
 }
 
 #[test]

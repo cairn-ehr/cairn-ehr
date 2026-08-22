@@ -137,4 +137,12 @@ async fn a_failing_chart_report_names_the_sqlstate() {
         names_a_resolution_sqlstate(&text),
         "the SQLSTATE must survive: {text}"
     );
+    // The assertion its two siblings have and this one was missing: without it, deleting
+    // the context from `chart_safety`'s `map_err` left this test green (PR #478 review).
+    // This is the operator's OWN `patient-safety` query, so the line they are staring at
+    // must say which read failed, not merely that a read did.
+    assert!(
+        text.contains("reading the chart safety report"),
+        "the line must name what was being done: {text}"
+    );
 }

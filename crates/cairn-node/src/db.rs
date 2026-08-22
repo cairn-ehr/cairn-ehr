@@ -328,10 +328,17 @@ const SCHEMA: &[(&str, &str)] = &[
 /// the daemon's own connection going away.
 ///
 /// What it must NOT do is print the connection string, which can carry a password (the same
-/// rule [`connect`]'s own error obeys). So the string is parsed and exactly two facts are
-/// rendered back: the database name and the first host/port. A string that will not parse
-/// degrades to a fixed phrase rather than falling back to the raw input — this runs on an
-/// error path, where the input is by definition the suspect thing.
+/// rule [`connect`]'s own error obeys). So the string is parsed and nothing but the database
+/// name plus the first host and port is rendered back. The host and the port come from two
+/// independent accessors: `tokio_postgres` enforces their pairing at connect time (one port,
+/// or one per host), so `first()`/`first()` pairs correctly for any string that can actually
+/// connect — but a string with no explicit `port=` labels as `<no port>` even though the
+/// connection really goes to 5432.
+///
+/// A string that will not parse degrades to a fixed phrase rather than falling back to the
+/// raw input. Note the label is built EAGERLY on every SUCCESSFUL connect (so the spawned
+/// task owns it and needs no borrow), not lazily on failure — but a connection string that
+/// got this far and still will not re-parse is by definition the suspect thing.
 ///
 /// **Known limit, stated rather than hidden:** two concurrent connections to the same
 /// database produce the same label. They also say the same true thing, and a serial number
@@ -355,6 +362,18 @@ pub fn connection_label(conn: &str) -> String {
     format!("{db}@{host}:{port}")
 }
 
+/// The sentence a dying connection leaves behind. **Pure**, so the line an operator reads
+/// is pinned by `tests/db_diagnosis.rs` rather than being reachable only by killing a
+/// backend mid-session (PR #478 review, finding 11: the behaviour shipped with a tested
+/// label and an untested LINE, so reverting the arm below to `let _ = connection.await;`
+/// left the whole workspace green).
+pub fn connection_ended_line(label: &str, e: &tokio_postgres::Error) -> String {
+    format!(
+        "db: the connection to {label} ended: {}",
+        legible_db_error(e)
+    )
+}
+
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
     // What the operator needs is the reason, and it arrives by two different routes.
@@ -370,23 +389,27 @@ pub async fn connect(conn: &str) -> anyhow::Result<Client> {
         .await
         .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
     // #474 item 4: this task is the ONLY place a mid-session connection death is ever
-    // reported, and `let _ = connection.await;` hid every one of them — `FATAL:
-    // terminating connection due to administrator command`, a backend crash, a server
-    // restart, an `idle_in_transaction_session_timeout`, a TLS teardown, an OOM-kill.
-    // That is *why* a client afterwards can only say `connection closed`:
-    // `Kind::Closed`'s `source()` is genuinely `None`, because the reason was delivered
-    // HERE and dropped on the floor. No amount of work in `legible_db_error` can recover
-    // it; it has to be logged at the one place it arrives.
+    // reported, and `let _ = connection.await;` hid every one of them. The deaths that
+    // arrive as an `ErrorResponse` carry a real SQLSTATE — `FATAL: terminating connection
+    // due to administrator command`, a server restart, an
+    // `idle_in_transaction_session_timeout` — and for THOSE the reason was delivered HERE
+    // and dropped on the floor, which is *why* a client afterwards can only say
+    // `connection closed`: `Kind::Closed`'s `source()` is genuinely `None`. No amount of
+    // work in `legible_db_error` can recover it; it has to be logged where it arrives.
+    //
+    // An ABRUPT death (OOM-kill, SIGKILL, a pulled cable) carries no reason at all: the
+    // socket simply EOFs and this line says `connection closed` too. That is still more
+    // than the label-less silence it replaces — it names WHICH connection and WHEN — but
+    // an operator told "the reason arrives here" would be puzzled by it otherwise.
+    // (Not listed among the causes: a TLS teardown. This connection is opened `NoTls`
+    // on the `tokio_postgres::connect` call above; PR #478 review, finding 11.)
     //
     // A clean close returns `Ok(())` — it happens whenever the client is dropped — so a
     // healthy node logs nothing here and the line is never noise.
     let label = connection_label(conn);
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!(
-                "db: the connection to {label} ended: {}",
-                legible_db_error(&e)
-            );
+            eprintln!("{}", connection_ended_line(&label, &e));
         }
     });
     Ok(client)
