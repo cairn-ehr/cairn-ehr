@@ -300,11 +300,25 @@ def cmd_analyze(args):
     # (unverifiable events quarantined / signing-context skew) — those cycles
     # carry `integrity: true` and are NOT partitions: the peer answered.
     integrity = sum(1 for r in rows if r.get("integrity"))
+    # Since issue #469 a third loud class exists: the peer answered, the events
+    # applied, and THIS NODE'S database failed to record where the cycle got to.
+    # Counted separately for the same reason `integrity` is — it was previously
+    # falling through into `partitions` and inflating the link-downtime figure with
+    # a local fault.
+    local_faults = sum(1 for r in rows if r.get("local_fault"))
     dur_s = (rows[-1]["ts"] - rows[0]["ts"]) / 1000.0
-    lat = [r["pull"]["elapsed_ms"] for r in rows if "pull" in r]
+    # A4 latency measures a HEALTHY pull. Since #469 a local_fault cycle also publishes a
+    # `pull` object, and its elapsed_ms includes however long the failing write blocked
+    # (a lock_timeout, a TCP timeout) — folding that in would inflate p95/max with a
+    # number that is not pull latency at all. Counted in `local faults` instead.
+    lat = [r["pull"]["elapsed_ms"] for r in rows
+           if "pull" in r and not r.get("local_fault")]
     # Post-A1 metric name; .get() keeps old pre-rename logs analysable.
     vf = sum(r["pull"].get("skipped_unverifiable", r["pull"].get("verify_failures", 0))
              for r in rows if "pull" in r)
+    # NOTE: after a local_fault the cursor did not (knowably) move, so the same events are
+    # re-offered next cycle. `applied_new` counts only genuinely-new inserts, so the
+    # re-offer contributes 0 and this total does not double-count.
     applied = sum(r["pull"]["applied_new"] for r in rows if "pull" in r)
     bpe = [r["pull"]["bytes_per_event"] for r in rows if r.get("pull", {}).get("shipped")]
     fps = [r["fingerprint"] for r in rows if "fingerprint" in r]
@@ -314,6 +328,14 @@ def cmd_analyze(args):
     print(f"  duration        {dur_s:.0f}s over {cycles} cycles")
     print(f"  partitions      {partitions} cycle(s) the peer was unreachable "
           f"({100*partitions/cycles:.0f}% of cycles)")
+    # Printed UNCONDITIONALLY and with a rate, exactly like `partitions` above. A
+    # conditional line is a line an operator does not know to look for: a run that is 40%
+    # local faults would otherwise show a reassuring "partitions 0 (0% of cycles)" with the
+    # real story one easily-missed line below and no rate to compare. The whole point of
+    # #469 was that this class stops being counted as link downtime — which only helps if
+    # it is counted as something.
+    print(f"  local faults    {local_faults} cycle(s) failed on THIS node's database, not "
+          f"the link ({100*local_faults/cycles:.0f}% of cycles)")
     if integrity:
         print(f"  INTEGRITY       {integrity} cycle(s) failed loud on unverifiable/skewed "
               f"events (peer was reachable; see pull_error in the raw log)")

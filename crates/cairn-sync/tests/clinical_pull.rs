@@ -13,7 +13,8 @@
 //! next pull after the repair converges.
 //!
 //! Skips unless BOTH `CAIRN_TEST_PG` (node A) and `CAIRN_TEST_PG2` (node B) are set.
-//! Serialized cluster-wide via cairn-node's `db::test_serial_guard` (both DBs live on
+//! Serialized via cairn-node's `db::test_serial_guard`, taken on CAIRN_TEST_PG —
+//! advisory locks are scoped PER DATABASE, not cluster-wide (#476) (both DBs live on
 //! the same cluster in CI, and this file TRUNCATEs shared tables on both).
 use cairn_event::medication::{CodingClaim, SubstanceCoding};
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
@@ -194,7 +195,7 @@ async fn enroll_device(c: &Client, kid: &str) {
 /// and reset its HLC, so each run starts from a genuinely empty pair of nodes.
 async fn reset(c: &Client) {
     // RESTART IDENTITY resets event_log.seq to 1 so the #196 seq-cursor tests see
-    // deterministic serving seqs (1, 2, 3 …) rather than a cluster-wide running total.
+    // deterministic serving seqs (1, 2, 3 …) rather than a database-wide running total.
     //
     // The ADR-0052 custody plane (node_unwrap_key / event_dek / event_clear /
     // erasure_shred_log) MUST be truncated too. node_unwrap_key is a SINGLETON that

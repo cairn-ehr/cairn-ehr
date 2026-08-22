@@ -70,7 +70,9 @@ cargo clippy --workspace --all-targets    # lint — keep it clean; CI-equivalen
 Many `cairn-node` integration tests (anything touching the in-DB floor — `demographics*.rs`,
 `match_veto.rs`, `floor_enforced.rs`, `federation.rs`, …) need a **live PostgreSQL with the
 `cairn_pgx` extension installed** (see the next section to install it). They self-serialize
-cluster-wide via a Postgres advisory lock (`db::test_serial_guard`), so a plain
+via a Postgres advisory lock (`db::test_serial_guard`) taken on `CAIRN_TEST_PG`
+specifically — advisory locks are scoped **per database**, so every suite must take the
+guard on that same database whatever database its own work then uses — so a plain
 `cargo test --workspace` is reliable even though they share one cluster.
 
 They discover the database through an environment variable:

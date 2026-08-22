@@ -1,3 +1,4 @@
+use crate::db_diagnosis::legible_db_error;
 use tokio_postgres::{Client, NoTls};
 
 // A slice (not a fixed-size array) so appending a migration is a one-line change
@@ -318,7 +319,19 @@ const SCHEMA: &[(&str, &str)] = &[
 ];
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
-    let (client, connection) = tokio_postgres::connect(conn, NoTls).await?;
+    // The connection string is NEVER echoed into the error — it can carry a password.
+    // What the operator needs is the reason, and it arrives by two different routes.
+    // A server that ANSWERED sends a `DbError` (`database "x" does not exist` [3D000],
+    // `password authentication failed` [28P01]) — that is the half `Display` renders as
+    // the useless "db error". A server that did not answer AT ALL — a refused socket, an
+    // unresolvable host — sends no `DbError`, and `Display` renders every one of those
+    // as "error connecting to server": a category, not a diagnosis. `legible_db_error`
+    // covers both, the second by walking `source()` for the errno (issue #467; the second
+    // half added by the PR #472 review, which caught that this door — where the
+    // no-`DbError` failures overwhelmingly live — was the one it served worst).
+    let (client, connection) = tokio_postgres::connect(conn, NoTls)
+        .await
+        .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -380,7 +393,8 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
             "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cairn_node')",
             &[],
         )
-        .await?
+        .await
+        .map_err(|e| anyhow::anyhow!("probing for the cairn_node role: {}", legible_db_error(&e)))?
         .get(0);
     if !cairn_node_exists {
         anyhow::bail!(
@@ -398,10 +412,9 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
          END $$; \
          GRANT cairn_node TO {role};"
     );
-    client
-        .batch_execute(&ddl)
-        .await
-        .map_err(|e| anyhow::anyhow!("provisioning runtime role {role}: {e}"))?;
+    client.batch_execute(&ddl).await.map_err(|e| {
+        anyhow::anyhow!("provisioning runtime role {role}: {}", legible_db_error(&e))
+    })?;
     Ok(())
 }
 
@@ -416,6 +429,23 @@ pub async fn provision_runtime_role(client: &Client, role: &str) -> anyhow::Resu
 /// db/*.sql) and this crate's unit test (this FULL list embeds that newest file).
 pub fn embedded_schema_version() -> i32 {
     cairn_event::schema_generation::SCHEMA_GENERATION
+}
+
+/// Replay ONE migration body, naming it and the server's reason if it fails.
+///
+/// Pulled out of [`connect_and_load_schema`]'s replay loop and made public for one
+/// reason: this composition IS the acceptance criterion of issue #467 — *a schema-load
+/// failure names the migration, the SQLSTATE and the server's message + DETAIL* — and a
+/// three-line loop body cannot be tested. As a named door it can be driven with a
+/// deliberately failing body, which is what `tests/db_diagnosis.rs` does.
+///
+/// It is otherwise exactly the loop body it replaces: one `batch_execute`, one wrapping.
+/// The migration NAME is what turns a wall of SQL into a place to look, so it leads.
+pub async fn load_migration(client: &Client, name: &str, sql: &str) -> anyhow::Result<()> {
+    client
+        .batch_execute(sql)
+        .await
+        .map_err(|e| anyhow::anyhow!("loading {name}: {}", legible_db_error(&e)))
 }
 
 /// Connect and replay every embedded migration — guarded against DOWNGRADE (#188).
@@ -447,21 +477,33 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
         )
         .await
-        .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
     // Two round-trips, not one CASE: SQL references to node_schema are checked at
     // plan time, so a single statement naming the table errors on a database that
     // does not have it yet (fresh, or pre-#188) — exactly the databases that must
     // pass the guard.
     let table_exists: bool = client
         .query_one("SELECT to_regclass('public.node_schema') IS NOT NULL", &[])
-        .await?
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "probing for the node_schema table: {}",
+                legible_db_error(&e)
+            )
+        })?
         .get(0);
     // query_opt: an absent ROW (never stamped — hand-loaded rig) is a legitimate
     // "generation unknown", but a real query error must still fail loudly.
     let recorded: Option<i32> = if table_exists {
         client
             .query_opt("SELECT version FROM node_schema", &[])
-            .await?
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "reading the recorded schema generation: {}",
+                    legible_db_error(&e)
+                )
+            })?
             .map(|row| row.get(0))
     } else {
         None
@@ -478,10 +520,7 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         }
     }
     for (name, sql) in SCHEMA.iter() {
-        client
-            .batch_execute(sql)
-            .await
-            .map_err(|e| anyhow::anyhow!("loading {name}: {e}"))?;
+        load_migration(&client, name, sql).await?;
     }
     // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
     //
@@ -509,7 +548,9 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             &[],
         )
         .await
-        .map_err(|e| anyhow::anyhow!("re-adjudicating deferred events: {e}"))?;
+        .map_err(|e| {
+            anyhow::anyhow!("re-adjudicating deferred events: {}", legible_db_error(&e))
+        })?;
     // Granting power is never a silent event: an operator who upgrades a node wants to see
     // which types just became live. Empty on a healthy node, so this prints nothing.
     for row in &promoted {
@@ -553,7 +594,7 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
                 &[],
             )
             .await
-            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("post-upgrade heal replay: {}", legible_db_error(&e)))?;
     }
     // Stamp only AFTER the full replay (and any heal above) succeeded: a
     // half-applied load must not claim the new generation. loaded_at defaults to
@@ -572,14 +613,14 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             ],
         )
         .await
-        .map_err(|e| anyhow::anyhow!("recording schema generation: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e)))?;
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",
             &[&cairn_event::schema_generation::SCHEMA_LOAD_LOCK],
         )
         .await
-        .map_err(|e| anyhow::anyhow!("releasing schema load-lock: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("releasing schema load-lock: {}", legible_db_error(&e)))?;
     Ok(client)
 }
 
@@ -599,7 +640,9 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
              INSERT INTO hlc_state (id) VALUES (TRUE) ON CONFLICT DO NOTHING;",
         )
         .await
-        .map_err(|e| anyhow::anyhow!("resetting node-federation tables: {e}"))?;
+        .map_err(|e| {
+            anyhow::anyhow!("resetting node-federation tables: {}", legible_db_error(&e))
+        })?;
     Ok(())
 }
 
@@ -610,7 +653,8 @@ pub async fn reset_node_federation_tables(client: &Client) -> anyhow::Result<()>
 pub async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<cairn_event::Hlc> {
     let row = client
         .query_one("SELECT wall, counter FROM node_hlc_tick()", &[])
-        .await?;
+        .await
+        .map_err(|e| anyhow::anyhow!("ticking the node HLC: {}", legible_db_error(&e)))?;
     Ok(cairn_event::Hlc {
         wall: row.get(0),
         counter: row.get(1),
@@ -623,16 +667,27 @@ pub async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<cair
 /// them concurrently — across test binaries OR within one binary — races. This
 /// acquires a SESSION-level advisory lock on a fixed key; the returned `Client`
 /// holds the lock until it is dropped at the end of the test (a panic still drops
-/// it, releasing the lock). Every caller must lock against the SAME database
-/// (`CAIRN_TEST_PG`) so the guard serializes regardless of whether the server
-/// scopes advisory locks per-cluster or per-database. (PR #28 review follow-up.)
+/// it, releasing the lock). **PostgreSQL advisory locks are scoped PER DATABASE**,
+/// not per cluster, so every caller must lock against the SAME database
+/// (`CAIRN_TEST_PG`) — whatever database its own work then uses. A suite that took
+/// the guard on `cairn_test2` would not serialize against one holding it on
+/// `cairn_test` at all. (PR #28 review follow-up; the per-database fact stated
+/// outright rather than hedged, #467 — the hedge is what let the "cluster-wide" wording
+/// spread. It is still in ~120 further comments, which is issue #476; this doc and
+/// HANDOVER were the two that stated the wrong MECHANISM rather than using it as a
+/// loose name for the guard.)
 pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
     // 0x4341524E = "CARN": a fixed project-specific key shared by every guard.
     client
         .execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
         .await
-        .map_err(|e| anyhow::anyhow!("acquiring test serialization lock: {e}"))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "acquiring test serialization lock: {}",
+                legible_db_error(&e)
+            )
+        })?;
     Ok(client)
 }
 

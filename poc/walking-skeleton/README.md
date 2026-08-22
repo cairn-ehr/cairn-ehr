@@ -253,9 +253,14 @@ python3 harness/bet_a.py report  --local capeyork.jsonl.fingerprint.json \
                                  --peer  dorrigo.jsonl.fingerprint.json   # A1 + A3
 ```
 
-`analyze` reports duration, **partition cycles** (how often the link was down), pull
-latency p50/p95/max, A2 verify-failures, A5 bytes/event, A3 HLC merge + gap, and A6
-blob present/referenced-only — and writes a `.fingerprint.json` for the A1 compare.
+`analyze` reports duration, **partition cycles** (how often the link was down),
+**local-fault cycles** (how often THIS node's database failed — since issue #469 these are
+counted separately, because folding them into the partition figure blames the WAN for a
+local write failure), pull latency p50/p95/max — measured over healthy pulls only, so a
+cycle spent blocked on a broken local database does not inflate it — A2 verify-failures,
+A5 bytes/event, A3 HLC merge + gap, and A6 blob present/referenced-only. It also writes a
+`.fingerprint.json` for the A1 compare. Loud data-integrity cycles print their own
+`INTEGRITY` line when there are any.
 
 ## Bet B benchmark harness (the Pi compute-cost bet)
 
