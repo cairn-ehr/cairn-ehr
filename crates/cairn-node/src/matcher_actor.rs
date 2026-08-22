@@ -13,6 +13,7 @@
 //! Pure determinants first; the IO `resolve_matcher_actor` (load-or-generate key +
 //! idempotent enroll) follows.
 
+use crate::db_diagnosis::LocalDbFault;
 use crate::keystore;
 use cairn_event::SigningKey;
 use serde_json::{json, Value};
@@ -86,7 +87,11 @@ pub async fn resolve_matcher_actor(
             "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1 AND kind = 'agent')",
             &[&kid],
         )
-        .await?
+        .await
+        // #477: named so a failure here says which registry read met the database, not
+        // just that one did. The §5.7 auto-apply ceremony's caller counts the failure and
+        // moves on, so this line is the operator's only account of it.
+        .map_err(|e| LocalDbFault::new("reading the matcher actor's current identity", e))?
         .get(0);
     if !live {
         let ever_enrolled: bool = client
@@ -95,7 +100,8 @@ pub async fn resolve_matcher_actor(
                  WHERE signing_key_id = $1 AND kind = 'agent' AND op = 'enroll')",
                 &[&kid],
             )
-            .await?
+            .await
+            .map_err(|e| LocalDbFault::new("reading the matcher actor's enroll history", e))?
             .get(0);
         if ever_enrolled {
             anyhow::bail!(
@@ -113,7 +119,8 @@ pub async fn resolve_matcher_actor(
                 "SELECT enroll_actor('agent', $1::text::jsonb, $2)",
                 &[&pinned, &kid],
             )
-            .await?;
+            .await
+            .map_err(|e| LocalDbFault::new("enrolling the matcher actor for this epoch", e))?;
     }
 
     Ok((sk, kid))
