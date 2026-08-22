@@ -183,19 +183,44 @@ pub fn legible_db_error(e: &tokio_postgres::Error) -> String {
 pub fn operator_chain(e: &anyhow::Error) -> String {
     let mut parts: Vec<String> = Vec::new();
     for cause in e.chain() {
-        let rendered = match cause.downcast_ref::<tokio_postgres::Error>() {
+        let pg = cause.downcast_ref::<tokio_postgres::Error>();
+        let rendered = match pg {
             Some(pg) => legible_db_error(pg),
             None => one_line(&cause.to_string()),
         };
         // An empty layer would make the suffix test below vacuously true for everything
         // after it, so it is dropped outright rather than reasoned about.
         if rendered.is_empty() {
+            // Still stop if this was the database error — see the `break` below.
+            if pg.is_some() {
+                break;
+            }
             continue;
         }
-        if parts.last().is_some_and(|above| above.ends_with(&rendered)) {
-            continue;
+        if !parts.last().is_some_and(|above| above.ends_with(&rendered)) {
+            parts.push(rendered);
         }
-        parts.push(rendered);
+        if pg.is_some() {
+            // STOP DESCENDING. `legible_db_error` has already consumed this error's whole
+            // source subtree — the `Kind::Db` arm reads the `DbError`'s message, SQLSTATE,
+            // DETAIL and HINT, and every other arm walks `source()` itself through
+            // `kind_and_causes`. An `anyhow` chain is a single path, so everything below a
+            // `tokio_postgres::Error` IS that subtree and has nothing left to add.
+            //
+            // Without this the `Kind::Db` arm printed the server's message TWICE on one
+            // line, which is precisely the `{e:#}` defect this function's header rejects.
+            // The suffix rule cannot catch it: `compose_db_diagnosis` renders
+            // `message [SQLSTATE] — DETAIL — HINT` while `DbError`'s own `Display` is
+            // `severity: message` + `DETAIL:` + `HINT:`, and neither ends with the other.
+            //
+            // It survived because the unit fixtures build their error from an unparseable
+            // connection string — `Kind::ConfigParse`, whose rendering ends with its
+            // cause's text, so the suffix rule fired and the dedupe LOOKED correct. The
+            // arm every in-DB refusal actually takes had no coverage until
+            // `a_server_error_is_rendered_once_through_the_whole_chain`, which needs a
+            // live server because a `DbError` cannot be constructed by hand.
+            break;
+        }
     }
     parts.join(": ")
 }
