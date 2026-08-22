@@ -355,15 +355,26 @@ impl Error for PullIntegrityError {}
 /// falling into this hole that surfaced it.
 ///
 /// Relationship to [`cycle_is_loud`]: that predicate ranges over the states reachable on a
-/// cycle that DID commit its cursor. This is an `Err` return before it is ever consulted,
-/// so it is loud by construction rather than by that test — though it satisfies it too
-/// (the cursor is not where the peer will assume it is).
+/// cycle that DID commit its cursor, and this is an `Err` return before it is ever
+/// consulted — so this class is loud by construction rather than by that test. It does
+/// NOT satisfy the predicate: the canonical case (every event applied cleanly, only the
+/// bookmark write failed) passes `(0, 0, false, false)`, for which `cycle_is_loud` is
+/// FALSE. An earlier draft of this comment claimed otherwise (PR #472 review, finding 6).
+///
+/// The two are INDEPENDENT, which is what `also_loud` records: a cycle can quarantine
+/// unverifiable events *and* fail its commit, and reporting only one of those hands an
+/// operator half a diagnosis — with the wrong remedy attached, since this class's own
+/// line says the events re-apply idempotently and a quarantined event does no such thing.
 #[derive(Debug)]
 struct CursorCommitError {
     message: String,
     /// The same metrics JSON a successful pull returns, with the fields that describe
     /// the FAILED write marked unknown — see [`mark_cursor_outcome_unknown`].
     metrics: serde_json::Value,
+    /// Was this ALSO a `cycle_is_loud` cycle? Then the log line carries BOTH class keys
+    /// and the message carries both diagnoses; the integrity condition is not swallowed
+    /// just because the commit failed on the same pass (PR #472 review, finding 5).
+    also_loud: bool,
 }
 
 impl std::fmt::Display for CursorCommitError {
@@ -795,25 +806,44 @@ fn loud_pull_message(
 ///
 /// Three things this must say, because each redirects a different wrong instinct:
 ///
-/// 1. **the work is not lost** — the events applied in their own transactions and are
-///    durable in `event_log`; only the bookmark failed to move;
+/// 1. **the applied work is not lost** — the events applied in their own transactions and
+///    are durable in `event_log`; only the bookmark write failed;
 /// 2. **it is THIS node, not the link** — the whole reason the error class exists. An
 ///    operator who reads "pull failed" reaches for the network first;
-/// 3. **it self-heals if the fault does** — the cursor did not advance, so the next cycle
-///    re-offers the same events and they re-apply idempotently. That is the difference
-///    between "watch it" and "act now", and it is not guessable from the failure alone.
+/// 3. **it self-heals if the fault does** — the next cycle re-offers from wherever the
+///    cursor actually is and re-applies idempotently. That is the difference between
+///    "watch it" and "act now", and it is not guessable from the failure alone.
+///
+/// What it must NOT say is that the cursor did not advance. An earlier draft did (PR #472
+/// review, finding 4), which flatly contradicted [`mark_cursor_outcome_unknown`] thirty
+/// lines below: that function nulls `cursor_seq` precisely BECAUSE a statement may have
+/// committed before the connection broke, so this node cannot know. Publishing the null
+/// and then asserting the certainty in the prose an operator actually reads is principle 4
+/// applied to the metric and dropped where it counts — and it invites a manual cursor
+/// reset on a cursor that may well have moved. The claim is hedged; the SELF-HEALING is
+/// not, because it holds either way.
+///
+/// `loud` carries the SEPARATE integrity diagnosis when the same cycle was also
+/// `cycle_is_loud`. Both travel or the operator gets half a picture, with this line's
+/// "re-applies idempotently" as the remedy for a quarantined event it does not fit.
 fn cursor_commit_failure_message(
     peer_name: &str,
     applied: usize,
     attempted_seq: i64,
     cause: &str,
+    loud: Option<&str>,
 ) -> String {
+    let also = loud
+        .map(|l| format!(" AND, INDEPENDENTLY: {l}"))
+        .unwrap_or_default();
     format!(
         "pull {peer_name}: {applied} event(s) applied and durable, but committing the \
          sync_state cursor to seq {attempted_seq} FAILED — this node's own DATABASE, not \
-         the peer and not the link: {cause}. Nothing is lost: the cursor did not advance, \
-         so the next cycle re-offers the same events and re-applies them idempotently. \
-         Fix the local database fault; if it recurs every cycle the backlog grows."
+         the peer and not the link: {cause}. The applied events are not lost. Whether the \
+         cursor MOVED is unknown — the statement may have committed before the failure — \
+         so both cursor fields report null rather than guess; the next cycle re-offers \
+         from wherever it actually is and re-applies idempotently either way. Fix the \
+         local database fault; if it recurs every cycle the backlog grows.{also}"
     )
 }
 
@@ -838,25 +868,75 @@ fn mark_cursor_outcome_unknown(metrics: &mut serde_json::Value) {
     metrics["floor_active"] = serde_json::Value::Null;
 }
 
-/// Which failure class is this, and what metrics survive it? (issue #469.)
+/// Which failure classes is this, and what metrics survive it? (issue #469.)
 ///
-/// Pure and total, so the three-way mapping is unit-testable over constructed errors
-/// instead of being reachable only through a live pull against a broken database. Returns
-/// the log-line KEY to set (`"integrity"` / `"local_fault"` / `"partition"`) and the
-/// metrics to publish alongside it — `Null` when the failure carried none.
+/// Pure and total, so the mapping is unit-testable over constructed errors instead of
+/// being reachable only through a live pull against a broken database. Returns the
+/// log-line KEYS to set (`"integrity"` / `"local_fault"` / `"partition"`) and the metrics
+/// to publish alongside them — `Null` when the failure carried none.
+///
+/// **Keys, plural.** A cursor-commit failure on a cycle that ALSO quarantined unverifiable
+/// events is genuinely both, and collapsing it to one key drops a condition that needs a
+/// human (PR #472 review, finding 5).
+///
+/// **A raw `postgres::Error` is a LOCAL fault, not a partition** (PR #472 review, finding
+/// 3). `do_pull` reaches its peer over a raw `TcpStream`, so the only postgres error that
+/// can escape it is one from THIS node's database — and `do_pull`'s first two statements
+/// (the `sync_state` upsert and read) are bare `?` on exactly that, before any network I/O
+/// happens at all. Without this arm they fell to the default and were logged as link
+/// downtime, which is issue #469's own title sentence, two statements above the fix.
+/// This matters more than the cursor-commit case it generalises: `cmd_run` builds its
+/// client ONCE, outside the loop, so after the database goes away every later cycle fails
+/// at that first statement for the life of the process.
 ///
 /// The default arm is `partition`, and it is deliberately LAST: a failure this function
 /// does not recognise is, by elimination, one where the peer did not answer. Every failure
 /// that IS recognised must therefore be claimed explicitly above, or it silently becomes a
 /// partition — which is exactly the defect #469 records.
-fn classify_pull_failure(e: &(dyn Error + 'static)) -> (&'static str, serde_json::Value) {
+///
+/// Caveat worth knowing before you wrap `do_pull`: `downcast_ref` does NOT walk `source()`.
+/// A `.map_err` or a retry wrapper anywhere on this path turns all four arms back into
+/// `partition`, silently.
+fn classify_pull_failure(
+    e: &(dyn Error + 'static),
+) -> (&'static [&'static str], serde_json::Value) {
     if let Some(ie) = e.downcast_ref::<PullIntegrityError>() {
-        return ("integrity", ie.metrics.clone());
+        return (&["integrity"], ie.metrics.clone());
     }
     if let Some(ce) = e.downcast_ref::<CursorCommitError>() {
-        return ("local_fault", ce.metrics.clone());
+        let classes: &'static [&'static str] = if ce.also_loud {
+            &["local_fault", "integrity"]
+        } else {
+            &["local_fault"]
+        };
+        return (classes, ce.metrics.clone());
     }
-    ("partition", serde_json::Value::Null)
+    if e.downcast_ref::<postgres::Error>().is_some() {
+        // No metrics: these escape BEFORE the metrics object is built, so there is
+        // nothing to report about this cycle beyond the class and the error text.
+        return (&["local_fault"], serde_json::Value::Null);
+    }
+    (&["partition"], serde_json::Value::Null)
+}
+
+/// Write one failed cycle's classification into its log line. (PR #472 review, finding 8.)
+///
+/// Extracted from `cmd_run` for the same reason `classify_pull_failure` was extracted from
+/// it: this is the seam where the whole three-class distinction becomes OBSERVABLE — it
+/// is what `bet_a.py` reads — and while the classifier was well tested, the four lines
+/// that used it were reachable only by running the daemon. A dropped `line["pull"]`, a
+/// hardcoded key, or a swapped class would have passed the entire suite.
+fn record_pull_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) {
+    line["pull_error"] = serde_json::json!(e.to_string());
+    let (classes, metrics) = classify_pull_failure(e);
+    for class in classes {
+        line[*class] = serde_json::json!(true);
+    }
+    // Null only for the classes that failed before any work was measurable; every other
+    // class publishes what the cycle actually did.
+    if !metrics.is_null() {
+        line["pull"] = metrics;
+    }
 }
 
 /// The operator line for a peer that withheld custody for a batch (issue #231).
@@ -1025,11 +1105,11 @@ fn emit_unlearnable_report(
     metric
 }
 
-/// A `postgres::Error` rendered for a human instead of the four characters it gives.
+/// A `postgres::Error` rendered for a human instead of the eight characters it gives.
 ///
 /// `postgres::Error`'s `Display` is a bare match on its kind — a server-side failure of
 /// ANY sort renders as the literal string `"db error"`, and `Display` does not chain to
-/// the source that holds the message, the DETAIL and the SQLSTATE. This file has been
+/// the source that holds the message, the DETAIL, the HINT and the SQLSTATE. This file has been
 /// bitten by that twice before ([`ApplyError::from`], and `quarantine_event`'s local
 /// renderer), and #467 records the same species one crate over. On THIS surface it would
 /// be worse than elsewhere: the whole point of the `null`-not-zero arm is that a failed
@@ -1038,15 +1118,74 @@ fn emit_unlearnable_report(
 ///
 /// The SQLSTATE is included because it is the part an operator can search for, and the
 /// DETAIL because on the doors it is where the reason actually lives (issue #109).
+/// Flatten a server-supplied string onto ONE line. **Pure.**
+fn one_line(s: &str) -> String {
+    s.replace(['\n', '\r'], " ")
+}
+
+/// Compose the operator-facing text of a server-side failure. **Pure.**
+///
+/// `message [SQLSTATE] — DETAIL — HINT: hint`. DETAIL is where this project's own
+/// doors put the reason (issue #109); HINT is where POSTGRES puts the remedy, and it is
+/// labelled because unlike DETAIL it is advice rather than fact. Each separator travels
+/// with its own part, so an absent part leaves no dangling em dash.
+///
+/// Every part is flattened onto one line: a DETAIL/HINT is routinely multi-line, these
+/// renderings land in a one-line-per-event operator log, and a raw newline would let a
+/// server — or, through the bounded peer prefixes the doors splice into their messages, a
+/// PEER — forge a whole log line. `unlearnable_report` below escapes for the same reason.
+///
+/// **Twin.** `cairn-node`'s `db_diagnosis::compose_db_diagnosis` composes the byte-identical
+/// shape, and `the_twin_composes_the_agreed_shape` here asserts the same strings its
+/// `the_agreed_shape_is_exactly_this` does, so drift between the two goes red.
+fn compose_db_diagnosis(
+    message: &str,
+    sqlstate: &str,
+    detail: Option<&str>,
+    hint: Option<&str>,
+) -> String {
+    let message = one_line(message);
+    let detail = detail
+        .map(|d| format!(" — {}", one_line(d)))
+        .unwrap_or_default();
+    let hint = hint
+        .map(|h| format!(" — HINT: {}", one_line(h)))
+        .unwrap_or_default();
+    format!("{message} [{sqlstate}]{detail}{hint}")
+}
+
+/// Name the kind of a non-server failure **and every cause beneath it**. **Pure.**
+///
+/// `postgres::Error`'s `Display` is a bare match on KIND for EVERY kind, not just
+/// `Kind::Db`, and it never consults `source()`. So `error connecting to server` is the
+/// whole of what it says about a refused socket, an unresolvable host and a TLS timeout
+/// alike — a category, not a diagnosis, and `db error` one kind over. The cause is
+/// reachable; it is just not in `Display`. (PR #472 review, finding 1.)
+///
+/// The hop limit is belt-and-braces: a cyclic source chain would otherwise spin forever,
+/// and no diagnostic is worth hanging the daemon over.
+fn kind_and_causes(e: &postgres::Error) -> String {
+    let mut text = one_line(&e.to_string());
+    let mut source = std::error::Error::source(e);
+    for _ in 0..8 {
+        match source {
+            Some(cause) => {
+                text.push_str(": ");
+                text.push_str(&one_line(&cause.to_string()));
+                source = cause.source();
+            }
+            None => break,
+        }
+    }
+    text
+}
+
 fn legible_db_error(e: postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => {
-            let detail = db.detail().map(|d| format!(" — {d}")).unwrap_or_default();
-            format!("{} [{}]{detail}", db.message(), db.code().code())
-        }
-        // Not a server error at all (connection closed, TLS, encode): Display is
-        // genuinely the whole story for these kinds.
-        None => e.to_string(),
+        Some(db) => compose_db_diagnosis(db.message(), db.code().code(), db.detail(), db.hint()),
+        // Not a server error at all (refused socket, connection closed, TLS, encode): the
+        // kind names the LAYER that failed, the chain beneath it names the failure.
+        None => kind_and_causes(&e),
     }
 }
 
@@ -2704,12 +2843,14 @@ fn do_pull(
                 (None, p) => p,
             }
         };
-    // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit below is the only
-    // propagation point between the apply loop and this object, so a bare `?` there threw
-    // away every number describing work that had ALREADY happened — events applied and
-    // durable, flags written — and the cycle reported nothing at all about it. Two fields
-    // are filled in afterwards because they are not knowable yet; both are seeded `null`
-    // rather than `0` so a path that somehow skipped them can never publish a claim.
+    // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit is the only `?` between the
+    // apply loop and this function's return — it used to sit ABOVE this object, so a bare
+    // `?` there threw away every number describing work that had ALREADY happened — events
+    // applied and durable, flags written — and the cycle reported nothing at all about it.
+    // Moving the object above the commit is the fix; the commit is now the block below.
+    // Two fields are filled in afterwards because they are not knowable yet; both are
+    // seeded `null` rather than `0` so a path that somehow skipped them can never publish
+    // a claim.
     let mut metrics = serde_json::json!({
         "op": "pull", "peer": peer_name,
         "shipped": resp.events.len(), "applied_new": applied,
@@ -2755,7 +2896,20 @@ fn do_pull(
               WHERE peer = $1",
             &[&peer_name, &max_seq, &new_floor],
         )
-        .map_err(legible_db_error);
+        .map_err(legible_db_error)
+        // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
+        // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
+        // of this function makes the row, so this needs a concurrent `DELETE FROM
+        // sync_state` or an RLS change to happen at all — but a silent zero is exactly the
+        // shape #465/#469 exist to end, and checking a rowcount we already have is free
+        // (PR #472 review).
+        .and_then(|rows| match rows {
+            0 => Err(format!(
+                "the sync_state row for peer '{peer_name}' matched no row — it was deleted \
+                 mid-cycle, or this role cannot see it"
+            )),
+            _ => Ok(()),
+        });
     metrics["elapsed_ms"] = serde_json::json!(started.elapsed().as_secs_f64() * 1000.0);
 
     // Issue #465: what did this cycle admit that it cannot fetch the bytes for? Read
@@ -2777,31 +2931,19 @@ fn do_pull(
             .map_err(legible_db_error),
     );
 
-    // The local-fault class (issue #469). Everything above describes work that genuinely
-    // happened; only the two fields describing the failed write are withdrawn.
-    if let Err(cause) = cursor_commit {
-        mark_cursor_outcome_unknown(&mut metrics);
-        return Err(Box::new(CursorCommitError {
-            message: cursor_commit_failure_message(peer_name, applied, max_seq, &cause),
-            metrics,
-        }));
-    }
-
-    // LOUD failure (issue #108, generalised by the #110 review, extended to the
-    // freeze by issue #270): ANY state in which this node knowingly does not hold
-    // something the peer offered it fails the pull, every cycle, until the cause is
-    // fixed or a human acks the exclusion. The old `skipped == len` heuristic
-    // structurally missed the two common cases (a mixed legacy+new batch, and an
-    // already-synced link whose boundary event re-applies idempotently), which is
-    // exactly where the silent livelock lived; the freeze arm then reintroduced one
-    // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
-    // integrity condition, not a partition.
-    if cycle_is_loud(
+    // The loud-integrity diagnosis is composed BEFORE the cursor-commit check, because the
+    // two conditions are independent and a cycle can be both. Composing it here (rather
+    // than only in the `if` below, as the first draft did) is what stops a failed commit
+    // from swallowing an integrity condition that needs a human — PR #472 review, finding
+    // 5. `loud_pull_message` is pure, so composing it on a path that may not use it costs
+    // one allocation and no I/O.
+    let loud = cycle_is_loud(
         skipped_unverifiable,
         refused_verifiable,
         frozen,
         pen_refused.is_some(),
-    ) {
+    );
+    let loud_message = loud.then(|| {
         let all = !resp.events.is_empty() && skipped_unverifiable == resp.events.len();
         let diagnosis = if all {
             let declared = match &resp.signing_context {
@@ -2821,17 +2963,45 @@ fn do_pull(
         // Every clause is conditional on the state that makes it true — see
         // `loud_pull_message`, where the four loud states and their (different)
         // operator actions are composed and unit-tested with no database.
-        return Err(Box::new(PullIntegrityError {
-            message: loud_pull_message(
+        loud_pull_message(
+            peer_name,
+            skipped_unverifiable,
+            refused_verifiable,
+            frozen.then_some(max_seq),
+            pen_refused.as_deref(),
+            &diagnosis,
+        )
+    });
+
+    // The local-fault class (issue #469). Everything above describes work that genuinely
+    // happened; only the two fields describing the failed write are withdrawn.
+    if let Err(cause) = cursor_commit {
+        mark_cursor_outcome_unknown(&mut metrics);
+        return Err(Box::new(CursorCommitError {
+            message: cursor_commit_failure_message(
                 peer_name,
-                skipped_unverifiable,
-                refused_verifiable,
-                frozen.then_some(max_seq),
-                pen_refused.as_deref(),
-                &diagnosis,
+                applied,
+                max_seq,
+                &cause,
+                loud_message.as_deref(),
             ),
             metrics,
+            also_loud: loud,
         }));
+    }
+
+    // LOUD failure (issue #108, generalised by the #110 review, extended to the
+    // freeze by issue #270): ANY state in which this node knowingly does not hold
+    // something the peer offered it fails the pull, every cycle, until the cause is
+    // fixed or a human acks the exclusion. The old `skipped == len` heuristic
+    // structurally missed the two common cases (a mixed legacy+new batch, and an
+    // already-synced link whose boundary event re-applies idempotently), which is
+    // exactly where the silent livelock lived; the freeze arm then reintroduced one
+    // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
+    // integrity condition, not a partition. The message itself was composed above,
+    // so that a cycle which ALSO failed its cursor commit still carries it.
+    if let Some(message) = loud_message {
+        return Err(Box::new(PullIntegrityError { message, metrics }));
     }
 
     Ok(metrics)
@@ -3522,21 +3692,18 @@ fn cmd_run(
                 //   * integrity (unverifiable events / skew / pen refusal): the
                 //     peer answered; the DATA is the problem. The per-cycle
                 //     metrics still exist and are logged.
-                //   * local_fault (issue #469): the peer answered, the events
-                //     applied, and THIS NODE'S DATABASE failed to record where the
-                //     cycle got to. Its metrics survive too — they describe work
-                //     that really happened.
+                //   * local_fault (issue #469): THIS NODE'S DATABASE failed —
+                //     either after the events applied, failing to record where the
+                //     cycle got to, or before the cycle reached the network at all.
+                //     The first kind's metrics survive; they describe real work.
                 //   * anything else (retries exhausted) = a partition.
-                // The mapping itself lives in `classify_pull_failure`, pure and
+                // A cycle can be integrity AND local_fault at once, so the classes
+                // are a SET, not a choice. Both the mapping and the line-writing
+                // live in `classify_pull_failure` / `record_pull_failure`, pure and
                 // unit-tested, because a wrong branch here is a wrong DIAGNOSIS
                 // handed to an operator at 3am.
                 status += &format!(": PULL FAILED: {e}");
-                line["pull_error"] = serde_json::json!(e.to_string());
-                let (class, metrics) = classify_pull_failure(e.as_ref());
-                line[class] = serde_json::json!(true);
-                if !metrics.is_null() {
-                    line["pull"] = metrics;
-                }
+                record_pull_failure(&mut line, e.as_ref());
             }
         }
         // Cumulative blobs fetched by the separate byte-tier thread (informational;
@@ -4387,17 +4554,19 @@ mod tests {
             message: "unverifiable".into(),
             metrics: serde_json::json!({"applied_new": 3}),
         };
-        let (class, metrics) = classify_pull_failure(&integrity);
-        assert_eq!(class, "integrity");
+        let (classes, metrics) = classify_pull_failure(&integrity);
+        assert_eq!(classes, &["integrity"]);
         assert_eq!(metrics["applied_new"], 3, "the cycle's work is published");
 
         let local = CursorCommitError {
             message: "cursor commit failed".into(),
             metrics: serde_json::json!({"applied_new": 7}),
+            also_loud: false,
         };
-        let (class, metrics) = classify_pull_failure(&local);
+        let (classes, metrics) = classify_pull_failure(&local);
         assert_eq!(
-            class, "local_fault",
+            classes,
+            &["local_fault"],
             "this node's database, NOT the WAN — the whole point of #469"
         );
         assert_eq!(
@@ -4407,12 +4576,135 @@ mod tests {
 
         // The catch-all, unchanged: a transport failure with nothing to report.
         let transport: Box<dyn Error> = "connection refused".into();
-        let (class, metrics) = classify_pull_failure(transport.as_ref());
-        assert_eq!(class, "partition");
+        let (classes, metrics) = classify_pull_failure(transport.as_ref());
+        assert_eq!(classes, &["partition"]);
         assert!(
             metrics.is_null(),
             "nothing was reached, so nothing is claimed"
         );
+    }
+
+    /// **PR #472 review, finding 5.** A cycle can be BOTH, and must be logged as both.
+    ///
+    /// A failed cursor commit on a cycle that also quarantined unverifiable events used to
+    /// return before `cycle_is_loud` was ever consulted, so `integrity` was never set: the
+    /// operator lost `loud_pull_message`'s remedies (`ack-quarantine`, `requeue`, re-sign)
+    /// and `bet_a.py`'s INTEGRITY counter missed the cycle. Worse, the local-fault line
+    /// says the events "re-apply idempotently", which is the WRONG remedy for a
+    /// quarantined event — reassuring, and false.
+    #[test]
+    fn a_cycle_that_is_both_loud_and_locally_broken_reports_both() {
+        let both = CursorCommitError {
+            message: "cursor commit failed AND, INDEPENDENTLY: 2 unverifiable".into(),
+            metrics: serde_json::json!({"applied_new": 1, "skipped_unverifiable": 2}),
+            also_loud: true,
+        };
+        let (classes, metrics) = classify_pull_failure(&both);
+        assert!(
+            classes.contains(&"local_fault") && classes.contains(&"integrity"),
+            "both conditions are true, so both keys are set: {classes:?}"
+        );
+        assert_eq!(metrics["skipped_unverifiable"], 2, "{metrics}");
+    }
+
+    /// **PR #472 review, finding 3.** A bare `postgres::Error` is a LOCAL fault.
+    ///
+    /// `do_pull` talks to its peer over a raw `TcpStream`, so a postgres error escaping it
+    /// can only have come from THIS node's database. Its first two statements — the
+    /// `sync_state` upsert and read — are bare `?` on exactly that, and they run BEFORE
+    /// any network I/O, so before this arm existed a dead local database was reported as
+    /// link downtime every cycle for the life of the process. That is #469's own title
+    /// sentence, two statements above where #469 was fixed.
+    #[test]
+    fn a_bare_postgres_error_is_this_node_not_the_link() {
+        // A real `postgres::Error`, obtained without a server: an unparseable connection
+        // string fails in Config's own parser. What matters is the TYPE reaching the
+        // classifier, not which kind of postgres failure it is.
+        let e = "host=localhost port=not-a-number"
+            .parse::<postgres::Config>()
+            .expect_err("a non-numeric port is not a parseable connection string");
+        let boxed: Box<dyn Error> = Box::new(e);
+        let (classes, metrics) = classify_pull_failure(boxed.as_ref());
+        assert_eq!(
+            classes,
+            &["local_fault"],
+            "a database error on this node's own client is never a partition"
+        );
+        assert!(
+            metrics.is_null(),
+            "these escape before the metrics object exists, so nothing is claimed"
+        );
+    }
+
+    /// **PR #472 review, finding 8.** The seam where the classification becomes observable.
+    ///
+    /// `classify_pull_failure` was well tested and the four lines that USED it were not —
+    /// yet those are what `bet_a.py` reads. A dropped `line["pull"]`, a hardcoded key or a
+    /// swapped class would have passed the whole suite.
+    #[test]
+    fn the_log_line_carries_the_class_the_error_text_and_the_surviving_metrics() {
+        let mut line = serde_json::json!({"ts": 1, "cycle": 4});
+        record_pull_failure(
+            &mut line,
+            &CursorCommitError {
+                message: "committing the sync_state cursor to seq 412 FAILED".into(),
+                metrics: serde_json::json!({"applied_new": 7}),
+                also_loud: false,
+            },
+        );
+        assert_eq!(line["local_fault"], true, "{line}");
+        assert!(line.get("partition").is_none(), "not a partition: {line}");
+        assert!(
+            line["pull_error"]
+                .as_str()
+                .is_some_and(|t| t.contains("seq 412")),
+            "the operator-facing text travels into the machine-readable log: {line}"
+        );
+        assert_eq!(
+            line["pull"]["applied_new"], 7,
+            "and the work the cycle really did: {line}"
+        );
+
+        // A partition claims nothing, and must not leave a stale `pull` object behind.
+        let mut line = serde_json::json!({"ts": 2, "cycle": 5});
+        let transport: Box<dyn Error> = "connection refused".into();
+        record_pull_failure(&mut line, transport.as_ref());
+        assert_eq!(line["partition"], true, "{line}");
+        assert!(line.get("pull").is_none(), "nothing was reached: {line}");
+    }
+
+    /// The node crate composes the byte-identical shape; this is the sync half of the pair.
+    /// `cairn-node`'s `db_diagnosis::tests::the_agreed_shape_is_exactly_this` asserts the
+    /// same two strings, so a change to either renderer turns the OTHER crate red rather
+    /// than drifting silently (PR #472 review, finding 7 on the twin).
+    #[test]
+    fn the_twin_composes_the_agreed_shape() {
+        assert_eq!(
+            compose_db_diagnosis("permission denied for table event_log", "42501", None, None),
+            "permission denied for table event_log [42501]"
+        );
+        assert_eq!(
+            compose_db_diagnosis("could not obtain lock", "55P03", Some("why"), Some("how")),
+            "could not obtain lock [55P03] — why — HINT: how"
+        );
+    }
+
+    /// A server message can carry newlines, and these renderings land in a one-line-per-
+    /// event log. `unlearnable_report` escapes its cause for this reason; the general
+    /// renderer must not be the weaker one (PR #472 review).
+    #[test]
+    fn a_diagnosis_never_forges_a_log_line() {
+        let text = compose_db_diagnosis(
+            "refused\npull peer-a: 0 attachment reference(s) unlearnable",
+            "P0001",
+            Some("first\r\nsecond"),
+            None,
+        );
+        assert!(
+            !text.contains('\n') && !text.contains('\r'),
+            "no rendering may span two lines: {text:?}"
+        );
+        assert!(text.contains("second"), "collapse, never drop: {text}");
     }
 
     /// The message must send the operator to the right place, and say the work survived.
@@ -4423,6 +4715,7 @@ mod tests {
             7,
             412,
             "could not serialize access due to concurrent update [40001]",
+            None,
         );
         assert!(text.contains("peer-a"), "the peer is named: {text}");
         assert!(
@@ -4439,6 +4732,61 @@ mod tests {
         assert!(
             text.contains("[40001]"),
             "and the legible cause travels with it, never 'db error': {text}"
+        );
+    }
+
+    /// **PR #472 review, finding 4.** The prose may not claim what the metric withholds.
+    ///
+    /// `mark_cursor_outcome_unknown` nulls `cursor_seq` BECAUSE the statement may have
+    /// committed before the connection broke. An earlier draft of this line then told the
+    /// operator flatly that "the cursor did not advance" — principle 4 applied to the
+    /// machine-readable field and dropped in the sentence a human actually reads, which
+    /// invites a manual cursor reset on a cursor that may well have moved.
+    ///
+    /// What must survive the hedge is the SELF-HEALING claim: that one holds either way,
+    /// and it is the difference between "watch it" and "act now".
+    #[test]
+    fn the_cursor_failure_message_does_not_claim_an_outcome_it_nulled() {
+        let text = cursor_commit_failure_message("peer-a", 7, 412, "connection closed", None);
+        assert!(
+            !text.contains("the cursor did not advance"),
+            "the metric says unknown, so the prose may not say certain: {text}"
+        );
+        assert!(
+            text.contains("unknown"),
+            "and it says so out loud rather than going quiet: {text}"
+        );
+        assert!(
+            text.contains("re-applies idempotently"),
+            "the self-healing claim holds either way and must not be lost to the \
+             hedge — without it an operator cannot tell watch-it from act-now: {text}"
+        );
+    }
+
+    /// **PR #472 review, finding 5.** Both diagnoses travel, and the loud one is marked
+    /// as independent so it does not read as an explanation of the commit failure.
+    #[test]
+    fn a_loud_cycle_that_also_failed_its_commit_carries_both_diagnoses() {
+        let text = cursor_commit_failure_message(
+            "peer-a",
+            1,
+            9,
+            "connection closed",
+            Some("pull peer-a: 2 event(s) UNVERIFIABLE and quarantined; run `ack-quarantine`"),
+        );
+        assert!(
+            text.contains("committing the sync_state cursor"),
+            "the local fault is still stated: {text}"
+        );
+        assert!(
+            text.contains("ack-quarantine"),
+            "and the integrity remedy is NOT swallowed by it — a quarantined event does \
+             not 're-apply idempotently', so losing this line loses the only correct \
+             instruction: {text}"
+        );
+        assert!(
+            text.contains("INDEPENDENTLY"),
+            "and the two are marked as separate conditions, not cause and effect: {text}"
         );
     }
 
@@ -5580,7 +5928,7 @@ mod quarantine_tests {
     /// A realistic HLC wall (≈2026) so ceiling checks compare against a sane instant.
     const WALL_2026: i64 = 1_782_000_000_000;
 
-    /// Connect + take the cluster-wide test advisory lock (same 'CARN' key every
+    /// Connect + take the shared test advisory lock (same 'CARN' key every
     /// DB-gated suite uses), then (re)apply the schema and reset the tables this
     /// suite touches. The returned client HOLDS the lock until dropped.
     /// pub(super): shared with the sibling `fingerprint_db_tests` module.
@@ -5851,9 +6199,10 @@ mod quarantine_tests {
         let ce = err
             .downcast_ref::<CursorCommitError>()
             .unwrap_or_else(|| panic!("must be a CursorCommitError, got: {err}"));
-        let (class, metrics) = classify_pull_failure(err.as_ref());
+        let (classes, metrics) = classify_pull_failure(err.as_ref());
         assert_eq!(
-            class, "local_fault",
+            classes,
+            &["local_fault"],
             "a local write failure is not link downtime: {}",
             ce.message
         );
@@ -5869,6 +6218,21 @@ mod quarantine_tests {
             "…and the metrics survived the failure to report it: {metrics}"
         );
         assert_eq!(metrics["shipped"], 1, "{metrics}");
+        // The #465 ledger read runs AFTER the commit attempt, including when it failed:
+        // the flag rows are durable regardless, so it stays a true report about completed
+        // work. Seeded `null`, so `0` here proves the read actually ran rather than the
+        // seed surviving @EM@ move `emit_unlearnable_report` above the failure return and
+        // this goes red (PR #472 review).
+        assert_eq!(
+            metrics["references_unlearnable"], 0,
+            "the report about durable work still runs when the commit failed: {metrics}"
+        );
+        // Newly nullable this PR (seeded null, filled after the commit). Nothing else
+        // asserts it, and `bet_a.py`'s median(lat) throws on a null.
+        assert!(
+            metrics["elapsed_ms"].is_number(),
+            "every published cycle carries its latency: {metrics}"
+        );
 
         // The write that failed is reported as unknown, never as the value it tried.
         assert!(
@@ -5886,6 +6250,62 @@ mod quarantine_tests {
             !ce.message.contains("db error") && ce.message.contains("[55P03]"),
             "lock_not_available, named: {}",
             ce.message
+        );
+    }
+
+    /// **PR #472 review, finding 3, end to end.** A DEAD local database is a local fault,
+    /// and this is the half of #469 that never self-heals.
+    ///
+    /// #469 fixed the cursor commit. But `do_pull`'s FIRST TWO statements — the `sync_state`
+    /// upsert and read — are bare `?` on a `postgres::Error`, and they run before any
+    /// network I/O happens at all. `cmd_run` builds its client ONCE, outside the loop
+    /// (`connect_checked_apply`), and never reconnects: so when the database goes away
+    /// mid-run, every remaining cycle for the life of the process failed at that first
+    /// statement and was logged `"partition": true`. An operator sent to look at a
+    /// satellite link, and the Bet A availability figure charged for a local outage —
+    /// which is issue #469's own title sentence, two statements above where #469 was fixed.
+    ///
+    /// The failure is forced by terminating the client's own backend from a SECOND
+    /// connection. That is chosen over stopping the server (obviously) and over revoking a
+    /// grant (which persists in a shared test database if the test panics, poisoning every
+    /// later suite): the only thing killed is a connection this test opened, and the
+    /// serialization guard is held on a DIFFERENT client so the kill cannot release it.
+    ///
+    /// The peer address is deliberately unreachable. If this test ever fails by REACHING
+    /// it, the ordering assumption above is what broke.
+    #[test]
+    fn a_dead_local_database_is_a_local_fault_not_a_partition() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        // Guard on its own client, so terminating the victim below cannot drop the
+        // advisory lock and let a concurrent suite interleave.
+        let _guard = locked_client(&base);
+
+        let mut victim = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        let pid: i32 = victim
+            .query_one("SELECT pg_backend_pid()", &[])
+            .unwrap()
+            .get(0);
+        let mut killer = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        // Ignore the result: the backend may be gone before the reply is written.
+        let _ = killer.execute("SELECT pg_terminate_backend($1)", &[&pid]);
+
+        // Port 1 is privileged and nothing listens on it: if the pull got this far it
+        // would fail as a genuine partition, which is exactly what must NOT happen here.
+        let err = do_pull(&mut victim, "127.0.0.1:1", "peer-a", false, None)
+            .expect_err("the client's backend has been terminated");
+
+        let (classes, metrics) = classify_pull_failure(err.as_ref());
+        assert_eq!(
+            classes,
+            &["local_fault"],
+            "this node's database is gone; the link was never touched: {err}"
+        );
+        assert!(
+            metrics.is_null(),
+            "it failed before any work was measurable, so it claims nothing: {metrics}"
         );
     }
 
@@ -7697,8 +8117,12 @@ mod schema_subset_tests {
         };
 
         // Serialize against every other DB-gated suite (same 'CARN' advisory-lock key,
-        // taken on the primary database so it serializes cluster-wide regardless of
-        // which database each suite touches). Held until `lock` drops at test end.
+        // taken on CAIRN_TEST_PG specifically — PostgreSQL advisory locks are scoped PER
+        // DATABASE, so a guard taken on any OTHER database, CAIRN_TEST_PG2 included, would
+        // not serialize against these suites at all. This comment used to say the lock
+        // serializes "cluster-wide regardless of which database each suite touches", which
+        // is the wrong mechanism for the right practice; #476 tracks the rest of the
+        // copies). Held until `lock` drops at test end.
         let mut lock = postgres::Client::connect(&base, postgres::NoTls).unwrap();
         lock.execute("SELECT pg_advisory_lock($1)", &[&0x4341524E_i64])
             .unwrap();
@@ -8396,7 +8820,7 @@ mod trust_lookup_db_tests {
 
     impl Plane {
         fn open(base: &str) -> Plane {
-            // Take the cluster-wide advisory lock FIRST (locked_client does it), then
+            // Take the shared advisory lock FIRST (locked_client does it), then
             // open the async connection unguarded — cairn-node's `test_serial_guard`
             // uses the same key, so guarding twice would deadlock against ourselves.
             let sync_db = locked_client(base);

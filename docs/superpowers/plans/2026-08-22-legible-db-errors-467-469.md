@@ -156,3 +156,43 @@ declared elsewhere"). The new error type's doc comment states the relationship i
 - Every new test **mutation-checked**: revert the fix, watch the assertion go red, restore.
 - `ruff` + the poc harness left importable (`bet_a.py` is not under a test suite; the change is a
   three-line sum-and-print mirroring the two beside it).
+
+
+---
+
+## Addendum — what the PR review changed (2026-08-22, same day)
+
+The plan above was executed as written. Its review then found that **the plan's own central
+interface was wrong**, so the shipped code differs from the `Interface:` blocks above. Recorded
+here rather than edited in, so the gap between what was planned and what survives is visible.
+
+1. **`compose_db_diagnosis` takes four fields, not three.** `hint` was missing. `DbError`'s own
+   `Display` prints message + DETAIL + **HINT**, so at the five sites that had been bare `?` the
+   HINT previously reached the operator through anyhow's chain and the "fix" removed it — on
+   `42883`, the SQLSTATE this plan's own acceptance test pins, PostgreSQL's HINT is the most
+   actionable line it sends.
+
+2. **The fallback arm was the defect the plan existed to remove.** The plan says `Display` "is
+   genuinely the whole story" for a non-`DbError`. It is not: `Display` is a bare kind match for
+   *every* kind and never consults `source()`. The plan reasoned from `Kind::Db` and generalised
+   without checking. This also made the change a **regression** at `db::connect`, whose failures
+   are overwhelmingly the no-`DbError` kind.
+
+3. **A test that cannot fail is not a test.** The plan's own constraint said *"a test that would
+   pass against `"db error"` is testing nothing"* — and the fallback test asserted only
+   `!= "db error"`, which the broken output satisfies. The rule was right and was not applied to
+   the one arm the plan reasoned loosely about. That is the transferable lesson: the assertion has
+   to name what the output must CONTAIN, not what it must not equal.
+
+4. **Scope was drawn one function too tight.** The plan scoped #469 to the cursor commit, which is
+   where the issue pointed. But `do_pull`'s first two statements are the same defect, before any
+   network I/O, and `cmd_run` never reconnects — so the misclassification the plan set out to end
+   survived in a form that never self-heals. A "fix the propagation point the issue names" scope
+   is worth one deliberate look outward before it is accepted.
+
+5. **Two conditions that can co-occur need a set, not a choice.** The early return for the new class
+   sat above the loud-integrity check, silently dropping the second diagnosis.
+
+Also corrected: the message asserted "the cursor did not advance" while the metric beside it
+reported the same fact as unknown; `do_requeue` has three in-loop `?` sites, not two; and a source
+scan (`db_errors_stay_legible.rs`) now guards the class rather than the fourteen instances.

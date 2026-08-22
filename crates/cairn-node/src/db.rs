@@ -320,9 +320,15 @@ const SCHEMA: &[(&str, &str)] = &[
 
 pub async fn connect(conn: &str) -> anyhow::Result<Client> {
     // The connection string is NEVER echoed into the error — it can carry a password.
-    // What the operator needs is the server's own reason (`database "x" does not exist`
-    // [3D000], `password authentication failed` [28P01], a refused socket), which
-    // `tokio_postgres::Error`'s Display alone would render as "db error" (issue #467).
+    // What the operator needs is the reason, and it arrives by two different routes.
+    // A server that ANSWERED sends a `DbError` (`database "x" does not exist` [3D000],
+    // `password authentication failed` [28P01]) — that is the half `Display` renders as
+    // the useless "db error". A server that did not answer AT ALL — a refused socket, an
+    // unresolvable host — sends no `DbError`, and `Display` renders every one of those
+    // as "error connecting to server": a category, not a diagnosis. `legible_db_error`
+    // covers both, the second by walking `source()` for the errno (issue #467; the second
+    // half added by the PR #472 review, which caught that this door — where the
+    // no-`DbError` failures overwhelmingly live — was the one it served worst).
     let (client, connection) = tokio_postgres::connect(conn, NoTls)
         .await
         .map_err(|e| anyhow::anyhow!("connecting to the database: {}", legible_db_error(&e)))?;
@@ -666,8 +672,10 @@ pub async fn next_hlc(client: &Client, node_origin: &str) -> anyhow::Result<cair
 /// (`CAIRN_TEST_PG`) — whatever database its own work then uses. A suite that took
 /// the guard on `cairn_test2` would not serialize against one holding it on
 /// `cairn_test` at all. (PR #28 review follow-up; the per-database fact stated
-/// outright rather than hedged, #467 — the hedge is what let HANDOVER's
-/// "cluster-wide" wording stand unchallenged.)
+/// outright rather than hedged, #467 — the hedge is what let the "cluster-wide" wording
+/// spread. It is still in ~120 further comments, which is issue #476; this doc and
+/// HANDOVER were the two that stated the wrong MECHANISM rather than using it as a
+/// loose name for the guard.)
 pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
     let client = connect(conn).await?;
     // 0x4341524E = "CARN": a fixed project-specific key shared by every guard.

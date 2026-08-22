@@ -192,9 +192,66 @@ species, and both were found by a real failure rather than by reading. Every ite
    persists if the test panics and poisons every later suite; a row lock dies with its connection.
 
 **Raised, not fixed: [#471](https://github.com/cairn-ehr/cairn-ehr/issues/471)** — `do_requeue` has
-the same two bare `?` sites *inside* its loop, so a failure on row 5 of 20 loses the whole report of
+the same bare `?` sites *inside* its loop — **three**, not two (`query_opt` for the row, the release
+`DELETE`, the `last_requeue_error` `UPDATE`) — so a failure on row 5 of 20 loses the whole report of
 what the first four achieved. **ADR-0060 decision 2** (partial completion must be reported, never
-implied) is the argument, and #469's fix is the worked example.
+implied) is the argument, and #469's fix is the worked example. Note the two halves are about
+different errors: the `?`s propagate a raw `postgres::Error` (which renders `db error`), while the
+`e` *stored* in `last_requeue_error` is an `ApplyError`, already legible. Both are real; only the
+first is #467's species.
+
+**PR #472 review round (2026-08-22).** The review of the fix above found one defect at its centre and
+several around it; all are fixed on the same branch rather than deferred:
+
+1. **`legible_db_error`'s fallback arm was #467 one kind over, and REGRESSED `db::connect`.**
+   `tokio_postgres::Error`'s `Display` is a bare kind match for *every* kind, not just `Kind::Db`, and
+   it never chains to `source()`. So `error connecting to server` was the whole of what the node said
+   about a refused socket, an unresolvable host and a TLS timeout alike. Worse: `connect` was a bare
+   `?` before the PR, which anyhow preserved, so `main`'s `Termination` printed
+   `Caused by: Connection refused (os error 61)` — and wrapping it in `anyhow!("…: {}")` deleted that.
+   The arm now walks `source()`. **`hint()` was also dropped at all 14 sites** (`DbError`'s own
+   `Display` prints message + DETAIL + **HINT**), which on a `42883` throws away PostgreSQL's own
+   remedy; the composer now carries it, labelled.
+2. **The test covering that arm could not fail** — it asserted only `!= "db error"` and non-empty,
+   both true of the broken output. Mutation-checked red before the fix.
+3. **#469's misdiagnosis survived two statements above the fix.** `do_pull`'s first two statements
+   (the `sync_state` upsert and read) are bare `?` on a `postgres::Error`, *before* any network I/O,
+   and fell to `classify_pull_failure`'s default arm as `partition`. Since `do_pull` reaches its peer
+   over a raw `TcpStream`, **any** postgres error escaping it is by construction local — so there is
+   now an explicit arm for it. This mattered more than the case it generalises: `cmd_run` builds its
+   client ONCE outside the loop, so after the database goes away *every* later cycle was logged as
+   link downtime for the life of the process.
+4. **The operator line contradicted the metric.** It said "the cursor did not advance" while
+   `mark_cursor_outcome_unknown` nulled `cursor_seq` precisely because the statement may have
+   committed before the failure. Principle 4 applied to the field and dropped in the sentence a human
+   reads. Hedged now; the self-healing claim, which holds either way, survives.
+5. **A failed commit swallowed a co-occurring integrity condition.** The early return sat above
+   `cycle_is_loud`, so a cycle that quarantined events *and* failed its commit lost `integrity` and
+   all of `loud_pull_message`'s remedies — while the local-fault line said the events "re-apply
+   idempotently", which is the wrong remedy for a quarantined event. The classes are now a SET.
+6. Smaller: `CursorCommitError`'s doc claimed it satisfies `cycle_is_loud` (it does not — the
+   canonical case is `(0,0,false,false)`); "four operator actions" over five SQLSTATEs; "four
+   characters" for the eight-character `db error`; a 0-row cursor commit reported `Ok`; `elapsed_ms`
+   and `references_unlearnable` were newly nullable and asserted nowhere; the connection-string leak
+   assertion was vacuous on a rig with no password.
+
+**New guard:** `crates/cairn-node/tests/db_errors_stay_legible.rs` — a source scan asserting no `{e}`
+interpolation survives in `db.rs`. The point is not the fourteen sites that exist but the fifteenth,
+written by someone who has never read #467. Scoped to `db.rs` today because `safety.rs` (#473) and
+`sync.rs` (#474) would fail it; widen it when they are fixed.
+
+**Raised, not fixed — four, from the same review.** [#473](https://github.com/cairn-ehr/cairn-ehr/issues/473):
+`safety.rs`'s advisory-lookup failure line says `db error` — on a CLINICAL surface, and its own doc
+says the line exists so a degraded safety projection is distinguishable from a correctly empty one.
+Reached on a real medication write path; arguably a better candidate for #467's fix than the schema
+loader was. [#474](https://github.com/cairn-ehr/cairn-ehr/issues/474): `cairn-node`'s pull loop — the
+P0001 deny-all reason, the FREEZE reason, and a `PARTITION` line asserted over an unread error (#469's
+defect in the other crate); plus `db.rs`'s `let _ = connection.await;`, which discards every
+mid-session connection death and is *why* a later client can only say "connection closed".
+[#475](https://github.com/cairn-ehr/cairn-ehr/issues/475): `cairn-sync init`'s migration loop has
+`name` in scope and unused in the error — #467's acceptance criterion, unmet in the operator's first
+command. [#476](https://github.com/cairn-ehr/cairn-ehr/issues/476): ~120 further comments still say
+advisory locks are "cluster-wide"; the ones stating the wrong MECHANISM are fixed here.
 
 ### 2026-08-22 (later) — the signal admit-and-flag owed
 
