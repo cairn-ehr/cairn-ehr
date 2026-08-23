@@ -15,7 +15,7 @@
 //! database mid-cycle, which is why the defect survived this long in `cairn-sync`.
 
 use cairn_node::db_diagnosis::LocalDbFault;
-use cairn_node::sync::{pull_failure_class, PullFailureClass};
+use cairn_node::sync::{pull_failure_class, PeerIntegrityError, PullFailureClass};
 
 /// A real `tokio_postgres::Error` with a live `source()`, built with no database and no
 /// network — `Config`'s own parser produces one, which is the same trick
@@ -103,4 +103,145 @@ fn the_local_fault_line_carries_the_cause() {
         text.contains("port"),
         "…and the cause must survive the wrapping: {text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #482 — the third class: the peer ANSWERED, and its answer is the problem.
+// ---------------------------------------------------------------------------
+//
+// `Partition` was simultaneously the default-by-elimination and a specific operator
+// instruction ("go and look at the link"), so every failure the classifier did not
+// recognise got that instruction — including failures where the peer demonstrably
+// answered. The sharp case is an mTLS pin mismatch: a rotated or REVOKED peer key
+// produced a log line indistinguishable from a satellite link being down, and on a
+// WAN-sync project the availability figure is charged against `Partition`.
+//
+// The recogniser is `std::io::ErrorKind::InvalidData` anywhere in the chain, plus the
+// typed `PeerIntegrityError` for the protocol checks that have no io::Error to carry.
+// Both mean the same thing and neither can be produced by a link that went away:
+// `ConnectionRefused`, `UnexpectedEof`, `ConnectionReset` and `TimedOut` are what a
+// dead link looks like, and every one of them still classifies `Partition` below.
+
+/// The defect's own sentence: a revoked or rotated peer key is NOT link downtime.
+///
+/// rustls surfaces a failed certificate check to `tokio_rustls` as an `io::Error` of kind
+/// `InvalidData`, and `pull_into` adds `.context("mTLS handshake (server pin)")` over it.
+/// The peer completed a TCP connect moments earlier, so the link is demonstrably up; what
+/// failed is the peer's *identity*.
+#[test]
+fn an_mtls_pin_mismatch_is_the_peer_not_the_link() {
+    let io = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "invalid peer certificate: the presented key is not in the trust set",
+    );
+    let e = anyhow::Error::from(io).context("mTLS handshake (server pin)");
+    assert_eq!(
+        pull_failure_class(&e),
+        PullFailureClass::Integrity,
+        "a peer whose key no longer pins has answered; the WAN is not the place to look: {e:#}"
+    );
+}
+
+/// A response frame too short to carry its own 8-byte seq prefix. There is no `io::Error`
+/// here at all — the bytes arrived fine and this node read them — so this is the case the
+/// typed marker exists for.
+#[test]
+fn a_short_response_frame_is_the_peer_not_the_link() {
+    let e = anyhow::Error::from(PeerIntegrityError::new(
+        "pull: response frame shorter than the 8-byte seq prefix",
+    ));
+    assert_eq!(
+        pull_failure_class(&e),
+        PullFailureClass::Integrity,
+        "the peer answered with an unusable frame — its code, not the link: {e:#}"
+    );
+}
+
+/// …and it survives a `.context()` layer, for the same reason the local-fault arm must.
+#[test]
+fn a_peer_integrity_failure_survives_an_added_context_layer() {
+    let e = anyhow::Error::from(PeerIntegrityError::new("frame shorter than the prefix"))
+        .context("reading a response frame");
+    assert_eq!(pull_failure_class(&e), PullFailureClass::Integrity, "{e:#}");
+}
+
+/// An oversized length prefix: `read_frame` refuses it BEFORE allocating and returns
+/// `InvalidData`. A peer serving a frame over `MAX_FRAME_BYTES` is running incompatible
+/// code or is hostile; either way the link delivered the bytes faithfully.
+#[test]
+fn an_oversized_frame_prefix_is_the_peer_not_the_link() {
+    let io = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "frame length 999999999 exceeds the 8388608-byte cap",
+    );
+    let e = anyhow::Error::from(io).context("reading a response frame");
+    assert_eq!(pull_failure_class(&e), PullFailureClass::Integrity, "{e:#}");
+}
+
+/// **The ordering guard, and it is the whole safety argument.** `LocalFault` is checked
+/// FIRST, so a chain carrying BOTH a `tokio_postgres::Error` and an `InvalidData` io error
+/// is local: a type outranks a kind, and calling such a chain a peer problem would send an
+/// operator to a peer that never failed.
+///
+/// # The fixture has to contain both, and the first one did not
+///
+/// This test was written as `anyhow::Error::from(pg).context(io_error)`, on the stated
+/// belief that "anyhow stores a `.context()` value in the chain, so an `io::Error` used as
+/// context is reachable by `downcast_ref`". **That is false.** `ContextError::source()`
+/// returns only the inner error and `anyhow::Chain` walks nothing but `source()`, so the
+/// chain was `[ContextError, tokio_postgres::Error]` and the `Integrity` arm never matched
+/// the fixture at all. Swapping the two arms in `pull_failure_class` left the test GREEN —
+/// a guard for an ordering property that could not observe the ordering (PR #493 review).
+///
+/// The shape below genuinely carries both. `io::Error::source()` delegates to the boxed
+/// error's own `source()`, so the chain is `[io::Error(InvalidData), tokio_postgres::Error]`
+/// — the io error is element 0 and downcasts, the postgres error is element 1. Both arms
+/// match; only the order decides. It is also a REAL shape rather than an invention: it is
+/// what a transport layer wrapping a named local-database failure produces, which is the
+/// case the ordering exists to survive if `db_conn` ever points at a remote Postgres.
+#[test]
+fn a_local_fault_wins_over_a_peer_signal_in_the_same_chain() {
+    let e = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        LocalDbFault::new("reading the node quarantine floor", a_real_pg_error()),
+    ));
+    // The fixture is only worth anything if it really does trip the peer recogniser too —
+    // assert that here, so a future edit that quietly drops the `InvalidData` turns this
+    // back into the vacuous test it used to be and says so.
+    assert!(
+        e.chain().any(|c| c
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidData)),
+        "the fixture must carry the PEER signal, or this guard proves nothing: {e:#}"
+    );
+    assert!(
+        e.chain().any(|c| c.is::<tokio_postgres::Error>()),
+        "…and the LOCAL signal: {e:#}"
+    );
+    assert_eq!(
+        pull_failure_class(&e),
+        PullFailureClass::LocalFault,
+        "a postgres error anywhere in the chain outranks every peer signal: {e:#}"
+    );
+}
+
+/// The four io kinds a link that went away actually produces. None of them may reach the
+/// new class — if one did, the availability figure would start UNDER-counting real
+/// downtime, which is the mirror image of the defect being fixed.
+#[test]
+fn the_kinds_a_dead_link_produces_are_still_partitions() {
+    for kind in [
+        std::io::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::UnexpectedEof,
+        std::io::ErrorKind::TimedOut,
+    ] {
+        let e = anyhow::Error::from(std::io::Error::new(kind, "the link is gone"))
+            .context("reading a response frame");
+        assert_eq!(
+            pull_failure_class(&e),
+            PullFailureClass::Partition,
+            "{kind:?} is what a dead link looks like: {e:#}"
+        );
+    }
 }
