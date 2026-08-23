@@ -47,10 +47,19 @@
 //! resolved at all — rendering `resolve_matcher_actor`'s three unwrapped registry reads.
 //!
 //! That is **not** every production file in this crate that talks to the database: **28**
-//! files under `crates/cairn-node/src/` execute SQL. The remaining ~24 raw `?` sites are
-//! ugly-but-not-silent rather than silent — a bare `?` preserves `source()`, so `anyhow`'s
-//! chain printing still reaches the `DbError` — but they name no operation, so an operator
-//! learns the cause and not what was being attempted.
+//! files under `crates/cairn-node/src/` execute SQL, so **23** sit outside `GUARDED`, and they
+//! hold **89** postgres call sites between them — measured 2026-08-23, per-file table in
+//! **#485**, which is where this residual is tracked. Not one of those 23 files contains a
+//! single `LocalDbFault` or `legible_db_error`, so all 89 are raw.
+//!
+//! The figure this replaces — "~24 raw `?` sites" — was inherited from before `auto_apply.rs`
+//! was converted and never re-measured. It understated the residual more than threefold, in the
+//! one paragraph a maintainer sizes #485 from (PR #486 review), which is why what stands here
+//! now is a count with a date and an issue behind it rather than a tilde.
+//!
+//! Those sites are ugly-but-not-silent rather than silent — a bare `?` preserves `source()`,
+//! so `anyhow`'s chain printing still reaches the `DbError` — but they name no operation, so
+//! an operator learns the cause and not what was being attempted.
 //!
 //! An earlier draft of this paragraph claimed the three files WERE the whole set. That
 //! claim was false, contradicted by this repo's own HANDOVER, and worse than the honest
@@ -108,9 +117,13 @@ const GUARDED: &[&str] = &[
 
 /// How many wrapped postgres calls `auto_apply.rs` carries (#477).
 ///
-/// Every postgres call in that file propagates, and every one is wrapped — the only
-/// remaining `.await?` is `db::next_hlc`, which returns `anyhow` rather than a
-/// `tokio_postgres::Error` and does its own naming.
+/// Every postgres call in that file that PROPAGATES is wrapped. Two sit outside that
+/// population, named here so a future audit reconciling this constant against `grep -c` need
+/// not rediscover them: `db::next_hlc` returns `anyhow` rather than a `tokio_postgres::Error`
+/// and does its own naming, and the best-effort `pg_advisory_unlock` is a `let _ =` that
+/// deliberately swallows. An earlier draft said "every postgres call in that file propagates",
+/// which the unlock contradicts — and the unlock is precisely the swallowed one, so the claim
+/// omitted the case it most needed to name (PR #486 review). See #488 for the swallow itself.
 ///
 /// The count is the same crude, effective instrument as [`SYNC_LOCAL_DB_FAULT_SITES`] next
 /// door, and it is needed for the same reason: reverting a wrapper to a bare `?` compiles,
@@ -148,15 +161,20 @@ const MATCHER_ACTOR_LOCAL_DB_FAULT_SITES: usize = 3;
 #[test]
 fn every_postgres_call_in_the_auto_apply_ceremony_names_what_it_was_doing() {
     let root = sources::repo_root();
-    let text = std::fs::read_to_string(root.join("crates/cairn-node/src/auto_apply.rs"))
-        .expect("auto_apply.rs is in the tree");
+    // `flattened_code`, never the raw text: a deleted wrapper left behind in the comment
+    // that explains its deletion would otherwise keep this count at ten (PR #486 review).
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/auto_apply.rs"))
+            .expect("auto_apply.rs is in the tree"),
+    );
     let found = text.matches(AUTO_APPLY_WRAPPED_CALL).count();
 
-    let in_matcher_actor =
-        std::fs::read_to_string(root.join("crates/cairn-node/src/matcher_actor.rs"))
-            .expect("matcher_actor.rs is in the tree")
-            .matches(AUTO_APPLY_WRAPPED_CALL)
-            .count();
+    let in_matcher_actor = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/matcher_actor.rs"))
+            .expect("matcher_actor.rs is in the tree"),
+    )
+    .matches(AUTO_APPLY_WRAPPED_CALL)
+    .count();
     assert_eq!(
         in_matcher_actor, MATCHER_ACTOR_LOCAL_DB_FAULT_SITES,
         "matcher_actor.rs has {in_matcher_actor} wrapped postgres calls, expected \
@@ -187,6 +205,78 @@ const RAW_ERROR_BINDINGS: &[&str] = &["e", "err", "error"];
 /// doc for why naming the shape is worth protecting.
 fn is_a_comment_line(line: &str) -> bool {
     line.trim_start().starts_with("//")
+}
+
+/// The file's CODE — comments removed, all whitespace flattened to single spaces. **Pure.**
+///
+/// # Why the presence guards need this, and the interpolation scan does not
+///
+/// The scan below asks *does this line render an error badly?*, so a comment is harmless and
+/// being over-eager on code is the safe direction. The three guards ABOVE ask the opposite
+/// question — *is this site still here?* — and for that question a comment is not harmless,
+/// it is a forgery. Delete `do_pull`'s `map_err` and leave the old line behind in a `//`
+/// comment explaining what changed, and `contains`/`matches` over the raw text still says yes
+/// over a live regression on the first statement of every pull cycle. This repo quotes exact
+/// code shapes in prose constantly — this very file does it eight times in
+/// [`SYNC_DAEMON_RENDERINGS`] — so that is house style, not a contrived bypass. A guard that
+/// reports the same green over a reverted site is the #387 species (PR #486 review).
+///
+/// Trailing comments are truncated too, unlike [`is_a_comment_line`]'s deliberate leniency:
+/// for a PRESENCE question the safe direction is inverted. Truncating at `//` can only remove
+/// text, so it can only turn a match into a miss — a false RED, which a human reads. The
+/// alternative — a trailing comment able to satisfy a shape — is a false green.
+///
+/// Whitespace is flattened so a shape can be written as one logical line whatever rustfmt did
+/// with it. The trust-set entry below spans three source lines; without this it could only be
+/// pinned by embedding its exact indentation, which would go red on reformatting alone.
+fn flattened_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if is_a_comment_line(line) {
+            continue;
+        }
+        let code = line.split("//").next().unwrap_or(line);
+        for word in code.split_whitespace() {
+            out.push_str(word);
+            out.push(' ');
+        }
+    }
+    out
+}
+
+/// [`flattened_code`] keeps code, drops comments, and survives reflow.
+#[test]
+fn a_commented_out_site_cannot_stand_in_for_a_live_one() {
+    // The bypass that passed all three presence guards before this existed: the site is
+    // gone, its shape survives in the comment explaining why.
+    let reverted = "    .query(&sql, &[])?\n    // was: .map_err(|e| LocalDbFault::boxed(\"listing the quarantine pen\", e))?";
+    assert!(
+        !flattened_code(reverted).contains(".map_err(|e| LocalDbFault::boxed("),
+        "a whole-line comment must not satisfy a presence guard"
+    );
+
+    // …nor a trailing one, which `is_a_comment_line` deliberately does not exclude.
+    assert!(
+        !flattened_code("    let x = 1; // .map_err(|e| LocalDbFault::new(")
+            .contains("LocalDbFault::new("),
+        "a trailing comment must not satisfy a presence guard either"
+    );
+
+    // Real code survives, and a call rustfmt split across lines reads as one.
+    let split = "            eprintln!(\n                \"lookup failed: {}\",\n                legible_db_error(&e)\n            );";
+    assert!(
+        flattened_code(split).contains(r#""lookup failed: {}", legible_db_error(&e)"#),
+        "a reflowed call must still match a flat shape: {:?}",
+        flattened_code(split)
+    );
+
+    // The doc-comment forms this repo uses for prose are all dropped.
+    for prose in ["/// {e}", "//! `{e}`", "  // {e}"] {
+        assert!(
+            flattened_code(prose).trim().is_empty(),
+            "{prose:?} is prose"
+        );
+    }
 }
 
 /// Does this line interpolate one of the raw error bindings into a string?
@@ -231,8 +321,11 @@ const SYNC_LOCAL_DB_FAULT_SITES: usize = 12;
 #[test]
 fn every_propagating_postgres_call_in_sync_is_wrapped_in_a_local_db_fault() {
     let root = sources::repo_root();
-    let text = std::fs::read_to_string(root.join("crates/cairn-node/src/sync.rs"))
-        .expect("sync.rs is in the tree");
+    // Comment-stripped for the same reason as the auto-apply count next door.
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/sync.rs"))
+            .expect("sync.rs is in the tree"),
+    );
     let found = text.matches("LocalDbFault::new(").count();
 
     assert_eq!(
@@ -251,7 +344,15 @@ fn every_propagating_postgres_call_in_sync_is_wrapped_in_a_local_db_fault() {
 
 /// `cairn-sync`'s daemon-loop sites, pinned by the exact shape that renders them (#479).
 ///
-/// Each entry is `(what it is, the shape that must still be there)`. The shapes are
+/// Each entry is `(what it is, the shape that must still be there)`. **Every shape includes
+/// the RENDERING CALL, not just the format string.** The first cut of the last two stopped at
+/// the format string and its comma, so reverting those two sites to a bare `e` put `db error`
+/// back on the byte tier AND on the serve trust-set lookup while this test still reported
+/// green — measured, PR #486 review. A pin that survives the revert it names is the #387
+/// species, and those two were it.
+///
+/// Shapes are matched against [`flattened_code`], so each is written as one logical line
+/// whatever rustfmt did with it — the trust-set entry spans three source lines — and each is
 /// deliberately long enough to be unambiguous: several include the `.map_err(|e| …)?`
 /// wrapper, which no test in that file writes, so a test fixture using the same operation
 /// phrase cannot stand in for a reverted production site.
@@ -279,24 +380,31 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
         r#"": PULL FAILED: {}", operator_chain(e.as_ref())"#,
     ),
     (
-        "the fingerprint failure arm, which had no `else` at all",
-        "Err(e) => eprintln!(\"{}\", fingerprint_error_line(e.as_ref())),",
+        "the fingerprint failure arm, which had no `else` at all — BOTH surfaces, since a \
+         first cut wrote only to stderr while `bet_a.py` reads the JSONL",
+        "Err(e) => { record_fingerprint_failure(&mut line, e.as_ref()); \
+         eprintln!(\"{}\", fingerprint_error_line(e.as_ref())); }",
     ),
     (
         "the byte tier's chunk insert",
-        r#""blob_chunk insert failed: {}","#,
+        r#""blob_chunk insert failed: {}", legible_db_error(&e)"#,
     ),
     (
         "the serve trust-set lookup — the AUTHORIZATION path for an inbound peer",
-        r#""cairn-sync serve: trust-set lookup for puller {kid} failed: {}","#,
+        r#""cairn-sync serve: trust-set lookup for puller {kid} failed: {}", legible_db_error(&e)"#,
     ),
 ];
 
 /// How many `.map_err(|e| LocalDbFault::boxed(` sites `cairn-sync`'s daemon carries.
 ///
-/// The count catches the site added six months from now that skips the wrapper; the shapes
-/// above catch a revert of one that exists. Neither alone is enough, exactly as with
-/// `sync.rs` next door.
+/// **What this count does and does not catch.** It counts WRAPPERS, not postgres calls, so a
+/// new call written without one leaves it at three and passes. This test's own doc below says
+/// exactly that — "it protects the sites that were fixed, and it does NOT protect the next one
+/// somebody writes" — and an earlier draft of this sentence claimed the opposite, two lines
+/// from the sentence contradicting it (PR #486 review). What it DOES catch is a revert: drop a
+/// wrapper and the count drops with it. Bumping it is the forced acknowledgement when a
+/// wrapped site is added. The shapes above also catch a revert and name which site; the count
+/// catches one whose shape was edited rather than deleted.
 const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 3;
 
 /// `cairn-sync`'s run loop keeps rendering its database failures (#479).
@@ -324,7 +432,12 @@ const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 3;
 fn the_cairn_sync_run_loop_still_renders_its_database_failures() {
     let root = sources::repo_root();
     let path = root.join("crates/cairn-sync/src/main.rs");
-    let text = std::fs::read_to_string(&path).expect("cairn-sync's main.rs is in the tree");
+    // Comment-stripped AND whitespace-flattened: the raw text let a `//` line stand in for
+    // a deleted site, and the flattening is what lets each shape below be written as one
+    // logical line regardless of how rustfmt wrapped it.
+    let text = flattened_code(
+        &std::fs::read_to_string(&path).expect("cairn-sync's main.rs is in the tree"),
+    );
 
     let missing: Vec<&str> = SYNC_DAEMON_RENDERINGS
         .iter()

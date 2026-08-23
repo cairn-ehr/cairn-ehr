@@ -49,11 +49,14 @@
 //! `the_twin_composes_the_agreed_shape` there assert the same strings: change the shape in
 //! one and the other crate goes red rather than silently drifting.
 //!
-//! The two are not copy-paste-compatible, which is worth knowing before you "change it
-//! there too": this one takes `&tokio_postgres::Error`, `cairn-sync`'s takes
-//! `postgres::Error` BY VALUE so it drops straight into `.map_err(legible_db_error)`.
-//! (They are the same type — `postgres` re-exports `tokio_postgres::error`.) What must
-//! stay identical is the composed TEXT, not the signature.
+//! The two now take the same shape — `&tokio_postgres::Error` here, `&postgres::Error`
+//! there, and they are the same type (`postgres` re-exports `tokio_postgres::error`). An
+//! earlier version of this paragraph said `cairn-sync`'s took it BY VALUE "so it drops
+//! straight into `.map_err(legible_db_error)`"; #479 changed that signature to a reference
+//! so `LocalDbFault::new` could render without consuming, and rewrote all four point-free
+//! call sites to `.map_err(|e| legible_db_error(&e))`. The sentence outlived the change and
+//! was still telling readers to write code that no longer compiles (PR #486 review). What
+//! must stay identical is the composed TEXT.
 //!
 //! (`cairn-sync` also has two older, narrower renderers of the same idea: `ApplyError::from`,
 //! which keeps the SQLSTATE separately because the pull routing reads it, and
@@ -169,13 +172,20 @@ pub fn legible_db_error(e: &tokio_postgres::Error) -> String {
 /// `db error`. Rendering the fix's own log line as `… : db error` would have been a
 /// remarkable way to close #474.
 ///
-/// # The rule, in two parts
+/// # The rule, in three parts
 ///
 /// * a `tokio_postgres::Error` is rendered through [`legible_db_error`], never as its
 ///   kind — so a bare one (no wrapper) still says something useful;
 /// * a layer is **dropped when the layer above already ends with it**, which is exactly
 ///   the `LocalDbFault` case and needs no knowledge of that type. A suffix test rather
-///   than a type test keeps this honest for any future wrapper that renders its own cause.
+///   than a type test keeps this honest for any future wrapper that renders its own cause;
+/// * the walk **stops at the first `tokio_postgres::Error`**, because [`legible_db_error`]
+///   has already consumed that error's whole source subtree. Without it the `Kind::Db` arm
+///   printed the server's message twice on one line — the `{e:#}` defect this very header
+///   rejects, and one the suffix rule cannot catch. The body comment at the `break` carries
+///   the full account of why it survived so long; it is stated here because `cairn-sync`'s
+///   twin points readers at this list for "the same three rules" and, until PR #486's
+///   review, sent them to a list of two.
 ///
 /// Every layer is flattened with `one_line` (private to this module): this is the other
 /// door into the same one-line-per-event operator log `compose_db_diagnosis` already

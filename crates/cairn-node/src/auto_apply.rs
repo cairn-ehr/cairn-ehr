@@ -295,7 +295,7 @@ fn resolve_failure_line(version: &str, e: &anyhow::Error) -> String {
 /// same fix; the pair is named because the summary counts alone cannot say WHICH charts
 /// were left unlinked.
 ///
-/// The same exactness applies: `apply_auto_candidate`'s ten postgres calls are wrapped, so
+/// The same exactness applies: `apply_auto_candidate`'s eight postgres calls are wrapped, so
 /// the outermost `Display` is legible on its own. `operator_chain` earns its place on the
 /// paths that are NOT database errors at all — a signing failure, a future unwrapped call —
 /// and on any context layer a caller adds above.

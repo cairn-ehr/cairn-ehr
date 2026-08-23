@@ -50,10 +50,15 @@
 //!
 //! Three honest limits. A call site quoted verbatim *inside* a trailing comment, after code on
 //! the same line, is still read as a call site; the same is true inside a `/* … */` BLOCK
-//! comment, which `without_comment_lines` does not strip (the first cut of this header claimed
-//! the tree contained no Rust block comments — it contains two, `transport.rs` and
-//! `medication/attestation.rs`, neither holding an `env::var` call, but the exemption never
-//! rested on that being true); and a name assembled at runtime
+//! comment, which `without_comment_lines` does not strip. The first cut of this header claimed
+//! the tree contained no Rust block comments; a later one narrowed that to "two files", naming
+//! one of them by an unqualified path that resolves to a file with none. Both were wrong and
+//! both were beside the point — `grep -rl '/\*' --include='*.rs' crates/` matches 25 files
+//! today — so the enumeration is gone rather than re-counted, because the exemption never
+//! rested on the count being any particular number (PR #486 review). It rests on the fact that
+//! hiding an `env::var("CAIRN_TEST_…")` call inside a block comment to escape this guard would
+//! be a deliberate act, and this guard does not defend against the author of the guard.
+//! Finally, a name assembled at runtime
 //! (`env::var(&format!("CAIRN_TEST_PG{n}"))`) is invisible, because there is no literal to
 //! read. The first two are deliberate acts rather than accidents of prose; the third would be a
 //! new idiom, and the `GATE_VARS_TODAY` floor below is what notices coverage shrinking.

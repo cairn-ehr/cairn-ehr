@@ -218,11 +218,46 @@ mutation-checked.
    was not needed. **Honest about being narrower than a scan:** it protects the sites that were
    fixed and NOT the next one somebody writes.
 9. **Two prose corrections the work forced.** `ApplyError` was called "legible by construction"
-   in the guard's own header — it is not (#480). And the guard's scope sentence gains its
-   measured residual rather than an estimate: 23 further files under `crates/cairn-node/src/`
-   execute SQL and are outside `GUARDED` (**#485**); those sites are ugly-but-not-silent — a
-   bare `?` preserves `source()`, so anyhow's chain printing still reaches the `DbError` — but
-   they name no operation.
+   in the guard's own header — it is not (#480). And the guard's scope sentence now carries a
+   measured residual rather than an estimate: **23** further files under
+   `crates/cairn-node/src/` execute SQL and sit outside `GUARDED`, holding **89** postgres call
+   sites between them, none of which contains a `LocalDbFault` or `legible_db_error` (**#485**,
+   per-file table there). Those sites are ugly-but-not-silent — a bare `?` preserves
+   `source()`, so anyhow's chain printing still reaches the `DbError` — but they name no
+   operation.
+
+**The review round (2026-08-23, same PR).** A five-aspect review of the above found the sweep's
+own guard was green over two of the eight sites it pinned, and four load-bearing comments saying
+things the code contradicted. Fixed here, each mutation-checked:
+
+- **The guard had a FALSE GREEN, and it was on the authorization path.** Two of the eight shapes
+  stopped at the format string and its comma, so reverting the byte-tier chunk insert and the
+  serve trust-set lookup to a bare `e` — putting `db error` back on the line that says why an
+  inbound peer stopped being served — left the guard reporting `5 passed`. Measured. Both shapes
+  now pin the RENDERING CALL. A pin that survives the revert it names is the #387 species.
+- **All three presence guards read raw text, so a comment could stand in for a deleted site.**
+  Delete a wrapper, leave its shape in the `//` line explaining the deletion, and `contains` /
+  `matches` still said yes. New pure `flattened_code` strips comments and flattens whitespace;
+  the three counts run through it. The flattening also makes every shape reflow-proof — which is
+  why `cargo fmt` no longer threatens them.
+- **A count pin's doc claimed the opposite of what the count does**, two lines from the sentence
+  contradicting it. `SYNC_DAEMON_LOCAL_DB_FAULT_SITES` counts wrappers, so it catches a REVERT,
+  never a new unwrapped call.
+- **The `pull_error` key reverted silently.** Its test fed a `LocalDbFault`, whose `Display`
+  already renders legibly, so `operator_chain` and `to_string()` produced the same string and
+  the revert left 113/113 green. A bare-`postgres::Error` case now distinguishes them.
+- **The fingerprint fix reached stderr but not the artifact.** `bet_a.py` reads the JSONL; under
+  `nohup` a schema skew at cycle 3 left a clean-looking convergence series over cycles 1–2. New
+  pure `record_fingerprint_failure` sets the key to `null` and records why beside it — the same
+  null-never-absent rule `mark_cursor_outcome_unknown` applies one field over.
+- **Four comments the code contradicted:** the twin-contract paragraph still described the
+  by-value `legible_db_error` signature #479 had changed (and told readers to write code that no
+  longer compiles); `operator_chain`'s header said "the rule, in two parts" after this PR added a
+  third, while `cairn-sync`'s twin pointed readers at it for "the same three rules"; the
+  auto-apply count doc said "every postgres call in that file propagates", which the swallowed
+  `pg_advisory_unlock` contradicts; and the block-comment exemption named two files, one by a
+  path resolving to a file with none — `grep` matches 25. The enumeration is gone rather than
+  re-counted.
 
 **Still open from the sweep** (all four raised by PR #478's review, none fixed here):
 [**#480**](https://github.com/cairn-ehr/cairn-ehr/issues/480) (`ApplyError` conflates a door
@@ -232,7 +267,21 @@ mismatch is logged `PARTITION`, so a revoked peer key reads as link downtime) ·
 [**#483**](https://github.com/cairn-ehr/cairn-ehr/issues/483) (`connection_label` will not
 compile on Windows; no exposure, all CI is `ubuntu-24.04`) ·
 [**#484**](https://github.com/cairn-ehr/cairn-ehr/issues/484) (`do_requeue` reports through an
-untyped `serde_json::Value`). Also **#476** (~124 test-guard comments calling a per-database
+untyped `serde_json::Value`). **Opened by the review round:**
+[**#487**](https://github.com/cairn-ehr/cairn-ehr/issues/487) (cairn-node's `Termination` path
+double-renders a `LocalDbFault` chain — introduced by this PR, measured; the fix belongs at
+`main`, not in the type, because `anyhow`'s `Debug` renders each layer via `Display`) ·
+[**#488**](https://github.com/cairn-ehr/cairn-ehr/issues/488) (auto_apply swallows its advisory
+unlock, and builds `Skipped(reason)` then discards it) ·
+[**#489**](https://github.com/cairn-ehr/cairn-ehr/issues/489) (a local pen-write failure is
+classified as a PEER `integrity` fault, and three "the peer answered with garbage" sites fall to
+`partition`) · [**#490**](https://github.com/cairn-ehr/cairn-ehr/issues/490) (the pen path still
+renders `db error`, and `quarantine_event`'s private `legible()` drops the SQLSTATE and
+`source()`) · [**#491**](https://github.com/cairn-ehr/cairn-ehr/issues/491) (the `break` has no
+non-DB coverage; the `operator_chain` twins have no drift test and differ in hop limit) ·
+[**#492**](https://github.com/cairn-ehr/cairn-ehr/issues/492) (the per-crate ratchet is blind to
+a crate reading its gate variable through a shared helper — which is what #327's `cs()`
+unification would produce). Also **#476** (~124 test-guard comments calling a per-database
 advisory lock "cluster-wide").
 
 ### 2026-08-22 — the db-error sweep, in four passes (condensed)

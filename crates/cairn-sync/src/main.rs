@@ -1039,6 +1039,38 @@ fn chain_reaches_a_postgres_error(e: &(dyn Error + 'static)) -> bool {
     false
 }
 
+/// Write a failed fingerprint probe into the cycle's log line. **Pure.** (PR #486 review.)
+///
+/// # Why the `eprintln!` was not enough (issue #479, second half)
+///
+/// #479 replaced `if let Ok(fp) = do_fingerprint(...)` — which had no `else` arm at all — with
+/// a `match` whose `Err` arm printed [`fingerprint_error_line`] to stderr. That names the
+/// missing thing and its consequence, and [`fingerprint_error_line`]'s own doc claims the gap
+/// in the log is thereby self-explaining. It is not: the gap is in `run.jsonl` and the
+/// explanation was on stderr. `bet_a.py` reads the JSONL —
+///
+/// ```python
+/// fps = [r["fingerprint"] for r in rows if "fingerprint" in r]
+/// ```
+///
+/// — so under `nohup`, or a systemd unit whose stderr is discarded or separately rotated, a
+/// schema skew at cycle 3 leaves it computing a clean-looking convergence series over cycles
+/// 1-2 with no evidence in the artifact at all.
+///
+/// # `null`, never absent
+///
+/// The same rule [`mark_cursor_outcome_unknown`] applies one field over, for the same reason:
+/// a key that VANISHES cannot be told from a key nobody wrote, while an explicit `null` is a
+/// claim that we looked and do not know. Absence was precisely #479's defect here — so the
+/// failed probe sets the key to `null` AND records why beside it, rather than leaving a reader
+/// to infer both from a hole.
+///
+/// The probe stays non-fatal: a node that cannot fingerprint itself must still pull.
+fn record_fingerprint_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) {
+    line["fingerprint"] = serde_json::Value::Null;
+    line["fingerprint_error"] = serde_json::json!(operator_chain(e));
+}
+
 /// Write one failed cycle's classification into its log line. (PR #472 review, finding 8.)
 ///
 /// Extracted from `cmd_run` for the same reason `classify_pull_failure` was extracted from
@@ -4150,7 +4182,14 @@ fn cmd_run(
             // cannot take one must still pull. But never silent either (issue #479): the
             // `if let Ok(..)` this replaces had no else arm at all, so a schema skew
             // dropped the key from every later line with no evidence anywhere.
-            Err(e) => eprintln!("{}", fingerprint_error_line(e.as_ref())),
+            //
+            // BOTH surfaces, deliberately: the operator reads stderr, `bet_a.py` reads the
+            // JSONL, and the first cut of this arm wrote only to stderr — which left the
+            // machine-readable artifact exactly as silent as before (PR #486 review).
+            Err(e) => {
+                record_fingerprint_failure(&mut line, e.as_ref());
+                eprintln!("{}", fingerprint_error_line(e.as_ref()));
+            }
         }
 
         writeln!(log, "{line}")?;
@@ -6007,6 +6046,60 @@ mod tests {
         );
         assert!(reported.contains("port"), "…and why: {reported}");
         assert_eq!(line["local_fault"], serde_json::json!(true));
+
+        // A BARE `postgres::Error` — the case that can tell `operator_chain` from
+        // `to_string()`. The `LocalDbFault` above cannot: its own `Display` already embeds the
+        // rendered cause, so both renderings produce the same string, and reverting this key
+        // to `{e}` left the entire suite green (measured, PR #486 review). A bare error
+        // renders as its KIND alone — the layer that failed, never the reason — and only
+        // `operator_chain` reaches the cause beneath it.
+        let mut bare = serde_json::json!({ "cycle": 119 });
+        let raw: Box<dyn Error> = Box::new(a_real_pg_error());
+        record_pull_failure(&mut bare, raw.as_ref());
+
+        let reported = bare["pull_error"].as_str().expect("a reason is recorded");
+        assert_ne!(
+            reported,
+            raw.to_string(),
+            "the kind alone is what `{{e}}` gives; this key must carry what is UNDER it"
+        );
+        assert!(
+            reported.contains("port"),
+            "…which for this fixture is the cause naming the bad port: {reported}"
+        );
+        assert_eq!(bare["local_fault"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_failed_fingerprint_probe_is_null_and_says_why_in_the_jsonl() {
+        // The half `bet_a.py` actually reads. The stderr line is covered by
+        // `a_missing_fingerprint_says_why`; this pins that the ARTIFACT is not silent, which
+        // is what a run under nohup leaves behind.
+        let mut line = serde_json::json!({ "cycle": 3 });
+        let e: Box<dyn Error> = LocalDbFault::boxed("reading the event count", a_real_pg_error());
+        record_fingerprint_failure(&mut line, e.as_ref());
+
+        // Present-and-null, never absent — the #479 defect was the key VANISHING, and
+        // `"fingerprint" in r` is exactly how bet_a.py asks.
+        assert!(
+            line.get("fingerprint").is_some(),
+            "the key must be present so a reader can tell 'we looked and failed' from \
+             'nobody wrote this': {line}"
+        );
+        assert!(
+            line["fingerprint"].is_null(),
+            "…and null, never a number: {line}"
+        );
+
+        let why = line["fingerprint_error"]
+            .as_str()
+            .expect("the reason travels in the artifact, not only on stderr");
+        assert!(
+            why.starts_with("reading the event count: "),
+            "the operation is named: {why}"
+        );
+        assert!(why.contains("port"), "…and the cause beneath it: {why}");
+        assert_ne!(why, "db error", "#479's title sentence");
     }
 
     #[test]
