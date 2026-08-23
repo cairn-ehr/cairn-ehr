@@ -132,6 +132,19 @@ pub struct BackupReport {
 /// Read this node's signed `node_event` set, in local `seq` order. A plain `SELECT` —
 /// any role with read access works (the runtime `cairn_node` role has `GRANT SELECT ON
 /// node_event`); no signing key and no validated door are needed to back up.
+///
+/// ⚠️ **#500 — `node_event` IS THE WHOLE MEDIUM, and that is a live defect.** This is the
+/// federation plane: enrollments, pairings, supersedes. `event_log` is NOT read here or
+/// anywhere else on the backup path, so the medium carries **no clinical event at all** —
+/// while [ADR-0026](../../../docs/spec/decisions/0026-node-durability-and-disaster-recovery.md)
+/// decision 1 promises *"the clinical event log survives"* a restore and decision 2 says
+/// *"clinical events back up as a cold peer"*. For the solo clinic that ADR opens by naming
+/// as first-class — the one for which *"replication provides zero durability"* — a dead disk
+/// is total clinical loss, and every surface (`verify-backup`, `backup-status.json`,
+/// `status`) reports health honestly throughout, because each reports truly on the events
+/// the medium does hold. Its sibling is #495 (a restored node cannot unwrap inherited
+/// custody); fixing either alone is useless. Pinned by
+/// `tests/dr_clinical_guarantee_gap.rs::medium_carries_the_federation_plane_and_no_clinical_event`.
 pub async fn read_event_set(db: &tokio_postgres::Client) -> anyhow::Result<Vec<Vec<u8>>> {
     use anyhow::Context;
     let rows = db

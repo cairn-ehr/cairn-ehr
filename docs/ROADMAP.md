@@ -437,9 +437,19 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 - **⇒ Custody narrows on `event`/`patient`, never `thread`** — a custody-less node cannot resolve membership, and inheriting decision 9's bound would make break-glass routine on the nodes that see the patient least. **The bound is right for disclosure and wrong for custody**, the second ADR to hit that asymmetry (ADR-0064 decision 8 was the first): *"conservative" is a property of a direction, not of a value.*
 - **⇒ The three-implementations-no-name rule is finally named: *refuse at a door only what that door can drop whole*.** Unparseable custody **holds nobody and the grade still STANDS** — fail-closed is affordable ONLY because the keyring guarantees reachability, and refusing the assertion would destroy protection with a malformed protection field. Unknown ranks MAX as in db/048/049 but for a **different** reason (it withholds quiet access, not protection), flagged so nobody carries the wrong justification into a fourth site.
 - **⇒ Rung 2 is floor-enforced, not cryptographic.** Per-actor wrapping is available (`--author-as` is a passphrase-sealed file the node never holds, so ADR-0052's HKDF works one level down) but against node-level DB access it buys **noise, not protection** — that access can break glass anyway — while creating permanent unreadability with **no escrow** (ADR-0026 decision 4) and **no `erasure_shred_log` row to say so**. *An EHR may lose a record deliberately, audibly and by ceremony; never by a forgotten passphrase.* Deferred with its threat named; blocked meanwhile on a **reader identity** that does not exist (#496, §5.11 — today's surfaces attribute writes only).
-- **Two ADR divergences found by checking rather than assuming.** **#494** — ADR-0052 decision 4 describes `event_dek` as `(event_id, holder, dek_wrapped)`; the built table has no `holder` column and `PRIMARY KEY (event_id)` structurally forbids the multi-holder custody that sentence says the design needed (erratum, not a migration). **#495** — ADR-0052 derives the node unwrap secret from the signing seed and says ADR-0026's escrow covers it, while ADR-0026 decision 4 says the signing key is **never backed up**; if both hold literally, **every born-sealed body on a restored node goes dark.**
+- **Two ADR divergences found by checking rather than assuming.** **#494** — ADR-0052 decision 4 describes `event_dek` as `(event_id, holder, dek_wrapped)`; the built table has no `holder` column and `PRIMARY KEY (event_id)` structurally forbids the multi-holder custody that sentence says the design needed (erratum, not a migration). **#495** — ADR-0052 derives the node unwrap secret from the signing seed and says ADR-0026's escrow covers it, while ADR-0026 decision 4 says the signing key is **never backed up**; if both hold literally, every born-sealed body on a restored node goes dark. **CONFIRMED IN CODE the same day (fourth pass) — both do hold, and #500 was split out of it. See the DR-guarantee entry below.**
 - **C1 (buildable now):** rung 1 (`custody.nodes`, both doors, serve-door withholding), the audited break-glass path, and the **in-chart location signal** — of the three notification directions (location / custodian / patient) it is the only one that actually restrains, and it needs no channel. Patient and custodian are §5.12 discharging obligations in part D, where the ADR records the DV hazard: *"sealed content on your record was opened at Clinic A"* delivered to a household phone reaches the person the record was sequestered against, with a pointer.
 
+
+**The DR-guarantee audit — three promises, none of them true (2026-08-23, fourth pass; confirms [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495), opens [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500); adds `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` — 4 tests, all four mutation-checked — and corrects the expired comments at their source (`localstate.rs` header + `read_local_state`, `backup.rs::read_event_set`, and the stale justification on `tests/localstate.rs`'s emptiness assertion); no behaviour change, no migration, no ADR, SCHEMA stays 50).** #495 was filed from the ADR-0065 design pass with an honest caveat — *"I have not read the sealed local-state export design, so this may already be resolved there."* Reading it turned the suspicion into two confirmed defects.
+
+- **ADR-0026 decision 1's three clinical promises are all false.** It guarantees, for total hardware loss of a solo node restored from the sealed medium: *"the **clinical event log survives**"*, *"**node-default data-at-rest keys survive**"*, *"**sealed-episode DEKs survive minus any erased ones**"*. Built: `backup.rs:138` exports `SELECT signed_bytes FROM node_event` (the federation plane), and `LocalState`'s two DEK slots are `Vec::new()` with `read_local_state`'s `_db` parameter **unused**.
+- **#500 — the bytes.** The medium carries no clinical event at all. A solo clinic — the deployment ADR-0026 opens by naming as first-class, *"replication provides **zero** durability"* — backs up nightly, `verify-backup` passes, health is reported honestly, and restore recovers its peering history and **zero clinical records**.
+- **#495 — the key.** `restore.rs` mints a fresh seed by design (decision 4); the X25519 unwrap secret is HKDF-derived from it (ADR-0052 decision 4), so every inherited `event_dek` row is unopenable. **Fixing either alone is useless**: one leaves a working key with nothing to open, the other sealed bodies with no key. #495 carries three fix options — escrow the secret / break the derivation / declare the loss — none symmetric, each superseding an ADR.
+- **⇒ A DEFERRAL IS ONLY HONEST WHILE ITS STATED PRECONDITION HOLDS, AND NOTHING WATCHES FOR ONE EXPIRING.** `localstate.rs:10` declared its empty seam truthfully — *"the federation-node tier has no clinical surface yet"*. ADR-0052 made that sentence false and nothing reopened the seam, while this file went on recording slices A–D as ✓ done. The first defect here whose cause is a **true comment going stale**, and it is whole-record loss. **Every ✓ in this file rests on a sentence; the sentence is what to re-check.**
+- **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** `main.rs:349` runs the local-state export on the live backup path, seals an empty bundle, writes the `.lsk` sidecar and reports success; `backup-status.json` records a true count of what the medium actually holds. **Every surface is honest and the composite is a precise untruth** — principle 4 violated by a system in which no single component lies.
+- **⇒ WHERE A GUARANTEE IS ALREADY FALSE, PIN THE DEFECT, NOT THE PROMISE.** No `#[ignore]` exists in this crate and a permanently-red test would block the gate for every unrelated change, so the suite asserts what is true **today**, each assertion naming what it must be INVERTED to — the pinned-count idiom, where the guard failing IS the guard working. Anti-vacuity is explicit: the node is provisioned so the medium is genuinely non-empty, the `event_dek` row is written by the **production door** rather than the test, and the pure test asserts the happy-path unwrap *first* so the refusal cannot pass for the wrong reason. All four mutations verified red.
+- **A design-level coupling worth remembering:** deriving the unwrap secret from the signing seed bought *"no new key-management mechanism"* (ADR-0052 decision 4) and paid for it with a contradiction against ADR-0026 decision 4 that **neither ADR could see from inside itself**. Cross-ADR claims about *the same key material* need checking where they meet, which is code.
 
 ## Phase 5 — Security & compliance core
 
@@ -448,8 +458,13 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 - **At-rest seal** — ✓ done (ADR-0026 **slice A**): signing key sealed with a dual-recipient envelope (Argon2id
   KEKs from an operational passphrase + a one-time off-node recovery code; XChaCha20-Poly1305), recovery escrow
   minted at `init`, `seal-key` migration.
-- **Backup-as-cold-peer** — ✓ done (ADR-0026 **slice B**): `backup`/`verify-backup` CLI + `last_backup` status;
-  signed-event medium, self-verifying via the existing signature invariant; fail-safe health sidecar.
+- **Backup-as-cold-peer** — ⚠️ **PARTIAL, not done** (ADR-0026 **slice B**): `backup`/`verify-backup` CLI +
+  `last_backup` status; medium self-verifying via the existing signature invariant; fail-safe health sidecar.
+  **But the medium carries `node_event` ONLY** (`backup.rs:138`) — the clinical event log is absent, so a
+  solo node's restore recovers its peering history and zero clinical records, against ADR-0026 decision 1's
+  *"the clinical event log survives"* and decision 2's *"clinical events back up as a cold peer"*
+  (**[#500](https://github.com/cairn-ehr/cairn-ehr/issues/500)**, found 2026-08-23; pinned by
+  `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs`).
 - **Restore-apply + new-identity `supersede`** — ✓ done at node level (ADR-0026 **slice C**, [issue #50](https://github.com/cairn-ehr/cairn-ehr/issues/50)):
   `cairn-node restore` rehydrates the `node_event` log into a fresh DB via a self-trusting `restore_node_event` door
   (empty-genesis fenced), mints a fresh key, records a `supersede`(dead→new); `db/009` op `supersede` + `node_lineage`.
@@ -459,10 +474,18 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
   **Live residual:** the commitment binds set *content*, so a peer's genuine marker spliced between
   **byte-identical converged** media is not rejectable — impossible on a sole-enroll medium, so multi-enroll
   restores report `Provenance::SignedFederated` → confirm-on-restore.
-- **Sealed local-state export** — ✓ done (ADR-0026 **slice D**): a long-lived local-state DEK dual-wrapped once
-  at provisioning; `CAIRNL1` export + a `CAIRNX1` `.lsk` sidecar; additive-CBOR `LocalState` with typed-empty
-  slots + DB read/apply **seams** the clinical tier extends; signing key never in the bundle.
-  **All ADR-0026 slices A–D complete.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
+- **Sealed local-state export** — ⚠️ **container done, contents empty** (ADR-0026 **slice D**): a long-lived
+  local-state DEK dual-wrapped once at provisioning; `CAIRNL1` export + a `CAIRNX1` `.lsk` sidecar;
+  additive-CBOR `LocalState` with typed-empty slots + DB read/apply **seams** the clinical tier extends;
+  signing key never in the bundle. **The seam's stated precondition — *"the federation-node tier has no
+  clinical surface yet"* (`localstate.rs:10`) — EXPIRED when ADR-0052 made every clinical body born-sealed,
+  and nothing reopened it.** `read_local_state`'s `_db` parameter is unused, so the export cannot see custody
+  even in principle, while `main.rs:349` runs the ceremony on the live backup path and reports success over
+  an empty bundle. With restore minting a fresh seed (decision 4) and the X25519 unwrap secret derived from
+  it (ADR-0052 decision 4), **every born-sealed body on a restored node is unopenable**
+  (**[#495](https://github.com/cairn-ehr/cairn-ehr/issues/495)**, confirmed in code 2026-08-23 — it carries
+  the three fix options, none symmetric; each supersedes an ADR).
+  **ADR-0026 slices A and C complete; B and D are partial — see #495/#500.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
   every transient KEK/DEK/seed/LSK in `Zeroizing`. Optional follow-on: escrow rungs (Shamir M-of-N, QR, TPM).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).

@@ -7,13 +7,24 @@
 //! it. The signing key is DELIBERATELY EXCLUDED (point 4): a stolen, unsealed artifact
 //! must yield read access, never a signing identity.
 //!
-//! SCOPE (slice D): the federation-node tier has no clinical surface yet, so the bundle
-//! is EMPTY today. This module builds the can't-retrofit SHAPE — the format, the
+//! SCOPE (slice D): this module builds the can't-retrofit SHAPE — the format, the
 //! dual-recipient secret lifecycle (a long-lived local-state DEK dual-wrapped once at
 //! provisioning), the container, and the restore path — with typed empty slots the
 //! clinical tier fills later via additive evolution (principle 11). The genuine
 //! day-one piece is `establish_lsk`: state accrued before the channel exists has no
 //! durability path, so the channel must exist from `init`.
+//!
+//! ⚠️ **THE SCOPE SENTENCE THAT USED TO STAND HERE HAS EXPIRED — see #495.** It read
+//! *"the federation-node tier has no clinical surface yet, so the bundle is EMPTY today"*,
+//! and it was true when slice D was written. ADR-0052 then made **every clinical body
+//! born-sealed**, so this node now holds real `event_dek` custody — and the slots are
+//! still empty. The consequence is not cosmetic: `restore` mints a fresh signing seed
+//! (ADR-0026 decision 4) and the X25519 unwrap secret is HKDF-derived from it (ADR-0052
+//! decision 4), so **every born-sealed body on a restored node is unopenable**, against
+//! ADR-0026 decision 1's promise that node-default and sealed-episode DEKs survive.
+//! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` pins the gap; #495 carries the
+//! three fix options. Its sibling is #500 (the medium carries no clinical event either).
+//! **Do not re-describe these slots as legitimately empty without closing #495 first.**
 
 use crate::seal::{
     self, aead_decrypt, aead_encrypt, normalize_recovery_code, rand_bytes, ArgonParams, Wrap,
@@ -44,10 +55,10 @@ pub enum LocalStateError {
     // here actually touches the filesystem.
 }
 
-/// The node-local material ADR-0026 point 3 exports. Every slot is EMPTY at the
-/// federation-node tier (no clinical surface yet); the clinical tier fills them via
-/// additive evolution. The leaf type is opaque `Vec<u8>` so we reserve the SLOT SHAPE
-/// without committing to the clinical tier's internal schema (no speculative generality).
+/// The node-local material ADR-0026 point 3 exports. Every slot is EMPTY today — **not
+/// legitimately so any more: the clinical tier exists and this is #495.** The leaf type is
+/// opaque `Vec<u8>` so we reserve the SLOT SHAPE without committing to the clinical tier's
+/// internal schema (no speculative generality).
 ///
 /// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
 /// must grant read access, never a signing identity. Do not add it here.
@@ -297,12 +308,17 @@ pub fn lsk_sidecar_path_for(key: &Path) -> PathBuf {
     key.with_file_name(name)
 }
 
-/// Read the node's exportable local state from the DB. At the federation-node tier there
-/// is no clinical surface — no DEK store, no draft store, no config table — so this returns
-/// the EMPTY bundle. THIS IS THE SEAM the clinical tier extends: it will read the keystore's
+/// Read the node's exportable local state from the DB — **or rather, do not**: this returns
+/// the EMPTY bundle unconditionally, and `_db` is unused, so the export cannot see custody
+/// even in principle. THIS IS THE SEAM the clinical tier extends: it must read the
 /// node-default + sealed-episode DEKs (minus erased — ADR-0026 point 6), node config, and
 /// the draft/scratchpad store into the typed slots. The signing key is never read here
-/// (point 4). Async + DB-handle so the future shape needs no signature change.
+/// (point 4). Async + DB-handle so filling the seam needs no signature change.
+///
+/// ⚠️ **#495 — this is a live disaster-recovery hole, not a pending nicety.** `event_dek`
+/// now holds real custody for every born-sealed body (ADR-0052), and `main.rs`'s backup
+/// path calls this function, seals the empty result and **reports success**. Pinned by
+/// `tests/dr_clinical_guarantee_gap.rs::local_state_export_carries_no_dek_though_the_database_holds_one`.
 pub async fn read_local_state(_db: &tokio_postgres::Client) -> anyhow::Result<LocalState> {
     Ok(LocalState::empty())
 }
