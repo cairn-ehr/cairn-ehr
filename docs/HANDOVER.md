@@ -168,18 +168,23 @@ SCHEMA stays 50.** Every item mutation-checked.
    about the bytes that follow it.** The enum is not `#[non_exhaustive]`, so the new variant broke
    `run`'s one `match`: the forcing function.
 3. **⇒ THE RECOGNISER IS A TYPE OR AN `io::ErrorKind`, NEVER THE MESSAGE TEXT.**
-   `io::ErrorKind::InvalidData` anywhere in the chain covers both `tokio-rustls` (which renders EVERY
-   `rustls::Error` as that kind, so a failed pin lands there) and `read_frame`'s over-cap prefix. The
-   protocol checks have no io error at all — the bytes arrived intact and *this node* found them
-   self-inconsistent — so they carry a typed `PeerIntegrityError`. **`LocalFault` is still checked
-   FIRST**: this node's own database is reached over TLS too, so a `tokio_postgres::Error` can
-   legitimately carry an `InvalidData` beneath it. Accepted blur, documented: a badly lossy link reads
-   as a peer problem — the safe direction, costing one extra diagnostic step rather than the whole
-   diagnosis.
+   `io::ErrorKind::InvalidData` anywhere in the chain covers both `tokio-rustls` (which maps a
+   `rustls::Error` surfacing out of the *handshake* to that kind, so a failed pin lands there — not
+   *every* `rustls::Error`, as the first draft of this line said: a failure constructing the
+   connection is `ErrorKind::Other`) and `read_frame`'s over-cap prefix. The short-frame check has no
+   io error at all — the bytes arrived intact and *this node* found them self-inconsistent — so it
+   carries a typed `PeerIntegrityError`. **`LocalFault` is still checked FIRST, and the reason is that
+   a TYPE OUTRANKS A KIND**: a broad `io::ErrorKind` net must never re-label what a concrete type has
+   already claimed. (The first draft justified it with *this node's database is reached over TLS too*.
+   It is not — both crates connect `NoTls`, and `db.rs` already said so as a PR #478 finding. The
+   ordering is still load-bearing, because an `io::Error` wrapping a `LocalDbFault` puts both signals
+   in one chain, and it is the standing guard for the day `db_conn` points at a remote Postgres.)
+   Accepted blur, documented: a badly lossy link reads as a peer problem — the safe direction, costing
+   one extra diagnostic step rather than the whole diagnosis.
 4. **⇒ A PEN REFUSAL HAS TWO CAUSES THAT CALL FOR OPPOSITE ACTIONS, AND #490 HAD DESTROYED THE
    EVIDENCE.** `quarantine_event`'s private `legible()` rendered a server error into
    `db.message().to_string()` — a `String`, which has no `source()` — exactly the trap
-   `LocalDbFault`'s own doc warns about 1500 lines below. With the chain restored the two separate: a
+   `LocalDbFault`'s own doc warns about, one file over. With the chain restored the two separate: a
    **database** refusal is `["integrity", "local_fault"]` (the mirror of `CursorCommitError::also_loud`);
    the **per-peer quota** is a budget exhausted by the peer's garbage and stays `["integrity"]` alone.
    **BOTH directions are pinned** — the second by an assertion added to the existing quota test,
@@ -189,11 +194,12 @@ SCHEMA stays 50.** Every item mutation-checked.
    statement is a newness probe that never reaches the door — so a lock storm or a half-finished
    `pg_restore` was written into `sync_quarantine.last_requeue_error` as *the in-DB door adjudicated
    these bytes and rejected them*, which is what an operator reads while deciding whether an event is
-   corrupt. Now `!is_deliberate_refusal()` routes to `RequeueInterruptedError` (#471's
-   partial-completion report), the type keeps its `postgres::Error` as `source()`, and
-   `operator_text()` renders the ONE shared format. **The accepted cost is the PULL path's cost too**,
-   documented at the site: a non-`P0001` failure that recurs deterministically stops every run at the
-   same row rather than annotating it and moving on.
+   corrupt. Now the failure is routed by **`apply_failure_is_local`** — a new pure SQLSTATE-class
+   split — to `RequeueInterruptedError` (#471's partial-completion report); the type keeps its
+   `postgres::Error` as `source()`, and `operator_text()` renders the ONE shared format. **The accepted
+   cost is the PULL path's cost too**, documented at the site: a LOCAL fault stops every run at the
+   same row rather than annotating it — which costs nothing, because the row behind it would meet the
+   same broken database anyway.
 6. **⇒ WHERE A PIN'S FIXTURE IS BUILT BY THE TEST, THE PRODUCTION SITE IS UNPINNED.** The classifier's
    unit tests would have stayed green through a revert of any of the six sites, so each is now driven
    the real way: a **deny-all `TrustStore`** IS the revoked-peer case against the node's own `serve`; a
@@ -203,8 +209,53 @@ SCHEMA stays 50.** Every item mutation-checked.
 7. **Two more `db error` sites and two comments the fix contradicted.** The pull loop's pen-release
    `DELETE` rendered `{de}` (a binding `RAW_ERROR_BINDINGS` does not name), and `db_diagnosis`'s header
    still listed `quarantine_event`'s now-deleted renderer. `SYNC_DAEMON_LOCAL_DB_FAULT_SITES` 3 → **6**,
-   with four new shape pins — **each verified to fail under the revert it names**, the #387 species the
+   with five shape pins — **each verified to fail under the revert it names**, the #387 species the
    previous round found.
+8. **⇒ THE REVIEW ROUND, SAME PR: THE FIX HAD THE DEFECT IT WAS FIXING, ONE MATCH ARM ABOVE ITSELF.**
+   `also_local_fault` was computed from the pen write alone, so an apply that failed on **this node's
+   database** (`40001`, `53100`, `55P03`, a dropped connection) still reached `bet_a.py` as `integrity`
+   alone — issue #489 part 1's own sentence, in the arm above the one that was fixed — and, because the
+   A4 filter is `not r.get("local_fault")`, the blocked write's `elapsed_ms` was folded into the
+   pull-latency percentiles. The existing `40001` test was one assertion away from proving it.
+9. **⇒ AND THE `#480` GUARD WAS WIDER THAN "OUR MACHINE BROKE".** `!is_deliberate_refusal()` halted
+   `do_requeue` on **every** non-`P0001`, including the deterministic ones — a cast on a peer-supplied
+   field (`22P02`), a constraint violation, an `XX000` from a function fed adversarial bytes. The
+   listing is `ORDER BY first_seen` and `cairn-sync quarantine` is read-only, so one such row wedged
+   every row behind it forever with raw SQL as the only remedy — the outcome `db/001_envelope.sql`'s
+   header already records, one plane over. New pure **`apply_failure_is_local`** (SQLSTATE class, claims
+   explicit, defaults `false` so an unrecognised code keeps moving) serves BOTH: it sets the pull's
+   `local_fault` and it decides whether a requeue may halt. A byte-attributable failure now annotates
+   and continues — and says *"NOT a deliberate floor refusal"* in the DATABASE's vocabulary, because
+   writing it in the door's voice is #480's own defect in miniature.
+10. **⇒ A GUARD FOR AN ORDERING PROPERTY THAT COULD NOT OBSERVE THE ORDERING.** The `LocalFault`-first
+   test was built on `anyhow::Error::from(pg).context(io_error)` and a doc claim that a `.context()`
+   value is reachable from `chain()`. It is not: `ContextError::source()` returns only the inner error,
+   so the `Integrity` arm never matched the fixture and **swapping the two arms left the test green**
+   (measured). The fixture is now `io::Error::new(InvalidData, LocalDbFault::new(…, pg))` — whose chain
+   really is `[io::Error, tokio_postgres::Error]` — and it asserts that both signals are present before
+   asserting which wins, so the vacuity cannot come back silently.
+11. **⇒ THE TWO PLANES STILL GAVE ONE FAILURE TWO WORDS.** `cairn-sync`'s own `read_frame` returns
+   `InvalidData` for an over-cap prefix — the condition this PR calls `Integrity` on the node plane —
+   but `do_pull`'s request site flattened it with `format!`, so it fell to `partition`. Flattening was
+   the worse half: with no `source()` the classifier could never be *taught* to recognise it, which is
+   verbatim the trap this PR documents for `quarantine_event`'s old `legible()`. New typed
+   `PeerRequestError` keeps the cause; new `chain_reaches_a_peer_frame_error` classifies it, checked
+   LAST so neither typed class nor the postgres walk can be re-labelled. **Self-review caught the
+   price of that:** a reachable cause is also a cause that can be printed TWICE, because
+   `operator_chain` drops a layer only when the layer above ENDS WITH it — so the transport error
+   moved to the END of the sentence, pinned on the real path by counting its occurrences. And since
+   `fn main() -> R<()>` prints `Termination`'s `{err:?}`, `Debug` is the sentence rather than derived
+   — the defect `RequeueInterruptedError` and `LocalDbFault` had each already had to fix.
+12. **Also from the round:** `merge_pen_refusal` extracted pure — first-wins for the message, OR for
+   the flag, so a quota refusal arriving first no longer hides a database failure later in the same
+   batch (it names the later event, so text and class still agree) · the freeze line renders
+   `operator_text()`, so the SQLSTATE that separates a self-healing `40001` from a `53100` survives ·
+   `run`'s new line is `PEER INTEGRITY`, because the `Ok` arm already printed `run: INTEGRITY:` for a
+   different condition with a different remedy · it names BOTH revocation directions, since under TLS
+   1.3 a peer that revoked **us** fails the same way and `cairn-node peers` *here* is the wrong machine
+   to look at · an end-to-end `partition` guard on the clinical plane · blocker connections in the lock
+   tests take a `lock_timeout`, so contention becomes a red rather than a hang · six comment claims the
+   code contradicted, the redundant `db_gate` include dropped.
 
 **Still open from the sweep:** [**#490**](https://github.com/cairn-ehr/cairn-ehr/issues/490) item 3
 (two stderr-only signals — `blobd_error_line` and the serve thread's death — never reach the JSONL

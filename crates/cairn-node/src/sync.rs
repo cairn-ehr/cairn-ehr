@@ -80,11 +80,15 @@ pub enum PullFailureClass {
 /// # Why a type rather than another `anyhow::bail!`
 ///
 /// [`pull_failure_class`] recognises a peer-side failure either by this type or by
-/// `io::ErrorKind::InvalidData` in the chain. The protocol checks in [`pull_into`] have
-/// neither: the bytes arrived intact and *this node* read them, then found them
-/// self-inconsistent — so there is no io error at all, and a `bail!` produces a `String`
-/// error that classifies by elimination as a partition. That is the defect, not a
-/// near-miss of it: a peer running incompatible code would be reported as link downtime.
+/// `io::ErrorKind::InvalidData` in the chain. A protocol check has neither to offer: the
+/// bytes arrived intact and *this node* read them, then found them self-inconsistent — so
+/// there is no io error at all, and a `bail!` produces a `String` error that classifies by
+/// elimination as a partition. That is the defect, not a near-miss of it: a peer running
+/// incompatible code would be reported as link downtime.
+///
+/// One site uses it today — [`pull_into`]'s short-frame check. The over-cap length prefix,
+/// the other protocol failure on this path, already carries an `InvalidData` io error from
+/// `read_frame` and needs no marker.
 ///
 /// Matching on the message text instead was considered and rejected for the obvious
 /// reason — the classifier would then be pinned to prose that exists to be reworded.
@@ -134,25 +138,44 @@ impl std::error::Error for PeerIntegrityError {}
 /// not answer. Every failure that IS local or IS the peer's must therefore be claimed
 /// explicitly above. The asymmetry is deliberate: an unclaimed failure becomes a partition
 /// and misdirects an operator, so the recognised arms are the ones that have to be kept
-/// complete — which is why `tests/pull_failure_class.rs` pins a bare error, a wrapped one
-/// and a doubly-wrapped one for each.
+/// complete — which is why `tests/pull_failure_class.rs` pins the local arm bare, wrapped
+/// and doubly-wrapped, pins each of the peer arm's two recognisers, and pins one of those
+/// under an added `.context()` layer as well.
 ///
 /// # Why `LocalFault` is checked FIRST (issue #482)
 ///
-/// The order is the safety argument, exactly as it is in the sibling crate. This node's own
-/// database is reached over TLS too, so a `tokio_postgres::Error` can legitimately carry an
-/// `InvalidData` io error underneath it — and re-labelling that as the peer's problem sends
-/// an operator to a peer that never failed. Local wins, always.
+/// **The rule is that a TYPE outranks a KIND.** `LocalFault` is recognised by a concrete
+/// error type that only this node's database produces; `Integrity`'s second recogniser is an
+/// `io::ErrorKind`, which is a much broader net. An arm matching on a kind must never be
+/// able to re-label a failure a more specific arm has already claimed — so the specific one
+/// is asked first, and a chain carrying both answers `LocalFault`. That is the same rule the
+/// sibling crate follows, though its ORDER is the mirror of this one: `classify_pull_failure`
+/// matches its typed classes first and reaches its postgres walk LAST, because there the
+/// typed class is the specific thing and the walk is the net. Specific-before-broad in both;
+/// the literal order differs, and a first draft of this paragraph claimed the orders matched.
+///
+/// Which shape actually carries both signals at once is worth stating, because a first draft
+/// of this paragraph got it wrong and the test built on it could not fail. It said *this
+/// node's own database is reached over TLS too*. It is not: `db::connect_and_load_schema`
+/// opens `NoTls`, and `db.rs` already says so in as many words (PR #478 review, finding 11).
+/// A `tokio_postgres::Error` on this path therefore cannot carry a `rustls`-shaped
+/// `InvalidData` today. The ordering is still load-bearing — an `io::Error` wrapping a
+/// `LocalDbFault` puts both in one chain, which is what the test now uses — and it is the
+/// standing guard for the day `db_conn` points at a remote Postgres, the caveat `run`'s own
+/// comment already carries (PR #478 review, I10).
 ///
 /// # What recognises a peer-side failure
 ///
 /// Two things, and neither can be produced by a link that went away:
 ///
-/// * [`PeerIntegrityError`], for the protocol checks that read intact bytes and found them
-///   self-inconsistent (no io error exists for those);
-/// * `io::ErrorKind::InvalidData` **anywhere in the chain** — `tokio-rustls` renders every
-///   `rustls::Error` as exactly that kind (so a failed pin lands here), and `read_frame`
-///   uses it for an over-cap length prefix.
+/// * [`PeerIntegrityError`], for a protocol check that read intact bytes and found them
+///   self-inconsistent — today the short-frame check in [`pull_into`], which has no io error
+///   to carry because nothing about the I/O failed;
+/// * `io::ErrorKind::InvalidData` **anywhere in the chain**. `tokio-rustls` maps a
+///   `rustls::Error` surfacing out of the handshake to exactly that kind (so a failed pin
+///   lands here), and `read_frame` uses it for an over-cap length prefix. Not *every*
+///   `rustls::Error`, as a first draft of this line said — a failure constructing the
+///   connection itself is `ErrorKind::Other` — but every one that a live peer can cause.
 ///
 /// A dead link produces `ConnectionRefused` / `ConnectionReset` / `UnexpectedEof` /
 /// `TimedOut` instead, all of which still fall through to `Partition`. The one accepted
@@ -1106,13 +1129,28 @@ pub async fn run(
                 // pin case explicitly is the point: the class alone would still leave a
                 // revoked key and an oversized frame looking identical, and the first of
                 // those is a security event.
+                //
+                // `PEER INTEGRITY`, not the bare `INTEGRITY` a first draft used (PR #493
+                // review): the `Ok` arm above already prints `run: INTEGRITY:` for a
+                // completely different condition — unacked pen rows, whose remedy is
+                // `cairn-node quarantine` — so one search term covered two findings. A
+                // monitor keyed on `INTEGRITY` still sees both; one keyed on `PEER
+                // INTEGRITY` or on `INTEGRITY:` now sees exactly one.
+                //
+                // The pin sentence names BOTH directions deliberately. Under TLS 1.3 the
+                // client half of the handshake completes before the server has verified the
+                // client certificate, so a peer that has revoked US surfaces here too — as
+                // an alert on the first frame rather than at `connect` — and sending the
+                // operator to run `cairn-node peers` on this node would be sending them to
+                // the one machine where nothing is wrong.
                 PullFailureClass::Integrity => eprintln!(
-                    "run: INTEGRITY pulling {peer} — the peer ANSWERED and its answer or \
-                     its identity was unusable; the link is not the place to look: {}. If \
-                     this is the mTLS handshake, the peer's key no longer matches the trust \
-                     set (rotated, revoked, or a different node at that address) — check \
-                     `cairn-node peers`; otherwise the peer is serving a wire format this \
-                     build cannot read.",
+                    "run: PEER INTEGRITY pulling {peer} — the peer ANSWERED and its answer \
+                     or its identity was unusable; the link is not the place to look: {}. \
+                     If this is the mTLS handshake or the first frame after it, a pinned \
+                     key no longer matches: check `cairn-node peers` HERE for a rotated or \
+                     revoked peer key, and check this node's own key in the peer's trust \
+                     set — a peer that has revoked US fails the same way. Otherwise the \
+                     peer is serving a wire format this build cannot read.",
                     operator_chain(&pull_err)
                 ),
                 // A sustained outage = a partition. Logged, never fatal.

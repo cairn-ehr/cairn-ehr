@@ -32,8 +32,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-#[path = "common/db_gate.rs"]
-mod db_gate;
+// NOTE: no `#[path = "common/db_gate.rs"] mod db_gate;` here. #442's fail-closed guard
+// binds PER CRATE, not per file, and `tests/db_gate_actually_ran.rs` already binds
+// `cairn-node`; including it again only compiles and runs its eleven source-scanning tests
+// a second time in a second binary (PR #493 review). The `cs()` self-skip below is
+// unaffected — it is what the guard exists to police, not part of the guard.
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()

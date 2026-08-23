@@ -413,6 +413,12 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
          — a binding RAW_ERROR_BINDINGS does not name (#490 item 1)",
         r#"row could not be released: {} — retried next cycle", legible_db_error(&de)"#,
     ),
+    (
+        "do_pull's transient-apply HALT line — the cursor STOPS here, so the SQLSTATE is \
+         the whole diagnosis (40001 retries by itself, 53100 does not). `{e}` rendered \
+         `ApplyError`'s Display, which omits it by design (PR #493 review)",
+        r#"and must not be skipped: {}", e.operator_text()"#,
+    ),
 ];
 
 /// How many `.map_err(|e| LocalDbFault::boxed(` sites `cairn-sync`'s daemon carries.
@@ -425,7 +431,7 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
 /// `postgres::Error` reachable, nothing could tell it from the pen's quota refusal.
 ///
 /// **What this count does and does not catch.** It counts WRAPPERS, not postgres calls, so a
-/// new call written without one leaves it at three and passes. This test's own doc below says
+/// new call written without one leaves the count where it stands and passes. This test's own doc below says
 /// exactly that — "it protects the sites that were fixed, and it does NOT protect the next one
 /// somebody writes" — and an earlier draft of this sentence claimed the opposite, two lines
 /// from the sentence contradicting it (PR #486 review). What it DOES catch is a revert: drop a

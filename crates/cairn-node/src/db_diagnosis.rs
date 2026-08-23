@@ -61,8 +61,10 @@
 //! (`cairn-sync` has ONE narrower renderer of the same idea left: `ApplyError::from`, which
 //! keeps the SQLSTATE separately because the pull routing reads it, renders its no-`DbError`
 //! arm through `legible_db_error`, and exposes `operator_text()` for the callers that have
-//! established the failure was never a door verdict. `quarantine_event`'s private `legible()`
-//! — the second one this paragraph used to name — is GONE: it flattened a server error into
+//! established the failure was NOT a deliberate floor refusal — where the SQLSTATE is the
+//! whole diagnosis, and where its own `Display` deliberately omits it.
+//! `quarantine_event`'s private `legible()` — the second one this paragraph used to name —
+//! is GONE: it flattened a server error into
 //! a `String`, which destroyed the `source()` a chain-walking classifier reads and made a pen
 //! write refused by this node's own database indistinguishable from the peer's data being at
 //! fault (#490 item 2, #489 part 1). It uses `LocalDbFault` now, like everything else.)

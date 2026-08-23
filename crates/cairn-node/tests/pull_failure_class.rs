@@ -179,19 +179,45 @@ fn an_oversized_frame_prefix_is_the_peer_not_the_link() {
 }
 
 /// **The ordering guard, and it is the whole safety argument.** `LocalFault` is checked
-/// FIRST, so a chain carrying both a `tokio_postgres::Error` and an `InvalidData` io error
-/// is local — this node's own database reached over TLS is exactly that shape, and calling
-/// it a peer problem would send an operator to a peer that never failed.
+/// FIRST, so a chain carrying BOTH a `tokio_postgres::Error` and an `InvalidData` io error
+/// is local: a type outranks a kind, and calling such a chain a peer problem would send an
+/// operator to a peer that never failed.
 ///
-/// The fixture is synthetic (anyhow stores a `.context()` value in the chain, so an
-/// `io::Error` used as context is reachable by `downcast_ref`); it pins the ORDER, not a
-/// production error shape.
+/// # The fixture has to contain both, and the first one did not
+///
+/// This test was written as `anyhow::Error::from(pg).context(io_error)`, on the stated
+/// belief that "anyhow stores a `.context()` value in the chain, so an `io::Error` used as
+/// context is reachable by `downcast_ref`". **That is false.** `ContextError::source()`
+/// returns only the inner error and `anyhow::Chain` walks nothing but `source()`, so the
+/// chain was `[ContextError, tokio_postgres::Error]` and the `Integrity` arm never matched
+/// the fixture at all. Swapping the two arms in `pull_failure_class` left the test GREEN —
+/// a guard for an ordering property that could not observe the ordering (PR #493 review).
+///
+/// The shape below genuinely carries both. `io::Error::source()` delegates to the boxed
+/// error's own `source()`, so the chain is `[io::Error(InvalidData), tokio_postgres::Error]`
+/// — the io error is element 0 and downcasts, the postgres error is element 1. Both arms
+/// match; only the order decides. It is also a REAL shape rather than an invention: it is
+/// what a transport layer wrapping a named local-database failure produces, which is the
+/// case the ordering exists to survive if `db_conn` ever points at a remote Postgres.
 #[test]
 fn a_local_fault_wins_over_a_peer_signal_in_the_same_chain() {
-    let e = anyhow::Error::from(a_real_pg_error()).context(std::io::Error::new(
+    let e = anyhow::Error::from(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        "a TLS failure on the way to this node's OWN database",
+        LocalDbFault::new("reading the node quarantine floor", a_real_pg_error()),
     ));
+    // The fixture is only worth anything if it really does trip the peer recogniser too —
+    // assert that here, so a future edit that quietly drops the `InvalidData` turns this
+    // back into the vacuous test it used to be and says so.
+    assert!(
+        e.chain().any(|c| c
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidData)),
+        "the fixture must carry the PEER signal, or this guard proves nothing: {e:#}"
+    );
+    assert!(
+        e.chain().any(|c| c.is::<tokio_postgres::Error>()),
+        "…and the LOCAL signal: {e:#}"
+    );
     assert_eq!(
         pull_failure_class(&e),
         PullFailureClass::LocalFault,
