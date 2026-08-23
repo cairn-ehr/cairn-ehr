@@ -18,10 +18,14 @@
 //! *"the federation-node tier has no clinical surface yet, so the bundle is EMPTY today"*,
 //! and it was true when slice D was written. ADR-0052 then made **every clinical body
 //! born-sealed**, so this node now holds real `event_dek` custody — and the slots are
-//! still empty. The consequence is not cosmetic: `restore` mints a fresh signing seed
+//! still empty. The consequence is not cosmetic: restore mints a fresh signing seed
 //! (ADR-0026 decision 4) and the X25519 unwrap secret is HKDF-derived from it (ADR-0052
-//! decision 4), so **every born-sealed body on a restored node is unopenable**, against
-//! ADR-0026 decision 1's promise that node-default and sealed-episode DEKs survive.
+//! decision 4), so **every born-sealed body on a restored SOLO node is unopenable**,
+//! against ADR-0026 decision 1's promise that node-default and sealed-episode DEKs survive.
+//! *Solo* is the scope ADR-0026 itself uses, and it is not a hedge: a FEDERATED node that
+//! re-peers does recover custody, because the serve arm re-wraps each DEK against the
+//! puller's current unwrap cert (`cairn-sync`'s `rewrap_custody_for_peer`). The solo clinic
+//! — the one for which *"replication provides zero durability"* — has no such rescue.
 //! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` pins the gap; #495 carries the
 //! three fix options. Its sibling is #500 (the medium carries no clinical event either).
 //! **Do not re-describe these slots as legitimately empty without closing #495 first.**
@@ -55,18 +59,22 @@ pub enum LocalStateError {
     // here actually touches the filesystem.
 }
 
-/// The node-local material ADR-0026 point 3 exports. Every slot is EMPTY today — **not
-/// legitimately so any more: the clinical tier exists and this is #495.** The leaf type is
-/// opaque `Vec<u8>` so we reserve the SLOT SHAPE without committing to the clinical tier's
-/// internal schema (no speculative generality).
-///
-/// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
-/// must grant read access, never a signing identity. Do not add it here.
-///
 /// The highest bundle `version` this build understands. A bundle declaring a higher
 /// version must be REFUSED, not partially applied — see [`from_cbor`].
 pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 
+/// The node-local material ADR-0026 point 3 exports. The leaf type is opaque `Vec<u8>` so
+/// we reserve the SLOT SHAPE without committing to the clinical tier's internal schema (no
+/// speculative generality).
+///
+/// ⚠️ **Every slot is EMPTY today, and no longer legitimately so — this is #495.** The
+/// clinical tier exists and this node holds real `event_dek` custody; nothing here carries
+/// it across a restore. See the module header for the full finding, and
+/// `tests/dr_clinical_guarantee_gap.rs` for the guards that pin it.
+///
+/// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
+/// must grant read access, never a signing identity. Do not add it here.
+///
 /// `serde(default)` on every content field makes this ADDITIVELY evolvable (principle 11):
 /// a bundle written before a field existed still deserializes, with that field defaulted.
 ///
@@ -85,22 +93,26 @@ pub struct LocalState {
     /// NOT `#[serde(default)]`: absence of a version is always a malformed bundle —
     /// we must refuse it rather than silently assume v1.
     pub version: u8,
-    /// Node-default data-at-rest keys. Empty today.
+    /// Node-default data-at-rest keys. Empty — and no store exists to fill them from
+    /// (#495: promise 2 has no subject; see `dr_clinical_guarantee_gap.rs`).
     #[serde(default)]
     pub node_default_deks: Vec<Vec<u8>>,
-    /// Sealed-episode DEKs (minus any erased — ADR-0026 point 6). Empty today.
+    /// Sealed-episode DEKs (minus any erased — ADR-0026 point 6). Empty, though
+    /// `event_dek` holds custody for every born-sealed body — the #495 hole itself.
     #[serde(default)]
     pub episode_deks: Vec<Vec<u8>>,
-    /// Node config blob. None today.
+    /// Node config blob. None today (no node config table exists yet).
     #[serde(default)]
     pub config: Option<Vec<u8>>,
-    /// Draft / scratchpad store. Empty today.
+    /// Draft / scratchpad store. Empty today (no draft store exists yet).
     #[serde(default)]
     pub drafts: Vec<Vec<u8>>,
 }
 
 impl LocalState {
-    /// The empty bundle a federation-tier node exports today.
+    /// The empty bundle. THE ONLY PRODUCER this node has — `read_local_state` returns
+    /// it unconditionally, which is #495. A fix must add a producer that reads custody
+    /// out of the database; `dr_clinical_guarantee_gap.rs` pins the count at one.
     pub fn empty() -> Self {
         LocalState {
             version: 1,
@@ -111,7 +123,9 @@ impl LocalState {
         }
     }
 
-    /// True iff the bundle carries no content (the only valid state at this tier).
+    /// True iff the bundle carries no content. It was once documented here as "the only
+    /// valid state at this tier" — a sentence written before the clinical tier existed. It
+    /// is now the state a node in #495 is stuck in, not a valid one.
     pub fn is_empty(&self) -> bool {
         self.node_default_deks.is_empty()
             && self.episode_deks.is_empty()
@@ -323,11 +337,18 @@ pub async fn read_local_state(_db: &tokio_postgres::Client) -> anyhow::Result<Lo
     Ok(LocalState::empty())
 }
 
-/// Apply a restored local-state bundle into a fresh node. At this tier the bundle is empty,
+/// Apply a restored local-state bundle into a fresh node. The bundle is always empty today,
 /// so this is a validated noop — it asserts the bundle carries no content it cannot yet
 /// honour, rather than silently dropping it. THIS IS THE SEAM the clinical tier extends: it
-/// will load DEKs into the keystore, restore config, and rehydrate drafts. A non-empty
+/// must load DEKs into the keystore, restore config, and rehydrate drafts. A non-empty
 /// bundle here means a newer node wrote content an older restorer cannot apply — fail loud.
+///
+/// ⚠️ **#495, RESTORE HALF.** [`read_local_state`] is the export side of the same open seam;
+/// this is the side that would have to *land* the custody. Both must be built for ADR-0026
+/// decision 1 to become true, and a fix that builds only one leaves the other silently
+/// green — which is why `dr_clinical_guarantee_gap.rs` pins the producer and the reader
+/// separately. The `bail!` below is correct and must stay: refusing a bundle we cannot
+/// apply is the one part of this path that already fails loudly.
 pub async fn apply_local_state(
     _db: &tokio_postgres::Client,
     ls: &LocalState,

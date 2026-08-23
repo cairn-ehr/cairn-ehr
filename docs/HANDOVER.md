@@ -9,25 +9,38 @@
 > three promises about a restored node's clinical tier — the clinical event log survives,
 > node-default data-at-rest keys survive, sealed-episode DEKs survive — and ALL THREE ARE FALSE.**
 > Two independent defects, both pinned by `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs`
-> (4 tests, mutation-checked, asserting the DEFECT so they go red on the commit that fixes them):
+> (5 tests, every assertion mutation-checked — four PINS that go red on the commit that fixes the
+> gap, plus one MECHANISM test that stays true and says so):
 >
-> - **#500 — the bytes.** `backup.rs:138` exports `SELECT signed_bytes FROM node_event`: the medium
->   is the **federation plane only**. A solo clinic backs up nightly, `verify-backup` passes, health
->   is reported honestly — and restore recovers who it peered with and **zero clinical records**.
-> - **#495 — the key.** `restore.rs` mints a fresh seed by design (ADR-0026 decision 4); the X25519
->   unwrap secret is HKDF-derived from it (ADR-0052 decision 4), so every inherited `event_dek` row
->   is unopenable. `LocalState`'s two DEK slots are empty by construction and `read_local_state`'s
->   `_db` parameter is **unused** — yet `main.rs:349` runs the export ceremony on the live backup
->   path and every surface reports success over a bundle carrying nothing.
+> - **#500 — the bytes.** `backup.rs::read_event_set` exports `SELECT signed_bytes FROM node_event`:
+>   the medium is the **federation plane only**, so NO `event_log` row travels — not clinical, not
+>   demographic, not identity, not registration. A solo clinic backs up nightly, `verify-backup`
+>   passes, health is reported honestly — and restore recovers who it peered with and **zero
+>   patients**.
+> - **#495 — the key.** Restore mints a fresh seed by design (ADR-0026 decision 4; `restore.rs`
+>   orchestrates, `main.rs` mints); the X25519 unwrap secret is HKDF-derived from it (ADR-0052
+>   decision 4), so every inherited `event_dek` row is unopenable **on a SOLO node** — a federated
+>   node that re-peers recovers custody via `cairn-sync`'s `rewrap_custody_for_peer`, which is
+>   exactly why ADR-0026 scopes the promise to solo. `LocalState`'s two DEK slots are empty by
+>   construction and `read_local_state`'s `_db` parameter is **unused** — yet `main.rs`'s backup arm
+>   runs the export ceremony and reports success over a bundle carrying nothing.
 >
 > **Fixing either alone is useless**: one leaves a key with nothing to open, the other bodies with no
 > key. **#495 carries the three fix options** (escrow the secret / break the derivation / declare the
 > loss) — they are not symmetric, and picking one supersedes an ADR either way.
 >
+> **[#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) came out of the same read:** four
+> silent-success spots on the DR path where a failure the operator needs to see renders identically
+> to normality — a present-but-unreadable export skipped in silence at restore, `verify-backup`
+> printing `backup OK: 0/0` over a medium that restores nothing, a corrupt `.lsk` diagnosed as
+> "absent" with a remedy that then refuses, and a discarded keystore-load reason. Separate from
+> #495/#500: those are about what the backup CARRIES, #502 about what it SAYS when it fails.
+>
 > **The reusable lesson, and the reason this hid for weeks:** *a deferral is only honest while its
-> stated precondition holds, and nothing in the repo watches for one expiring.* `localstate.rs:10`
-> declared its seam truthfully — *"the federation-node tier has no clinical surface yet"* — and
-> ADR-0052 made that false without reopening it, while ROADMAP kept recording slices A–D as ✓ done.
+> stated precondition holds, and nothing in the repo watches for one expiring.* The `localstate.rs`
+> module header declared its seam truthfully — *"the federation-node tier has no clinical surface
+> yet"* — and ADR-0052 made that false without reopening it, while ROADMAP kept recording slices
+> A–D as ✓ done.
 > **Before trusting any ✓, check whether the sentence that justified it is still true.**
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems. A, B,
@@ -189,23 +202,30 @@ that generalise past the slice that found them.
 
 ### 2026-08-23 (last, fourth pass) — the DR-guarantee audit: three promises, none of them true
 
-**Confirmed #495 in code and split #500 out of it; added
-`crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` (4 tests, all four mutation-checked) and
-corrected the expired comments at their source (`localstate.rs` header + `read_local_state`,
-`backup.rs::read_event_set`, and the stale justification on `tests/localstate.rs`'s emptiness
-assertion). No behaviour change, no migration, no ADR, SCHEMA stays 50.** Finding and fix options:
-⇒ NEXT. What generalises past it:
+**Confirmed #495 in code, split #500 out of it, opened #502; added
+`crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` (5 tests, every assertion mutation-checked)
+and corrected the expired comments at their source — `localstate.rs`'s header, `LocalState`,
+`empty`/`is_empty`, `read_local_state` and `apply_local_state`; `backup.rs::read_event_set`;
+`main.rs`'s export ceremony and restore arm; and the stale justification on `tests/localstate.rs`'s
+emptiness assertion (also renamed, since the name carried the same expired claim). No logic change,
+no migration, no ADR, SCHEMA stays 50 — the ONE operator-visible edit is deleting a false
+reassurance from a backup warning (*"backed up events only (they are the load-bearing copy and are
+safe)"* cannot be said while #500 is open).** Finding and fix options: ⇒ NEXT. What generalises
+past it:
 
 1. **⇒ A DEFERRAL IS ONLY HONEST WHILE ITS STATED PRECONDITION HOLDS, AND NOTHING WATCHES FOR ONE
-   EXPIRING.** `localstate.rs:10` declared its empty seam truthfully — *"the federation-node tier has
-   no clinical surface yet"*. ADR-0052 made that sentence false and nothing reopened the seam. The
-   first defect here whose cause is a **true comment going stale**, and it is whole-record loss.
+   EXPIRING.** The `localstate.rs` module header declared its empty seam truthfully — *"the
+   federation-node tier has no clinical surface yet"*. ADR-0052 made that sentence false and nothing
+   reopened the seam. The first defect here whose cause is a **true comment going stale**, and it is
+   whole-record loss.
    **Every ✓ in ROADMAP rests on a sentence; the sentence is what to re-check.**
-2. **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** `main.rs:349` runs the local-state
-   export on the live backup path, seals an empty bundle, writes the `.lsk` sidecar and reports
-   success; `verify-backup` passes; `backup-status.json` records a true count of what the medium
-   actually holds. **Every surface is honest and the composite is a precise untruth** — principle 4
-   violated by a system in which no single component lies.
+2. **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** `main.rs`'s backup arm runs the
+   local-state export (`seal_and_write_local_state_export`), seals an empty bundle, writes a valid
+   `CAIRNL1` container and reports success; `verify-backup` passes; `backup-status.json` records a
+   true count of what the medium actually holds. **Every surface is honest and the composite is a
+   precise untruth** — principle 4, and ADR-0026 decision 7's *"must say so"*, violated by a system
+   in which no single component lies. (It does NOT write the `.lsk` sidecar — that is `init` /
+   `establish-local-state-key` / `restore` only; an earlier draft of this entry said otherwise.)
 3. **⇒ TWO DEFECTS THAT LOOK LIKE ONE MUST BE SPLIT WHEN FIXING EITHER ALONE IS USELESS.** #500 is
    the bytes, #495 the key: one fix leaves a working key with nothing to open, the other sealed
    bodies with no key. Filed apart so neither can be closed on the strength of the other.
