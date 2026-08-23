@@ -46,7 +46,10 @@ The design did not resolve derived-vs-explicit on its own terms. It was settled 
 sequester is *for*, and the answer changed the invariant:
 
 > **Custody narrowing changes the cost and the noise of reading. It never changes whether the content
-> can be reached.**
+> can be reached — at a node that holds the key, or that can reach one.**
+
+*(The bound is a PR-review correction. The first draft stated it unbounded, which is false at rung 1
+under partition — see §3, §11 and §14, and [#498](https://github.com/cairn-ehr/cairn-ehr/issues/498).)*
 
 Three findings, in the order they arrived:
 
@@ -62,8 +65,12 @@ draft of this design made break-glass the route for the *normal* case; that is �
 confirmation-dialog disease and §5.12's alert fatigue in one, and it was wrong.
 
 **(c) A universal, audited break-glass keyring, whose use notifies patient, custodian and location.**
-This is the piece that makes the rest safe. It means no narrowing can ever produce unreachable clinical
-content, so **recoverability and confidentiality stop being in tension** — the keyring *is* the escrow.
+This is the piece that makes the rest safe. It means no narrowing can produce unreachable clinical
+content **wherever the keyring reaches** — outright at rungs 0 and 2, and at rung 1 whenever a holder is
+reachable — so **recoverability and confidentiality stop being in tension** and the keyring *is* the
+escrow. The remainder is real and is [#498](https://github.com/cairn-ehr/cairn-ehr/issues/498): a rung-1
+break-glass is a network act (§3), so a partitioned non-holder still cannot reach the content. Review
+finding; the first draft of this section claimed the unbounded form.
 It is also paper's actual mechanism: the sealed envelope opens with your fingers, and the torn flap is
 what everyone sees.
 
@@ -103,13 +110,15 @@ rung 1   custody narrowed to named NODES     serve withholds the DEK from non-ho
 rung 2   custody narrowed to named ACTORS    the floor gates QUIET unwrap at a holder node
          ─────────────────────────────────
          break-glass                         available at every rung, audited and notified
+                                             (rung 1's needs a reachable holder — #498)
 ```
 
 Invariants, each inherited rather than invented:
 
 - **Withhold the key, never the bytes** (ADR-0052 E1, unchanged). A non-holder still receives ciphertext
   and the safety projection.
-- **Narrowing changes cost and noise, never reach** (new, from finding (c)).
+- **Narrowing changes cost and noise, never reach — at a node that holds the key or can reach one**
+  (new, from finding (c); the bound is #498, and rung 1 offline is the one place it bites).
 - **Break-glass is loud in three directions with different jobs** — *location* immediate and in-chart
   (the torn envelope colleagues see; the restraint that actually works), *custodian* and *patient* as
   the discharging accountability trail.
@@ -131,6 +140,14 @@ Four properties fall out rather than being built:
   construction rather than by anyone remembering.
 - **Additive per ADR-0012** — no new event type, so none of the four pinned registry row-counts move.
 - **Honest nodes agree.** The custody set is a signed fact rather than a per-node derivation.
+- **Composition is intersection, forced by the bullet above.** The free ADR-0064 inheritance holds only
+  if adding an assertion can never *widen*; a union rule would let a frictionless raise (ADR-0062
+  decision 7 gates only lowering) add a node to the holder set with no authority check. Intersection is
+  also the custody analogue of max-over-standing-assertions. **It can empty** — two honest chart-wide
+  narrowings by clinicians who never met collapse custody to nobody and make every read loud, which
+  destroys finding (b). Not closed here:
+  [#499](https://github.com/cairn-ehr/cairn-ehr/issues/499). Review finding; this design originally left
+  the rule unstated.
 
 ### 5.1 Correcting ADR-0064's handoff argument
 
@@ -166,7 +183,8 @@ decision 8 found for the overclaim detector: over-coarsening is safe when it wit
 and unsafe when it drives a different mechanism.
 
 So a thread-scoped custody narrowing is **refused at the local authoring door, admitted at the remote
-door** (the #342 no-fork rule) and surfaced on the worklist.
+door** (the #342 no-fork rule) and surfaced on the worklist — the same retryability axis §7 names, not a
+different rule.
 
 This also answers #376's first question. Chart-wide (`patient`) custody narrowing is legitimate and
 useful — the staff-member-as-patient case narrows the whole chart to the practice node, which causes no
@@ -183,10 +201,17 @@ is one of them. This is affordable *only because* of the keyring: failing closed
 a lost record. **The keyring is what makes fail-closed affordable** — without it, the same rule would
 silently destroy access.
 
-**Never refuse the assertion for it.** `custody` is a **field on** a sensitivity assertion. Refusing the
-assertion drops the **grade** — protection destroyed by a malformed protection field, #342's fork trap
-pointed at its own foot, and ADR-0060's *the system may fail to record an order; it may never cancel
-one* one subsystem over.
+**Never refuse the assertion for it — at the REMOTE door.** `custody` is a **field on** a sensitivity
+assertion. Refusing it there drops the **grade** — protection destroyed by a malformed protection field,
+#342's fork trap pointed at its own foot, and ADR-0060's *the system may fail to record an order; it may
+never cancel one* one subsystem over. **Locally it is refused**, like any malformed body this node's own
+client mints (ADR-0063 decision 2's mint-strict/arrive-permissive rule).
+
+**PR-review correction:** the first draft said *"never refuse"* with no door qualifier, which contradicts
+§6 — where a thread-scoped narrowing IS refused locally — and contradicts the mint-strict precedent this
+design cites. The rule below does not separate the two cases on its own (each drops one assertion); the
+separator is **retryability, not defectiveness** — the author is standing there to fix a local refusal
+and absent from a remote one.
 
 This is the rule HANDOVER records as having *"three implementations and no name, which is why it keeps
 breaking."* This design names it and states its test:
@@ -239,7 +264,7 @@ surface is §5.11 point-of-care identity, unbuilt.
 
 | | scope | state |
 |---|---|---|
-| **C1** | rung 1: `custody.nodes` on the assertion, both doors, serve-door withholding, the audited break-glass path, in-chart honest disclosure and the location signal | **buildable now** |
+| **C1** | rung 1: `custody.nodes` on the assertion, both doors, serve-door withholding, the audited break-glass path, in-chart honest disclosure and the location signal | **buildable now — except the chart-wide (`patient`) subject, which is blocked on #499** |
 | **C2** | rung 2: floor-enforced quiet-vs-loud unwrap | **blocked on a reader identity (§5.11)** — filed with the block named |
 | **D** | patient and custodian notification as §5.12 discharging obligations | after C1 |
 
@@ -254,9 +279,13 @@ Counterpart: **the sealed envelope in the paper file.**
 |---|---|---|---|
 | seal it and record who may open | 1 | 1 (one assertion carries grade and custody) | 1 |
 | read it at a holder node | 0 extra | 0 extra | 0 |
-| read it elsewhere | 1 (tear it; the tear is visible) | 1 (invoke break-glass; the audit is automatic) | 1 |
+| read it elsewhere, holder reachable | 1 (tear it; the tear is visible) | 1 (invoke break-glass; the audit is automatic) | 1 |
+| read it elsewhere, **partitioned** | 1 (tear it — the envelope is in the file you hold) | **impossible** at rung 1 | — |
 
-`M = N` at every step, so there is **no architecture defect to file** under CLAUDE.md rule 7.
+`M = N` on the first three rows. **The fourth is an architecture defect and is filed as one under
+CLAUDE.md rule 7** ([#498](https://github.com/cairn-ehr/cairn-ehr/issues/498)) — not slower or harder but
+*impossible*, which §1.2 names as a violation in its own right. Review finding; this table originally
+claimed `M = N` at every step.
 
 C1's runnable surface is the CLI, so it owes the **machine-side** budget: a non-narrowed pull shows no
 regression beyond noise, and a break-glass round trip to a reachable holder completes in ≤ 5 s. The
@@ -265,7 +294,8 @@ outside its budget, that is the finding — file an issue; never adjust the budg
 
 ## 12. Testing
 
-TDD throughout, and every guard verified to fail under the revert it names (HANDOVER's #387 species —
+TDD throughout, and every guard verified to fail under the revert it names (the
+[#387](https://github.com/cairn-ehr/cairn-ehr/issues/387) species, recorded in `docs/ROADMAP.md` —
 a mutation that does not change the property tests nothing).
 
 The mutations that must go red:
@@ -298,6 +328,10 @@ The mutations that must go red:
 
 ## 14. Declared limitations
 
+- **Rung 1 has no offline glass** ([#498](https://github.com/cairn-ehr/cairn-ehr/issues/498)). A
+  partitioned non-holder holds the ciphertext, cannot reach a holder, and falls to §5.9's
+  honest-disclosure branch. Rungs 0 and 2 are unaffected. Candidate close: carried-with-patient custody.
+- **Intersection can empty** ([#499](https://github.com/cairn-ehr/cairn-ehr/issues/499)) — see §5.
 - **Narrowing is forward-looking.** A peer that pulled before the act landed keeps what it has. Nothing
   un-knows a DEK. No surface may imply otherwise.
 - **Enforcement is schema-generation-local.** A node that does not understand the `custody` field serves
@@ -317,7 +351,12 @@ The mutations that must go red:
 - **An attacker with node-level DB access reads quietly at rung 2.** Accepted: they can break glass
   anyway, so the cryptography would have bought noise, not protection.
 
-## 15. Findings to file separately
+## 15. Findings filed separately
+
+*Two found during the design (#494, #495, below); two more found by the PR review of this document and
+of ADR-0065 — **#498** (rung 1 has no offline glass, and the paper-parity table claimed `M = N` where it
+is impossible) and **#499** (the custody composition rule was unstated, and the intersection it forces
+can empty). Both are folded into the sections above.*
 
 - **`event_dek` cannot express a named holder set, and ADR-0052 says it can.** ADR-0052 decision 4
   describes `(event_id, holder, dek_wrapped)`; the built table is `(event_id PRIMARY KEY, dek_wrapped,

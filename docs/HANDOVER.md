@@ -26,7 +26,11 @@ re-derive their decisions.**
   ([ADR-0065](spec/decisions/0065-narrow-the-custody-never-the-reach.md), spec v0.67; #376 answered,
   #377 merged). #231 closed, so the hard block is gone. A **custody ladder** — admission (default) →
   named **nodes** → named **actors** — under one invariant: **narrowing changes the cost and the noise
-  of reading, never whether content can be REACHED**, because audited break-glass sits at every rung.
+  of reading, never whether content can be REACHED — at a node that holds the key or can reach one**,
+  because audited break-glass sits at every rung. **The bound is load-bearing** (PR-review finding): a
+  rung-1 break-glass is a NETWORK act, so a partitioned non-holder falls to honest disclosure and cannot
+  reach it — **#498**, the one paper-parity row where this ladder loses to the paper envelope, which
+  travels inside the file. Candidate close: carried-with-patient custody, already in §5.9's trichotomy.
   **Node custody is the NORM, per-clinician the EXCEPTION** (a blanket per-clinician policy makes work
   inside a location impossible) — which is also what keeps break-glass rare enough to mean anything.
   Five things a next session must not re-derive: **the node's own DEK is the keyring and the floor is
@@ -34,13 +38,18 @@ re-derive their decisions.**
   under partition) · **C and D are NOT separable and #377's dependency is REVERSED — the glass must
   exist before anything is sealed behind it** · custody is an **additive field on the sensitivity
   assertion, not a new event type** (one gesture, two dials; ADR-0064's authority floor inherited free
-  because widening is withdraw-by-reference) · custody narrows on `event`/`patient` **never `thread`**
-  · and **an unparseable custody holds NOBODY while the grade still STANDS.**
+  because widening is withdraw-by-reference — which **forces composition to be INTERSECTION**, since a
+  union rule would let a frictionless raise widen the holder set; **and intersection can EMPTY**, which
+  is **#499**) · custody narrows on `event`/`patient` **never `thread`** · and **an unparseable custody
+  holds NOBODY while the grade still STANDS** (refused at the LOCAL door, admitted at the remote one —
+  the split turns on **retryability, not defectiveness**: the author is there to fix a local refusal).
 - **⇒ C1 is the buildable slice:** rung 1 (`custody.nodes`, both doors, serve-door withholding), the
   audited break-glass path, and the **in-chart location signal** (it needs no channel, and it is the
   only one of the three notification directions that actually restrains). **Rung 2 is #496** — blocked
   on a *reader* identity that does not exist (§5.11; today's surfaces attribute writes only). Patient
-  and custodian notification is part D.
+  and custodian notification is part D. **Scope moved OUT of C1 by the PR review: the chart-wide
+  (`patient`) subject is blocked on #499** — until the empty-intersection collapse is decided, a
+  chart-wide narrowing can make every read on that chart a break-glass read.
 
 **Two §5.9 leaks were closed 2026-08-16** (#412, #405), leaving two facts. **`REVOKE SELECT (column)` is
 inert while a table-level grant stands**, so `cairn_agent` holds an explicit 23-column grant on
@@ -184,6 +193,9 @@ The ladder and its five non-re-derivable decisions are in ⇒ NEXT. What general
    custody holds nobody *because* break-glass exists; lift that rule anywhere reachability is not
    guaranteed and it becomes a destroyer of access. The most dangerous coupling in the ADR, and the
    reason its decisions 5 and 6 both restate the reachability argument instead of cross-referencing it.
+   **And the PR review found the guarantee is ALREADY bounded, today, not by some future change: it does
+   not hold for a partitioned rung-1 non-holder (#498).** Fail-closed is affordable everywhere the
+   keyring reaches, and rung 1 offline is exactly where it does not.
    Related: **unknown ranks MAX here as in db/048/049 but for a DIFFERENT reason** (it withholds *quiet
    access*, not protection) — flagged so nobody carries the wrong justification into a fourth site.
 5. **⇒ CRYPTOGRAPHY THAT BUYS NOISE RATHER THAN PROTECTION IS NOT WORTH A SILENT LOSS MODE.** Per-actor
@@ -200,6 +212,19 @@ The ladder and its five non-re-derivable decisions are in ⇒ NEXT. What general
    ADR-0026 decision 4 says the signing key is **never backed up**; if both hold literally, **every
    born-sealed body on a restored node goes dark.** Unread: the sealed local-state export. Highest
    blast radius of anything open.
+7. **⇒ THE PR REVIEW OF A DESIGN-ONLY PR IS A CLAIMS AUDIT, AND IT FOUND FOUR THINGS.** Every code and
+   ADR citation in ADR-0065 verified line-exact — but two claims about the ADR's *own* reasoning did not
+   survive. **#498** — the invariant was stated UNBOUNDED while decision 2 makes rung-1 glass a network
+   act, so the ADR asserted absolutely the property it rejects a remote keyring for; the paper-parity
+   table claimed `M = N` at every step where the partitioned row is *impossible* (§1.2's own third
+   violation category, so rule 7 says file it). **#499** — the custody composition rule was never stated;
+   intersection is FORCED by the ADR-0064 inheritance claim, and it collapses to ∅ on two honest
+   chart-wide narrowings. Two prose defects fixed in place: identity.md said *"four rungs"* and listed
+   break-glass as one (it sits BESIDE the ladder, at every rung), and decisions 4 and 5 gave opposite
+   door treatment to a defective `custody` field without naming the separator — **retryability, not
+   defectiveness.** ⇒ **The ROADMAP condensation had also deleted the "Open-issue index", whose own
+   stated convention is *never drop an open issue number* (the PR #271 finding); 22 live numbers were
+   orphaned in one edit. Restored. A line cap is never a reason to drop a live issue.**
 
 ### 2026-08-23 (first + second pass) — the misclassification cluster and the sweep's tail (condensed)
 

@@ -58,10 +58,21 @@ rung 1   custody narrowed to named NODES     serve withholds the DEK from non-ho
 rung 2   custody narrowed to named ACTORS    the floor gates QUIET unwrap at a holder node
          ─────────────────────────────────
          break-glass                         available at EVERY rung, audited and notified
+                                             (rung 1's needs a reachable holder — #498)
 ```
 
 > **Custody narrowing changes the cost and the noise of reading. It never changes whether the content
-> can be reached.**
+> can be reached — at a node that holds the key, or that can reach one.**
+
+**The bound on that sentence is load-bearing, not decoration.** Rung 2's glass is local, so the invariant
+holds there unqualified. **Rung 1's glass is a network act** (decision 2), so a partitioned non-holder
+degrades to §5.9's honest-disclosure branch — *"sealed content exists here; the key is not present on
+this node"* — and the content genuinely is not reachable there and then. That is the one place this
+ladder is weaker than the paper envelope it copies, because paper's envelope travels **inside the file**.
+It is declared in Known limitations and owned by
+[#498](https://github.com/cairn-ehr/cairn-ehr/issues/498). Stating the invariant unbounded would be a
+**precise untruth in the reassuring direction on a confidentiality surface** — the exact defect this ADR
+rejects a rendered holder list for, one decision over (principle 4).
 
 **Node custody is the norm; per-clinician custody is the exception.** A blanket per-clinician policy
 would cause unbearable friction inside a location and make normal work impossible — in an ED the team
@@ -93,6 +104,17 @@ of every DEK, `REVOKE`d from `PUBLIC` and `cairn_agent` and granted only to `cai
 partitioned remote clinic — an availability failure on the safety path. Break glass locally; the audit
 event replicates as an ordinary append-only event and the notification discharges when the link returns.
 
+**That argument convicts rung 1's own glass, and the honest thing is to say so here rather than let a
+reader find it.** A rung-1 break-glass needs a reachable holder, so under partition it fails for the same
+reason a remote keyring would. Two differences keep the rejection sound rather than hypocritical: a remote
+keyring fails at **every** rung including the local ones, where rung 1 fails at one; and rungs 0 and 2
+keep the guarantee outright. But the residue is real — principle 5 says a clinician *"must always be able
+to read locally-relevant records ... during a partition"*, and at rung 1 offline, they cannot. The
+candidate that closes it is the one §5.9's trichotomy already names — **carried-with-patient custody**
+(*the patient is a key-holder, paper-parity-exact*), which is the literal paper mechanism: the envelope
+travels with the file. Unbuilt; [#498](https://github.com/cairn-ehr/cairn-ehr/issues/498) owns the
+decision.
+
 **Consequence for sequencing, stated because the issue tracker records it backwards:** part C and part D
 are **not separable**. A narrowing without an audited break-glass path creates content nobody can reach.
 [#377](https://github.com/cairn-ehr/cairn-ehr/issues/377) says *"blocked on C"*; **the glass has to exist
@@ -105,7 +127,8 @@ being built:
 
 - **One gesture, not two.** Two independently-settable dials means one is independently *forgettable* —
   protection real in the projection and absent at the wire, which is #376's own *"worse than shipping
-  nothing"* argument reinstated by its own fix. One signed act keeps `M = N` against paper (§1.2).
+  nothing"* argument reinstated by its own fix. One signed act keeps the sealing row at `M = N` against
+  paper (§1.2).
 - **[ADR-0064](0064-admit-the-claim-withhold-the-power.md)'s authority floor is inherited free.** Widening
   custody is protection-**removing**, and it is expressed as withdraw-by-reference on the assertion
   carrying it — so it already routes through `cairn_claim_authority` at the single site every dial keys
@@ -115,6 +138,23 @@ being built:
   event type, so none of the four pinned registry row-counts move and `SCHEMA_GENERATION` rises only for
   the floor migration.
 - **Honest nodes agree.** The custody set is a signed fact, not a per-node derivation.
+
+**Custody sets across standing assertions compose by INTERSECTION, and that is forced rather than
+chosen.** The bullet above only holds if adding an assertion can never *widen* the holder set — under a
+union rule, any accountable contributor could add their own node with a frictionless raise (ADR-0062
+decision 7 gates only lowering) and ADR-0064's floor would be inherited in name only. So composition must
+be monotonically narrowing, which is intersection, which is also the custody analogue of ADR-0062's
+max-over-standing-assertions: *the most protective standing claim wins.*
+
+**Intersection has a collapse, and this ADR does not close it.** Two honest, well-formed narrowings on
+one chart — a GP's `{practice-node}`, a hospital clinician's `{hospital-node}`, both standing — intersect
+to **∅**, which by decision 5 holds nobody, which makes **every** read on that chart a break-glass read
+and destroys decision 1's rarity guarantee. Fail-closed keeps that safe (nothing is lost) but not *useful*:
+it converts the ladder into the shape decision 1 rejects, where break-glass is the route for the normal
+case. Multi-site care for a sequestered patient is not an edge case — it is the staff-member-as-patient
+and DV shapes §5.9 exists for. The rule is stated; the collapse is
+[#499](https://github.com/cairn-ehr/cairn-ehr/issues/499), and **C1 must not ship a chart-wide narrowing
+before it is decided.**
 
 #### 3.1 Correcting ADR-0064's handoff argument
 
@@ -133,6 +173,12 @@ The genuine quiet leaks are different, and in both cases **both nodes are honest
 
 Explicitness closes the first. Nothing closes the second — it is a distributed system — and it is
 **declared** (decision 8) rather than papered over.
+
+Stated more precisely, because the two causes are the same cause one plane apart and a reader will
+notice: actor revocation is itself a replicated event, so registry divergence *is* replication lag on the
+registry. The durable form of the argument is therefore about **surface count**, not about two different
+mechanisms — **a derived dial has two lag surfaces (the assertion and the actor registry); an explicit
+act has one.** That version survives the objection the shorter one invites.
 
 The conclusion ADR-0064 reached is adopted; the argument is replaced. Recording the correction matters
 because the original argument would have justified the wrong mitigation — hardening thread resolution,
@@ -155,7 +201,9 @@ is a property of a direction, not of a value — before reusing a bound, ask wha
 
 A thread-scoped custody narrowing is therefore **refused at the local authoring door, admitted at the
 remote door** ([#342](https://github.com/cairn-ehr/cairn-ehr/issues/342)'s no-fork rule) and surfaced on
-the worklist.
+the worklist. The reason it is *locally* refusable while decision 5's unparseable custody is not is
+**retryability, not defectiveness** — the author is standing there in both local cases and absent in both
+remote ones; see decision 5, which states that axis and is the half of the pair that needs it spelled out.
 
 This answers #376's first question. Chart-wide (`patient`) custody narrowing **is** legitimate: the
 staff-member-as-patient case narrows the whole chart to the practice node, which causes no local
@@ -172,12 +220,22 @@ one of them. **The keyring is what makes fail-closed affordable**: the cost is a
 record. Without the keyring the identical rule would silently destroy access, which is why this decision
 cannot be lifted out of this ADR and applied elsewhere unchanged.
 
-**Never refuse the assertion for it.** `custody` is a **field on** a sensitivity assertion. Refusing the
-assertion drops the **grade** — protection destroyed by a malformed protection field, #342's fork trap
-pointed at its own foot, and [ADR-0060](0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md)
-one subsystem over.
+**Never refuse the assertion for it — at the REMOTE door.** `custody` is a **field on** a sensitivity
+assertion. Refusing the assertion there drops the **grade** — protection destroyed by a malformed
+protection field, #342's fork trap pointed at its own foot, and
+[ADR-0060](0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md) one subsystem over.
+**Locally it is refused**, like any malformed body this node's own client mints — ADR-0063 decision 2's
+*constrained where it is MINTED, permissive where it ARRIVES*, applied here rather than excepted.
 
-This is the rule with three implementations and no name. It gets one here:
+**The door qualifier matters because decision 4 goes the other way on a less defective input**, and the
+rule named below does not by itself separate them — a thread-scoped custody and an unparseable one each
+drop exactly one assertion, so *"what else dies with them"* returns the same answer for both. The
+separator is a second axis: **who is standing there to fix it.** At the local door the author is present,
+the refusal is visible and the write is retryable, so refusing costs a corrected re-author and nothing is
+lost. At the remote door there is no author to retry, so refusing is permanent loss plus a fork. Both
+decisions follow from that, and neither is safe to quote without it.
+
+With that second axis in hand, the rule this ADR is the fourth implementation of can finally be named:
 
 > **Refuse at a door only what that door can drop whole.**
 > A malformed sensitivity assertion drops one assertion — refuse it. A malformed **field on** a clinical
@@ -268,10 +326,18 @@ forced-rationale escape. Counterpart: **the sealed envelope in the paper file.**
 |---|---|---|---|
 | seal it, record who may open | 1 | 1 (one assertion carries grade **and** custody) | 1 |
 | read it at a holder node | 0 extra | 0 extra | 0 |
-| read it elsewhere | 1 (tear it; the tear is visible) | 1 (invoke break-glass; the audit is automatic) | 1 |
+| read it elsewhere, holder reachable | 1 (tear it; the tear is visible) | 1 (invoke break-glass; the audit is automatic) | 1 |
+| read it elsewhere, **partitioned** | 1 (tear it — the envelope is in the file you are holding) | **impossible** at rung 1 | — |
 
-`M = N` at every step — **no architecture defect to file.** The decision that keeps it there is decision
-3: had custody been a separate event type, sealing would have cost two acts against paper's one.
+`M = N` on the first three rows, and the decision that keeps it there is decision 3: had custody been a
+separate event type, sealing would have cost two acts against paper's one.
+
+**The fourth row is an architecture defect and is filed as one**
+([#498](https://github.com/cairn-ehr/cairn-ehr/issues/498)), per CLAUDE.md rule 7. It is not *slower* or
+*harder* than paper — it is **impossible**, which §1.2 names explicitly as a violation alongside the
+other two, and it is the single row where this ladder loses to the envelope it copies: paper's envelope
+travels inside the file, and rung 1's glass does not travel with the record. Recorded rather than
+absorbed, because the standing rule is that a measurement outside its budget **is** the finding.
 
 Part C1's runnable surface is the CLI, so it owes the **machine-side** budget: a non-narrowed pull shows
 no regression beyond noise, and a break-glass round trip to a reachable holder completes in **≤ 5 s**.
@@ -295,7 +361,8 @@ falls outside its budget, that is the finding — file an issue; never adjust th
   input; it is never what a clinician is told.
 - **A remote break-glass keyring provider.** Genuinely stronger audit — the record would live with
   another party and could not be deleted by the breaker — but it fails under partition at 3am, and
-  availability wins on the safety path.
+  availability wins on the safety path. Rejected on a *degree*, not a kind: rung 1's own glass shares the
+  property at one rung where a remote keyring would have it at all three (decision 2 owns the asymmetry).
 - **Paper-escrow recoverability per sequester** (a printed recovery code per sealed body, ADR-0026
   decision 5's rung). Rejected in favour of the keyring: a physical artifact per act, and the safe
   holding it is a custody set nobody named.
@@ -304,6 +371,20 @@ falls outside its budget, that is the finding — file an issue; never adjust th
 
 ## Known limitations
 
+- **Rung 1 has no offline glass.** A non-holder node under partition holds the ciphertext, cannot reach a
+  holder, and falls to §5.9's honest-disclosure branch — the content is unreachable there and then. This
+  is the bound on decision 1's invariant, it leaves principle 5's literal words unmet at that one rung,
+  and it is the row where the paper-parity table shows a defect rather than parity. Rungs 0 and 2 are
+  unaffected. The candidate close is **carried-with-patient key custody**, which §5.9's acquisition
+  trichotomy already names and which is the literal paper mechanism.
+  [#498](https://github.com/cairn-ehr/cairn-ehr/issues/498).
+- **Two honest narrowings on one chart intersect to nobody.** Composition is intersection (decision 3,
+  forced rather than chosen), so independent chart-wide narrowings by two clinicians who never met
+  collapse the holder set to **∅**; every read on that chart becomes a break-glass read and decision 1's
+  rarity guarantee — which the whole ladder rests on — dies from two legitimate acts. Fail-closed keeps
+  it *safe* but not *useful*. Not an edge case in multi-site care, which is the shape §5.9 exists for.
+  **C1 must not ship a chart-wide narrowing before this is decided.**
+  [#499](https://github.com/cairn-ehr/cairn-ehr/issues/499).
 - **Narrowing is forward-looking.** A peer that pulled before the act landed keeps what it has. Nothing
   un-knows a DEK, and no surface may imply otherwise.
 - **Enforcement is schema-generation-local.** A node that does not understand the `custody` field serves
@@ -330,9 +411,11 @@ falls outside its budget, that is the finding — file an issue; never adjust th
 - Sequester becomes buildable without a new key tier, a new escrow mechanism, or a per-actor key
   management surface — decision 2.
 - Recoverability and confidentiality stop being in tension. Every previous shape of this design traded
-  one against the other; the keyring makes them the same mechanism.
+  one against the other; the keyring makes them the same mechanism — outright at rungs 0 and 2, and at
+  rung 1 whenever a holder is reachable ([#498](https://github.com/cairn-ehr/cairn-ehr/issues/498) is the
+  remainder).
 - Fail-closed becomes affordable on a confidentiality dial (decision 5), which is normally the one place
-  it is too expensive.
+  it is too expensive — everywhere the keyring actually reaches.
 - ADR-0064's structural inheritance claim is discharged: widening custody routes through
   `cairn_claim_authority` with no new gate.
 - The three-implementations-no-name rule finally has a name and a test (decision 5).
@@ -346,7 +429,13 @@ falls outside its budget, that is the finding — file an issue; never adjust th
 - Decision 5's fail-closed rule is safe **only** while the keyring guarantee holds. If a future change
   makes any content unreachable, that decision becomes a destroyer of access — the most dangerous
   coupling this ADR introduces, and the reason decisions 5 and 6 both carry the reachability argument
-  explicitly rather than by reference.
+  explicitly rather than by reference. **And the guarantee is already bounded, today, not by some future
+  change:** it does not hold for a partitioned rung-1 non-holder, so fail-closed is affordable everywhere
+  except exactly there ([#498](https://github.com/cairn-ehr/cairn-ehr/issues/498)). A live edge, stated
+  as one.
+- **The composition rule has an unclosed collapse.** Intersection is forced by decision 3, and it can
+  empty ([#499](https://github.com/cairn-ehr/cairn-ehr/issues/499)). Until that is decided, C1's
+  chart-wide narrowing is not buildable — which moves scope out of C1 that the design doc placed in it.
 - Rung 2 is blocked on a reader identity that does not exist, so the ladder ships with its most
   clinically-motivated rung unbuilt, and that gap must be stated to users rather than implied away.
 
