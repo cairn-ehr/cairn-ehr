@@ -339,6 +339,14 @@ fn establish_local_state_escrow(
 /// arm so the caller can treat EVERY failure here as a warn-and-skip degradation: the export
 /// is OPTIONAL and the event medium is already written (the load-bearing copy), so a missing
 /// passphrase (unattended run), a wrong passphrase, or an I/O error must never abort backup.
+///
+/// ⚠️ **#495 — THIS CEREMONY SUCCEEDS OVER AN EMPTY BUNDLE, AND THAT IS THE DEFECT.**
+/// `read_local_state` returns `LocalState::empty()` unconditionally (its `_db` is unused),
+/// so on a node holding real `event_dek` custody this seals nothing, writes a valid
+/// `CAIRNL1` container, and reports success. The failure paths above are all handled
+/// honestly; it is the SUCCESS path that lies. Nothing here needs to change when #495 is
+/// fixed — the fix is inside `read_local_state` — but a reader arriving at "why did my
+/// restore have no keys" lands here first.
 async fn seal_and_write_local_state_export(
     db: &tokio_postgres::Client,
     wraps: &cairn_node::localstate::LskWraps,
@@ -1393,10 +1401,14 @@ async fn main() -> anyhow::Result<()> {
                         Ok(export_path) => {
                             println!("local-state exported to {}", export_path.display())
                         }
+                        // The "load-bearing copy" reassurance that used to end this line was
+                        // removed, not softened: with #500 open the medium carries only the
+                        // federation plane, so telling an operator the backed-up events are
+                        // "safe" is precisely the false composite this DR audit named.
                         Err(e) => eprintln!(
-                            "WARNING: local-state export skipped: {e:#}. Backed up events only \
-                             (they are the load-bearing copy and are safe); set \
-                             CAIRN_KEY_PASSPHRASE or pass --passphrase to write the sealed export."
+                            "WARNING: local-state export skipped: {e:#}. Backed up events only; \
+                             set CAIRN_KEY_PASSPHRASE or pass --passphrase to write the sealed \
+                             export."
                         ),
                     }
                 }
@@ -1531,9 +1543,19 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
             // ADR-0026 slice D: if a sealed local-state export sits beside the medium,
-            // unseal it with the OLD recovery code and apply it (empty/noop today), then
-            // give the NEW node its OWN local-state escrow. Absent export => skip (the node
-            // restores from events alone — honest degradation).
+            // unseal it with the OLD recovery code and apply it, then give the NEW node its
+            // OWN local-state escrow. Absent export => skip (the node restores from events
+            // alone — honest degradation).
+            //
+            // ⚠️ #495: "apply it" is a noop today, because the export it is applying is
+            // always empty (localstate::read_local_state never reads the database). This is
+            // the moment a restored solo node would have regained its custody, and it is
+            // where the absence finally bites. Do not read the noop as "nothing to do".
+            //
+            // ⚠️ The `Err` arm of the read below is SILENT — a permissions or I/O failure on
+            // a present export is indistinguishable here from no export at all, at the worst
+            // possible moment. Every INNER arm warns; only this one does not. Tracked in #502
+            // with the rest of this path's silent-success spots.
             let export_path = cairn_node::localstate::localstate_path_for(&from);
             if let Ok(bytes) = std::fs::read(&export_path) {
                 // A corrupt/bit-rotted export sibling must NOT bail — by this point the node

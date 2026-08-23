@@ -14,8 +14,15 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
+/// The export comes back empty. **The assertion is still true; its old justification was
+/// not** — this test used to say "no clinical surface yet => the bundle is empty", a
+/// sentence ADR-0052 falsified when it made every clinical body born-sealed. The emptiness
+/// is now a **defect** (#495), pinned properly — against a database that genuinely holds
+/// custody — by `dr_clinical_guarantee_gap.rs`. Kept here as the round-trip's read half.
+/// (Renamed off `..._is_empty_at_the_federation_tier` for the same reason: a test name is a
+/// claim, and that one re-taught the expired framing every time it was read.)
 #[tokio::test]
-async fn read_local_state_is_empty_at_the_federation_tier() {
+async fn read_local_state_returns_the_empty_bundle() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -27,7 +34,7 @@ async fn read_local_state_is_empty_at_the_federation_tier() {
     let ls = read_local_state(&conn).await.expect("read must succeed");
     assert!(
         ls.is_empty(),
-        "no clinical surface yet => the bundle is empty"
+        "the export is empty — a DEFECT since ADR-0052, not the tier's shape (#495)"
     );
     // Applying an empty bundle is a clean noop (the seam the clinical tier extends).
     apply_local_state(&conn, &ls)

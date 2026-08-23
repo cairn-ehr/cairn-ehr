@@ -132,6 +132,28 @@ pub struct BackupReport {
 /// Read this node's signed `node_event` set, in local `seq` order. A plain `SELECT` —
 /// any role with read access works (the runtime `cairn_node` role has `GRANT SELECT ON
 /// node_event`); no signing key and no validated door are needed to back up.
+///
+/// ⚠️ **#500 — `node_event` IS THE WHOLE MEDIUM, and that is a live defect.** This is the
+/// federation plane: enroll, peer, revoke, supersede. `event_log` is NOT read here or
+/// anywhere else on the backup path, so the medium carries **no `event_log` row at all** —
+/// not clinical, not demographic, not identity, not registration, not erasure — while
+/// ADR-0026 decision 1 promises *"the clinical event log survives"* a restore and decision 2
+/// says *"clinical events back up as a cold peer"*. For the solo clinic that ADR opens by
+/// naming as first-class — the one for which *"replication provides zero durability"* — a
+/// dead disk is total record loss, not merely loss of clinical content.
+///
+/// **And the operator is never told.** ADR-0026 decision 7: *"Backup health is a first-class
+/// honest-assembly fact."* — *"A node that cannot currently back up is running without a net
+/// and must say so."* `backup-status.json` and `status` report freshness
+/// truly, and `verify-backup` reports the medium's INTEGRITY truly (not its health, and not
+/// its scope); none of them can see that the scope is wrong, because nothing on this path
+/// distinguishes the two planes. Every surface is honest and the composite is a precise
+/// untruth — decision 7 defeated by a system in which no single component lies.
+///
+/// Its sibling is #495 (a restored solo node cannot unwrap inherited custody); fixing
+/// either alone is useless. Pinned by
+/// `tests/dr_clinical_guarantee_gap.rs::medium_carries_the_federation_plane_and_no_clinical_event`,
+/// which checks both this function's result AND the medium file `backup_to` writes.
 pub async fn read_event_set(db: &tokio_postgres::Client) -> anyhow::Result<Vec<Vec<u8>>> {
     use anyhow::Context;
     let rows = db
