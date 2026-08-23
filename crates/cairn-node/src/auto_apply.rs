@@ -9,6 +9,7 @@
 //! Split: pure body/provenance assembly (unit-tested, no DB) + IO functions — one
 //! proposal (`apply_auto_candidate`) and the batch driver (`apply_auto_candidates`).
 
+use crate::db_diagnosis::{operator_chain, LocalDbFault};
 use crate::matcher_actor::resolve_matcher_actor;
 use cairn_event::identity::{link_assertion_body, render_link_twin, LinkAssertion};
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
@@ -105,7 +106,14 @@ pub async fn apply_auto_candidate(
         (high, low)
     };
     let (low_s, high_s) = (low.to_string(), high.to_string());
-    let tx = client.transaction().await?;
+    // Every postgres call in this function names the operation it was performing, so a
+    // failure on the §5.7 auto-apply ceremony says which step met the database and with
+    // what SQLSTATE (#477). `LocalDbFault` renders legibly AND keeps the
+    // `tokio_postgres::Error` reachable as `source()`.
+    let tx = client
+        .transaction()
+        .await
+        .map_err(|e| LocalDbFault::new("opening the auto-apply transaction", e))?;
 
     // 1. Lock the row; require it is an auto_candidate still awaiting disposition.
     let row = tx
@@ -114,7 +122,8 @@ pub async fn apply_auto_candidate(
              WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid FOR UPDATE",
             &[&low_s, &high_s],
         )
-        .await?;
+        .await
+        .map_err(|e| LocalDbFault::new("locking the match proposal", e))?;
     let Some(row) = row else {
         return Ok(AutoOutcome::Skipped(format!(
             "no proposal for ({low}, {high})"
@@ -138,7 +147,8 @@ pub async fn apply_auto_candidate(
             "SELECT EXISTS(SELECT 1 FROM cairn_match_veto($1::text::uuid, $2::text::uuid))",
             &[&low_s, &high_s],
         )
-        .await?
+        .await
+        .map_err(|e| LocalDbFault::new("re-checking the db/016 veto floor", e))?
         .get(0);
     if vetoed {
         tx.execute(
@@ -146,8 +156,11 @@ pub async fn apply_auto_candidate(
              WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
             &[&low_s, &high_s],
         )
-        .await?;
-        tx.commit().await?;
+        .await
+        .map_err(|e| LocalDbFault::new("kicking a vetoed pair to human review", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| LocalDbFault::new("committing the veto-to-review update", e))?;
         return Ok(AutoOutcome::VetoedToReview);
     }
 
@@ -169,7 +182,8 @@ pub async fn apply_auto_candidate(
     // 4. Submit through the 1-arg (un-attested) door. The db/018 identity floor +
     //    patient_link_apply trigger run here.
     tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+        .await
+        .map_err(|e| LocalDbFault::new("submitting the matcher link through the floor", e))?;
 
     // 5. Mark the proposal auto_applied (distinct from C2's human 'applied').
     let event_id_s = event_id.to_string();
@@ -178,9 +192,12 @@ pub async fn apply_auto_candidate(
          WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
         &[&low_s, &high_s, &event_id_s],
     )
-    .await?;
+    .await
+    .map_err(|e| LocalDbFault::new("marking the proposal auto_applied", e))?;
 
-    tx.commit().await?;
+    tx.commit()
+        .await
+        .map_err(|e| LocalDbFault::new("committing the auto-applied link", e))?;
     Ok(AutoOutcome::Applied(event_id))
 }
 
@@ -223,7 +240,8 @@ pub async fn apply_auto_candidates(
             "SELECT pg_try_advisory_lock($1, $2)",
             &[&AUTO_APPLY_LOCK_NS, &AUTO_APPLY_LOCK_SLOT],
         )
-        .await?
+        .await
+        .map_err(|e| LocalDbFault::new("taking the auto-apply advisory lock", e))?
         .get(0);
     if !got_lock {
         anyhow::bail!(
@@ -246,6 +264,45 @@ pub async fn apply_auto_candidates(
     result
 }
 
+/// The operator line for an epoch whose matcher actor could not be resolved. **Pure.**
+///
+/// # Why `operator_chain` and not `{e}` (issue #477)
+///
+/// `anyhow`'s plain `Display` prints only the OUTERMOST message. Before this change every
+/// postgres call below reached the database with a bare `?`, so the outermost error WAS a
+/// `tokio_postgres::Error` — whose own `Display` is the literal string `db error`, and
+/// that was the whole content of this line on the §5.7 identity auto-apply ceremony.
+///
+/// It matters more here than the two words suggest. The caller counts the failure and
+/// CONTINUES, so a run where every pair failed for one missing grant looked exactly like a
+/// run where every pair failed for a different reason — and this path is the one that
+/// links two patient charts together without a human in the loop.
+///
+/// Both halves of the fix are needed, and it is worth being exact about which does what:
+/// `resolve_matcher_actor`'s three registry calls now name their operation, so the
+/// outermost `Display` is already legible; `operator_chain` is what keeps that true when a
+/// caller adds a context layer, and what still renders a call somebody forgets to name.
+fn resolve_failure_line(version: &str, e: &anyhow::Error) -> String {
+    format!(
+        "auto-apply resolve epoch '{version}': {}",
+        operator_chain(e)
+    )
+}
+
+/// The operator line for one pair whose apply transaction failed. **Pure.**
+///
+/// [`resolve_failure_line`]'s sibling, and the one that fires once per pair. Same defect,
+/// same fix; the pair is named because the summary counts alone cannot say WHICH charts
+/// were left unlinked.
+///
+/// The same exactness applies: `apply_auto_candidate`'s eight postgres calls are wrapped, so
+/// the outermost `Display` is legible on its own. `operator_chain` earns its place on the
+/// paths that are NOT database errors at all — a signing failure, a future unwrapped call —
+/// and on any context layer a caller adds above.
+fn apply_failure_line(low: Uuid, high: Uuid, e: &anyhow::Error) -> String {
+    format!("auto-apply ({low},{high}): {}", operator_chain(e))
+}
+
 /// The auto-apply ceremony body. MUST only run under the session advisory lock taken
 /// by [`apply_auto_candidates`] — factored out so the lock/unlock bracket wraps every
 /// early `?` return here by construction.
@@ -264,7 +321,8 @@ async fn ceremony_locked(
              ORDER BY patient_low, patient_high",
             &[],
         )
-        .await?;
+        .await
+        .map_err(|e| LocalDbFault::new("reading the auto-candidate worklist", e))?;
 
     let mut keys: HashMap<String, (SigningKey, String)> = HashMap::new();
     // Epochs whose resolve already failed this run — so we neither re-resolve nor re-log
@@ -301,7 +359,7 @@ async fn ceremony_locked(
                     keys.insert(version.clone(), resolved);
                 }
                 Err(e) => {
-                    eprintln!("auto-apply resolve epoch '{version}': {e}");
+                    eprintln!("{}", resolve_failure_line(&version, &e));
                     failed_versions.insert(version.clone());
                     summary.errored += 1;
                     continue;
@@ -321,7 +379,7 @@ async fn ceremony_locked(
             Ok(AutoOutcome::VetoedToReview) => summary.vetoed_to_review += 1,
             Ok(AutoOutcome::Skipped(_)) => summary.skipped += 1,
             Err(e) => {
-                eprintln!("auto-apply ({low},{high}): {e}");
+                eprintln!("{}", apply_failure_line(low, high, &e));
                 summary.errored += 1;
             }
         }
@@ -333,6 +391,64 @@ async fn ceremony_locked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real `tokio_postgres::Error` with a live `source()`, built with NO database:
+    /// `Config`'s own parser is the only way to get one by hand, because `DbError` cannot
+    /// be constructed outside `tokio-postgres`. The same fixture `db_diagnosis` uses.
+    fn a_real_pg_error() -> tokio_postgres::Error {
+        "host=localhost port=not-a-number"
+            .parse::<tokio_postgres::Config>()
+            .expect_err("a non-numeric port is not a parseable connection string")
+    }
+
+    /// Issue #477: both operator lines on the §5.7 auto-apply ceremony said `db error`.
+    ///
+    /// `apply_auto_candidate` returns `anyhow::Result` and reaches the database with a
+    /// bare `?`, so the outermost error IS the `tokio_postgres::Error` — and `anyhow`'s
+    /// plain `Display` prints only the outermost message, which is that literal string.
+    /// The line then increments `summary.errored` and continues, so a run where EVERY
+    /// pair failed for one missing grant is indistinguishable from one where every pair
+    /// failed for a different reason.
+    #[test]
+    fn a_failed_resolve_names_the_epoch_and_the_diagnosis() {
+        let e = anyhow::Error::from(a_real_pg_error());
+        let line = resolve_failure_line("2026.07.1", &e);
+
+        assert!(line.contains("2026.07.1"), "names the epoch: {line}");
+        assert!(
+            line.contains("port"),
+            "…and the diagnosis, not the kind: {line}"
+        );
+        assert!(!line.ends_with("db error"), "#477's species: {line}");
+        assert!(!line.contains('\n'), "one line per event: {line}");
+    }
+
+    /// The sibling line, and the one that fires once per pair.
+    #[test]
+    fn a_failed_apply_names_the_pair_and_the_diagnosis() {
+        let (a, b, _) = ids();
+        // The shape production builds since this change: a named operation over the
+        // database error, with a caller's context layer on top.
+        let e = anyhow::Error::from(LocalDbFault::new(
+            "locking the match proposal",
+            a_real_pg_error(),
+        ))
+        .context("auto-applying a matcher link");
+        let line = apply_failure_line(a, b, &e);
+
+        assert!(line.contains(&a.to_string()), "names the pair: {line}");
+        assert!(line.contains(&b.to_string()), "names the pair: {line}");
+        assert!(
+            line.contains("locking the match proposal"),
+            "…the operation that failed: {line}"
+        );
+        assert!(line.contains("port"), "…and the diagnosis: {line}");
+        assert_eq!(
+            line.matches("invalid value for option `port`").count(),
+            1,
+            "said exactly once: {line}"
+        );
+    }
 
     fn ids() -> (Uuid, Uuid, Uuid) {
         let a = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
