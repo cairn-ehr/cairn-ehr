@@ -70,9 +70,11 @@
 //! `cairn-sync`'s `main.rs` is deliberately NOT in `GUARDED`. It carries the twin renderer
 //! and its loops were fixed alongside these (#475, #471, #479), but it is one 10,000-line
 //! file mixing production code with its own test modules, and dozens of its `{e}`-shaped
-//! sites render errors that are not database errors at all — hex decoding, serde, I/O, and
-//! `ApplyError`, which is NOT legible by construction (its `None` arm is `e.to_string()`;
-//! that is #480). A name-based scan over that file would be mostly false positives, and a
+//! sites render errors that are not database errors at all — hex decoding, serde and I/O.
+//! (`ApplyError` used to belong on that list — its `None` arm was `e.to_string()`, the bare
+//! kind — but #480 closed that: it now renders through `legible_db_error`, keeps the
+//! `postgres::Error` as `source()`, and the requeue path no longer records a fault the door
+//! never adjudicated.) A name-based scan over that file would be mostly false positives, and a
 //! guard whose failures are usually noise is one people learn to silence. Splitting
 //! `main.rs` is separate work (#402's shape).
 //!
@@ -393,9 +395,34 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
         "the serve trust-set lookup — the AUTHORIZATION path for an inbound peer",
         r#""cairn-sync serve: trust-set lookup for puller {kid} failed: {}", legible_db_error(&e)"#,
     ),
+    (
+        "quarantine_event's dedupe UPDATE — the FIRST statement of a pen write, and the \
+         one a lock storm or an aborted transaction meets (#490 item 2)",
+        r#".map_err(|e| LocalDbFault::boxed("recording a re-offer of already-penned bytes", e))?"#,
+    ),
+    (
+        "quarantine_event's INSERT — the pen write itself",
+        r#".map_err(|e| LocalDbFault::boxed("penning a refused event in sync_quarantine", e))?"#,
+    ),
+    (
+        "quarantine_event's over-quota probe, which was a bare `?`",
+        r#".map_err(|e| LocalDbFault::boxed("distinguishing a full pen from a lost race", e))?"#,
+    ),
+    (
+        "the pen-release DELETE in the pull loop, whose `{de}` was the literal `db error` \
+         — a binding RAW_ERROR_BINDINGS does not name (#490 item 1)",
+        r#"row could not be released: {} — retried next cycle", legible_db_error(&de)"#,
+    ),
 ];
 
 /// How many `.map_err(|e| LocalDbFault::boxed(` sites `cairn-sync`'s daemon carries.
+///
+/// Three came from #479 (the two pre-network statements and `do_requeue`'s opening query);
+/// three more from #490 item 2, which replaced `quarantine_event`'s private `legible()` —
+/// a helper that flattened a server error into a `String`, destroying the SQLSTATE and the
+/// `source()` a classifier reads. That flattening is why a pen write refused by this node's
+/// own database was reported as the PEER's data problem (#489 part 1): with no
+/// `postgres::Error` reachable, nothing could tell it from the pen's quota refusal.
 ///
 /// **What this count does and does not catch.** It counts WRAPPERS, not postgres calls, so a
 /// new call written without one leaves it at three and passes. This test's own doc below says
@@ -405,7 +432,7 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
 /// wrapper and the count drops with it. Bumping it is the forced acknowledgement when a
 /// wrapped site is added. The shapes above also catch a revert and name which site; the count
 /// catches one whose shape was edited rather than deleted.
-const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 3;
+const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 6;
 
 /// `cairn-sync`'s run loop keeps rendering its database failures (#479).
 ///

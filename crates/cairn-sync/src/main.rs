@@ -325,6 +325,15 @@ struct PullIntegrityError {
     /// The same metrics JSON a successful pull returns (may be `null` for the
     /// pre-loop skew refusal, where no per-event work happened yet).
     metrics: serde_json::Value,
+    /// Was THIS NODE'S DATABASE also at fault? (Issue #489 part 1.)
+    ///
+    /// The mirror image of [`CursorCommitError::also_loud`], and it exists for the same
+    /// reason: one cycle can be two conditions, and collapsing it to the outer type's
+    /// class drops the one that needs a different human action. Set only by the pen
+    /// refusal path, and only when a `postgres::Error` is reachable in the pen's own
+    /// error — a pen refused by its per-peer QUOTA is the peer's garbage filling a
+    /// budget, not a local fault, and must not charge this node's uptime for it.
+    also_local_fault: bool,
 }
 
 impl std::fmt::Display for PullIntegrityError {
@@ -808,6 +817,49 @@ fn cycle_is_loud(unverifiable: usize, refused: usize, frozen: bool, pen_failed: 
     unverifiable > 0 || refused > 0 || frozen || pen_failed
 }
 
+/// A quarantine-pen write that was refused, and **whose fault that is** (issue #489).
+///
+/// The pen refuses for two entirely different reasons, and they call for opposite
+/// operator actions:
+///
+/// * **this node's own database** said no — disk full, a grant revoked by a restore, a
+///   lock timeout, a dead connection. The peer and the link are fine; the machine under
+///   the operator's hands is not;
+/// * **the per-peer quota** said no — a resource budget exhausted by the peer's own
+///   garbage. That is the mechanism working as designed (`MAX_QUARANTINE_*`), and it is a
+///   fact about the PEER.
+///
+/// Before this, both produced the single class `integrity` — *the peer answered and its
+/// DATA is the problem* — so a failing local disk sent someone to audit a peer's
+/// signatures, and the Bet A figures learned nothing about this node's own uptime.
+#[derive(Debug, Clone)]
+struct PenRefusal {
+    /// The already-legible refusal text, as it goes into the operator's freeze line.
+    message: String,
+    /// True iff a `postgres::Error` is reachable in the refusal's chain.
+    local_fault: bool,
+}
+
+/// Classify a refused pen write. **Pure**, so the routing is testable without a database
+/// that refuses on demand.
+///
+/// The test is *is a `postgres::Error` reachable*, not *does the message look like SQL*:
+/// [`quarantine_event`] renders its database failures through [`LocalDbFault`], which
+/// keeps the original error as `source()` precisely so this question can be asked. Its
+/// quota refusal is a plain `String` error with no chain, so it answers `false` — which
+/// is the right answer, not a fallback.
+///
+/// ⚠️ This is why [`quarantine_event`] must never "tidy" a `LocalDbFault` into a
+/// `format!(…).into()`: a `String` error has no `source()`, so a dead local database
+/// would silently start reporting as the peer's problem. That helper used to do exactly
+/// that (issue #490 item 2).
+fn pen_refusal(e: &(dyn Error + 'static)) -> PenRefusal {
+    PenRefusal {
+        message: e.to_string(),
+        local_fault: chain_reaches_a_postgres_error(e),
+    }
+}
+
 /// Compose the operator-facing text of a loud cycle (see [`cycle_is_loud`]).
 ///
 /// Pure and unit-tested because this message IS the product on this path: it is
@@ -986,7 +1038,14 @@ fn classify_pull_failure(
     e: &(dyn Error + 'static),
 ) -> (&'static [&'static str], serde_json::Value) {
     if let Some(ie) = e.downcast_ref::<PullIntegrityError>() {
-        return (&["integrity"], ie.metrics.clone());
+        // Both, when the pen write was refused by this node's own database (#489 part 1):
+        // the peer sent something we could not admit AND we could not record that fact.
+        let classes: &'static [&'static str] = if ie.also_local_fault {
+            &["integrity", "local_fault"]
+        } else {
+            &["integrity"]
+        };
+        return (classes, ie.metrics.clone());
     }
     if let Some(ce) = e.downcast_ref::<CursorCommitError>() {
         let classes: &'static [&'static str] = if ce.also_loud {
@@ -1570,12 +1629,33 @@ fn unlearnable_references(
 struct ApplyError {
     message: String,
     sqlstate: Option<String>,
+    /// The original error, kept REACHABLE — the same discipline [`LocalDbFault`] follows
+    /// and for the same reason (issue #480).
+    ///
+    /// `Display` here is the DOOR's vocabulary (`message (detail)`), which is what belongs
+    /// in `sync_quarantine.reason` and `last_requeue_error`. When the failure turns out
+    /// NOT to be a door verdict at all, the operator needs the *database's* vocabulary
+    /// instead — SQLSTATE included — and that is only renderable from the error itself.
+    /// Flattening it away is also what would make this type invisible to a chain-walking
+    /// classifier, which is the trap that cost `quarantine_event` its diagnosis (#490).
+    source: postgres::Error,
 }
 
 impl ApplyError {
     /// True iff the floor decided against these bytes (see [`refusal_is_deliberate`]).
     fn is_deliberate_refusal(&self) -> bool {
         refusal_is_deliberate(self.sqlstate.as_deref())
+    }
+
+    /// Render the underlying failure in the ONE format every local database fault in this
+    /// daemon uses (`message [SQLSTATE] — DETAIL — HINT`).
+    ///
+    /// For callers that have already established this was not a door verdict: the
+    /// `Display` above deliberately omits the SQLSTATE, because a floor refusal's SQLSTATE
+    /// is always `P0001` and says nothing, while a transient fault's SQLSTATE is the whole
+    /// diagnosis.
+    fn operator_text(&self) -> String {
+        legible_db_error(&self.source)
     }
 }
 
@@ -1585,7 +1665,13 @@ impl std::fmt::Display for ApplyError {
     }
 }
 
-impl Error for ApplyError {}
+impl Error for ApplyError {
+    /// Kept reachable so a chain-walking classifier can still find the database error —
+    /// see the `source` field's doc.
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 impl From<postgres::Error> for ApplyError {
     /// Surface the database's own message AND its DETAIL: `postgres::Error`'s
@@ -1600,10 +1686,17 @@ impl From<postgres::Error> for ApplyError {
                     None => db.message().to_string(),
                 },
                 sqlstate: Some(db.code().code().to_string()),
+                source: e,
             },
+            // No `DbError` at all: the statement never reached a verdict (a dropped
+            // connection, a client-side decode failure). `e.to_string()` here was
+            // `postgres::Error`'s bare kind — `db error` / `error connecting to server` —
+            // which is #467's species inside the type that is supposed to carry the
+            // door's reasons (issue #480). `legible_db_error` walks the chain instead.
             None => ApplyError {
-                message: e.to_string(),
+                message: legible_db_error(&e),
                 sqlstate: None,
+                source: e,
             },
         }
     }
@@ -2612,14 +2705,6 @@ fn quarantine_event(
     refused_seq: i64,
     reason: &str,
 ) -> R<bool> {
-    // Surface the database's own message on failure (postgres::Error's Display
-    // is just "db error", which would strip the reason from the freeze logs).
-    fn legible(e: postgres::Error) -> Box<dyn Error> {
-        match e.as_db_error() {
-            Some(db) => db.message().to_string().into(),
-            None => e.into(),
-        }
-    }
     let digest = cairn_event::event_address(signed_bytes);
     // Dedupe first: a re-offer of known bytes always succeeds (it does not grow
     // the pen), even when the peer is over quota.
@@ -2634,7 +2719,7 @@ fn quarantine_event(
           RETURNING acked",
             &[&digest, &attestation, &attester_key],
         )
-        .map_err(legible)?;
+        .map_err(|e| LocalDbFault::boxed("recording a re-offer of already-penned bytes", e))?;
     if let Some(row) = bumped {
         return Ok(row.get(0));
     }
@@ -2682,16 +2767,19 @@ fn quarantine_event(
                 &MAX_QUARANTINE_BYTES_PER_PEER,
             ],
         )
-        .map_err(legible)?;
+        .map_err(|e| LocalDbFault::boxed("penning a refused event in sync_quarantine", e))?;
     if inserted == 0 {
         // Zero rows means EITHER over-quota OR a concurrent writer penned the
         // same bytes first (ON CONFLICT DO NOTHING). Distinguish them — a false
         // "quota" diagnosis on the safety path would send the operator chasing
         // a condition that does not exist.
-        if let Some(row) = client.query_opt(
-            "SELECT acked FROM sync_quarantine WHERE content_digest = $1",
-            &[&digest],
-        )? {
+        if let Some(row) = client
+            .query_opt(
+                "SELECT acked FROM sync_quarantine WHERE content_digest = $1",
+                &[&digest],
+            )
+            .map_err(|e| LocalDbFault::boxed("distinguishing a full pen from a lost race", e))?
+        {
             return Ok(row.get(0)); // lost a benign race: the trace exists
         }
         return Err(format!(
@@ -2804,7 +2892,20 @@ fn do_pull(
         )
     })?;
     let wire_bytes = raw.len();
-    let resp: EventsResponse = serde_json::from_slice(&raw)?;
+    // The peer ANSWERED and what it sent is unusable — an integrity condition, not a
+    // partition (issue #489). A bare `?` here handed `classify_pull_failure` a
+    // `serde_json::Error`, which its default arm claimed by elimination was a peer that
+    // never answered; `bet_a.py` then counted a truncated or foreign response as link
+    // downtime. Nothing was reached beyond the response itself, so there are no metrics.
+    let resp: EventsResponse = serde_json::from_slice(&raw).map_err(|e| PullIntegrityError {
+        message: format!(
+            "pull {peer_name}: the peer answered with {wire_bytes} byte(s) that are not an \
+             EventsResponse: {e}. The link delivered them — the peer is serving a corrupt, \
+             truncated, or entirely different payload on this port."
+        ),
+        metrics: serde_json::Value::Null,
+        also_local_fault: false,
+    })?;
 
     // Deterministic wire-format skew check (issue #108): a peer that DECLARES a
     // signing context we don't speak would fail verification for every event it
@@ -2827,6 +2928,9 @@ fn do_pull(
                     CTX_EVENT.as_str()
                 ),
                 metrics: serde_json::Value::Null,
+                // Nothing was written here: the batch is refused before any per-event
+                // work, so this node's database was never asked to do anything.
+                also_local_fault: false,
             }));
         }
     }
@@ -2835,13 +2939,21 @@ fn do_pull(
     // carrying events but a short/empty seqs array is a malformed or unexpectedly-old
     // serve — fail LOUDLY rather than checkpoint the cursor blind.
     if !resp.events.is_empty() && resp.seqs.len() != resp.events.len() {
-        return Err(format!(
-            "pull {peer_name}: peer returned {} events but {} seqs — cannot checkpoint the \
-             seq cursor safely; the peer serves an incompatible/older wire format",
-            resp.events.len(),
-            resp.seqs.len()
-        )
-        .into());
+        // Integrity, not partition (issue #489): the peer answered, and its WIRE FORMAT is
+        // the problem. This is the structural sibling of the signing-context skew sixteen
+        // lines above, which has returned a `PullIntegrityError` since #108 — the two
+        // returned different classes for the same kind of fault until now.
+        return Err(Box::new(PullIntegrityError {
+            message: format!(
+                "pull {peer_name}: peer returned {} events but {} seqs — cannot checkpoint \
+                 the seq cursor safely; the peer serves an incompatible/older wire format",
+                resp.events.len(),
+                resp.seqs.len()
+            ),
+            metrics: serde_json::Value::Null,
+            // Refused before any per-event work: this node's database was never asked.
+            also_local_fault: false,
+        }));
     }
     // …and the VALUES are untrusted wire input that persists into sync_state (the
     // advance-only cursor + the re-offer floor). A well-formed serve (`WHERE seq >
@@ -2853,11 +2965,18 @@ fn do_pull(
     // review). (A peer lying HIGH about its own seqs only starves its own
     // incremental serving; the periodic full sweep remains the correctness floor.)
     if resp.seqs.first().is_some_and(|&s| s < 1) || resp.seqs.windows(2).any(|w| w[1] <= w[0]) {
-        return Err(format!(
-            "pull {peer_name}: peer returned malformed seqs (must be strictly ascending \
-             and positive) — refusing to checkpoint the seq cursor from these values"
-        )
-        .into());
+        // Integrity, not partition (issue #489). A buggy or hostile peer is the ONLY thing
+        // that produces this — a link cannot reorder a JSON array — so classifying it as
+        // link downtime both misdirected the operator and hid a peer worth looking at.
+        return Err(Box::new(PullIntegrityError {
+            message: format!(
+                "pull {peer_name}: peer returned malformed seqs (must be strictly ascending \
+                 and positive) — refusing to checkpoint the seq cursor from these values"
+            ),
+            metrics: serde_json::Value::Null,
+            // Refused before any per-event work: this node's database was never asked.
+            also_local_fault: false,
+        }));
     }
 
     // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
@@ -2913,7 +3032,7 @@ fn do_pull(
     let mut max_seq = last_seq;
     let mut frozen = false;
     // First pen failure (if any) — surfaced in the loud error.
-    let mut pen_refused: Option<String> = None;
+    let mut pen_refused: Option<PenRefusal> = None;
     // The seq of the FIRST unacked refused event this cycle (the stream is
     // seq-ascending, so the first is the lowest) — persisted as the new floor.
     let mut pin: Option<i64> = None;
@@ -3045,9 +3164,17 @@ fn do_pull(
                                 "DELETE FROM sync_quarantine WHERE content_digest = $1",
                                 &[&digest],
                             ) {
+                                // `{de}` here was the literal two words `db error` —
+                                // #479's title sentence, inside the daemon loop (#490
+                                // item 1). A grant revoked by a restore (42501) or the
+                                // table gone after a schema skew (42P01) prints this
+                                // every cycle forever, the retry never succeeds, and the
+                                // pen row is never released; without the SQLSTATE there
+                                // is nothing to act on.
                                 eprintln!(
                                     "pull {peer_name}: seq {seq} applied but its resolved pen \
-                                     row could not be released: {de} — retried next cycle"
+                                     row could not be released: {} — retried next cycle",
+                                    legible_db_error(&de)
                                 );
                             }
                         }
@@ -3135,7 +3262,10 @@ fn do_pull(
                          event could not be quarantined, so it must not be skipped: {qe}; \
                          reason: {reason}"
                     );
-                    pen_refused.get_or_insert(qe.to_string());
+                    // FIRST refusal wins, message and class together — they must
+                    // describe the same event or the operator reads one refusal's text
+                    // under another's class (issue #489).
+                    pen_refused.get_or_insert_with(|| pen_refusal(qe.as_ref()));
                 }
             }
         }
@@ -3299,7 +3429,7 @@ fn do_pull(
             skipped_unverifiable,
             refused_verifiable,
             frozen.then_some(max_seq),
-            pen_refused.as_deref(),
+            pen_refused.as_ref().map(|p| p.message.as_str()),
             &diagnosis,
         )
     });
@@ -3332,7 +3462,13 @@ fn do_pull(
     // integrity condition, not a partition. The message itself was composed above,
     // so that a cycle which ALSO failed its cursor commit still carries it.
     if let Some(message) = loud_message {
-        return Err(Box::new(PullIntegrityError { message, metrics }));
+        return Err(Box::new(PullIntegrityError {
+            message,
+            metrics,
+            // #489 part 1: a pen write the DATABASE refused makes this cycle a local
+            // fault as well as an integrity condition. A quota refusal does not.
+            also_local_fault: pen_refused.is_some_and(|p| p.local_fault),
+        }));
     }
 
     Ok(metrics)
@@ -3391,30 +3527,32 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
     };
     // Built once per failing statement: the three sites below differ only in which
     // statement failed, and every one of them owes the same report (ADR-0060 decision 2).
-    let interrupted = |digest: &[u8],
-                       released: usize,
-                       still_quarantined: usize,
-                       vanished: usize,
-                       e: postgres::Error| {
-        RequeueInterruptedError {
-            message: requeue_interrupted_message(
-                examined,
-                released,
-                still_quarantined,
-                vanished,
-                &hex_prefix(digest),
-                &legible_db_error(&e),
-            ),
-            // null, NEVER 0: the #465 report never ran, and a number here would tell a
-            // monitor this run had looked and found nothing (#465's own rule).
-            metrics: snapshot(
-                released,
-                still_quarantined,
-                vanished,
-                serde_json::Value::Null,
-            ),
-        }
-    };
+    // `why` is ALREADY LEGIBLE — `legible_db_error` for a raw `postgres::Error`, or an
+    // `ApplyError`'s own `Display` (issue #480 made that legible too). Taking a rendered
+    // reason rather than a `postgres::Error` is what lets the apply path reach this
+    // closure at all: the apply door's failures arrive as `ApplyError`, which has already
+    // read the `DbError` it needed.
+    let interrupted =
+        |digest: &[u8], released: usize, still_quarantined: usize, vanished: usize, why: String| {
+            RequeueInterruptedError {
+                message: requeue_interrupted_message(
+                    examined,
+                    released,
+                    still_quarantined,
+                    vanished,
+                    &hex_prefix(digest),
+                    &why,
+                ),
+                // null, NEVER 0: the #465 report never ran, and a number here would tell a
+                // monitor this run had looked and found nothing (#465's own rule).
+                metrics: snapshot(
+                    released,
+                    still_quarantined,
+                    vanished,
+                    serde_json::Value::Null,
+                ),
+            }
+        };
     // Content addresses of the events this run put through the apply door (issue #465).
     // `sync_quarantine.content_digest` IS the event content address — the same key the
     // pull path's release DELETE uses — so no re-hashing is needed. As on the pull path,
@@ -3439,7 +3577,15 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
              FROM sync_quarantine WHERE content_digest=$1",
                 &[digest],
             )
-            .map_err(|e| interrupted(digest, released, still_quarantined, vanished, e))?
+            .map_err(|e| {
+                interrupted(
+                    digest,
+                    released,
+                    still_quarantined,
+                    vanished,
+                    legible_db_error(&e),
+                )
+            })?
         else {
             vanished += 1;
             eprintln!(
@@ -3468,7 +3614,15 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                         "DELETE FROM sync_quarantine WHERE content_digest=$1",
                         &[&digest],
                     )
-                    .map_err(|e| interrupted(digest, released, still_quarantined, vanished, e))?;
+                    .map_err(|e| {
+                        interrupted(
+                            digest,
+                            released,
+                            still_quarantined,
+                            vanished,
+                            legible_db_error(&e),
+                        )
+                    })?;
                 released += 1;
                 released_addresses.push(digest.clone());
                 eprintln!(
@@ -3476,25 +3630,45 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                     hex_prefix(digest)
                 );
             }
+            // NOT a verdict about these bytes (issue #480). `apply_signed` returns
+            // `ApplyError` for two entirely different events: the door refusing (a
+            // `RAISE EXCEPTION`, SQLSTATE `P0001`) and the statement never reaching the
+            // door at all — its FIRST statement is a newness probe on `event_log`, and a
+            // dropped connection or a lock storm fails there.
+            //
+            // Recording the second as `last_requeue_error` claims the in-DB door
+            // adjudicated these bytes and rejected them. It did not, and that annotation
+            // is what an operator reads while deciding whether an event is corrupt. So it
+            // takes the interruption path instead — the same partial-completion report
+            // #471 built for the three raw statements around it, and the same routing the
+            // PULL path already applies to this exact distinction (`refusal_is_deliberate`
+            // → pen vs freeze).
+            //
+            // The accepted cost, and it is the pull path's cost too: a NON-`P0001` failure
+            // that recurs deterministically stops every requeue run at the same row rather
+            // than annotating it and moving on. That is "delayed, never lost", loud, and
+            // it names the row and the SQLSTATE — strictly better than exiting 0 having
+            // written a false verdict onto every row behind it.
+            Err(e) if !e.is_deliberate_refusal() => {
+                return Err(Box::new(interrupted(
+                    digest,
+                    released,
+                    still_quarantined,
+                    vanished,
+                    e.operator_text(),
+                )));
+            }
             Err(e) => {
                 // Still refused: keep the row and record the door's CURRENT
                 // rejection beside (never over) the original reason.
                 // #471, and the distinction a reader will otherwise miss: THE TWO HALVES
-                // OF THIS STATEMENT ARE ABOUT DIFFERENT ERRORS. The `e` being STORED is an
-                // `ApplyError`, kept beside (never over) the original reason. The error
-                // this `map_err` catches is a `postgres::Error` from the UPDATE itself,
-                // which renders `db error`; only that one is #467's species.
-                //
-                // `ApplyError` is USUALLY the door's own refusal and legible — but NOT by
-                // construction, and an earlier draft of this comment claimed otherwise
-                // (PR #478 review, C3). `ApplyError::from` falls back to
-                // `postgres::Error`'s own `Display` when there is no `DbError` (a dropped
-                // connection), and `apply_signed`'s EXISTS probe converts a raw
-                // `postgres::Error` into one — so a transient LOCAL fault can land in this
-                // arm wearing a refusal's clothes and be recorded as one. Filed rather
-                // than fixed here: it needs an `is_deliberate_refusal()` split on the
-                // apply path, which is wider than this sweep. `still_quarantined` has not moved for this row
-                // yet, and it stays that way: nothing recorded the current refusal.
+                // OF THIS STATEMENT ARE ABOUT DIFFERENT ERRORS. The `e` being STORED is
+                // the door's own `P0001` refusal — the arm above has already taken
+                // everything that is not one — kept beside (never over) the original
+                // reason. The error this `map_err` catches is a `postgres::Error` from the
+                // UPDATE itself, which renders `db error`; only that one is #467's species.
+                // `still_quarantined` has not moved for this row yet, and it stays that
+                // way until the current refusal is recorded.
                 client
                     .execute(
                         "UPDATE sync_quarantine
@@ -3504,7 +3678,15 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
                      WHERE content_digest = $1",
                         &[&digest, &e.to_string()],
                     )
-                    .map_err(|ue| interrupted(digest, released, still_quarantined, vanished, ue))?;
+                    .map_err(|ue| {
+                        interrupted(
+                            digest,
+                            released,
+                            still_quarantined,
+                            vanished,
+                            legible_db_error(&ue),
+                        )
+                    })?;
                 still_quarantined += 1;
                 eprintln!("requeue: {} still refused: {e}", hex_prefix(digest));
             }
@@ -5035,6 +5217,7 @@ mod tests {
         let integrity = PullIntegrityError {
             message: "unverifiable".into(),
             metrics: serde_json::json!({"applied_new": 3}),
+            also_local_fault: false,
         };
         let (classes, metrics) = classify_pull_failure(&integrity);
         assert_eq!(classes, &["integrity"]);
@@ -5891,6 +6074,32 @@ mod tests {
         "host=localhost port=not-a-number"
             .parse::<postgres::Config>()
             .expect_err("a non-numeric port is not a parseable connection string")
+    }
+
+    /// **Issue #480.** `ApplyError` is NOT "legible by construction", and it was
+    /// documented as though it were.
+    ///
+    /// `ApplyError::from`'s `None` arm is taken when there is no `DbError` at all — the
+    /// connection died rather than the door deciding — and it fell back to
+    /// `postgres::Error`'s own `Display`, which is the two words `db error`. The type's
+    /// other job, telling a deliberate floor refusal from a transient fault, is unaffected
+    /// and pinned here beside it: no SQLSTATE can never be a verdict.
+    #[test]
+    fn an_apply_failure_with_no_door_verdict_is_legible_and_is_not_a_refusal() {
+        let ae = ApplyError::from(a_real_pg_error());
+        assert!(
+            !ae.is_deliberate_refusal(),
+            "no SQLSTATE means the door never decided, so it is never a verdict"
+        );
+        let text = ae.to_string();
+        // As in the sibling crate's guard: this fixture is a `Kind::ConfigParse` error, so
+        // it could not render `db error` whatever the code did. The assertion below it is
+        // the one that does the work.
+        assert_ne!(text, "db error", "{text}");
+        assert!(
+            text.contains("port"),
+            "the cause must survive rather than being flattened to a kind: {text}"
+        );
     }
 
     /// A purpose-built chain link, so a multi-layer chain can be written down exactly.
@@ -6979,6 +7188,329 @@ mod quarantine_tests {
             n, 0,
             "a patient with no sensitivity events must have an empty standing set"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #480 — a transient local fault must not be recorded as a door refusal.
+    // -----------------------------------------------------------------------
+    //
+    // `ApplyError` was documented as "the door's own refusal, already legible". Neither
+    // half held. `ApplyError::from`'s `None` arm — taken when there is no `DbError` at
+    // all, i.e. the connection died rather than the door deciding — fell back to
+    // `postgres::Error`'s own `Display`, which is `db error`. And `apply_signed`'s FIRST
+    // statement is a bare `?` on a newness probe, so a `postgres::Error` from a statement
+    // that never reached the door becomes an `ApplyError` too.
+    //
+    // The consequence is in `do_requeue`, which had no `is_deliberate_refusal()` check on
+    // that path: a lock storm, or a `pg_restore` that has not finished re-granting, gets
+    // written into `sync_quarantine.last_requeue_error` as though the in-DB door had
+    // adjudicated those bytes and rejected them. That annotation is what an operator
+    // reads while deciding whether an event is corrupt.
+
+    /// The behavioural half, end to end: a transient local fault during `requeue` must
+    /// interrupt with a partial-completion report, NOT annotate the pen row.
+    ///
+    /// Forced by holding an `ACCESS EXCLUSIVE` lock on `event_log` from a second
+    /// connection while the requeue runs under a short `lock_timeout`, so `apply_signed`'s
+    /// newness probe — its first statement, and one that never reaches the door — fails
+    /// with `55P03`. The lock is released by the `ROLLBACK` (and by the OS if this test
+    /// ever panics between the two), so nothing persists into the shared test database.
+    #[test]
+    fn a_transient_fault_during_requeue_is_not_recorded_as_a_door_refusal() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let garbage = b"penned bytes whose requeue meets a lock storm".to_vec();
+        let digest = cairn_event::event_address(&garbage);
+        c.execute(
+            "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, refused_seq, reason)
+             VALUES ($1, $2, 'peer-a', 1, 'unverifiable at first sight')",
+            &[&digest, &garbage],
+        )
+        .unwrap();
+
+        let mut blocker = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        blocker
+            .batch_execute("BEGIN; LOCK TABLE event_log IN ACCESS EXCLUSIVE MODE;")
+            .unwrap();
+        c.batch_execute("SET lock_timeout = '750ms'").unwrap();
+
+        let err = do_requeue(&mut c).expect_err("the newness probe cannot read event_log");
+
+        c.batch_execute("RESET lock_timeout").unwrap();
+        blocker.batch_execute("ROLLBACK;").unwrap();
+
+        let ie = err
+            .downcast_ref::<RequeueInterruptedError>()
+            .unwrap_or_else(|| panic!("a local fault must INTERRUPT, not refuse: {err}"));
+        assert!(
+            ie.message.contains("55P03"),
+            "the operator line must name the condition that was met: {}",
+            ie.message
+        );
+
+        // The claim that matters. `last_requeue_error` says "the in-DB door adjudicated
+        // these bytes and rejected them" — a door that was never reached must not leave
+        // that behind, and `still_quarantined` must not count a row it never judged.
+        let annotation: Option<String> = c
+            .query_one(
+                "SELECT last_requeue_error FROM sync_quarantine WHERE content_digest = $1",
+                &[&digest],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            annotation, None,
+            "a lock timeout is not a verdict about these bytes: {annotation:?}"
+        );
+        assert_eq!(
+            ie.metrics["still_quarantined"], 0,
+            "nothing was judged, so nothing is counted as still refused: {}",
+            ie.metrics
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #489 part 1 / #490 item 2 — a pen write refused by THIS NODE'S DATABASE.
+    // -----------------------------------------------------------------------
+    //
+    // `pen_refused` is set when the quarantine INSERT fails, and it fed `cycle_is_loud` →
+    // `PullIntegrityError` → the single class `integrity`, whose documented meaning is
+    // *the peer answered and its DATA is the problem*. So a local disk-full, a grant
+    // revoked by a restore, or a lock timeout sent an operator to audit a peer's
+    // signatures for a write failure on this node's own disk — #469's species in a third
+    // direction.
+    //
+    // It is genuinely BOTH: the peer really did send something we could not admit (that
+    // is why a pen write was attempted at all), AND our database refused to record it.
+    // Two classes, exactly as `CursorCommitError::also_loud` already models the mirror
+    // case. The pen's OTHER failure mode — the per-peer quota — is not a local fault at
+    // all: it is a resource budget exhausted by the peer's own garbage, so it stays
+    // `integrity` alone. The two are told apart by whether a `postgres::Error` is
+    // reachable in the chain, which is why #490 item 2 (the private `legible()` that
+    // flattened DB errors into a `String`, destroying `source()`) had to be fixed first.
+
+    /// The pure half: a loud cycle whose pen write was refused BY THE DATABASE is both.
+    #[test]
+    fn a_pen_write_refused_by_the_database_is_local_fault_as_well_as_integrity() {
+        let both = PullIntegrityError {
+            message: "2 unverifiable; Quarantine pen refused (cursor frozen): …".into(),
+            metrics: serde_json::json!({"applied_new": 1}),
+            also_local_fault: true,
+        };
+        let (classes, metrics) = classify_pull_failure(&both);
+        assert!(
+            classes.contains(&"integrity") && classes.contains(&"local_fault"),
+            "the peer sent something we could not admit AND our own database refused to \
+             record it — both conditions are true: {classes:?}"
+        );
+        assert_eq!(
+            metrics["applied_new"], 1,
+            "the cycle's work is still published"
+        );
+
+        // …and the quota case, which is the peer's garbage filling a budget, stays one
+        // class. Widening this to "any pen refusal is local" would charge this node's
+        // uptime for a peer flooding the pen.
+        let quota = PullIntegrityError {
+            message: "quarantine pen for peer 'peer-a' is at its quota".into(),
+            metrics: serde_json::Value::Null,
+            also_local_fault: false,
+        };
+        let (classes, _) = classify_pull_failure(&quota);
+        assert_eq!(classes, &["integrity"], "{classes:?}");
+    }
+
+    /// **#490 item 2.** `quarantine_event`'s DB failures must stay CLASSIFIABLE.
+    ///
+    /// Its private `legible()` rendered a server error into `db.message().to_string()` —
+    /// a `String`, which has no `source()` — so the SQLSTATE, the DETAIL and the original
+    /// error were all gone by the time anything could read them, and the `None` arm fell
+    /// back to `postgres::Error`'s own `Display`: the two words `db error`. That is
+    /// exactly the trap `LocalDbFault`'s doc warns about 1500 lines below, still live in
+    /// this helper.
+    ///
+    /// The failure is forced by an ABORTED TRANSACTION: every later statement on that
+    /// connection fails `25P02` until it is rolled back. Chosen over a REVOKE or a
+    /// trigger for the reason the cursor-commit test gives — those persist in the shared
+    /// test database if the test panics; a `ROLLBACK` cannot be left behind, because the
+    /// connection is dropped at the end of the test either way.
+    #[test]
+    fn a_pen_write_refused_by_the_database_keeps_its_sqlstate_and_its_source() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        c.batch_execute("BEGIN").unwrap();
+        c.batch_execute("SELECT 1/0")
+            .expect_err("division by zero aborts the transaction");
+
+        let err = quarantine_event(&mut c, "peer-a", b"some bytes", None, None, 1, "reason")
+            .expect_err("no statement succeeds in an aborted transaction");
+        let text = err.to_string();
+        c.batch_execute("ROLLBACK").unwrap();
+
+        assert!(
+            chain_reaches_a_postgres_error(err.as_ref()),
+            "the postgres error must stay REACHABLE — flattening it into a String is what \
+             silently reverts a local fault to `partition`: {text}"
+        );
+        assert_ne!(text, "db error", "{text}");
+        assert!(
+            text.contains("25P02"),
+            "the SQLSTATE is what tells an operator which condition was met: {text}"
+        );
+        // The dedupe UPDATE is the FIRST statement `quarantine_event` runs, so it is the
+        // one that meets an aborted transaction — and naming the operation is half of
+        // what `LocalDbFault` exists for.
+        assert!(
+            text.contains("recording a re-offer of already-penned bytes"),
+            "…and the line must say what this node was DOING: {text}"
+        );
+    }
+
+    /// The seam, end to end: a pen write that the database refuses must reach the
+    /// operator (and `bet_a.py`) as BOTH classes.
+    ///
+    /// Forced with a row lock on the pen row the dedupe UPDATE is about to take, held
+    /// from a second connection while the puller runs under a short `lock_timeout` — the
+    /// same shape (and the same reasoning about not poisoning the shared test database)
+    /// as `a_failed_cursor_commit_keeps_the_cycles_metrics_and_is_not_a_partition`, one
+    /// table over. Without this the fix would be pinned only by fixtures the tests build
+    /// themselves, and a revert at the freeze site would stay green.
+    #[test]
+    fn a_pen_write_the_database_refuses_reports_both_classes() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let garbage = b"unverifiable bytes whose pen row is already locked".to_vec();
+        let digest = cairn_event::event_address(&garbage);
+
+        // The row must EXIST before it can be locked — so the dedupe UPDATE at the top of
+        // `quarantine_event` is the statement that blocks.
+        c.execute(
+            "INSERT INTO sync_quarantine (content_digest, signed_bytes, peer, refused_seq, reason)
+             VALUES ($1, $2, 'peer-a', 1, 'seeded by the test')",
+            &[&digest, &garbage],
+        )
+        .unwrap();
+        let mut blocker = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+        blocker
+            .batch_execute("BEGIN; SELECT 1 FROM sync_quarantine WHERE peer='peer-a' FOR UPDATE;")
+            .unwrap();
+        c.batch_execute("SET lock_timeout = '750ms'").unwrap();
+
+        let addr = serve_canned(response_json(&[&garbage], Some(CTX_EVENT.as_str())), 1);
+        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect_err("the pen write cannot acquire the row lock");
+
+        c.batch_execute("RESET lock_timeout").unwrap();
+        blocker.batch_execute("ROLLBACK;").unwrap();
+
+        let (classes, _) = classify_pull_failure(err.as_ref());
+        assert!(
+            classes.contains(&"local_fault"),
+            "the pen write failed on THIS node's database; auditing the peer's signatures \
+             is the wrong instruction: {classes:?} — {err}"
+        );
+        assert!(
+            classes.contains(&"integrity"),
+            "…and the peer's event is still not held here, which needs a human: \
+             {classes:?} — {err}"
+        );
+        assert!(
+            err.to_string().contains("55P03"),
+            "the operator line must carry the SQLSTATE that names the condition: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #489 part 2 — "the peer answered with garbage" is not link downtime.
+    // -----------------------------------------------------------------------
+    //
+    // `classify_pull_failure`'s default arm argued it was safe BY ELIMINATION: "a failure
+    // this function does not recognise is, by elimination, one where the peer did not
+    // answer". Three sites in `do_pull` falsified that. All three returned a bare
+    // `String`/`serde_json::Error`, fell to `partition`, and were counted by `bet_a.py` as
+    // link downtime — for a peer that had answered in full over a healthy link.
+    //
+    // Sixteen lines above the second of them, the structurally identical signing-context
+    // skew already returned a `PullIntegrityError`. These tests drive the real `do_pull`
+    // against a canned serve so a revert at any of the three sites is caught here, not
+    // just in the classifier's own unit tests (which build their fixtures themselves).
+
+    /// A response body that is not JSON at all: truncated, or a peer serving something
+    /// else entirely on the sync port.
+    #[test]
+    fn a_corrupt_response_body_is_the_peer_not_the_link() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let addr = serve_canned(b"{ this is not an EventsResponse".to_vec(), 1);
+
+        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect_err("a body that will not deserialize cannot be applied");
+        let (classes, _) = classify_pull_failure(err.as_ref());
+        assert_eq!(
+            classes,
+            &["integrity"],
+            "the peer ANSWERED — sending an operator to the WAN is the wrong \
+             instruction, and bet_a.py would charge the outage figure for it: {err}"
+        );
+    }
+
+    /// A response carrying events but a short `seqs` array (issue #196's own guard). The
+    /// peer serves an incompatible or unexpectedly-old wire format; the link is fine.
+    #[test]
+    fn a_seq_count_mismatch_is_the_peer_not_the_link() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        // One event, ZERO seqs: the puller cannot checkpoint its cursor safely.
+        let mut resp: serde_json::Value =
+            serde_json::from_slice(&response_json(&[&e1], Some(CTX_EVENT.as_str()))).unwrap();
+        resp["seqs"] = serde_json::json!([]);
+        let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
+
+        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect_err("events without seqs cannot checkpoint the cursor");
+        let (classes, _) = classify_pull_failure(err.as_ref());
+        assert_eq!(classes, &["integrity"], "{err}");
+    }
+
+    /// Seq VALUES that are not strictly ascending and positive — a buggy or hostile peer.
+    /// These are untrusted wire input that would otherwise persist into `sync_state`, so
+    /// the batch is refused; the refusal must name the peer, not the network.
+    #[test]
+    fn malformed_seq_values_are_the_peer_not_the_link() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        let e2 = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let mut resp: serde_json::Value =
+            serde_json::from_slice(&response_json(&[&e1, &e2], Some(CTX_EVENT.as_str()))).unwrap();
+        resp["seqs"] = serde_json::json!([7, 3]); // descending: the freeze logic relies on order
+        let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
+
+        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+            .expect_err("descending seqs must not poison the persistent cursor");
+        let (classes, _) = classify_pull_failure(err.as_ref());
+        assert_eq!(classes, &["integrity"], "{err}");
     }
 
     /// Unwrap a pull that must fail as a PullIntegrityError; returns (message, metrics).
@@ -8470,11 +9002,30 @@ mod quarantine_tests {
         let fresh_garbage = b"yet another distinct corrupt frame".to_vec();
         let raw = response_json(&[&fresh_garbage], None);
         let addr = serve_canned(raw, 1);
-        let (err, m) = pull_integrity_err(&mut c, &addr, "peer-flood");
+        // The error object itself is kept (rather than going through
+        // `pull_integrity_err`) because its CLASS is half of what this test now pins, and
+        // the canned serve answers exactly once.
+        let boxed = do_pull(&mut c, &addr, "peer-flood", false, None)
+            .expect_err("a pen at its quota freezes the cycle loudly");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
+        let (err, m) = (ie.message.clone(), ie.metrics.clone());
         assert!(err.contains("quota"), "error names the quota, got: {err}");
         assert_eq!(
             m["watermark_frozen"], true,
             "over quota = freeze, never skip"
+        );
+        // #489 part 1, the OTHER direction. A quota refusal is the pen mechanism working
+        // as designed against a peer's garbage — a fact about the PEER — so it must not
+        // pick up the `local_fault` class the same code path now sets when this node's
+        // own database refuses the write. Getting this wrong would charge this node's
+        // uptime for a peer flooding the pen, which is the mirror image of the defect.
+        let (classes, _) = classify_pull_failure(boxed.as_ref());
+        assert_eq!(
+            classes,
+            &["integrity"],
+            "a quota refusal is the peer's doing, not this node's database: {err}"
         );
 
         let count: i64 = c
