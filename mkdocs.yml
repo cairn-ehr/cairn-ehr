@@ -169,6 +169,7 @@ nav:
       - ADR-0062 · The sensitivity stream and the inverted unknown: spec/decisions/0062-the-sensitivity-stream-and-the-inverted-unknown.md
       - ADR-0063 · The safety projection and the seal as coarsening boundary: spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md
       - ADR-0064 · Admit the claim, withhold the power: spec/decisions/0064-admit-the-claim-withhold-the-power.md
+      - ADR-0065 · Narrow the custody, never the reach: spec/decisions/0065-narrow-the-custody-never-the-reach.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
