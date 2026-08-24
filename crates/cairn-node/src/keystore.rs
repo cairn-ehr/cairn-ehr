@@ -155,13 +155,12 @@ pub fn unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
 
 /// The unwrap-key file for a signing-key path: `<key>.unwrap`, a sibling — discoverable
 /// from what every command already has, exactly like the `.lsk` sidecar. Pure.
+///
+/// Built on `fsio::sibling_with_suffix`, the same same-directory-sibling naming
+/// `fsio::tmp_sibling` uses for its `.tmp` sidecar — one naming rule for both, so a
+/// future change to how a sibling path is formed can't quietly diverge between them.
 pub fn unwrap_key_path_for(key: &Path) -> PathBuf {
-    let mut name = key
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    name.push(".unwrap");
-    key.with_file_name(name)
+    crate::fsio::sibling_with_suffix(key, ".unwrap")
 }
 
 /// Mint this node's INDEPENDENT X25519 unwrap secret and write it sealed (mode 0600)
@@ -172,6 +171,20 @@ pub fn unwrap_key_path_for(key: &Path) -> PathBuf {
 /// The sealed format is the SAME dual-recipient bundle the signing key uses: both are
 /// 32-byte secrets, so `seal::seal` covers this with no new ceremony and no new format
 /// (ADR-0066 decision 1 — the operator still holds one passphrase and one recovery code).
+///
+/// **Read-after-write integrity check**, mirroring `seal_existing`'s for the signing key
+/// — and for strictly higher stakes: losing the signing key to a bad write costs a node
+/// *identity*, which DR deliberately re-mints anyway; losing the unwrap key this way
+/// costs the *clinical record*, because the public half returned here is what every
+/// subsequent `event_dek` row gets wrapped to. If the sealed bytes on disk don't actually
+/// recover under BOTH secrets — a serialization edge, a lying fsync, a truncation — a
+/// caller that trusted the in-memory secret would register a public half nothing can
+/// ever unwrap again, reintroducing the ADR-0066 failure shape one layer up. So this
+/// re-reads the file, unseals it under both recipients (one Argon2 derivation each, the
+/// same halved cost `seal_existing` chose, paid once per provisioning), confirms the
+/// recovered bytes match what was generated, and derives the returned public half from
+/// the READBACK — never from the in-memory `secret` — so a caller only ever registers a
+/// public half this function has actually proven recoverable from disk.
 pub fn generate_unwrap_sealed(
     path: &Path,
     op_pass: &str,
@@ -180,7 +193,31 @@ pub fn generate_unwrap_sealed(
     let secret = cairn_event::seal::generate_unwrap_secret()
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     write_unwrap_sealed(path, &secret, op_pass, recovery_code)?;
-    Ok(cairn_event::seal::unwrap_public(&secret))
+
+    let readback = std::fs::read(path)?;
+    let readback_sealed = seal::from_cbor(&readback).map_err(|e| {
+        KeystoreError::Key(format!(
+            "unwrap key verification failed after write (parse): {e}"
+        ))
+    })?;
+    let secret_op = seal::unseal_op(&readback_sealed, op_pass).ok_or_else(|| {
+        KeystoreError::Key(
+            "unwrap key verification failed after write: op passphrase did not unseal".into(),
+        )
+    })?;
+    let secret_rec = seal::unseal_rec(&readback_sealed, recovery_code).ok_or_else(|| {
+        KeystoreError::Key(
+            "unwrap key verification failed after write: recovery code did not unseal".into(),
+        )
+    })?;
+    if *secret_op != *secret || *secret_rec != *secret {
+        return Err(KeystoreError::Key(
+            "unwrap key verification failed after write: recovered secret does not match \
+             the one generated"
+                .into(),
+        ));
+    }
+    Ok(cairn_event::seal::unwrap_public(&secret_op))
 }
 
 /// Write a KNOWN unwrap secret sealed under both operator secrets. Two callers, both
@@ -193,8 +230,10 @@ pub fn write_unwrap_sealed(
     op_pass: &str,
     recovery_code: &str,
 ) -> Result<(), KeystoreError> {
-    let material = zeroize::Zeroizing::new(*secret);
-    let sealed = seal::seal(&material, op_pass, recovery_code)
+    // `secret` is already the exact shape `seal::seal` wants (`&[u8; 32]`) and is owned
+    // by the caller (who is responsible for its `Zeroizing` lifetime) — no need to copy
+    // it into a fresh `Zeroizing` here.
+    let sealed = seal::seal(secret, op_pass, recovery_code)
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
     Ok(())
@@ -238,6 +277,42 @@ pub fn load_unwrap_secret(
 pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
     let seed = zeroize::Zeroizing::new(sk.to_bytes());
     cairn_event::seal::derive_unwrap_secret(&seed)
+}
+
+/// True iff `unwrap` IS the node's Ed25519 signing seed, rather than a genuine unwrap
+/// secret — the shape a `node.key.unwrap` file takes after a file-swap accident (a
+/// fat-fingered restore, a path bug, an rsync of the wrong sibling — e.g. `cp node.key
+/// node.key.unwrap`).
+///
+/// This matters because the two files are byte-format INDISTINGUISHABLE: same
+/// `CAIRNK1` magic, same dual-recipient escrow, no purpose tag anywhere in the sealed
+/// bundle. So a swapped file unseals SUCCESSFULLY — `load_unwrap_secret` reports no
+/// error at all — and silently hands back the signing seed as though it were the
+/// node's unwrap secret. Every DEK from that moment is wrapped to a key derived from
+/// the signing seed: the exact ADR-0066 coupling this whole task exists to break,
+/// reintroduced by accident, with every surface reporting success.
+///
+/// A plain byte comparison is the right test, and it cannot false-positive on either
+/// LEGITIMATE case:
+/// - A GENERATED secret ([`cairn_event::seal::generate_unwrap_secret`]) is drawn fresh
+///   from the OS CSPRNG, independent of the signing seed — colliding with it by chance
+///   is a 2^-256 event.
+/// - An ADOPTED secret ([`adopt_derived_unwrap_secret`]) is the HKDF *derivation* of the
+///   seed (domain-separated by the `cairn-node-unwrap-x25519-v1` info tag), which is
+///   computationally indistinguishable from random and is never equal to its own input
+///   key material — an equality here would mean a preimage break of HKDF, not a
+///   legitimate adoption.
+///
+/// So `unwrap == sk.to_bytes()` can mean only one thing: the file was never produced by
+/// [`generate_unwrap_sealed`] or [`adopt_derived_unwrap_secret`] at all — it IS the
+/// signing key's content, misplaced.
+///
+/// Deliberately NOT wired into `load_unwrap_secret` or any provisioning path here — this
+/// task only owns the keystore file shape. The task that owns provisioning/loading
+/// decides where in that flow to call this and how to react (refuse to boot, most
+/// likely).
+pub fn unwrap_secret_is_the_signing_seed(unwrap: &[u8; 32], sk: &SigningKey) -> bool {
+    *unwrap == sk.to_bytes()
 }
 
 /// Inspect the at-rest posture without needing the secret (for `status`).
@@ -405,6 +480,20 @@ mod tests {
         assert!(matches!(key_at_rest_state(&bad), KeyAtRest::Corrupt));
     }
 
+    /// Owner-only (0600) mode check for a written key/unwrap file, factored out so the
+    /// roundtrip test below can make good on its own name (`..._and_is_owner_only`)
+    /// without duplicating the assertion `written_key_has_owner_only_permissions`
+    /// already carries for the signing key. A no-op on non-unix, where POSIX modes
+    /// don't apply (mirrors `fsio::atomic_write`'s own unix/non-unix split).
+    #[cfg(unix)]
+    fn assert_owner_only_mode(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "file must be owner-read/write only: {path:?}");
+    }
+    #[cfg(not(unix))]
+    fn assert_owner_only_mode(_path: &Path) {}
+
     #[test]
     fn unwrap_key_roundtrips_under_both_secrets_and_is_owner_only() {
         let dir = tempdir().unwrap();
@@ -423,6 +512,9 @@ mod tests {
             matches!(load_unwrap_secret(&p, None), Err(KeystoreError::Sealed)),
             "a sealed unwrap key with no secret returns the distinct Sealed variant"
         );
+        // The name promises "is_owner_only" — make good on it, exactly like the signing
+        // key's dedicated `written_key_has_owner_only_permissions`.
+        assert_owner_only_mode(&p);
     }
 
     #[test]
@@ -465,7 +557,59 @@ mod tests {
         generate_unwrap_sealed(&p, "op", "REC-CODE").unwrap();
         assert!(matches!(
             key_at_rest_state(&p),
-            KeyAtRest::Sealed { dual_recipient: true }
+            KeyAtRest::Sealed {
+                dual_recipient: true
+            }
         ));
+        // The name promises "and_corrupt" too — exercise it, exactly like the signing
+        // key's `state_reports_missing_and_corrupt` (neither 32 bytes nor a sealed bundle).
+        let bad = dir.path().join("bad.unwrap");
+        std::fs::write(&bad, b"only 5").unwrap();
+        assert!(matches!(key_at_rest_state(&bad), KeyAtRest::Corrupt));
+    }
+
+    #[test]
+    fn unwrap_key_path_for_appends_unwrap_suffix_in_same_dir() {
+        // Pinned exactly, modelled on fsio's own `tmp_sibling_appends_tmp_suffix_in_same_dir`:
+        // if this were ever "simplified" to `with_extension("unwrap")`, `node.key` would map
+        // to `node.unwrap` instead of `node.key.unwrap`. A restored/existing deployment would
+        // then find no file at the new path, and provisioning could mint a FRESH unwrap key
+        // that orphans every existing `event_dek` row — #495 all over again.
+        let p = Path::new("/var/lib/cairn/node.key");
+        let u = unwrap_key_path_for(p);
+        assert_eq!(u, Path::new("/var/lib/cairn/node.key.unwrap"));
+        assert_eq!(
+            u.parent(),
+            p.parent(),
+            "the unwrap file must be a sibling of the signing key"
+        );
+    }
+
+    #[test]
+    fn unwrap_secret_is_the_signing_seed_detects_the_swap_but_not_legitimate_secrets() {
+        let (sk, _kid) = cairn_event::generate_key().unwrap();
+
+        // The file-swap accident this predicate exists to catch: node.unwrap holding
+        // the signing seed verbatim (e.g. `cp node.key node.key.unwrap`).
+        assert!(
+            unwrap_secret_is_the_signing_seed(&sk.to_bytes(), &sk),
+            "the exact signing seed must be caught"
+        );
+
+        // A genuinely GENERATED secret is independent of the seed — must never false-positive.
+        let generated = cairn_event::seal::generate_unwrap_secret().unwrap();
+        assert!(
+            !unwrap_secret_is_the_signing_seed(&generated, &sk),
+            "an independently generated secret must not be flagged as the signing seed"
+        );
+
+        // An ADOPTED secret is the HKDF *derivation* of the seed, never the seed itself —
+        // must also never false-positive (this is the legitimate migration path, I4).
+        let adopted = adopt_derived_unwrap_secret(&sk);
+        assert!(
+            !unwrap_secret_is_the_signing_seed(&adopted, &sk),
+            "an adopted (derived) secret is a transform of the seed, not the seed itself, \
+             and must not be flagged"
+        );
     }
 }
