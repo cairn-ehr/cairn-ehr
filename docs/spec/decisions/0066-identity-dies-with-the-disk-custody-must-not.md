@@ -10,7 +10,9 @@
   by `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs`, a suite written to be inverted rather than
   extended.
 - **Supersedes, in exactly one clause:** ADR-0052 decision 4's **derivation** clause, and nothing else.
-  ADR-0052 is **not** superseded as a whole and is not edited — the rest of its decision 4 (public-half-
+  ADR-0052 is **not** superseded as a whole and is not reworded — it carries a marked
+  **[Erratum E2](0052-born-sealed-clinical-bodies.md) (2026-08-24)** under decision 4 pointing here, which
+  is the house mechanism for amending an immutable ADR. The rest of its decision 4 (public-half-
   only in the database, the `CTX_UNWRAP_KEY` unwrap-key certificate, mandatory KEK escrow, the wrapped-DEK
   sync sidecar) stands unaltered, as does every other decision in it. Its stated *rationale* for deriving —
   *"no new key-management mechanism"*, meaning **no second ceremony for the operator** — is **preserved,

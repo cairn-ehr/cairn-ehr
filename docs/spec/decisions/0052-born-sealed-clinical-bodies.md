@@ -16,6 +16,11 @@
 - **Errata:** **E1**, appended 2026-08-11 (under decision 4) — §4's *"any **admitted** peer"* described
   an intent the code did not implement until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231).
   The decision is unchanged; only the record of what was built is corrected.
+  **E2**, appended 2026-08-24 (under decision 4) — decision 4's **derivation** clause (the node unwrap key
+  HKDF-derived from the Ed25519 signing seed) is **superseded by
+  [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**, which makes it an independent X25519
+  keypair; unlike E1 this one does change a clause, and the rest of decision 4 — including the
+  no-second-ceremony rationale — stands unchanged.
 - **Resolves:** [#189](https://github.com/cairn-ehr/cairn-ehr/issues/189) (2026-07-15 review finding C1,
   Critical/window-closing — the seal-by-default posture), [#92](https://github.com/cairn-ehr/cairn-ehr/issues/92)
   (2026-07-02 — the ADR-0005 erasure-ladder composition collisions).
@@ -183,6 +188,34 @@ slice's perf bench (§8).
 > including an un-provisioned node plane; the operator line names which cause applies, since their
 > remedies differ, and travels to the puller (whose chart is the thing that goes blank) rather than
 > stopping at the serving node's log.
+
+> **Erratum E2 (2026-08-24) — the derivation clause is superseded; the rest of decision 4 stands.**
+> This erratum is a different animal from E1 and says so plainly: E1 corrected *the record of what was
+> built* and changed no decision, whereas this one **does change one clause**. It is therefore a forward
+> pointer to a superseding decision, not a factual correction. The clause — *"**The node unwrap key is
+> X25519**, derived from the node's Ed25519 signing seed by HKDF with
+> `info = "cairn-node-unwrap-x25519-v1"`"* — is **superseded by
+> [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**: the node unwrap key is an
+> **independent X25519 keypair** with its own lifecycle.
+>
+> **Why the derivation could not stand.**
+> [ADR-0026](0026-node-durability-and-disaster-recovery.md) decision 4 mints a **fresh signing seed on
+> restore** and never backs the old one up — deliberately, so a stolen medium can never resurrect a
+> signing identity. A secret *derived from that seed* therefore **changes on every disaster recovery**,
+> and every `event_dek` row a restored **solo** node inherits is wrapped to a public half whose private
+> half no longer exists. Because this ADR made every clinical body born-sealed, the blast radius is the
+> **whole clinical record** ([#495](https://github.com/cairn-ehr/cairn-ehr/issues/495)) — *"the exact
+> outcome crypto-shredding is designed to produce, by accident."* Both ADRs were internally consistent;
+> the contradiction existed only where they meet, which is code.
+>
+> **What is unchanged — everything else in decision 4.** The custody plane (`event_dek` beside the log,
+> never inside the signed bytes), the wrap/unwrap mechanics, the **public-half-only database** (so an
+> ordinary DB backup still can never reconstruct a DEK), the `CTX_UNWRAP_KEY` unwrap-key certificate, the
+> wrapped-DEK sync sidecar, and **mandatory KEK escrow** all stand. So does this decision's stated
+> *rationale* for deriving — *"no new key-management mechanism"*, meaning **no second ceremony for the
+> operator**: the independent key is sealed under the **same op-passphrase and the same recovery code**,
+> so the operator's escrow ceremony does not move. **Only the derivation is dropped.** E1 is unaffected,
+> and decision 8's deferred *unwrap-key rotation* remains deferred.
 
 ### 5. Two doors — the floor makes born-sealed unbypassable
 
