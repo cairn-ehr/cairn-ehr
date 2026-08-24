@@ -371,6 +371,79 @@ fn refuse_to_replace_existing_unwrap_key(path: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
+/// Resolve this node's unwrap secret for `establish-unwrap-key`: load the existing file if
+/// there is one, otherwise ADOPT the pre-ADR-0066 derived secret and write it.
+///
+/// **The `unwrap_path.exists()` branch is the whole safety property, which is why this is a
+/// function and not four inline lines.** The write happens BEFORE
+/// `cairn_register_unwrap_key` is ever called, so the registrar cannot be the backstop: a
+/// regression that inverted this condition would overwrite a live custody key first and
+/// only then fail at the registrar, with the file already gone — precisely the
+/// unrecoverable state this command exists to avoid. Only the branch condition can prevent
+/// that, so only a test of the branch condition can prove it prevented.
+///
+/// Extracted with no database and no CLI in its signature so both directions are covered by
+/// plain tempdir tests (see `an_existing_unwrap_key_is_loaded_not_replaced` and
+/// `a_missing_unwrap_key_is_adopted_and_written`).
+///
+/// - EXISTING file ⇒ loaded, never replaced, and checked for the `cp node.key` file-swap.
+///   Replacing it would mint a key that opens nothing already written, and the registrar
+///   would then REFUSE the differing key — leaving the node unable to unwrap its own
+///   custody with no way back. The common re-run case is a recreated database beside an
+///   intact key file.
+/// - NO file ⇒ ADR-0066 decision 5: adopt the secret this node's `event_dek` rows are
+///   ALREADY wrapped to, so every existing sealed body stays openable with no rewrap and no
+///   custody migration. This works only while the node still holds its original signing
+///   seed — which is why the migration is cheap today and never cheaper.
+///
+/// `op` is `None` only for a node whose SIGNING key is itself unsealed
+/// (`--insecure-plaintext`); the custody key then follows that posture rather than being
+/// unwritable.
+fn resolve_or_adopt_unwrap_secret(
+    unwrap_path: &std::path::Path,
+    key_path: &std::path::Path,
+    op: Option<&str>,
+    sk: &cairn_event::SigningKey,
+) -> anyhow::Result<Zeroizing<[u8; 32]>> {
+    if unwrap_path.exists() {
+        return load_unwrap_secret_or_refuse_swapped_file(unwrap_path, key_path, op, sk);
+    }
+
+    let adopted = cairn_node::keystore::adopt_derived_unwrap_secret(sk);
+    match op {
+        Some(op) => {
+            // A FRESH recovery code for the unwrap file. It cannot reuse the signing key's:
+            // that code is OFF-NODE by design and this command never sees it. So a migrated
+            // node ends up holding TWO codes — ADR-0066 decision 1's "one operator
+            // ceremony" holds for a node provisioned by `init`, but the migration path
+            // cannot reach it without prompting for a secret the operator may not have to
+            // hand. Say so explicitly rather than letting the shared banner (which talks
+            // about the SIGNING key) imply the wrong thing.
+            let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
+            eprintln!(
+                "The code below is for the UNWRAP key at {} — it is SEPARATE from the \
+                 recovery code for the signing key at {}. Keep both.",
+                unwrap_path.display(),
+                key_path.display()
+            );
+            // Printed BEFORE the write, for the same reason `init` prints first: a crash
+            // between persist and print would seal the key under a code no human ever saw,
+            // silently destroying the escrow.
+            print_recovery_code(&code);
+            cairn_node::keystore::write_unwrap_sealed(unwrap_path, &adopted, op, &code)?;
+        }
+        None => {
+            eprintln!(
+                "WARNING: the signing key at {} is UNSEALED, so the unwrap key is written \
+                 UNSEALED too (test use only)",
+                key_path.display()
+            );
+            cairn_node::keystore::write_unwrap_plaintext(unwrap_path, &adopted)?;
+        }
+    }
+    Ok(adopted)
+}
+
 /// Load this node's unwrap secret from `unwrap_path`, REFUSING if the file turns out to
 /// be a copy of the signing key at `key_path`.
 ///
@@ -1401,59 +1474,7 @@ async fn main() -> anyhow::Result<()> {
             let op_str: Option<&str> = op.as_deref().map(|s| s.as_str());
             let sk = cairn_node::keystore::load(&cli.key, op_str)?;
 
-            // IDEMPOTENT: an existing file is loaded, never replaced. Overwriting it would
-            // mint a key that opens nothing already written, and `cairn_register_unwrap_key`
-            // would then REFUSE the differing key — leaving the node unable to unwrap its
-            // own custody with no way back. (The common re-run case is a recreated database
-            // beside an intact key file.)
-            let secret = if unwrap_path.exists() {
-                load_unwrap_secret_or_refuse_swapped_file(&unwrap_path, &cli.key, op_str, &sk)?
-            } else {
-                // ADR-0066 decision 5: adopt the secret this node's `event_dek` rows are
-                // ALREADY wrapped to, so every existing sealed body stays openable with no
-                // rewrap and no custody migration. This works only while the node still
-                // holds its original signing seed — which is why the migration is cheap
-                // today and never cheaper.
-                let adopted = cairn_node::keystore::adopt_derived_unwrap_secret(&sk);
-                match op_str {
-                    Some(op) => {
-                        // A FRESH recovery code for the unwrap file. It cannot reuse the
-                        // signing key's: that code is OFF-NODE by design and this command
-                        // never sees it. So a migrated node ends up holding TWO codes —
-                        // ADR-0066 decision 1's "one operator ceremony" holds for a node
-                        // provisioned by `init`, but the migration path cannot reach it
-                        // without prompting for a secret the operator may not have to hand.
-                        // Say so explicitly rather than letting the shared banner (which
-                        // talks about the SIGNING key) imply the wrong thing.
-                        let code = Zeroizing::new(cairn_node::seal::generate_recovery_code());
-                        eprintln!(
-                            "The code below is for the UNWRAP key at {} — it is SEPARATE \
-                             from the recovery code for the signing key at {}. Keep both.",
-                            unwrap_path.display(),
-                            cli.key.display()
-                        );
-                        // Printed BEFORE the write, for the same reason `init` prints
-                        // first: a crash between persist and print would seal the key
-                        // under a code no human ever saw, silently destroying the escrow.
-                        print_recovery_code(&code);
-                        cairn_node::keystore::write_unwrap_sealed(
-                            &unwrap_path,
-                            &adopted,
-                            op,
-                            &code,
-                        )?;
-                    }
-                    None => {
-                        eprintln!(
-                            "WARNING: the signing key at {} is UNSEALED, so the unwrap key \
-                             is written UNSEALED too (test use only)",
-                            cli.key.display()
-                        );
-                        cairn_node::keystore::write_unwrap_plaintext(&unwrap_path, &adopted)?;
-                    }
-                }
-                adopted
-            };
+            let secret = resolve_or_adopt_unwrap_secret(&unwrap_path, &cli.key, op_str, &sk)?;
 
             // Registering the public half is the whole point of the command: after this the
             // sealed-write path's `ensure_unwrap_key` check passes. Idempotent when the same
@@ -3784,6 +3805,81 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         refuse_to_replace_existing_unwrap_key(&dir.path().join("node.key.unwrap"))
             .expect("a node with no unwrap key yet is exactly what `init` is for");
+    }
+
+    // --- ADR-0066: `establish-unwrap-key` must never REPLACE a live custody key ---
+    //
+    // The destructive direction has no backstop below it. `resolve_or_adopt_unwrap_secret`
+    // writes the file BEFORE `cairn_register_unwrap_key` is called, so the registrar cannot
+    // catch an inverted branch condition — by the time it refuses, the old file is already
+    // overwritten and every `event_dek` row wrapped to it is orphaned. Only the branch
+    // condition prevents that, so it is the branch condition these two tests pin.
+
+    #[test]
+    fn an_existing_unwrap_key_is_loaded_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+
+        cairn_node::keystore::generate_sealed(&key, OP_PASS, REC_CODE).unwrap();
+        let public = cairn_node::keystore::generate_unwrap_sealed(&unwrap, OP_PASS, REC_CODE)
+            .expect("provision the node's custody key");
+        let sk = cairn_node::keystore::load(&key, Some(OP_PASS)).unwrap();
+        // The exact bytes on disk BEFORE the call. Comparing the whole sealed bundle (not
+        // just the recovered secret) is deliberate: a re-seal under a fresh salt/nonce would
+        // recover the same secret while still having rewritten the operator's file, and the
+        // recovery code they wrote down would no longer be the one it is sealed under.
+        let before = std::fs::read(&unwrap).unwrap();
+
+        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk)
+            .expect("an existing custody key must be loaded, not replaced");
+
+        assert_eq!(
+            cairn_event::seal::unwrap_public(&secret),
+            public,
+            "the secret returned must be the one already on disk — anything else would be a \
+             key that opens none of this node's existing event_dek rows"
+        );
+        assert_eq!(
+            std::fs::read(&unwrap).unwrap(),
+            before,
+            "the file must be byte-identical afterwards: this command is IDEMPOTENT, and a \
+             rewrite here is unrecoverable data loss the registrar cannot catch (it is only \
+             consulted after the write)"
+        );
+    }
+
+    #[test]
+    fn a_missing_unwrap_key_is_adopted_and_written() {
+        // The other direction — the ADR-0066 decision-5 migration. Without this, the test
+        // above would pass just as well against a function that never wrote anything.
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+
+        cairn_node::keystore::generate_sealed(&key, OP_PASS, REC_CODE).unwrap();
+        let sk = cairn_node::keystore::load(&key, Some(OP_PASS)).unwrap();
+        assert!(
+            !unwrap.exists(),
+            "precondition: a node that predates ADR-0066"
+        );
+
+        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk)
+            .expect("a node with no custody key must adopt its derived one");
+
+        assert!(unwrap.exists(), "the adopted secret must be persisted");
+        assert_eq!(
+            *secret,
+            *cairn_node::keystore::adopt_derived_unwrap_secret(&sk),
+            "it must adopt the secret this node's existing event_dek rows are ALREADY \
+             wrapped to — minting a fresh one here would orphan every sealed body it has"
+        );
+        // And it must be readable back under the operator's secret, or the node could not
+        // open its own custody after a restart.
+        assert_eq!(
+            *cairn_node::keystore::load_unwrap_secret(&unwrap, Some(OP_PASS)).unwrap(),
+            *secret
+        );
     }
 
     // --- ADR-0066: `cp node.key node.key.unwrap` must be refused, not registered ---

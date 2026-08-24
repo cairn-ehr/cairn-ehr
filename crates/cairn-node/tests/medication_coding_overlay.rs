@@ -32,10 +32,12 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
 }
 
 /// ADR-0052: seal a CLEAR clinical EventBody like the node write path (payload + twin
-/// under a fresh per-event DEK, outer stub twin), sign,
-/// and submit through the 4-arg strict door. Returns the raw driver Result so
-/// refusal-pinning tests keep using db_msg on the error. House rule 6: the DEK is
-/// generated inside seal_event_payload, never a literal.
+/// under a fresh per-event DEK, outer stub twin), sign, and submit through the 4-arg strict
+/// door. Returns the raw driver Result so refusal-pinning tests keep using db_msg on the
+/// error. House rule 6: the DEK is generated inside seal_event_payload, never a literal.
+///
+/// Does NOT register the node's unwrap key — `setup_node` provisions it (ADR-0066
+/// decision 6).
 async fn seal_and_submit(
     c: &Client,
     sk: &SigningKey,

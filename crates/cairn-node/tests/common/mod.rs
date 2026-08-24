@@ -635,10 +635,12 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
 ///
 /// Signs with the HUMAN key and takes ADR-0053 authorship (`with_human_author`) — the
 /// shape every real medication assert in this slice carries — while `sk`/`kid` (the
-/// device/node key) re-registers the node's unwrap key, exactly as `ensure_unwrap_key`
-/// does on every real submit. Re-registering is a no-op when `medication_setup` already
-/// registered the same key (idempotent — see `cairn_register_unwrap_key`'s own doc), so
-/// this helper does not depend on being called only after that fixture.
+/// device/node key) re-registers the node's unwrap key. Since ADR-0066 decision 6 the real
+/// pipeline no longer registers on write (`ensure_unwrap_key` only VERIFIES), so this
+/// re-registration stands in for PROVISIONING, keeping the helper independent of whether
+/// `medication_setup` ran first: registering the same key twice is a no-op (idempotent —
+/// see `cairn_register_unwrap_key`'s own doc), and it must be the same DERIVED key that
+/// fixture registers, because the singleton refuses a differing one.
 ///
 /// Returns the submitted event's content address (`event_log.content_address`), or the
 /// door's rejection — NOT unwrapped, so a caller asserting ADMISSION can still say why a
@@ -655,10 +657,11 @@ pub async fn submit_medication_with_raw_safety(
     wall: i64,
     safety: serde_json::Value,
 ) -> Result<Vec<u8>, tokio_postgres::Error> {
-    // Re-register the node's unwrap key from the DEVICE key, exactly as
-    // `ensure_unwrap_key(client, node_sk)` does in the real pipeline — custody is always
-    // the NODE's regardless of who signs (born-sealed erasability, ADR-0052). Idempotent:
-    // a second registration of the same key is a no-op.
+    // Provision the node's unwrap key from the DEVICE key — custody is always the NODE's
+    // regardless of who signs (born-sealed erasability, ADR-0052). Since ADR-0066 decision
+    // 6 the write path only VERIFIES a key is registered, so this is the PROVISIONING step
+    // rather than a mirror of what `ensure_unwrap_key` does. Idempotent: a second
+    // registration of the same key is a no-op.
     //
     // `.expect()`, deliberately NOT `?` (2026-08-15 review, Important #3): this function's
     // `Result` is the caller's proxy for "did the DOOR admit or refuse this write" —

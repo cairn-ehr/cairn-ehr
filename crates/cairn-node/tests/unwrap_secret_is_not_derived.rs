@@ -136,12 +136,15 @@ fn calls_derive_unwrap_secret(text: &str) -> bool {
 /// Production files permitted to call `derive_unwrap_secret`, with the reason each is
 /// allowed. A file NOT on this list calling it is the failure this guard exists for.
 ///
-/// `crates/cairn-node/src/medication/sealed_submit.rs` is deliberately NOT here: its
-/// `ensure_unwrap_key` calls `keystore::unwrap_secret(sk)`, and the derivation happens
-/// INSIDE `keystore.rs` — so `sealed_submit.rs` never contains the literal
-/// `derive_unwrap_secret` and was never an offender. An allow-list entry for a file that
-/// calls nothing on this list is misleading documentation, and would have made a later
-/// task's "remove this entry" step a silent no-op.
+/// `crates/cairn-node/src/medication/sealed_submit.rs` is deliberately NOT here, and never
+/// was an offender. When this guard was written its `ensure_unwrap_key` reached the
+/// derivation only INDIRECTLY, through a `keystore::unwrap_secret(sk)` wrapper, so the file
+/// never contained the literal `derive_unwrap_secret` — an allow-list entry for it would
+/// have named a file that calls nothing on this list, which is misleading documentation and
+/// would have made a later task's "remove this entry" step a silent no-op. ADR-0066
+/// decision 6 has since gone further: `ensure_unwrap_key` no longer derives ANYTHING, it
+/// only verifies that a provisioned key is registered, and `keystore::unwrap_secret` is
+/// deleted. The entry is still correctly absent, now for the stronger reason.
 const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/cairn-node/src/keystore.rs",
