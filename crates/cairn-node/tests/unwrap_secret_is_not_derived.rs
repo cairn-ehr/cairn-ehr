@@ -99,11 +99,19 @@ fn cfg_test_tail_start(lines: &[&str]) -> Option<usize> {
 /// share the two-slash prefix, so a whole doc-comment line strips to empty). Naming the
 /// function in prose — a doc comment writing `` `derive_unwrap_secret` `` in backticks,
 /// exactly the shape this file's own module doc uses — is not a call, the same clause
-/// (a) `no_drugref_dependency.rs` carries for its own scan. Line-oriented and quote-
-/// unaware like the rest of this guard: a `//` inside a string literal would still cut
-/// the line early, an accepted, narrow miss in the safe direction (under- rather than
-/// over-scanning a line is the wrong way round for THIS omission, but no production line
-/// in this tree embeds a `//` inside a string next to this identifier today).
+/// (a) `no_drugref_dependency.rs` carries for its own scan.
+///
+/// Line-oriented and quote-unaware, like the rest of this guard: a `//` INSIDE a string
+/// literal (e.g. a URL) would cut the line early and could hide a real call written on
+/// the same line — a false negative, which for a guard is the UNSAFE direction (a
+/// missed re-coupling, not a merely-annoying extra failure). Accepted here only because
+/// no production line in this tree puts `//` inside a string next to this identifier
+/// today; if one ever does, this function needs widening, not a shrug. A `/* */` block
+/// comment is likewise not handled at all — the identical, separately-declared gap
+/// `no_drugref_dependency.rs`'s own module doc states for its scanner. Both gaps fail
+/// LOUD rather than pass silently, so the real risk is a maintainer "fixing" the
+/// failure by reaching for `ALLOWED` instead of widening this function — exactly the
+/// wrong move this guard's declaration/test-tail scoping exists to make unnecessary.
 fn strip_comment_tail(line: &str) -> &str {
     match line.find("//") {
         Some(i) => &line[..i],
@@ -157,16 +165,21 @@ fn only_the_adoption_migration_derives_the_unwrap_secret() {
     let files: Vec<std::path::PathBuf> = sources::production_rust_files(&root).collect();
 
     let mut offenders: Vec<String> = Vec::new();
-    let mut swept_rel_paths: Vec<String> = Vec::new();
-    // Positive control (part of the anti-vacuity check below): does the RAW substring
-    // still show up anywhere, independent of the matcher's declaration/comment/test-tail
-    // smarts? If `derive_unwrap_secret` were renamed (e.g. to
-    // `derive_legacy_unwrap_secret` in a later cleanup) or moved out of `crates/*/src`
-    // entirely, `calls_derive_unwrap_secret` would return `false` EVERYWHERE,
-    // `offenders` would be empty forever, and `files.len() > 50` would still hold — this
-    // guard would report green while protecting nothing. This counter is independent of
-    // the matcher precisely so it cannot go blind for the SAME reason the matcher would.
-    let mut raw_needle_sightings = 0usize;
+    // (relative path, whether that file's production text actually calls
+    // `derive_unwrap_secret`) for every swept file — ONE record both the offender scan
+    // and the anti-vacuity checks below read from, so "was it swept" and "does it still
+    // call the function" can never quietly disagree between two separately-maintained
+    // collections.
+    let mut swept: Vec<(String, bool)> = Vec::new();
+    // Positive control (anti-vacuity part 2 below): does the function's own
+    // DECLARATION — not merely the bare identifier — still exist somewhere in the
+    // sweep? Round-1 review used a bare-identifier count here, but that stays positive
+    // on a leftover PROSE mention alone (e.g. a post-rename comment reading "// formerly
+    // derive_unwrap_secret") even after the real function is gone — exactly the
+    // silent-green failure mode this control exists to close. Pinning the literal
+    // declaration text closes that: only the actual `fn derive_unwrap_secret(...)` can
+    // satisfy it, a comment never can.
+    let mut declaration_sightings = 0usize;
 
     for path in &files {
         let text = sources::read_source(path);
@@ -175,13 +188,15 @@ fn only_the_adoption_migration_derives_the_unwrap_secret() {
             .unwrap_or(Path::new(""))
             .to_string_lossy()
             .replace('\\', "/");
-        swept_rel_paths.push(rel.clone());
 
-        if text.contains("derive_unwrap_secret") {
-            raw_needle_sightings += 1;
+        if text.contains("fn derive_unwrap_secret(") {
+            declaration_sightings += 1;
         }
 
-        if !calls_derive_unwrap_secret(&text) {
+        let calls = calls_derive_unwrap_secret(&text);
+        swept.push((rel.clone(), calls));
+
+        if !calls {
             continue;
         }
         if !ALLOWED.iter().any(|(allowed, _)| *allowed == rel) {
@@ -206,29 +221,41 @@ fn only_the_adoption_migration_derives_the_unwrap_secret() {
          a guard that inspects nothing always passes"
     );
 
-    // Anti-vacuity, part 2 (positive control): the thing this guard hunts must still be
-    // findable, in its raw literal form, somewhere in the swept text. See the counter's
-    // doc comment above for exactly which silent-pass this catches.
+    // Anti-vacuity, part 2 (positive control): the function's DECLARATION must still be
+    // findable, literally, somewhere in the sweep. See `declaration_sightings`'s doc
+    // comment above for exactly which silent-pass this catches, and why the bare
+    // identifier (round 1's version of this check) was not strong enough.
     assert!(
-        raw_needle_sightings > 0,
-        "no swept file contains the literal `derive_unwrap_secret` any more — has the \
-         function been renamed, or moved out of crates/*/src? If so this guard is now \
-         VACUOUS (every ALLOWED entry has gone inert with no signal) and must be updated \
+        declaration_sightings > 0,
+        "no swept file contains the literal `fn derive_unwrap_secret(` any more — has \
+         the function been renamed, or moved out of crates/*/src? (A leftover comment \
+         mentioning the old name would NOT satisfy this check — only the real \
+         declaration can.) If this fires, this guard is now VACUOUS and must be updated \
          to track the new name/location, never simply deleted."
     );
 
-    // Anti-vacuity, part 3: every live ALLOWED path must actually be inside the swept
-    // set. Catches the same rename/move as part 2 from the allow-list's side, AND a
-    // walker silently narrowed to a subset of crates (an ALLOWED file living in a crate
-    // the walker stopped covering would never be read, so its entry would go inert with
-    // no signal even though `raw_needle_sightings` stayed positive elsewhere).
+    // Anti-vacuity, part 3: every live ALLOWED entry must (a) still be inside the swept
+    // set, and (b) still genuinely call the function. (a) catches a walker silently
+    // narrowed to fewer crates, or the file having moved. (b) catches an entry that has
+    // gone INERT — the exact defect a prior review round found BY HAND in
+    // `sealed_submit.rs` (removed from ALLOWED above): a file that never called
+    // `derive_unwrap_secret` sitting in the list looking legitimate while protecting
+    // nothing. The fix for an inert entry is always to DELETE it, never to keep it "just
+    // in case" — a stale exemption is how an allow-list rots into a rubber stamp.
     for (allowed, _) in ALLOWED {
-        assert!(
-            swept_rel_paths.iter().any(|p| p == allowed),
-            "ALLOWED names {allowed:?}, but the production-source sweep never saw that \
-             file — the walker's scope has narrowed, or the file moved, and this \
-             allow-list entry is now unverifiable"
-        );
+        match swept.iter().find(|(rel, _)| rel == allowed) {
+            None => panic!(
+                "ALLOWED names {allowed:?}, but the production-source sweep never saw \
+                 that file — the walker's scope has narrowed, or the file moved, and \
+                 this allow-list entry is now unverifiable"
+            ),
+            Some((_, calls)) => assert!(
+                *calls,
+                "ALLOWED names {allowed:?}, but that file no longer calls \
+                 `derive_unwrap_secret` — this entry is INERT and must be DELETED, not \
+                 kept \"just in case\""
+            ),
+        }
     }
 }
 
