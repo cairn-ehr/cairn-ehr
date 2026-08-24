@@ -9,8 +9,10 @@
 //!
 //! SCOPE (slice D): this module builds the can't-retrofit SHAPE — the format, the
 //! dual-recipient secret lifecycle (a long-lived local-state DEK dual-wrapped once at
-//! provisioning), the container, and the restore path — with typed empty slots the
-//! clinical tier fills later via additive evolution (principle 11). The genuine
+//! provisioning), the container, and the restore path — with typed slots the clinical tier
+//! fills later via additive evolution (principle 11). **Two of those slots are no longer
+//! empty** — see the state of play below; this paragraph is left otherwise as written
+//! because its own expiry is the lesson recorded under it. The genuine
 //! day-one piece is `establish_lsk`: state accrued before the channel exists has no
 //! durability path, so the channel must exist from `init`.
 //!
@@ -32,8 +34,13 @@
 //! keypair (decision 1) living in its own `<key>.unwrap` keystore file, and it rides this
 //! export beside the custody rows (decision 3): [`LocalState::unwrap_secret`] carries the
 //! secret, [`LocalState::episode_deks`] carries the wrapped `event_dek` rows minus every
-//! target in `erasure_shred_log` (decision 7). Identity may die with the disk; custody no
-//! longer does. The producer is [`crate::localstate_read::read_local_state`].
+//! target in `erasure_shred_log` (decision 7). The producer is
+//! [`crate::localstate_read::read_local_state`].
+//!
+//! Read that heading narrowly: what is closed is the **EXPORT half**. "Identity dies with
+//! the disk; custody must not" is the ADR's title, not yet this system's behaviour — the
+//! restore half below is still owed, so custody currently leaves the dying node and is then
+//! refused on arrival.
 //!
 //! **STILL OPEN, do not read this module as closing them:**
 //!
@@ -114,7 +121,7 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 /// to guard against. With this, an unknown field is a LOUD refusal instead. `default` (for
 /// missing fields) and `deny_unknown_fields` (for extra fields) are orthogonal and compose:
 /// an OLDER bundle still deserializes, a NEWER one is refused rather than silently lossy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalState {
     /// Bundle format version (bump only on a NON-additive change, which we avoid).
@@ -182,6 +189,47 @@ impl LocalState {
             && self.config.is_none()
             && self.drafts.is_empty()
             && self.unwrap_secret.is_none()
+    }
+}
+
+/// Hand-written so the raw unwrap secret can never reach a log line, a panic message, or an
+/// `assert_eq!` failure. `Debug` was DERIVED until #495, which was harmless while every slot
+/// was empty and is not now: `{:?}` on a populated bundle would print this node's custody key
+/// in full. Everything else is shown as usual — only the secret is redacted, and its presence
+/// is still visible so a reader can tell "absent" from "hidden".
+impl std::fmt::Debug for LocalState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalState")
+            .field("version", &self.version)
+            .field("node_default_deks", &self.node_default_deks)
+            .field("episode_deks", &self.episode_deks)
+            .field("config", &self.config)
+            .field("drafts", &self.drafts)
+            .field(
+                "unwrap_secret",
+                &self.unwrap_secret.as_ref().map(|_| "<redacted 32 bytes>"),
+            )
+            .finish()
+    }
+}
+
+/// Wipe the raw unwrap secret when a bundle is dropped (issues #46/#54 — the convention this
+/// module already follows for the LSK).
+///
+/// A `Vec<u8>` field rather than `Zeroizing<Vec<u8>>` because the field must round-trip
+/// through `serde`/`ciborium` unchanged; wiping on drop gets the same protection without
+/// asking the serializer to understand a wrapper type. Every bundle that ever held the secret
+/// — the one the producer built, the one the restore path decoded — passes through here.
+///
+/// LIMITS, so nobody reads this as more than it is: a `Vec` that was reallocated while being
+/// built leaves its earlier buffer behind, and `serde` makes its own copies during encode and
+/// decode. Wiping is a real reduction in exposure, not an erasure guarantee (#508).
+impl Drop for LocalState {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(secret) = self.unwrap_secret.as_mut() {
+            secret.zeroize();
+        }
     }
 }
 
@@ -362,7 +410,21 @@ pub fn build_export_container(
     op_pass: &str,
     bundle: &LocalState,
 ) -> Result<Vec<u8>, LocalStateError> {
-    let sealed = seal_local_state(wraps, op_pass, &to_cbor(bundle))?;
+    // `Zeroizing` is load-bearing here since #495, and it was not before. The bundle now
+    // carries a RAW X25519 unwrap secret (`LocalState::unwrap_secret`), so this CBOR
+    // plaintext is a full copy of it in the clear; without the wrapper it would be dropped
+    // unwiped the moment `seal_local_state` returned, leaving the node's custody key
+    // readable in freed heap for anything that later reads that memory (a core dump, a swap
+    // file, a heap-spray). Same reasoning, and the same issues (#46/#54), that made
+    // `seal::try_unwrap` return `Zeroizing` for the LSK.
+    //
+    // RESIDUAL, stated rather than implied: `to_cbor` builds its `Vec` by GROWING it, so any
+    // reallocation during serialization frees an intermediate buffer that still holds part of
+    // the secret and that nothing can reach to wipe. Wiping the final buffer is a real
+    // reduction, not a guarantee — the guarantee needs a serializer writing into a
+    // pre-sized zeroizing buffer. Tracked in #508.
+    let plaintext = Zeroizing::new(to_cbor(bundle));
+    let sealed = seal_local_state(wraps, op_pass, &plaintext)?;
     Ok(serialize_container(&sealed))
 }
 
@@ -406,8 +468,10 @@ pub fn lsk_sidecar_path_for(key: &Path) -> PathBuf {
 /// call site keeps resolving after the move.
 ///
 /// It lives in [`crate::localstate_read`] rather than here because this module owns the
-/// FORMAT (container, seal, slots) and was already past the project's 500-line file budget;
-/// reading custody out of a database is a different job with a different dependency.
+/// FORMAT (container, seal, slots) and was already past the project's 500-line file-size
+/// GUIDELINE (a guideline, not a cap — `tests/patient_register_demographics.rs` records the
+/// correction to the "house limit" phrasing); reading custody out of a database is a
+/// different job with a different dependency.
 pub use crate::localstate_read::read_local_state;
 
 /// Apply a restored local-state bundle into a fresh node. Today this is a validated noop: it

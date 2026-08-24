@@ -71,10 +71,11 @@
 //!
 //! # What each test is now
 //!
-//! - [`the_export_carries_the_unwrap_secret_and_the_surviving_dek`] — **GUARANTEE** (#495,
-//!   ADR-0066 decisions 3 and 7). It replaced the pin that asserted the export carried no
-//!   DEK at all. It stays green; if it reddens, a restored solo clinic has lost custody of
-//!   its own sealed bodies again.
+//! - [`the_export_carries_the_unwrap_secret_and_the_surviving_dek`] — **GUARANTEE, EXPORT
+//!   HALF ONLY** (#495, ADR-0066 decision 3). It replaced the pin that asserted the export
+//!   carried no DEK at all. It stays green; if it reddens, custody stops reaching the export.
+//!   It says nothing about the RESTORE half, which is decision 4 and is not built — see its
+//!   own doc before quoting it as "the DR guarantee holds".
 //! - [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] — **HALF
 //!   GUARANTEE, HALF PROHIBITION**, and that asymmetry is the whole point: the survivor's
 //!   custody must travel, the shredded event's must never. The prohibition was written
@@ -88,8 +89,8 @@
 //!   the sibling issue). It names its own inversion and goes red on the commit that fixes
 //!   the medium. Do not read the rest of this file as evidence that it is fixed.
 //! - [`local_state_producers_are_the_empty_constructor_and_the_db_reader`] — a producer
-//!   COUNT guard over source text; it moved from 1 to 2 when the DB-reading producer
-//!   landed.
+//!   COUNT guard over the source text of EVERY crate's `src/`; it moved from 1 to 2 when the
+//!   DB-reading producer landed, and reddens at 3 wherever a third appears.
 //! - [`a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body`] — **MECHANISM**,
 //!   not a pin, and it says so in its own doc: it describes what a fresh seed does to a
 //!   derived secret, which is unchanged and is now migration-only territory.
@@ -315,8 +316,18 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
     );
 }
 
-/// **Promise 3 — "sealed-episode DEKs survive" — is now TRUE (#495, ADR-0066).** This is
-/// the guarantee test that replaced the pin asserting the export carried nothing.
+/// **Promise 3's EXPORT HALF — "sealed-episode DEKs survive" — is now true (#495,
+/// ADR-0066 decision 3).** This is the guarantee test that replaced the pin asserting the
+/// export carried nothing.
+///
+/// ⚠️ **Scoped deliberately, because the unscoped sentence would be false.** The DEKs do NOT
+/// yet survive a restore: `localstate::apply_local_state` refuses a non-empty bundle and
+/// `main.rs`'s restore arm propagates that refusal, so custody leaves the dying node and is
+/// then turned away on arrival. What this test proves is that the custody and the key to open
+/// it now REACH the export — the half ADR-0066 decision 3 owns. The other half is decision 4
+/// (a restored node adopts the exported unwrap key), and it is not built. Writing "promise 3
+/// is now TRUE" here would be a freshly-minted version of the expired-precondition claim this
+/// whole suite exists to catch.
 ///
 /// The sealed local-state export (ADR-0026 slice D) is the only artifact that can carry key
 /// material off a dying node. ADR-0066 decision 3 rides the node's INDEPENDENT unwrap
@@ -350,8 +361,11 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
     // this node, exactly the derived one; deriving it here is how the test gets hold of the
     // same secret the production door wrapped every DEK to.
     let node_secret = derive_unwrap_secret(&sk.to_bytes());
-    // `&*` is load-bearing: `Some(&node_secret)` would be `Option<&Zeroizing<[u8; 32]>>`
-    // — deref coercion does not reach inside `Some`, so deref explicitly.
+    // `&*` derefs the `Zeroizing` wrapper explicitly, so the argument reads as the
+    // `&[u8; 32]` the signature asks for rather than leaning on a coercion the reader has to
+    // work out. (An earlier comment here claimed coercion could not reach inside `Some` at
+    // all; that is wrong — `main.rs` relies on exactly such a coercion two `Deref` steps
+    // deep. Clarity is the reason, not necessity.)
     let exported = read_local_state(&c, Some(&*node_secret))
         .await
         .expect("export must succeed");
@@ -772,13 +786,21 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
     // The restored node cannot. Its inherited custody is noise.
     assert!(
         unwrap_dek(&wrapped, &restored_secret).is_err(),
-        "PINS #495: a node restored under a fresh identity cannot unwrap custody written \
-         before the loss — so the DEKs that reach it, by whatever route, are noise to it"
+        "MECHANISM, not a pin: a node restored under a fresh identity cannot unwrap custody \
+         derived-wrapped before the loss. This is why ADR-0066 decision 5 makes a pre-ADR node \
+         ADOPT its derived secret rather than mint a new one — and why decision 1 stopped \
+         deriving at all. It must stay green"
     );
 }
 
-/// Exactly TWO pieces of code build a `LocalState`, and the guard knows both by name.
-/// Pure: no database.
+/// Exactly two pieces of code build a `LocalState` **by struct literal**, and this guard
+/// knows both by name. Pure: no database.
+///
+/// The qualifier is not pedantry: `from_cbor`'s DERIVED `Deserialize` also builds one, and it
+/// is the producer on the restore path. It is out of scope here because it cannot get the
+/// erasure filter wrong — it reproduces whatever bundle was written, and the filtering
+/// decision was already made by the producer that wrote it. Scope stated rather than an
+/// absolute "exactly two", because an absolute sentence is how a guard's doc starts lying.
 ///
 /// **RENAMED on the #495 fix** (it was `the_only_local_state_producer_is_the_empty_
 /// constructor`). A test name is a claim, and that one asserted a state of affairs ADR-0066
@@ -794,10 +816,14 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
 /// `erasure_shred_log`. A third producer that skipped that filter would resurrect an erased
 /// body's key on restore, and every other test here would stay green.
 ///
-/// **The two-file scan is the load-bearing part.** The producer moved OUT of
-/// `localstate.rs` (already past the 500-line house budget; the format and the DB read are
-/// different jobs), so a single-file scan would now count 1, pass, and prove nothing about
-/// the file that does the dangerous work. Both files are read.
+/// **Why the whole production tree is swept, not the two files.** The producer moved OUT of
+/// `localstate.rs` (already past the 500-line file-size GUIDELINE — a guideline, not a cap;
+/// see `tests/patient_register_demographics.rs` for the correction to the "house limit"
+/// phrasing — and the format and the DB read are different jobs). A scan of only the two
+/// KNOWN files has exactly the hole this guard claims to close: a third producer in a NEW
+/// file (`localstate_export.rs`, say) leaves a two-file scan green at 2. Sweeping every
+/// crate's `src/` with `sources::production_rust_files` — the same walk
+/// `unwrap_secret_is_not_derived.rs` uses — reddens at 3 wherever it appears.
 ///
 /// This is a SOURCE-DERIVED guard, the repo's idiom for a claim about code shape
 /// (`event_log_row_by_name.rs`, `no_drugref_dependency.rs`). Asserting instead that
@@ -807,26 +833,36 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
 #[test]
 fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
     let root = sources::repo_root();
-    // Both files, named individually rather than walked: the claim is about these two
-    // specific producers, and a walk would silently absorb a third file's producer into the
-    // count instead of reddening on it.
-    let files = [
-        root.join("crates/cairn-node/src/localstate.rs"),
-        root.join("crates/cairn-node/src/localstate_read.rs"),
-    ];
+    // EVERY crate's shipped `src/` tree, not the two files we happen to know about. A new
+    // file is the likeliest home for a third producer, and it is the one place a
+    // named-files scan cannot see.
+    let files: Vec<std::path::PathBuf> = sources::production_rust_files(&root).collect();
 
+    // Anti-vacuity: the walk really swept a production tree. Without this, a walk that
+    // returned nothing (a moved root, a changed layout) would report ZERO producers and the
+    // count assertion would simply say "expected 2, got 0" — technically red, but for a
+    // reason that hides the real one. `unwrap_secret_is_not_derived.rs` guards its own sweep
+    // the same way and against the same number.
+    assert!(
+        files.len() > 50,
+        "the production sweep found only {} files — the walk is broken, so nothing below \
+         proves anything about producers",
+        files.len()
+    );
+
+    // (relative path, 1-based line, trimmed text) for every struct-literal construction.
     let producers: Vec<(String, usize, String)> = files
         .iter()
         .flat_map(|f| {
-            let name = f
-                .file_name()
-                .expect("both paths name a file")
+            let rel = f
+                .strip_prefix(&root)
+                .unwrap_or(f)
                 .to_string_lossy()
-                .into_owned();
+                .replace('\\', "/");
             sources::read_source(f)
                 .lines()
                 .enumerate()
-                .map(|(i, l)| (name.clone(), i + 1, l.trim().to_string()))
+                .map(|(i, l)| (rel.clone(), i + 1, l.trim().to_string()))
                 .filter(|(_, _, l)| constructs_local_state(l))
                 .collect::<Vec<_>>()
         })
@@ -835,20 +871,26 @@ fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
     assert_eq!(
         producers.len(),
         2,
-        "`LocalState` is constructed in exactly TWO places — `localstate::LocalState::empty()` \
-         (the legitimate zero value) and `localstate_read::read_local_state` (the DB reader, \
-         which MUST filter on erasure_shred_log). A third producer is a place an erased \
-         body's key could travel from. Found: {producers:?}"
+        "`LocalState` is built by struct literal in exactly TWO places — \
+         `localstate::LocalState::empty()` (the legitimate zero value) and \
+         `localstate_read::read_local_state` (the DB reader, which MUST filter on \
+         erasure_shred_log). A third producer anywhere in any crate's src/ is a place an \
+         erased body's key could travel from, and it reddens this. Found: {producers:?}"
     );
 
-    // And one is in each file: the count alone would pass if the DB reader vanished and a
-    // second `empty()`-shaped constructor appeared beside the first.
-    for f in &files {
-        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+    // Naming the files closes the swap the count alone cannot see: two constructors in
+    // `localstate.rs` and none in the reader would also total 2.
+    for expected in [
+        "crates/cairn-node/src/localstate.rs",
+        "crates/cairn-node/src/localstate_read.rs",
+    ] {
         assert_eq!(
-            producers.iter().filter(|(n, _, _)| *n == name).count(),
+            producers
+                .iter()
+                .filter(|(rel, _, _)| rel == expected)
+                .count(),
             1,
-            "one producer per file — {name} must hold exactly one. Found: {producers:?}"
+            "{expected} must hold exactly one of the two producers. Found: {producers:?}"
         );
     }
 
@@ -868,17 +910,47 @@ fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
 /// — a guard that reports the wrong number is worse than no guard. Declaration lines
 /// (`pub struct LocalState {`, `impl LocalState {`) are not constructions and are excluded
 /// too, as are comments.
+///
+/// RETURN-TYPE POSITIONS are excluded as well, and that exclusion was added when the caller
+/// widened from two named files to the whole production tree. `fn f() -> LocalState {` opens
+/// a function BODY, not a struct literal, and over two known files no such signature existed;
+/// over every crate's `src/` one eventually will, and it would redden the guard for a reason
+/// that has nothing to do with an erased body's key. Found by mutation-testing the widened
+/// guard, not by reasoning about it.
+///
+/// Every occurrence on the line is examined, not just the first, so a hypothetical
+/// `fn f() -> LocalState { LocalState { … } }` still counts (the first hit is a return type,
+/// the second a construction). rustfmt would split that line, but a matcher that stops at the
+/// first hit is one rewrite away from silently under-counting, and under-counting is the
+/// direction that hides a producer.
 fn constructs_local_state(line: &str) -> bool {
-    let Some(i) = line.find("LocalState {") else {
-        return false;
-    };
     if line.starts_with("//") || line.starts_with("pub struct") || line.starts_with("struct") {
         return false;
     }
     if line.starts_with("impl") {
         return false;
     }
-    // `SealedLocalState` / `MyLocalState` are different types, not this one: require that the
-    // character before the needle is not part of an identifier.
-    !matches!(line[..i].chars().next_back(), Some(c) if c.is_alphanumeric() || c == '_')
+    line.match_indices("LocalState {")
+        .any(|(i, _)| is_construction_at(line, i))
+}
+
+/// True iff the `LocalState {` occurrence starting at byte offset `i` in `line` is a struct
+/// literal rather than a different type or a type position. Pure; split out so each rule reads
+/// as one line and can be reasoned about on its own.
+fn is_construction_at(line: &str, i: usize) -> bool {
+    let before = &line[..i];
+    // `SealedLocalState` / `MyLocalState` are different types, not this one: the character
+    // before the needle must not be part of an identifier.
+    if matches!(before.chars().next_back(), Some(c) if c.is_alphanumeric() || c == '_') {
+        return false;
+    }
+    // A return arrow immediately before it is a signature (`fn f() -> LocalState {`), so the
+    // brace opens a function body. `rsplit`-free on purpose: only the text since the LAST
+    // arrow matters, and it must be whitespace for this to be the return position.
+    if let Some(rest) = before.rsplit_once("->") {
+        if rest.1.trim().is_empty() {
+            return false;
+        }
+    }
+    true
 }

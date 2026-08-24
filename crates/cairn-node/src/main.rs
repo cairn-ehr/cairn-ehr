@@ -1902,6 +1902,13 @@ async fn main() -> anyhow::Result<()> {
                         // (the `?` on apply_local_state below).
                         match cairn_node::localstate::unseal_local_state_rec(&sealed, &old_code) {
                             Some(plaintext) => {
+                                // The unsealed bundle now contains the dead node's RAW unwrap
+                                // secret (ADR-0066 decision 3), so this plaintext is key
+                                // material and must not be dropped unwiped — the restore-side
+                                // twin of the wrap in `build_export_container`. `LocalState`'s
+                                // own `Drop` wipes the decoded copy; this wipes the buffer it
+                                // was decoded from.
+                                let plaintext = Zeroizing::new(plaintext);
                                 let bundle = cairn_node::localstate::from_cbor(&plaintext)?;
                                 cairn_node::localstate::apply_local_state(&db, &bundle).await?;
                                 println!("local-state restored from {}", export_path.display());

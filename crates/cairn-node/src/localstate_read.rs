@@ -1,7 +1,9 @@
 //! ADR-0066 / #495 — the producer that fills the sealed local-state export.
 //!
 //! WHY A SEPARATE FILE: `localstate.rs` owns the FORMAT (container, seal, slots) and is
-//! already past the 500-line house budget. This file owns the one thing that needs a
+//! already past the project's 500-line file-size GUIDELINE — a guideline, not a cap; the
+//! repo does not enforce a file-length limit, and `tests/patient_register_demographics.rs`
+//! records the correction to the "house limit" phrasing. This file owns the one thing needing a
 //! database — reading custody out of it — so neither grows the other. The public name
 //! stays `localstate::read_local_state` (re-exported there), so no call site moved.
 //!
@@ -41,6 +43,16 @@ use crate::localstate::{episode_dek_to_cbor, EpisodeDek, LocalState};
 /// * `node_default_deks`, `config`, `drafts` — empty, and legitimately: no node-default
 ///   keystore, node-config table, or draft store exists anywhere in the built system yet.
 ///   That is "nothing to read", not "not implemented".
+///
+/// # Memory footprint, stated because it is unbounded by construction
+///
+/// Every surviving `event_dek` row is materialised into one in-memory `LocalState`, which
+/// `build_export_container` then CBOR-encodes and encrypts in a single shot — so peak
+/// residency is roughly three copies of the whole custody set. At the scale a node holds
+/// today (one wrapped 32-byte-ish DEK per sealed body) that is trivially fine, and a
+/// streaming/chunked export would be speculative generality now. It is written down because
+/// nothing here bounds it: the day a node holds millions of sealed bodies, this is the line
+/// that has to change, and a reader should not have to rediscover that from a memory spike.
 pub async fn read_local_state(
     db: &tokio_postgres::Client,
     unwrap_secret: Option<&[u8; 32]>,
